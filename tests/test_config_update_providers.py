@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import functools
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -27,6 +29,19 @@ from raven.config.update_providers import (
 )
 from raven.config.update_providers import test_provider as probe_provider
 from raven.providers.registry import PROVIDERS as _PROVIDERS
+from tests._tls import OpenAIModels, connect_proxy, https_endpoint, keep_loopback_off_proxies, private_ca
+
+# The real probe, kept from module import time: the `_no_provider_probe`
+# autouse fixture replaces the module attribute in every test, and the two
+# tls_verify tests below want the real network path with no `transport` -- the
+# only shape under which the client's `verify` knob applies.
+_REAL_PROBE = probe_provider.__globals__["_probe_models_endpoint"]
+
+
+def _restore_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.config.update_providers as u
+
+    monkeypatch.setattr(u, "_probe_models_endpoint", _REAL_PROBE)
 
 
 @pytest.fixture
@@ -642,6 +657,154 @@ def test_test_provider_never_returns_the_proxy_credentials(cfg_path: Path, monke
     assert result["proxy"] == f"http://127.0.0.1:{port}"
     dumped = json.dumps(result)
     assert "s3cr" not in dumped and "alice" not in dumped
+
+
+def test_a_certificate_that_fails_verification_is_named_for_what_it_is(cfg_path: Path, tmp_path: Path) -> None:
+    """A gateway signed by a root this machine does not hold is refused at the handshake.
+
+    The network did not fail and the key was never sent, so the remedy is neither:
+    it is the certificate store. The transport is a real one, and so is the handshake.
+    """
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields("custom", {"api_key": "k", "api_base": f"{origin}/v1"}, config_path=cfg_path)
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5, transport=httpx.HTTPTransport())
+
+    assert result["ok"] is False
+    assert result["status"] == "certificate_untrusted"
+
+
+def test_a_section_that_opted_out_accepts_the_same_certificate(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`tls_verify: false` on the section makes its own probe accept what it signed.
+
+    The same gateway that reads `certificate_untrusted` above reads valid here:
+    the field is the section's, so the settings dialog reports the setup the
+    model calls could actually live with. The proxy goes, so the handshake is
+    this machine's alone.
+    """
+    keep_loopback_off_proxies(monkeypatch)
+    _restore_probe(monkeypatch)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": f"{origin}/v1", "tls_verify": False}, config_path=cfg_path
+        )
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5)
+
+    assert result["ok"] is True
+    assert result["status"] == "valid"
+
+
+def test_an_opted_out_section_still_tells_an_unchecked_key_from_a_verified_one(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The decoy control rides the same opt-out as the probe it checks.
+
+    This gateway answers any key, so its catalogue says nothing about the one
+    configured. A control refused at the handshake would never see that, and
+    the key would read as verified.
+    """
+    keep_loopback_off_proxies(monkeypatch)
+    _restore_probe(monkeypatch)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": f"{origin}/v1", "tls_verify": False}, config_path=cfg_path
+        )
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5, check_credential=True)
+
+    assert result["status"] == "key_unchecked"
+
+
+def test_an_undressed_section_still_verifies(cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A section that names no `tls_verify` verifies, as every section always has.
+
+    The field defaults to True, and the probe of a section that never turned the
+    knob reads the same `certificate_untrusted` result as before.
+    """
+    keep_loopback_off_proxies(monkeypatch)
+    _restore_probe(monkeypatch)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": f"{origin}/v1", "tls_verify": True}, config_path=cfg_path
+        )
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5)
+
+    assert result["ok"] is False
+    assert result["status"] == "certificate_untrusted"
+
+
+def test_a_certificate_refused_through_an_environment_proxy_is_not_an_unreachable_proxy(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The proxy answered and opened the tunnel; the certificate behind it is the fault.
+
+    A proxy that inspects TLS is the usual place such a certificate comes from, so
+    calling the proxy unreachable sends the reader after the one setting that works.
+    """
+    monkeypatch.undo()
+    for var in ("NO_PROXY", "no_proxy", "ALL_PROXY", "all_proxy", "HTTP_PROXY", "http_proxy", "https_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin, connect_proxy() as proxy:
+        monkeypatch.setenv("HTTPS_PROXY", proxy)
+        set_provider_fields("custom", {"api_key": "k", "api_base": f"{origin}/v1"}, config_path=cfg_path)
+        result = probe_provider("custom", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted"
+
+
+_PROXY_VARIABLES = ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy")
+
+
+def test_a_codex_catalogue_behind_an_untrusted_certificate_is_named_for_what_it_is(
+    cfg_path: Path, oauth_home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex is checked by asking its backend for the account's models, not through the generic probe.
+
+    The reader this matters to sits behind a proxy that inspects TLS, and a
+    refusal reported as a network error sends them to check the network.
+    """
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    _codex_credential()
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("live", None))
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        monkeypatch.setattr("raven.providers.codex_catalog.CATALOG_URL", f"{origin}/backend-api/codex/models")
+        result = probe_provider("openai_codex", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted", result
+
+
+def test_a_minimax_token_renewal_behind_an_untrusted_certificate_is_named_for_what_it_is(
+    cfg_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An expired token is renewed before the check, and the renewal meets the certificate first.
+
+    Reported as a missing token it sends the reader to sign in again, which meets
+    the same certificate.
+    """
+    from raven.providers import minimax_oauth
+
+    for var in _PROXY_VARIABLES:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MINIMAX_OAUTH_TOKEN_DIR", str(tmp_path / "minimax"))
+    minimax_oauth.save_token(
+        "global",
+        minimax_oauth.MiniMaxOAuthToken("old-access", "old-refresh", 0, "https://api.minimax.io/anthropic/v1"),
+    )
+    monkeypatch.setattr(minimax_oauth, "get_token", functools.partial(minimax_oauth.get_token, sleep_fn=lambda _: None))
+    ca = private_ca(tmp_path / "pki")
+    with https_endpoint(ca.server, OpenAIModels) as origin:
+        renewing_here = dataclasses.replace(minimax_oauth.CONFIGS["global"], auth_base_url=origin)
+        monkeypatch.setitem(minimax_oauth.CONFIGS, "global", renewing_here)
+        result = probe_provider("minimax_global", config_path=cfg_path, timeout_s=5)
+
+    assert result["status"] == "certificate_untrusted", result
 
 
 def test_a_proxy_error_that_quotes_the_proxy_is_redacted_too(cfg_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2245,6 +2408,40 @@ class TestResolveProviderCredentials:
         assert resolve_provider_credentials("openai", config_path=cfg_path) is None
 
 
+class TestResolveProviderTlsVerify:
+    """The TLS verdict read off the same section the credentials come from."""
+
+    def test_an_opted_out_section_resolves_off(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_tls_verify, set_provider_fields
+
+        set_provider_fields(
+            "custom", {"api_key": "k", "api_base": "https://gw.test/v1", "tls_verify": False}, config_path=cfg_path
+        )
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is False
+
+    def test_a_section_that_names_nothing_verifies(self, cfg_path: Path) -> None:
+        from raven.config.update_providers import resolve_provider_tls_verify, set_provider_fields
+
+        set_provider_fields("custom", {"api_key": "k", "api_base": "https://gw.test/v1"}, config_path=cfg_path)
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is True
+
+    def test_an_unreadable_config_verifies(self, cfg_path: Path) -> None:
+        """The safe answer when there is nothing to read: every section's default."""
+        from raven.config.update_providers import resolve_provider_tls_verify
+
+        cfg_path.write_text("{not json", encoding="utf-8")
+
+        assert resolve_provider_tls_verify("custom", config_path=cfg_path) is True
+
+    def test_an_oauth_seat_verifies(self, cfg_path: Path) -> None:
+        """An OAuth seat names no address of its own for an opt-out to apply to."""
+        from raven.config.update_providers import resolve_provider_tls_verify
+
+        assert resolve_provider_tls_verify("openai_codex", config_path=cfg_path) is True
+
+
 # lend_provider_credentials: the three documented outcomes
 # ---------------------------------------------------------------------------
 
@@ -2657,3 +2854,86 @@ def test_a_differently_cased_tenant_header_still_reaches_the_relay(cfg_path: Pat
     result = probe_provider("custom", config_path=cfg_path, transport=_tenant_relay(seen))
     assert result["status"] == "valid"
     assert seen == ["test-tenant"]
+
+
+# ---------------------------------------------------------------------------
+# A credential judged before it is stored
+# ---------------------------------------------------------------------------
+
+
+def test_an_unsaved_key_is_judged_as_the_stored_one_would_be(cfg_path: Path) -> None:
+    """``section_override`` lays the form's fields over the section; nothing is written.
+
+    The stored key is the good one and the tried one is not, then the other way
+    round: the verdict follows the key being tried, and the section on disk is
+    the same bytes afterwards either way.
+    """
+    _seed_key(cfg_path, key="sk-real")
+    before = cfg_path.read_text()
+
+    tried = probe_provider(
+        "openrouter",
+        config_path=cfg_path,
+        transport=_public_catalogue("sk-real"),
+        check_credential=True,
+        section_override={"api_key": "111"},
+    )
+    assert tried["status"] == "invalid_key"
+    assert tried["http_status"] == 401
+    assert cfg_path.read_text() == before
+
+    _seed_key(cfg_path, key="111")
+    before = cfg_path.read_text()
+    tried = probe_provider(
+        "openrouter",
+        config_path=cfg_path,
+        transport=_public_catalogue("sk-real"),
+        check_credential=True,
+        section_override={"api_key": "sk-real"},
+    )
+    assert tried["status"] == "valid"
+    assert cfg_path.read_text() == before
+
+
+def test_the_tried_field_replaces_the_stored_spelling_too() -> None:
+    """The section model reads ``apiKey`` over ``api_key`` when both are present.
+
+    So laying the schema spelling over a section that keeps the serialized one
+    would have judged the stored key. The stored spelling goes; a ``None`` leaves
+    the field alone, the way a form that draws no field for it does.
+    """
+    from raven.config.schema import ProviderConfig
+    from raven.config.update_providers import _with_override
+
+    merged = _with_override(
+        {"apiKey": "stored", "apiBase": "https://relay.test/v1"},
+        {"api_key": "tried", "api_base": None},
+    )
+
+    assert merged == {"apiBase": "https://relay.test/v1", "api_key": "tried"}
+    section = ProviderConfig.model_validate(merged)
+    assert section.api_key == "tried"
+    assert section.api_base == "https://relay.test/v1"
+
+
+@pytest.mark.parametrize(
+    ("status", "http_status", "refused"),
+    [
+        ("invalid_key", 401, True),
+        # Google names a key it does not know in a 400.
+        ("invalid_key", 400, True),
+        # Forbidden is what vendors say for a region, a plan or a permission as
+        # well, and what a proxy says for anything: reported, not refused.
+        ("invalid_key", 403, False),
+        # A key that could not be sent at all was never shown to the vendor.
+        ("invalid_key", None, False),
+        ("key_unchecked", None, False),
+        ("network_error", None, False),
+        ("no_probe_endpoint", None, False),
+        ("valid", 200, False),
+    ],
+)
+def test_only_the_vendors_own_refusal_refuses_a_key(status: str, http_status: int | None, refused: bool) -> None:
+    from raven.config.update_providers import credential_refused
+
+    assert credential_refused({"status": status, "http_status": http_status}) is refused

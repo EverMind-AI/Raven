@@ -10,6 +10,7 @@ invariant covering all three callers.
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -62,3 +63,64 @@ def test_runnable_schedules_still_created(tmp_path: Path) -> None:
         job = _add(svc, schedule)
         assert job.state.next_run_at_ms is not None  # runnable
         assert len(svc.list_jobs()) == 1
+
+
+@pytest.mark.parametrize("explicit", [None, "UTC"])
+def test_a_new_cron_stores_its_timezone_and_preserves_dst_rules(tmp_path, explicit):
+    from zoneinfo import ZoneInfo
+
+    now = datetime(2026, 3, 7, 15, tzinfo=timezone.utc)
+    svc = CronService(tmp_path / "jobs.json", now_fn=lambda: now, default_timezone=lambda: "America/New_York")
+    schedule = CronSchedule(kind="cron", expr="0 9 * * *", tz=explicit)
+    job = _add(svc, schedule)
+    zone = explicit or "America/New_York"
+    expected = datetime(2026, 3, 8, 9, tzinfo=ZoneInfo(zone))
+    assert job.schedule.tz == zone
+    assert schedule.tz == explicit
+    assert job.state.next_run_at_ms == int(expected.timestamp() * 1000)
+    assert CronService(svc.store_path).list_jobs()[0].schedule.tz == zone
+
+
+@pytest.mark.parametrize("old_zone", [None, "UTC"])
+@pytest.mark.parametrize("by_topic", [False, True, "missing-id"])
+def test_an_implicit_timezone_edit_keeps_the_previous_job_zone(tmp_path, old_zone, by_topic):
+    path = tmp_path / "jobs.json"
+    old = CronService(path).add_job(
+        "old", CronSchedule(kind="cron", expr="0 9 * * *", tz=old_zone), "old", topic_tag="guide"
+    )
+
+    def unused_default():
+        raise AssertionError("an edit must not read the new-job default")
+
+    svc = CronService(path, default_timezone=unused_default)
+    updated = svc.add_job(
+        "edited",
+        CronSchedule(kind="cron", expr="0 10 * * *"),
+        "edited",
+        **(
+            {"topic_tag": "guide", "job_id": "gone" if by_topic == "missing-id" else None}
+            if by_topic
+            else {"job_id": old.id}
+        ),
+    )
+    assert updated.id == old.id
+    assert updated.schedule.tz == old_zone
+    assert updated.schedule.expr == "0 10 * * *"
+
+
+def test_an_invalid_default_is_rejected_without_mutating_jobs(tmp_path):
+    svc = CronService(tmp_path / "jobs.json", default_timezone=lambda: "Not/AZone")
+    with pytest.raises(ValueError, match="unknown timezone"):
+        _add(svc, CronSchedule(kind="cron", expr="0 9 * * *"))
+    assert svc.list_jobs() == []
+    assert _add(svc, CronSchedule(kind="cron", expr="0 9 * * *", tz="UTC")).schedule.tz == "UTC"
+
+
+@pytest.mark.parametrize("kind", ["at", "every"])
+def test_non_cron_schedules_do_not_read_the_default(tmp_path, kind):
+    def unused_default():
+        raise AssertionError("only cron expressions use the default")
+
+    svc = CronService(tmp_path / "jobs.json", default_timezone=unused_default)
+    schedule = CronSchedule(kind=kind, at_ms=int(time.time() * 1000) + 60000, every_ms=60000)
+    assert _add(svc, schedule).schedule == schedule

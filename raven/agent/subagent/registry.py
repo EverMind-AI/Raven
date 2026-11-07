@@ -69,6 +69,16 @@ class AgentCaps:
 
     A menu rather than a capability, so unlike the three above it is not
     rendered as a roster tag -- see ``AgentMeta.modes``."""
+    machine: str = ""
+    """The registered machine the agent runs on, or ``""`` for this computer -- see ``AgentMeta.machine``."""
+    effort_choices: tuple[Any, ...] = ()
+    """The reasoning efforts the agent offers, when its transport has a menu (acp only).
+
+    AcpEffortChoice records, from the ``thought_level`` config option in the
+    same session response that gives ``model_choices``. Appended after
+    ``machine`` for the reason ``AgentMeta.effort_choices`` gives."""
+    effort_via_modes: bool = False
+    """Whether ``effort_choices`` is the mode menu read as effort -- see ``AgentMeta.effort_via_modes``."""
 
 
 @dataclass(frozen=True)
@@ -152,6 +162,9 @@ class AgentRow:
             self.caps.modes,
             self.owns_watched_work,
             self.caps.model_choices,
+            self.caps.machine,
+            self.caps.effort_choices,
+            self.caps.effort_via_modes,
         )
 
 
@@ -189,6 +202,9 @@ def _row_for(cfg: Any) -> AgentRow:
             live_progress=meta.live_progress,
             modes=meta.modes,
             model_choices=meta.model_choices,
+            machine=meta.machine,
+            effort_choices=meta.effort_choices,
+            effort_via_modes=meta.effort_via_modes,
         ),
         injectable=Injectable(skills=builtin, mcps=injectable_mcps),
         owns=meta.owns,

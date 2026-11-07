@@ -152,14 +152,60 @@ export function ofTurn(scope: string, turn: number): DeliveryRow[] {
   return mine.filter((row) => newest.get(row.path) === row)
 }
 
+/* One file, two spellings. The registry keys what the gateway resolved, and a
+   caller may hold the path as the model typed it -- the panel's change rows
+   carry that spelling (record.ts's `sameFile` reconciles the same pair). What
+   two spellings of one file can still differ in is separators (a Windows
+   gateway sends backslashes), `.`/`..`, and the drive letter's case; compare
+   on that, never on a bare file name, which could hand back another file's
+   download token. */
+const canonPath = (p: string): string => {
+  const s = String(p || '').replace(/\\/g, '/')
+  const drive = /^([A-Za-z]):/.exec(s)
+  const body = drive ? s.slice(drive[0].length) : s
+  /* Two leading separators are not a separator difference: on Windows
+     `//server/share/a.md` is a network share, while `/server/share/a.md` is
+     rooted on the current drive. Collapsing them would make two different
+     files compare equal, and a lookup could hand one the other's token. */
+  const unc = s.startsWith('//')
+  const out: string[] = []
+  for (const seg of body.split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') {
+      if (out.length && out[out.length - 1] !== '..') out.pop()
+      else out.push('..')
+      continue
+    }
+    out.push(seg)
+  }
+  return `${drive ? drive[1]!.toLowerCase() + ':' : ''}${unc ? '//' : body.startsWith('/') ? '/' : ''}${out.join('/')}`
+}
+
+/* A drive letter or a UNC prefix means Windows, where a path's case is not
+   significant unless the directory it names was made case-sensitive. */
+const windowsPath = (p: string): boolean => {
+  const s = String(p || '').replace(/\\/g, '/')
+  return /^[A-Za-z]:/.test(s) || s.startsWith('//')
+}
+
+/* The rows for a path, exact spelling first. A case-sensitive Windows
+   directory can hold two delivered files whose paths differ only by case;
+   folding first would hand one of them the other's download token. The folded
+   comparison is the fallback for the ordinary case-insensitive volume, and
+   only when no row matched exactly. */
+const rowsFor = (path: string): Held[] => {
+  const key = canonPath(path)
+  const exact = rows.filter((row) => canonPath(row.path) === key)
+  if (exact.length || !windowsPath(path)) return exact
+  const folded = key.toLowerCase()
+  return rows.filter((row) => windowsPath(row.path) && canonPath(row.path).toLowerCase() === folded)
+}
+
 /* The newest row for a path: what the pane says about the file that is open.
    Session-wide, because the pane is -- it shows the file, not the stream that
    last handed it over. */
 export const byPath = (path: string): DeliveryRow | null =>
-  rows.reduce<Held | null>(
-    (best, row) => (row.path === path && (!best || later(row, best)) ? row : best),
-    null,
-  )
+  rowsFor(path).reduce<Held | null>((best, row) => (!best || later(row, best) ? row : best), null)
 
 
 /* What the shelf shows, so the tab's number matches its list: paths, not rows.
@@ -278,8 +324,10 @@ export function seed(files: unknown): void {
    Every turn's row for that path: the file is gone for all of them, and the
    turn cards would otherwise disagree with the shelf about the same file. */
 export function markMissing(path: string): void {
-  if (!rows.some((row) => row.path === path && !row.missing)) return
-  rows = rows.map((row) => (row.path === path && !row.missing ? { ...row, missing: true } : row))
+  const matching = rowsFor(path)
+  if (!matching.some((row) => !row.missing)) return
+  const marks = new Set(matching)
+  rows = rows.map((row) => (marks.has(row) && !row.missing ? { ...row, missing: true } : row))
   bump()
 }
 

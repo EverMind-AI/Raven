@@ -42,7 +42,7 @@ describe('the turn clock on an instance pane', () => {
     render(<TurnClock row={row({ turnStartedAtMs: 1_700_000_000_000 })} />)
     /* 90s, in the spelling `lib/duration.ts` gives every other elapsed number
        on the page. */
-    expect(shown()).toBe('1m30s')
+    expect(shown()).toBe('1m 30s')
   })
 
   it('will not fall back to the row stamp when no turn is running', () => {
@@ -74,6 +74,6 @@ describe('the turn clock on an instance pane', () => {
     vi.setSystemTime(1_700_000_090_000)
     render(<TurnClock row={row({ turnStartedAtMs: 1_700_000_000_000 })} />)
     expect(document.querySelector('.pane-turnms')?.getAttribute('title'))
-      .toBe('gui.ws.instance_turn_elapsed {"d":"1m30s"}')
+      .toBe('gui.ws.instance_turn_elapsed {"d":"1m 30s"}')
   })
 })

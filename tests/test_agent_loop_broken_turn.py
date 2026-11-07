@@ -21,7 +21,8 @@ import pytest
 from raven.agent.hook import AgentHook, HookDecision
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
-from raven.agent.loop.recovery import RecoveryLimits
+from raven.agent.loop.recovery import EMPTY_REPLY_FAILURE, PARTIAL_STREAM_NOTE, RecoveryLimits
+from raven.contracts.llm_provider import CallRecord
 from raven.providers.base import ErrorClassification, LLMProvider, LLMResponse, ToolCallRequest
 from raven.spine.message import ChatType, Source
 from raven.spine.turn import AnswerlessTurnError, Origin, TurnRequest
@@ -155,12 +156,14 @@ async def test_a_finished_turn_writes_no_marker(workspace):
 
 class _StreamingThenDying(LLMProvider):
     """Streams ``chunks``, then raises -- the shape a stop or a dropped
-    connection takes while the answer is already on the reader's screen."""
+    connection takes while the answer is already on the reader's screen.
+    ``mid_call`` has the model part-way through a tool call when it goes."""
 
-    def __init__(self, chunks: list[str], death: BaseException):
+    def __init__(self, chunks: list[str], death: BaseException, *, mid_call: bool = False):
         super().__init__(api_key="test")
         self._chunks = chunks
         self._death = death
+        self._mid_call = mid_call
 
     async def chat(self, messages, **kwargs: Any):
         raise AssertionError("the streaming path is the one under test")
@@ -170,14 +173,21 @@ class _StreamingThenDying(LLMProvider):
 
         for chunk in self._chunks:
             yield ChatDelta(content=chunk)
+        if self._mid_call:
+            yield ChatDelta(
+                content=None,
+                tool_call_delta={
+                    "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "write_file", "arguments": '{"pa'}}]
+                },
+            )
         raise self._death
 
     def get_default_model(self) -> str:
         return "stub"
 
 
-async def _streamed_turn(workspace: Path, death: BaseException) -> None:
-    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death))
+async def _streamed_turn(workspace: Path, death: BaseException, *, mid_call: bool = False) -> None:
+    agent = _agent(workspace, _StreamingThenDying(["half an ", "answer"], death, mid_call=mid_call))
 
     async def _sink(_text: str) -> None:
         return None
@@ -203,8 +213,11 @@ async def test_a_cancelled_turn_files_its_question_once_with_what_had_streamed(w
 
 @pytest.mark.asyncio
 async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(workspace):
+    """Words alone are handed back and continued when the stream dies, so the turn that
+    still fails here is one whose model was part-way through a tool call: there is no
+    answer to go on from, and the failure stands."""
     with pytest.raises(RuntimeError):
-        await _streamed_turn(workspace, RuntimeError("the socket went away"))
+        await _streamed_turn(workspace, RuntimeError("the socket went away"), mid_call=True)
 
     msgs = _persisted(workspace)
     users = [m for m in msgs if m.get("role") == "user"]
@@ -212,6 +225,69 @@ async def test_a_failed_turn_files_its_question_once_with_what_had_streamed(work
     assert any("half an answer" in str(m.get("content")) for m in msgs), "what streamed was lost"
     assert msgs[-1]["turn_ended"]["status"] == "failed"
     assert "the socket went away" in msgs[-1]["content"]
+
+
+class _CutThenDies(LLMProvider):
+    """Streams "half an " and loses the connection; the call that follows dies before it says a word."""
+
+    def __init__(self, death: BaseException):
+        super().__init__(api_key="test")
+        self._death = death
+        self.calls = 0
+
+    async def chat(self, messages, **kwargs: Any):
+        raise AssertionError("the streaming path is the one under test")
+
+    async def chat_stream(self, **kwargs: Any):
+        from raven.providers.base import ChatDelta
+
+        self.calls += 1
+        if self.calls == 1:
+            yield ChatDelta(content="half an ")
+            raise ConnectionError("connection reset by peer")
+        raise self._death
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+class _Refused(Exception):
+    status_code = 400  # fatal: neither reconnected nor waited out
+
+
+@pytest.mark.asyncio
+async def test_the_words_of_a_cut_answer_are_filed_when_its_continuation_is_cancelled_unheard(workspace):
+    """The cut answer's words sit in the loop's list as a recovery row that is never
+    persisted, and a continuation cancelled before saying anything leaves the reader's
+    words as exactly that row's text. The rescue must not take them for committed, or
+    the answer the reader watched is gone on the next reload."""
+    agent = _agent(workspace, _CutThenDies(asyncio.CancelledError()))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    with pytest.raises(asyncio.CancelledError):
+        await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    msgs = _persisted(workspace)
+    assert [(m["role"], m["content"]) for m in msgs[:-1]] == [("user", "hello"), ("assistant", "half an ")]
+    assert msgs[-1]["turn_ended"]["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_a_cut_answer_whose_continuation_is_refused_ends_on_its_words(workspace):
+    """A continuation refused outright leaves the reader holding the answer so far, so the turn ends on
+    it, said to be partial, and files it as the turn's reply rather than failing."""
+    agent = _agent(workspace, _CutThenDies(_Refused("invalid request")))
+
+    async def _sink(_text: str) -> None:
+        return None
+
+    out = await agent._process_message(_make_msg("hello"), on_token_delta=_sink)
+
+    msgs = _persisted(workspace)
+    assert out is not None and out[0] == "half an\n\n" + PARTIAL_STREAM_NOTE
+    assert [(m["role"], m["content"]) for m in msgs] == [("user", "hello"), ("assistant", out[0])]
 
 
 # --- the other way a turn dies: an error response the ladder could not wait out ---
@@ -288,7 +364,7 @@ async def test_an_exhausted_empty_response_recovery_leaves_the_same_marker(works
         await agent._process_message(_make_msg("hello"))
 
     reason = str(failed.value)
-    assert reason == "The model returned no content on 3 attempt(s) (prefill 0, post-tool nudge 0, plain retry 2)."
+    assert reason == EMPTY_REPLY_FAILURE
     msgs = _persisted(workspace)
     assert [m["role"] for m in msgs] == ["user", "assistant"]
     assert msgs[-1]["turn_ended"] == {"status": "failed", "reason": reason}
@@ -443,3 +519,106 @@ async def test_a_cut_streams_canonical_account_survives_retries_after_output(wor
         await agent._process_message(_make_msg("hello"))
 
     assert str(failed.value) == cut
+
+
+@pytest.mark.asyncio
+async def test_a_long_crash_keeps_its_whole_account_on_the_marker(workspace, monkeypatch):
+    """The marker's ``reason`` stays at 200 characters for every reader it has;
+    ``full_detail`` beside it keeps what the cut removed, scrubbed, for a client
+    that lets the reader open the row."""
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+    secret = "sk-or-v1-" + "b" * 40
+    message = "the engine room flooded: " + "w" * 400 + f" key {secret}"
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(RuntimeError) as raised:
+        await agent._process_message(_make_msg("hello"))
+
+    ended = _persisted(workspace)[-1]["turn_ended"]
+    assert len(ended["reason"]) == 200 and ended["reason"].endswith("...")
+    assert ended["full_detail"].startswith("RuntimeError: the engine room flooded: " + "w" * 400)
+    assert secret not in ended["full_detail"]
+    assert raised.value.full_detail == ended["full_detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_short_crash_files_no_second_copy(workspace, monkeypatch):
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise RuntimeError("the engine room flooded")
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(RuntimeError):
+        await agent._process_message(_make_msg("hello"))
+
+    assert "full_detail" not in _persisted(workspace)[-1]["turn_ended"]
+
+
+class _RefusedWithABody(LLMProvider):
+    """One final error response, whose call record kept the provider's whole body."""
+
+    _CHAT_RETRY_DELAYS = ()  # the provider's own ladder, exhausted at once
+
+    def __init__(self, content: str, body: str):
+        super().__init__(api_key="test")
+        self._content = content
+        self._body = body
+
+    async def chat(self, *args: Any, **kwargs: Any):
+        return LLMResponse(
+            content=self._content,
+            finish_reason="error",
+            error_classification=ErrorClassification("rate_limit", retryable=False),
+            call_record=CallRecord(http_status=429, body=self._body),
+        )
+
+    async def chat_stream(self, *args: Any, **kwargs: Any):  # pragma: no cover - the non-stream path is under test
+        raise NotImplementedError
+
+    def get_default_model(self) -> str:
+        return "stub"
+
+
+@pytest.mark.asyncio
+async def test_a_call_the_ladder_gave_up_on_files_the_body_its_record_kept_on_the_marker(workspace):
+    """The long account rides the raised failure, and the except arm that catches
+    it files the marker from what it attaches itself -- so the marker is read
+    back, not the exception's own attribute."""
+    content = "Error calling LLM (rate_limit@openrouter): Provider returned error"
+    body = (
+        '{"error":{"code":429,"metadata":{"raw":"z-ai/glm-5.3-flash is temporarily rate-limited upstream",'
+        '"provider_name":"Z.AI","limit_source":"upstream_provider_shared_pool"}}}'
+    )
+    agent = _agent(workspace, _RefusedWithABody(content, body))
+
+    with pytest.raises(AnswerlessTurnError):
+        await agent._process_message(_make_msg("hello"))
+
+    assert _persisted(workspace)[-1]["turn_ended"]["full_detail"] == f"{content}\n\n{body}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_error", [False, True], ids=["crash-window", "capped-record"])
+async def test_a_partial_private_key_never_reaches_the_failure_marker(workspace, monkeypatch, provider_error):
+    pem = "-----BEGIN " + "PRIVATE KEY-----\nsynthetic-private-material-" + "a" * 1600 + "\n-----END PRIVATE KEY-----"
+    if provider_error:
+        body = ("diagnostic " * 700 + "\n" + pem)[:8000]
+        agent = _agent(workspace, _RefusedWithABody("Error calling LLM (rate_limit@audit): refused", body))
+    else:
+        agent = _agent(workspace, DyingProvider([LLMResponse(content="unused")]))
+
+        async def explode(*args, **kwargs):
+            raise RuntimeError("diagnostic " * 25 + "Authorization: Bearer " + "b" * 31000 + "\n" + pem)
+
+        monkeypatch.setattr(agent, "_run_agent_loop", explode)
+
+    with pytest.raises((AnswerlessTurnError, RuntimeError)):
+        await agent._process_message(_make_msg())
+
+    marker = _persisted(workspace)[-1]["turn_ended"]
+    assert "synthetic-private-material" not in marker["reason"]
+    assert "synthetic-private-material" not in marker["full_detail"]

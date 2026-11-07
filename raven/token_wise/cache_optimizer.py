@@ -13,9 +13,11 @@ When tools are present (common agent scenario):
     2. The system message — on its **stable head** when it declares one
        (``prompt_cache.STABLE_PREFIX_KEY``), on its tail otherwise. The head is
        the only mark in this whole set that survives a turn: the rest of that
-       message is the memory recall, the router's hits and the Curator's working
-       state, all derived from what the user just said, and a cache covers
-       everything in front of its breakpoint.
+       message is the Curator's working state -- and, with turn scratch off,
+       the memory recall and the router's hits -- all derived from what the
+       user just said, and a cache covers everything in front of its
+       breakpoint. With turn scratch on and nothing appended by the history
+       builder, the whole message is stable and the tail mark survives too.
     3. ``messages[-2]`` — rolling tail; covers the intra-turn tool-chain
        prefix so each iteration only pays fresh for the newest result.
     4. ``messages[-1]`` — rolling tail; written as cache this call, read as
@@ -30,6 +32,12 @@ When no tools are present (pure conversation):
     1. The system message, same rule as above.
     2–4. Last 3 non-system messages (rolling window identical to Hermes's
          ``system_and_3`` — proven optimal for cross-turn prefix matching).
+
+When a history message carries ``prompt_cache.COMPACTION_BOUNDARY_KEY``, the
+oldest rolling slot moves to it, provided the newest one is left. The compacting
+history strategy summarises by replaying an earlier request up to the end of
+what it removes, which lies behind the rolling window, so this is the only mark
+the summary can read back past the system head.
 
 For models that do not support prompt caching, this strategy is a no-op.
 Original messages and tools are *never* mutated; deep copies are taken for
@@ -46,6 +54,7 @@ from loguru import logger
 
 from raven.contracts.token_strategy import TokenStrategy
 from raven.providers.prompt_cache import (
+    COMPACTION_BOUNDARY_KEY,
     STABLE_PREFIX_KEY,
     cache_control,
     claim_marks,
@@ -99,6 +108,33 @@ def _mark_message_tail(msg: dict[str, Any]) -> dict[str, Any]:
     return {**msg, "content": new_content}
 
 
+def _compaction_boundary(messages: list[dict[str, Any]]) -> int | None:
+    """The flagged boundary message, or the nearest one before it that can hold a mark.
+
+    Never one after it: a summary replays up to the flag and no further, so a
+    mark past it is one the summary never sends. The walk back steps over what
+    has no block to carry the field -- an assistant turn that only called a
+    tool, empty content -- since wrapping empty text into a marked block is
+    refused upstream.
+    """
+    flagged = next(
+        (i for i, m in enumerate(messages) if m.get(COMPACTION_BOUNDARY_KEY) and m.get("role") != "system"),
+        None,
+    )
+    if flagged is None:
+        return None
+    for i in range(flagged, -1, -1):
+        msg = messages[i]
+        if msg.get("role") == "system":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return i
+        if isinstance(content, list) and content and isinstance(content[-1], dict):
+            return i
+    return None
+
+
 class CacheOptimizer(TokenStrategy):
     """Adaptive cache breakpoint placement.
 
@@ -108,6 +144,8 @@ class CacheOptimizer(TokenStrategy):
     - **With tools**: tools + system + msg[-2] + msg[-1]  (2 rolling)
     - **Without tools**: system + msg[-3] + msg[-2] + msg[-1]  (3 rolling,
       equivalent to Hermes ``system_and_3``)
+    - **With a compaction boundary flagged**: the boundary takes the oldest
+      rolling slot, as long as one rolling mark is left
 
     The rolling tail ensures that intra-turn tool chains are cached
     incrementally (each iteration's new tool_result becomes cached prefix
@@ -175,16 +213,27 @@ class CacheOptimizer(TokenStrategy):
             marked_indices.add(sys_idx)
             budget -= 1
 
+        non_sys = [
+            i for i in range(len(new_messages)) if i not in marked_indices and new_messages[i].get("role") != "system"
+        ]
+
+        # ── the compaction boundary, when the history flags one ──
+        # Taken from the rolling window's oldest slot, and only while the
+        # newest is left for the next call to read. The provider's look-back
+        # from that newest mark still finds what the oldest one would have
+        # held, so the window loses little; a boundary already inside it needs
+        # no slot of its own.
+        boundary = _compaction_boundary(new_messages)
+        if boundary is not None and budget > 1 and boundary not in non_sys[-budget:]:
+            new_messages[boundary] = _mark_message_tail(new_messages[boundary])
+            marked_indices.add(boundary)
+            budget -= 1
+
         # ── bp3..4 (or bp2..4 when no tools): rolling tail window ──
         # Place breakpoints on the last N non-system messages, where
         # N = remaining budget. This is the rolling-window approach that
         # covers both intra-turn tool chains and cross-turn prefix reuse.
         if budget > 0:
-            non_sys = [
-                i
-                for i in range(len(new_messages))
-                if i not in marked_indices and new_messages[i].get("role") != "system"
-            ]
             for idx in non_sys[-budget:]:
                 new_messages[idx] = _mark_message_tail(new_messages[idx])
                 marked_indices.add(idx)

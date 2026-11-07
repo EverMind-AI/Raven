@@ -9,7 +9,7 @@ the same question six ways and each looked reasonable alone.
 Tools never got the equivalent. Three rules decide whether a tool is offered to
 the model, one per family, each a different shape:
 
-    web_search   a resolved key, asked of the built tool
+    web_search   a resolved key or a vendor needing none, asked of the built tool
     web_fetch    nothing -- always registered, a key only improves extraction
     media x3     an api_key *or* a model, either one counting as configured
 
@@ -82,6 +82,12 @@ class Capability:
     #: Stated before the deployer switches it on rather than after: these cost
     #: money per call, and one cannot run at all without prepaid credit.
     cost_note: str = ""
+    #: :attr:`cost_note` for a section on a named provider, which bills it
+    #: instead of OpenRouter; empty where the note holds either way.
+    named_provider_cost_note: str = ""
+    #: The credential's path where it is not the section's own: a section on a
+    #: named provider runs on that provider's key (see :func:`resolve`).
+    key_field: str = ""
 
     @property
     def key_path(self) -> str:
@@ -91,6 +97,8 @@ class Capability:
         model field: naming a model path as where a key came from sends the
         deployer to edit a line that holds no credential.
         """
+        if self.key_field:
+            return self.key_field
         return f"tools.media.{self.media_attr}.apiKey" if self.media_attr else self.config_path
 
 
@@ -132,6 +140,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         media_attr="video",
         env_var="OPENROUTER_API_KEY",
         cost_note="Billed per call; needs prepaid OpenRouter credit to run at all.",
+        named_provider_cost_note="Billed per call.",
     ),
     Capability(
         tool="web_search",
@@ -178,11 +187,26 @@ def resolve(cap: Capability, config: "Config") -> Capability:
 
         spec = FETCH_PROVIDERS[config.tools.web.fetch.provider]
         return replace(cap, config_path=spec.config_path, env_var=spec.env_var, obtain_from=spec.signup)
+    if cap.media_attr:
+        from raven.config.schema import media_provider
+
+        runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
+        if runs_on and runs_on != "openrouter":
+            # That provider's key is the only one the section takes, and the
+            # provider bills it: OpenRouter's variable and credit do not reach it.
+            return replace(
+                cap,
+                key_field=f"providers.{runs_on}.apiKey",
+                env_var="",
+                cost_note=cap.named_provider_cost_note or cap.cost_note,
+            )
     return cap
 
 
 def _resolved_media(cap: Capability, config: "Config") -> Any:
-    """This tool's media section with the OpenRouter borrow already applied."""
+    """This tool's media section with what it borrows already applied: the named
+    provider's address, key and headers, or the OpenRouter key for a section calling
+    OpenRouter."""
     return getattr(config.effective_media_config(), cap.media_attr)
 
 
@@ -212,7 +236,7 @@ def is_configured(cap: Capability, config: "Config") -> bool:
         vendor = image_search_vendor(config.tools.web.search.provider, config.tools.web.vendor_key)
         return ImageSearchTool.is_configured(config.tools.web.vendor_key(vendor), vendor)
     provider = config.tools.web.search.provider
-    return WebSearchTool.is_configured(config.tools.web.vendor_key(provider), provider)
+    return WebSearchTool.is_configured(config.effective_web_vendor_key(provider), provider)
 
 
 def disabled_by(cap: Capability, config: "Config") -> str:
@@ -268,9 +292,12 @@ def has_credential(cap: Capability, config: "Config") -> bool:
     every call then fails on a missing key. A report that collapses the two
     ticks a capability that cannot run, which is the one thing it must not do.
 
-    The same answer twice for the other families -- web_search is configured by
-    a resolved key and nothing else, and web_fetch needs none -- so this only
-    ever diverges where the rule itself does.
+    They come apart for web_search too, with the opposite outcome: a vendor
+    that needs no key (Keenable) is configured without one and every call runs.
+    :func:`runs_keyless` names that state, so a report neither claims a key
+    nor warns about a missing one. web_fetch needs none, and image_search is
+    configured by a resolved key and nothing else, so for those this is the
+    same answer twice.
     """
     if cap.need is Need.NOTHING:
         return True
@@ -278,7 +305,29 @@ def has_credential(cap: Capability, config: "Config") -> bool:
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
         return _OpenRouterMediaTool.has_key(_resolved_media(cap, config))
+    from raven.agent.tools.web import WebSearchTool
+
+    if cap.tool == WebSearchTool.name:
+        provider = config.tools.web.search.provider
+        return WebSearchTool.has_key(config.effective_web_vendor_key(provider), provider)
     return is_configured(cap, config)
+
+
+def runs_keyless(cap: Capability, config: "Config") -> bool:
+    """Whether this capability is configured with no key because its vendor needs none.
+
+    The state :func:`has_credential` cannot tell apart from the media family's
+    on its own: configured, no key resolves, and yet every call runs, because
+    the selected web_search vendor answers unauthenticated at a lower rate
+    limit. A report that warned "calls will fail" here would send the deployer
+    to fix what works.
+
+    False wherever a key resolves, and for web_fetch, which needs nothing and
+    is never asked for a credential.
+    """
+    if cap.need is Need.NOTHING or cap.media_attr:
+        return False
+    return is_configured(cap, config) and not has_credential(cap, config)
 
 
 def configured_from(cap: Capability, config: "Config") -> str:
@@ -290,10 +339,11 @@ def configured_from(cap: Capability, config: "Config") -> str:
     have" and "needs a key" are different instructions, and a row that cannot
     tell them apart sends someone to create an account they already have.
 
-    Empty when the capability is unconfigured, when it needs nothing, and --
-    for the media family only -- when it is registered with no credential at
-    all: a section naming just a model is offered to the model and fails on
-    every call, so there is no source to name.
+    Empty when the capability is unconfigured, when it needs nothing, and when
+    it is registered with no credential at all: a media section naming just a
+    model is offered to the model and fails on every call, and web_search on a
+    vendor that needs no key runs without one (:func:`runs_keyless`), so in
+    neither case is there a source to name.
 
     Names a source; it does not rule on whether one exists. Callers wanting that
     answer ask :func:`has_credential`, which asks the tools -- inferring it from
@@ -302,12 +352,24 @@ def configured_from(cap: Capability, config: "Config") -> str:
     if cap.need is Need.NOTHING or not is_configured(cap, config):
         return ""
     if cap.media_attr:
-        if getattr(config.tools.media, cap.media_attr).api_key:
+        from raven.config.schema import media_provider
+
+        section = getattr(config.tools.media, cap.media_attr)
+        runs_on = media_provider(section)
+        # A section on a named provider runs on that provider's key, never its
+        # own, so its own key is not the source even when one is written there.
+        if runs_on and runs_on != "openrouter":
+            return f"borrowed: providers.{runs_on}.apiKey" if _resolved_media(cap, config).api_key else ""
+        if section.api_key:
             return cap.key_path
         # effective_media_config resolves the borrow, so a key present after it
         # but absent in the raw section came from the provider entry.
         if _resolved_media(cap, config).api_key:
             return f"borrowed: {_OPENROUTER_KEY}"
+        # The exported key below is OpenRouter's: it never reaches a section
+        # whose address is somewhere else.
+        if not runs_on:
+            return ""
     else:
         # Name the slot that actually holds the key: the vendor slot first, then
         # the pre-vendor Serper leaf a config written before the vendor layout
@@ -321,6 +383,10 @@ def configured_from(cap: Capability, config: "Config") -> str:
             return f"tools.web.providers.{provider}.apiKey"
         if provider == "serper" and config.tools.web.search.api_key:
             return "tools.web.search.apiKey"
+        from raven.config.schema import borrowed_web_key, web_vendor_llm_source
+
+        if borrowed_web_key(provider, config.providers):
+            return f"borrowed: providers.{web_vendor_llm_source(provider)}.apiKey"
     env_var = resolve(cap, config).env_var
     return env_var if os.environ.get(env_var) else ""
 
@@ -334,9 +400,20 @@ def borrowable_credential(cap: Capability, config: "Config") -> str:
     the tool is registered because a model alone counts, and every call then
     fails on a credential they were told they already had.
 
-    Empty for the other families, whose own rows already name what to set.
+    Empty for the other families, whose own rows already name what to set, and
+    for a section pointed at an address no configured provider serves.
     """
     if not cap.media_attr:
+        return ""
+    from raven.config.schema import media_provider
+
+    runs_on = media_provider(getattr(config.tools.media, cap.media_attr))
+    if runs_on and runs_on != "openrouter":
+        from raven.config.update_providers import provider_connection
+
+        api_base, api_key, _ = provider_connection(runs_on, config.providers.get(runs_on))
+        return f"providers.{runs_on}.apiKey" if api_base and api_key else ""
+    if not runs_on:
         return ""
     openrouter = config.providers.get("openrouter")
     if openrouter and openrouter.api_key:
@@ -352,4 +429,5 @@ __all__ = [
     "configured_from",
     "has_credential",
     "is_configured",
+    "runs_keyless",
 ]

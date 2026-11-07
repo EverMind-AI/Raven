@@ -84,3 +84,40 @@ def read(said: str) -> tuple[str, Remedy | None] | None:
     if _SERVER.search(said):
         return (f"its model provider returned a server error. It said: {said}", None)
     return None
+
+
+# How each sentence above opens, as Copilot writes it. A task's answer can open
+# with an error it found ("Error: 502 Bad Gateway from staging"); Copilot's own
+# refusals are these fixed sentences, and nothing else is read as one.
+_REFUSAL_OPENING = re.compile(
+    r"Error: (?:"
+    r"Authentication failed with provider at "
+    r"|\d{3} Your credit balance is too low"
+    r"|\d{3} Your Copilot subscription has expired"
+    r"|Model '[^']+' not found on provider at "
+    r"|Could not connect to local model provider"
+    r"|Execution failed: Failed to get response from the AI model"
+    r"|Failed to get response from the AI model; retried"
+    r")",
+    re.IGNORECASE,
+)
+# Longer than any refusal above: the longest measured runs to under 300 characters.
+_REFUSAL_MAX_CHARS = 1000
+
+
+def read_reply(reply: str) -> tuple[str, Remedy | None] | None:
+    """:func:`read`, for the answer to a dispatched task rather than to a ping.
+
+    Every refusal above came back as the whole assistant message. A real answer
+    can cite the same words -- a 500 in the log of a deploy it is debugging, an
+    error a request it was asked to make returned -- and failing it for that
+    would lose the work, so a reply is read only when it opens the way one of
+    Copilot's own refusals does, and only when it is as short as one: a long
+    reply is work, and the patterns above are not run over text that size. A
+    ping's reply answers a one-word prompt, which is why the connect reads it as
+    it is.
+    """
+    said = reply.strip()
+    if len(said) > _REFUSAL_MAX_CHARS or not _REFUSAL_OPENING.match(said):
+        return None
+    return read(said)

@@ -32,6 +32,7 @@ import difflib
 import json
 import re
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 from loguru import logger
@@ -152,7 +153,9 @@ _YOURS = {
     "silent": "It gave no reason. Run `{command}` with exec; it prints what its model provider answered.",
     "exited": "It quit on start; its last words are in the refusal. Fix what they name (a dependency, a flag, "
     "its config), then retry.",
-    "download": "Fetching it failed. Run `{command}` once with exec (nothing times it out there), then retry.",
+    "download": "Fetching it failed or ran out of time; the refusal says which. Fix what it names (the network, "
+    "the npm registry or the proxy), then retry. Do not fetch it yourself with exec: exec's time limit ends a "
+    "fetch part-way, and npx cannot start a copy left that way.",
     "upgrade": "It is too old to be connected. Upgrade it with `{command}`, then retry.",
     "runtime": "Its Node.js is too old (needs {needs}, found {found}). Upgrade Node.js{with_command}, then retry.",
     "model": "Its provider will not serve the model it is set to. Pick another one it lists and retry.",
@@ -194,7 +197,7 @@ def _model_check(value: str, row: dict[str, Any]) -> str:
     return f"The agent does not list it ({', '.join(choices[:12])}); it may refuse it -- pick one of those."
 
 
-_ADD_KEYS = ("preset", "name", "description", "model", "lend_key")
+_ADD_KEYS = ("preset", "name", "description", "model", "lend_key", "machine", "remote_cwd")
 
 
 def _add_params(value: dict[str, Any]) -> dict[str, Any]:
@@ -241,15 +244,34 @@ def _lend_line(preset: str, name: str | None, can_lend: list[str]) -> str:
 
 
 def _what_it_needs(
-    preset: str, row: dict[str, Any], *, remedy: dict[str, Any] | None, detail: str, model: str
+    preset: str,
+    row: dict[str, Any],
+    *,
+    remedy: dict[str, Any] | None,
+    detail: str,
+    model: str,
+    machine: str | None = None,
 ) -> list[str]:
-    """The next step for one agent that did not answer, read off its refusal's remedy."""
-    from raven.agent.subagent.presets import DIAGNOSE_HINTS
+    """The next step for one agent that did not answer, read off its refusal's remedy.
 
+    On a registered machine the fix is made there: the agent, its install and
+    its sign-in are all on that machine. exec can look there -- it takes the
+    machine's id -- but a sign-in or an install is the user's, in a terminal of
+    their own on it.
+    """
+    from raven.agent.subagent.presets import diagnose_hint_for
+
+    if machine:
+        lines = [
+            f"- It runs on machine {machine!r}, so the fix is made there by the user, in a terminal on that "
+            f"machine: install, sign-in or setup, as the refusal says. exec(machine={machine!r}) can look there "
+            "first (command -v <agent>, its --version), capped at 60s; it is not where a sign-in or an install "
+            "happens. Tell the user what the refusal and the look said, then retry once they have."
+        ]
+        return lines + _menu_line(row, model)
     remedy = remedy or {}
     kind = str(remedy.get("kind") or "")
     fallback = {
-        "download": "its launch command (npx -y <package> --version fetches it)",
         "config": "its own config check (its --help names it: doctor, config validate)",
     }.get(kind, "its own sign-in or setup command (find it in its --help: login, auth, onboard, configure)")
     fields = {
@@ -272,16 +294,45 @@ def _what_it_needs(
             "one; the user confirms. Then retry."
         ]
     else:
-        run = DIAGNOSE_HINTS.get(preset)
+        run = diagnose_hint_for(SimpleNamespace(preset=preset, model=row.get("model")))
         lines = [
             f"- Run `{run}` with exec; it prints the answer its model provider gave."
             if run
             else "- Run it on its own with exec in its one-shot mode (its --help names it); that prints the real error."
         ]
+    return lines + _menu_line(row, model)
+
+
+def _menu_line(row: dict[str, Any], model: str) -> list[str]:
+    """The agent's own model menu, when it was measured: the retry for a model its provider refused."""
     choices = [c.get("value") for c in row.get("model_choices") or [] if isinstance(c, dict) and c.get("value")]
-    if choices:
-        lines.append(f"- Models it lists: {', '.join(str(c) for c in choices[:12])}. To try another, {model}.")
-    return lines
+    if not choices:
+        return []
+    return [f"- Models it lists: {', '.join(str(c) for c in choices[:12])}. To try another, {model}."]
+
+
+def _machines_line() -> str | None:
+    """The usable registered machines a preset can be added on, or nothing when none are registered."""
+    from raven.ops import connections
+
+    try:
+        rows = connections.usable(connections.load())
+    except (OSError, ValueError):
+        return None
+    names = [
+        f"{row['id']} ({row['display_name']})" if row.get("display_name") else str(row["id"])
+        for row in rows
+        if row.get("id") and connections.transport_of(row) == connections.SSH
+    ]
+    if not names:
+        return None
+    return (
+        f"  machines a preset can be added on: {', '.join(names)} -- add subagents "
+        '{"preset": "<preset>", "machine": "<id>", "remote_cwd"?: "~/raven-work"}: an acp or cli preset runs '
+        "there, signed in there, though a mirasim_* preset runs only here; an openai preset's endpoint is "
+        "reached from there through an ssh tunnel (no remote_cwd); the name defaults to <preset>@<id>, and a preset "
+        "the machine already has is refused under it, naming the entry there -- pass a name to add a second one"
+    )
 
 
 def _fix_rules(retry: str) -> list[str]:
@@ -306,7 +357,7 @@ def _fix_it_yourself(
     preset: str, row: dict[str, Any], *, remedy: dict[str, Any] | None, detail: str, retry: str, model: str
 ) -> str:
     """What to do about an agent that did not answer: fix what Raven can, ask only for what needs the user."""
-    needs = _what_it_needs(preset, row, remedy=remedy, detail=detail, model=model)
+    needs = _what_it_needs(preset, row, remedy=remedy, detail=detail, model=model, machine=row.get("machine"))
     rules = _fix_rules(retry)
     return "\n".join([rules[0], *needs, *rules[1:]])
 
@@ -315,22 +366,40 @@ _MEDIA_MODEL = re.compile(r"^tools\.media\.(?P<kind>image|speech|video)\.model$"
 
 
 def _media_needs(raw: dict[str, Any], path: str) -> str:
-    """What else an unset media model needs, read from the keys actually on file.
+    """What else an unset media model needs, given the keys this install has.
 
-    The rule is the schema's (an empty media key falls back to the one under
-    ``providers.openrouter``); whether a model alone is enough depends on
-    whether that key or the tool's own is set, so it is said per install
-    rather than as a fixed sentence that is wrong wherever neither is.
+    The section is resolved by ``config.schema``'s own resolver as it would
+    stand once a model is set, then put to the tool's own ``has_key``, so a key
+    counts wherever the tool would find it: the provider the image section
+    names (flat or on an endpoint, under any spelling), ``providers.openrouter``
+    or ``OPENROUTER_API_KEY`` while the section calls OpenRouter, and nobody for
+    a section pointed elsewhere. Whether a model alone is enough depends on
+    whether that key or the tool's own is set, so it is said per install rather
+    than as a fixed sentence that is wrong wherever neither is.
     """
     found = _MEDIA_MODEL.match(path)
     if found is None:
         return ""
+    from raven.agent.tools.media_gen import _OpenRouterMediaTool
+    from raven.config.schema import live_media_tool_config, media_provider
+
     kind = found["kind"]
-    _, own = surface.lookup(raw, f"tools.media.{kind}.apiKey")
-    _, lent = surface.lookup(raw, "providers.openrouter.apiKey")
-    if own or lent:
+    _, section = surface.lookup(raw, f"tools.media.{kind}")
+    # Only a section naming a model borrows, and the question is what one would.
+    staged = {**(section if isinstance(section, dict) else {}), "model": "any"}
+    resolved = live_media_tool_config(staged, raw.get("providers"), kind)
+    if resolved is None:
+        return ""
+    if _OpenRouterMediaTool.has_key(resolved):
         return "a model is all it lacks: a key it can use is already set"
-    return f"it also needs a key: tools.media.{kind}.apiKey, or one under providers.openrouter"
+    runs_on = media_provider(resolved)
+    if runs_on and runs_on != "openrouter":
+        wanted = f"one under providers.{runs_on}, the provider it runs on"
+    elif runs_on:
+        wanted = f"tools.media.{kind}.apiKey, or one under providers.openrouter"
+    else:
+        wanted = f"tools.media.{kind}.apiKey"
+    return f"it also needs a key: {wanted}"
 
 
 def _compact(value: Any) -> str:
@@ -571,7 +640,7 @@ class RavenConfigTool(Tool):
     def _setting_line(
         self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None, *, detail: bool
     ) -> str:
-        value = self._value_view(raw, setting, path, roles)
+        value = self._stored_view(raw, setting, path, roles)
         if isinstance(value, dict) and set(value) == {"default"}:
             default = value["default"]
             if default in (None, "", [], {}) and setting.unset_means:
@@ -582,6 +651,8 @@ class RavenConfigTool(Tool):
                 shown = f"{_compact(default)} (default)"
         else:
             shown = _compact(value)
+        if setting.in_effect is not None:
+            shown += f", in effect: {_compact(setting.in_effect(raw))}"
         line = f"  {path} = {shown} [{self._meta(setting)}] {setting.summary}"
         if shown.startswith("not set") and (missing := _media_needs(raw, path)):
             line += f"; {missing}"
@@ -627,6 +698,8 @@ class RavenConfigTool(Tool):
             view = self._subagent_view(row)
             state = "not added" if view.get("added") is False else ("on" if view.get("enabled") else "off")
             bits = [state, str(view.get("kind") or "")]
+            if view.get("machine"):
+                bits.append(f"on machine {view['machine']}")
             if view.get("model"):
                 bits.append(f"model {view['model']}")
             if view.get("status") not in (None, "ready", "installed"):
@@ -641,6 +714,8 @@ class RavenConfigTool(Tool):
             "not listed here cannot be connected from here; several agents go in one add as a list; "
             "describe subagents.<name> for one agent's settings and health"
         )
+        if machines := _machines_line():
+            lines.append(machines)
         return lines
 
     async def _search_reply(self, query: str, raw: dict[str, Any]) -> str:
@@ -734,6 +809,8 @@ class RavenConfigTool(Tool):
     def _subagent_view(row: dict[str, Any]) -> dict[str, Any]:
         """One roster row with what explains a failure: added or not, health, the last test."""
         out: dict[str, Any] = {k: row.get(k) for k in ("name", "kind", "enabled", "description", "model")}
+        if row.get("machine"):
+            out["machine"] = row["machine"]
         if not (row.get("configured") or row.get("builtin") or row.get("vendored")):
             preset = row.get("preset") or row.get("name")
             out["added"] = False
@@ -808,6 +885,13 @@ class RavenConfigTool(Tool):
         return _dump({path: self._value_view(raw, found[0], path, roles)})
 
     def _value_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None = None) -> Any:
+        view = self._stored_view(raw, setting, path, roles)
+        if setting.in_effect is None:
+            return view
+        stored = view if isinstance(view, dict) and set(view) == {"default"} else {"value": view}
+        return stored | {"in_effect": setting.in_effect(raw)}
+
+    def _stored_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None) -> Any:
         if setting.session:
             now = self._conversation_model()
             return now if now is not None else "unknown outside a conversation"
@@ -891,8 +975,8 @@ class RavenConfigTool(Tool):
             present, _ = surface.lookup(await asyncio.to_thread(surface.read_raw), instance)
             if not present:
                 raise LookupError(f"{instance} is not configured; describe {setting.path.split('.*')[0]} first")
-        previous = await self._write(setting, path, bound, value)
-        return self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value)
+        previous, warning = await self._write(setting, path, bound, value)
+        return self._report(path, setting.effect, previous, value, warning=warning) + self._unknown_tools(path, value)
 
     async def _set_many(self, changes: dict[str, Any]) -> str:
         """Several settings under the one confirmation the user already gave.
@@ -943,8 +1027,11 @@ class RavenConfigTool(Tool):
                 if setting.secret:
                     lines.append(await self._secret_outcome(path, setting, value))
                     continue
-                previous = await self._write(setting, path, bound, value)
-                lines.append(self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value))
+                previous, warning = await self._write(setting, path, bound, value)
+                lines.append(
+                    self._report(path, setting.effect, previous, value, warning=warning)
+                    + self._unknown_tools(path, value)
+                )
             for name, fields in channels.items():
                 lines.append(await self._set_channel_fields(name, fields))
             for path, value in agents:
@@ -990,13 +1077,21 @@ class RavenConfigTool(Tool):
         model, own = self._session_model(conversation)
         return model if own else f"{model} (the default)"
 
-    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> Any:
+    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> tuple[Any, str]:
+        """Write through the setting's owner: ``(previous, warning)``.
+
+        The warning is the owner's own sentence for a write that costs more than
+        the value -- a reload the serving process still owes -- and is empty
+        when it has nothing to add.
+        """
         writer = setting.writer
         if writer == "raw":
-            return await asyncio.to_thread(surface.write_value, path, value)
+            return await asyncio.to_thread(surface.write_value, path, value), ""
         if writer == "settings":
             result = await self._rpc("settings.set", {"key": path, "value": value})
-            return result.get("previous") if isinstance(result, dict) else None
+            previous = result.get("previous") if isinstance(result, dict) else None
+            warning = result.get("warning") if isinstance(result, dict) else None
+            return previous, str(warning) if warning else ""
         if writer == "config.model":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1008,7 +1103,7 @@ class RavenConfigTool(Tool):
                     raise ValueError("session.model needs a conversation; this call is not part of one")
                 params |= {"scope": "session", "session_id": conversation}
             result = await self._rpc("config.set", params)
-            return result.get("previous") if isinstance(result, dict) else None
+            return (result.get("previous") if isinstance(result, dict) else None), ""
         if writer == "everos":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1017,11 +1112,11 @@ class RavenConfigTool(Tool):
             await self._rpc(
                 "settings.everos_set", {"section": path.rsplit(".", 1)[1], "model": model, "provider": provider}
             )
-            return previous
+            return previous, ""
         if writer == "model.fields":
             result = await self._rpc("model.set_fields", {"slug": bound[0], "fields": {"api_base": value}})
             previous = result.get("previous") if isinstance(result, dict) else None
-            return previous.get("api_base") if isinstance(previous, dict) else previous
+            return (previous.get("api_base") if isinstance(previous, dict) else previous), ""
         raise ValueError(f"{path} has no writer in this process")
 
     async def _unset(self, path: str) -> str:
@@ -1179,8 +1274,8 @@ class RavenConfigTool(Tool):
         specs = value if isinstance(value, list) else [value]
         if not specs or not all(isinstance(v, dict) and isinstance(v.get("preset"), str) for v in specs):
             raise ValueError(
-                'add takes {"preset": "<preset>", "model"?: ...} for an agent in the describe list -- or a list '
-                "of those to connect several under one confirmation"
+                'add takes {"preset": "<preset>", "model"?: ..., "machine"?: "<registered machine>"} for an agent '
+                "in the describe list -- or a list of those to connect several under one confirmation"
             )
         params_list = [_add_params(v) for v in specs]
         rows: list[dict[str, Any]] | None = None
@@ -1208,10 +1303,11 @@ class RavenConfigTool(Tool):
                     row = row | {"model_choices": [{"value": m} for m in refusal["models"]]}
                 needs = _what_it_needs(
                     str(params.get("preset") or ""),
-                    row,
+                    row | {"model": params.get("model") or row.get("model")},
                     remedy=remedy if isinstance(remedy, dict) else None,
                     detail=text,
                     model=f"add with {json.dumps(again, ensure_ascii=False)}",
+                    machine=params.get("machine"),
                 )
                 failed.append("\n".join([f"Not added: {text}", *needs]))
                 continue
@@ -1293,7 +1389,7 @@ class RavenConfigTool(Tool):
 
     # -- helpers ---------------------------------------------------------------
 
-    def _report(self, path: str, effect: Effect, previous: Any, value: Any) -> str:
+    def _report(self, path: str, effect: Effect, previous: Any, value: Any, *, warning: str = "") -> str:
         line = (
             f"Set {path}: {json.dumps(previous, ensure_ascii=False, default=str)} -> "
             f"{json.dumps(value, ensure_ascii=False, default=str)}. It {EFFECT_TEXT[effect]}."
@@ -1304,6 +1400,8 @@ class RavenConfigTool(Tool):
                 f" Pending until {'a restart' if effect is Effect.RESTART else 'a reload'}: "
                 f"{sorted(self._pending)}. Batch further changes first, then call restart once."
             )
+        if warning:
+            line += f" {warning}"
         return line
 
     def _unknown_tools(self, path: str, value: Any) -> str:

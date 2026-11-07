@@ -1295,3 +1295,39 @@ async def test_a_third_answer_supersedes_a_superseder_stuck_in_cleanup(workspace
 
     assert loop.tools.has("mcp_c_search"), "the newest admitted answer lands at its own boundary"
     assert not loop.tools.has("mcp_a_search")
+
+
+# ---------------------------------------------------------------------------
+# The Agent Plugin package layer
+# ---------------------------------------------------------------------------
+
+
+def test_a_package_server_is_added_to_the_hosts_set(workspace) -> None:
+    loop = _loop(
+        workspace,
+        {"host": MCPServerConfig(command="echo")},
+        package_mcp_servers={"pkg__srv": MCPServerConfig(command="echo")},
+    )
+
+    merged = loop._with_package_servers({"host": MCPServerConfig(command="echo")})
+
+    assert set(merged) == {"host", "pkg__srv"}
+
+
+def test_a_host_server_keeps_its_name_on_a_package_collision(workspace) -> None:
+    """The operator configured it; a package may not replace it."""
+    host = MCPServerConfig(type="streamableHttp", url="https://host.invalid/mcp")
+    package = MCPServerConfig(type="streamableHttp", url="https://pkg.invalid/mcp")
+    loop = _loop(workspace, package_mcp_servers={"acme__search": package})
+
+    merged = loop._with_package_servers({"acme__search": host})
+
+    assert merged["acme__search"].url == "https://host.invalid/mcp"
+
+
+def test_the_no_answer_sentinel_survives_the_package_layer(workspace) -> None:
+    """``None`` means "the file said nothing"; a package layer must not turn it
+    into an answer, or the next reconcile detaches every host server."""
+    loop = _loop(workspace, package_mcp_servers={"pkg__srv": MCPServerConfig(command="echo")})
+
+    assert loop._with_package_servers(None) is None

@@ -20,6 +20,11 @@ history.
   header; the stylesheet lifts it in the light theme rather than editing the
   file. Neither icon set below carries an AMD mark, which is why this one comes
   straight from the vendor.
+- Opper's mark, `ui-web/src/assets/providers/opper.svg`, is supplied by Opper,
+  the vendor, with the change that added the Opper row, and shown to identify
+  that row on the same nominative basis. It is drawn in `currentColor`, so the
+  dark theme inverts it the way it does `vllm.svg`. Neither icon set below
+  carries an Opper mark, which is why this one comes straight from the vendor.
 - The channel marks under `ui-web/src/assets/channels/` come straight from the
   vendors too, on the same nominative basis: each identifies the channel row it
   sits on. Nine are the app icons the vendors publish on their App Store
@@ -47,11 +52,14 @@ history.
   the artwork is unaltered in design or colour; only the embedded PNG is
   resampled to 96x96, which `cmp` will therefore not match for this file alone.
   Regenerate it with scripts/refresh_dmxapi_mark.py.
-- `MIT-lobe-icons.txt` - twelve of the fourteen sub-agent brand marks under
-  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those twelve keep
+- `MIT-lobe-icons.txt` - fifteen of the eighteen sub-agent brand marks under
+  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those fifteen keep
   upstream's filenames, so each is byte-identical to the one
   `@lobehub/icons-static-svg@1.95.0` ships under that name and the attribution is checkable
-  with `cmp` rather than by trust. `raven.svg` is this project's own mark, drawn here and
-  not upstream's, so no `cmp` applies to it. The rest of `providers/` moved to the vendors'
+  with `cmp` rather than by trust. The other three on the same nominative basis as the
+  vendor marks above: `raven.svg` is this project's own mark, drawn here and not upstream's;
+  `miromind.svg` is MiroMind's own favicon; `mirasim.svg` is the mark mirasim.ai serves for
+  itself at `/icon.svg`, copied byte for byte from the drawing its `marks.tsx` shares. No
+  `cmp` applies to those three. The rest of `providers/` moved to the vendors'
   own colour marks; see the Cherry Studio entry above.
 - `MIT-nanobot.txt` - Nanobot license notice.

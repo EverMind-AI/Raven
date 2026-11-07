@@ -14,7 +14,7 @@
  */
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
-import type { TaskCounts, TaskNode, TaskRow } from '../generated'
+import type { TaskBoard, TaskBoardCard, TaskCounts, TaskGroup, TaskNode, TaskRow } from '../generated'
 
 const MIN = 60000
 const SEC = 1000
@@ -22,7 +22,7 @@ const SEC = 1000
 function node(over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'status'>): TaskNode {
   return {
     node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null, error: null,
-    tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null, has_output: null,
+    tokens_in: null, tokens_out: null, tool_call_count: null, has_output: null,
     prompt_template: null, files: [],
     ...over,
   }
@@ -31,7 +31,7 @@ function node(over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'st
 function counts(nodes: readonly TaskNode[]): TaskCounts {
   const c: TaskCounts = {
     total: nodes.length, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0,
-    cancelled: 0, interrupted: 0, exception: 0,
+    cancelled: 0, interrupted: 0, exception: 0, not_executed: 0,
   }
   nodes.forEach((n) => {
     switch (n.status) {
@@ -43,6 +43,7 @@ function counts(nodes: readonly TaskNode[]): TaskCounts {
       case 'cancelled': c.cancelled += 1; break
       case 'interrupted': c.interrupted += 1; break
       case 'exception': c.exception += 1; break
+      case 'not_executed': c.not_executed += 1; break
     }
   })
   return c
@@ -66,7 +67,7 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
       node_id: 'survey', agent: 'Raven-Research', status: 'completed',
       node_summary: 'Survey what changed since the last release',
       started_at: started, ended_at: started + 40 * SEC, tokens_in: 1200, tokens_out: 340,
-      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+      tool_call_count: 3, has_output: true,
       prompt_template: 'Survey the changelog and open PRs since {{ inputs.since }}.',
       inputs: { since: 'v0.4.0' },
       files: [{ path: '/work/notes/survey.md', op: 'write', add: 28, del: 0, size: 1180 }],
@@ -75,13 +76,13 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
       node_id: 'draft_notes', agent: 'Raven', status: 'completed', depends_on: ['survey'],
       node_summary: 'Draft the release notes from the survey',
       started_at: started + 41 * SEC, ended_at: started + 95 * SEC, tokens_in: 900, tokens_out: 520,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       prompt_template: 'Draft release notes from {{ survey.output }}.',
     }),
     node({
       node_id: 'render_deck', agent: 'Raven-Code', status: 'running', depends_on: ['survey'], instance: 'w1',
       node_summary: 'Render a one-slide summary deck',
-      started_at: started + 41 * SEC, tool_call_count: 2, tool_failure_count: 0,
+      started_at: started + 41 * SEC, tool_call_count: 2,
       prompt_template: 'Render one slide summarising {{ survey.output }}.',
       skills: ['deck-render'], mcps: [],
     }),
@@ -103,7 +104,7 @@ function scenarioForkJoin(env: FixtureEnv): TaskRow[] {
     node({
       node_id: 'render_deck_v1', agent: 'Raven-Code', status: 'exception',
       node_summary: 'Render a one-slide summary deck',
-      started_at: started - 90 * SEC, tool_call_count: 1, tool_failure_count: 0,
+      started_at: started - 90 * SEC, tool_call_count: 1,
     }),
   ]
   const superseded = row({
@@ -139,7 +140,7 @@ function scenarioPlaybookFailed(env: FixtureEnv): TaskRow[] {
       node_id: 'nightly-checks-a1b2c3-setup', agent: 'Raven', status: 'completed',
       node_summary: 'Prepare the test environment',
       started_at: started, ended_at: started + 30 * SEC, tokens_in: 300, tokens_out: 90,
-      tool_call_count: 2, tool_failure_count: 0, has_output: true,
+      tool_call_count: 2, has_output: true,
     }),
     node({
       node_id: 'nightly-checks-a1b2c3-run_tests', agent: 'Raven-Code', status: 'failed',
@@ -147,7 +148,7 @@ function scenarioPlaybookFailed(env: FixtureEnv): TaskRow[] {
       node_summary: 'Run the regression suite',
       started_at: started + 31 * SEC, ended_at: started + 210 * SEC,
       error: 'pytest: 3 assertions failed in test_login.py (test_expired_token, test_locked_account, test_mfa_retry)',
-      tokens_in: 4100, tokens_out: 260, tool_call_count: 5, tool_failure_count: 2, has_output: true,
+      tokens_in: 4100, tokens_out: 260, tool_call_count: 5, has_output: true,
       skills: ['pytest-runner'],
     }),
     node({
@@ -177,13 +178,13 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
       node_id: 'inspect', agent: 'Raven-Code', status: 'completed',
       node_summary: 'Read the current payment callback module',
       started_at: started, ended_at: started + 22 * SEC, tokens_in: 800, tokens_out: 140,
-      tool_call_count: 2, tool_failure_count: 0, has_output: true,
+      tool_call_count: 2, has_output: true,
     }),
     node({
       node_id: 'patch', agent: 'Raven-Code', status: 'completed', depends_on: ['inspect'],
       node_summary: 'Fix the missing null check on the webhook signature',
       started_at: started + 23 * SEC, ended_at: started + 96 * SEC, tokens_in: 1500, tokens_out: 610,
-      tool_call_count: 3, tool_failure_count: 0, has_output: true,
+      tool_call_count: 3, has_output: true,
       /* The four verdicts a folded touch can carry, one node apart: an edit in
          place, a file the node removed (no size -- there is nothing left to
          measure), and below, a file it created against one it rewrote. */
@@ -196,7 +197,7 @@ function scenarioCompletedWithFiles(env: FixtureEnv): TaskRow[] {
       node_id: 'verify', agent: 'Raven-Code', status: 'completed', depends_on: ['patch'],
       node_summary: 'Run the payments test suite',
       started_at: started + 97 * SEC, ended_at: started + 150 * SEC, tokens_in: 700, tokens_out: 90,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       files: [
         { path: '/work/reports/payments-verify.md', op: 'add', add: 18, del: 0, size: 640 },
         { path: '/work/reports/index.md', op: 'write', add: 6, del: 2, size: 210 },
@@ -227,7 +228,7 @@ function scenarioManyFiles(env: FixtureEnv): TaskRow {
     node({
       node_id: 'ai-hotspot-deck', agent: 'Raven-Design', status: 'running', instance: 'ai_hotspot_deck',
       node_summary: 'Turn the AI news survey into a deck',
-      started_at: started, tokens_in: 4200, tokens_out: 900, tool_call_count: 41, tool_failure_count: 0,
+      started_at: started, tokens_in: 4200, tokens_out: 900, tool_call_count: 41,
       files: DECK_ASSETS.map((name, i) => ({
         path: `/work/deck/assets/${name}`, op: 'add' as const, add: 0, del: 0, size: 2300 + ((i * 7919) % 900) * 1024,
       })),
@@ -250,7 +251,7 @@ function scenarioTwoSpawns(env: FixtureEnv): TaskRow[] {
       node_id: 'write-install-section', agent: 'Raven', status: 'completed',
       node_summary: 'Write the installer README section',
       started_at: okStart, ended_at: okStart + 54 * SEC, tokens_in: 640, tokens_out: 410,
-      tool_call_count: 1, tool_failure_count: 0, has_output: true,
+      tool_call_count: 1, has_output: true,
       files: [{ path: '/work/README.md', op: 'write', add: 40, del: 0, size: 1536 }],
     }),
   ]
@@ -266,7 +267,7 @@ function scenarioTwoSpawns(env: FixtureEnv): TaskRow[] {
       node_summary: 'Scan dependencies for known CVEs',
       started_at: failStart, ended_at: failStart + 38 * SEC,
       error: 'The vendor advisory feed answered 503 three times in a row; nothing was substituted for it.',
-      tokens_in: 500, tokens_out: 70, tool_call_count: 4, tool_failure_count: 3, has_output: false,
+      tokens_in: 500, tokens_out: 70, tool_call_count: 4, has_output: false,
     }),
   ]
   const failed = row({
@@ -288,7 +289,7 @@ function scenarioInterrupted(env: FixtureEnv): TaskRow[] {
       node_id: 'fetch', agent: 'Raven-Research', status: 'completed',
       node_summary: 'Fetch the source documents to index',
       started_at: started, ended_at: started + 60 * SEC, tokens_in: 900, tokens_out: 120,
-      tool_call_count: 4, tool_failure_count: 0, has_output: true,
+      tool_call_count: 4, has_output: true,
     }),
     node({
       node_id: 'transform', agent: 'Raven-Code', status: 'interrupted', depends_on: ['fetch'],
@@ -317,7 +318,7 @@ function scenarioSkippedLayer(env: FixtureEnv): TaskRow[] {
   const research = (id: string, summary: string, took: number): TaskNode => node({
     node_id: id, agent: 'Raven-Research', status: 'completed', instance: id.replace('research_', 'research-'),
     node_summary: summary, started_at: started, ended_at: started + took, tokens_in: 5200, tokens_out: 2100,
-    tool_call_count: 14, tool_failure_count: 0, has_output: true,
+    tool_call_count: 14, has_output: true,
   })
   const nodes = [
     research('research_rl_llm', 'Survey recent progress in RL for LLMs', 15 * MIN + 9 * SEC),
@@ -344,6 +345,54 @@ function scenarioSkippedLayer(env: FixtureEnv): TaskRow[] {
   })]
 }
 
+/* Scenario 7, session 'f': a graph that branched. The router chose one route of two, so the
+   other branch -- and the step that waited only on it -- was left out; a second decision, which
+   may choose any number of routes, chose none. The task is simply completed: a branch the run
+   did not take is not a step that went wrong. */
+function scenarioBranched(env: FixtureEnv): TaskRow[] {
+  const now = env.now()
+  const started = now - 25 * MIN
+  const nodes = [
+    node({
+      node_id: 'triage', agent: 'Raven', status: 'completed',
+      node_summary: 'Decide whether the report is a question or a bug',
+      started_at: started, ended_at: started + 20 * SEC, tokens_in: 420, tokens_out: 60,
+      tool_call_count: 1, has_output: true,
+      routes: ['question', 'bug'], select: 'one', selected_routes: ['question'],
+      route_evidence: 'The user asks how to reset a password; nothing in the message describes a failure.',
+    }),
+    node({
+      node_id: 'answer', agent: 'Raven', status: 'completed', depends_on: ['triage'], when: 'triage.question',
+      node_summary: 'Answer the question from the docs',
+      started_at: started + 21 * SEC, ended_at: started + 66 * SEC, tokens_in: 900, tokens_out: 310,
+      tool_call_count: 3, has_output: true,
+    }),
+    node({
+      node_id: 'reproduce', agent: 'Raven-Code', status: 'not_executed', depends_on: ['triage'], when: 'triage.bug',
+      node_summary: 'Reproduce the failure', reason: 'when_false',
+    }),
+    node({
+      node_id: 'patch', agent: 'Raven-Code', status: 'not_executed', depends_on: ['reproduce'],
+      node_summary: 'Write a patch for it', reason: 'upstream_not_executed',
+    }),
+    node({
+      node_id: 'label', agent: 'Raven', status: 'completed', depends_on: ['answer'],
+      node_summary: 'Add any labels that apply',
+      started_at: started + 67 * SEC, ended_at: started + 80 * SEC, tokens_in: 300, tokens_out: 40,
+      tool_call_count: 1, has_output: true,
+      routes: ['docs', 'billing'], select: 'many', selected_routes: [],
+    }),
+    node({
+      node_id: 'tag_docs', agent: 'Raven', status: 'not_executed', depends_on: ['label'], when: 'label.docs',
+      node_summary: 'Tag the thread as docs', reason: 'when_false',
+    }),
+  ]
+  return [row({
+    id: '20260918T091000000000Z-branch5e', kind: 'dag', status: 'completed', nodes,
+    task_summary: 'Triage an incoming support message', started_at: started, ended_at: started + 80 * SEC,
+  })]
+}
+
 export interface TasksFixture {
   fixtures: Fixtures
 }
@@ -359,7 +408,66 @@ export function createTasks(env: FixtureEnv): TasksFixture {
     ['h', scenarioTwoSpawns(env)],
     ['d', scenarioInterrupted(env)],
     ['c', scenarioSkippedLayer(env)],
+    ['f', scenarioBranched(env)],
   ])
+
+  /* The host's Task Board for four of the conversations above, so the offline
+     page draws both halves of the tab: groups whose steps hang those Tasks,
+     and (everywhere else) the Unassigned row a session from before the board
+     shows. Between them the Task Board page gets a card in every category --
+     the interrupted run's group is the idle one: it says running, and the run
+     a restart cut off says otherwise. */
+  const groupOf = (id: string, rows: TaskRow[], step: string, summary: string, status: TaskGroup['status']): TaskGroup => {
+    const at = Math.min(...rows.map((r) => r.started_at ?? env.now()))
+    return {
+      id, title: rows[0]?.task_summary || id, summary, status, created_at: at, updated_at: at,
+      steps: [{
+        id: `s_${id}`, turn_at: new Date(at).toISOString(), turn_id: null, title: step,
+        summary: status === 'needs_you'
+          ? `Asked the user whether the result looks right or should change. ${summary}.`
+          : `${summary}.`,
+        questions: status === 'needs_you' ? ['Does the result look right to you, or should it change?'] : [],
+        tasks: rows.map((r) => ({ kind: r.kind, id: r.id, summary: r.task_summary || r.id })),
+      }],
+    }
+  }
+  const boards = new Map<string, TaskBoard>()
+  /* A group as the Task Board page's card, by the rule `tasks.boards` keeps:
+     needs_you and completed stand as marked; any other group is running while
+     a row it links still runs, and idle otherwise. */
+  const cardOf = (key: string, g: TaskGroup): TaskBoardCard => {
+    const rows = bySession.get(key) ?? []
+    const links = new Set(g.steps.flatMap((s) => s.tasks.map((t) => `${t.kind}:${t.id}`)))
+    const live = rows.filter((r) => links.has(`${r.kind}:${r.id}`) && r.status === 'running')
+    const category = g.status === 'needs_you' || g.status === 'completed' ? g.status
+      : live.length ? 'running' : 'idle'
+    return {
+      session_key: key, session_title: rows[0]?.task_summary || key,
+      group_id: g.id, title: g.title, summary: g.summary, status: g.status,
+      created_at: g.created_at, updated_at: g.updated_at, category,
+      running_since_ms: live.length ? Math.min(...live.map((r) => r.started_at ?? env.now())) : null,
+      events: g.steps.length, sub_agents: links.size,
+    }
+  }
+  const spawns = bySession.get('h') ?? []
+  boards.set('h', {
+    version: 1, unassigned: [],
+    groups: spawns.map((r, i) => (r.status === 'running'
+      ? groupOf(`g_h${i}`, [r], 'Sent a subagent to do it', 'A subagent is on it', 'running')
+      : groupOf(`g_h${i}`, [r], 'Sent a subagent to do it', 'Done; waiting on your look', 'needs_you'))),
+  })
+  boards.set('g', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_g0', bySession.get('g') ?? [], 'Wrote the files', 'Files written and reported back', 'completed')],
+  })
+  boards.set('c', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_c0', bySession.get('c') ?? [], 'Started the survey graph', 'The survey graph is running', 'running')],
+  })
+  boards.set('d', {
+    version: 1, unassigned: [],
+    groups: [groupOf('g_d0', bySession.get('d') ?? [], 'Started the reindex', 'Cut off by a restart; ready to run again', 'running')],
+  })
 
   const findRow = (id: string, kind?: string): { rows: TaskRow[]; at: number; row: TaskRow } | null => {
     for (const rows of bySession.values()) {
@@ -371,6 +479,43 @@ export function createTasks(env: FixtureEnv): TasksFixture {
 
   return {
     fixtures: {
+      'tasks.board': (p) => ({
+        board: boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] },
+        lineage: {},
+      }),
+      'tasks.boards': (p) => {
+        const cards = [...boards.entries()].flatMap(([key, board]) => board.groups.map((g) => cardOf(key, g)))
+        return {
+          cards: cards.filter((c) => p.include_completed || c.category !== 'completed')
+            .sort((a, b) => b.updated_at - a.updated_at),
+          completed_count: cards.filter((c) => c.category === 'completed').length,
+          needs_you_count: cards.filter((c) => c.category === 'needs_you').length,
+        }
+      },
+      /* An unknown group answers the board unchanged rather than throwing: the
+         offline library answers every method for any params it is handed. */
+      'tasks.set_group_status': (p) => {
+        const board = boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] }
+        const group = board.groups.find((g) => g.id === p.group_id)
+        if (group) {
+          group.status = p.status
+          group.updated_at = env.now()
+        }
+        return { board, lineage: {} }
+      },
+      /* The board model's rule: the question leaves its step, and a group whose
+         latest step then asks nothing goes idle. */
+      'tasks.ignore_question': (p) => {
+        const board = boards.get(p.session_key) ?? { version: 1, groups: [], unassigned: [] }
+        const group = board.groups.find((g) => g.id === p.group_id)
+        const step = group?.steps.find((s) => s.id === p.step_id)
+        if (group && step && step.questions.includes(p.question)) {
+          step.questions = step.questions.filter((q) => q !== p.question)
+          if (group.status === 'needs_you' && !group.steps[group.steps.length - 1]!.questions.length) group.status = 'idle'
+          group.updated_at = env.now()
+        }
+        return { board, lineage: {} }
+      },
       'tasks.list': (p) => {
         const all = bySession.get(p.session_key) || []
         const filtered = p.kind && p.id ? all.filter((r) => r.kind === p.kind && r.id === p.id) : all

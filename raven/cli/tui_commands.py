@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import typer
 
@@ -128,8 +128,17 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
-    """Find a usable node executable (>= 22).
+def _meets_tui_floor(version: Tuple[int, int, int]) -> bool:
+    return version >= _MIN_NODE_VERSION
+
+
+def find_node(
+    accept: Callable[[Tuple[int, int, int]], bool] = _meets_tui_floor,
+) -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
+    """Find a usable node executable (>= 22, or whatever ``accept`` says).
+
+    ``accept`` lets a caller with a stricter floor keep searching past a node
+    the TUI would take, instead of being handed that one and refusing it.
 
     Returns (path, version_tuple) or (None, None) if not found.
     """
@@ -208,12 +217,32 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             continue
-        if version >= _MIN_NODE_VERSION:
+        if accept(version):
             return (node_path, version)
         if best_below_min is None or version > best_below_min[1]:
             best_below_min = (node_path, version)
 
     return best_below_min if best_below_min is not None else (None, None)
+
+
+def _forward_signals_to(proc: subprocess.Popen) -> None:
+    """Relay this process's SIGINT, SIGTERM and SIGHUP to ``proc``."""
+
+    def _forward(sig, _frame):
+        if sys.platform == "win32" and sig == signal.SIGINT:
+            # The console hands Ctrl+C to every process attached to it, the
+            # child included, and Popen cannot send SIGINT on Windows: it
+            # raises ValueError, which took the TUI down with it.
+            return
+        try:
+            proc.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+    signal.signal(signal.SIGINT, _forward)
+    signal.signal(signal.SIGTERM, _forward)
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _forward)
 
 
 def run_subprocess(
@@ -232,17 +261,7 @@ def run_subprocess(
     )
 
     if forward_signals:
-
-        def _forward(sig, _frame):
-            try:
-                proc.send_signal(sig)
-            except ProcessLookupError:
-                pass
-
-        signal.signal(signal.SIGINT, _forward)
-        signal.signal(signal.SIGTERM, _forward)
-        if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _forward)
+        _forward_signals_to(proc)
 
     try:
         return proc.wait()
@@ -317,6 +336,11 @@ async def _run_rpc_server_until_done(
     from raven.tracing import set_surface
 
     set_surface(TERMINAL_SURFACE)
+
+    from raven.utils.heap import start_trimmer
+
+    # This host outlives every session it serves, so it trims like the gateway.
+    start_trimmer()
 
     # Lazy import: keeps tui_commands importable without pulling rpc on
     # users who never touch the TUI (e.g. CLI-only workflows).
@@ -423,6 +447,9 @@ async def _run_rpc_server_until_done(
     # turn.send binds a turn's addressee into it and the spine's outlet/sink read
     # it back to tag that turn's events (see build_rpc_spine).
     direct_targets: dict[str, dict[str, str]] = {}
+    # Owned here for the same reason: the spine keeps what each running turn has
+    # measured in it, and turn.cancel reads a stopped turn's reading back.
+    live_usages: dict[str, dict[str, Any]] = {}
     turn_teardown = None
     if agent_loop is not None:
         from raven.core.cron_stack import make_on_cron_job
@@ -438,9 +465,17 @@ async def _run_rpc_server_until_done(
             direct_targets=direct_targets,
             readback_texts=cron_readback,
             approval_responder=approval_broker,
+            live_usages=live_usages,
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
+        # The runs a process before this one left on registered machines are
+        # picked up and reported to their conversations, as the gateway and
+        # the served page do; after the submit is wired, so the announce has
+        # a spine to go to.
+        from raven.agent.subagent.resume_remote import schedule_remote_resume
+
+        schedule_remote_resume(agent_loop.subagents)
         # Cron reminders run as CRON turns through the scheduler; the wrapper fans
         # the reply out as cron.delivered to every session. on_job must be wired
         # before cron.start() so an immediately-firing job has its callback.
@@ -486,6 +521,7 @@ async def _run_rpc_server_until_done(
         turn_ids=turn_ids,
         direct_targets=direct_targets,
         build_error=build_error,
+        live_usages=live_usages,
     )
 
     serve_task = asyncio.create_task(server.serve_forever())
@@ -566,7 +602,11 @@ async def _run_rpc_server_until_done(
         # bounded wait, where the drain costs its whole budget.
         try:
             from raven.acp_client.client import begin_drain
+            from raven.acp_client.remote import leave_agents_running
 
+            # The agents on registered machines stay with their daemons (see
+            # the gateway's shutdown): the next process picks their runs up.
+            leave_agents_running()
             begin_drain()
             if agent_loop is not None:
                 await agent_loop.subagents.cancel_all(reason="the TUI exited")
@@ -589,11 +629,15 @@ async def _run_rpc_server_until_done(
 
                 _logger.exception("tui: plugin services stop failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
-        # terminal's signals and outlive this process unless the pool is closed.
+        # terminal's signals and outlive this process unless the pool is closed;
+        # so does the ssh of a Raven node on a registered machine, whose pool is
+        # closed after the agents' so a closing agent still has its link.
         try:
             from raven.acp_client.pool import close_pool
+            from raven.node.client import close_node_pool
 
             await close_pool()
+            await close_node_pool()
         except Exception:
             from loguru import logger as _logger
 
@@ -733,17 +777,7 @@ def run_subprocess_with_rpc(
     proc, server_sock, auth_token = _spawn_with_rpc_socket(node_path, args, cwd)
 
     if forward_signals:
-
-        def _forward(sig, _frame):
-            try:
-                proc.send_signal(sig)
-            except ProcessLookupError:
-                pass
-
-        signal.signal(signal.SIGINT, _forward)
-        signal.signal(signal.SIGTERM, _forward)
-        if hasattr(signal, "SIGHUP"):
-            signal.signal(signal.SIGHUP, _forward)
+        _forward_signals_to(proc)
 
     proc_done = asyncio.Event()
 

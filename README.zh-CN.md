@@ -5,8 +5,8 @@
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://arxiv.org/abs/2609.33439"><img src="https://img.shields.io/badge/arXiv-2609.33439-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
-  <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-Paper-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
-  <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-%231%20Paper%20of%20the%20Day-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face #1 Paper of the Day"></a>
+  <a href="https://discord.gg/QHQ2YYp7cH"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FQHQ2YYp7cH%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
@@ -15,6 +15,14 @@
 </div>
 
 <br>
+
+## ❯❯ What's New
+
+### ❯ 多智能体轨迹观测
+
+**每个智能体、每个 Turn、每个 Step，都落在同一条时间线上。** Raven 新增的多智能体轨迹观测页面，把运行中的会话变成一张实时瀑布图，从整段运行一直缩放到单个 Step。
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
 
 # Raven 是什么
 
@@ -29,8 +37,6 @@ Raven 是 **The Harness of Harnesses**——一个自我演进的多 Agent 协�
 Raven 构建于 EverMind 的自进化 harness 引擎之上，由 [EverOS](https://github.com/EverMind-AI/EverOS) 驱动，跨会话保留记忆，并持续改进 Agent harness 与协作工作流。
 
 **内置 Agent：** **Raven-Research**、**Raven-Code**、**Raven-Design** 与 **Raven-Oncall**，分别覆盖研究、编程、视觉设计与无人值守的流程自动化。
-
-> Raven 目前处于 pre-alpha 阶段，接口与配置可能会快速变化。
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
@@ -205,6 +211,14 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，�
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
+## ❯❯ 新闻
+
+- 📣 **2026-09-30** — Raven 技术报告在 [**Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) 上拿下日榜（2026-09-30）、周榜（2026-10-04）、月榜（2026-10-10）第一。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29"><img src="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29" alt="Three Crowns on Hugging Face, Chinese edition: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
+
 ## ❯❯ 快速开始
 
 ### 🤖 让 Agent 帮你安装
@@ -319,7 +333,7 @@ raven web
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>以记忆为核心、可自我改进的 Agent harness，支持主动行为、上下文控制与技能演化。</td>
+<td>以记忆为核心、可自我改进的 Agent harness，支持主动行为、上下文控制与可复用技能检索。</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
@@ -405,3 +419,11 @@ raven web
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ 贡献者
+
+感谢每一位帮助 Raven 变得更好的贡献者。
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven 贡献者" />
+</a>

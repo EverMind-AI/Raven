@@ -1,15 +1,16 @@
 """OpenAI Codex Responses Provider.
 
-LiteLLM owns the credential raven signs in with, but not the request. On the
-pinned 1.85.0 its bridge to this backend raises: the account streams a
-``response.completed`` whose ``output`` is empty, which 1.95.0 rebuilds from the
-``output_item.done`` events and 1.85.0 reports as an unknown response.
+LiteLLM owns the credential raven signs in with, but not the request. The
+provider was written against LiteLLM 1.85.0, whose bridge to this backend raised:
+the account streams a ``response.completed`` whose ``output`` is empty, which
+1.95.0 rebuilds from the ``output_item.done`` events and 1.85.0 reports as an
+unknown response. Whether the pin's 1.108 bridge can carry this traffic is
+untested here; the request path stays ours until it is.
 
-Routing through it also needs the model spelled ``responses/<slug>`` (nothing an
-account offers is in LiteLLM's table, and without a table entry there is no
-bridge), and costs ``prompt_cache_key``, which its allow-list filters out. That
-last one is what ``test_openai_codex_provider`` guards; the rest is a version
-bump away.
+Routing through that bridge also needs the model spelled ``responses/<slug>``
+(nothing an account offers is in LiteLLM's table, and without a table entry
+there is no bridge), and costs ``prompt_cache_key``, which its allow-list
+filters out. That last one is what ``test_openai_codex_provider`` guards.
 """
 
 from __future__ import annotations
@@ -17,11 +18,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from typing import Any, AsyncGenerator
 
 import httpx
 import json_repair
-from loguru import logger
 
 from raven.providers.base import (
     LLMProvider,
@@ -41,6 +42,10 @@ from raven.providers.usage import merge_usage, responses_usage
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
 DEFAULT_ORIGINATOR = "raven"
+
+# The only replayed function_call id OpenAI's endpoints take: 64 characters at
+# most, and a 400 for anything else.
+_OPENAI_ITEM_ID = re.compile(r"fc_[A-Za-z0-9_-]{1,61}")
 
 
 def _convert_tool_choice(
@@ -79,11 +84,14 @@ class OpenAICodexProvider(LLMProvider):
         model = model or self.default_model
         system_prompt, input_items = _convert_messages(messages)
 
+        from raven.providers import codex_client_version
         from raven.providers.chatgpt_token import access_token_and_account
 
         # Refreshing can block, and the credential belongs to LiteLLM's driver.
         access, account_id = await asyncio.to_thread(access_token_and_account)
-        headers = _build_headers(account_id, access)
+        # So can asking npm, once per cache window.
+        client_version = await asyncio.to_thread(codex_client_version.resolve)
+        headers = _build_headers(account_id, access, client_version=client_version)
 
         body: dict[str, Any] = {
             "model": _strip_model_prefix(model),
@@ -124,31 +132,15 @@ class OpenAICodexProvider(LLMProvider):
         caps = httpx_timeout(self.generation) or timeout
         raw_usage: dict[str, Any] = {}
         try:
-            try:
-                content, tool_calls, finish_reason = await _request_codex(
-                    url,
-                    headers,
-                    body,
-                    verify=True,
-                    timeout=caps,
-                    idle_timeout=idle_timeout,
-                    first_byte=first_byte,
-                    usage_sink=raw_usage,
-                )
-            except Exception as e:
-                if "CERTIFICATE_VERIFY_FAILED" not in str(e):
-                    raise
-                logger.warning("SSL certificate verification failed for Codex API; retrying with verify=False")
-                content, tool_calls, finish_reason = await _request_codex(
-                    url,
-                    headers,
-                    body,
-                    verify=False,
-                    timeout=caps,
-                    idle_timeout=idle_timeout,
-                    first_byte=first_byte,
-                    usage_sink=raw_usage,
-                )
+            content, tool_calls, finish_reason = await _request_codex(
+                url,
+                headers,
+                body,
+                timeout=caps,
+                idle_timeout=idle_timeout,
+                first_byte=first_byte,
+                usage_sink=raw_usage,
+            )
             return LLMResponse(
                 content=content,
                 tool_calls=tool_calls,
@@ -180,12 +172,17 @@ def _strip_model_prefix(model: str) -> str:
     return wire_model(model, spec=find_by_name("openai_codex"))
 
 
-def _build_headers(account_id: str, token: str) -> dict[str, str]:
+def _build_headers(account_id: str, token: str, *, client_version: str) -> dict[str, str]:
+    """``client_version`` goes where the official CLI puts its own release: a
+    ``version`` header on every request (``create_openai_provider`` in
+    ``codex-rs/model-provider-info``). The backend gates models by client version,
+    and a request that names none leaves the backend to assume one."""
     return {
         "Authorization": f"Bearer {token}",
         "chatgpt-account-id": account_id,
         "OpenAI-Beta": "responses=experimental",
         "originator": DEFAULT_ORIGINATOR,
+        "version": client_version,
         "User-Agent": "raven (python)",
         "accept": "text/event-stream",
         "content-type": "application/json",
@@ -196,7 +193,6 @@ async def _request_codex(
     url: str,
     headers: dict[str, str],
     body: dict[str, Any],
-    verify: bool,
     timeout: Any,
     idle_timeout: float | None = None,
     first_byte: float = 0.0,
@@ -208,7 +204,7 @@ async def _request_codex(
     ``first_byte`` bounds the wait for that stream's first event. ``timeout``
     may be an ``httpx.Timeout`` so the pre-generation phases can be narrower
     than the read."""
-    async with httpx.AsyncClient(timeout=timeout, verify=verify) as client:
+    async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             if response.status_code != 200:
                 text = await response.aread()
@@ -238,7 +234,19 @@ def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return converted
 
 
-def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+def _convert_messages(
+    messages: list[dict[str, Any]], *, openai_item_ids: bool = True
+) -> tuple[str, list[dict[str, Any]]]:
+    """History -> Responses ``instructions`` and ``input``.
+
+    A stored call's id is ``call_id|item_id``, and the item id is whatever the
+    vendor that answered minted. OpenAI's endpoints refuse a ``function_call``
+    id outside their own shape, so under ``openai_item_ids`` another vendor's
+    (DeepSeek mints UUIDs) is replaced the way a missing one always was. Other
+    vendors get the stored id back unchanged. A replacement names the call's
+    place in its message as well as the message, so parallel calls keep
+    distinct ids; the first keeps the plain form a lone call always had.
+    """
     system_prompt = ""
     input_items: list[dict[str, Any]] = []
 
@@ -271,11 +279,12 @@ def _convert_messages(messages: list[dict[str, Any]]) -> tuple[str, list[dict[st
                     }
                 )
             # Then handle tool calls.
-            for tool_call in msg.get("tool_calls", []) or []:
+            for n, tool_call in enumerate(msg.get("tool_calls", []) or []):
                 fn = tool_call.get("function") or {}
                 call_id, item_id = _split_tool_call_id(tool_call.get("id"))
                 call_id = call_id or f"call_{idx}"
-                item_id = item_id or f"fc_{idx}"
+                if not item_id or (openai_item_ids and not _OPENAI_ITEM_ID.fullmatch(item_id)):
+                    item_id = f"fc_{idx}_{n}" if n else f"fc_{idx}"
                 input_items.append(
                     {
                         "type": "function_call",
@@ -440,9 +449,12 @@ async def _consume_sse(
     first_byte: float = 0.0,
 ) -> tuple[str, list[ToolCallRequest], str]:
     content = ""
+    refusal = ""
     tool_calls: list[ToolCallRequest] = []
     tool_call_buffers: dict[str, dict[str, Any]] = {}
-    finish_reason = "stop"
+    # What a stream that closes without a terminal event keeps: nothing here said
+    # how the response ended, so it must not read as a finished one.
+    finish_reason = "unknown"
 
     async for event in _iter_sse(response, timeout, first_byte):
         raw_usage = (event.get("response") or {}).get("usage")
@@ -462,6 +474,11 @@ async def _consume_sse(
                 }
         elif event_type == "response.output_text.delta":
             content += event.get("delta") or ""
+        elif event_type == "response.refusal.delta":
+            refusal += event.get("delta") or ""
+        elif event_type == "response.refusal.done":
+            # The whole text, which the deltas have already spelled out.
+            refusal = event.get("refusal") or refusal
         elif event_type == "response.function_call_arguments.delta":
             call_id = event.get("call_id")
             if call_id and call_id in tool_call_buffers:
@@ -502,6 +519,10 @@ async def _consume_sse(
         elif event_type in {"response.completed", "response.done"}:
             status = (event.get("response") or {}).get("status")
             finish_reason = _map_finish_reason(status)
+        elif event_type == "response.incomplete":
+            details = (event.get("response") or {}).get("incomplete_details")
+            reason = details.get("reason") if isinstance(details, dict) else None
+            finish_reason = _INCOMPLETE_REASONS.get(reason, "unknown")
         elif event_type in {"error", "response.failed"}:
             # The code is the retry signal: classify_error buckets by message
             # substring, and "server_is_overloaded" is what turns a dead-end
@@ -516,14 +537,25 @@ async def _consume_sse(
             detail = ": ".join(str(part) for part in (code, message) if part)
             raise RuntimeError(f"Codex response failed: {detail}" if detail else "Codex response failed")
 
+    # A refusal part makes the call a refusal even though the response closes as
+    # ``completed``; a failed status keeps its own word.
+    if refusal and finish_reason != "error":
+        content = content or refusal
+        finish_reason = "refusal"
     return content, tool_calls, finish_reason
 
 
 _FINISH_REASON_MAP = {"completed": "stop", "incomplete": "length", "failed": "error", "cancelled": "error"}
 
+# Only the two reasons the loop can act on are named; any other is not guessed
+# into one of them.
+_INCOMPLETE_REASONS = {"max_output_tokens": "length", "content_filter": "content_filter"}
+
 
 def _map_finish_reason(status: str | None) -> str:
-    return _FINISH_REASON_MAP.get(status or "completed", "stop")
+    # A ``response.completed`` that names no status still says it completed; a
+    # status nobody mapped says nothing.
+    return _FINISH_REASON_MAP.get(status or "completed", "unknown")
 
 
 def _friendly_error(status_code: int, raw: str) -> str:

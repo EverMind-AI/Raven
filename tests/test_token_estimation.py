@@ -3,13 +3,158 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import regex
 
 from raven.memory_engine.consolidate.consolidator import MemoryConsolidator
 from raven.session.manager import Session
 from raven.utils import images, tokens
+
+
+@pytest.mark.parametrize("after_scope", [False, True])
+def test_estimates_outside_a_trim_do_not_share_cached_state(monkeypatch, after_scope) -> None:
+    calls: list[str] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            calls.append(payload)
+            return list(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    history = [{"role": "user", "content": "unscoped estimate"}]
+    if after_scope:
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(history)
+        calls.clear()
+    tokens.estimate_prompt_tokens(history)
+    tokens.estimate_prompt_tokens(history)
+    assert calls == ["unscoped estimate", "unscoped estimate"]
+
+
+def test_reused_prompt_tokenization_matches_whole_payload_counts() -> None:
+    rng = random.Random(886)
+    atoms = ["alpha", "123456", "?!", "\n", "\r", "\t", " ", "  ", "A\u0301", "\u2603", "{}", "'s"]
+    histories = [
+        [{"role": "user", "content": "".join(rng.choices(atoms, k=rng.randrange(1, 60)))} for _ in range(5)]
+        for _ in range(100)
+    ]
+    histories += [[{"role": "user", "content": "repeat"}] * count for count in (5, 2, 7, 1, 0)]
+    expected = [tokens.estimate_prompt_tokens(history) for history in histories]
+
+    with tokens.reuse_prompt_tokenization():
+        assert [tokens.estimate_prompt_tokens(history) for history in histories] == expected
+
+
+def test_cache_boundaries_match_the_selected_encoding() -> None:
+    history = [{"role": "user", "content": "!\n/s"}]
+    expected = tokens.estimate_prompt_tokens(history)
+    with tokens.reuse_prompt_tokenization():
+        tokens.estimate_prompt_tokens([{"role": "user", "content": "warmup"}])
+        assert tokens.estimate_prompt_tokens(history) == expected
+
+
+@pytest.mark.parametrize("reset", ["empty", "unavailable"])
+def test_the_initial_prompt_is_forgotten_when_the_cache_clears(monkeypatch, reset) -> None:
+    history = [{"role": "user", "content": "The first prompt has more than one token."}]
+    expected = tokens.estimate_prompt_tokens(history)
+    with tokens.reuse_prompt_tokenization():
+        assert tokens.estimate_prompt_tokens(history) == expected
+        if reset == "empty":
+            tokens.estimate_prompt_tokens([])
+        else:
+
+            def unavailable(_name):
+                raise RuntimeError("encoding unavailable")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(tokens.tiktoken, "get_encoding", unavailable)
+                tokens.estimate_prompt_tokens(history)
+        assert tokens.estimate_prompt_tokens(history) == expected
+
+
+def test_reused_prompt_tokens_keep_reasoning_tools_images_and_error_fallback() -> None:
+    image = {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "Look.\n"}, image]},
+        {
+            "role": "assistant",
+            "content": "  Now.\n\n",
+            "reasoning_content": "thinking",
+            "thinking_blocks": [{"thinking": "more"}],
+        },
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "c", "function": {"name": "read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "c", "name": "read", "content": {"answer": "found"}},
+    ]
+    tool_definitions = [{"type": "function", "function": {"name": "read"}}]
+    cases = [
+        (history, tool_definitions),
+        (history[1:], []),
+        ([{"role": "user", "content": "<|endoftext|>"}], []),
+        (history, tool_definitions),
+    ]
+    expected = [tokens.estimate_prompt_tokens(messages, tools) for messages, tools in cases]
+
+    with tokens.reuse_prompt_tokenization():
+        assert [tokens.estimate_prompt_tokens(messages, tools) for messages, tools in cases] == expected
+
+
+def test_prompt_token_cache_is_nested_scoped_and_drops_removed_text(monkeypatch) -> None:
+    real = tokens.tiktoken.get_encoding("cl100k_base")
+    encoded: list[str] = []
+
+    class MeasuredEncoding:
+        def encode(self, payload):
+            encoded.append(payload)
+            return real.encode(payload)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: MeasuredEncoding())
+    first = [{"role": "user", "content": "first"}]
+    second = [{"role": "user", "content": "second"}]
+    with tokens.reuse_prompt_tokenization():
+        tokens.estimate_prompt_tokens(first)
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(second)
+        before = len(encoded)
+        tokens.estimate_prompt_tokens(first)
+        assert len(encoded) == before
+        tokens.estimate_prompt_tokens(second)
+        before = len(encoded)
+        tokens.estimate_prompt_tokens(first)
+        assert encoded[before:] == ["first"]
+        for unavailable in ([], [{"role": "user", "content": "<|endoftext|>"}]):
+            tokens.estimate_prompt_tokens(unavailable)
+            before = len(encoded)
+            tokens.estimate_prompt_tokens(first)
+            assert encoded[before:] == ["first"]
+    before = len(encoded)
+    tokens.estimate_prompt_tokens(first)
+    assert encoded[before:] == ["first"]
+
+
+def test_prompt_token_cache_is_released_when_the_trim_raises(monkeypatch) -> None:
+    encoding = _FakeEncoding()
+    calls: list[str] = []
+
+    def encode(payload):
+        calls.append(payload)
+        return list(payload)
+
+    monkeypatch.setattr(encoding, "encode", encode)
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: encoding)
+    history = [{"role": "user", "content": "unchanged"}]
+    with pytest.raises(RuntimeError, match="builder failed"):
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(history)
+            raise RuntimeError("builder failed")
+    tokens.estimate_prompt_tokens(history)
+    assert calls == ["unchanged", "unchanged"]
 
 
 class _FakeEncoding:
@@ -342,3 +487,73 @@ def test_image_tokens_survive_the_tiktoken_fallback_path(
 
     assert tokens.estimate_prompt_tokens([{"role": "user", "content": [block]}]) == 100
     assert tokens.estimate_message_tokens({"role": "user", "content": [block]}) == 100
+
+
+def test_ordinary_text_counts_exactly_as_one_encode() -> None:
+    enc = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    rng = random.Random(7)
+    words = ["alpha", "beta", "path/to/file.py", "x=1", chr(0x4E2D) + chr(0x6587), "{}", "\n"]
+    text = " ".join(rng.choice(words) for _ in range(20_000))
+
+    assert tokens._encoded_len(enc, text) == len(enc.encode(text))
+    assert tokens.estimate_message_tokens({"role": "tool", "content": text}) == len(enc.encode(text))
+
+
+@pytest.mark.parametrize(
+    "run",
+    ["=", "A", "0", " ", "\n", "\t", "=" * 999 + chr(0x1F), "-" * 500 + chr(0x1C)],
+    ids=["equals", "letter", "digit", "space", "newline", "tab", "equals-glued-by-us", "dashes-glued-by-fs"],
+)
+def test_a_long_unbroken_run_never_reaches_the_encoder_whole(monkeypatch, run) -> None:
+    """tiktoken is quadratic in one piece's length; a 200K run held the loop for about twenty seconds.
+
+    Pieces are measured with the encoding's own pattern, not with ``tokens._RUN``:
+    the two disagree on what is space, and that disagreement is what escapes.
+    """
+    real = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    pieces = regex.compile(real._pat_str)
+    longest: list[int] = []
+
+    class Measured:
+        def encode(self, text):
+            longest.append(max((len(m.group()) for m in pieces.finditer(text)), default=0))
+            return real.encode(text)
+
+    monkeypatch.setattr(tokens.tiktoken, "get_encoding", lambda _name: Measured())
+    content = "head line\n" + run * (120_000 // len(run)) + "\ntail line"
+
+    estimate = tokens.estimate_message_tokens({"role": "tool", "content": content})
+    with tokens.reuse_prompt_tokenization():
+        prompt = tokens.estimate_prompt_tokens([{"role": "tool", "content": content}])
+
+    assert max(longest) <= tokens._RUN_SLICE
+    assert estimate > 0 and prompt > 0
+
+
+@pytest.mark.parametrize("length", [1_000, 1_001, 1_500, 2_001, 3_000])
+def test_text_after_a_sliced_run_is_counted_once(length) -> None:
+    enc = tokens.tiktoken.get_encoding(tokens._ENCODING_NAME)
+    run = "A" * length
+    tail = " word" * 400
+    slices = -(-length // tokens._RUN_SLICE)
+    by_parts = sum(len(enc.encode(run[i : i + tokens._RUN_SLICE])) for i in range(0, length, tokens._RUN_SLICE))
+
+    assert tokens._encoded_len(enc, run + tail) == by_parts + len(enc.encode(tail))
+    assert abs(tokens._encoded_len(enc, run + tail) - len(enc.encode(run + tail))) <= 2 * slices
+
+
+def test_a_reused_count_with_long_runs_matches_a_fresh_one() -> None:
+    """The whole-payload and fragment paths of the trim cache must agree on sliced runs."""
+    rng = random.Random(11)
+    for _ in range(40):
+
+        def message() -> dict:
+            body = rng.choice(["=", "A", " ", "\n"]) * rng.randint(900, 3_500) + " tail " * rng.randint(0, 30)
+            return {"role": "tool", "content": body}
+
+        a = [message() for _ in range(4)]
+        b = [*a[: rng.randint(1, 4)], message()]
+        with tokens.reuse_prompt_tokenization():
+            tokens.estimate_prompt_tokens(a)
+            reused = tokens.estimate_prompt_tokens(b)
+        assert reused == tokens.estimate_prompt_tokens(b)

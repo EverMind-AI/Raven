@@ -4,7 +4,11 @@
 (``## Answer`` / ``## Findings`` / ``## Limitations``) and the same label added the rule
 that the template outranks a format the question itself asks for. Both live in
 the system prompt, and a system prompt is the weakest place to put an
-instruction that a conversation can argue with:
+instruction that a conversation can argue with. Under
+``final_shape.report_layout = "reader"`` the same three parts take the reader's
+form - the answer as the opening blockquote, the body under its own ``##``
+headings, the limits as the last one - and are read back under the same three
+names, so everything below applies to both layouts:
 
 * **Recency loses to it.** Measured on this repo's own demo sessions (30 turns
   carrying the template, dr@3.4): 8/14 research turns well-formed, but only
@@ -80,6 +84,17 @@ logger = logging.getLogger(__name__)
 #: Section headings the template promises, in the order it promises them.
 REPORT_SECTIONS: tuple[str, ...] = ("Answer", "Findings", "Limitations")
 
+#: ``finalShape.reportLayout`` value for the reader form of the template: the answer as
+#: the opening blockquote, the body under its own ``##`` headings, the limits last.
+READER_LAYOUT = "reader"
+
+#: What each section is called in the reader layout, for text the model reads back.
+_READER_PART_NAMES = {
+    "Answer": "the opening answer blockquote",
+    "Findings": "the body under `##` headings",
+    "Limitations": "the closing section on what could not be verified",
+}
+
 # Delimiters so ``strip_reminder`` can take the reminder back out before the
 # turn is persisted. Same reasoning as the research memo's: the block is rebuilt
 # at every assembly, so persisting it would accumulate - turn three would carry
@@ -95,6 +110,15 @@ _REMINDER_BODY = (
     "`## Limitations`, in that order, all three present. If this message asks "
     "for another shape - an outline, slides, a table, JSON, one word - that "
     "shape goes inside the sections, not in place of them."
+)
+_REMINDER_BODY_READER = (
+    "Reply with the report in its three parts: the answer as the opening blockquote "
+    "with no label before it (no word and colon, in any language), then the body "
+    "under `##` headings, then the "
+    "closing `##` section on what could not be verified (`## Limitations` in English; "
+    "in any other language, that language's words, with no English word in the heading). "
+    "If this message asks for another shape - an outline, slides, a table, JSON, one "
+    "word - that shape goes inside the body, not in place of the report."
 )
 
 # Any heading level, any decoration around the name. Every one of these
@@ -125,18 +149,79 @@ _LABEL_NOISE_RE = re.compile(r"^(?:[\W_]*\d+[.)])?[\W_]*")
 # ``annotated`` still records the deviation, so a batch can ask how often it happens.
 #
 # The alternates are spelled as ``\u`` escapes so the source carries no CJK
-# characters; the compiled patterns are unchanged.
+# characters; the compiled patterns are unchanged. The three "could not be verified"
+# forms are the reader layout's own Chinese heading for the limits.
 _SECTION_RE = {
     name: re.compile(rf"(?<![a-z]){stem}|{alt}", re.I)
     for name, stem, alt in (
         ("Answer", "answer", "\u56de\u7b54|\u7b54\u6848|\u7ed3\u8bba"),
         ("Findings", "finding", "\u53d1\u73b0|\u7814\u7a76\u53d1\u73b0|\u8c03\u7814"),
-        ("Limitations", "limitation", "\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3"),
+        (
+            "Limitations",
+            "limitation",
+            "\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u80fd\u6838\u5b9e|\u672a\u6838\u5b9e|\u65e0\u6cd5\u6838\u5b9e",
+        ),
     )
 }
 
+# The reader layout's answer: an optional ``#`` title, then the blockquote that opens
+# the reply.
+_LEAD_RE = re.compile(r"\s*(?:#[ \t][^\n]*\n)?\s*")
+_QUOTE_RE = re.compile(r"(?:[ \t]{0,3}>[^\n]*(?:\n|\Z))+")
 
-def render_reminder(task: str = "") -> str:
+
+def _reader_sections(text: str) -> tuple[dict[str, tuple[float, bool, bool]], bool]:
+    """Sections found under the reader layout, and whether a ``##`` follows the limits.
+
+    Same direction of tolerance as the sections parse: a reply written in the old
+    three-heading form still delivers all three parts, so ``## Answer`` counts as the
+    answer (recorded as annotated), and a body written without headings counts when an
+    answer blockquote stands above it. The second condition is what keeps a clarify
+    written as prose - no blockquote, no headings - reading as no report at all.
+    """
+    found: dict[str, tuple[float, bool, bool]] = {}
+    quote = _QUOTE_RE.match(text, _LEAD_RE.match(text).end())
+    quote_end = None
+    if quote and re.sub(r"[>\s]", "", quote.group()):
+        found["Answer"] = (-1, False, False)
+        quote_end = quote.end()
+    heads = [(m.start(), m.group(1), m.group(2).strip()) for m in _HEADING_RE.finditer(text) if len(m.group(1)) >= 2]
+    labels = [_LABEL_NOISE_RE.sub("", label) for _, _, label in heads]
+
+    limits_at = next((i for i in range(len(heads) - 1, -1, -1) if _SECTION_RE["Limitations"].search(labels[i])), None)
+    # The contract puts the limits in the last ``##`` section, in the reply's own
+    # language, so no word list names every heading it allows: with a section above
+    # it, the last ``##`` heading is the limits. A listed word in the first heading
+    # with no body above it is a body heading that names a limit (export limits, a
+    # labour shortfall), since the body comes before the limits.
+    level_two = [i for i, (_, hashes, _) in enumerate(heads) if len(hashes) == 2]
+    body_above = quote_end is not None and bool(heads) and bool(text[quote_end : heads[0][0]].strip())
+    if (limits_at is None or (limits_at == 0 and not body_above)) and len(level_two) >= 2:
+        limits_at = level_two[-1]
+    answer_at = None
+    if "Answer" not in found:
+        answer_at = next(
+            (i for i in range(len(heads)) if i != limits_at and _SECTION_RE["Answer"].search(labels[i])), None
+        )
+        if answer_at is not None:
+            found["Answer"] = (answer_at, True, len(heads[answer_at][1]) != 2)
+
+    body = [i for i in range(len(heads)) if i not in (limits_at, answer_at) and (limits_at is None or i < limits_at)]
+    if body:
+        found["Findings"] = (body[0], False, all(len(heads[i][1]) != 2 for i in body))
+    elif quote_end is not None:
+        stop = heads[limits_at][0] if limits_at is not None else len(text)
+        if text[quote_end:stop].strip():
+            found["Findings"] = (-0.5, True, False)
+
+    trailing = False
+    if limits_at is not None:
+        found["Limitations"] = (limits_at, False, len(heads[limits_at][1]) != 2)
+        trailing = any(len(h) == 2 for _, h, _ in heads[limits_at + 1 :])
+    return found, trailing
+
+
+def render_reminder(task: str = "", layout: str = "sections") -> str:
     """The per-turn reminder block, delimiters included.
 
     ``task`` is this turn's user message. When it carries constraints a parser can settle -
@@ -150,7 +235,11 @@ def render_reminder(task: str = "") -> str:
     injected and ``strip_reminder`` needs no second case. Empty task, or a task with no
     machine-readable constraints, renders exactly the bytes this function always rendered.
     """
-    return f"{REMINDER_OPEN} {_REMINDER_BODY}{render_checklist(task)} {REMINDER_CLOSE}"
+    if layout == READER_LAYOUT:
+        body = _REMINDER_BODY_READER + render_checklist(task, limits=_READER_PART_NAMES["Limitations"])
+    else:
+        body = _REMINDER_BODY + render_checklist(task)
+    return f"{REMINDER_OPEN} {body} {REMINDER_CLOSE}"
 
 
 def strip_reminder(content: str) -> str:
@@ -184,8 +273,12 @@ class ReportShape:
 
     __slots__ = ("present", "missing", "annotated", "off_level", "in_order", "empty")
 
-    def __init__(self, text: str) -> None:
-        found: dict[str, tuple[int, bool, bool]] = {}
+    def __init__(self, text: str, layout: str = "sections") -> None:
+        if layout == READER_LAYOUT:
+            found, trailing = _reader_sections(text or "")
+            self._settle(text, found, trailing)
+            return
+        found: dict[str, tuple[float, bool, bool]] = {}
         for order, (hashes, body) in enumerate(_HEADING_RE.findall(text or "")):
             label = body.strip()
             cleaned = _LABEL_NOISE_RE.sub("", label)
@@ -203,13 +296,16 @@ class ReportShape:
                     # deviation nobody counts reads exactly like one that never
                     # happened.
                     found[name] = (order, label.lower() != name.lower(), len(hashes) != 2)
+        self._settle(text, found, False)
+
+    def _settle(self, text: str, found: dict[str, tuple[float, bool, bool]], trailing: bool) -> None:
         self.empty = not (text or "").strip()
         self.present = tuple(n for n in REPORT_SECTIONS if n in found)
         self.missing = tuple(n for n in REPORT_SECTIONS if n not in found)
         self.annotated = tuple(n for n in self.present if found[n][1])
         self.off_level = tuple(n for n in self.present if found[n][2])
         seen = [found[n][0] for n in self.present]
-        self.in_order = seen == sorted(seen)
+        self.in_order = seen == sorted(seen) and not trailing
 
     @property
     def well_formed(self) -> bool:
@@ -244,29 +340,54 @@ _REWRITE_PROMPT = (
     "directly, each heading at the start of its own line, and do not acknowledge "
     "this instruction or narrate what you are changing."
 )
+_REWRITE_PROMPT_READER = (
+    "Your reply above is missing: {missing}. Rewrite it as the report in its three "
+    "parts - the answer as the opening blockquote with no label before it (no word "
+    "and colon, in any language), "
+    "then the body under `##` headings, then the closing `##` section on what could "
+    "not be verified (`## Limitations` in English; in any other language, that "
+    "language's words, with no English word in the heading) - keeping every finding, every "
+    "source URL and every caveat you already wrote, and every section name the task "
+    "gave, word for word with its numbering. Do not shorten it, do not drop "
+    "evidence, and do not research anything new. If this turn was asked for another "
+    "shape (an outline, slides, a table), keep that content inside the body. The "
+    "rewrite is itself the reply the reader receives: begin it at the blockquote "
+    "directly, each heading at the start of its own line, and do not acknowledge this "
+    "instruction or narrate what you are changing."
+)
 
 
-def interrupted_report_guidance(task: str) -> str:
+def rewrite_prompt(missing: tuple[str, ...], layout: str = "sections") -> str:
+    if layout == READER_LAYOUT:
+        return _REWRITE_PROMPT_READER.format(missing=", ".join(_READER_PART_NAMES[n] for n in missing))
+    return _REWRITE_PROMPT.format(missing=", ".join(missing))
+
+
+def interrupted_report_guidance(task: str, layout: str = "sections") -> str:
     return (
         "This research turn was interrupted before completion. Give the best-supported "
         "partial answer, preserve source URLs and uncertainty, and state what remains "
         "unfinished. Do not present the partial result as a completed investigation. "
         "Reply in the same language as the user's request.\n\n"
-        f"{render_reminder(task)}"
+        f"{render_reminder(task, layout)}"
     )
 
 
-def interrupted_report_rewrite_prompt(draft: str) -> str | None:
-    missing = ReportShape(draft).missing
+def interrupted_report_rewrite_prompt(draft: str, layout: str = "sections") -> str | None:
+    missing = ReportShape(draft, layout).missing
     if not missing:
         return None
-    return (
-        _REWRITE_PROMPT.format(missing=", ".join(missing))
-        + " Keep the interruption and unfinished work explicit under Limitations."
-    )
+    where = _READER_PART_NAMES["Limitations"] if layout == READER_LAYOUT else "Limitations"
+    return rewrite_prompt(missing, layout) + f" Keep the interruption and unfinished work explicit under {where}."
 
 
-def interrupted_report_fallback(reason: str) -> str:
+def interrupted_report_fallback(reason: str, layout: str = "sections") -> str:
+    if layout == READER_LAYOUT:
+        return (
+            f"> {reason}\n\n"
+            "## Partial result\nThe available record could not be summarized into a reliable partial result.\n\n"
+            "## Limitations\nThe research turn ended before the task was complete."
+        )
     return (
         f"## Answer\n{reason}\n\n"
         "## Findings\nThe available record could not be summarized into a reliable partial result.\n\n"
@@ -290,8 +411,9 @@ class ReportShapeGate(Gate):
     already going to be replaced.
     """
 
-    def __init__(self, *, closing_tag_required: bool = False) -> None:
+    def __init__(self, *, closing_tag_required: bool = False, layout: str = "sections") -> None:
         self._closing_tag_required = closing_tag_required
+        self._layout = layout
 
     @property
     def name(self) -> str:
@@ -313,7 +435,7 @@ class ReportShapeGate(Gate):
             # three sections.
             return HookDecision()
 
-        shape = ReportShape(draft)
+        shape = ReportShape(draft, self._layout)
         # ``report_shape_gate``, not ``report_shape``: the loop seam records the
         # shape that SHIPPED under the latter, and these are two different facts.
         # Same split the verify gate draws - the delivered verdict is near
@@ -372,7 +494,7 @@ class ReportShapeGate(Gate):
                 {"role": "assistant", "content": draft, "_recovery_synthetic": True},
                 {
                     "role": "user",
-                    "content": _REWRITE_PROMPT.format(missing=", ".join(shape.missing)),
+                    "content": rewrite_prompt(shape.missing, self._layout),
                     "_recovery_synthetic": True,
                 },
             ],
@@ -381,6 +503,7 @@ class ReportShapeGate(Gate):
 
 
 __all__ = [
+    "READER_LAYOUT",
     "REMINDER_CLOSE",
     "REMINDER_OPEN",
     "REPORT_SECTIONS",

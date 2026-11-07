@@ -1,0 +1,200 @@
+"""A refused forced tool choice costs one retry, not the call.
+
+A vendor can accept a tool list and still reject being told it must call one:
+DeepSeek's thinking mode answers a 400 with "Thinking mode does not support
+this tool_choice". Every caller that forces a choice already handles a model
+that declines under ``auto``, so the adapter relaxes and retries once rather
+than returning the call as an error.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from raven.providers import openai_responses_provider as mod
+
+pytestmark = pytest.mark.anyio
+
+_REFUSAL = '{"error":{"message":"Thinking mode does not support this tool_choice"}}'
+_SSE = (
+    'data: {"type":"response.output_item.done","item":{"type":"function_call",'
+    '"call_id":"c1","name":"annotate_conversation","arguments":"{\\"episode_summary\\":[]}"}}',
+    'data: {"type":"response.completed","response":{"usage":{}}}',
+    "data: [DONE]",
+)
+
+
+class _RefuseThenAccept:
+    """400 on a forcing tool_choice, 200 once the body says ``auto``."""
+
+    bodies: list[Any] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    async def __aenter__(self) -> "_RefuseThenAccept":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+        body = kwargs.get("json") or {}
+        _RefuseThenAccept.bodies.append(dict(body))
+        return _Response(forced=body.get("tool_choice") != "auto")
+
+
+class _Response:
+    def __init__(self, *, forced: bool, status: int = 400) -> None:
+        self.status_code = status if forced else 200
+
+    async def __aenter__(self) -> "_Response":
+        return self
+
+    async def __aexit__(self, *exc: Any) -> bool:
+        return False
+
+    async def aread(self) -> bytes:
+        return _REFUSAL.encode()
+
+    async def aiter_lines(self):
+        for line in _SSE:
+            yield line
+            yield ""
+
+
+class TestTheRelaxation:
+    @pytest.mark.parametrize(
+        "choice",
+        ["required", "any", {"type": "function", "name": "emit"}, {"type": "tool", "name": "emit"}],
+    )
+    def test_a_forcing_choice_is_relaxed_when_the_refusal_names_it(self, choice: Any) -> None:
+        body = {"tool_choice": choice}
+        assert mod._relax_forced_tool_choice(body, "does not support this tool_choice") is True
+        assert body["tool_choice"] == "auto"
+
+    def test_auto_is_left_alone(self) -> None:
+        body = {"tool_choice": "auto"}
+        assert mod._relax_forced_tool_choice(body, "does not support this tool_choice") is False
+        assert body["tool_choice"] == "auto"
+
+    def test_a_refusal_about_something_else_is_not_ours(self) -> None:
+        """Only the complaint that names it; a ceiling or a temperature is another repair's."""
+        body = {"tool_choice": "required"}
+        assert mod._relax_forced_tool_choice(body, "max_tokens is above the model limit") is False
+        assert body["tool_choice"] == "required"
+
+
+class TestTheRetry:
+    async def test_a_refused_force_is_retried_once_under_auto(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _RefuseThenAccept.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _RefuseThenAccept)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        out = await provider.chat(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "annotate_conversation", "parameters": {}}}],
+            tool_choice="required",
+        )
+
+        sent = [b.get("tool_choice") for b in _RefuseThenAccept.bodies]
+        assert sent == ["required", "auto"], sent
+        assert out.finish_reason != "error"
+        assert [c.name for c in out.tool_calls] == ["annotate_conversation"]
+
+    async def test_the_relaxation_happens_at_most_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A 400 that keeps naming tool_choice must not loop."""
+
+        class _AlwaysRefuse(_RefuseThenAccept):
+            def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+                _AlwaysRefuse.bodies.append(dict(kwargs.get("json") or {}))
+                return _Response(forced=True)
+
+        _AlwaysRefuse.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _AlwaysRefuse)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        out = await provider.chat(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+            tool_choice="required",
+        )
+
+        assert len(_AlwaysRefuse.bodies) == 2
+        assert out.finish_reason == "error"
+
+
+class TestOnlyA400:
+    async def test_a_500_that_mentions_tool_choice_is_not_relaxed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A gateway can echo the request body into a 5xx; that is not a refusal.
+
+        Relaxing there would silently drop the forced call on a transient
+        upstream fault, and the caller would read the missing tool call as the
+        model declining.
+        """
+
+        class _ServerError(_RefuseThenAccept):
+            def stream(self, _method: str, _url: str, **kwargs: Any) -> "_Response":
+                _ServerError.bodies.append(dict(kwargs.get("json") or {}))
+                return _Response(forced=True, status=500)
+
+        _ServerError.bodies = []
+        monkeypatch.setattr(mod.httpx, "AsyncClient", _ServerError)
+        provider = mod.OpenAIResponsesProvider(api_key="k", default_model="deepseek/deepseek-v4-pro")
+
+        out = await provider.chat(
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "t", "parameters": {}}}],
+            tool_choice="required",
+        )
+
+        assert [b.get("tool_choice") for b in _ServerError.bodies] == ["required"]
+        assert out.finish_reason == "error"
+
+
+class TestTheAnnotatorOffersRatherThanForces:
+    """The memory writers ask for the tool; they do not demand it.
+
+    A forced choice is refused outright by some vendors, and only one of the
+    three transports carries the relax-and-retry above. Forcing there means
+    the log is never written on that transport at all, while the prompt
+    already says to call the tool and both callers have always handled a
+    model that declines.
+    """
+
+    def test_neither_memory_writer_forces_a_tool_choice(self) -> None:
+        import inspect
+
+        from raven.memory_engine.consolidate import consolidator as mod
+
+        for fn in (mod.MemoryStore.annotate, mod.MemoryStore.refresh_section):
+            src = inspect.getsource(fn)
+            assert 'tool_choice="required"' not in src, fn.__qualname__
+            assert 'tool_choice="auto"' in src, fn.__qualname__
+
+    async def test_a_declining_model_is_handled_rather_than_forced(self, tmp_path) -> None:
+        """What `auto` costs, and that it costs only this."""
+
+        seen: list[Any] = []
+
+        class _Declines:
+            def get_default_model(self) -> str:
+                return "m"
+
+            async def chat_with_retry(self, **kwargs: Any) -> Any:
+                # Recorded, not asserted here: ``annotate`` catches everything
+                # this raises, so an assertion inside would be swallowed and
+                # the test could not fail on it.
+                seen.append(kwargs.get("tool_choice"))
+                return type("R", (), {"has_tool_calls": False, "content": "I would rather not", "tool_calls": []})()
+
+        from raven.memory_engine import MemoryStore
+
+        store = MemoryStore(tmp_path)
+        ok = await store.annotate([{"role": "user", "content": "x"}], _Declines(), "m")
+
+        assert seen == ["auto"]
+        assert ok is False
+        assert not store.history_file.exists() or store.history_file.read_text(encoding="utf-8") == ""

@@ -114,6 +114,18 @@ def test_run_starts_the_litellm_warm_up_before_the_first_request() -> None:
     assert "warm_up_in_background()" in run_body
 
 
+def test_run_starts_the_heap_trimmer_at_boot() -> None:
+    """Freed native memory goes back to the system while the gateway serves.
+    ``run()`` blocks forever, so its source is pinned rather than executed."""
+    import inspect
+
+    from raven.cli import gateway_commands
+
+    src = inspect.getsource(gateway_commands.register)
+    run_body = src.split("async def run():", 1)[1].split("bounded_asyncio.run(run())", 1)[0]
+    assert "start_trimmer()" in run_body
+
+
 def test_every_page_mount_hands_the_gateway_stop_to_the_page() -> None:
     """The page's upgrade restarts this whole process, so it needs the same
     graceful stop and busy check the control plane uses. Handed over on every
@@ -1741,3 +1753,29 @@ def test_the_gateway_takes_its_control_port_from_the_fallback() -> None:
     src = inspect.getsource(gateway_commands.register)
     assert "ControlPlaneServer(await _control_plane_port()" in src
     assert "pick_port(8765)" not in src, "an inline probe has no fallback to fall back to"
+
+
+def test_gateway_rejects_dev() -> None:
+    r = CliRunner(mix_stderr=False).invoke(app, ["gateway", "--dev"])
+    assert r.exit_code == 2
+    assert "No such option" in r.stderr
+
+
+def test_gateway_serves_the_trajectory_view_by_default(monkeypatch, tmp_config) -> None:
+    """Stopped at the install guard, the gateway's first real step: by then the
+    policy must still be the default one, enabled and never re-armed."""
+    from raven.cli import serve_commands
+    from raven.trajectory import policy
+
+    policy._reset_for_tests()
+
+    def halt(*_a, **_k):
+        raise RuntimeError("halt here")
+
+    monkeypatch.setattr(serve_commands, "_refuse_incomplete_install", halt)
+    try:
+        r = runner.invoke(app, ["gateway"])
+        assert r.exit_code != 0
+        assert policy.current().enabled() is True and policy.current().revision == 0
+    finally:
+        policy._reset_for_tests()

@@ -117,8 +117,8 @@ def test_spawn_record_finish_records_the_output(tmp_path: Path) -> None:
 
 def test_spawn_record_finish_keeps_the_closing_beside_the_whole_output(tmp_path: Path) -> None:
     """The context read draws the answer row from `closing.md` when a lane left
-    one, so a narrating agent's progress notes are not repeated at the head of
-    its answer; `out.md` stays the whole reply, which is what the caller got."""
+    one; `out.md` keeps what the caller got. The record writes both as handed
+    to it, so the two can differ whatever each lane put in them."""
     record = SpawnRecord.open(_session_dir(tmp_path, "web:abc"), task_id="t1", task="ask", meta={"agent": "Coder"})
     with activity.collecting() as run:
         activity.note_closing("the last thing said")
@@ -668,10 +668,10 @@ def _logged_answer(tmp_path: Path, output: str | None, run: Any) -> str | None:
 def test_the_closing_row_wins_over_the_joined_output_when_a_lane_reports_one() -> None:
     """Three states, and the middle one must not fall back.
 
-    `None` is "this transport cannot tell what was said last", so the joined
-    output stands in. `""` is "it ended on a step and said nothing after it",
-    which is a different fact: falling back there would attribute the whole
-    reply to a closing message the run never sent. Neither is exercised anywhere
+    `None` is "this transport cannot tell what was said last", so its output
+    stands in. `""` is "it ended on a step and said nothing after it", which is
+    a different fact: falling back there would attribute the output to a
+    closing message the run never sent. Neither is exercised anywhere
     else, so the distinction was free to rot.
     """
     assert _closing_answer(output="every burst joined", closing=None) == "every burst joined"

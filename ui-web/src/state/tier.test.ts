@@ -8,7 +8,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
-import * as session from '../lib/session'
 import { resetSources, setSources } from './sources'
 import * as tier from './tier'
 
@@ -25,12 +24,14 @@ const MENU = [
 ]
 
 let asked: Array<string | null>
-let answer: (mode: string | null) => Promise<TierReply>
+/* What each read was about: the conversation and the switch it named. */
+let reads: Array<[string | null | undefined, number | undefined]>
+let answer: (mode: string | null) => Promise<TierReply | null>
 
 function source(): void {
   const src: TierSource = {
-    read: () => { asked.push(null); return answer(null) },
-    set: (mode) => { asked.push(mode); return answer(mode) },
+    read: (sid, gen) => { asked.push(null); reads.push([sid, gen]); return answer(null) },
+    set: (mode) => { asked.push(mode); return answer(mode) as Promise<TierReply> },
   }
   setSources({ tier: src })
 }
@@ -38,9 +39,8 @@ function source(): void {
 beforeEach(() => {
   setTranslator((key) => key)
   tier._resetForTests()
-  session._resetForTests()
-  session.setCurrent('cli:one')
   asked = []
+  reads = []
   answer = async (mode) => ({ mode: mode ?? 'high', availableModes: MENU })
   source()
 })
@@ -48,7 +48,6 @@ beforeEach(() => {
 afterEach(() => {
   resetTranslator()
   tier._resetForTests()
-  session._resetForTests()
   resetSources()
 })
 
@@ -85,14 +84,47 @@ describe('the sub-agent tier', () => {
        to dispatch sub-agents as any other. The handler answers the catalogue and
        its default for a key it has never seen, which is exactly that tier. Where
        a switch made here is WRITTEN is the seam's problem, not this module's --
-       the live source stages it the way it already stages a model. */
-    session.setCurrent(null)
-
-    await tier.load()
+       the live source stages it the way it already stages a model. A draft is
+       read as no conversation, under the switch that opened it. */
+    await tier.load(null, 3)
 
     expect(asked).toEqual([null])
+    expect(reads).toEqual([[null, 3]])
     expect(tier.offered()).toBe(true)
     expect(tier.current()).toBe('high')
+  })
+
+  it('reads the conversation it was given under the switch it was given, not the one on screen', async () => {
+    /* A switch asks for the conversation being opened before the page's
+       current session moves over to it: the source is told which, so it does
+       not ask about the one being left. A caller with neither is reading the
+       view as it stands. */
+    await tier.load('cli:two', 7)
+    expect(reads).toEqual([['cli:two', 7]])
+    await tier.load()
+    expect(reads).toEqual([['cli:two', 7], [undefined, undefined]])
+  })
+
+  it('paints nothing from a read the source dropped, and keeps what it had', async () => {
+    const heard: string[] = []
+    const off = tier.watch((next) => heard.push(next))
+    try {
+      await tier.load()
+      expect(tier.current()).toBe('high')
+      expect(heard).toEqual(['high'])
+      /* The source answers null for a read whose switch was overtaken (the
+         live one, features/model/source.ts): nothing to paint, nothing lost
+         -- the chip goes on showing the last answer about the view on screen,
+         and a listener that would re-fetch on the news is not told. */
+      answer = async () => null
+      await tier.load('cli:gone', 9)
+      expect(tier.offered()).toBe(true)
+      expect(tier.current()).toBe('high')
+      expect(ticked()).toEqual(['high'])
+      expect(heard).toEqual(['high'])
+    } finally {
+      off()
+    }
   })
 
   it('offers nothing when the read fails, rather than naming a tier it does not know', async () => {

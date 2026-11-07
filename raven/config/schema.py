@@ -2,9 +2,19 @@
 
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlparse
 
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -169,6 +179,16 @@ class CompactionConfig(Base):
     preserve_recent_tokens: int | None = None
 
 
+class TaskBoardConfig(Base):
+    """The host's Task Board: one extra call, after each turn that answered or dispatched work, keeps it.
+
+    The switch is all there is to set: the call runs at the model and effort the
+    turn's own last call ran at, so the main model's settings govern it.
+    """
+
+    enabled: bool = True
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -194,6 +214,7 @@ class AgentDefaults(Base):
     context_window_tokens: int | None = None
     # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    task_board: TaskBoardConfig = Field(default_factory=TaskBoardConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
@@ -248,6 +269,9 @@ class AgentDefaults(Base):
     post_tool_empty_max_nudges: int = 1
     thinking_prefill_max_retries: int = 2
     empty_content_max_retries: int = 3
+    # An empty reply whose call reported at least this cost (USD) is resent once instead of
+    # empty_content_max_retries times: every resend bills the whole prompt again for no answer.
+    empty_retry_cost_threshold_usd: float = Field(default=0.25, gt=0)
     # Seconds to wait before asking the model again when a call fails with a
     # retryable error the provider's own short ladder could not clear; one entry per
     # further attempt, per turn. Empty disables it. A long autonomous run wants a
@@ -301,8 +325,13 @@ class CronConfig(Base):
     key is stripped by the config loader for backwards compatibility.
     """
 
-    default_timezone: str = "Asia/Shanghai"
-    """Default IANA timezone for cron expressions without explicit ``--tz``."""
+    default_timezone: str | None = None
+    """IANA timezone stored on new cron-expression jobs without an explicit zone.
+
+    Unset, a new job stores no zone and fires on the host's local time, as
+    legacy jobs do. Read at creation, including in a running process. Existing
+    jobs keep their stored timezone.
+    """
 
     notify_missed: bool = True
     """When True, the gateway observes one-shot reminders bound to other
@@ -335,6 +364,12 @@ class ModelOverlay(Base):
     request may actually carry is still decided by `capabilities.supports_vision`
     and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
     model and never a wrong call.
+
+    ``reasoning_efforts`` is the exception to the display-only rule: it states
+    the words this model accepts for a per-conversation pick, and
+    ``providers/effort_levels.py`` prefers it over the LiteLLM table. A word
+    outside the effort ladder is refused at the RPC door; an empty list means
+    nothing was stated and falls back to the table.
     """
 
     label: str = ""
@@ -342,6 +377,7 @@ class ModelOverlay(Base):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):
@@ -371,6 +407,13 @@ class ProviderConfig(Base):
     # Custom headers (e.g. APP-Code for AiHubMix) -- can carry a secret, so
     # display faces redact the values (keys stay visible).
     extra_headers: dict[str, str] | None = Field(default=None, json_schema_extra={"secret": True})
+    # Keep verifying the server's certificate? Off for a gateway whose certificate
+    # no client machine trusts -- a self-signed one (a mkcert dev server, a
+    # throwaway VM) or an internal root nobody has imported. The call clients
+    # and the `/models` probe both read it; the preferred path is still
+    # importing the real root (see docs: "Behind a corporate proxy"), since a
+    # section that skips verification here accepts whatever answers that host.
+    tls_verify: bool = True
     models: list[str] = Field(default_factory=list)  # User-curated model names for the picker
     # Several full url/key/header groups under one provider section, for a
     # vendor reachable by more than one account or region. Meaningful only for
@@ -642,6 +685,7 @@ class ProvidersConfig(Base):
     ph8: ProviderConfig = Field(default_factory=ProviderConfig)
     aionly: ProviderConfig = Field(default_factory=ProviderConfig)
     radeon_cloud: ProviderConfig = Field(default_factory=ProviderConfig)
+    opper: ProviderConfig = Field(default_factory=ProviderConfig)
     # Self-hosted servers, reached by address like the three above.
     gpustack: ProviderConfig = Field(default_factory=ProviderConfig)
     ovms: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenVINO Model Server
@@ -770,6 +814,16 @@ class GatewayPageConfig(Base):
 TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
+
+REASONING_EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high")
+"""The words ``agents.defaults.reasoningEffort`` accepts, least first: the
+install-wide default. A session's own pick is checked against the levels its
+model declares (``providers/effort_levels.py``), which may also carry
+``xhigh``/``max``; this list is that picker's fallback only when the LiteLLM
+table cannot be read. Each provider maps a word to its own wire -- the adaptive
+efforts and thinking budgets in
+``providers/anthropic_messages_provider.py``, ``reasoning_effort`` on the
+OpenAI-shaped ones -- and a model with no thinking to move ignores it."""
 
 ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
 """What a route may declare its target's own pipeline spends.
@@ -991,8 +1045,10 @@ class GatewayConfig(Base):
     page: GatewayPageConfig = Field(default_factory=GatewayPageConfig)
 
 
-WebSearchProvider = Literal["serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply"]
-WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl"]
+WebSearchProvider = Literal[
+    "serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable", "deepseek"
+]
+WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl", "keenable", "deepseek"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
 #: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
@@ -1006,6 +1062,8 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "brave": "BRAVE_API_KEY",
     "firecrawl": "FIRECRAWL_API_KEY",
     "serply": "SERPLY_API_KEY",
+    "keenable": "KEENABLE_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
 }
 
 
@@ -1018,7 +1076,7 @@ class WebProviderKey(Base):
 class WebProvidersConfig(Base):
     """Credentials keyed by vendor, not by the tool that happens to use them.
 
-    AnySearch, Tavily, Exa and Firecrawl each serve both ``web_search`` and
+    AnySearch, Tavily, Exa, Firecrawl and Keenable each serve both ``web_search`` and
     ``web_fetch`` off one account, so a key held per tool would have to be
     pasted twice and could drift into two values for the same credential. Named
     fields rather than a free dict so a misspelled vendor fails validation
@@ -1038,6 +1096,8 @@ class WebProvidersConfig(Base):
     brave: WebProviderKey = Field(default_factory=WebProviderKey)
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
     serply: WebProviderKey = Field(default_factory=WebProviderKey)
+    keenable: WebProviderKey = Field(default_factory=WebProviderKey)
+    deepseek: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""
@@ -1103,6 +1163,103 @@ class WebToolsConfig(Base):
         return out
 
 
+#: Web vendors whose API runs on the same account as an LLM provider, so the
+#: key already configured for chat pays for search and fetch too. The web slot
+#: stays optional: a key written there wins over the borrowed one, and an empty
+#: slot is the ordinary state rather than a revocation.
+WEB_VENDOR_BORROWED_KEYS: dict[str, str] = {"deepseek": "deepseek"}
+
+
+def web_vendor_llm_source(vendor: str) -> str:
+    """The LLM provider a web vendor borrows its key from, or ``""``."""
+    return WEB_VENDOR_BORROWED_KEYS.get(vendor, "")
+
+
+#: The first-party web host each borrowing vendor's endpoints live on. A key
+#: borrowed from the model provider is issued for this host; a section pointed
+#: anywhere else (a relay, a corporate gateway) lends nothing to the web tool,
+#: whose endpoints are literals.
+WEB_VENDOR_WEB_HOSTS: dict[str, str] = {"deepseek": "api.deepseek.com"}
+
+
+def is_web_vendor_address(vendor: str, api_base: str) -> bool:
+    """Whether ``api_base`` is ``vendor``'s own web host."""
+    host = WEB_VENDOR_WEB_HOSTS.get(vendor)
+    if not host:
+        return False
+    try:
+        return urlparse(api_base).hostname == host
+    except ValueError:
+        return False
+
+
+def _borrowed_key_for_section(vendor: str, section: Any) -> str:
+    """The key a model-provider section lends to ``vendor``'s web tools, or ``""``.
+
+    Resolved through ``provider_connection`` so the key, address and headers are
+    one group: an endpoint's key travels only with that endpoint's address, and
+    a section aimed at another host lends nothing to a tool whose endpoint is a
+    literal.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source or section is None:
+        return ""
+    from raven.config.update_providers import provider_connection
+
+    try:
+        api_base, api_key, _headers = provider_connection(source, section)
+    except Exception:  # noqa: BLE001 - a section the resolver cannot read lends nothing
+        return ""
+    return str(api_key or "") if is_web_vendor_address(vendor, api_base) else ""
+
+
+def borrowed_web_key(vendor: str, providers: Any) -> str:
+    """The LLM credential a web vendor may borrow, or ``""``.
+
+    ``providers`` is either the validated ``ProvidersConfig`` or the raw
+    ``providers`` subtree from the config file; both answer the same key, and a
+    vendor this deployment does not configure answers an empty one. A section
+    that resolves to another host answers an empty one too: its key was issued
+    for that host, not for the web endpoints this tool calls.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source:
+        return ""
+    if isinstance(providers, dict):
+        try:
+            section = _provider_section(providers, source)
+        except Exception:  # noqa: BLE001 - a malformed section is validated by the loader
+            return ""
+        return _borrowed_key_for_section(vendor, section)
+    try:
+        section = providers.get(source)
+    except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+        return ""
+    return _borrowed_key_for_section(vendor, section)
+
+
+def live_borrowed_web_answer(vendor: str, providers_section: Any) -> tuple[bool, str | None]:
+    """The file's answer for a borrowing vendor: ``(named, key)``.
+
+    ``named`` False means the file says nothing about the provider, so the boot
+    value stays in charge. ``named`` True with ``key`` None means the file names
+    it with a section the schema rejects -- the live reader admits that state
+    through its last-good memory rather than rolling the credential back.
+    ``named`` True with a string is the answer this edit grants, possibly ``""``
+    when the section resolves to another host.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source or not isinstance(providers_section, dict):
+        return False, None
+    try:
+        section = _provider_section(providers_section, source)
+    except Exception:  # noqa: BLE001 - a bad edit keeps the last admitted key
+        return True, None
+    if section is None:
+        return False, None
+    return True, _borrowed_key_for_section(vendor, section)
+
+
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
@@ -1149,29 +1306,72 @@ class MediaToolConfig(Base):
     """Config for a media-generation tool (key + base + model).
 
     Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
-    / ``OPENROUTER_API_KEY``; ``api_base`` → OpenRouter; ``model`` → the tool's
-    default (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
+    / ``OPENROUTER_API_KEY``, borrowed only while the tool calls OpenRouter's own
+    address; ``api_base`` → OpenRouter; ``model`` → the tool's default
+    (gpt-image-2.5-sunburst for images). An empty ``quality`` names no quality:
+    the request's own value applies for the gpt-image family; with nothing on
+    the request either, the exact ``gpt-image-2`` id sends ``medium`` and other
+    models send none.
     """
 
     api_key: str = ""
     api_base: str = ""  # defaults to https://openrouter.ai/api/v1
     model: str = ""
     quality: Literal["", "low", "medium", "high"] = ""
-    selection_config: str = Field(default="", description="Host config path for live model and quality inheritance")
+    # Sent with every request, beside the key; secret like a provider's own.
+    extra_headers: dict[str, str] = Field(default_factory=dict, json_schema_extra={"secret": True})
+    selection_config: str = Field(
+        default="",
+        description="Config file this section is read from, live, against that file's providers: "
+        "the host's, or a pinned deck's own",
+    )
+
+
+class ImageToolConfig(MediaToolConfig):
+    """The image tool's section, one of the two media sections that can name a provider.
+
+    ``provider`` names another configured provider to run on instead, whose
+    address, key and headers replace this section's -- see
+    :func:`borrow_media_credentials`. The image and video tools have request
+    paths for such a provider (OpenAI's Images API, MiniMax's image and video
+    APIs); speech keeps to OpenRouter's request shapes, so its section has no
+    such field, and a ``provider`` written there is ignored like any key its
+    class does not declare.
+    """
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
+
+
+class VideoToolConfig(MediaToolConfig):
+    """The video tool's section; ``provider`` works as on :class:`ImageToolConfig`."""
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
 
 class MediaGenConfig(Base):
     """Multimodal generation tools configuration.
 
-    OpenRouter is the only backend: image + speech via chat-completions output
-    modalities, and video via the async ``/videos`` endpoint (Kling).
+    OpenRouter is the default backend: image + speech via chat-completions output
+    modalities, and video via the async ``/videos`` endpoint (Kling). The image
+    tool also runs on a provider serving OpenAI's Images API or on MiniMax, named
+    by ``image.provider``, and the video tool on MiniMax, named by
+    ``video.provider``; speech keeps to OpenRouter's request shapes.
     """
 
-    image: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    image: ImageToolConfig = Field(default_factory=ImageToolConfig)
     speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
-    video: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    video: VideoToolConfig = Field(default_factory=VideoToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
+
+    @field_validator("image", "video", mode="before")
+    @classmethod
+    def _plain_section_takes_its_kind(cls, value: Any, info: ValidationInfo) -> Any:
+        """A plain ``MediaToolConfig`` is still an image or video section, one naming
+        no provider: an embedder handing ``AgentLoop`` one keeps working."""
+        if isinstance(value, MediaToolConfig) and not isinstance(value, cls.model_fields[info.field_name].annotation):
+            return value.model_dump(exclude_unset=True)
+        return value
 
 
 class MCPOAuthConfig(Base):
@@ -1215,6 +1415,7 @@ class MCPServerConfig(Base):
     command: str = ""  # Stdio: command to run (e.g. "npx")
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
     env: dict[str, str] = Field(default_factory=dict)  # Stdio: extra env vars
+    cwd: str = ""  # Stdio: working directory of the server process
     url: str = ""  # HTTP/SSE: endpoint URL
     # Any header can carry a credential (Authorization, X-Custom-Auth), whatever it is called.
     headers: dict[str, str] = Field(
@@ -1450,6 +1651,11 @@ class SubagentEngineConfig(Base):
         return data
 
 
+def _settle_machine(entry: Any) -> str | None:
+    """``entry.machine`` as a stripped registry id, or ``None`` for a local entry."""
+    return (getattr(entry, "machine", None) or "").strip() or None
+
+
 class ThirdPartyCliSubagentConfig(Base):
     """A third-party CLI agent (claude code, codex, …) callable as a native subagent.
 
@@ -1559,6 +1765,26 @@ class ThirdPartyCliSubagentConfig(Base):
     transcript_format: Literal["text", "codex_jsonl", "claude_stream_json", "openclaw_json", "opencode_json"] = "text"
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    """The registered machine this agent runs on, by its ``connections.json`` id, or
+    ``None`` for this computer.
+
+    Set, ``command`` is started on that machine by its Raven node, in the
+    registered user's login environment there with this entry's ``env`` over
+    it -- never this computer's login shell -- and each run works in
+    ``<remoteCwd>/<instance or task id>`` there (``cwd`` names a directory on
+    this computer and is not read). The prompt reaches it the three ways it
+    does here: a ``{prompt}`` token as one argument, a ``{prompt_file}`` as a
+    file written into that directory, or on stdin, which the node closes after
+    it. The host's MCP servers are not lent to it, the files that come with a
+    task are named to it by address and not copied, and what it writes stays
+    on that machine. Raven reaches the machine over one ssh link with the
+    address, port and key the registry holds, none of which is written here.
+    See :mod:`raven.node.client` and
+    :class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`."""
+    remote_cwd: str | None = None
+    """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
+    without ``machine``. ``~`` is the registered user's home there."""
     timeout: int | None = None
     max_output_chars: int = 30000
     memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
@@ -1605,6 +1831,11 @@ class ThirdPartyCliSubagentConfig(Base):
             raise ValueError("command and resumeCommand must either both contain {mcp_file} or both omit it")
         if self.mcps and not carries[0]:
             raise ValueError("mcps is set but command does not contain {mcp_file}")
+        return self
+
+    @model_validator(mode="after")
+    def _settle_machine_row(self) -> "ThirdPartyCliSubagentConfig":
+        self.machine = _settle_machine(self)
         return self
 
     @model_validator(mode="after")
@@ -1696,9 +1927,9 @@ class ThirdPartyOpenAISubagentConfig(Base):
     ``OpenAIApiBackend`` has no tools and no filesystem access of its own, so
     no channel exists through which the endpoint could open a path -- being
     served from this host does not change that. The value is not inert:
-    ``format_agent_listing`` renders it into the spawn / DAG tool descriptions
-    as a ``local-files`` tag, which is the dispatching model's licence to hand
-    this agent a path."""
+    ``format_agent_listing`` renders it into the roster that closes the ``spawn``
+    tool's description as a ``local-files`` tag, which is the dispatching model's
+    licence to hand this agent a path."""
     system_prompt: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -1707,12 +1938,37 @@ class ThirdPartyOpenAISubagentConfig(Base):
     memory: SubagentMemoryConfig | None = Field(default=None, validation_alias=AliasChoices("memory", "everos"))
     """How the host addresses this agent's memories, or ``None`` for an agent
     the host records none for."""
+    machine: str | None = None
+    """The registered machine this agent's endpoint is reached from, by its
+    ``connections.json`` id, or ``None`` to reach ``baseUrl`` from this computer.
+
+    Set, each turn opens an ssh tunnel to that machine and closes it after: a
+    port on this computer's loopback forwarded to ``baseUrl``'s host and port
+    as the machine resolves them, for an endpoint that answers only on that
+    machine's network, or only on the machine itself (``http://127.0.0.1:...``,
+    or ``http://[::1]:...``). ``baseUrl`` has to be ``http``: the tunnel ends
+    at this computer's loopback, which an ``https`` certificate would not
+    name. The files that come with a task are named to the endpoint by their
+    address on this computer and not copied, as to the other kinds on a
+    machine. The address, port and key the registry holds are read for the
+    tunnel alone and written nowhere here. There is no ``remoteCwd``: an endpoint has no
+    working directory on the machine, and one written here is dropped with a
+    warning."""
 
     @model_validator(mode="before")
     @classmethod
     def _drop_unsupported_mcp_fields(cls, data: Any) -> Any:
         if not isinstance(data, dict):
             return data
+        if "remoteCwd" in data or "remote_cwd" in data:
+            # Named here for the reason the mcp fields are: a field that loads
+            # and does nothing is the failure that takes longest to find.
+            logger.warning(
+                "remoteCwd is not supported for kind 'openai' (sub-agent {!r}); ignoring -- an endpoint reached "
+                "from a machine has no working directory there",
+                data.get("name") or "<unnamed>",
+            )
+            data = {k: v for k, v in data.items() if k not in ("remoteCwd", "remote_cwd")}
         declared_mcps = data.get("mcps")
         allow_secrets = data.get("allowMcpSecrets", data.get("allow_mcp_secrets"))
         if declared_mcps or allow_secrets:
@@ -1751,6 +2007,18 @@ class ThirdPartyOpenAISubagentConfig(Base):
                 self.name,
             )
             self.reads_local_files = False
+        return self
+
+    @model_validator(mode="after")
+    def _settle_machine_row(self) -> "ThirdPartyOpenAISubagentConfig":
+        self.machine = _settle_machine(self)
+        if self.machine and (self.base_url or "").strip().lower().startswith("https:"):
+            logger.warning(
+                "openai sub-agent {!r} reaches its endpoint from machine {!r}, and the tunnel there carries http "
+                "only: every dispatch will be refused until baseUrl is http or `machine` is removed",
+                self.name,
+                self.machine,
+            )
         return self
 
     @model_validator(mode="after")
@@ -1968,7 +2236,8 @@ class ThirdPartyAcpSubagentConfig(Base):
 
     Three-valued. ``None`` is "not declared", and it resolves to the measured
     answer for the preset this row was created from -- ``False`` for opencode,
-    ``True`` for everything else. Not a plain ``True`` default, because the field
+    and for the agents Mirasim runs, whose host takes no MCP servers for one
+    session; ``True`` for everything else. Not a plain ``True`` default, because the field
     arrived after rows were already on disk: an ``opencode`` row written before it
     existed carries no key, and a permissive default would leave exactly the agent
     this is about delivering as if it isolated. See
@@ -2000,6 +2269,27 @@ class ThirdPartyAcpSubagentConfig(Base):
     the field on the write path."""
     cwd: str | None = None
     env: dict[str, str] = Field(default_factory=dict)
+    machine: str | None = None
+    """The registered machine this agent runs on, by its ``connections.json`` id, or
+    ``None`` for this computer.
+
+    Set, ``command`` is what runs on that machine, started there by the
+    machine's Raven node in its registered user's login environment, with
+    this entry's ``env`` over it; raven reaches the machine over one ssh link
+    with the address, port and key the registry holds, and none of those is
+    written here. Each session works in ``<remoteCwd>/<instance or task id>``
+    there. MCP servers the entry is granted are lent to it through the
+    machine's Raven node: the agent runs the node's bridge as a stdio server
+    and the node carries its frames over the link to the server here, which
+    stays here with its definition and keys. The host authorizes each dispatch's
+    endpoints against the acquired agent task. A host without Unix sockets opens
+    them on loopback behind a per-endpoint token, which stays on the host.
+    Files are not handed to it, and
+    what it writes stays on that machine. See :mod:`raven.node.client` and
+    :mod:`raven.acp_client.remote`."""
+    remote_cwd: str | None = None
+    """Where on ``machine`` this agent works, ``~/raven-work`` when unset; ignored
+    without ``machine``. ``~`` is the registered user's home there."""
     lend_keys: list[str] = Field(default_factory=list)
     """Raven providers whose key this agent is started with, by name (``openrouter``).
 
@@ -2030,6 +2320,15 @@ class ThirdPartyAcpSubagentConfig(Base):
     reads nothing from this field."""
     model: str | None = None
     """The ``model`` sent with every ``session/new``, or ``None`` to let the agent pick its own default."""
+    effort: str | None = None
+    """The reasoning effort sent with every session, or ``None`` for the agent's own.
+
+    The value is one the agent advertised in its ``thought_level`` config option
+    (``low``, ``high``, ``max``, ``default`` on OpenCode 1.19.4), not one of
+    Raven's run-intensity tiers: it is set through ``session/set_config_option``
+    with the option's own id, separately from ``model``. An agent that packs
+    effort into model ids instead (OpenCode 1.14.31's ``.../low``) advertises no
+    such option and this field stays unset."""
 
     @model_validator(mode="before")
     @classmethod
@@ -2064,6 +2363,29 @@ class ThirdPartyAcpSubagentConfig(Base):
                 data.get("name") or "<unnamed>",
             )
         return data
+
+    @model_validator(mode="after")
+    def _remote_rows_borrow_no_keys(self) -> "ThirdPartyAcpSubagentConfig":
+        """A row on another machine is started without Raven's keys; drop and warn.
+
+        Lending lets an agent here use a provider key Raven holds without
+        holding it itself; on another machine it would mean copying Raven's key
+        to that machine, which is that machine's own sign-in to provide.
+        Warn-and-drop on load for the startup reason
+        ``_warn_on_declared_cli_fields`` gives; the write path refuses it
+        (``update_subagents.reject_unsupported_acp_fields``).
+        """
+        self.machine = _settle_machine(self)
+        if self.machine and self.lend_keys:
+            logger.warning(
+                "sub-agent {!r} runs on machine {!r}, so Raven's keys {} are not lent to it; "
+                "sign it in on that machine instead",
+                self.name,
+                self.machine,
+                sorted(self.lend_keys),
+            )
+            self.lend_keys = []
+        return self
 
     @model_validator(mode="after")
     def _warn_on_prompt_placeholders(self) -> "ThirdPartyAcpSubagentConfig":
@@ -2145,6 +2467,31 @@ class BuiltinAgentConfig(Base):
     row that says nothing about confinement cannot loosen it."""
     timeout: int | None = None
     max_output_chars: int = 30000
+    machine: str | None = None
+    """Declared so that a row naming one is told, not so that it runs there.
+
+    A built-in agent is Raven's own loop in this process, where its model keys
+    and tools are, so it has no process to start on another machine; a value
+    here is dropped on load with a warning and the row runs on this computer,
+    reaching a machine the way the main loop does (``exec`` with a
+    ``machine``). Undeclared, the key would be dropped without a
+    word, which is how a row ends up running here while its author believes
+    it runs there."""
+
+    @model_validator(mode="after")
+    def _runs_here(self) -> "BuiltinAgentConfig":
+        machine = (self.machine or "").strip()
+        if machine:
+            logger.warning(
+                "built-in sub-agent {!r} names machine {!r}, which it cannot run on: Raven's own loop runs in "
+                "this process, where its model keys and tools are. The entry runs on this computer and reaches "
+                "the machine as the main loop does (exec with a machine); remove `machine` "
+                "from it",
+                self.name,
+                machine,
+            )
+        self.machine = None
+        return self
 
 
 AgentConfig = Annotated[
@@ -2218,10 +2565,10 @@ class PlaybookConfig(Base):
     """Whether each turn writes itself a worker table before it starts.
 
     ``default`` is the flow this repo has always run: nothing is generated and
-    no new code is on the request path. ``generate`` spends one model call per
-    turn deciding which sub-agents the question needs and what each one's brief
-    is, then offers those workers -- rather than the bare roster -- to the
-    dispatching model.
+    no new code is on the request path. ``generate`` enables the pre-turn mode
+    chosen by ``defaultGenerationMode`` or the request override: Task selects
+    existing workers with minimal prompts, while Persona may build the full
+    enabled Harness surface.
 
     What it does not do is configure the main agent: it keeps every tool it had
     and decides for itself who to hand work to. The brief travels as a preamble
@@ -2229,6 +2576,55 @@ class PlaybookConfig(Base):
     it is permitted -- narrowing what a model is shown was never a permission
     in Raven, and the enforcement point is ``ToolRegistry.execute``.
     """
+
+    default_generation_mode: Literal["off", "task", "persona"] = "task"
+    """Default pre-turn Playbook generation mode for a request that names none.
+
+    ``off`` preserves the ordinary turn path and ``task`` selects and configures
+    existing workers for the turn in hand. Both are deployment-wide answers,
+    which is what a default is for.
+
+    ``persona`` is not, and setting it here does not make every turn mint one:
+    a Persona is an identity a conversation then runs as, so it is minted only
+    for a request that asked for one by sending ``playbook_mode: "persona"``
+    (the maker page does). Read as a default it meant a reader typing "hi" spent
+    a model call on a Harness, was bound to it, and heard the assistant offer a
+    draft nobody asked about. The value is accepted rather than refused because
+    it still reads as "this deployment is in the Persona business", and a turn
+    that does ask is served -- but a deployment wanting Personas from clients
+    that send no mode needs those clients to send one."""
+
+
+class SubagentRuntimeConfig(Base):
+    """How the agent processes this host launches share its memory.
+
+    Read live by the host that launches them, so a change reaches the next
+    launch (and the next idle check) without a restart. None of it changes what
+    an agent does; it changes how many processes are kept around and what each
+    one has to load.
+    """
+
+    idle_close_s: float | None = 600.0
+    """Seconds a pooled ACP agent may sit with no request in flight and no frame
+    either way before its process is closed. ``None`` or ``0`` keeps every agent
+    until the host exits. Only an agent that can reopen its sessions
+    (``loadSession``) is closed, so a later turn resumes the conversation in a
+    fresh process. An agent that holds work nobody is asking for yet -- an armed
+    cron job of its own, a running plugin service -- says so when asked
+    (``_raven/residentWork``) and is kept."""
+
+    llm_relay: bool = True
+    """Serve a Raven agent's LiteLLM calls from this process instead of loading
+    LiteLLM in each agent. The agent builds the request, retries and records
+    usage itself; only the call to the model, and the catalogue questions that
+    need LiteLLM's tables, cross to the host. An agent that cannot reach the host
+    loads LiteLLM as before."""
+
+    fork_template: bool = True
+    """On Linux, start Raven agents by forking a process that has already loaded
+    their code, so the loaded modules are shared between them instead of loaded
+    once per agent. Any agent the template cannot start is launched the ordinary
+    way. Has no effect on other systems."""
 
 
 class SubagentsConfig(Base):
@@ -2248,6 +2644,7 @@ class SubagentsConfig(Base):
         default_factory=list,
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
+    runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":
@@ -2344,24 +2741,41 @@ class Config(BaseSettings):
                 found[name] = configured.strip()
         return found
 
+    def effective_web_vendor_key(self, vendor: str) -> str:
+        """One web vendor's key: its own slot, else the LLM provider it borrows from.
+
+        DeepSeek serves its search and fetch endpoints on the account its chat
+        API already uses, so a deployment that configured the model does not
+        have to paste the key a second time under ``tools.web``. A key written
+        to the vendor slot still wins; a deployment with neither answers ``""``.
+        """
+        return self.tools.web.vendor_key(vendor) or borrowed_web_key(vendor, self.providers)
+
+    def effective_web_vendor_keys(self) -> dict[str, str]:
+        """Every web vendor with a resolved credential, the borrowed ones included."""
+        return {
+            vendor: key
+            for vendor in type(self.tools.web.providers).model_fields
+            if (key := self.effective_web_vendor_key(vendor))
+        }
+
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.
 
         A media tool (image/speech/video) counts as configured only when the
-        user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. For
-        each configured tool we default a missing key to
-        ``providers.openrouter.apiKey`` so the chat key can be reused without
-        re-declaring it. Tools the user did not configure are left untouched
+        user set its ``model`` or ``apiKey`` under ``tools.media.<tool>``. Each
+        configured tool borrows what it lacks through :func:`borrow_media_credentials`
+        -- the named provider's address and key, or the ``providers.openrouter``
+        key for one calling OpenRouter -- so a key already configured need not
+        be declared twice. Tools the user did not configure are left untouched
         (no key, no model) — ``AgentLoop`` withholds a media tool until it has
-        a key or model, so an OpenRouter key set for chat alone never
-        surfaces image/speech/video to the agent. Returns a copy so this
-        resolution never mutates the raw config.
+        a key or model, so a key set for chat alone never surfaces
+        image/speech/video to the agent. Returns a copy so this resolution
+        never mutates the raw config.
         """
         media = self.tools.media.model_copy(deep=True)
-        openrouter = self.providers.get("openrouter")
-        or_key = openrouter.api_key if openrouter else ""
         for tool in (media.image, media.speech, media.video):
-            borrow_openrouter_key(tool, or_key)
+            borrow_media_credentials(tool, self.providers)
         return media
 
     def _match_provider(self, model: str | None = None) -> tuple["ProviderConfig | None", str | None]:
@@ -2578,18 +2992,102 @@ class Config(BaseSettings):
     )
 
 
-def borrows_openrouter_key(tool: MediaToolConfig) -> bool:
-    """Whether this section is in the one state that borrows: configured (it
-    names a model or a key) yet keyless. Unconfigured sections borrow nothing,
-    which is what keeps a chat credential from quietly enabling tools that
-    bill per call."""
-    return bool((tool.api_key or tool.model) and not tool.api_key)
+_OPENROUTER = "openrouter"
 
 
-def borrow_openrouter_key(tool: MediaToolConfig, openrouter_key: str) -> None:
-    """The media key-borrow rule, stated once, applied in place."""
-    if borrows_openrouter_key(tool) and openrouter_key:
-        tool.api_key = openrouter_key
+def is_openrouter_address(api_base: str) -> bool:
+    """Whether ``api_base`` is OpenRouter's own host. Parsed rather than matched
+    as text: ``https://openrouter.ai.gateway.test`` belongs to somebody else."""
+    try:
+        return urlparse(api_base).hostname == "openrouter.ai"
+    except ValueError:
+        return False
+
+
+def media_provider(tool: Any) -> str:
+    """The configured provider whose credential a media section runs on, or ``""``.
+
+    A section naming a provider other than OpenRouter runs on that provider. One
+    naming none, or OpenRouter itself, is the OpenRouter default, whose key it
+    borrows only while it calls OpenRouter's address: the key travels to whatever
+    ``api_base`` names, as its bearer token. ``""`` is a section pointed at some
+    other endpoint, which borrows from nobody. Read off the section alone, so the
+    tool's call-time fallback to ``OPENROUTER_API_KEY`` asks this same question.
+    """
+    from raven.providers.registry import canonical_provider_name
+
+    raw_name = str(getattr(tool, "provider", "") or "").strip()
+    named = canonical_provider_name(raw_name) if raw_name else ""
+    if named and named != _OPENROUTER:
+        return named
+    base = str(getattr(tool, "api_base", "") or "")
+    return _OPENROUTER if not base or is_openrouter_address(base) else ""
+
+
+def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
+    """The media borrowing rule, stated once, applied in place.
+
+    Only a configured section borrows anything -- one naming a model or a key of
+    its own -- which is what keeps a credential set for chat from quietly
+    enabling tools that bill per call. A section on a named provider takes that
+    provider's address, key and headers as one group, its own standing aside,
+    and takes no key or headers at all where it finds no address to send them
+    to. A keyless section calling OpenRouter takes ``providers.openrouter``'s key.
+
+    ``providers`` is anything answering ``get(name)`` with a provider section or
+    ``None``: the validated ``ProvidersConfig``, or that one provider's section.
+    """
+    if not (tool.api_key or tool.model):
+        return
+    runs_on = media_provider(tool)
+    if runs_on and runs_on != _OPENROUTER:
+        from raven.config.update_providers import provider_connection
+
+        try:
+            section = providers.get(runs_on)
+        except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+            section = None
+        api_base, api_key, headers = provider_connection(runs_on, section)
+        tool.api_base = api_base
+        tool.api_key = api_key if api_base else ""
+        tool.extra_headers = headers if api_base else {}
+        return
+    if runs_on and not tool.api_key:
+        openrouter = providers.get(_OPENROUTER)
+        if openrouter and openrouter.api_key:
+            tool.api_key = openrouter.api_key
+
+
+def media_section_class(kind: str) -> type[MediaToolConfig]:
+    """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
+    validating a raw one: the image and video sections have a provider."""
+    return MediaGenConfig.model_fields[kind].annotation
+
+
+def _provider_section(providers_section: dict[str, Any], name: str) -> "ProviderConfig | None":
+    """``name``'s section out of a raw ``providers`` subtree, as ``ProvidersConfig``
+    resolves it at boot, or ``None`` when the file has none.
+
+    Every key that may spell this provider -- in another case, with LiteLLM's
+    hyphens, under a former name or a field alias -- goes through
+    ``ProvidersConfig`` itself, so the spellings fold into one section and the
+    name resolves exactly as :meth:`Config.effective_media_config` sees them.
+    Only those keys are validated, so an unrelated provider's bad edit cannot
+    hold a media answer back; a bad edit to this provider's raises, and the
+    caller turns that into "no new answer".
+    """
+    from raven.providers.registry import find_by_name, names_same_provider
+
+    spec = find_by_name(name)
+    spellings = spec.route_names if spec else frozenset({name})
+    field = ProvidersConfig.model_fields.get(name)
+    aliases = getattr(field.validation_alias, "choices", ()) if field is not None else ()
+    own = {
+        key: value
+        for key, value in providers_section.items()
+        if key in aliases or any(names_same_provider(key, spelling) for spelling in spellings)
+    }
+    return ProvidersConfig.model_validate(own).get(name) if own else None
 
 
 def live_web_search_key(section: Any) -> str | None:
@@ -2646,37 +3144,42 @@ def live_web_provider_key(section: Any, vendor: str) -> str | None:
         return None
 
 
-def live_media_tool_config(section: Any, openrouter_section: Any) -> "MediaToolConfig | None":
+def live_media_tool_config(section: Any, providers_section: Any, kind: str = "image") -> "MediaToolConfig | None":
     """One media tool's section as a live file has it, resolved by the same
     rule as :meth:`Config.effective_media_config`.
 
-    Takes raw file subtrees because the caller (``config.live``) holds no
-    validated ``Config``; validation happens here so the credential handling
-    stays in this module, next to the rule it applies. ``None`` is "no usable
-    answer" and the caller keeps what it had: the tool's own section failing
-    validation, and equally the borrow's input -- a configured-but-keyless
-    tool whose ``providers.openrouter`` slice is present but invalid gets no
-    new answer, never a valid-looking config with the borrowed key dropped.
+    Takes raw file subtrees -- the tool's section and the file's ``providers`` --
+    because the caller (``config.live``) holds no validated ``Config``, and the
+    tool's ``kind``, whose declared class (:func:`media_section_class`) the
+    section is validated with. ``kind`` defaults to the image tool, the one an
+    agent launcher inherits: a launcher copied out of an older raven calls this
+    with two arguments. Validation happens here so the credential
+    handling stays in this module, next to the rule it applies. ``None`` is "no
+    usable answer" and the caller keeps what it had: the tool's own section
+    failing validation, and equally the provider's it borrows from -- a section
+    whose provider is present but invalid gets no new answer, never a
+    valid-looking config with the borrowed credential dropped.
     """
     if section is not None and not isinstance(section, dict):
         return None
     try:
-        cfg = MediaToolConfig.model_validate(section or {})
+        cfg = media_section_class(kind).model_validate(section or {})
     except Exception:  # noqa: BLE001 - a torn read is not worth a turn
         return None
-    if borrows_openrouter_key(cfg):
-        # The borrow is a second input to the combined answer, so its slice is
-        # admitted on the same terms as the tool's own: absent means "nothing
-        # to lend" (a real, keyless answer), while present-but-invalid rejects
-        # the WHOLE answer -- degrading it to an empty borrow would hand the
-        # caller a valid-looking config that silently dropped the credential
-        # the last valid file lent.
-        if openrouter_section is not None:
-            if not isinstance(openrouter_section, dict):
-                return None
-            try:
-                openrouter_key = ProviderConfig.model_validate(openrouter_section).api_key
-            except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
-                return None
-            borrow_openrouter_key(cfg, openrouter_key)
+    runs_on = media_provider(cfg) if (cfg.api_key or cfg.model) else ""
+    if not runs_on or (runs_on == _OPENROUTER and cfg.api_key):
+        return cfg
+    # The provider's section is a second input to the combined answer, so it is
+    # admitted on the same terms as the tool's own: absent means "nothing to
+    # borrow" (a real, keyless answer), while present-but-invalid rejects the
+    # WHOLE answer -- degrading it to an empty borrow would hand the caller a
+    # valid-looking config that silently dropped the credential the last valid
+    # file supplied.
+    if providers_section is not None and not isinstance(providers_section, dict):
+        return None
+    try:
+        borrowed = _provider_section(providers_section or {}, runs_on)
+    except Exception:  # noqa: BLE001 - an invalid candidate dispenses no new answer
+        return None
+    borrow_media_credentials(cfg, {runs_on: borrowed})
     return cfg

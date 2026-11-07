@@ -1182,6 +1182,18 @@ describe('createChatStream — delegated delivery wording', () => {
     vi.useRealTimers()
   })
 
+  it('announces a live notice as still running', async () => {
+    const fake = makeFakeRpc()
+    const sysCalls: string[] = []
+    const stream = createChatStream({ rpcClient: fake, sessionKey: 'tui:default', sys: m => sysCalls.push(m) })
+    await stream.attach()
+
+    fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'working-node', status: 'notice' } })
+
+    expect(sysCalls).toContain('↩ working-node — Still running')
+    expect(sysCalls.some(m => m.includes('Finished'))).toBe(false)
+  })
+
   it('tells a waiting node it is waiting, not that it finished', async () => {
     // announce_dag_exception reports status "exception" on this same event --
     // a suspended node still open for adjudication, not a completed delivery.
@@ -1194,8 +1206,8 @@ describe('createChatStream — delegated delivery wording', () => {
 
     fake.__pushEvent({ type: 'subagent.delivered', payload: { label: 'stuck-node', status: 'exception' } })
 
-    expect(sysCalls.some(m => m.includes('waiting on a decision'))).toBe(true)
-    expect(sysCalls.some(m => m.includes('finished;'))).toBe(false)
+    expect(sysCalls).toContain('↩ stuck-node — Waiting on a decision')
+    expect(sysCalls.some(m => m.includes('Finished'))).toBe(false)
   })
 })
 
@@ -1384,5 +1396,63 @@ describe('createChatStream — cron.missed startup notice', () => {
     expect(sysCalls).toHaveLength(1)
     expect(sysCalls[0]).toContain('hydrate — scheduled 09:30: drink water')
     expect(sysCalls[0]).not.toMatch(/scheduled \d{2}-\d{2} /)
+  })
+})
+
+describe('createChatStream — the context bar after a turn that ended without an answer', () => {
+  beforeEach(() => {
+    resetTurnState()
+    resetUiState()
+    turnController.fullReset()
+  })
+
+  const usage = {
+    completion_tokens: 0,
+    context_max: 40000,
+    context_used: 7000,
+    prompt_tokens: 7000,
+    total_tokens: 7000
+  }
+
+  it.each([
+    ['failed', { code: -32099, message: 'turn_failed', reason: 'internal' as const }],
+    ['stopped', { code: -32099, message: 'turn_cancelled', reason: 'cancelled_by_client' as const }]
+  ])('moves to the window a %s turn measured', async (_end, payload) => {
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: () => {},
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: () => {}
+    })
+    await stream.attach()
+    patchUiState({ busy: true, usage: { ...getUiState().usage, context_max: 40000, context_used: 3100 } })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({ type: 'error', payload: { ...payload, turn_id: 'turn-1', usage } })
+
+    expect(getUiState().usage.context_used).toBe(7000)
+  })
+
+  it('stays where it was when the turn measured nothing', async () => {
+    const fake = makeFakeRpc()
+    const stream = createChatStream({
+      appendMessage: () => {},
+      rpcClient: fake,
+      sessionKey: 'tui:default',
+      sys: () => {}
+    })
+    await stream.attach()
+    patchUiState({ busy: true, usage: { ...getUiState().usage, context_max: 40000, context_used: 3100 } })
+    await stream.send('question')
+
+    fake.__pushEvent({ type: 'message.start', payload: { turn_id: 'turn-1' } })
+    fake.__pushEvent({
+      type: 'error',
+      payload: { code: -32099, message: 'turn_failed', reason: 'internal', turn_id: 'turn-1' }
+    })
+
+    expect(getUiState().usage.context_used).toBe(3100)
   })
 })

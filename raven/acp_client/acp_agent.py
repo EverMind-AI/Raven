@@ -27,20 +27,26 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import weakref
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from raven.acp_client.acp_dialects import AcpDialect, ToolCall, content_texts, dialect_for
+from raven.acp_client import remote, remote_runs
+from raven.acp_client.acp_dialects import AcpDialect, ToolCall, agent_version, dialect_for
 from raven.acp_client.ask_user import AskUserResponder, clarify_responder
 from raven.acp_client.capabilities import (
     CapabilitySnapshot,
+    read_session_current_mode,
     read_session_current_model,
-    relearn_session_modes,
+    read_session_effort,
+    relearn_session_menus,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
@@ -50,16 +56,19 @@ from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
     AcpBusyError,
+    AcpConnectionError,
     AcpError,
     AcpRemoteError,
     AcpTimeoutError,
 )
-from raven.agent.subagent import activity
+from raven.acp_client.turn_events import ANSWER_UPDATES, THOUGHT_UPDATES, USER_UPDATES, TurnEvents
+from raven.agent.subagent import activity, github_copilot
 from raven.agent.subagent.attachments import attachment_blocks
 from raven.agent.subagent.backends import turn_rows
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.backends.observability import (
+    LiveSteps,
     external_agent_span,
     record_events,
     record_frames,
@@ -68,41 +77,28 @@ from raven.agent.subagent.backends.observability import (
 )
 from raven.agent.subagent.instances import InstanceRegistry, get_registry
 from raven.agent.subagent.mcp_grant import McpDispatchError, McpGrant, McpSource, acp_target, resolve_grant
+from raven.agent.subagent.mirasim_presets import MIRASIM_SHIM_PRESETS
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.contracts.subagent_backend import SubagentActionAbortedError
 from raven.contracts.tool import FileChange
+from raven.home import subagent_role_env
 from raven.mcp.endpoint import McpEndpoints, bridge_command
+from raven.ops import remote_path
+from raven.providers.usage import reported_cost, token_count
 from raven.spine.message import Media
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
 
-# Text-bearing update kinds, and the ones whose text is the answer rather than
-# commentary. Only `usage_update` was observed on a live server; the rest follow
-# the ACP contract and are handled defensively -- an unrecognised shape is
-# recorded raw and skipped, never guessed at.
-_ANSWER_UPDATES = ("agent_message_chunk",)
-_THOUGHT_UPDATES = ("agent_thought_chunk",)
-# What the person said mid-turn. Only a steer produces one during a live turn:
-# every other user message reached the agent as the prompt and is already on
-# the caller's side, so this frame is the one record of a steer landing.
-_USER_UPDATES = ("user_message_chunk",)
-
 # A tool call ends whatever message was being written: an agent that says what
 # it is about to do, runs a command and then reports back has sent two messages,
 # and the protocol marks the boundary only by what came between them. Thoughts
 # and usage updates are deliberately not here -- neither ends a message, and
-# breaking on one would split a single reply mid-sentence.
+# breaking on one would split a single reply mid-sentence. An update that says
+# its call is pending or in progress is passed over for the same reason.
 _BREAKING_UPDATES = ("tool_call", "tool_call_update")
 _MESSAGE_BREAK = "\n\n"
-
-# One synthetic id for the turn's plan. The frame carries no call id of its
-# own, and a plan frame re-sends the whole list on every change -- five times
-# for one plan in codex's capture, the only adapter measured sending one -- so
-# a row per frame would be five near-identical rows. The branch this feeds is
-# dialect-independent: any adapter's plan frame lands here.
-_PLAN_CALL_ID = "acp-plan"
 
 
 def _uploads_root() -> Path | None:
@@ -113,6 +109,31 @@ def _uploads_root() -> Path | None:
         return Path(load_config().workspace_path)
     except Exception:
         return None
+
+
+@dataclass(frozen=True)
+class _Lent:
+    """A machine row's endpoints, opened here and paired on the link: the stanzas are rendered once the agent's task is known."""
+
+    paths: dict[str, str]
+    """By server name, the socket of the endpoint opened for this dispatch."""
+
+
+@dataclass(frozen=True)
+class _OnMachine:
+    """One dispatch's place on its machine, resolved through the machine's Raven node."""
+
+    target: remote.Machine
+    root: str
+    """Where the agent process starts there: the entry's ``remoteCwd`` or the default, as written."""
+    session_cwd: str
+    """The session's directory under the root, made there and resolved to an absolute path."""
+    since: float
+    """The machine's clock as the session directory was made: what counts as the session's output comes after."""
+    link: Any
+    """The machine's node pool, for the files sent there and brought back."""
+    launcher: Callable[[], Awaitable[Any]]
+    """Starts the agent through the node; what the pool runs the connection over."""
 
 
 class AcpEmptyTurnError(RuntimeError):
@@ -127,10 +148,138 @@ class AcpEmptyTurnError(RuntimeError):
     one that ends on a failed tool call, having narrated only its plan to make
     the call. Same outcome for the caller -- nothing usable came back -- and
     without this it was reported as a completed run whose result was the plan.
+
+    ``tokens`` and ``agent_version`` are what the agent's own answer carried and
+    what the handshake reported: the first says whether a model call ran at all
+    (a turn that produced nothing and spent nothing never reached the model),
+    and the second is the build that was asked. Both are facts the protocol
+    does carry, where the reason does not -- and a caller that has to name a
+    cause reads them here rather than out of the sentence.
     """
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        tokens: int | None = None,
+        agent_version: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.tokens = tokens
+        """The total tokens the agent's own answer reported, or None when it reported none."""
+        self.agent_version = agent_version
+        """The build that answered the handshake, as the agent spells its version."""
 
-_RESULT_TEXT_CAP = 2000
+
+def _tokens_reported(result: Any) -> int | None:
+    """The total tokens the agent's own answer reported, or ``None`` when it reported none.
+
+    Read off the prompt answer's ``usage``, in either spelling of the field the
+    contract and the adapters use. An agent that reports no usage is not read
+    as one that spent nothing: the absence of a number is not a number. What
+    counts as a number is ``token_count``'s rule, the one the same answer's
+    ledger counts are read by.
+    """
+    if not isinstance(result, dict):
+        return None
+    usage = result.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    for key in ("totalTokens", "total_tokens"):
+        if key in usage:
+            return token_count(usage[key])
+    return None
+
+
+def _agent_version(connection: Any) -> str:
+    """The build that answered the handshake on this connection.
+
+    Read through the shared dialect helper, which reads ``agentInfo.version``
+    alone -- not through the full handshake parser, whose ``int()`` of
+    ``protocolVersion`` makes the whole read raise when an agent spells it
+    "1.0", and the version disappear.
+
+    The live one, not a stored snapshot: a snapshot describes the build that
+    was measured last, and a reader told "your agent is too old" out of a stale
+    copy would keep hearing it after the upgrade that closed the gap.
+
+    Never fatal, like the mode and the model beside it: a version is a fact to
+    add to the sentence, and a connection that cannot be read for one has no
+    version to give.
+    """
+    try:
+        return agent_version(connection.initialize) or ""
+    except Exception:  # noqa: BLE001 - a version is a fact to add, never a reason to fail a turn
+        return ""
+
+
+class AcpProviderRefusalError(AcpEmptyTurnError):
+    """The agent ended its turn normally and its whole reply was its model provider's refusal.
+
+    ``said`` is that reply as the agent wrote it, kept apart from raven's reading
+    of it so a caller that explains refusals itself (the connect) reads the
+    agent's words rather than this error's.
+    """
+
+    def __init__(self, message: str, *, said: str) -> None:
+        super().__init__(message)
+        self.said = said
+
+
+def _ledger_counts(counts: Any) -> dict[str, Any] | None:
+    """One ACP turn's token counts in the shape the usage ledger reads, or ``None`` without them.
+
+    ``counts`` is the turn's ``usage`` in the field names ACP's draft gives it.
+    Its ``inputTokens`` leaves out the cached reads and writes reported beside it
+    (claude-agent-acp and codex-acp both), so they are kept apart rather than
+    taken out again. ``None`` when the input and output counts are not both
+    there: the ledger stores numbers, and a row of zeros would say the turn read
+    and wrote nothing.
+    """
+    if not isinstance(counts, dict):
+        return None
+    read, wrote = token_count(counts.get("inputTokens")), token_count(counts.get("outputTokens"))
+    if read is None or wrote is None:
+        return None
+    return {
+        "prompt_tokens": read,
+        "prompt_tokens_include_cache": False,
+        "completion_tokens": wrote,
+        "cache_read_input_tokens": token_count(counts.get("cachedReadTokens")),
+        "cache_creation_input_tokens": token_count(counts.get("cachedWriteTokens")),
+        "reasoning_tokens": token_count(counts.get("thoughtTokens")) or 0,
+        "total_tokens": token_count(counts.get("totalTokens")),
+    }
+
+
+def _turn_cost(reported: Any, spent_before: float | None) -> tuple[float | None, float | None]:
+    """What one turn cost in USD, and the session's cumulative cost to measure the next from.
+
+    ACP's ``usage_update.cost`` is the session's cumulative cost, so a turn
+    costs what it added to it. ``spent_before`` is the total at the turn's
+    start: 0 for a session this process opened, ``None`` when it is unknown --
+    a session resumed after this process started -- and then the turn's cost is
+    unknown too, not the whole total charged again. A total that went down says
+    the agent counts some other way, and is read as unknown for the same reason.
+    """
+    cost = reported.get("cost") if isinstance(reported, dict) else None
+    amount = reported_cost(cost.get("amount")) if isinstance(cost, dict) and cost.get("currency") == "USD" else None
+    if amount is None:
+        return None, spent_before
+    if spent_before is None or amount < spent_before:
+        return None, amount
+    return amount - spent_before, amount
+
+
+def _holds_session(exc: AcpRemoteError) -> bool:
+    """Whether the agent refused ``session/load`` because this process already holds the session.
+
+    Measured on GitHub Copilot CLI 1.0.88: the refusal is ``-32602`` ``Session <id>
+    is already loaded``, it comes only from the process that holds the session (a
+    second process loads it without complaint), and the session keeps its context.
+    That is a live session, not a pruned one, and there is no replay to read.
+    """
+    return exc.code == -32602 and "already loaded" in exc.message.lower()
 
 
 @asynccontextmanager
@@ -217,7 +366,9 @@ class _TurnCollector:
     then reports back sends two, and joined chunk-to-chunk they read as one
     paragraph whose halves do not follow from each other. ``_BREAKING_UPDATES``
     is where the boundary is recovered, and the break is forwarded to
-    ``on_delta`` as well so a live view and the stored reply agree.
+    ``on_delta`` as well so a live view keeps the messages apart too. Only the
+    last of them is the run's result (``reply``): the live view shows the work
+    as it happens, and the earlier messages stay on the steps they preceded.
     """
 
     def __init__(
@@ -226,8 +377,18 @@ class _TurnCollector:
         dialect: AcpDialect | None = None,
         prompt: str | None = None,
         workspace: Path | None = None,
+        limit: int | None = None,
+        track_files: bool = True,
+        agent_version: str | None = None,
+        steps: LiveSteps | None = None,
     ) -> None:
-        self._on_delta = on_delta
+        # The reply's cap, renewed for every message rather than spent across
+        # the turn: the reply is one message, and narration spending a shared
+        # budget would cut the report short on screen while the reply itself
+        # fits whole -- with no notice, since nothing was capped.
+        self._deliver = on_delta
+        self._limit = limit
+        self._on_delta = self._budgeted()
         # The prompt this turn was opened with. A ``user_message_chunk`` that
         # repeats it is an agent echoing the question back (the spec uses the
         # frame for replays), not a steer, and must not become a user row.
@@ -235,7 +396,19 @@ class _TurnCollector:
         # The spec by default, so a collector built without one (every test that
         # only cares about answer text) still reads tool calls correctly.
         self._dialect = dialect or AcpDialect()
+        # What the agent said, thought and ran, reduced by the same code the
+        # journal replay uses; ``events`` is its list, read in place.
+        self._turn = TurnEvents(self._dialect, prompt)
+        # Writes those events as the run's steps while it runs, so the
+        # trajectory shows a worker's work before its turn ends.
+        self.steps = steps
+        self._agent_version = agent_version
         self._tool_ran = False
+        self._steered = False
+        # Where each message starts in `answer`. Only a step opens one: the
+        # stream's per-message budget and `reply` both read this, so the two
+        # cannot disagree about where a message ends.
+        self._message_starts = [0]
         # The run this collector belongs to, captured here rather than read at
         # publish time. `__call__` is awaited from the connection's read loop,
         # a task created when the *connection* was opened, so the ContextVar it
@@ -247,6 +420,10 @@ class _TurnCollector:
         # of its commands produced is only ever visible as a directory that
         # changed around the call, which is what the per-call listings are for.
         self._workspace = workspace
+        # Off for an agent on another machine: its paths name that machine's
+        # disk, so a listing here would see none of its files, and a path it
+        # wrote that is absent here would be recorded as a delete.
+        self._track_files = track_files
         self._blocks: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._listings: dict[str, Any] = {}
         self._settled_calls: set[str] = set()
@@ -256,12 +433,55 @@ class _TurnCollector:
         self.thoughts: list[str] = []
         self.kinds: list[str] = []
         self.usage: dict[str, Any] = {}
-        self.events: list[dict[str, Any]] = []
+        self.events = self._turn.events
         self.answer_at: str | None = None
 
     @staticmethod
     def _now() -> str:
-        return datetime.now().isoformat()
+        # With its offset: the run's steps are written from these stamps, and a
+        # naive one cannot say which 01:30 it was when the clocks fall back.
+        return datetime.now().astimezone().isoformat()
+
+    @staticmethod
+    @lru_cache(maxsize=4096)
+    def _shown(at: str | None) -> str | None:
+        """A stamp as the transcript has always carried it: local, without an offset.
+
+        Cached: the transcript is republished on every update, from every event,
+        and converting each stamp every time made a long turn's republishing
+        quadratic.
+        """
+        if not at:
+            return at
+        return datetime.fromisoformat(at).astimezone().replace(tzinfo=None).isoformat()
+
+    @property
+    def prompt(self) -> str:
+        """The prompt this turn was opened with, as sent."""
+        return self._prompt
+
+    def _budgeted(self) -> Callable[[str], Awaitable[None]] | None:
+        deliver = self._deliver
+        if deliver is None or self._limit is None:
+            return deliver
+        bounded = bounded_delta(deliver, self._limit)
+        if bounded is None:
+            return None
+        leading = True
+
+        async def emit(text: str) -> None:
+            nonlocal leading
+            if leading:
+                stripped = text.lstrip()
+                prefix = text[: len(text) - len(stripped)]
+                if prefix:
+                    # reply strips this prefix, so it cannot spend its cap.
+                    await deliver(prefix)
+                text = stripped
+                leading = not bool(text)
+            await bounded(text)
+
+        return emit
 
     async def __call__(self, method: str, params: dict[str, Any]) -> None:
         # Any frame from the agent is the run moving, whatever it carries. The
@@ -270,14 +490,10 @@ class _TurnCollector:
         # otherwise leave the stall watcher reading a run that never moved.
         activity.note_alive(self._run)
         if method == PERMISSION_METHOD:
-            # Subject only, never the name: this frame reports `kind: "execute"`
-            # even for a call the session update badged `read`, and reading it
-            # for a name would erase the distinction codex drew.
-            command = self._dialect.permission_command(params)
+            call_id = self._turn.permission(params)
+            if self.steps is not None:
+                self.steps.touch(self.events)
             tool = params.get("toolCall")
-            call_id = str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
-            if command and call_id:
-                self._backfill_permission_command(call_id, command)
             # The earliest frame that names the call. An agent that asks first
             # and announces the call as it runs it -- raven's own does -- leaves
             # the announce too late for a listing to be a baseline: the file the
@@ -291,92 +507,72 @@ class _TurnCollector:
         kind = update.get("sessionUpdate")
         kind = kind if isinstance(kind, str) else "unknown"
         self.kinds.append(kind)
-        if kind in _ANSWER_UPDATES:
+        applied = self._turn.apply(update, self._now())
+        if self.steps is not None:
+            self.steps.touch(self.events)
+        if kind in ANSWER_UPDATES:
             if not self.answer:
                 self.answer_at = self._now()
-            texts = content_texts(update.get("content"))
-            said = "".join(texts)
-            if texts and self._tool_ran and self.answer:
-                texts.insert(0, _MESSAGE_BREAK)
+            texts = applied.texts
+            step = bool(texts) and self._tool_ran and bool(self.answer)
+            broke = step or (bool(texts) and self._steered and bool(self.answer))
+            if broke:
+                self.answer.append(_MESSAGE_BREAK)
+            if step:
+                self._message_starts.append(len(self.answer))
+                self._on_delta = self._budgeted()
             if texts:
                 self._tool_ran = False
+                self._steered = False
             self.answer.extend(texts)
-            if said:
-                # Merged with the previous burst only when nothing came between:
-                # a `call` event in between is exactly what makes this a new
-                # burst, and the boundary is what puts each one on the step it
-                # was said before instead of at the end with the rest.
-                if self.events and self.events[-1].get("t") == "say":
-                    self.events[-1]["text"] += said
-                else:
-                    self.events.append({"t": "say", "text": said, "at": self._now()})
+            if broke:
+                # Raven's separator, not the agent's words. A step's break comes
+                # before the message it opens and is in no reply, so it rides past
+                # the budget the way the partial-turn notice does: counted, it
+                # would cut the last characters of a reply that fits its cap. A
+                # steer's break is inside the message the reply returns, and the
+                # reply's cap counts it, so that message's budget does too.
+                sink = self._deliver if step else self._on_delta
+                if sink is not None:
+                    await sink(_MESSAGE_BREAK)
             if self._on_delta is not None:
                 for text in texts:
                     await self._on_delta(text)
-        elif kind in _USER_UPDATES:
-            said = "".join(content_texts(update.get("content")))
-            if said and said.strip() != self._prompt:
-                # A steer ends the message being written the way a tool call
-                # does: what the agent says next answers the new words.
-                self._tool_ran = bool(self.answer)
-                self.events.append({"t": "user", "text": said, "at": self._now()})
-        elif kind in _THOUGHT_UPDATES:
-            chunks = content_texts(update.get("content"))
-            self.thoughts.extend(chunks)
-            for c in chunks:
-                if self.events and self.events[-1].get("t") == "thought":
-                    self.events[-1]["text"] += c
-                else:
-                    self.events.append({"t": "thought", "text": c, "at": self._now()})
+        elif kind in USER_UPDATES:
+            if applied.steered:
+                # Set apart by a break, but not the end of the message: raven
+                # puts a steer on the wire as it arrives and reads it only before
+                # its next model call, so the words after it can finish the
+                # message it landed in.
+                self._steered = bool(self.answer)
+        elif kind in THOUGHT_UPDATES:
+            self.thoughts.extend(applied.texts)
         elif kind in _BREAKING_UPDATES:
             # Both tool kinds break the message, and each also contributes its
             # own row to the transcript: the call names what was run, the update
             # carries how it ended. One branch, because the boundary is the same
             # fact for both -- an answer chunk after either starts a new message.
-            self._tool_ran = True
-            if kind == "tool_call":
-                call = self._dialect.call(update)
-                if call.id and any(e.get("t") == "call" and e.get("id") == call.id for e in self.events):
-                    # A second opening frame for a call already announced. The spec
-                    # revises with `tool_call_update`, but codebuddy re-sends
-                    # `tool_call` once it knows the kind, and appending again
-                    # rendered one read as two rows with only one result to pair.
-                    # Treated as the revision it is, which also lets the finer
-                    # `kind` on this frame name the call.
-                    self._revise_call(update)
-                else:
-                    self.events.append(
-                        {
-                            "t": "call",
-                            "id": call.id or f"call-{len(self.calls) + 1}",
-                            "call": call,
-                            "at": self._now(),
-                        }
-                    )
-            else:
-                self._revise_call(update)
-                status = update.get("status")
-                if status in ("completed", "failed"):
-                    outcome = self._dialect.result(update)
-                    self.events.append(
-                        {
-                            "t": "result",
-                            "id": str(update.get("toolCallId") or ""),
-                            "ok": outcome.ok,
-                            "text": outcome.text[:_RESULT_TEXT_CAP],
-                            "at": self._now(),
-                        }
-                    )
-                    self._backfill_subject(str(update.get("toolCallId") or ""), update)
-            await self._note_files(update)
+            # Not after a pending or in_progress update: raven's
+            # own held prompt beats one on its open wait call every minute, and
+            # the wake turn's report may be mid-sentence when it lands. The
+            # opening frame says `in_progress` too and still ends the message
+            # before the call; a status-less update still ends it, since
+            # claude-agent-acp reports a finished call's result on one.
+            if kind == "tool_call" or update.get("status") not in ("pending", "in_progress"):
+                self._tool_ran = True
+            if self._track_files:
+                await self._note_files(update)
         elif kind == "plan":
-            self._plan(update)
+            # Only the opening frame breaks the message. A revision that broke it
+            # too would split the narration around a plan that changes four times.
+            if applied.opened_plan:
+                self._tool_ran = True
         elif kind == "usage_update":
             self.usage = {k: v for k, v in update.items() if k != "sessionUpdate"}
         # Republished on every update rather than once at the end: the live
         # index is how a panel watches the run, and a transcript that only
         # exists after the answer is not a live view of anything.
-        if kind in (*_ANSWER_UPDATES, *_THOUGHT_UPDATES, *_USER_UPDATES, "tool_call", "tool_call_update", "plan"):
+        if kind in (*ANSWER_UPDATES, *THOUGHT_UPDATES, *USER_UPDATES, "tool_call", "tool_call_update", "plan"):
             activity.set_transcript(self._run, self.messages(in_flight=True))
         # The count beside it, on the same beat: `tasks.list` draws a running
         # node's tool count off the live account, and a tally published only
@@ -538,149 +734,18 @@ class _TurnCollector:
             return path
         return str(Path(self._workspace) / path)
 
-    def _revise_call(self, update: dict[str, Any]) -> None:
-        """Re-read a call's arguments from a later frame.
+    def turn_counts(self, answered: Any) -> dict[str, Any]:
+        """The turn's token counts, from one source: never both, as ``note_usage`` adds.
 
-        The opening ``tool_call`` announces the call before the arguments are
-        known: measured on claude-agent-acp and opencode, it carries
-        ``rawInput: {}`` and the real input follows on a ``tool_call_update``.
-        Until that lands, the only thing a reader has is the title -- which is
-        why the fallback to it is resolved at render time (``ToolCall.subject``)
-        rather than stored here.
-
-        The newest input wins, because that is what a ``tool_call_update``
-        means: the fields it carries replace the call's current ones, so an
-        adapter that revises an argument has revised what the tool actually ran
-        with. The whole call is re-parsed rather than only its input, since the
-        same frame also carries the ``kind`` and ``_meta`` a dialect names the
-        tool from -- but only when it does: ``names_call`` is what decides, and
-        a frame that answers False leaves the name alone.
+        ``answered`` is the prompt response's ``usage``, read where the dialect
+        says it counts the whole turn; the ``usage_update`` then carries only the
+        window and the cost. Otherwise the update, where an earlier agent was seen
+        to send its counts.
         """
-        if not self._dialect.revises_call(update):
-            return
-        call_id = str(update.get("toolCallId") or "")
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                revised = self._dialect.call(update)
-                previous: ToolCall = event["call"]
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    # Guarded like the fields below it: a frame that carries no
-                    # kind cannot name the call, and reading one anyway is what
-                    # renamed codex's searches to the fallback.
-                    name=revised.name if self._dialect.names_call(update) else previous.name,
-                    argument=revised.argument or previous.argument,
-                    # An update need not repeat the title, and losing it would
-                    # leave a no-argument call with nothing to show at all.
-                    title=revised.title or previous.title,
-                    raw_input=revised.raw_input or previous.raw_input,
-                )
-                return
-
-    def _backfill_subject(self, call_id: str, update: dict[str, Any]) -> None:
-        """Set a call's subject from its own result.
-
-        The frame that opened the call did not have it: codex sends
-        ``apply_patch`` as the command and names the files it patched only in
-        the output. Never overwrites a subject already known -- a later frame
-        revising an argument is ``_revise_call``'s business, not this.
-
-        Passes the call's own name, established when it opened, into
-        ``subject_from_result`` as the tool the completed frame belongs to: that
-        frame typically carries none of ``tool_name``'s own discriminators, so
-        without it a dialect could not tell an ``apply_patch`` completion from
-        any other tool's own -- including one whose output merely looks like an
-        apply_patch envelope.
-        """
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                previous: ToolCall = event["call"]
-                if previous.argument:
-                    return
-                subject = self._dialect.subject_from_result(update, name=previous.name)
-                if not subject:
-                    return
-                # The new subject must win a `path` collision -- an
-                # `imageGeneration` call's own `rawInput` can already carry one
-                # -- so it seeds the dict and `previous.raw_input` is copied in
-                # behind it, the same order `CodexDialect.call` merges with.
-                raw_input = {"path": subject}
-                for key, value in previous.raw_input.items():
-                    if key == "path":
-                        continue
-                    # `apply_patch`'s own `command` is the tool's name, not an
-                    # argument -- a reader that picks a subject by scanning
-                    # known key names rather than by position (as
-                    # `ui-tui`'s `callSubject` does) would otherwise take it
-                    # over the subject just recovered here. A real recovered
-                    # command never equals the call's own name, so this never
-                    # drops one.
-                    if key == "command" and value == previous.name:
-                        continue
-                    raw_input[key] = value
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    name=previous.name,
-                    argument=subject,
-                    title=previous.title,
-                    raw_input=raw_input,
-                )
-                return
-
-    def _backfill_permission_command(self, call_id: str, command: str) -> None:
-        """Set a call's subject to the command a permission request recovered.
-
-        Guarded on ``raw_input`` already carrying a ``command`` key rather than
-        on ``argument`` being non-empty: a ``commandExecution.read`` opens with
-        its ``locations`` path already filling ``argument``, and that
-        placeholder is exactly what this must replace. A real
-        ``commandExecution`` -- and ``apply_patch``, whose ``rawInput.command``
-        is its own name -- already carry their command there, and overwriting
-        either would either restate the same value or, for ``apply_patch``,
-        block the file-derived subject its own result still owes it.
-        """
-        for event in reversed(self.events):
-            if event.get("t") == "call" and event.get("id") == call_id:
-                previous: ToolCall = event["call"]
-                if previous.raw_input.get("command"):
-                    return
-                event["call"] = ToolCall(
-                    id=previous.id,
-                    name=previous.name,
-                    argument=command,
-                    title=previous.title,
-                    raw_input={"command": command, **previous.raw_input},
-                )
-                return
-
-    def _plan(self, update: dict[str, Any]) -> None:
-        """Open the turn's plan row, or move the one already open.
-
-        Only the opening frame breaks the message. A revision that broke it too
-        would split the narration around a plan that changes four times.
-        """
-        subject, checklist = self._dialect.plan_rows(update)
-        if not checklist:
-            return
-        call = ToolCall(
-            id=_PLAN_CALL_ID,
-            name=self._dialect.plan_tool_name,
-            argument=subject,
-            title="",
-            raw_input={"argument": subject} if subject else {},
-        )
-        for event in self.events:
-            if event.get("t") == "call" and event.get("id") == _PLAN_CALL_ID:
-                event["call"] = call
-                break
-        else:
-            self._tool_ran = True
-            self.events.append({"t": "call", "id": _PLAN_CALL_ID, "call": call, "at": self._now()})
-        for event in self.events:
-            if event.get("t") == "result" and event.get("id") == _PLAN_CALL_ID:
-                event["text"] = checklist
-                return
-        self.events.append({"t": "result", "id": _PLAN_CALL_ID, "ok": True, "text": checklist, "at": self._now()})
+        counts_the_turn = self._dialect.prompt_usage_counts_the_turn(self._agent_version)
+        if counts_the_turn and isinstance(answered, dict) and answered:
+            return answered
+        return self.usage
 
     @property
     def calls(self) -> list[ToolCall]:
@@ -719,21 +784,26 @@ class _TurnCollector:
 
     @property
     def closing_text(self) -> str:
-        """What the agent said after its last tool call -- the reply proper.
+        """What the agent said after its last tool call -- the transcript's closing row.
 
         Measured on codex-acp, a turn narrates as it goes: a plan, then a
         progress note before each of three calls, then the report. ``text``
-        joins all of it, which is right for the caller that receives the run's
-        answer, and wrong for a transcript -- the three progress notes belong on
-        the steps they preceded, and repeating them inside the final message is
-        what made a direct chat read as one blob of restated plan.
+        joins all of it, which is wrong for every reader: the three progress
+        notes belong on the steps they preceded, repeating them inside the final
+        message is what made a direct chat read as one blob of restated plan,
+        and a caller handed them as the result reads a plan as the answer.
 
         Empty when the turn ended on a tool call and said nothing after it, which
         is a real outcome and not the same as "not reported".
 
         A steer is a boundary too: what was said before the person's words is
         already on its own row above them, and repeating it here printed the
-        first half of the reply twice.
+        first half of the message twice.
+
+        So it is not ``reply``, which is a message as the live view shows it:
+        the rows put a steer between the words around it, and they attach text
+        to a call only when a call follows it, which is why this walks the
+        events rather than the messages.
         """
         said: list[str] = []
         for ev in reversed(self.events):
@@ -742,6 +812,27 @@ class _TurnCollector:
             if ev["t"] == "say":
                 said.append(ev["text"])
         return "".join(reversed(said)).strip()
+
+    @property
+    def reply(self) -> str:
+        """What the run hands its caller: the last message, never the ones before it.
+
+        A message is what the live view shows between two steps -- a tool call,
+        an update whose status is neither pending nor in_progress, or a plan
+        opening -- so the caller gets the last one exactly as it streamed. A
+        steer inside it stays inside it, set apart by a break that the
+        message's stream budget counts the way the reply's cap does. A turn that
+        ended on a step said nothing after it, and so did one whose last message
+        is blank; either way the message before is the answer: still one
+        message rather than every one joined, and still an answer rather than
+        an empty result for a run that finished its work.
+        """
+        ends = [*self._message_starts[1:], len(self.answer)]
+        for start, end in zip(reversed(self._message_starts), reversed(ends), strict=True):
+            said = "".join(self.answer[start:end]).strip()
+            if said:
+                return said
+        return ""
 
     @property
     def failed_call_without_answer(self) -> tuple[str, str] | None:
@@ -805,12 +896,13 @@ class _TurnCollector:
         events: list[dict[str, Any]] = []
         for ev in self.events:
             kind = ev["t"]
+            at = self._shown(ev.get("at"))
             if kind == "say":
                 events.append(turn_rows.say(ev["text"]))
             elif kind == "thought":
-                events.append(turn_rows.thought(ev["text"], at=ev.get("at")))
+                events.append(turn_rows.thought(ev["text"], at=at))
             elif kind == "user":
-                events.append(turn_rows.user(ev["text"], at=ev.get("at")))
+                events.append(turn_rows.user(ev["text"], at=at))
             elif kind == "call":
                 acp_call: ToolCall = ev["call"]
                 events.append(
@@ -818,15 +910,15 @@ class _TurnCollector:
                         id=ev["id"],
                         name=acp_call.name,
                         arguments_json=acp_call.arguments_json(),
-                        at=ev.get("at"),
+                        at=at,
                     )
                 )
             elif kind == "result":
-                events.append(turn_rows.result(id=ev["id"], text=ev["text"], ok=ev["ok"], at=ev.get("at")))
+                events.append(turn_rows.result(id=ev["id"], text=ev["text"], ok=ev["ok"], at=at))
         return turn_rows.rows(
             events,
             in_flight_answer=self.closing_text if in_flight else None,
-            in_flight_answer_at=self.answer_at if in_flight else None,
+            in_flight_answer_at=self._shown(self.answer_at) if in_flight else None,
         )
 
 
@@ -891,6 +983,91 @@ def _prompt_meta(skey: Any) -> dict[str, Any]:
     return meta
 
 
+@dataclass
+class _SessionState:
+    """What this host knows about one session, across backend instances.
+
+    Held here rather than on ``AcpAgentBackend`` because a config change hot-applies
+    the agent table and replaces every backend instance. A session outlives that
+    replacement, and so must what this host recorded about it: the model, effort
+    and mode it opened on, and the overrides pushed to it -- otherwise clearing a
+    row's value finds an empty ``pushed`` and never sends the session back, leaving
+    a live direct chat on the old value while every surface reports the agent's own."""
+
+    option: str = ""
+    baseline: str = ""
+    pushed: str = ""
+    mode_baseline: str = ""
+    mode_pushed: str = ""
+    model_baseline: str = ""
+    model_pushed: str = ""
+    efforts: tuple[str, ...] | None = None
+    """The rungs this session's own model offers, as its latest response listed them.
+
+    ``None`` until a response lists the session's config options at all; then a
+    tuple, empty for a model with no effort option. Per session because an
+    instance can be moved to a model other than the row's, whose menu the row's
+    effort was never checked against."""
+
+
+_SESSION_STATE: dict[tuple[str, str], dict[str, _SessionState]] = {}
+"""Pooled connections' session records, by pool slot and then by session id.
+
+The slot is the agent's name and the parent binding (``AcpClient.session_identity``).
+Not the name alone: the pool holds one process per binding under a name, each
+numbering its own sessions, so two of them can both hold ``s1``, and a record
+shared between them let clearing one forget what was pushed to the other. Not
+the client either: the pool closes an idle agent that can reload its sessions
+and relaunches it into the same slot, where the instance's next turn reloads
+the same session -- a record held by the closed client would be gone exactly
+when the clear that reads it arrives. A hot apply keeps the slot too, so the
+records also survive the backend's replacement.
+
+A session opened fresh starts on an empty record (``_fresh_session_state``), so
+a relaunched process handing out an id an earlier one used inherits nothing,
+and a record goes when no instance can resume its session (``_forget_session``)."""
+
+_UNPOOLED_STATE: weakref.WeakKeyDictionary[Any, dict[str, _SessionState]] = weakref.WeakKeyDictionary()
+"""Records of a client the pool did not hand out, which has no slot: held for that client's life."""
+
+
+def _records_of(client: Any) -> dict[str, _SessionState]:
+    """The session records kept for ``client``'s pool slot, or for the client itself when unpooled."""
+    identity = getattr(client, "session_identity", None)
+    if identity is not None:
+        return _SESSION_STATE.setdefault(identity, {})
+    sessions = _UNPOOLED_STATE.get(client)
+    if sessions is None:
+        sessions = _UNPOOLED_STATE[client] = {}
+    return sessions
+
+
+def _session_state(client: Any, session_id: str) -> _SessionState:
+    """The record for ``session_id`` on ``client``'s pool slot, created on first use."""
+    sessions = _records_of(client)
+    state = sessions.get(session_id)
+    if state is None:
+        state = sessions[session_id] = _SessionState()
+    return state
+
+
+def _fresh_session_state(client: Any, session_id: str) -> None:
+    """Start ``session_id`` on an empty record: a session just opened has had nothing pushed."""
+    _records_of(client)[session_id] = _SessionState()
+
+
+def _forget_session(client: Any, session_id: str | None) -> None:
+    """Drop the record of a session no route can reach again.
+
+    A pooled connection lives as long as its agent process, so a record left
+    for every session a stateless agent ever opened would grow with every spawn.
+    A session an instance can still resume keeps its record: the clear on its
+    next turn is what reads it.
+    """
+    if session_id:
+        _records_of(client).pop(session_id, None)
+
+
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
@@ -908,31 +1085,56 @@ class AcpAgentBackend:
         timeout: int | None = None,
         max_output_chars: int = 30000,
         snapshot: CapabilitySnapshot | None = None,
+        capability_fingerprint: str | None = None,
         registry: InstanceRegistry | None = None,
         mcps: list[str] | None = None,
         allow_mcp_secrets: bool = False,
         session_mcp: bool = True,
         pool: Any = None,
+        machine: str | None = None,
+        remote_cwd: str | None = None,
+        preset: str | None = None,
     ) -> None:
         self.name = name
         self.command = command
         self.cwd = cwd
+        # The registered machine this agent runs on, or None for this computer;
+        # see ``raven.acp_client.remote`` for what changes when it is set.
+        self.machine = (machine or "").strip() or None
+        self.remote_cwd = remote_cwd
+        # Which shipped preset this row is, for the readings measured per agent.
+        self.preset = preset
         self.env = env or {}
         self.ready_timeout_ms = ready_timeout_ms
         self.timeout = timeout
         self.max_output_chars = max_output_chars
         self._snapshot = snapshot
-        # What each live session's model was before this host touched it, and
-        # what this host last set it to. Both keyed by session id, and both exist
-        # only so that clearing an override can be honoured: the agent takes a
-        # value, never an "unset", so the only way back to its own choice is to
-        # send that choice again -- and nothing else remembers what it was.
-        self._model_baseline: dict[str, str] = {}
-        self._model_pushed: dict[str, str] = {}
+        # The launch digest a minted row belongs to, when no row exists yet.
+        self._capability_fingerprint = capability_fingerprint
+        # What each live session's model, effort and mode were before this host
+        # touched them, and what this host last set them to, live in
+        # `_SESSION_STATE`, held per pool slot: a hot apply replaces this
+        # instance, and an idle close the process, while the session it
+        # describes continues. It has to survive
+        # because the agent takes a value and never an "unset", so the only way
+        # back to its own choice is to send that choice again -- and nothing
+        # else remembers what it was.
         # Values this agent has refused, so a refusal re-attempted on every
         # route into a session -- and on every fresh session a spawn opens --
         # is said once per value rather than once per turn.
         self._model_refused: set[str] = set()
+        self._effort_refused: set[str] = set()
+        # An instance whose earlier session the agent could not resume, by
+        # (session key, handle): the next reply on that handle has to say it
+        # starts over. Held until a turn there answers, not only for the turn
+        # that met the refusal -- the binding is dropped at that refusal, so a
+        # retry after a failed turn opens a fresh session with nothing of its
+        # own to report. For this process's life, as the backend is.
+        self._resume_lost: dict[tuple[str, str], str] = {}
+        # Each session's cumulative cost as last reported, for the cost of its
+        # next turn (`_turn_cost`). Only for sessions this process has seen, and
+        # only on an agent that resumes them: no other session has a next turn.
+        self._session_spend: dict[str, float] = {}
         self._registry = registry or get_registry()
         # Which pool this backend's turns are served from. Almost always the
         # process-wide one, and held unresolved until it is used so that
@@ -1101,7 +1303,7 @@ class AcpAgentBackend:
         """
         self._caps_listener = listener
 
-    def _note_session_model(self, session_id: str | None, result: Any) -> None:
+    def _note_session_model(self, client: Any, session_id: str | None, result: Any) -> None:
         """Remember what a session was on before this host moved it.
 
         Recorded once per session and never overwritten: on a resumed route the
@@ -1109,23 +1311,73 @@ class AcpAgentBackend:
         second reading would adopt that as the baseline and clearing would then
         restore the override it was meant to undo.
         """
-        if not session_id or session_id in self._model_baseline:
+        if not session_id:
+            return
+        state = _session_state(client, session_id)
+        if state.model_baseline:
             return
         current = read_session_current_model(result)
         if current:
-            self._model_baseline[session_id] = current
+            state.model_baseline = current
 
-    def _relearn_modes(self, result: Any) -> None:
-        """Take the modes a session response advertises over the cached ones.
+    def _note_session_mode(self, client: Any, session_id: str | None, result: Any) -> None:
+        """Remember the mode a session opened on, for a menu that is effort."""
+        if not session_id:
+            return
+        state = _session_state(client, session_id)
+        if state.mode_baseline:
+            return
+        current = read_session_current_mode(result)
+        if current:
+            state.mode_baseline = current
 
-        Best-effort at every step. The menu is a description the NEXT dispatch
-        reads, never something this turn depends on, so neither the write nor
-        the table rebuild may cost the turn that happened to carry the evidence.
+    def _note_session_effort(self, client: Any, session_id: str | None, result: Any) -> None:
+        """Remember the effort option's id and what the session opened on.
+
+        Both are read from the session response, because the option's id is the
+        agent's to name (``effort`` on OpenCode 1.19.4) and a resumed response
+        may omit it. The id is taken from every response that names one: a model
+        switch answers with the options the new model has, and that is the id a
+        later push goes through. The baseline is recorded once per session, for
+        the reason :meth:`_note_session_model` gives: a second reading would
+        adopt a value this host pushed as the baseline.
+        """
+        if not session_id:
+            return
+        state = _session_state(client, session_id)
+        option, current, choices = read_session_effort(result)
+        if option:
+            state.option = option
+        if current and not state.baseline:
+            state.baseline = current
+        if isinstance(result, dict) and isinstance(result.get("configOptions"), list):
+            # A response that lists the session's options names its effort menu
+            # even by leaving it out: that model has none.
+            state.efforts = tuple(choice.value for choice in choices)
+
+    def _relearn_menus(self, result: Any) -> None:
+        """Take the modes and models a session response advertises over the cached ones.
+
+        Or, when a newer measurement has been stored since this backend was
+        built, take that record instead, so the next response builds on it.
+        With no record at all, the first response carrying a menu mints one:
+        a boot probe that ran before the provider was configured wrote nothing,
+        and without this no successful dispatch could repair it.
+
+        Best-effort at every step. The menus are what the NEXT dispatch and the
+        row's picker read, never something this turn depends on, so neither the
+        write nor the table rebuild may cost the turn that happened to carry the
+        evidence.
         """
         try:
-            updated = relearn_session_modes(self._snapshot, result)
+            updated = relearn_session_menus(
+                self._snapshot,
+                result,
+                agent=self.name,
+                fingerprint=self._capability_fingerprint or "",
+            )
         except Exception as exc:  # noqa: BLE001 - a cache refresh must not sink a turn
-            logger.warning("acp agent {!r}: refreshing modes from the session failed: {}", self.name, exc)
+            logger.warning("acp agent {!r}: refreshing menus from the session failed: {}", self.name, exc)
             return
         if updated is None:
             return
@@ -1238,21 +1490,40 @@ class AcpAgentBackend:
         """
         from raven.agent.subagent.backends import session_mcp_delivered
 
-        return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot)
+        return not session_mcp_delivered(session_mcp=self.session_mcp, snapshot=self._snapshot, machine=self.machine)
 
-    def _mcp_note(self, grant: McpGrant) -> str:
-        """Every secret-free reason this dispatch's MCP is degraded.
+    def _mcp_note(self, grant: McpGrant, lent: tuple[str, ...] | None = None) -> str:
+        """Every secret-free reason this dispatch's MCP is degraded, and on a machine, how it was delivered.
 
         The withholding decided here is not a ``McpGrant`` reason, so it is
         joined onto ``note_text`` rather than routed through it -- a grant whose
         servers all resolved cleanly still owes the user this sentence, because a
         sub-agent that silently received no servers looks exactly like one nobody
-        configured.
+        configured. ``lent`` is what a run on a machine was handed through the
+        machine's node (``None`` for a run here): the names, or none when the
+        node carries no streams.
         """
         notes = []
+        if lent is not None and grant.granted and self.machine:
+            names = ", ".join(repr(server.name) for server in grant.granted)
+            if lent:
+                notes.append(
+                    f"MCP servers {names} were lent to acp agent {self.name!r} through the Raven node on machine "
+                    f"{self.machine!r}: the servers themselves run here"
+                )
+            else:
+                notes.append(
+                    f"MCP servers {names} were not lent to acp agent {self.name!r}: the Raven node on machine "
+                    f"{self.machine!r} carries no MCP streams (it serves without a daemon)"
+                )
         if self._session_mcp_refused and grant.granted:
             names = ", ".join(repr(server.name) for server in grant.granted)
-            if not self.session_mcp:
+            if not self.session_mcp and self.preset in MIRASIM_SHIM_PRESETS:
+                notes.append(
+                    f"MCP servers {names} were withheld because acp agent {self.name!r} runs on Mirasim's host, "
+                    f"which takes no per-session servers: nothing handed over could reach the agent"
+                )
+            elif not self.session_mcp:
                 notes.append(
                     f"MCP servers {names} were withheld because acp agent {self.name!r} is configured as not "
                     f"keeping one session's servers to that session (sessionMcp: false); raven pools one "
@@ -1288,8 +1559,16 @@ class AcpAgentBackend:
             raise
 
     @asynccontextmanager
-    async def _mcp_endpoints(self, node_id: str, grant: McpGrant) -> AsyncIterator[list[dict[str, Any]]]:
-        """The bridge stanzas for one dispatch, live for exactly as long as it runs.
+    async def _mcp_endpoints(
+        self, node_id: str, grant: McpGrant, launched: _OnMachine | None = None
+    ) -> AsyncIterator[list[dict[str, Any]] | _Lent]:
+        """The bridge stanzas for one dispatch, live for exactly as long as it runs; on a machine, the endpoints to pair.
+
+        ``launched`` is the dispatch's place on its machine, when it has one:
+        the endpoints are opened here all the same, and what is yielded is
+        :class:`_Lent`; ``_lent_stanzas`` binds the endpoints to the acquired
+        agent's task before handing its bridge to the session. A host without
+        Unix sockets uses authenticated loopback endpoints for both paths.
 
         ``node_id`` is this dispatch's identity -- a DAG node's id, a spawn's
         task id -- because reaping is per node and not per run: a graph of a
@@ -1320,8 +1599,10 @@ class AcpAgentBackend:
             if not grant.granted:
                 yield []
                 return
-            argv = bridge_command(path=await asyncio.to_thread(self._adapter_path))
-            if argv is None or self._session_mcp_refused:
+            # On a machine the agent runs the node's bridge, not this
+            # computer's: no raven need be on the adapter's PATH there.
+            argv = None if launched is not None else bridge_command(path=await asyncio.to_thread(self._adapter_path))
+            if (argv is None and launched is None) or self._session_mcp_refused:
                 if self._session_mcp_refused:
                     # Two independent reasons reach here and they call for
                     # different actions, so they must not share a sentence: one
@@ -1349,13 +1630,50 @@ class AcpAgentBackend:
                 )
                 for server in grant.granted
             }
-            yield grant.with_endpoints(paths).for_acp(argv)
+            if launched is None:
+                yield grant.with_endpoints(paths).for_acp(argv or [])
+                return
+            try:
+                yield _Lent(paths)
+            finally:
+                await launched.link.unlend(launched.target.id, node_id)
         finally:
             # Through close(), never by closing the listeners here: it also
             # cancels the in-flight relays, and without that wait_closed blocks
             # for as long as the sub-agent keeps its bridge open -- which is
             # exactly this moment.
             await endpoints.close(node_id)
+
+    async def _lent_stanzas(
+        self, endpoints: list[dict[str, Any]] | _Lent, launched: _OnMachine | None, client: Any, node_id: str
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...] | None]:
+        """The stanzas ``session/new`` carries, and on a machine the names lent: the node's bridge, once per server.
+
+        Here, the stanzas as opened. On a machine, each server is one stdio
+        stanza running the machine's own bridge (``node/hello`` says its argv),
+        named by the agent's task there, this dispatch (what the host pairs
+        the stream with) and the server; nothing of the server's definition is
+        in it. A node that offers no bridge -- one serving without a daemon --
+        gets no stanzas, and the reply says so (``_mcp_note``).
+        """
+        if not isinstance(endpoints, _Lent):
+            return endpoints, None
+        if launched is None or not endpoints.paths:
+            return [], ()
+        argv = await launched.link.bridge_argv(launched.target.id)
+        task = getattr(getattr(client, "endpoint", None), "task", None)
+        if argv is None or not isinstance(task, str) or not task:
+            return [], ()
+        launched.link.lend(launched.target.id, node_id, endpoints.paths, task=task)
+        return [
+            {
+                "name": name,
+                "command": argv[0],
+                "args": [*argv[1:], "--task", task, "--lend", node_id, "--server", name],
+                "env": [],
+            }
+            for name in endpoints.paths
+        ], tuple(endpoints.paths)
 
     @property
     def is_stateful(self) -> bool:
@@ -1392,9 +1710,16 @@ class AcpAgentBackend:
         # Not `model` above, which is the PARENT's and rides out as
         # RAVEN_PARENT_MODEL: this is what this agent should answer with.
         session_model: str | None = None,
+        # The row's reasoning effort, a value from its thought_level menu.
+        session_effort: str | None = None,
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns, as for a caller that takes the reply as its own result.
+        reported_by_caller: bool = False,
     ) -> str:
         # The parent binding is forwarded when the pooled ACP worker launches.
         # Without this, a long-lived worker keeps the provider/model captured
@@ -1410,11 +1735,26 @@ class AcpAgentBackend:
         # it, so it must be the caller's workspace whatever the entry pinned.
         # Conflating them sent a pinned entry's own folder to `session/new`, and
         # the agent then edited that tree instead of the caller's.
-        launch_cwd = self.cwd or str(workspace)
-        session_cwd = str(workspace)
+        # An agent on another machine has neither: its machine's Raven node
+        # starts it in the entry's root there, and the session works in a
+        # directory made under that root (`_on_machine`), never in this
+        # computer's workspace, which does not exist there.
+        launched = await self._on_machine(handle) if self.machine else None
+        if launched is not None:
+            launch_cwd = launched.root
+            session_cwd = launched.session_cwd
+        else:
+            launch_cwd = self.cwd or str(workspace)
+            session_cwd = str(workspace)
+        # Nothing is carried to the machine: the files that come with the
+        # task are named to the agent by address, and it looks for them there.
+        sent_text = task
+        if launched is not None and (note := remote.files_note(media, launched.target)):
+            sent_text = f"{task}\n\n{note}"
         started = time.monotonic()
         grant = mcp_grant if mcp_grant is not None else await self.resolve_mcp_grant_async(mcps)
-        async with self._mcp_endpoints(task_id, grant) as mcp_servers:
+        lent: tuple[str, ...] | None = None
+        async with self._mcp_endpoints(task_id, grant, launched) as endpoints:
             with (
                 external_agent_span(agent=self.name, transport="acp", task_id=task_id, instance=handle) as span,
                 self._annotate_mcp_failure(grant),
@@ -1433,13 +1773,16 @@ class AcpAgentBackend:
                 # binding gets a connection of its own and the two coexist.
 
                 binding: dict[str, str] = {}
-                if model:
+                if model and launched is None:
                     binding["RAVEN_PARENT_MODEL"] = model
                 parent_provider = str(getattr(provider, "provider_name", "") or "")
-                if parent_provider:
+                # Not for an agent on another machine: the binding is launch
+                # environment for a process of raven's own, and there it would
+                # start a second agent process per parent model for nothing.
+                if parent_provider and launched is None:
                     binding["RAVEN_PARENT_PROVIDER"] = parent_provider
                 parent_protocol = str(getattr(provider, "api_protocol", "") or "")
-                if parent_protocol:
+                if parent_protocol and launched is None:
                     binding["RAVEN_PARENT_PROTOCOL"] = parent_protocol
                 # One of raven's own with no pin of its own follows the parent.
                 # The binding above puts a fresh worker on the parent's model at
@@ -1462,8 +1805,15 @@ class AcpAgentBackend:
                     env=dict(self.env),
                     binding=binding or None,
                     ready_timeout_s=budget,
+                    # On a machine the node starts the process (`launcher`);
+                    # the command, root and env still key the connection.
+                    machine=self.machine,
+                    launcher=launched.launcher if launched is not None else None,
                 )
                 client = connection.client
+                # On a machine, rendered only now: the stanzas name the
+                # agent's task there, which the launch just settled.
+                mcp_servers, lent = await self._lent_stanzas(endpoints, launched, client, task_id)
                 # Marked after acquire, so a call's range covers its own traffic and
                 # not the handshake of a connection it merely inherited. The pool
                 # records where that handshake ends, and it is carried alongside so a
@@ -1481,6 +1831,7 @@ class AcpAgentBackend:
                     router=connection.router,
                     mode=mode,
                     session_model=session_model,
+                    session_effort=session_effort,
                 )
                 if journal is not None:
                     # Inside the marked range on purpose, so the per-call copy of the
@@ -1496,18 +1847,41 @@ class AcpAgentBackend:
                         }
                     )
                 record_session(span, session_id=session_id, resumed=resumed)
+                # A run on a machine is remembered here while it is in flight,
+                # so a process after this one can pick it up where this one
+                # left it (remote_runs): removed when the turn ends here, kept
+                # when this process stops and leaves the agent to the machine.
+                tracker = (
+                    self._track_on_machine(
+                        client,
+                        connection,
+                        session_id=session_id,
+                        skey=skey,
+                        handle=handle,
+                        task_id=task_id,
+                        session_cwd=session_cwd,
+                    )
+                    if launched is not None
+                    else None
+                )
 
                 # Snapshotted before the prompt so the error below names what this
                 # turn ran into rather than what the connection has ever refused.
                 refused_before = client.refusal_count
-                sink = bounded_delta(on_delta, self.max_output_chars)
                 # From the live handshake, not the stored snapshot: this is the
                 # process actually answering, and a snapshot can be stale.
                 # `session_cwd` rather than `workspace`: it is the directory the
                 # agent's own tools resolve against, so it is where a file this
                 # turn writes actually lands.
                 collector = _TurnCollector(
-                    sink, dialect_for(connection.initialize), prompt=task, workspace=Path(session_cwd)
+                    on_delta,
+                    dialect_for(connection.initialize),
+                    prompt=task,
+                    workspace=Path(session_cwd) if launched is None else None,
+                    limit=self.max_output_chars,
+                    track_files=launched is None,
+                    agent_version=agent_version(connection.initialize),
+                    steps=LiveSteps(span, prompt=task),
                 )
                 # Built here, in the turn's context, for the reason `_TurnCollector`
                 # documents: the read loop's ContextVars predate this run, and the
@@ -1534,6 +1908,17 @@ class AcpAgentBackend:
                     connection.responders.attach(session_id, responder)
                     if self.can_steer or steer_offered(connection.initialize):
                         activity.offer_steer(collector._run, self._steerer(client, session_id))
+                    answered = False
+                    # Whether the prompt went out: a turn that ended before it
+                    # did has no step to record, and a prompt step would say the
+                    # agent was asked what it never received.
+                    prompt_out: list[int] = []
+
+                    def heard_sent(request_id: int) -> None:
+                        prompt_out.append(request_id)
+                        if tracker is not None:
+                            tracker.prompt_sent(request_id)
+
                     try:
                         result = await client.request(
                             "session/prompt",
@@ -1544,14 +1929,24 @@ class AcpAgentBackend:
                                 # text, the block an editor sends for an @-mentioned
                                 # file; see raven.agent.subagent.attachments.
                                 "prompt": [
-                                    {"type": "text", "text": task},
-                                    *attachment_blocks(media, root=_uploads_root()),
+                                    {"type": "text", "text": sent_text},
+                                    # Links to this computer's files, which an agent
+                                    # on another machine cannot open; the manager has
+                                    # already told the caller they were not sent.
+                                    *(attachment_blocks(media, root=_uploads_root()) if launched is None else ()),
                                 ],
                             },
                             timeout=_prompt_deadline(self.timeout),
                             cancel_session=session_id,
+                            sent=heard_sent,
                         )
+                        answered = True
                     except asyncio.CancelledError:
+                        if tracker is not None and remote.leaving():
+                            # This process is stopping: the turn goes on under
+                            # the machine's daemon, and the manager reads this
+                            # dispatch as left, not cancelled.
+                            remote_runs.mark_left(task_id)
                         # An UNSETTLED cancel means the turn outlived its cancel
                         # budget, so it is still running on the agent while this lock
                         # is about to be released -- prompting the same session again
@@ -1564,7 +1959,10 @@ class AcpAgentBackend:
                         # stateless agent would leak it.
                         if client.take_unsettled_cancel(session_id) and self.is_stateful:
                             await self._registry.unbind(skey, self.name, handle)
-                        elif not resumed and self.is_stateful:
+                            _forget_session(client, session_id)
+                        elif not self.is_stateful:
+                            _forget_session(client, session_id)
+                        elif not resumed:
                             # A cancel that SETTLED leaves a live session holding the
                             # partial exchange, and the deferred commit below is
                             # unreachable from here -- so an instance whose *first*
@@ -1581,10 +1979,57 @@ class AcpAgentBackend:
                         cancelled = self._frames(journal, connection, session_id, frames_start)
                         activity.note_frames(cancelled)
                         record_frames(span, cancelled)
+                        if prompt_out:
+                            await self._write_steps(span, collector, started)
+                        raise
+                    except Exception:
+                        if not resumed:
+                            # Nothing bound this session: a stateless agent never
+                            # does, and a first turn binds only once it answers.
+                            _forget_session(client, session_id)
+                        # The prompt ended with no answer of its own -- its
+                        # deadline passed, or the connection went under it. What
+                        # the agent said and ran until then is on the collector
+                        # and its frames are in the journal; both are kept, as on
+                        # a cancel, so the run is not one bar with nothing in it.
+                        # Recording must not replace the error being raised; only
+                        # a cancel landing while the steps are written does, as a
+                        # cancel should.
+                        try:
+                            failed = self._frames(journal, connection, session_id, frames_start)
+                            activity.note_frames(failed)
+                            record_frames(span, failed)
+                            if prompt_out:
+                                await self._write_steps(span, collector, started)
+                        except Exception:  # noqa: BLE001 - the turn's own error is the one to raise
+                            logger.debug(
+                                "acp agent {!r}: recording a failed turn's steps failed", self.name, exc_info=True
+                            )
                         raise
                     finally:
+                        if tracker is not None:
+                            # The record goes with a turn that ended here before
+                            # its prompt was out. It stays while this process
+                            # leaves the turn running, and, for a caller that
+                            # reports the outcome and forgets the record then
+                            # (`remote_runs.forget_dispatch`), with the reply or
+                            # with the failure of a prompt that went out: a host
+                            # that stops between either and its announce has no
+                            # other way back to the run, and the machine's record
+                            # of the task says how it ended.
+                            self._untrack(
+                                client,
+                                tracker,
+                                keep=remote.leaving()
+                                or (reported_by_caller and (answered or tracker.run.prompt_id > 0)),
+                            )
                         activity.offer_steer(collector._run, None)
                         connection.router.detach(session_id, collector)
+                        # Detached, the collector hears nothing more; whatever is
+                        # left is settled by `_write_steps`, not by a timer firing
+                        # after the turn.
+                        if collector.steps is not None:
+                            collector.steps.close()
                         connection.elicitors.detach(session_id, elicitor)
                         connection.responders.detach(session_id, responder)
                         # Detaching stops only the *next* request from routing here.
@@ -1613,55 +2058,201 @@ class AcpAgentBackend:
                     activity.note_output_limit()
                 text = collector.text
                 frames = self._frames(journal, connection, session_id, frames_start)
-                self._record(span, collector, stop_reason=stop_reason, started=started, frames=frames)
-
-                if not text:
-                    tail = client.stderr_tail(1500)
-                    span.error(f"empty turn (stopReason={stop_reason})")
-                    # An agent that asked raven for something it does not serve --
-                    # `fs/read_text_file` and its siblings, permission requests
-                    # being answered now -- was told the method does not exist, and
-                    # adapters answer that by ending the turn with nothing. The
-                    # stderr tail says nothing about it, so name it here or it is
-                    # unknowable.
-                    refused = client.refusals_since(refused_before, session_id=session_id)
-                    # Collapsed: one turn with three tool calls refuses the same
-                    # method three times, and naming it three times says no more.
-                    asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
-                    raise AcpEmptyTurnError(
-                        f"acp agent {self.name!r} ended its turn with no content "
-                        f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}"
+                self._record(
+                    span,
+                    collector,
+                    stop_reason=stop_reason,
+                    started=started,
+                    frames=frames,
+                    counted=result.get("usage") if isinstance(result, dict) else None,
+                )
+                # The steps go to disk last, yielding to the loop as they go, so
+                # a cancel landing meanwhile cannot cost the turn its usage or
+                # its first-turn binding -- and they go however this ends: a
+                # cancel during the booking, or anything the checks raise,
+                # since a turn that ended badly is the one worth reading.
+                bound = resumed
+                try:
+                    # Before the checks below: a turn that answered nothing usable
+                    # still spent what it spent.
+                    await self._book_usage(
+                        collector,
+                        result.get("usage") if isinstance(result, dict) else None,
+                        client=client,
+                        initialize=connection.initialize,
+                        session_id=session_id,
+                        resumed=resumed,
+                        session_key=session_key,
+                        task_id=task_id,
                     )
 
-                if failed := collector.failed_call_without_answer:
-                    label, detail = failed
-                    span.error(f"no answer after a failed {label}")
-                    # Not `if not text`: this turn said something. What it said
-                    # is the plan it had for the call that then failed, and
-                    # handing that back made a run that did nothing read as a
-                    # completed one whose result was a promise to begin.
-                    raise AcpEmptyTurnError(
-                        f"acp agent {self.name!r} ended its turn on a failed {label} and answered "
-                        f"nothing after it (stopReason={stop_reason!r}); the call reported: "
-                        f"{detail.strip() or '<no detail>'}"
+                    if not text:
+                        tail = client.stderr_tail(1500)
+                        span.error(f"empty turn (stopReason={stop_reason})")
+                        # An agent that asked raven for something it does not serve --
+                        # `fs/read_text_file` and its siblings, permission requests
+                        # being answered now -- was told the method does not exist, and
+                        # adapters answer that by ending the turn with nothing. The
+                        # stderr tail says nothing about it, so name it here or it is
+                        # unknowable.
+                        refused = client.refusals_since(refused_before, session_id=session_id)
+                        # Collapsed: one turn with three tool calls refuses the same
+                        # method three times, and naming it three times says no more.
+                        asked = f"; refused agent requests: {', '.join(sorted(set(refused)))}" if refused else ""
+                        # What the agent's own answer says it spent. A turn that
+                        # produced nothing and spent nothing never reached a model:
+                        # the turn is empty because the model call was refused, not
+                        # because the model had nothing to say. Said here because the
+                        # protocol carries it and the reason does not.
+                        spent = _tokens_reported(result)
+                        quiet = " and reported 0 tokens" if spent == 0 else ""
+                        raise AcpEmptyTurnError(
+                            f"acp agent {self.name!r} ended its turn with no content{quiet} "
+                            f"(stopReason={stop_reason!r}){asked}; stderr tail: {tail or '<empty>'}",
+                            tokens=spent,
+                            agent_version=_agent_version(connection),
+                        )
+
+                    if failed := collector.failed_call_without_answer:
+                        label, detail = failed
+                        span.error(f"no answer after a failed {label}")
+                        # Not `if not text`: this turn said something. What it said
+                        # is the plan it had for the call that then failed, and
+                        # handing that back made a run that did nothing read as a
+                        # completed one whose result was a promise to begin.
+                        raise AcpEmptyTurnError(
+                            f"acp agent {self.name!r} ended its turn on a failed {label} and answered "
+                            f"nothing after it (stopReason={stop_reason!r}); the call reported: "
+                            f"{detail.strip() or '<no detail>'}"
+                        )
+
+                    if (refused := self._provider_refusal(collector.reply)) is not None:
+                        span.error("the reply is the model provider's refusal")
+                        raise AcpProviderRefusalError(refused, said=collector.reply)
+
+                    if not resumed and self.is_stateful:
+                        # Deferred commit, as the cli transport does it: binding a handle
+                        # before the first turn succeeded would resume a session that
+                        # never produced anything. A settled cancel binds it above
+                        # instead -- that session did produce something, and is the one
+                        # the next turn has to continue.
+                        bound = True
+                        await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
+                finally:
+                    if not bound:
+                        _forget_session(client, session_id)
+                    await self._write_steps(span, collector, started)
+
+                reply = await self._finished(collector.reply, stop_reason=stop_reason, span=span, sink=on_delta)
+                notes = [self._resume_lost.pop((skey, handle), None), self._mcp_note(grant, lent)]
+                if launched is not None:
+                    # Where to find what it made: the caller's workspace line names
+                    # this computer, and what it wrote is there, by address --
+                    # nothing is brought back unasked.
+                    notes.append(
+                        f"Ran on machine {launched.target.label}, in "
+                        f"{remote.shown(launched.target, session_cwd)}; the files it wrote are there, "
+                        "not on this computer -- read_file, list_dir, find, grep, write_file and edit_file take "
+                        "that path as it is, and deliver_files fetches one by it"
                     )
-
-                if not resumed and self.is_stateful:
-                    # Deferred commit, as the cli transport does it: binding a handle
-                    # before the first turn succeeded would resume a session that
-                    # never produced anything. A settled cancel binds it above
-                    # instead -- that session did produce something, and is the one
-                    # the next turn has to continue.
-                    await self._registry.commit(skey, self.name, handle, session_id, kind="acp")
-
-                reply = await self._finished(text, stop_reason=stop_reason, span=span, sink=on_delta)
-                if note := self._mcp_note(grant):
+                for note in filter(None, notes):
                     notice = f"\n\n[raven] {note}."
                     activity.append_closing(notice)
                     if on_delta is not None:
                         await on_delta(notice)
                     reply += notice
                 return reply
+
+    async def _on_machine(self, handle: str) -> _OnMachine:
+        """This dispatch's place on its machine, or a connection error that says why not.
+
+        The session directory is made fresh for every dispatch, never cached:
+        one removed on the machine between two dispatches would otherwise be
+        named to ``session/new`` and refused there, and the round trip costs
+        milliseconds on the link against a turn. The launcher is handed to the
+        pool, which calls it only when no connection of this entry is live.
+        """
+        try:
+            target = await asyncio.to_thread(remote.machine, self.machine or "")
+        except remote.RemoteMachineError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+        link = remote_path.nodes()
+        if link is None:
+            raise AcpConnectionError(
+                f"acp agent {self.name!r}: this process does not reach registered machines, so it cannot run on "
+                f"machine {target.label}"
+            )
+        root = remote.root_of(self.remote_cwd)
+        try:
+            session_cwd, since = await link.session_dir(target.id, remote.session_root(self.remote_cwd, handle))
+        except remote_path.NodeCallError as exc:
+            raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+        # The role goes on before the entry's own map, as the local launch
+        # puts it; the host's identity stays here, where it means something.
+        env = {**subagent_role_env(), **self.env}
+
+        async def launcher() -> Any:
+            try:
+                return await link.open_channel(target.id, name=self.name, command=self.command, cwd=root, env=env)
+            except remote_path.NodeCallError as exc:
+                raise AcpConnectionError(f"acp agent {self.name!r}: {exc}") from None
+
+        return _OnMachine(target=target, root=root, session_cwd=session_cwd, since=since, link=link, launcher=launcher)
+
+    def _track_on_machine(
+        self,
+        client: Any,
+        connection: Any,
+        *,
+        session_id: str,
+        skey: str,
+        handle: str,
+        task_id: str,
+        session_cwd: str,
+    ) -> remote_runs.Tracker | None:
+        """The record of this turn on its machine, kept current until the prompt is out (``remote_runs.Tracker``)."""
+        endpoint = client.endpoint
+        task = getattr(endpoint, "task", None)
+        watchers = getattr(endpoint, "watchers", None)
+        if not isinstance(task, str) or watchers is None:
+            return None
+        run = remote_runs.RemoteRun(
+            machine=self.machine or "",
+            task=task,
+            agent=self.name,
+            session_key=skey,
+            handle=handle,
+            task_id=task_id,
+            session_id=session_id,
+            prompt_id=0,
+            next_id=client.next_request_id,
+            initialize=connection.initialize,
+            launch_key=connection.launch_key,
+            config_key=connection.config_key,
+            session_cwd=session_cwd,
+            stateful=self.is_stateful,
+            received=int(getattr(endpoint, "received", 0) or 0),
+            stderr_received=int(getattr(endpoint, "stderr_received", 0) or 0),
+        )
+        try:
+            tracker = remote_runs.Tracker(run, stderr_count=lambda: getattr(endpoint, "stderr_received", 0))
+        except OSError as exc:
+            logger.warning(
+                "acp agent {!r}: the run on machine {} could not be recorded: {}", self.name, self.machine, exc
+            )
+            return None
+        watchers.append(tracker.received)
+        return tracker
+
+    @staticmethod
+    def _untrack(client: Any, tracker: remote_runs.Tracker, *, keep: bool) -> None:
+        watchers = getattr(client.endpoint, "watchers", None)
+        if watchers is not None:
+            try:
+                watchers.remove(tracker.received)
+            except ValueError:
+                pass
+        tracker.close(keep=keep)
 
     @property
     def can_steer(self) -> bool:
@@ -1695,6 +2286,56 @@ class AcpAgentBackend:
             return status if status in ("injected", "no_turn") else "no_turn"
 
         return steer
+
+    async def _book_usage(
+        self,
+        collector: _TurnCollector,
+        answered: Any,
+        *,
+        client: Any,
+        initialize: Any,
+        session_id: str,
+        resumed: bool,
+        session_key: str | None,
+        task_id: str,
+    ) -> None:
+        """Book the turn's tokens and cost in the usage ledger, as an in-process sub-agent's calls are.
+
+        Not for a raven agent: it books its own calls under the delegating
+        conversation (the prompt's ``raven.usage``), so booking its turn here as
+        well would count it twice.
+        """
+        info = initialize.get("agentInfo") if isinstance(initialize, dict) else None
+        if isinstance(info, dict) and info.get("name") == "raven":
+            return
+        before = self._session_spend.get(session_id, None if resumed else 0.0)
+        cost, spent = _turn_cost(collector.usage, before)
+        if spent is not None and self.is_stateful:
+            self._session_spend[session_id] = spent
+        counts = _ledger_counts(collector.turn_counts(answered))
+        if counts is None and cost is None:
+            return
+        state = _session_state(client, session_id)
+        model = state.model_pushed or state.model_baseline or ""
+        await activity.note_ledger_usage(
+            {**(counts or {}), "cost_usd": cost},
+            model=model,
+            session_key=session_key,
+            task_id=task_id,
+            counts_known=counts is not None,
+        )
+
+    def _provider_refusal(self, reply: str) -> str | None:
+        """Why the run failed, when the whole reply is the agent's model provider refusing the call.
+
+        Copilot ends a refused model call as a finished turn whose message is the
+        refusal, so neither an empty-turn check nor a failed-call check sees it,
+        and handed back it is a completed run whose output is the error. Read only
+        for the agent it was measured on.
+        """
+        if self.preset != "github_copilot" or (refused := github_copilot.read_reply(reply)) is None:
+            return None
+        return f"acp agent {self.name!r} answered with its model provider's refusal: {refused[0]}"
 
     async def _finished(
         self,
@@ -1756,6 +2397,7 @@ class AcpAgentBackend:
         router: Any = None,
         mode: str | None = None,
         session_model: str | None = None,
+        session_effort: str | None = None,
     ) -> tuple[str, bool]:
         """The session to prompt, and whether it continues an earlier one."""
 
@@ -1790,6 +2432,7 @@ class AcpAgentBackend:
                     f"the same silence again."
                 ) from None
 
+        lost: str | None = None
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
             if known is not None and (self._snapshot and self._snapshot.can_load):
@@ -1804,15 +2447,29 @@ class AcpAgentBackend:
                     # a second time. A sink that drops them holds the session for
                     # the length of the call; the turn's collector takes it over
                     # immediately after.
-                    async with _replay_dropped(router, known):
-                        loaded = await request_or_busy(
-                            "session/load",
-                            {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                        )
-                    self._relearn_modes(loaded)
-                    self._note_session_model(known, loaded)
-                    await self._set_mode(client, known, mode, budget=budget)
-                    await self._set_model(client, known, session_model, budget=budget)
+                    try:
+                        async with _replay_dropped(router, known):
+                            loaded = await request_or_busy(
+                                "session/load",
+                                {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
+                            )
+                    except AcpRemoteError as exc:
+                        if not _holds_session(exc):
+                            raise
+                        loaded = None
+                    if loaded is not None:
+                        self._relearn_menus(loaded)
+                        self._note_session_model(client, known, loaded)
+                        self._note_session_effort(client, known, loaded)
+                        self._note_session_mode(client, known, loaded)
+                    await self._settle_session(
+                        client,
+                        known,
+                        mode=mode,
+                        session_model=session_model,
+                        session_effort=session_effort,
+                        budget=budget,
+                    )
                     return known, True
                 except AcpRemoteError as exc:
                     # The agent's own store may have pruned this id, and the
@@ -1828,19 +2485,35 @@ class AcpAgentBackend:
                         exc.message,
                     )
                     await self._registry.unbind(skey, self.name, handle)
+                    _forget_session(client, known)
+                    lost = exc.message
                 except AcpError:
                     # A transport-level failure is not evidence the session was
                     # pruned, so the binding is kept and the caller is told.
                     raise
 
         result = await request_or_busy("session/new", {"cwd": cwd, "mcpServers": mcp_servers})
-        self._relearn_modes(result)
+        self._relearn_menus(result)
         session_id = (result or {}).get("sessionId") if isinstance(result, dict) else None
         if not isinstance(session_id, str) or not session_id:
             raise AcpEmptyTurnError(f"acp agent {self.name!r}: session/new returned no sessionId")
-        self._note_session_model(session_id, result)
-        await self._set_mode(client, session_id, mode, budget=budget)
-        await self._set_model(client, session_id, session_model, budget=budget)
+        _fresh_session_state(client, session_id)
+        self._note_session_model(client, session_id, result)
+        self._note_session_effort(client, session_id, result)
+        self._note_session_mode(client, session_id, result)
+        await self._settle_session(
+            client,
+            session_id,
+            mode=mode,
+            session_model=session_model,
+            session_effort=session_effort,
+            budget=budget,
+        )
+        if lost is not None:
+            self._resume_lost[(skey, handle)] = (
+                f"Instance {handle!r} could not pick up its earlier conversation ({lost}), "
+                "so this reply comes from a fresh session that has none of it"
+            )
         return session_id, False
 
     async def _set_model(self, client: Any, session_id: str, model: str | None, *, budget: float) -> None:
@@ -1874,14 +2547,15 @@ class AcpAgentBackend:
         refusal would otherwise be a warning per turn for as long as the row
         keeps the pick.
         """
-        pushed = self._model_pushed.get(session_id)
+        state = _session_state(client, session_id)
+        pushed = state.model_pushed
         if model:
             target = model
-        elif pushed is None:
+        elif not pushed:
             # Nothing asked for and nothing of this host's to undo.
             return
         else:
-            target = self._model_baseline.get(session_id, "")
+            target = state.model_baseline
             if not target:
                 # Moved, and the agent never said what it was on beforehand. Said
                 # out loud rather than left as a silent no-op, because the reader
@@ -1893,10 +2567,10 @@ class AcpAgentBackend:
                     session_id,
                     pushed,
                 )
-                self._model_pushed.pop(session_id, None)
+                state.model_pushed = ""
                 return
         try:
-            await client.request(
+            response = await client.request(
                 "session/set_config_option",
                 {"sessionId": session_id, "configId": "model", "value": target},
                 timeout=budget,
@@ -1929,9 +2603,205 @@ class AcpAgentBackend:
         # note that it DID -- without which every later turn with no override
         # returns early and the session is never brought back at all.
         if model:
-            self._model_pushed[session_id] = target
+            state.model_pushed = target
         else:
-            self._model_pushed.pop(session_id, None)
+            state.model_pushed = ""
+        # The response carries the config options the model now has. Its
+        # thought_level entry names the option the effort push below goes
+        # through, so it is noted for this session. Its menu is not relearned
+        # as the agent's: it is this model's -- OpenCode 1.19.4 offers effort
+        # only for a model that reasons -- and taking it as the row's would
+        # rebuild the agent table on every switch whose menu differs, forgetting
+        # in each rebuilt backend that this session's model was moved. The row's
+        # menu is the probe's, measured on the row's own model.
+        self._note_session_effort(client, session_id, response)
+
+    async def _set_effort(
+        self,
+        client: Any,
+        session_id: str,
+        effort: str | None,
+        *,
+        fallback_mode: str | None = None,
+        budget: float,
+    ) -> None:
+        """Put this session on ``effort``, or back on its own when that is cleared.
+
+        Two channels, because agents advertise effort in two ways. A real
+        ``thought_level`` option (OpenCode 1.19.4) is set through
+        ``session/set_config_option`` with the agent's own option id. An agent
+        whose mode menu *is* its effort menu (Pi, Grok, Kimi, DSH) is set through
+        ``session/set_mode``; the row's effort then wins over the run-intensity
+        tier sent just before it, which is what a per-row setting means. It does
+        not win over a person's mode override on the instance: the manager
+        resolves the effort away for that case (``session_effort_for``), so
+        ``effort`` arrives here empty and the override is the mode that stands.
+
+        Cleared means sending the value the session opened on again -- the
+        config option has no unset, and the mode menu has no "agent default" --
+        unless a falling-back tier mode is already what the session was put on.
+        Never fatal, for the reason the model push gives.
+        """
+        state = _session_state(client, session_id)
+        option = state.option or str(getattr(self._snapshot, "effort_option", "") or "")
+        if not option:
+            if self._effort_rides_modes(client, session_id):
+                await self._set_mode_effort(client, session_id, effort, fallback_mode=fallback_mode, budget=budget)
+            return
+        pushed = state.pushed
+        if effort and state.efforts is not None and effort not in state.efforts:
+            # The row's effort was checked against the row's model; an instance
+            # moved to another one is on that model's menu, which its session
+            # response named. Sent anyway, the agent would refuse it every turn.
+            self._say_effort_refused(
+                effort,
+                "acp agent {!r}: session {} is on a model that offers no effort {!r}; running on its default",
+                self.name,
+                session_id,
+                effort,
+            )
+            return
+        if effort:
+            target = effort
+        elif not pushed:
+            return
+        else:
+            target = state.baseline
+            if not target:
+                logger.warning(
+                    "acp agent {!r}: session {} was put on effort {!r} and reported no earlier effort; "
+                    "cannot restore the agent's own",
+                    self.name,
+                    session_id,
+                    pushed,
+                )
+                state.pushed = ""
+                return
+        try:
+            await client.request(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": option, "value": target},
+                timeout=budget,
+            )
+        except AcpRemoteError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: session {} would not take effort {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                target,
+                exc.message,
+            )
+            return
+        except AcpError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: could not set effort {!r} on session {} ({}); running on its default",
+                self.name,
+                target,
+                session_id,
+                exc,
+            )
+            return
+        self._effort_refused.discard(target)
+        state.pushed = target if effort else ""
+
+    async def _set_mode_effort(
+        self,
+        client: Any,
+        session_id: str,
+        effort: str | None,
+        *,
+        fallback_mode: str | None,
+        budget: float,
+    ) -> None:
+        """The row's effort for an agent whose mode menu is its effort menu.
+
+        Sent after :meth:`_set_mode`, so a per-row effort wins over the session
+        tier; a clear restores the mode already sent -- the tier, or an instance's
+        override -- or the mode the session opened on when there is none. Never
+        fatal, like its siblings.
+        """
+        state = _session_state(client, session_id)
+        pushed = state.mode_pushed
+        if effort:
+            target = effort
+        elif not pushed:
+            return
+        else:
+            target = fallback_mode or state.mode_baseline
+            if not target:
+                logger.warning(
+                    "acp agent {!r}: session {} was put on effort mode {!r} and reported no earlier mode; "
+                    "cannot restore the agent's own",
+                    self.name,
+                    session_id,
+                    pushed,
+                )
+                state.mode_pushed = ""
+                return
+        try:
+            await client.request("session/set_mode", {"sessionId": session_id, "modeId": target}, timeout=budget)
+        except AcpRemoteError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: session {} would not take effort mode {!r} ({}); running on its default",
+                self.name,
+                session_id,
+                target,
+                exc.message,
+            )
+            if effort and fallback_mode and fallback_mode != target:
+                # The tier was not sent ahead of an effort on this channel, so a
+                # refused effort leaves the session where the tier would have.
+                await self._set_mode(client, session_id, fallback_mode, budget=budget)
+            return
+        except AcpError as exc:
+            self._say_effort_refused(
+                target,
+                "acp agent {!r}: could not set effort mode {!r} on session {} ({}); running on its default",
+                self.name,
+                target,
+                session_id,
+                exc,
+            )
+            return
+        state.mode_pushed = target if effort else ""
+
+    def _effort_rides_modes(self, client: Any, session_id: str) -> bool:
+        """Whether this session's effort goes out as a mode: no ``thought_level``
+        option, and a mode menu made of effort levels."""
+        if _session_state(client, session_id).option or getattr(self._snapshot, "effort_option", ""):
+            return False
+        mode_efforts = getattr(self._snapshot, "mode_efforts", None)
+        return callable(mode_efforts) and bool(mode_efforts())
+
+    async def _settle_session(
+        self,
+        client: Any,
+        session_id: str,
+        *,
+        mode: str | None,
+        session_model: str | None,
+        session_effort: str | None,
+        budget: float,
+    ) -> None:
+        """Put a session on the mode, model and effort this dispatch runs on.
+
+        Where the effort rides the mode channel it is sent instead of the tier,
+        not after it: the two are one setting there, so sending both switched
+        the session twice a turn. :meth:`_set_mode_effort` falls back to the tier
+        when the agent refuses the effort.
+        """
+        if not (session_effort and self._effort_rides_modes(client, session_id)):
+            await self._set_mode(client, session_id, mode, budget=budget)
+        await self._set_model(client, session_id, session_model, budget=budget)
+        await self._set_effort(client, session_id, session_effort, fallback_mode=mode, budget=budget)
+
+    def _say_effort_refused(self, value: str, message: str, *args: Any) -> None:
+        first = value not in self._effort_refused
+        self._effort_refused.add(value)
+        logger.log("WARNING" if first else "DEBUG", message, *args)
 
     def _say_model_refused(self, value: str, message: str, *args: Any) -> None:
         first = value not in self._model_refused
@@ -1984,12 +2854,20 @@ class AcpAgentBackend:
         """
         if journal is None or start is None:
             return {}
+        initialize = getattr(connection, "initialize", None)
+        info = initialize.get("agentInfo") if isinstance(initialize, dict) else None
         return {
             "path": str(journal.path),
             "session_id": session_id,
             "start": start,
             "end": journal.offset,
             "handshake_end": getattr(connection, "handshake_bytes", 0),
+            # An adopted connection's journal starts at this run, so the
+            # initialize exchange is not in the file; the answer the live turn
+            # read is the only record of which dialect to replay with. Only the
+            # agent info is kept -- it is all ``dialect_for`` reads, and the
+            # handshake's capabilities belong to the connection, not this run.
+            "initialize": {"agentInfo": info} if isinstance(info, dict) else None,
         }
 
     def _record(
@@ -2000,14 +2878,16 @@ class AcpAgentBackend:
         stop_reason: Any,
         started: float,
         frames: dict[str, Any],
+        counted: Any = None,
     ) -> None:
         counts = collector.counts()
         record_events(span, transport="acp", kinds=counts)
         thought_chars = sum(len(t) for t in collector.thoughts)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         record_outcome(
             span,
-            answer_chars=len(collector.text),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
+            answer_chars=len(collector.reply),
+            elapsed_ms=elapsed_ms,
             stop_reason=stop_reason,
             update_counts=counts,
             tool_calls=collector.tool_calls,
@@ -2020,7 +2900,7 @@ class AcpAgentBackend:
         # already published as they landed; this is the settled list, with the
         # labels every later frame corrected, written over it rather than added.
         activity.set_tool_calls(activity.current(), collector.tool_calls, collector.failed_calls)
-        activity.note_usage(collector.usage)
+        activity.note_usage(collector.turn_counts(counted))
         activity.note_steps(counts)
         activity.note_thoughts(thought_chars)
         activity.note_transcript(collector.messages())
@@ -2030,6 +2910,18 @@ class AcpAgentBackend:
         activity.note_closing(collector.closing_text)
         activity.note_frames(frames)
         record_frames(span, frames)
+
+    @staticmethod
+    async def _write_steps(span: Any, collector: _TurnCollector, started: float) -> None:
+        """What the agent said and ran, as the run's own steps, however the turn ended.
+
+        The caller only ever sees the answer, and the wire journal is not a
+        timeline. The count on the run is what keeps a later backfill from
+        writing them again.
+        """
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        steps = collector.steps if collector.steps is not None else LiveSteps(span, prompt=collector.prompt)
+        await steps.finish(collector.events, elapsed_ms=elapsed_ms)
 
 
 __all__ = ["AcpAgentBackend", "AcpEmptyTurnError"]

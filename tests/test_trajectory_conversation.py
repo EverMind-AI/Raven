@@ -685,6 +685,9 @@ def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypat
             reads.append(n)
             return self._handle.read(n)
 
+        def __getattr__(self, name):
+            return getattr(self._handle, name)
+
         def __enter__(self):
             return self
 
@@ -699,11 +702,29 @@ def test_artifact_read_is_bounded_and_rejects_non_regular_files(state, monkeypat
     text, degraded = tconv._read_artifact(state, str(big))
     assert degraded == "content over 512 KiB — truncated"
     assert len(text) == tconv._ARTIFACT_LIMIT
-    assert reads == [tconv._ARTIFACT_LIMIT + 1]
+    # The reader sniffs the first four bytes for a compressed frame, then reads
+    # the bounded window; no read may exceed that window.
+    assert max(reads) == tconv._ARTIFACT_LIMIT + 1
+    assert reads.count(tconv._ARTIFACT_LIMIT + 1) == 1
 
     fifo = state / "logs" / "audit-artifacts" / "pipe"
     os.mkfifo(fifo)
     assert tconv._read_artifact(state, str(fifo)) == (None, "artifact is not a regular file")
+
+
+def test_a_relative_pointer_is_read_against_the_state_directory(state, tmp_path, monkeypatch):
+    target = state / "logs" / "audit-artifacts" / "kind" / "a.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"ok": true}', encoding="utf-8")
+    elsewhere = tmp_path / "cwd"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert tconv._read_artifact(state, "logs/audit-artifacts/kind/a.json") == ('{"ok": true}', None)
+    assert tconv._read_artifact(state, str(target)) == ('{"ok": true}', None)
+    (state / "secret.txt").write_text("x", encoding="utf-8")
+    assert tconv._read_artifact(state, "logs/../secret.txt") == (None, "artifact path outside the trace store")
+    assert tconv._read_artifact(state, "../outside.txt") == (None, "artifact path outside the trace store")
+    assert tconv._read_artifact(state, "logs/audit-artifacts/kind/none.json") == (None, "artifact missing")
 
 
 def test_empty_turn_yields_marker_record(state):
@@ -999,3 +1020,13 @@ def test_v2_mixed_missing_and_oversize_notes_combine(state):
         "1 message blob(s) missing — placeholders shown; 1 message blob(s) over the 512 KiB cap — placeholders shown"
     )
     assert "q" in record.text
+
+
+def test_tool_call_brief_names_the_call_without_its_id():
+    assert (
+        tconv._tool_call_brief({"id": "call_1", "name": "web_fetch", "arguments": '{"url": "u"}'})
+        == 'web_fetch {"url": "u"}'
+    )
+    assert tconv._tool_call_brief({"function": {"name": "f", "arguments": {"a": 1}}}) == 'f {"a": 1}'
+    assert tconv._tool_call_brief({"name": "bare"}) == "bare"
+    assert tconv._tool_call_brief("odd") == '"odd"'

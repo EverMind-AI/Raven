@@ -10,6 +10,7 @@ import pytest
 
 from raven.agent.tools.load_playbook import LoadPlaybookTool
 from raven.agent.tools.registry import ToolRegistry
+from raven.config.agent_names import GENERIC_AGENT
 from raven.playbook import (
     NodeSpec,
     ParamSpec,
@@ -25,9 +26,11 @@ class FakeDagTool:
     def __init__(self):
         self.calls = []
         self.context = None
+        self.surface = None
 
-    def set_context(self, channel, chat_id, session_key=None):
+    def set_context(self, channel, chat_id, session_key=None, surface=None):
         self.context = (channel, chat_id, session_key)
+        self.surface = surface
 
     async def execute(self, nodes, background=True, confirm=False, **_):
         self.calls.append({"nodes": nodes, "background": background, "confirm": confirm})
@@ -183,7 +186,7 @@ class FakeGenerator:
         self.fail = fail
         self.calls = []
 
-    async def generate(self, workflow, skills=None):
+    async def generate(self, workflow, skills=None, *, dag_only=False):
         from raven.playbook import GeneratedPlaybook, PlaybookGenerationError
 
         self.calls.append((workflow, skills))
@@ -319,11 +322,11 @@ def test_a_playbook_naming_an_agent_that_does_not_exist_is_not_offered(tmp_path)
     nothing else, so a graph naming an agent that is not on the table used to
     load fine and be offered, and the turn that called it found out.
     """
-    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: ["Raven"])
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: [GENERIC_AGENT])
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
 
     # A name the store's own migration will not rewrite: `data-raven` in `_spec`
-    # is a retired builtin and gets repointed at `Raven`, which the roster has.
+    # is a retired builtin and gets repointed at the generic agent, which the roster has.
     store.save(
         _spec(
             name="hand-written",
@@ -353,13 +356,13 @@ def test_a_field_left_for_the_caller_is_not_read_as_a_defect(tmp_path):
     by name and the run proceeds. Refusing them at the door would refuse the
     hand-written shape this refresh exists to make visible.
     """
-    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: ["Raven"])
+    runtime = _runtime(tmp_path, [_spec(name="weekly-scan")], known_agents=lambda: [GENERIC_AGENT])
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
 
     store.save(
         _spec(
             name="left-blank",
-            nodes=[NodeSpec(id="pull", subagent="Raven", node_summary="pull it", prompt_template="")],
+            nodes=[NodeSpec(id="pull", subagent=GENERIC_AGENT, node_summary="pull it", prompt_template="")],
         )
     )
 
@@ -379,7 +382,7 @@ def test_a_refusal_is_reconsidered_when_the_agent_table_changes(tmp_path):
     `apply_agents` exists so that adding an agent needs no restart, so this has
     to hold within one process.
     """
-    table = ["Raven"]
+    table = [GENERIC_AGENT]
     runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
     store.save(
@@ -398,7 +401,7 @@ def test_a_refusal_is_reconsidered_when_the_agent_table_changes(tmp_path):
 
 
 def test_invalid_edit_discards_a_refused_cached_spec(tmp_path):
-    table = ["Raven"]
+    table = [GENERIC_AGENT]
     runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
     store.save(
@@ -420,7 +423,7 @@ def test_invalid_edit_discards_a_refused_cached_spec(tmp_path):
 def test_reconsidering_a_refusal_costs_no_parse(tmp_path):
     """Which is what makes reconsidering every refresh affordable: the spec is
     already in hand, and only the table it is checked against changed."""
-    table = ["Raven"]
+    table = [GENERIC_AGENT]
     runtime = _runtime(tmp_path, [], known_agents=lambda: list(table))
     store = PlaybookStore(tmp_path, builtin_root=tmp_path / "_builtin")
     store.save(
@@ -588,8 +591,8 @@ async def test_create_reports_a_name_written_while_generation_was_running(tmp_pa
     tool, store, adopted = _create_tool(tmp_path)
     generate = tool._generator.generate
 
-    async def _generate_after_another_writer(workflow, skills=None):
-        generated = await generate(workflow, skills)
+    async def _generate_after_another_writer(workflow, skills=None, *, dag_only=False):
+        generated = await generate(workflow, skills, dag_only=dag_only)
         store.save(_spec(name="weekly-scan", description="written by the winning request"))
         return generated
 

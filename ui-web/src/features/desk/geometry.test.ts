@@ -5,23 +5,28 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   anchoredGeometry,
+  anchoredRoom,
+  clampGeometry,
   DESK_ANCHOR_GAP,
   DESK_COLUMN_FLOOR,
+  DESK_COMPOSER_GAP,
   DESK_LAUNCHER_EDGE,
   DESK_TEXT_GAP,
   deskReserve,
   DESK_DEFAULT_HEIGHT,
   DESK_DEFAULT_WIDTH,
-  DESK_MAX_SIZE,
+  DESK_MAX_WIDTH,
   DESK_MIN_SIZE,
+  DESK_VIEWPORT_GUTTER,
   defaultGeometry,
   workspaceColumnCount,
   workspaceTransitionWidth,
 } from './geometry'
 
 /* The launcher, at the size and place the stylesheet gives it: a 30px button
-   centred on y=27 against the right edge with a 12px gutter. */
-const EDGE = 12
+   centred on y=27, 50px in from the right edge: the 12px gutter plus the
+   header slot the conversation menu takes. */
+const EDGE = 50
 
 function launcher(): number {
   const right = window.innerWidth - EDGE
@@ -33,6 +38,21 @@ function launcher(): number {
     width: 30, height: 30, x: right - 30, y: 12, toJSON: () => ({}),
   }) as DOMRect
   return right
+}
+
+/* The composer card, where the stylesheet puts it: the last child of `.dock`,
+   which hangs off the chat's floor. happy-dom lays nothing out, so its
+   rectangle is stated. By default it ends at x=600, clear of a 300px palette
+   hanging from the launcher at 974 -- where the reserve puts it in a chat wide
+   enough to spare one. */
+function composer(bottom: number, { height = 132, left = 36, right = 600 } = {}): HTMLElement {
+  document.body.insertAdjacentHTML('beforeend', '<div class="chat"><div class="dock"><div class="dock-in"></div></div></div>')
+  const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
+  card.getBoundingClientRect = () => ({
+    left, right, top: bottom - height, bottom,
+    width: right - left, height, x: left, y: bottom - height, toJSON: () => ({}),
+  }) as DOMRect
+  return card
 }
 
 afterEach(() => { document.body.innerHTML = '' })
@@ -57,8 +77,7 @@ describe('desk placement', () => {
   it('opens larger than it can be shrunk to, on both axes', () => {
     expect(DESK_DEFAULT_WIDTH).toBeGreaterThan(DESK_MIN_SIZE)
     expect(DESK_DEFAULT_HEIGHT).toBeGreaterThan(DESK_MIN_SIZE)
-    expect(DESK_DEFAULT_WIDTH).toBeLessThanOrEqual(DESK_MAX_SIZE)
-    expect(DESK_DEFAULT_HEIGHT).toBeLessThanOrEqual(DESK_MAX_SIZE)
+    expect(DESK_DEFAULT_WIDTH).toBeLessThanOrEqual(DESK_MAX_WIDTH)
   })
 
   it('snaps a dragged desk back to that same place', () => {
@@ -67,6 +86,69 @@ describe('desk placement', () => {
     expect(back.x + back.w).toBe(right)
     expect(back.y).toBe(42 + DESK_ANCHOR_GAP)
     expect(back.detached).toBe(false)
+  })
+})
+
+/* How far down the desk reaches: to the composer card, not to a number. A
+ * fixed height ends the palette wherever that number happens to land
+ * -- in one reader's window, level with a message bubble and well short of
+ * the box they type in.
+ */
+describe('how far down the desk reaches', () => {
+  it('lets an anchored desk reach the composer card\'s bottom edge, and no further', () => {
+    launcher()
+    composer(700)
+    const at = clampGeometry({ x: 0, y: 42 + DESK_ANCHOR_GAP, w: 300, h: 5000, detached: false })
+    expect(at.h).toBe(700 - (42 + DESK_ANCHOR_GAP))
+    /* Only the height: the width stops where it always has. */
+    expect(clampGeometry({ ...at, w: 5000 }).w).toBe(DESK_MAX_WIDTH)
+  })
+
+  it('measures an anchored desk from under the launcher, whatever y it carries', () => {
+    /* The stylesheet places an anchored palette. Its stored y is only what
+       was last written there, and need not be where the palette is drawn. */
+    launcher()
+    composer(700)
+    const at = clampGeometry({ x: 0, y: DESK_VIEWPORT_GUTTER, w: 300, h: 5000, detached: false })
+    expect(at.h).toBe(700 - (42 + DESK_ANCHOR_GAP))
+  })
+
+  it('stops a dragged desk at the composer card\'s bottom edge without shrinking it', () => {
+    /* A height bounded by the room under the palette's top would make a
+       downward move shrink the palette instead of stopping it. */
+    composer(700)
+    expect(clampGeometry({ x: 40, y: 600, w: 300, h: 300, detached: true })).toMatchObject({ y: 400, h: 300 })
+  })
+
+  it('reaches the window\'s own gutter when the composer is not drawn', () => {
+    /* An imported conversation has no dock (`.chat[data-readonly] .dock`), and
+       a card that is not drawn measures as a zero box -- taken as the limit, it
+       would hold the palette at its minimum height. */
+    launcher()
+    const card = composer(0, { height: 0 })
+    card.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList
+    const at = clampGeometry({ x: 0, y: 42 + DESK_ANCHOR_GAP, w: 300, h: 5000, detached: false })
+    expect(at.h).toBe(window.innerHeight - DESK_VIEWPORT_GUTTER - (42 + DESK_ANCHOR_GAP))
+  })
+
+  it('stops an anchored desk short of a composer card that runs under it', () => {
+    /* The landing page and a chat too narrow for the reserve leave the card
+       running under the palette's column, where reaching the card's bottom edge
+       would put the palette on the field and the send button. */
+    launcher()
+    composer(700, { right: 836 })
+    expect(anchoredRoom(300)).toBe(700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP))
+  })
+
+  it('asks about the column the palette takes at the width it has', () => {
+    /* From the launcher's right edge at 974: a card ending at x=700 runs under a
+       300px palette, meets a 274px one edge to edge, which is beside it, and
+       stays clear of a 250px one. */
+    launcher()
+    composer(700, { right: 700 })
+    expect(anchoredRoom(300)).toBe(700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP))
+    expect(anchoredRoom(274)).toBe(700 - (42 + DESK_ANCHOR_GAP))
+    expect(anchoredRoom(250)).toBe(700 - (42 + DESK_ANCHOR_GAP))
   })
 })
 
@@ -187,9 +269,9 @@ describe('the reserve the anchored desk asks the chat for', () => {
 
   it('gives a wider panel up sooner, because it is asking for more', () => {
     /* The panel is resizable, so the floor is a fact about the pair rather than
-       about one width: the same chat that can spare 324px cannot spare 504px. */
-    const chat = 324 + DESK_COLUMN_FLOOR
-    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(324)
+       about one width: the same chat that can spare 362px cannot spare 542px. */
+    const chat = 362 + DESK_COLUMN_FLOOR
+    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(362)
     expect(deskReserve({ shown: true, w: 480, chatWidth: chat })).toBe(0)
   })
 })

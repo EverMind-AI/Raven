@@ -12,6 +12,7 @@ import itertools
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -114,7 +115,16 @@ def test_the_registry_builds_every_tool_from_the_real_factory_strings(tmp_path):
         assert tool is not None and tool.name == name
 
 
-@pytest.mark.parametrize("config", [{}, {"enabled": True}, {"enabled": True, "tools": {"enabled": False}}])
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"enabled": True},
+        {"enabled": True, "tools": {"enabled": False}},
+        {"tools": {"pythonLint": True, "execPythonDiagnostics": True}},
+        {"tools": {"enabled": False, "pythonLint": True, "execPythonDiagnostics": True}},
+    ],
+)
 def test_a_slice_that_does_not_ask_for_the_face_contributes_nothing(tmp_path, config):
     """The flow and the face have one switch each: a product can keep the flow
     and hand the tools back to the host."""
@@ -129,6 +139,30 @@ def test_a_slice_that_does_not_ask_for_the_face_contributes_nothing(tmp_path, co
         factories.make_exec,
     ):
         assert make(ctx) is None
+
+
+@pytest.mark.asyncio
+async def test_loading_coding_tools_does_not_add_diagnostics_to_host_tools(tmp_path, monkeypatch):
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    from raven.agent.tools.filesystem import WriteFileTool as TrunkWriteFileTool
+    from raven.agent.tools.shell import ExecTool as TrunkExecTool
+
+    calls = []
+
+    async def check(*args, **kwargs):
+        calls.append(args)
+        return "unexpected coding diagnostics"
+
+    monkeypatch.setattr(PythonDiagnostics, "check", check)
+    writer = TrunkWriteFileTool(workspace=tmp_path)
+    out = await writer.execute(path=str(tmp_path / "host.py"), content="value = missing_binding\n")
+    assert "Successfully wrote" in str(out)
+    shell = TrunkExecTool(working_dir=str(tmp_path))
+    out = await shell.execute(command="echo other = another_missing > shell.py")
+    assert "Exit code: 0" in str(out)
+    assert calls == []
+    assert "another_missing" in (tmp_path / "shell.py").read_text()
 
 
 # --- the fork's schema, the host's names as aliases ----------------------------
@@ -221,6 +255,528 @@ def test_the_verdict_is_python_only_and_a_switch(tmp_path):
     assert "syntax" not in _text(_run(write.execute(file_path=str(tmp_path / "g.txt"), content="def f(:\n")))
     quiet = factories.make_write_file(_ctx(tmp_path, {"enabled": True, "pythonSyntaxNote": False}))
     assert "syntax" not in _text(_run(quiet.execute(file_path=str(tmp_path / "h.py"), content="def f(:\n")))
+
+
+def test_undefined_name_feedback_identifies_the_binding_and_keeps_the_edit(registry, tmp_path):
+    target = tmp_path / "undefined.py"
+    source = "def double():\n    return missing_value * 2\n"
+    result = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert "F821" in result and "missing_value" in result and "line 2" in result
+    assert "spelling, scope, import, or assignment order" in result
+    assert target.read_text() == source
+
+
+def test_existing_name_errors_do_not_reappear_when_unrelated_lines_move(registry, tmp_path):
+    target = tmp_path / "existing.py"
+    target.write_text("old_result = preexisting_missing\nvalue = 1\n")
+    _run(registry.execute("read_file", {"file_path": str(target)}))
+    result = _text(
+        _run(
+            registry.execute(
+                "edit_file",
+                {
+                    "file_path": str(target),
+                    "old_string": "old_result =",
+                    "new_string": "\nold_result =",
+                },
+            )
+        )
+    )
+    assert "F821" not in result
+    result = _text(
+        _run(
+            registry.execute(
+                "edit_file",
+                {
+                    "file_path": str(target),
+                    "old_string": "value = 1",
+                    "new_string": "value = newly_missing",
+                },
+            )
+        )
+    )
+    assert "F821" in result and "newly_missing" in result
+    assert "preexisting_missing" not in result
+
+
+@pytest.mark.parametrize("tool_name", ["edit_file", "write_file"])
+def test_existing_syntax_error_is_still_reported_after_an_unrelated_edit(registry, tmp_path, tool_name):
+    target = tmp_path / "still_broken.py"
+    source = "def f(:\n    return 1\nvalue = 2\n"
+    _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    params = {"file_path": str(target)}
+    if tool_name == "edit_file":
+        params.update(old_string="value = 2", new_string="value = 3")
+    else:
+        params["content"] = source.replace("value = 2", "value = 3")
+    result = _text(_run(registry.execute(tool_name, params)))
+    assert "Python syntax error" in result
+    assert "new findings compared" not in result
+    assert target.read_text() == source.replace("value = 2", "value = 3")
+
+
+def test_fixing_syntax_does_not_label_old_name_errors_as_new(registry, tmp_path):
+    target = tmp_path / "syntax_fixed.py"
+    source = "value = old_missing\ndef f(:\n    return 1\n"
+    _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    result = _text(
+        _run(registry.execute("edit_file", {"file_path": str(target), "old_string": "f(:", "new_string": "f():"}))
+    )
+    assert "F821" in result and "old_missing" in result
+    assert "baseline is unknown" in result and "new findings compared" not in result
+
+
+@pytest.mark.parametrize("source, expected", [("def f(:\n", "Python syntax error"), ("x = missing_name\n", "F821")])
+def test_overwriting_non_utf8_source_still_checks_the_new_content(registry, tmp_path, source, expected):
+    target = tmp_path / "legacy.py"
+    target.write_bytes('# coding: gbk\nname = "\u4e2d"\n'.encode("gbk"))
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": source}))
+    assert result.file_change is None
+    assert expected in _text(result) and "baseline is unknown" in _text(result)
+    assert target.read_text(encoding="utf-8") == source
+
+
+def test_import_notices_are_optional_and_explain_side_effects(tmp_path):
+    source = "import os\n"
+    quiet = factories.make_write_file(_ctx(tmp_path, {"enabled": True}))
+    result = _text(_run(quiet.execute(file_path=str(tmp_path / "quiet_import.py"), content=source)))
+    assert "F401" not in result
+    enabled = factories.make_write_file(_ctx(tmp_path, {"enabled": True, "pythonUnusedImports": True}))
+    target = tmp_path / "notice_import.py"
+    result = _text(_run(enabled.execute(file_path=str(target), content=source)))
+    assert "NOTICE" in result and "F401" in result and "side effects" in result
+    assert target.read_text() == source
+
+
+def test_name_checks_handle_nested_scopes_and_public_exports(registry, tmp_path):
+    source = (
+        "from os import path\n__all__ = ['path']\n"
+        "def outer(value):\n    def inner():\n        return value + len([])\n    return inner\n"
+    )
+    result = _text(
+        _run(
+            registry.execute(
+                "write_file",
+                {
+                    "file_path": str(tmp_path / "scopes.py"),
+                    "content": source,
+                },
+            )
+        )
+    )
+    assert "Python diagnostics" not in result
+
+
+def test_name_checks_can_be_disabled_without_disabling_syntax_feedback(tmp_path):
+    tool = factories.make_write_file(_ctx(tmp_path, {"enabled": True, "pythonLint": False}))
+    target = tmp_path / "syntax_only.py"
+    assert "F821" not in _text(_run(tool.execute(file_path=str(target), content="result = missing\n")))
+    assert "syntax error" in _text(_run(tool.execute(file_path=str(target), content="def f(:\n")))
+
+
+def test_append_checks_the_complete_file_and_suppresses_preexisting_errors(registry, tmp_path):
+    target = tmp_path / "append.py"
+    target.write_text("old = existing_missing\n")
+    result = _text(
+        _run(
+            registry.execute(
+                "write_file",
+                {
+                    "file_path": str(target),
+                    "content": "new = added_missing\n",
+                    "mode": "append",
+                },
+            )
+        )
+    )
+    assert "added_missing" in result and "existing_missing" not in result
+
+
+@pytest.mark.parametrize(
+    ("source", "code"),
+    [
+        ("__all__ = ['missing_export']\n", "F822"),
+        ("value = 1\ndef f():\n    print(value)\n    value = 2\n", "F823"),
+    ],
+)
+def test_name_feedback_covers_exports_and_use_before_local_assignment(registry, tmp_path, source, code):
+    target = tmp_path / "binding.py"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert code in out
+    assert target.read_text() == source
+
+
+@pytest.mark.parametrize(
+    ("source", "warns"),
+    [
+        ("value = injected_name  # noqa\n", False),
+        ("value = injected_name  # noqa: F821, F401\n", False),
+        ("value = injected_name  # noqa: F401\n", True),
+        ("value = injected_name  # type: ignore[name-defined]  # noqa: F821\n", False),
+        ("value = injected_name  # type: ignore[name-defined]  # noqa: F401\n", True),
+        ("value = injected_name  # noqa: F401  # noqa: F821\n", False),
+        ("value = injected_name  # noqa: F401  # noqa\n", False),
+        ("# ruff: noqa: F821\nvalue = injected_name\n", False),
+        ("# flake8: noqa\nvalue = injected_name\n", False),
+        ("value = injected_name  # ruff: noqa\nother = second_name\n", True),
+        ("value = injected_name  # ruff: noqa\n", True),
+        ("value = 1  # TODO # flake8: noqa\nother = injected_name\n", True),
+        ("label = '# noqa'; value = injected_name\n", True),
+        ("label = '# ruff: noqa'\nvalue = injected_name\n", True),
+        ("value = injected_name  # see https://example.com/page#noqa-section\n", True),
+        ('# Use "# ruff: noqa" only for generated files\nvalue = injected_name\n', True),
+        ("value = injected_name  # noqa: needed for registration\n", True),
+        ("value = injected_name  # noqa#reason\n", False),
+        ("# ruff: noqa: generated file\nvalue = injected_name\n", True),
+        ("# ruff : noqa\nvalue = injected_name\n", False),
+        ("# Ruff: noqa\nvalue = injected_name\n", True),
+    ],
+)
+def test_explicit_noqa_comments_suppress_only_the_requested_checks(registry, tmp_path, source, warns):
+    target = tmp_path / "ignored.py"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(target), "content": source})))
+    assert ("WARNING" in out) is warns
+
+
+def test_syntax_errors_are_not_hidden_by_noqa(registry, tmp_path):
+    source = "# ruff: noqa\ndef f(:\n"
+    out = _text(_run(registry.execute("write_file", {"file_path": str(tmp_path / "syntax.py"), "content": source})))
+    assert "Python syntax error" in out and "project's Python version" in out
+
+
+def test_the_tool_guide_gives_the_syntax_note_s_advice():
+    """The note and the seeded tool guide reach the model together, so the
+    guide must not tell it to fix outright what the note asks it to check
+    against the project's Python version first."""
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    note = PythonDiagnostics().note(Path("broken.py"), "def f(:\n", before=None)
+    guide = " ".join((PLUGIN_DIR / "prompts" / "TOOLS_CODE.md").read_text(encoding="utf-8").split())
+    advice = "check the project's Python version before changing newer syntax"
+    assert advice in note and advice in guide
+    assert "fix it before moving on" not in guide
+
+
+def test_the_name_checker_is_loaded_with_the_module_not_by_the_first_check():
+    """A cold import of the checker inside a check's wait can outlast the wait
+    on a cold runner, which reported diagnostics unavailable for a file with a
+    plain syntax error. It is paid when the module loads instead. A fresh
+    interpreter, so no earlier test's check has already imported it."""
+    probe = (
+        "import sys; sys.path.insert(0, sys.argv[1]); import code_flow.tools.diagnostics; "
+        "print('pyflakes.checker' in sys.modules)"
+    )
+    done = subprocess.run([sys.executable, "-I", "-c", probe, str(PLUGIN_DIR)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.strip() == "True"
+
+
+def test_checker_failure_does_not_turn_a_successful_write_into_a_failure(registry, tmp_path, monkeypatch):
+    from pyflakes import checker
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("checker broke")
+
+    monkeypatch.setattr(checker, "Checker", broken)
+    target = tmp_path / "kept.py"
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": "value = 1\n"}))
+    assert "diagnostics unavailable (RuntimeError)" in _text(result)
+    assert result.file_change.after == target.read_text() == "value = 1\n"
+    assert "Successfully wrote" in _text(result)
+
+
+@pytest.mark.parametrize("error", [RecursionError, MemoryError])
+def test_source_the_parser_cannot_finish_reports_diagnostics_unavailable(registry, tmp_path, monkeypatch, error):
+    """Python 3.12 raises RecursionError building the syntax tree of deeply
+    nested source (``compile`` too); that is no verdict, not a clean file."""
+    from code_flow.tools import diagnostics
+
+    def too_deep(*args, **kwargs):
+        raise error("nested too deeply")
+
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=too_deep))
+    target = tmp_path / "deep.py"
+    result = _run(registry.execute("write_file", {"file_path": str(target), "content": "value = 1\n"}))
+    assert f"diagnostics unavailable ({error.__name__})" in _text(result)
+    assert target.read_text() == "value = 1\n"
+
+
+@pytest.mark.parametrize("error", [RecursionError, MemoryError])
+def test_replaced_source_the_parser_cannot_finish_is_an_unknown_baseline(registry, tmp_path, monkeypatch, error):
+    from code_flow.tools import diagnostics
+
+    parse = diagnostics.ast.parse
+
+    def deep_before(source, *args, **kwargs):
+        if "nested_before" in source:
+            raise error("nested too deeply")
+        return parse(source, *args, **kwargs)
+
+    target = tmp_path / "replaced.py"
+    target.write_text("value = nested_before\n")
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=deep_before))
+    args = {"file_path": str(target), "content": "value = newly_missing\n"}
+    result = _text(_run(registry.execute("write_file", args)))
+    assert "newly_missing" in result and "baseline is unknown" in result
+    assert "new findings compared" not in result
+
+
+def test_identical_rewrite_does_not_repeat_diagnostics(registry, tmp_path):
+    target = tmp_path / "same.py"
+    args = {"file_path": str(target), "content": "value = missing\n"}
+    assert "F821" in _text(_run(registry.execute("write_file", args)))
+    assert "Python diagnostics" not in _text(_run(registry.execute("write_file", args)))
+
+
+def test_identical_rewrite_still_reports_a_syntax_error(registry, tmp_path):
+    target = tmp_path / "same_broken.py"
+    args = {"file_path": str(target), "content": "def f(:\n    return 1\n"}
+    assert "Python syntax error" in _text(_run(registry.execute("write_file", args)))
+    result = _text(_run(registry.execute("write_file", args)))
+    assert result.startswith("File unchanged:") and "Python syntax error" in result
+
+
+def test_diagnostics_bound_source_and_findings_without_executing_code(tmp_path):
+    from code_flow.tools.diagnostics import MAX_FINDINGS, MAX_SOURCE_BYTES, MAX_SYNTAX_BYTES, PythonDiagnostics
+
+    target = tmp_path / "source.py"
+    sentinel = tmp_path / "must_not_exist"
+    text = f"open({str(sentinel)!r}, 'w').close()\n"
+    diagnostics = PythonDiagnostics()
+    assert diagnostics.note(target, text, before=None) == ""
+    assert not sentinel.exists()
+    assert diagnostics.note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == (
+        f"\nPython name checks skipped for {target}: the source is over 256 KiB, so only its syntax was checked."
+    )
+    assert diagnostics.note(target, "#" * (MAX_SYNTAX_BYTES + 1), before=None) == (
+        f"\nPython diagnostics skipped for {target}: the source is over 2 MiB. Run targeted project checks."
+    )
+    assert PythonDiagnostics(lint=False).note(target, "#" * (MAX_SOURCE_BYTES + 1), before=None) == ""
+    note = diagnostics.note(target, "\n".join(f"value_{i} = missing_{i}" for i in range(20)), before=None)
+    assert note.count("WARNING:") == MAX_FINDINGS
+    assert "12 more findings omitted" in note
+
+
+@pytest.mark.parametrize("tool", ["write_file", "edit_file"])
+def test_a_syntax_error_past_the_name_check_bound_is_still_reported(registry, tmp_path, tool):
+    """Name checks stop at 256 KiB and the syntax check runs on past it, so an
+    edit that breaks one of a project's large modules still hears about it."""
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES
+
+    target = tmp_path / "large.py"
+    rows = MAX_SOURCE_BYTES // len("value = 1\n") + 1
+    body = "value = 1\n" * rows
+    if tool == "write_file":
+        args = {"file_path": str(target), "content": body + "def broken(:\n"}
+    else:
+        clean = {"file_path": str(target), "content": body + "def kept():\n    pass\n"}
+        assert "name checks skipped" in _text(_run(registry.execute("write_file", clean)))
+        args = {"file_path": str(target), "old_string": "def kept():", "new_string": "def broken(:"}
+    result = _text(_run(registry.execute(tool, args)))
+    assert f"WARNING: line {rows + 1}, column 12: Python syntax error" in result
+    assert "name checks skipped" not in result
+
+
+def test_an_append_python_cannot_decode_is_reported_where_decoding_stops(registry, tmp_path):
+    """UTF-8 appended to a file that declares GBK: Python refuses the file, so
+    the append hears that, at the line Python cannot decode."""
+    target = tmp_path / "legacy.py"
+    target.write_bytes('# coding: gbk\nname = "\u4e2d"\n'.encode("gbk"))
+    args = {"file_path": str(target), "content": 'label = "\u4e2d"\ndef broken(:\n', "mode": "append"}
+    result = _text(_run(registry.execute("write_file", args)))
+    assert "line 3, column 12: Python syntax error: 'gbk' codec can't decode byte 0xad" in result
+    assert "new findings compared with the content before this call" in result
+
+
+@pytest.mark.parametrize(
+    ("raw", "place", "message"),
+    [
+        # A declared encoding, where Python's parser reports line 0.
+        (
+            "# -*- coding: gbk -*-\nx = 1\nname = '\u4e2d\u6587'\n".encode(),
+            "line 3, column 11",
+            "'gbk' codec can't decode",
+        ),
+        # UTF-8 by default, a comment included, which Python 3.12's parser passes.
+        (b"a = 1\nb = 2\n# caf\xe9\n", "line 3, column 6", "'utf-8' codec can't decode byte 0xe9"),
+        # After a BOM, which its codec strips before decoding the rest.
+        (b"\xef\xbb\xbfa = 1\nb = '\xff'\n", "line 2, column 6", "'utf-8' codec can't decode byte 0xff"),
+        # The two lines a declaration may take are read before anything is decoded.
+        (b"name = 'caf\xe9'\n", "line 1, column 1", "invalid or missing encoding declaration"),
+        (b"#!/usr/bin/env python\n# coding: nope\nx = 1\n", "line 2, column 1", "unknown encoding: nope"),
+    ],
+    ids=["declared-encoding", "utf-8-comment", "after-a-bom", "first-line", "unknown-declaration"],
+)
+def test_bytes_python_cannot_decode_are_a_syntax_error_where_decoding_stops(tmp_path, raw, place, message):
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    target = tmp_path / "undecodable.py"
+    target.write_bytes(raw)
+    note = _run(PythonDiagnostics().check(target, before=None))
+    assert f"WARNING: {place}: Python syntax error: {message}" in note
+
+
+def test_a_finding_already_there_stays_existing_under_a_coding_declaration(registry, tmp_path):
+    """The content an edit replaced is decoded as the content it wrote is, so
+    a finding on a line the declaration decodes the same way both times is
+    an existing finding, not a new one."""
+    target = tmp_path / "declared.py"
+    body = "# coding: latin-1\nlabel = 'caf\u00e9' + missing_one\nvalue = 1\n"
+    assert "missing_one" in _text(_run(registry.execute("write_file", {"file_path": str(target), "content": body})))
+    args = {"file_path": str(target), "old_string": "value = 1", "new_string": "value = 2"}
+    edited = _text(_run(registry.execute("edit_file", args)))
+    assert "Successfully edited" in edited and "missing_one" not in edited
+
+
+def test_replaced_text_over_the_name_check_bound_in_bytes_is_an_unknown_baseline(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, PythonDiagnostics
+
+    # Fewer characters than the bound, more bytes once stored.
+    before = "# " + "\u00e9" * (MAX_SOURCE_BYTES // 2)
+    assert len(before) <= MAX_SOURCE_BYTES < len(before.encode("utf-8"))
+    note = PythonDiagnostics().note(tmp_path / "wide.py", "value = missing_name\n", before=before)
+    assert "missing_name" in note and "baseline is unknown" in note
+
+
+def test_text_is_checked_as_the_utf8_bytes_the_file_tool_stores(tmp_path):
+    """Each of these compiles when the string alone is parsed and not as the
+    bytes on disk, which is what Python runs."""
+    from code_flow.tools.diagnostics import PythonDiagnostics
+
+    text = "# coding: ascii\nname = 'caf\u00e9'\n"
+    note = _run(PythonDiagnostics().check(tmp_path / "declared.py", text=text, before=None))
+    assert "line 2, column 12: Python syntax error: 'ascii' codec" in note
+    declared = "# coding: latin-1\nname = 'caf\u00e9'\nvalue = missing_name\n"
+    note = _run(PythonDiagnostics().check(tmp_path / "latin.py", text=declared, before=None))
+    assert "line 3, column 9: F821" in note
+
+
+def test_a_checked_file_is_decoded_by_its_declaration_and_read_to_one_past_the_bound(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SYNTAX_BYTES, PythonDiagnostics, read_source
+
+    target = tmp_path / "encoded.py"
+    target.write_bytes(b"# coding: latin-1\nname = 'caf\xe9'\nvalue = missing_name\n")
+    assert "WARNING: line 3, column 9: F821" in _run(PythonDiagnostics().check(target, before=None))
+    target.write_bytes(b"#" * (MAX_SYNTAX_BYTES + 5))
+    assert len(read_source(target)) == MAX_SYNTAX_BYTES + 1
+    assert "diagnostics skipped" in _run(PythonDiagnostics().check(target, before=None))
+    for absent in (tmp_path / "absent.py", tmp_path):
+        with pytest.raises(FileNotFoundError):
+            read_source(absent)
+
+
+def test_a_baseline_is_read_as_bytes_and_bounded(tmp_path):
+    from code_flow.tools.diagnostics import MAX_SOURCE_BYTES, UNKNOWN, read_python
+
+    target = tmp_path / "encoded.py"
+    assert read_python(target) is None
+    raw = b"# coding: latin-1\nname = 'caf\xe9'\n"
+    target.write_bytes(raw)
+    assert read_python(target) == raw
+    target.write_bytes(b"x" * (MAX_SOURCE_BYTES + 1))
+    assert read_python(target) is UNKNOWN
+    assert read_python(tmp_path) is UNKNOWN
+
+
+@pytest.mark.asyncio
+async def test_a_baseline_read_runs_on_a_worker_and_gives_up_at_the_wait(tmp_path, monkeypatch):
+    """The content an append replaces is read as every diagnostic read is, on
+    a diagnostic worker: a stalled read leaves the event loop free and the
+    baseline unknown once the wait runs out."""
+    import time
+
+    from code_flow.tools import diagnostics
+
+    release = threading.Event()
+    readers = []
+
+    def stalled(path):
+        readers.append(threading.get_ident())
+        release.wait(5)
+        return b""
+
+    monkeypatch.setattr(diagnostics, "read_python", stalled)
+    monkeypatch.setattr(diagnostics, "CHECK_WAIT_SECONDS", 0.05)
+    try:
+        started = time.monotonic()
+        assert await diagnostics.read_before(tmp_path / "slow.py") is diagnostics.UNKNOWN
+        assert time.monotonic() - started < 1
+        assert readers and readers[0] != threading.get_ident()
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("tool", ["write_file", "edit_file"])
+def test_a_coding_declaration_applies_to_the_text_a_write_or_edit_stores(registry, tmp_path, tool):
+    """The file tool stores its text as UTF-8, so a declaration in that text
+    governs the file Python reads: content the declaration cannot decode is
+    reported, as it is for the same bytes read back after an append."""
+    target = tmp_path / "declared.py"
+    body = "# coding: ascii\nname = 'x'\n"
+    if tool == "write_file":
+        args = {"file_path": str(target), "content": body.replace("'x'", "'caf\u00e9'")}
+    else:
+        assert "Successfully" in _text(
+            _run(registry.execute("write_file", {"file_path": str(target), "content": body}))
+        )
+        args = {"file_path": str(target), "old_string": "'x'", "new_string": "'caf\u00e9'"}
+    result = _text(_run(registry.execute(tool, args)))
+    assert "line 2, column 12: Python syntax error: 'ascii' codec can't decode byte 0xc3" in result
+    with pytest.raises(SyntaxError):
+        compile(target.read_bytes(), str(target), "exec")
+
+
+def test_an_unavailable_note_names_its_file(tmp_path, monkeypatch):
+    """Post-command checks append one note per changed file, so each
+    unavailable note says which file it is about, from a failed read and a
+    failed parse alike."""
+    from code_flow.tools import diagnostics
+
+    unreadable = tmp_path / "locked.py"
+    unreadable.write_text("value = 1\n")
+    deep = tmp_path / "deep.py"
+    deep.write_text("value = 1\n")
+    read = diagnostics.read_source
+
+    def refused(path):
+        if path == unreadable:
+            raise PermissionError(f"permission denied: {path}")
+        return read(path)
+
+    def too_deep(*args, **kwargs):
+        raise RecursionError("nested too deeply")
+
+    monkeypatch.setattr(diagnostics, "read_source", refused)
+    monkeypatch.setattr(diagnostics, "ast", SimpleNamespace(parse=too_deep))
+    read_note = _run(diagnostics.PythonDiagnostics().check(unreadable))
+    parse_note = _run(diagnostics.PythonDiagnostics().check(deep))
+    assert f"unavailable (PermissionError) for {unreadable};" in read_note
+    assert f"unavailable (RecursionError) for {deep};" in parse_note
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_wait_is_bounded_and_cancellation_is_preserved(tmp_path, monkeypatch):
+    from code_flow.tools import diagnostics
+    from code_flow.tools.diagnostic_workers import DiagnosticWorkers
+
+    release = threading.Event()
+
+    def stalled(*args, **kwargs):
+        release.wait(2)
+        return ""
+
+    monkeypatch.setattr(diagnostics, "WORKERS", DiagnosticWorkers())
+    monkeypatch.setattr(diagnostics, "CHECK_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(diagnostics.PythonDiagnostics, "note", stalled)
+    try:
+        note = await diagnostics.PythonDiagnostics().check(tmp_path / "slow.py", text="value = 1\n")
+        assert "diagnostics unavailable (TimeoutError)" in note
+        task = asyncio.create_task(diagnostics.PythonDiagnostics().check(tmp_path / "cancelled.py", text="value = 1\n"))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        release.set()
 
 
 # --- occurrence -----------------------------------------------------------------------
@@ -419,6 +975,21 @@ def test_a_long_line_is_cut_the_way_the_description_promises(registry, tmp_path)
     body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
     assert "line truncated to 2000 chars" in body
     assert "1| " in body and "2| last" in body
+
+
+def test_minified_lines_are_cut_before_the_page_is_counted_so_they_share_one_page(registry, tmp_path):
+    """Fifty lines of 10k characters: cut after trunk's page, a dozen made a
+    page; cut on trunk's hook, before its budget counts them, they all do, each
+    cut once (the cut after the read is only for a page a registered
+    machine's node answered)."""
+    target = tmp_path / "chunks.js"
+    target.write_text("\n".join("x" * 10_000 for _ in range(50)) + "\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
+    lines = body.split("\n\n")[0].split("\n")
+    assert len(lines) == 50 and lines[0].startswith("1| ") and lines[-1].startswith("50| ")
+    assert lines[0] == "1| " + "x" * 2000 + "... (line truncated to 2000 chars)", "cut once, at the budget"
+    assert body.endswith("(End of file \u2014 50 lines total)")
+    assert "(Line 1 is" not in body
 
 
 def test_a_read_that_failed_does_not_license_an_edit(registry, tmp_path):
@@ -724,3 +1295,54 @@ def test_a_malformed_slice_declines_rather_than_serving_half_a_face(tmp_path):
     )
     assert factories.make_read_file(ctx) is None
     assert factories.make_glob(ctx) is None
+
+
+_MARK = "... (line truncated to 2000 chars)"
+
+
+def test_a_line_whose_own_text_ends_like_the_mark_is_cut_like_any_other(registry, tmp_path):
+    """A 5000-character line ending the way a cut line does came back whole: the
+    pass after the read took the ending for its own mark (found by both
+    reviewers of the first head). Whether a line was cut is decided by where
+    the read ran, never by the line's text."""
+    target = tmp_path / "pasted.txt"
+    target.write_text("x" * (5_000 - len(_MARK)) + _MARK + "\nlast\n")
+    body = _text(_run(registry.execute("read_file", {"file_path": str(target)})))
+    lines = body.split("\n")
+    assert lines[0] == "1| " + "x" * 2000 + _MARK and lines[1] == "2| last"
+
+
+def test_a_page_a_registered_machine_s_node_answered_is_cut_after_the_read(tmp_path, monkeypatch):
+    """The node runs trunk's tool, without this fork's hook, so its page is cut here, line by line, once."""
+    import json
+
+    from raven.ops import remote_path
+
+    rows = [
+        {"id": "box", "display_name": "Lab box", "host": "203.0.113.7", "port": 58717, "user": "worker", "key": "/k"}
+    ]
+    (tmp_path / "connections.json").write_text(json.dumps({"connections": rows}), encoding="utf-8")
+    monkeypatch.setenv("RAVEN_CONNECTIONS", str(tmp_path / "connections.json"))
+    monkeypatch.setattr(remote_path, "_HOMES", {})
+    monkeypatch.setattr(remote_path, "_NODES", None)
+    monkeypatch.setattr(remote_path, "_READ", {})
+    monkeypatch.setattr(
+        "raven.config.loader.load_config", lambda *a, **k: SimpleNamespace(subagents=SimpleNamespace(agents=[]))
+    )
+
+    class Pool:
+        async def home(self, machine_id: str) -> str:
+            return "/home/worker"
+
+        async def call(self, machine_id: str, method: str, params: dict) -> dict:
+            assert method == "fs/read"
+            return {"text": "1| " + "y" * 5_000 + "\n2| last\n\n(End of file — 2 lines total)", "sha256": "ab" * 32}
+
+    remote_path.use_nodes(Pool)
+    read = ReadFileTool(workspace=tmp_path, allowed_dirs=(tmp_path,), follow_binding=False)
+
+    got = _run(read.execute(file_path="box:raven-work/t1/bundle.js"))
+
+    lines = got.split("\n")
+    assert lines[0] == ("1| " + "y" * 5_000)[:2000] + _MARK and lines[1] == "2| last"
+    assert got.endswith("(End of file — 2 lines total)")

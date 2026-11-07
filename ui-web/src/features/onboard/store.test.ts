@@ -6,6 +6,9 @@ import * as store from './store'
 
 import type { AgentsBody, FoundAgent, ImportScan, OnboardSource, StepBody } from './types'
 
+const { toasts } = vi.hoisted(() => ({ toasts: [] as string[] }))
+vi.mock('../../state/toast', () => ({ show: (text: string) => { toasts.push(text) } }))
+
 const body = (done: boolean, found: FoundAgent[] = []): AgentsBody => ({
   Body: () => null as never,
   load: async () => {},
@@ -17,6 +20,7 @@ const body = (done: boolean, found: FoundAgent[] = []): AgentsBody => ({
 
 const source = (scan: ImportScan): OnboardSource => ({
   providerConfigured: async () => true,
+  seedSkillHub: async () => null,
   scan: async () => scan,
   startImport: async () => ({ started: true, total: 0, detail: '' }),
 })
@@ -248,6 +252,7 @@ describe('the tier', () => {
     setSources({
       onboard: {
         providerConfigured: async () => true,
+        seedSkillHub: async () => null,
         scan: async () => READY,
         startImport: async (platforms, tier) => { runs.push([platforms, tier]); return { started: true, total: 1, detail: '' } },
       },
@@ -267,5 +272,42 @@ describe('the tier', () => {
     await store.finish()
 
     expect(runs).toEqual([[['hermes'], 'memory_files']])
+  })
+})
+
+describe('the Hub opt-in', () => {
+  beforeEach(() => {
+    store._showStepsForTests(store.STEPS)
+    toasts.length = 0
+  })
+
+  const readyToFinish = async (seedSkillHub: () => Promise<string | null>): Promise<void> => {
+    setSources({ onboard: { ...source(READY), seedSkillHub } })
+    store.setBodies({ model: body(true) as StepBody, search: body(true) as StepBody, agents: body(true), memory: body(true) })
+    store.open()
+    await Promise.resolve()
+    await Promise.resolve()
+  }
+
+  it('seeds the Skill Hub endpoint when the wizard finishes, not on an intermediate next', async () => {
+    const seed = vi.fn(async () => null)
+    await readyToFinish(seed)
+
+    store.set({ step: 'model' })
+    await store.finish()
+    expect(seed).not.toHaveBeenCalled()
+
+    store.set({ step: store.visibleSteps().at(-1)! })
+    await store.finish()
+    expect(seed).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the reload notice the server returns for a seeded endpoint', async () => {
+    await readyToFinish(async () => 'Saved. Skill Hub search starts after Raven reloads.')
+
+    store.set({ step: store.visibleSteps().at(-1)! })
+    await store.finish()
+
+    expect(toasts).toEqual(['Saved. Skill Hub search starts after Raven reloads.'])
   })
 })

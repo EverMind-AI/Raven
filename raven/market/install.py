@@ -210,7 +210,7 @@ async def install_plugin(entry: dict, form: dict | None = None) -> dict:
             elif kind == "skill":
                 piece, _ = await _install_skill_piece(contrib)
             elif kind == "python":
-                raise PlugInstallError("python plugins install via `uv tool install raven --with <pkg>` for now")
+                raise PlugInstallError("Python plugins cannot be installed from the market yet.")
             else:
                 raise PlugInstallError(f"unknown contribution kind '{kind}'")
             done.append(piece)

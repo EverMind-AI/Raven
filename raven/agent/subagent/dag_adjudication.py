@@ -57,7 +57,8 @@ async def deliver_report(send: Callable[[], Awaitable[None]], *, what: str) -> E
 CONTINUE = "continue"
 ABANDON = "abandon"
 REPLAN = "replan"
-DECISIONS = (CONTINUE, ABANDON, REPLAN)
+REASSIGN = "reassign"
+DECISIONS = (CONTINUE, ABANDON, REPLAN, REASSIGN)
 
 
 @dataclass(frozen=True)
@@ -89,12 +90,40 @@ class ReplanPlan:
 
 
 @dataclass(frozen=True)
+class ReassignPlan:
+    """A checked move of one node to another agent, on its way to the run.
+
+    Run-local, and never serialized as a tool argument: ``backends`` holds live
+    backend objects and ``waiter`` is the adjudication the move answers. The
+    runner applies the move only after that answer is recorded, and only for
+    the attempt after it -- earlier attempts keep the agent that made them.
+    ``nodes`` is every possible mover the move was approved for, including
+    siblings that were still running when it was decided.
+    """
+
+    node_id: str
+    source_agent: str
+    source_instance: str | None
+    target_agent: str
+    target_stateful: bool
+    target_instance: str | None
+    instance_auto: bool
+    revision: int
+    waiter: asyncio.Event
+    nodes: tuple[DagNodeSpec, ...]
+    backends: dict[str, Any]
+    notices: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Adjudication:
     """What the main agent decided about one suspended node."""
 
     decision: str
     message: str | None = None
     plan: ReplanPlan | None = None
+    agent: str | None = None
+    reassignment: ReassignPlan | None = None
 
 
 class AdjudicationDesk:
@@ -126,7 +155,17 @@ class AdjudicationDesk:
     def open_nodes(self) -> set[str]:
         return set(self._waiting)
 
-    def resolve(self, node_id: str, decision: str, message: str | None, plan: ReplanPlan | None = None) -> bool:
+    def resolve(
+        self,
+        node_id: str,
+        decision: str,
+        message: str | None,
+        plan: ReplanPlan | None = None,
+        *,
+        agent: str | None = None,
+        reassignment: ReassignPlan | None = None,
+        expected_waiter: asyncio.Event | None = None,
+    ) -> bool:
         """Record an answer and wake the waiter. False when nobody was waiting.
 
         The caller reports that False to the model rather than swallowing it: by
@@ -144,19 +183,52 @@ class AdjudicationDesk:
         be dispatched again, and whatever is still running is handed to the next
         round rather than cancelled. Without it the re-dispatch waits out every
         sibling of the round it was suspended from -- nodes it does not depend on
-        and cannot be helped by, for an unbounded time.
+        and cannot be helped by, for an unbounded time. A reassign fires it too:
+        the node goes back to the scheduler, on the prepared target, and never
+        replaces the graph.
+
+        ``expected_waiter`` is for a caller that read the waiter before doing
+        asynchronous work. It must be the node's current waiter, and that waiter
+        must be unanswered: a decision prepared against a closed, replaced or
+        already-answered adjudication is refused instead of landing on whatever
+        now waits under the same node id.
+
+        A reassign is refused before anything is recorded when it carries no
+        target agent or no message, or when a replan has already landed -- the
+        graph is being replaced, so the move could never be applied. A prepared
+        move must also name this node and the waiter it was prepared against, so
+        a stale plan cannot be parked under a newer adjudication.
         """
         event = self._waiting.get(node_id)
         if event is None:
             return False
-        self._answers[node_id] = Adjudication(decision=decision, message=message, plan=plan)
+        if expected_waiter is not None and (event is not expected_waiter or node_id in self._answers):
+            return False
+        if decision == REASSIGN:
+            if not (agent and agent.strip()) or not (message and message.strip()):
+                return False
+            if self.replanned.is_set():
+                return False
+        if reassignment is not None and (reassignment.node_id != node_id or reassignment.waiter is not event):
+            return False
+        self._answers[node_id] = Adjudication(
+            decision=decision,
+            message=message,
+            plan=plan,
+            agent=agent,
+            reassignment=reassignment,
+        )
         if decision == REPLAN:
             self._plan = plan
             self.replanned.set()
-        elif decision == CONTINUE:
+        elif decision in (CONTINUE, REASSIGN):
             self.continued.set()
         event.set()
         return True
+
+    def peek(self, node_id: str) -> Adjudication | None:
+        """The answer that has landed for ``node_id``, without consuming it."""
+        return self._answers.get(node_id)
 
     def take(self, node_id: str) -> Adjudication | None:
         """The answer for ``node_id``, consumed. ``None`` if none landed."""
@@ -176,10 +248,16 @@ class AdjudicationDesk:
 
 @dataclass(frozen=True)
 class Report:
-    """One node's exception report, exactly as the runner built it."""
+    """One node's exception report, exactly as the runner built it, and what the node returned.
+
+    ``dispatch_link`` is the span of the attempt that sent it, which the turn the
+    report starts once the run is released links back to.
+    """
 
     node_id: str
     text: str
+    output: str | None = None
+    dispatch_link: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -203,11 +281,19 @@ class AnnounceReport(Protocol):
 
     Carries ``awaiting_decision`` for the same reason the runner's announcer does:
     a released run announces notifications as readily as questions, and only the
-    caller knows which this is.
+    caller knows which this is. ``dispatch_link`` is the attempt the report came
+    from, ``None`` when it names none.
     """
 
     async def __call__(
-        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+        self,
+        node_id: str,
+        text: str,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None: ...
 
 
@@ -309,7 +395,14 @@ class Outbox:
         return False
 
     async def put_report(
-        self, node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False
+        self,
+        node_id: str,
+        text: str,
+        *,
+        awaiting_decision: bool,
+        informational: bool = False,
+        output: str | None = None,
+        dispatch_link: tuple[str, str] | None = None,
     ) -> None:
         """Take one report. Where it goes depends on the lane, which only this object knows.
 
@@ -329,11 +422,18 @@ class Outbox:
         if self._stopped:
             return
         if self.released.is_set():
-            await self._announce_report(node_id, text, awaiting_decision=awaiting_decision, informational=informational)
+            await self._announce_report(
+                node_id,
+                text,
+                awaiting_decision=awaiting_decision,
+                informational=informational,
+                output=output,
+                dispatch_link=dispatch_link,
+            )
             return
         if not awaiting_decision:
             return
-        event = Report(node_id, text)
+        event = Report(node_id, text, output, dispatch_link)
         if not self._hand(event):
             self._buffer.append(event)
 
@@ -403,7 +503,14 @@ class Outbox:
         the drain moves on: one undeliverable event must not strand the rest.
         """
         if isinstance(event, Report):
-            send = partial(self._announce_report, event.node_id, event.text, awaiting_decision=True)
+            send = partial(
+                self._announce_report,
+                event.node_id,
+                event.text,
+                awaiting_decision=True,
+                output=event.output,
+                dispatch_link=event.dispatch_link,
+            )
         elif event.stopped:
             return
         else:

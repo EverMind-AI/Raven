@@ -40,6 +40,9 @@ VENDORED_TOOL_FACE = {
     "web_search",
     "web_fetch",
     "ask_user",
+    # Trunk serves it beside the default compacting history strategy, so the
+    # refs that strategy leaves in the window can be read back.
+    "context_retrieve",
     "tool_call",
     "tool_search",
 }
@@ -258,6 +261,12 @@ TWIN_DRFLOW_PRODUCT_ONLY = {
         "rather than inheriting it: the class default is on, and a default that can move "
         "is not the same as a file that says what ships"
     ),
+    "measuredGuidance": (
+        "the guidance block's numbers (short runs, one named answer) were measured on a "
+        "short-answer benchmark, where they hold; this product writes long reports, and "
+        "max's evidence floor asks for more reading than the block calls healthy. The fork "
+        "inherits the class default (on) and its arm was measured with it"
+    ),
     "plainFirst": (
         "medium and high answer settled general knowledge without a research round: "
         "web tools withheld for the first model call, the plain draft judged, anything "
@@ -288,7 +297,9 @@ TWIN_DRFLOW_DIVERGED = {
     "finalShape": (
         "the trunk product turns reportBounce on for every mode: a missing report section "
         "is a shape defect, not a depth setting, and it belongs to no tier. Measured at 0 "
-        "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off"
+        "bounces over 15 turns, so it costs the baseline nothing. The fork ran it off. "
+        "It also ships reportLayout=reader, the report in the form a reader receives, "
+        "which the fork's schema does not have"
     ),
     "version": (
         "the trunk product's flow now carries the numeric-discipline rule in its deep "
@@ -427,11 +438,12 @@ def test_the_shipped_label_moves_when_the_shipped_prompt_does():
         report_structure=shape["reportStructure"],
         report_format_override=shape["reportFormatOverride"],
         report_depth=shape["reportDepth"],
+        report_layout=shape["reportLayout"],
     )[1]
     digest = hashlib.sha256(" ".join(segment.split()).encode("utf-8")).hexdigest()[:16]
 
-    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high"
-    assert digest == "baf5019c4141a463", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
+    assert shipped["version"] == "dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader"
+    assert digest == "86337de7a030f8aa", f"the shipped prompt moved; advance the label and re-stamp to {digest}"
 
 
 def test_every_retirement_this_product_declares_names_a_label_it_can_load():
@@ -448,21 +460,77 @@ def test_every_retirement_this_product_declares_names_a_label_it_can_load():
         assert FlowConfig._resolve_successor(end) is None, "the end of a chain is not itself retired"
 
 
-def test_the_contract_is_seeded_beside_the_identity_once(grounded, tmp_path):
+def test_the_contract_is_regenerated_beside_the_identity(grounded, tmp_path, capsys):
     grounded.render_config(RUN_PY.parent / "config.json")
     profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
     soul = (profile / "soul.md").read_text()
-    assert "## What actually decides this task" in soul, "measured guidance rendered into the identity"
-    assert soul.index("## What actually decides this task") < soul.index("## Reading")
+    assert "## What actually decides this task" not in soul, "the shipped config turns measured guidance off"
+    assert soul.rstrip("\n") == (RUN_PY.parent / "soul.md").read_text().rstrip("\n")
     contract = profile / "agent.md"
     text = contract.read_text()
     assert "## Reading" not in text, "the identity is soul.md's; agent.md carries only the contract"
     assert "contract" in text.lower()
     contract.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
+    assert contract.read_text() == text, "the contract the gates enforce is back"
+    [backup] = profile.glob("agent.md.bak-*")
+    assert backup.read_text() == "operator tuned"
+    assert str(backup) in capsys.readouterr().err
+
+
+def test_a_config_change_reaches_the_contract_at_the_next_launch(grounded, tmp_path):
+    """The gates read the rendered config on every launch; the contract has to
+    follow it there, or a layout switch ships gates against a prompt that still
+    describes the other layout."""
+    source = tmp_path / "config.json"
+    config = json.loads((RUN_PY.parent / "config.json").read_text())
+    config["plugins"]["config"]["research-flow"]["finalShape"]["reportLayout"] = "sections"
+    source.write_text(json.dumps(config))
+    grounded.render_config(source)
+    contract = (
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "agent.md"
+    )
+    assert "`## Answer`" in contract.read_text()
+    grounded.render_config(RUN_PY.parent / "config.json")
+    assert "`## Answer`" not in contract.read_text()
+    assert "opening blockquote" in contract.read_text()
+    assert not list(contract.parent.glob("agent.md.bak-*")), "a config change is not an edit"
+
+
+def test_the_operators_local_lines_follow_the_identity(grounded, tmp_path):
+    grounded.render_config(RUN_PY.parent / "config.json")
+    profile = tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile"
+    (profile / "soul.local.md").write_text("Answer in British English.\n")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    soul = (profile / "soul.md").read_text()
+    assert soul.startswith((RUN_PY.parent / "soul.md").read_text().rstrip("\n"))
+    assert soul.endswith("\n\nAnswer in British English.\n")
+
+
+def test_a_raven_without_regenerated_prompts_seeds_once_and_says_so(grounded, tmp_path, monkeypatch, capsys):
+    """A home tree copied out by a newer wheel also serves an older checkout,
+    whose launcher library has no write_generated."""
+    monkeypatch.delattr(grounded.render, "write_generated")
+    grounded.render_config(RUN_PY.parent / "config.json")
+    contract = (
+        tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "agent.md"
+    )
+    contract.write_text("operator tuned")
+    grounded.render_config(RUN_PY.parent / "config.json")
     assert contract.read_text() == "operator tuned"
+    assert "seeded once, never refreshed" in capsys.readouterr().err
 
 
+def test_an_unwritable_prompt_refuses_the_launch(grounded, monkeypatch):
+    def unwritable(*_args, **_kwargs):
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(grounded.render, "write_generated", unwritable)
+    with pytest.raises(SystemExit, match="cannot regenerate .*soul.md: read-only home"):
+        grounded.render_config(RUN_PY.parent / "config.json")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     rendered = grounded.render_config(RUN_PY.parent / "config.json")
     assert stat.S_IMODE(rendered.stat().st_mode) == 0o600
@@ -477,15 +545,17 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
     assert config.tools.web.search.api_key == "serper-key"
 
 
-def test_the_identity_is_seeded_once_and_never_overwritten(grounded, tmp_path):
+def test_the_identity_is_regenerated_and_an_edit_is_backed_up(grounded, tmp_path):
     grounded.render_config(RUN_PY.parent / "config.json")
     soul = (
         tmp_path / "home" / "subagent_sessions" / "raven-research-ng" / "acp" / "agent_memory" / "profile" / "soul.md"
     )
     assert "research agent" in soul.read_text()
+    shipped = soul.read_text()
     soul.write_text("operator tuned")
     grounded.render_config(RUN_PY.parent / "config.json")
-    assert soul.read_text() == "operator tuned"
+    assert soul.read_text() == shipped
+    assert [b.read_text() for b in soul.parent.glob("soul.md.bak-*")] == ["operator tuned"]
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):
@@ -578,6 +648,7 @@ def test_the_search_env_var_is_the_plugin_tools_own(launcher):
 
 
 def test_the_exec_targets_installed_raven(grounded, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
     calls = []
     monkeypatch.setattr(os, "execv", lambda *a: calls.append(a))
     monkeypatch.setattr(sys, "argv", ["run.py"])
@@ -886,6 +957,19 @@ def test_search_refuses_to_launch_when_the_SELECTED_vendor_has_no_key(grounded, 
     assert "brave" in str(caught.value) and "BRAVE_API_KEY" in str(caught.value)
 
 
+def test_a_search_vendor_that_needs_no_key_launches_without_one(grounded, monkeypatch):
+    """Keenable searches unauthenticated at a lower rate limit, so the refusal
+    that guards a keyed vendor's withheld tool has nothing to guard here."""
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "keenable")
+    monkeypatch.delenv("RESEARCH_KEENABLE_API_KEY", raising=False)
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["plugins"]["config"]["research-flow"]["search"]["provider"] == "keenable"
+    assert "apiKey" not in data["plugins"]["config"]["research-flow"]["search"]
+
+
 @pytest.mark.parametrize(
     ("env", "typo", "meant"),
     [("RESEARCH_WEB_SEARCH_PROVIDER", "sepper", "serper"), ("RESEARCH_WEB_FETCH_PROVIDER", "jinaa", "jina")],
@@ -925,6 +1009,55 @@ def test_the_vendor_slots_are_the_trunks_own_vendors(launcher):
     # fails at the first call, refusing one it has withholds a working one.
     assert launcher.SEARCH_VENDORS == set(SEARCH_PROVIDERS)
     assert launcher.FETCH_VENDORS == set(FETCH_PROVIDERS)
+
+
+def test_a_web_vendor_borrows_the_llm_key_on_the_same_account(launcher):
+    """The web slot stays optional: the key the host already configured for chat
+    pays for search and fetch too, and an explicit web key still wins."""
+    config = {"providers": {"deepseek": {"apiKey": "sk-llm"}}}
+
+    assert launcher.vendor_key(config, "deepseek") == "sk-llm"
+
+    config["tools"] = {"web": {"providers": {"deepseek": {"apiKey": "sk-web"}}}}
+    assert launcher.vendor_key(config, "deepseek") == "sk-web"
+
+    assert launcher.vendor_key({"providers": {}}, "deepseek") == ""
+    # The config file's own snake_case spelling reaches the borrow too.
+    assert launcher.vendor_key({"providers": {"deepseek": {"api_key": "sk-snake"}}}, "deepseek") == "sk-snake"
+
+
+def test_a_borrowed_key_reaches_the_plugin_slice_on_the_own_key_branch(grounded, tmp_path, monkeypatch):
+    """The product's own LLM key means ``inherit_llm`` never runs, so the host's
+    ``providers`` block is absent from the rendered config. The launch must
+    still find the borrowed web key: the host config is the second source."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+                "tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}},
+            }
+        )
+    )
+    monkeypatch.setenv("RESEARCH_WEB_SEARCH_PROVIDER", "deepseek")
+    monkeypatch.setenv("RESEARCH_WEB_FETCH_PROVIDER", "deepseek")
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    flow = data["plugins"]["config"]["research-flow"]
+    assert flow["search"]["apiKey"] == "sk-deepseek"
+    assert flow["fetch"]["apiKey"] == "sk-deepseek"
+
+
+def test_a_launcher_without_the_borrow_helper_reads_no_borrowed_key(launcher, monkeypatch):
+    """A stamped launcher can run on a raven that predates the helper; the first
+    key lookup must answer no key rather than raising ImportError."""
+    from raven.config import schema
+
+    monkeypatch.delattr(schema, "borrowed_web_key")
+
+    assert launcher.vendor_key({"tools": {"web": {}}}, "jina") == ""
 
 
 def test_a_label_two_retirements_old_is_sent_to_the_end_of_the_chain():

@@ -211,7 +211,7 @@ class GrantedServer:
     config: MCPServerConfig = field(repr=False)
     tools: tuple[GrantedTool, ...] = ()
     command: str | None = None
-    socket_path: str | None = None
+    socket_path: str | None = field(default=None, repr=False)
     """The endpoint a bridged sub-agent connects to, filled in by
     :meth:`McpGrant.with_endpoints` once the host has opened it."""
     scope: str | None = None
@@ -281,7 +281,7 @@ class McpGrant:
         Every server projects to the same shape whatever its upstream transport
         is: one stdio stanza pointing at a host endpoint. ``env`` is empty by
         construction -- the definition and its secrets stay on the host, and the
-        socket's 0600 mode is the whole of the boundary.
+        endpoint uses Unix permissions or a per-endpoint loopback token.
         """
         out: list[dict[str, Any]] = []
         for server in self.granted:

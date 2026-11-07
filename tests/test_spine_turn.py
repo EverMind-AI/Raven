@@ -4,11 +4,24 @@ import dataclasses
 
 import pytest
 
-from raven.spine import BusyPolicy, ChatType, Origin, Source, TurnRequest
+from raven.spine import PROACTIVE_ORIGINS, BusyPolicy, ChatType, Origin, Source, TurnRequest
 
 
 def _src():
     return Source(channel="t", chat_id="c", sender_id="u", chat_type=ChatType.DM)
+
+
+@pytest.mark.parametrize("parent", ["tui:plain", "tui:issue#42", "email:name#tag@example.com"])
+def test_session_key_retains_the_complete_direct_parent(parent):
+    from raven.spine import direct_lane, session_key_for
+
+    target = ("Raven", "handle#1")
+    request = TurnRequest(
+        origin=Origin.USER, source=_src(), text="hi", conversation=direct_lane(parent, *target), direct_target=target
+    )
+    assert session_key_for(request) == parent
+    assert session_key_for(dataclasses.replace(request, parent_session="tui:declared#parent")) == "tui:declared#parent"
+    assert session_key_for(dataclasses.replace(request, direct_target=None)) == request.conversation
 
 
 def test_origin_is_closed_five_value_enum_without_system():
@@ -16,6 +29,17 @@ def test_origin_is_closed_five_value_enum_without_system():
     assert not hasattr(Origin, "SYSTEM")  # a zero-producer origin, intentionally absent
     with pytest.raises(ValueError):
         Origin("system")
+
+
+def test_the_proactive_origins_are_every_origin_a_person_does_not_start():
+    assert PROACTIVE_ORIGINS == frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
+    assert PROACTIVE_ORIGINS == frozenset(Origin) - {Origin.USER}, "a new origin has to be put on one side of the line"
+
+
+@pytest.mark.parametrize("origin", [*Origin, None])
+def test_the_proactive_origins_agree_with_the_spelling_the_loop_and_the_pools_used(origin):
+    """The stream hold used to read "not a person's turn" and the pools a tuple of four: one set stands for both."""
+    assert (origin in PROACTIVE_ORIGINS) == (origin not in (Origin.USER, None))
 
 
 def test_busy_policy_is_closed_three_value_enum():
@@ -102,3 +126,13 @@ def test_direct_target_carries_agent_and_handle():
         direct_target=("Raven-Code", "refactor-auth"),
     )
     assert req.direct_target == ("Raven-Code", "refactor-auth")
+
+
+def test_dispatch_link_defaults_to_none():
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi")
+    assert req.dispatch_link is None
+
+
+def test_dispatch_link_carries_trace_and_span():
+    req = TurnRequest(origin=Origin.SUBAGENT, source=_src(), text="hi", dispatch_link=("trace-1", "span-1"))
+    assert req.dispatch_link == ("trace-1", "span-1")

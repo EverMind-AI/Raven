@@ -23,6 +23,7 @@ the frozen variants are kept as cost-bound fallbacks and labelled as such.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional, Protocol
@@ -181,15 +182,27 @@ class SameSessionPairedBaseline:
     Methodology-correct under regime shift — candidate and control are always
     measured in the same session/window — at ~2x eval cost. Requires ``eval`` to
     reproduce the parent node's harness (the backend's job).
+
+    The job name carries a per-instance launch nonce: two processes resuming the
+    same round would otherwise share ``control_r{round}``, and the batch's
+    trial-level resume would hand the new window the old window's measurement —
+    the one thing a same-session control must not do. The nonce also separates
+    their infra-rerun ladder siblings. Control out-dirs from earlier runs stay
+    on disk for audit but are no longer reused.
     """
 
-    def __init__(self, k: int, *, label: str = "control"):
+    def __init__(self, k: int, *, label: str = "control", launch_nonce: str | None = None):
         self._k = k
         self._label = label
+        self._launch_nonce = launch_nonce if launch_nonce is not None else uuid.uuid4().hex[:8]
+
+    def _job_name(self, round_index) -> str:
+        return f"{self._label}_r{round_index}_{self._launch_nonce}"
 
     def for_round(self, round_index, parent, *, eval, train_task_ids, anchor) -> Baseline:
-        evals = eval(parent, train_task_ids, self._k, f"{self._label}_r{round_index}")
-        return Baseline(evals, train_mean(evals, train_task_ids), f"{parent.node_id}_{self._label}_r{round_index}")
+        job_name = self._job_name(round_index)
+        evals = eval(parent, train_task_ids, self._k, job_name)
+        return Baseline(evals, train_mean(evals, train_task_ids), f"{parent.node_id}_{job_name}")
 
     def on_promote(self, node, outcome, *, train_task_ids) -> None:  # re-measured each round
         return None

@@ -1,12 +1,16 @@
 // @vitest-environment happy-dom
 import { act } from '@testing-library/react'
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
 import { I18N } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import { _resetForTests as resetSession, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
 import * as pageStore from '../../state/page'
+import { noteRow } from '../../state/session/conversation'
 import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources, sources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
@@ -137,6 +141,24 @@ describe('transcript island, history', () => {
     })
     expect($<HTMLImageElement>('.turn.me .shot')?.src).toBe('data:image/png;base64,eA==')
     expect($('.turn.me .achip')).toBeNull()
+  })
+
+  /* A drag carries an <img> by its src, and the cached copy's src is the upload's
+     own data URL: dropped on the composer, it named no file. */
+  it('carries the file, not the cached bytes, when a sent picture is dragged', () => {
+    attachmentCache.set('uploads/shot.png', 'data:image/png;base64,eA==')
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    const dt = new DataTransfer()
+    /* happy-dom builds a drag event as a plain Event, so the transfer goes on by hand. */
+    const ev = new Event('dragstart', { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: dt })
+    act(() => { $('.turn.me .shot')!.dispatchEvent(ev) })
+    const url = new URL(dt.getData('text/uri-list') || 'about:blank')
+    expect(url.origin).toBe(location.origin)
+    expect(url.pathname).toBe('/file')
+    expect(url.searchParams.get('path')).toBe('uploads/shot.png')
   })
 
   it('renders an attached picture from the workspace once the cache is gone', () => {
@@ -695,6 +717,9 @@ describe('transcript island, history', () => {
       '',
       'When you reply, mention when the reminder was originally set '
         + '(e.g. "the reminder you set at 17:05 ...") so the user remembers the context.',
+      '',
+      'SILENT: If there is genuinely nothing new to report, respond with exactly "[SILENT]" (nothing else) '
+        + 'to suppress delivery.',
     ].join('\n')
 
     const bubble = (): HTMLElement => $('.msg.me[data-auto]') as HTMLElement
@@ -713,6 +738,9 @@ describe('transcript island, history', () => {
       expect(said).not.toContain('Scheduled instruction:')
       expect(said).not.toContain('[Scheduled Task]')
       expect(said).not.toContain('When you reply')
+      /* The paragraph after the closing line, which teaches the model its
+         silence marker and is as much the prompt as the line above it. */
+      expect(said).not.toContain('SILENT')
     })
 
     /* Every other origin has a shape of its own that nothing here reads, so
@@ -757,7 +785,7 @@ describe('transcript island, history', () => {
     /* One minute of work under a header that said eleven, because the span was
        measured from the question ten minutes before the cron entry. */
     const folds = Array.from(document.querySelectorAll('.tfold'))
-    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['1m00s'])
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['1m 0s'])
   })
 
   it('gives a delegated turn its own fold instead of rewriting the last one', () => {
@@ -787,7 +815,7 @@ describe('transcript island, history', () => {
        rather than wearing the twenty seconds the delivered turn took. */
     openFolds()
     const folds = Array.from(document.querySelectorAll('.tfold'))
-    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m00s', '20s'])
+    expect(folds.map((f) => f.querySelector('.tfh .tm')?.textContent)).toEqual(['5m 0s', '20s'])
     expect(folds.map((f) => f.querySelectorAll('.tfb .step').length)).toEqual([1, 1])
     expect((folds[0] as HTMLElement).querySelector('.think .lb')?.textContent).toBe('en:gui.think.label')
   })
@@ -833,6 +861,89 @@ describe('transcript island, history', () => {
     const row = step?.querySelector('.wkin .wrow')
     expect(row?.querySelector('.vb')?.textContent).toBe('en:gui.act.v.read_file')
     expect($('.answer .prose')?.textContent).toBe('the config was wrong')
+  })
+
+  it('keeps a turn open when its agent message runs to two rendered lines', () => {
+    /* Importance is read off the message's length, not off the rendered rows:
+       the threshold is the one constant `collapse` applies. */
+    const t0 = Date.now() - 60000
+    const long = 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the login timeout', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: long,
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1\nline2' },
+        { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    const fold = $('.tfold')
+    expect(fold).toBeTruthy()
+    expect(fold?.classList.contains('open')).toBe(true)
+    expect(fold?.textContent).toContain(long)
+  })
+
+  it('shows a delegating step\'s call rows by default, without locking them open', () => {
+    const t0 = Date.now() - 60000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'fan it out', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'spawn', arguments: '{"agent":"Coder","task":"look"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/a"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'spawn', text: 'started' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'x' },
+        { role: 'assistant', text: 'done', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    /* The turn's own fold is open by the same rule, and the step's work list is
+       not shut over the spawn row: the call has to be visible without a click. */
+    expect($('.tfold')?.classList.contains('open')).toBe(true)
+    expect($('.wkin')?.hasAttribute('hidden')).toBe(false)
+    expect($$('.wkin .wrow .vb')).toHaveLength(2)
+  })
+
+  it('lets the reader shut a delegating step, and keeps it shut', () => {
+    /* `keepCalls` used to make the body visible regardless of `wkOpen`, so the
+       summary stayed clickable while the click could never hide anything. The
+       default and the reader's decision are two different things: the first is
+       `paintWork`'s, the second is `wkPinned`'s. */
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('fan it out')
+      st = mount.step()
+      st.tool('spawn', { task: 'look' }, null, 'c1')
+      st.tool('read_file', { path: '/tmp/a' }, null, 'c2').done(true, 'x', 5)
+    })
+    const sum = (): HTMLElement => $('.wrow.sum') as HTMLElement
+    const body = (): HTMLElement => $('.wkin') as HTMLElement
+
+    /* Untouched: open, and the summary's own marker agrees with the body. */
+    expect(sum().classList.contains('open')).toBe(true)
+    expect(body().hidden).toBe(false)
+
+    /* The reader shuts it. Style and body are asserted together, because a
+       summary still reading "open" over a shut body is the same defect one
+       layer up. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* A call landing afterwards is a default, not an instruction to reopen. */
+    act(() => { st.tool('read_file', { path: '/tmp/b' }, null, 'c3').done(true, 'y', 5) })
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* And the reader can open it again, style and body still agreeing. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(false)
+    expect(sum().classList.contains('open')).toBe(true)
   })
 
   it('keeps a redirection whole: an ACP shell title stays one row, one command', () => {
@@ -1108,6 +1219,152 @@ describe('transcript island, history', () => {
     openTurns()
     expect(domSnapshot(document.getElementById('stage')!)).toMatchSnapshot()
   })
+
+  it('opens a failed row to the whole account the runner kept', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\n{"error":{"metadata":{"limit_source":"upstream_provider_shared_pool"}}}`
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason, full_detail: full }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('button.transcript-note-more') as HTMLButtonElement
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_expand')
+    expect(row.querySelector('.transcript-note-full')).toBeNull()
+    expect(row.title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+
+    act(() => { toggle.click() })
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_collapse')
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(full)
+    expect(row.hasAttribute('title')).toBe(false)
+
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')).toBeNull()
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.textContent).toBe('en:gui.transcript.error_expand')
+    expect(row.title).toBe(`${mount.failedTurnLabel()} · ${reason}`)
+  })
+
+  it('copies the whole account, not the line the row shows', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\nthe provider's whole body`
+    const before = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    try {
+      act(() => { mount.note(mount.failedTurnLabel(), reason, { full }) })
+      const row = $$('.tnote')[0] as HTMLElement & { _ctx?: () => Array<{ label: string; fn: () => void }> }
+      const item = row._ctx?.().find((it) => it.label === 'en:gui.answer.copy')
+      act(() => { item?.fn() })
+      expect(writeText).toHaveBeenCalledWith(`${mount.failedTurnLabel()} · ${full}`)
+    } finally {
+      if (before) Object.defineProperty(navigator, 'clipboard', before)
+      else delete (navigator as { clipboard?: unknown }).clipboard
+    }
+  })
+
+  it('offers no toggle when the row already says everything', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: boom)',
+          turn_ended: { status: 'failed', reason: 'ValueError: boom' }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    expect($$('.tnote')[0]?.querySelector('button.transcript-note-more')).toBeNull()
+  })
+
+  it.each(['long notice '.repeat(20), 'first line\nsecond line'])('uses a neutral toggle for a quiet notice: %s', (detail) => {
+    act(() => { noteRow('Runtime notice', detail, { quiet: true }) })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('.transcript-note-more') as HTMLButtonElement
+    expect(row.classList.contains('bad')).toBe(false)
+    expect(toggle.textContent).toBe('en:gui.transcript.notice_expand')
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(detail)
+    expect(toggle.textContent).toBe('en:gui.transcript.error_collapse')
+  })
+
+  it('replays a quiet notice with the same neutral expansion label', () => {
+    const detail = 'first line\nsecond line'
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: '', notice: { kind: 'organ_degraded', detail }, timestamp: iso(Date.now() - 3000) },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    const toggle = row.querySelector('.transcript-note-more') as HTMLButtonElement
+    expect(toggle.textContent).toBe('en:gui.transcript.notice_expand')
+    act(() => { toggle.click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(detail)
+  })
+
+  it('keeps a short quiet notice on one line without a toggle', () => {
+    act(() => { noteRow('Runtime notice', 'ready', { quiet: true }) })
+    expect($$('.tnote')[0]?.querySelector('.transcript-note-more')).toBeNull()
+  })
+
+  it('opens an older marker to the bounded reason it kept', () => {
+    const reason = `RateLimitError: ${'x'.repeat(180)}...`
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    const row = $$('.tnote')[0] as HTMLElement
+    act(() => { (row.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect(row.querySelector('.transcript-note-full')?.textContent).toBe(reason)
+  })
+
+  it('draws the live row and the replayed row of one failure alike', () => {
+    const reason = 'Error calling LLM (rate_limit@openrouter): Provider returned error'
+    const full = `${reason}\n\nthe provider's whole body`
+    act(() => { noteRow(mount.failedTurnLabel(), reason, { full }) })
+    const live = $$('.tnote')[0] as HTMLElement
+    act(() => { (live.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    const liveText = [live.querySelector('.tx')?.textContent, live.querySelector('.transcript-note-full')?.textContent]
+
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'hello', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '(turn failed: rate limited)',
+          turn_ended: { status: 'failed', reason, full_detail: full }, timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+    /* The last row, whether the replay cleared the live one or drew after it. */
+    const rows = $$('.tnote')
+    const replayed = rows[rows.length - 1] as HTMLElement
+    act(() => { (replayed.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect([replayed.querySelector('.tx')?.textContent, replayed.querySelector('.transcript-note-full')?.textContent]).toEqual(liveText)
+  })
+
+  it('keeps each row\'s toggle its own', () => {
+    const full = `first\n\n${'y'.repeat(300)}`
+    act(() => {
+      mount.note(mount.failedTurnLabel(), 'first', { full })
+      mount.note(mount.failedTurnLabel(), 'second', { full: `second\n\n${'z'.repeat(300)}` })
+    })
+    const [one, two] = $$('.tnote') as HTMLElement[]
+    act(() => { (one!.querySelector('button.transcript-note-more') as HTMLButtonElement).click() })
+    expect(one!.querySelector('.transcript-note-full')).not.toBeNull()
+    expect(two!.querySelector('.transcript-note-full')).toBeNull()
+  })
 })
 
 /** Which fold is open, and who decided.
@@ -1173,6 +1430,79 @@ describe('a thought box while the model is still thinking', () => {
     expect(think.classList.contains('open')).toBe(false)
     expect(think.querySelector('.lb')?.textContent).toBe('en:gui.think.live')
     expect(cot().hidden).toBe(true)
+  })
+
+  it('clocks a live thought and reports the span it took once it stops', () => {
+    vi.useFakeTimers()
+    try {
+      let st!: ReturnType<typeof mount.step>
+      act(() => {
+        mount.ask('why did it fail')
+        st = mount.step()
+        st.thinkAppend('first line')
+        st.reveal()
+      })
+      const label = (): string => (document.querySelector('.msg.ai .think .lb') as HTMLElement).textContent as string
+      expect(label()).toBe('en:gui.think.live')
+
+      act(() => { vi.advanceTimersByTime(5_000) })
+      expect(label()).toBe('en:gui.think.live (5s)')
+
+      act(() => { st.thinkDone() })
+      /* The translator mock keeps the key and its variables, so this is the
+         page's own template (`{label} for {t}`) with the real elapsed value. */
+      expect(label()).toBe('en:gui.transcript.think_done {"label":"en:gui.think.label","t":"5s"}')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('adds the shared long-run phrase at 8s, a second at 18s, and no more', () => {
+    vi.useFakeTimers()
+    try {
+      const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+      act(() => {
+        mount.ask('wait for it')
+        mount.step().tool('read_file', { path: '/tmp/a.log' }, null)
+      })
+      const row = (): Element => [...document.querySelectorAll('.wrow')].at(-1)!
+      expect(row().querySelector('.transcript-charm')).toBeNull()
+
+      act(() => { vi.advanceTimersByTime(8_000) })
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('still cooking…')
+
+      /* The second draw is a different word, so the DOM can tell the second
+         charm from the first; the row still carries one, not a stack. */
+      random.mockReturnValue(0.9)
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(row().querySelectorAll('.transcript-charm')).toHaveLength(1)
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('asking the void nicely…')
+
+      act(() => { vi.advanceTimersByTime(10_000) })
+      expect(row().querySelector('.transcript-charm')!.textContent).toBe('asking the void nicely…')
+      expect(row().querySelectorAll('.transcript-charm')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops the phrase when the tool finishes', () => {
+    vi.useFakeTimers()
+    try {
+      vi.spyOn(Math, 'random').mockReturnValue(0)
+      let call!: ReturnType<ReturnType<typeof mount.step>['tool']>
+      act(() => {
+        mount.ask('wait for it')
+        call = mount.step().tool('read_file', { path: '/tmp/a.log' }, null)
+      })
+      act(() => { vi.advanceTimersByTime(8_000) })
+      expect(document.querySelector('.transcript-charm')).not.toBeNull()
+
+      act(() => { call.done(true, 'line1', 12) })
+      expect(document.querySelector('.transcript-charm')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('follows a chunk far bigger than the old forty-pixel threshold', async () => {
@@ -1256,14 +1586,16 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold shuts over a sub-agent that is still working, like any other.
+/** A fold holding a delegated run opens, so the delegation stays in sight.
  *
- * The run goes on for minutes after the turn that dispatched it has answered;
- * it is followed on the task rows, not by holding the turn's fold open. What
- * is asserted here is that a spawn in flight buys the fold nothing: not at the
- * turn's end, and not when the next turn shuts the folds before it.
+ * The run itself goes on for minutes after the turn that dispatched it has
+ * answered, and its status is followed on the task rows -- a run still working
+ * is not what holds the fold open. The call kind is: a spawn or dag row inside
+ * the fold is the only place the delegation is named, so that turn's fold
+ * arrives open at its end and on replay, and a later turn does not shut it.
+ * It stays a default -- the reader's own toggle takes it over.
  */
-describe('a fold holding a run that has not finished', () => {
+describe('a fold holding a delegated run', () => {
   const RUNNING = {
     agent: 'Raven', instance: 'raven-9bc249', label: 'draw the poster',
     status: 'running', tool_call_id: 'call_7', call_id: 'rec-1',
@@ -1289,7 +1621,7 @@ describe('a fold holding a run that has not finished', () => {
     return st
   }
 
-  /* An ordinary turn after it -- the one that used to shut the first. */
+  /* An ordinary turn after it. */
   function askAgain(): void {
     let st!: ReturnType<typeof mount.step>
     act(() => {
@@ -1302,20 +1634,21 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('shuts at the end of its own turn', () => {
+  it('opens at the end of its own turn, so the delegation stays in sight', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
   })
 
-  it('finds no reason to stay open when the next turn arrives', () => {
+  it('stays open when the next turn arrives, which folds itself', () => {
     dispatched('running')
     askAgain()
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 
-  it('arrives shut on replay too, with the run still going under it', () => {
-    /* A reopened conversation opens no fold, the last turn's included, and a
-       run still in flight under it buys it nothing there either. */
+  it('arrives open on replay too, with the run still going under it', () => {
+    /* A reopened conversation used to open no fold, the last turn's included.
+       A spawn or dag call is the exception: its row is the only place the
+       delegation is visible. */
     wire({
       spawnList: async () => [{
         id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
@@ -1334,11 +1667,11 @@ describe('a fold holding a run that has not finished', () => {
         { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
       ])
     })
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
 
     askAgain()
 
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 })
 
@@ -1613,8 +1946,9 @@ describe('a delegated result coming back', () => {
       .toEqual(['twelve files, none of them stale', 'the brief is in reports/brief.md'])
   })
 
-  /* The other thing a graph delivers: one suspended node's report, in its own
-     words. Same `kind: dag`, and nothing about it is a machine block. */
+  /* The other thing a graph delivers: one suspended node's report. Same `kind:
+     dag`, and nothing about it is a machine block. Stored by a server that did not
+     send what the node returned, so the fence's own text is all there is to show. */
   it('leaves a suspended node report as prose', () => {
     wireDelivery()
     act(() => {
@@ -1630,6 +1964,182 @@ describe('a delegated result coming back', () => {
     expect($('.sdlv')?.className).toContain('warn')
     expect($('.sdlv .sdbd .raw')).toBeNull()
     expect($('.sdlv .sdbd .prose')?.textContent).toContain('live credential')
+  })
+
+  /* The bug: a suspended node's fold opened onto the runner's brief to the model --
+     how to call resolve_dag_node, and that call's whole schema -- which the node
+     never said. A server that sends what the node returned is shown that. */
+  it('opens a node report onto what the node returned, not the brief the model was given', () => {
+    wireDelivery()
+    const brief = 'node did not accomplish its task.\n'
+      + 'Answer by calling tool_call with name "resolve_dag_node" and arguments {"message": "<what next>"}'
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced(brief), timestamp: iso(Date.now() - 20000),
+          delegated: {
+            kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push',
+            output: 'I could not push: **the fork is read-only**',
+          },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const body = $('.sdlv .sdbd') as HTMLElement
+    expect(body.querySelector('.cap')?.textContent).toBe('en:gui.deleg.body_cap_node')
+    /* The node's own words, read as the markdown an agent writes. */
+    expect(body.querySelector('.prose strong')?.textContent).toBe('the fork is read-only')
+    expect(body.textContent).not.toContain('resolve_dag_node')
+    expect($('.sdlv .st')?.textContent).toBe('en:gui.deleg.delivered_exception')
+  })
+
+  it('gives a node that returned nothing no fold to open', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: '' },
+        },
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-8', status: 'exception', run_id: 'run-8', node_id: 'push', output: ' \n\t' },
+        },
+      ])
+    })
+    expect($$('.sdlv')).toHaveLength(2)
+    expect($('.sdlv .sdcv')).toBeNull()
+  })
+
+  /* The counts line is a graph's own result's, and only that delivery's: a node's
+     report is about the node, so its status is its word whatever its text quotes --
+     a node that ran a graph of its own returns that graph's tally as its answer. */
+  it('words a node report by its status, even when its text quotes a run tally', () => {
+    const tally = 'the inner graph finished: 3 completed, 1 failed, 0 cancelled, 0 skipped (of 4).'
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node did not accomplish its task.'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: tally },
+        },
+        {
+          role: 'user', text: fenced(`node did not accomplish its task.\nevidence: ${tally}`), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-8', status: 'exception', run_id: 'run-8', node_id: 'push' },
+        },
+      ])
+    })
+    for (const row of $$('.sdlv')) {
+      expect(row.querySelector('.st')?.textContent).toBe('en:gui.deleg.delivered_exception')
+      act(() => { (row.querySelector('.sdcv') as HTMLElement).click() })
+      expect(row.querySelector('.sdbd .raw')).toBeNull()
+      expect(row.querySelector('.sdbd .prose')?.textContent).toContain('3 completed, 1 failed')
+    }
+  })
+
+  it.each([true, false, undefined])('keeps the cut notice outside node text, live and replayed (%s)', (cut) => {
+    wireDelivery()
+    const said = 'The node wrote this suffix itself.\n... (output truncated)'
+    const check = (): string => {
+      act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+      const body = $('.sdlv .sdbd') as HTMLElement
+      expect(body.querySelector('.prose')?.textContent).toContain('(output truncated)')
+      expect(body.querySelector('.prose .transcript-cut')).toBeNull()
+      expect(body.querySelector('.transcript-cut')?.textContent ?? null).toBe(cut ? 'en:gui.deleg.body_truncated' : null)
+      expect(body.tabIndex).toBe(0)
+      expect(body.getAttribute('role')).toBe('region')
+      expect(body.getAttribute('aria-label')).toBe('en:gui.deleg.body_cap_node')
+      return body.textContent ?? ''
+    }
+    act(() => {
+      mount.delivered({ label: 'run-7', isDag: true, status: 'exception', output: said, outputTruncated: cut, open: () => {} })
+    })
+    const live = check()
+    store._resetForTests()
+    wireDelivery()
+    act(() => {
+      mount.history([{
+        role: 'user', text: fenced('model brief'), timestamp: iso(Date.now() - 9000),
+        delegated: { kind: 'dag', label: 'run-7', status: 'exception', output: said, output_truncated: cut },
+      }])
+    })
+    expect(check()).toBe(live)
+  })
+
+  it('keeps the truncation notice reachable when the visible prefix is whitespace', () => {
+    wireDelivery()
+    act(() => {
+      mount.delivered({ label: 'run-7', isDag: true, status: 'exception', output: ' \n\t', outputTruncated: true, open: () => {} })
+    })
+    expect($('.sdlv .sdcv')).not.toBeNull()
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    expect($('.sdlv .sdbd .transcript-cut')?.textContent).toBe('en:gui.deleg.body_truncated')
+  })
+
+  it('draws a node report the same live and after a reload', () => {
+    wireDelivery()
+    const injected = fenced('node did not accomplish its task.')
+    const said = 'the fork is read-only'
+    const shape = (): string =>
+      `${$('.sdlv .st')?.textContent}|${$('.sdlv .sdbd .cap')?.textContent}|${$('.sdlv .sdbd .prose')?.textContent}`
+
+    act(() => {
+      mount.delivered({
+        label: 'run-7', isDag: true, status: 'exception', body: injected, output: said,
+        open: () => sources.transcript?.openDagRun?.('run-7'),
+      })
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const live = shape()
+
+    store._resetForTests()
+    wireDelivery()
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: injected, timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'exception', run_id: 'run-7', node_id: 'push', output: said },
+        },
+      ])
+    })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+
+    expect(shape()).toBe(live)
+    expect(live).toBe(`en:gui.deleg.delivered_exception|en:gui.deleg.body_cap_node|${said}`)
+  })
+
+  /* A node that has already failed waits on nothing; the server marks it `error`. */
+  it('shows a failed node report as failed', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('node has failed'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'error', run_id: 'run-7', node_id: 'push', output: 'gave up' },
+        },
+      ])
+    })
+    expect($('.sdlv')?.classList.contains('bad')).toBe(true)
+    expect($('.sdlv .st')?.textContent).toBe('en:gui.deleg.delivered_err')
+  })
+
+  /* Both used to fall through to `ok` and read "Finished": a stall notice is about a
+     node still running, and a cancelled run did not finish. */
+  it('shows a stall notice as still running and a cancelled run as stopped', () => {
+    act(() => {
+      mount.history([
+        {
+          role: 'user', text: fenced('no sign of life for 10 minutes'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'dag', label: 'run-7', status: 'notice', run_id: 'run-7', node_id: 'push' },
+        },
+        {
+          role: 'user', text: fenced('Cancelled: the user stopped it'), timestamp: iso(Date.now() - 5000),
+          delegated: { kind: 'spawn', label: 'lookup', status: 'cancelled' },
+        },
+      ])
+    })
+    const [notice, cancelled] = $$('.sdlv')
+    expect(notice?.querySelector('.st')?.textContent).toBe('en:gui.deleg.dlv_notice')
+    expect(notice?.classList.contains('good')).toBe(false)
+    expect(cancelled?.querySelector('.st')?.textContent).toBe('en:gui.deleg.dlv_stopped')
+    expect(cancelled?.classList.contains('dim')).toBe(true)
   })
 
   it('replays a spawn delivery with its own label and the framing left out', () => {
@@ -1905,15 +2415,47 @@ describe("the turn's delivered files", () => {
     /* A page opens in a browser tab and in the panel; a document the panel
        reads opens there; a binary is fetched. */
     expect(acts).toEqual([
-      ['en:gui.arts.browser', 'en:gui.arts.open {"f":"page.html"}'],
-      ['en:gui.arts.open {"f":"notes.md"}'],
+      ['en:gui.arts.browser', 'en:gui.arts.download', 'en:gui.arts.open {"f":"page.html"}'],
+      ['en:gui.arts.download', 'en:gui.arts.open {"f":"notes.md"}'],
       ['en:gui.arts.download'],
     ])
     const [page, , deck] = $$('.atile')
     expect(page!.querySelector('a.transcript-act')?.getAttribute('target')).toBe('_blank')
     expect(deck!.querySelector('a.transcript-act')?.getAttribute('download')).toBe('cv.pptx')
+    expect($$('.atile')[1]!.querySelector('a.transcript-act')?.getAttribute('href')).toBe('/files/download?token=notes.md')
     act(() => { ($$('.atile')[1]!.querySelector('button.transcript-act') as HTMLElement).click() })
     expect(opened).toEqual(['/w/notes.md'])
+  })
+
+  /* The token link is the only attachment the page can hand over. A manifest
+     written before the field -- or the offline canvas's -- carries none, and
+     an anchor with an empty href would save the page itself under the file's
+     name instead of the file. */
+  it('offers no download when the delivery carries no link', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make them', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: {
+          raven_delivery: {
+            files: [
+              { path: '/w/notes.md', name: 'notes.md', title: 'notes.md', size: 12000, media_type: 'text/markdown' },
+              { path: '/w/cv.pptx', name: 'cv.pptx', title: 'cv.pptx', size: 12000,
+                media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+            invalid: [],
+          },
+        } },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.atile a[download]')).toHaveLength(0)
+    /* The document still opens in the panel; the binary has nothing to offer,
+       so it does not draw an empty control strip either. */
+    expect($$('.atile')[0]!.querySelectorAll('.transcript-act')).toHaveLength(1)
+    expect($$('.atile')[1]!.querySelectorAll('.transcript-act')).toHaveLength(0)
+    expect($$('.atile')[1]!.querySelector('.transcript-acts')).toBeNull()
   })
 
   it('shows a delivered deck by its first page, rendered by the gateway', async () => {
@@ -1958,6 +2500,43 @@ describe("the turn's delivered files", () => {
     const src = img?.getAttribute('src') || ''
     expect(src).toContain('/file?path=' + encodeURIComponent('/w/report.pdf'))
     expect(src).toContain('render=thumb')
+  })
+
+  /* A tile is a picture, and a document that drew one URL draws it again from
+     memory without asking, whatever Cache-Control says. The registry hands a
+     path delivered again in one conversation the same token, and a thumb is
+     named by its path, so the second card's tile could come back as the first
+     card's picture while the file on disk held the new one. Each delivery's own
+     stamp keeps the two URLs apart. */
+  it.each([
+    ['shot.png', '/files/download?token=shot.png'],
+    ['report.pdf', '/file?path=%2Fw%2Freport.pdf'],
+  ])('draws %s, delivered twice, under a URL per delivery', async (name, route) => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    const stamped = (at: number): Record<string, unknown> => ({
+      raven_delivery: { ...(manifest([name]).raven_delivery as Record<string, unknown>), delivered_at: at },
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'draw it', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(1000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now() - 8000) },
+        { role: 'user', text: 'make it blue', timestamp: iso(Date.now() - 5000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: stamped(2000) },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    await act(async () => { await Promise.resolve() })
+    const srcs = $$('.atile .pic.shot img').map((img) => img.getAttribute('src') || '')
+    expect(srcs).toHaveLength(2)
+    expect(srcs.every((src) => src.includes(route))).toBe(true)
+    expect(srcs[0]).not.toBe(srcs[1])
+    /* By the delivery's stamp rather than its turn: a delegated stream numbers
+       its turns from one as well, so one turn number can name two deliveries
+       of the same path. */
+    expect(srcs[0]).toContain('&v=1000')
+    expect(srcs[1]).toContain('&v=2000')
   })
 
   it('falls back to the type mark when the deck cannot be rendered', async () => {
@@ -2435,6 +3014,213 @@ describe('transcript island, streaming', () => {
   })
 })
 
+/* A turn the model ended on its silence marker has no answer. The reader gets
+   one quiet line saying so, drawn the same live and after a reload, and what
+   the turn said on the way stays narration under its fold instead of being
+   lifted into an answer. */
+describe('transcript island, a turn the model chose not to answer', () => {
+  const LABEL = 'en:gui.notice.silent_turn'
+  const quiet = (): HTMLElement[] => $$('.tnote:not(.bad)') as HTMLElement[]
+  const labels = (): Array<string | null | undefined> => quiet().map((n) => n.querySelector('.tx')?.textContent)
+
+  /* What the stage does on the notice, in its order: the open step is sealed
+     and what the notice says the reply showed is taken back, then the quiet row
+     is drawn; the turn lands flagged silent after. The notice has let go of the
+     open step by then, so finishTurn is handed none -- only the list of steps
+     the turn ran. */
+  const hush = (open: ReturnType<typeof mount.step> | null, shown = ''): void => {
+    act(() => {
+      if (open) { open.seal(); open.dropReply(shown) }
+      mount.note(LABEL, '', { quiet: true })
+    })
+  }
+
+  /* The frames a streaming step asks for, run by hand: the preview is only
+     on screen once its frame has fired. */
+  const rafQ: FrameRequestCallback[] = []
+  beforeEach(() => {
+    rafQ.length = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { rafQ.push(cb); return rafQ.length })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+  })
+
+  it('renders one muted line and no answer for a silent turn', () => {
+    act(() => { mount.ask('anything new?') })
+    hush(null)
+    act(() => { mount.finishTurn(null, [], '3s', true) })
+
+    expect(labels()).toEqual([LABEL])
+    expect($$('.tnote.bad')).toHaveLength(0)
+    expect($$('.answer')).toHaveLength(0)
+    expect($$('.tfold')).toHaveLength(0)
+  })
+
+  it('a reloaded silent row renders the same muted line', async () => {
+    /* The row the offline library sends for a scheduled run that found nothing
+       to report, read through the same transport the page runs on offline. */
+    const { demoFixtures } = await import('../../rpc/fixtures')
+    const { FixtureTransport } = await import('../../rpc/fixtureTransport')
+    const { messages } = await new FixtureTransport(demoFixtures).call('session.resume', { session_id: 'k3' })
+    const firing = messages.slice(-2) as HistoryMessage[]
+    expect(firing[1]).toMatchObject({ role: 'assistant', silent: true })
+
+    act(() => { mount.history(firing) })
+
+    expect(labels()).toEqual([LABEL])
+    expect($$('.tnote.bad')).toHaveLength(0)
+    expect($$('.answer')).toHaveLength(0)
+    /* Neither the marker nor the reminder's own instruction to use it. */
+    expect(document.body.textContent).not.toContain('SILENT')
+  })
+
+  it('drops a preview that had already streamed when the turn ends silent', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('abc') })
+    act(() => { rafQ.forEach((cb) => cb(0)) })
+    expect($('.say')?.textContent).toContain('abc')
+
+    hush(st, 'abc')
+    act(() => { mount.finishTurn(null, [st], '3s', true) })
+    openFolds()
+
+    expect(document.body.textContent).not.toContain('abc')
+    expect($$('.answer')).toHaveLength(0)
+    expect(labels()).toEqual([LABEL])
+  })
+
+  /* An exhausted turn's wrap-up streams into the last call's step, after that
+     call's narration, and a call whose only tool was a message that went
+     nowhere drew no tool row to mark where the narration ends. Only what the
+     notice names is the wrap-up's. */
+  it('takes back only what the closing reply showed, and keeps the narration before it', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Let me check the queue.')
+      st.sayDelta('<think>still nothing</think>')
+    })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Let me check the queue.')
+  })
+
+  it('keeps everything a step said when the closing reply showed nothing', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Checking the logs.')
+      st.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'quiet', 9)
+      st.sayDelta('Sent the summary.')
+    })
+
+    hush(st)
+
+    expect(st.seg.say).toBe('Checking the logs.Sent the summary.')
+  })
+
+  /* A page that joined the turn part-way holds only the end of what the reply
+     showed: all of what it holds is the reply's, so all of it goes. */
+  it('takes back a reply it saw only the end of', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('nothing</think>') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('')
+  })
+
+  it('leaves a step alone when what it holds does not end on what the reply showed', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('Checking the logs.') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Checking the logs.')
+  })
+
+  it('keeps what the turn said on the way as narration, never as its answer', () => {
+    act(() => { mount.ask('anything new?') })
+    let first!: ReturnType<typeof mount.step>
+    let last!: ReturnType<typeof mount.step>
+    act(() => {
+      first = mount.step()
+      first.setSay('Checking the logs.')
+      first.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'quiet', 9)
+      first.seal()
+      last = mount.step()
+    })
+
+    hush(last)
+    act(() => { mount.finishTurn(null, [first, last], '4s', true) })
+
+    /* Without the flag the last step that said something is the answer, and
+       that is this narration. */
+    expect($$('.answer')).toHaveLength(0)
+    openFolds()
+    expect($('.tfold')?.textContent).toContain('Checking the logs.')
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('reloads the same way: the narration stays in the fold and nothing is the answer', () => {
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'anything new?', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: 'Checking the logs.', timestamp: iso(t0 + 2000),
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'quiet' },
+        { role: 'assistant', text: '[SILENT]', silent: true, timestamp: iso(t0 + 5000) },
+      ])
+    })
+
+    expect($$('.answer')).toHaveLength(0)
+    expect(document.body.textContent).not.toContain('[SILENT]')
+    openFolds()
+    expect($('.tfold')?.textContent).toContain('Checking the logs.')
+    const order = [...document.querySelectorAll('.turn.me, .tfold, .answer, .tnote')]
+      .map((n) => n.className.split(' ')[0])
+    expect(order).toEqual(['turn', 'tfold', 'tnote'])
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('keeps the thought the model had before it chose to say nothing', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'anything new?', timestamp: iso(Date.now() - 9000) },
+        {
+          role: 'assistant', text: '[SILENT]', silent: true, reasoning_content: 'Nothing changed since the last run.',
+          timestamp: iso(Date.now() - 3000),
+        },
+      ])
+    })
+
+    expect($$('.answer')).toHaveLength(0)
+    openFolds()
+    expect($('.tfold .cot')?.textContent).toContain('Nothing changed since the last run.')
+    expect(labels()).toEqual([LABEL])
+  })
+
+  it('leaves a row without the flag alone, whatever it says', () => {
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'what do I say when there is nothing to report?', timestamp: iso(Date.now() - 9000) },
+        { role: 'assistant', text: '[SILENT]', timestamp: iso(Date.now() - 3000) },
+      ])
+    })
+
+    expect($('.answer .prose')?.textContent).toBe('[SILENT]')
+    expect(quiet()).toHaveLength(0)
+  })
+})
+
 /* The three delegation verbs are optional, and the offline demo installs none
    of them -- it used to install null-guarded stand-ins in the page layer, which
    put the "what happens with no host behind this" decision in the wrong place.
@@ -2451,7 +3237,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -2510,7 +3296,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     await act(async () => { await Promise.resolve() })
@@ -2556,7 +3342,7 @@ describe('transcript island, tool episodes', () => {
 
   it('opens a settled row into its detail card and closes it again', () => {
     twoCalls()
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     expect(row.classList.contains('tog')).toBe(true)
     /* Shut is not built at all, so the row stands with no card behind it. */
@@ -2585,7 +3371,7 @@ describe('transcript island, tool episodes', () => {
       st.tool('raven_config', { action: 'describe' }).done(true, '{}', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     const dtl = row.nextElementSibling as HTMLElement
@@ -2610,7 +3396,7 @@ describe('transcript island, tool episodes', () => {
         st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
         st.seal()
       })
-      act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+      openWork()
       const row = $$('.wkin .wrow')[0] as HTMLElement
       act(() => { row.click() })
       return (row.nextElementSibling as HTMLElement).querySelector<HTMLElement>('.bd pre .pth')!
@@ -2639,20 +3425,54 @@ describe('transcript island, tool episodes', () => {
     })
   })
 
-  it('shows a failure on the row, on the summary chip, and opens the fold unasked', () => {
+  it('shows a failure on the row and the summary chip without opening the fold', () => {
     twoCalls(true)
     const sum = $('.wk > .wrow.sum') as HTMLElement
-    /* A failure is the one thing worth opening unasked. */
-    expect(($('.wkin') as HTMLElement).hidden).toBe(false)
+    /* A failed call is ordinary work: the word says so, but it does not pop
+       the fold the reader did not ask for. */
+    expect(($('.wkin') as HTMLElement).hidden).toBe(true)
     expect(sum.querySelector('.chip.bad')?.textContent).toBe('en:gui.n_failed {"n":1}')
+    act(() => { sum.click() })
     const bad = $$('.wkin .wrow')[1] as HTMLElement
     expect(bad.classList.contains('bad')).toBe(true)
+    expect(bad.querySelector('.chip.bad')?.textContent).toBe('en:gui.fail')
     expect(bad.querySelector('.err')?.textContent).toBe('error: nope')
     /* The design's alert glyph (Figma: Raven / Thinking), not the kind's own. */
     expect(bad.querySelector('svg.transcript-ic circle')).toBeTruthy()
     expect(bad.querySelector('svg.transcript-ic')?.outerHTML).not.toBe(
       ($$('.wkin .wrow')[0] as HTMLElement).querySelector('svg.transcript-ic')?.outerHTML,
     )
+  })
+
+  it('keeps a failed row out of the danger colour', () => {
+    /* The row keeps its `bad` class for the state and for tests; what it must
+       not keep is the danger ink those rules used to paint. The stylesheet is
+       the only place that can answer this, so read it. */
+    const css = readFileSync('src/styles/page.css', 'utf8')
+    expect(css).not.toMatch(/\.wrow\.bad[^{]*\{[^}]*--chat-danger/)
+    expect(css).not.toMatch(/\.wrow \.err[^{]*\{[^}]*--chat-danger/)
+    expect(css).not.toMatch(/\.chip\.bad[^{]*\{[^}]*(?:--clay|--chat-danger)/)
+
+    /* The same rule for the detail behind a delegation, a sub-agent's
+       delivered row and a tool call's exit code: a step that failed is read
+       as the word and its own error line, not as a red alarm. One extraction
+       per selector, so a new rule cannot reintroduce the colour unseen. */
+    const rule = (head: string): string => {
+      const at = css.indexOf(head)
+      expect(at, head).toBeGreaterThanOrEqual(0)
+      return css.slice(at, css.indexOf('}', at) + 1)
+    }
+    for (const sel of [
+      '.dlg .dgr .v.err {', '.dlg .dot.bad {', '.sdlv.bad .st {', '.sdlv.bad .st .dot {',
+      '.dtl .exit.bad {', '.sarow.task[data-st="error"] .dot {', '.sarow.task .st.fail {',
+      '.tkerr {', '.tkfail {', '.tkstop {',
+    ]) {
+      expect(rule(sel), sel).not.toMatch(/--(?:clay|chat-danger)/)
+    }
+    /* Not a blanket removal: the page-wide status dot and diff deletions are
+       not task outcomes, so their warning colour stays. */
+    expect(rule('.dot.err, .dot.bad {')).toContain('--clay')
+    expect(rule('.diff .del {')).toContain('--clay')
   })
 
   it('merges consecutive silent steps into one stretch under one summary', () => {
@@ -3641,7 +4461,7 @@ describe('transcript island, delegated calls', () => {
     const shown = card.querySelector('.dgr')!.textContent as string
     expect(shown).toContain(store.durText(180_000))
     /* Not the near-zero call time, as a whole reading rather than a digit
-       that happens to occur inside the correct one ("3m00s" ends in the
+       that happens to occur inside the correct one ("3m 0s" ends in the
        same two characters `durText(5)` would print on its own). */
     expect(shown).not.toMatch(/(?<!\d)0s\b/)
   })
@@ -3699,7 +4519,7 @@ describe('transcript island, delegated calls', () => {
         { run_id: 'r-1', tool_call_id: 'call-1', node: 'alpha', status: 'failed' })
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
     const calls = store._dagCallsForTests()
 
@@ -3737,7 +4557,7 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
@@ -3876,6 +4696,75 @@ describe('transcript island, delegated calls', () => {
     const state = dagField(card, 'gui.deleg.d_state') || ''
     expect(state).toContain('gui.deleg.st_ok')
     expect(state).not.toContain('gui.deleg.dag_done')
+  })
+
+  /* The tally's bits one by one, off the translator's own `en:` prefix, so the line's exact
+     contents are asserted rather than a substring of it. */
+  const bitsOf = (line: string): string[] => line.split(' \u00b7 ').map((bit) => bit.replace(/^en:/, ''))
+
+  it('counts a node a branch left out in its own word, and does not read the run as still going', () => {
+    /* A branch the run did not take never starts and never reports a stamp, so it matches none of
+       the tally's cases unless `DOT_OF` names it -- and it is outstanding for as long as the settled
+       set leaves it out, which kept a finished run reading "running" with "1 to go". It is neither a
+       skip (the run chose it away rather than a failure cascading past it) nor a stop. */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'triage', subagent: 'router' },
+          { id: 'answer', subagent: 'writer', depends_on: ['triage'] },
+          { id: 'fix', subagent: 'coder', depends_on: ['triage'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r10', nodes: [{ id: 'triage' }, { id: 'answer' }, { id: 'fix' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'triage', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'answer', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r10', node: 'fix', status: 'not_executed' })
+      h.done(true, 'submitted', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(bitsOf(nodeRow)).toEqual(['gui.deleg.dag_done {"ok":"2","n":"3"}', 'gui.deleg.dag_not_executed {"n":"1"}'])
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+  })
+
+  it('says what a branch left out before what is still to go, while the graph runs', () => {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'triage', subagent: 'router' },
+          { id: 'fix', subagent: 'coder', depends_on: ['triage'] },
+          { id: 'review', subagent: 'writer', depends_on: ['triage'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r12', nodes: [{ id: 'triage' }, { id: 'fix' }, { id: 'review' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'triage', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'fix', status: 'not_executed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r12', node: 'review', status: 'running' })
+    })
+    const card = openDagCard()
+    expect(bitsOf(dagField(card, 'gui.deleg.d_nodes') || '')).toEqual([
+      'gui.deleg.dag_done {"ok":"1","n":"3"}', 'gui.deleg.dag_not_executed {"n":"1"}', 'gui.deleg.dag_left {"n":"1"}',
+    ])
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_run')
+  })
+
+  it('tallies a run that never branches exactly as before', () => {
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [{ id: 'scan', subagent: 'scout' }, { id: 'brief', subagent: 'writer', depends_on: ['scan'] }],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r11', nodes: [{ id: 'scan' }, { id: 'brief' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'brief', status: 'skipped' })
+      h.done(true, 'done', 40)
+      st.seal()
+    })
+    const nodeRow = dagField(openDagCard(), 'gui.deleg.d_nodes') || ''
+    expect(bitsOf(nodeRow)).toEqual(['gui.deleg.dag_done {"ok":"1","n":"2"}', 'gui.deleg.dag_skip {"n":"1"}'])
   })
 
   it('keeps the failure reason on a run the nodes cannot explain', () => {
@@ -4136,5 +5025,96 @@ describe('transcript island, a shut body is not built', () => {
     expect($$('.wkin .dtl')).toHaveLength(0)
     openRows()
     expect($$('.wkin .dtl')).toHaveLength(1)
+  })
+})
+
+/* An imported conversation is read on a machine that has none of its runs,
+   files or instances: nothing here asks this gateway for them, and nothing
+   offers to change the conversation. */
+describe('transcript island, an imported conversation', () => {
+  const KEY = 'imported:' + 'a'.repeat(32)
+
+  beforeEach(() => { setCurrent(KEY) })
+  afterEach(() => { resetSession() })
+
+  function readDagCard(): HTMLElement {
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', { task_summary: 'a graph', nodes: [{ id: 'alpha' }, { id: 'beta' }] })
+        .done(true, 'DAG run run-7: 2 nodes done', 30)
+      st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+      st.seal()
+    })
+    openWork()
+    const row = $$('.wkin .wrow')[0] as HTMLElement
+    act(() => { row.click() })
+    return row.nextElementSibling as HTMLElement
+  }
+
+  it('offers no branch under an answer, and the same answer offers one elsewhere', () => {
+    const turn = [
+      { role: 'user' as const, text: 'why did it fail' },
+      { role: 'assistant' as const, text: 'the token had expired' },
+    ]
+    const branches = (): Element[] => [...document.querySelectorAll('.ansfoot .acts button')]
+      .filter((b) => b.getAttribute('aria-label') === 'en:gui.answer.branch')
+    wire({ branch: () => {} })
+    act(() => { mount.history(turn) })
+    expect(branches()).toHaveLength(0)
+    expect(store.branchOf({ main: true } as never)).toBeNull()
+    setCurrent('tui:a')
+    wire({ branch: () => {} })
+    act(() => { mount.history(turn) })
+    expect(branches().length).toBeGreaterThan(0)
+  })
+
+  it('reads no run record, and does not draw a finished run as still going', async () => {
+    const reads: string[] = []
+    const doors: string[] = []
+    wire({
+      dagRun: (runId: string) => { reads.push(runId); return Promise.resolve({ files: [] }) },
+      openDagRun: (runId: string) => { doors.push(runId) },
+    })
+    const card = readDagCard()
+    await act(async () => { await Promise.resolve() })
+    expect(reads).toEqual([])
+    /* The nodes the arguments named are still pending, and nothing will ever say
+       otherwise: the graph reads as closed, not as running. */
+    expect(store._dagCallsForTests()[0]!.nodes.map((n) => n.status)).toEqual(['pending', 'pending'])
+    expect(card.querySelector('.dot')?.className).toBe('dot ok')
+    expect(card.querySelector('.v.gov')).toBeNull()
+    expect([...card.querySelectorAll('.k')].map((k) => k.textContent)).not.toContain('en:gui.deleg.d_nodes')
+  })
+
+  it('opens no task pane for a run or an agent', () => {
+    const doors: string[] = []
+    wire({ openDagRun: (id: string) => { doors.push(`dag:${id}`) }, openSpawn: (id: string) => { doors.push(`spawn:${id}`) } })
+    store.openDagRun('run-7')
+    store.openSpawn('read_docs')
+    expect(doors).toEqual([])
+  })
+
+  it('asks for no agent roster', async () => {
+    const asked: string[] = []
+    wire({ spawnList: async () => { asked.push('list'); return [] } })
+    act(() => {
+      const st = mount.step()
+      st.tool('spawn', { agent: 'raven-code', task: 'read the docs', node_id: 'read_docs' }).done(true, 'started', 3)
+      st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
+      st.seal()
+    })
+    openWork()
+    act(() => { ($$('.wkin .wrow')[0] as HTMLElement).click() })
+    await act(async () => { await Promise.resolve() })
+    expect(asked).toEqual([])
+  })
+
+  it('draws a picture by its name without asking this gateway for it', () => {
+    wire()
+    act(() => {
+      mount.history([{ role: 'user', text: `look\n\n${ATT_NOTE}\n- uploads/shot.png` }])
+    })
+    expect($('.turn.me .shot')).toBeNull()
+    expect($('.turn.me .achip .nm')?.textContent).toBe('shot.png')
   })
 })

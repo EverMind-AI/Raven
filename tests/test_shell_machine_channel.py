@@ -10,6 +10,8 @@ stand.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
 
 import pytest
@@ -91,6 +93,45 @@ async def test_a_named_machine_routes_to_the_channel(registry, monkeypatch, tmp_
 
     assert out == "routed"
     assert seen == {"command": "nvidia-smi", "connection": "conn_gpu", "cwd": "/root/ws"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform == "win32", reason="the stand-in ssh is a POSIX script")
+async def test_a_password_machine_s_runner_is_built_off_the_event_loop(monkeypatch, tmp_path, supported_host):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt will name. On the loop, a
+    resolution waiting on DNS or a slow ``Match exec`` would hold every other turn the loop serves."""
+    import asyncio
+
+    from raven.ops.connection_add import store_password
+
+    row = {**{k: v for k, v in ROW.items() if k != "key"}, "auth": "password"}
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(row)])
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "rhome"))
+    store_password("conn_gpu", "hunter2")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "ssh").write_text(
+        '#!/bin/sh\nif [ "$1" = -G ]; then sleep 1; echo "hostname 203.0.113.7"; exit 0; fi\necho looked\n',
+        encoding="utf-8",
+    )
+    (bin_dir / "ssh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    ticks = 0
+
+    async def tick():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.05)
+            ticks += 1
+
+    ticker = asyncio.create_task(tick())
+    try:
+        out = await machine_exec.run_on_machine("true", connection="conn_gpu")
+    finally:
+        ticker.cancel()
+
+    assert "looked" in out
+    assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
 
 
 @pytest.mark.asyncio
@@ -370,6 +411,105 @@ async def test_typed_ssh_to_a_registered_machine_is_refused(registry, tmp_path):
     assert "Error:" in out
     assert "conn_gpu" in out and "ops_submit" in out
     assert not marker.exists()
+
+
+def _resolving(monkeypatch, aliases: dict[str, tuple[str, str]]):
+    """ssh -G as the owner's ssh config would answer it: alias -> (HostName, Port)."""
+    from raven.ops import transport
+
+    asked: list[list[str]] = []
+
+    def resolve(argv):
+        asked.append(argv)
+        if argv[-1] in aliases:
+            host, port = aliases[argv[-1]]
+            return transport.SshResolution({"hostname": (host,), "port": (port,)}, "")
+        return transport.SshResolution({}, "ssh -G exited 255")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", resolve)
+    return asked
+
+
+@pytest.mark.asyncio
+async def test_ssh_through_an_ssh_config_alias_of_a_registered_machine_is_refused(registry, monkeypatch, tmp_path):
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "58717")})
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f'ssh gpu-box "ls /data"; touch {marker}')
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+def test_an_explicit_port_wins_over_the_alias_port(registry, monkeypatch):
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "22")})
+
+    assert machine_exec.raw_ssh_target("ssh -p 58717 gpu-box ls")["id"] == "conn_gpu"
+    assert machine_exec.raw_ssh_target("ssh gpu-box ls") is None
+
+
+def test_an_alias_to_an_unregistered_machine_and_a_literal_address_are_read_as_before(registry, monkeypatch):
+    asked = _resolving(monkeypatch, {"elsewhere": ("198.51.100.9", "22")})
+
+    assert machine_exec.raw_ssh_target("ssh elsewhere ls") is None
+    asked.clear()
+    assert machine_exec.raw_ssh_target("ssh -p 58717 root@203.0.113.7 ls")["id"] == "conn_gpu"
+    assert asked == []
+
+
+def test_a_written_port_22_wins_over_the_alias_port(monkeypatch):
+    on_22 = dict(ROW, port=22)
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(on_22)])
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "58717")})
+
+    assert machine_exec.raw_ssh_target("ssh -p 22 gpu-box ls")["id"] == "conn_gpu"
+    assert machine_exec.raw_ssh_target("ssh gpu-box ls") is None
+
+
+@pytest.mark.asyncio
+async def test_resolving_an_alias_leaves_the_event_loop_free(registry, monkeypatch, tmp_path):
+    import asyncio
+
+    from raven.ops import transport
+
+    def slow(argv):
+        time.sleep(0.4)
+        return transport.SshResolution({}, "ssh -G exited 255")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", slow)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        await ExecTool(working_dir=str(tmp_path)).execute(command="echo ssh somewhere-else would be typed here")
+    finally:
+        beat.cancel()
+    assert ticks >= 5
+
+
+def test_an_alias_ssh_cannot_resolve_or_with_no_numeric_port_is_left_alone(registry, monkeypatch):
+    _resolving(monkeypatch, {"odd-port": ("203.0.113.7", "not-a-port")})
+
+    assert machine_exec.raw_ssh_target("ssh unknown-alias ls") is None
+    assert machine_exec.raw_ssh_target("ssh odd-port ls") is None
+    assert machine_exec.raw_ssh_target("ssh -p 58717 odd-port ls")["id"] == "conn_gpu"
+
+
+@pytest.mark.asyncio
+async def test_ssh_typed_through_the_local_connection_is_refused(monkeypatch):
+    here = {"id": "this-mac", "display_name": "This Mac", "transport": "local", "kind": "cpu"}
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(here), dict(ROW)])
+
+    out = await machine_exec.run_on_machine("ssh -p 58717 root@203.0.113.7 ls", connection="this-mac")
+
+    assert out.startswith("Error:") and "machine='conn_gpu'" in out and "Nothing was run" in out
 
 
 @pytest.mark.asyncio
@@ -808,3 +948,151 @@ def test_the_machine_lane_appears_once_a_first_machine_is_added(tmp_path, monkey
     after = served()
     assert "machine" in after["parameters"]["properties"], "the lane the reply names is in the served schema"
     assert "pass 'machine'" in after["description"]
+
+
+# ---- a copy to a registered machine is the plain shell's, as on main ----
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "scp -P 58717 a.txt root@203.0.113.7:/tmp/",
+        "sftp -P 58717 root@203.0.113.7",
+        "rsync -av -e 'ssh -p 58717' ./dir root@203.0.113.7:/data/",
+        "scp.exe -P 58717 a.txt root@203.0.113.7:/tmp/",
+    ],
+)
+async def test_a_copy_to_a_registered_machine_is_not_refused(registry, tmp_path, command):
+    """A copy starts nothing on the far side, and passes exec's own question like any command.
+
+    The file tools cannot carry what a copy carries -- a directory, a binary
+    file, a file over the fetch budget -- so a refusal left those with no
+    route, and taught the very spelling it objected to. Python stands for
+    the client: nothing here connects anywhere.
+    """
+    import sys
+
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+    # Python stands for the client on any host (``true`` and ``touch`` are not
+    # on a Windows one): the copy's words are its arguments, and the marker
+    # says the line ran.
+    client = f'"{sys.executable}" -c "import pathlib, sys; pathlib.Path(sys.argv[-1]).touch()"'
+
+    out = await tool.execute(command=f'{client} {command} "{marker}"')
+
+    assert "Error:" not in out
+    assert marker.exists()
+
+
+# ---- the ssh client is read in its Windows spellings too ----
+
+
+@pytest.mark.parametrize(
+    ("word", "program"),
+    [
+        ("ssh", "ssh"),
+        ("/usr/bin/ssh", "ssh"),
+        ("\\ssh", "ssh"),
+        ("ssh.exe", "ssh"),
+        ("SSH.EXE", "ssh"),
+        ("C:\\Windows\\System32\\OpenSSH\\ssh.exe", "ssh"),
+        ("ssh.cmd", "ssh"),
+        ("sshx", "sshx"),
+        ("my-ssh.exe.bak", "my-ssh.exe.bak"),
+    ],
+)
+def test_the_program_a_word_runs_is_read_with_windows_spellings_too(word, program):
+    assert machine_exec._program(word) == program
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "C:\\Windows\\System32\\OpenSSH\\ssh.exe -p 58717 root@203.0.113.7 ls",
+        '"C:\\Program Files\\OpenSSH\\ssh.exe" -p 58717 root@203.0.113.7 ls',
+        "SSH.EXE -p 58717 root@203.0.113.7 ls",
+    ],
+)
+async def test_on_a_windows_host_a_program_s_whole_path_keeps_its_backslashes_and_its_name(
+    registry, tmp_path, monkeypatch, command
+):
+    # The shell there reads a backslash as a path's own; read as POSIX escapes, the name was lost.
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"{command}; touch {marker}")
+
+    assert out.startswith("Error:") and "conn_gpu" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        'ssh -p 58717 "root@203.0.113.7" true',
+        'ssh -p "58717" root@203.0.113.7 true',
+        'ssh -p"58717" root@203.0.113.7 true',
+        'ssh -p 58717 "root@"203.0.113.7 true',
+        'ssh -p "587"17 root@203.0.113.7 true',
+    ],
+)
+async def test_on_a_windows_host_a_quoted_destination_or_port_is_matched_like_a_bare_one(
+    registry, tmp_path, monkeypatch, command
+):
+    # That shell takes the quotes off before the program sees the word; read with them on, the
+    # host and the port went unmatched and the command reached the executor.
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f"{command}; touch {marker}")
+
+    assert out.startswith("Error:") and "conn_gpu" in out and "Nothing was run." in out
+    assert "203.0.113.7" not in out
+    assert not marker.exists()
+
+
+def test_on_a_windows_host_the_words_are_read_without_their_quotes(monkeypatch):
+    monkeypatch.setattr(machine_exec, "_WINDOWS", True)
+    assert machine_exec._words('scp -P "58717" a.txt "root@h:/x" && -p"2222" \'two words\'') == [
+        "scp",
+        "-P",
+        "58717",
+        "a.txt",
+        "root@h:/x",
+        "&&",
+        "-p2222",
+        "two words",
+    ]
+    # A quoted piece and a bare one next to it are one word, as that shell's argv has them; a backslash is kept.
+    assert machine_exec._words('ssh -p "587"17 "root@"h true 2>&1 C:\\dir\\scp.exe "C:\\Program Files\\x"') == [
+        "ssh",
+        "-p",
+        "58717",
+        "root@h",
+        "true",
+        "2",
+        ">&",
+        "1",
+        "C:\\dir\\scp.exe",
+        "C:\\Program Files\\x",
+    ]
+    assert machine_exec._words("scp 'unbalanced") == []
+
+    monkeypatch.setattr(machine_exec, "_WINDOWS", False)
+    assert machine_exec._words('scp -P "58717" a.txt "root@h:/x"') == ["scp", "-P", "58717", "a.txt", "root@h:/x"]
+
+
+@pytest.mark.asyncio
+async def test_typed_ssh_s_refusal_names_file_tools_without_a_debug_switch(registry, tmp_path, monkeypatch):
+    tool = ExecTool(working_dir=str(tmp_path))
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    said = await tool.execute(command="ssh -p 58717 root@203.0.113.7 ls")
+    assert "scp and rsync to it are still fine here" in said
+    assert "read_file, write_file and edit_file on the path the way scp writes it" in said

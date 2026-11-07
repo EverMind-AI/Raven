@@ -21,10 +21,15 @@ is. Three things follow:
     budget is counted in, and how many jobs it will run at once, were being
     restated in every campaign's meta and in the task statement itself.
 
-Credentials stay a reference -- a path to a key the owner already has. Passwords
-wait until there is a platform that needs them (2026-08-17, deliberate): storing
-one means a keychain or a master password, and neither is worth building before
-something asks for it.
+Credentials are a reference -- a path to a key the owner already has -- or,
+since 2026-10-19, a password this computer keeps for the machine (``auth:
+password``): under ``<home>/keys/<id>.password``, readable by the owner alone,
+handed to ssh through its askpass hook on every connection, and never in this
+file, on a command line or in a log. The 2026-08-17 ruling had kept passwords
+out until a platform needed one, since keeping one means a keychain or a master
+password; the owner's 2026-10-19 decision accepted the protection a 0600 file
+gives -- the same the provider keys in ``config.json`` have -- over either, for
+a service that restarts and runs at night with nobody there to unlock it.
 
 Read-only here: the file is written by hand or through
 :mod:`raven.ops.connection_add`, the one door behind both ``raven ops
@@ -90,6 +95,37 @@ _MISSPELLED = {
 def transport_of(row: dict[str, Any]) -> str:
     """``ssh`` or ``local``. Absent means ssh, which is what the runner assumes."""
     return LOCAL if str(row.get("transport") or SSH).strip().lower() == LOCAL else SSH
+
+
+AUTH_KEY, AUTH_PASSWORD = "key", "password"
+
+
+def password_auth(row: dict[str, Any]) -> bool:
+    """Whether the row logs in with a password this computer keeps (``auth: password``). Absent means a key."""
+    return str(row.get("auth") or AUTH_KEY).strip().lower() == AUTH_PASSWORD
+
+
+#: Where this Raven keeps what it holds for machines beside the home the registry lives in.
+KEY_DIRNAME = "keys"
+
+
+def password_path(conn_id: str) -> Path:
+    """Where the password kept for ``conn_id`` lives: ``<home>/keys/<id>.password``, the owner's alone.
+
+    Refused for an id the registry refuses (:data:`_ID`): the id is a path
+    segment here, and ``../x`` or ``/x`` put the file -- and the askpass
+    helper beside it -- outside ``keys/``, where nothing scrubs or removes it
+    (reviewed 2026-10-19). One owner for the rule, so a door that keeps a
+    password before it judges the id cannot keep it anywhere else.
+    """
+    from raven.home import raven_home
+
+    cleaned = str(conn_id or "").strip()
+    if not _ID.match(cleaned):
+        raise ValueError(
+            f"{conn_id!r} is not an id a password can be kept under (lowercase letters, digits, '-' or '_')"
+        )
+    return raven_home() / KEY_DIRNAME / f"{cleaned}.password"
 
 
 # How many devices a ``device`` line written as "2 x NVIDIA A800..." names.
@@ -195,8 +231,16 @@ def row_problems(row: dict[str, Any]) -> list[Problem]:
         if wrong in row and right not in row:
             out.append(Problem(f"{label}: '{wrong}' is not a field this reads; it is spelled '{right}'"))
     kind = transport_of(row)
+    auth = str(row.get("auth") or AUTH_KEY).strip().lower()
+    if kind == SSH and auth not in (AUTH_KEY, AUTH_PASSWORD):
+        out.append(Problem(f"{label}: 'auth' must be key or password, not {row.get('auth')!r}", blocking=True))
     blocking = _BLOCKING + (_BLOCKING_SSH if kind == SSH else ())
     for field in blocking:
+        if field == "key" and auth != AUTH_KEY:
+            # With a password the way onto it is the one kept here, judged
+            # when ssh is started (``transport.ssh_env``); with an auth nobody
+            # knows, the one problem above is the whole of it.
+            continue
         if field != "id" and row.get(field) in (None, ""):
             out.append(Problem(f"{label}: '{field}' is missing, so there is no way onto it", blocking=True))
     for field in _WANTED:
@@ -418,7 +462,81 @@ def shown(row: dict[str, Any]) -> dict[str, Any]:
     out.update({k: row[k] for k in _SHOWN if row.get(k) not in (None, "")})
     if isinstance(row.get("paths"), list):
         out["paths"] = [str(x) for x in row["paths"]]
+    if aliases(row):
+        out["aliases"] = aliases(row)
     return out
+
+
+def aliases(row: dict[str, Any]) -> list[str]:
+    """The owner's own extra names for a machine ("27", "the lab box"), in file order."""
+    raw = row.get("aliases")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [str(a).strip() for a in raw if str(a).strip()]
+
+
+@dataclass(frozen=True)
+class Match:
+    """One machine a phrase could mean, and why."""
+
+    row: dict[str, Any]
+    reason: str
+
+
+def match(hint: str, rows: list[dict[str, Any]] | None = None) -> list[Match]:
+    """The machines a person's phrase for one could mean, best guesses first.
+
+    People name a machine by whatever they have in front of them: the full
+    address, its last part ("100.27", "27"), the port ("64106"), the name they
+    gave it, or a nickname. The model is shown names, never addresses, so
+    without this it cannot turn "run it on 100.27" into a machine and guesses
+    (measured 2026-10-21 to 10-29: four registered machines shared one address,
+    and three runs picked the wrong one or stopped). Matching happens here,
+    against the registry, and only the name and the reason travel back: the
+    reason quotes the part of the address the phrase already contained, never
+    the rest of it.
+
+    An address part matches whole dotted segments from the right, so "27"
+    matches 203.0.113.27 but not 203.0.113.127. A number matches a port
+    exactly. Names and aliases match case-insensitively, whole or as a part.
+    """
+    text = str(hint or "").strip()
+    if not text:
+        return []
+    rows = load() if rows is None else rows
+    key = text.lower()
+    host_part, _, port_part = key.partition(":") if re.fullmatch(r"[\w.\-]+:\d+", key) else (key, "", "")
+    found: list[tuple[int, Match]] = []
+    for row in rows:
+        names = [str(row.get("id") or ""), str(row.get("display_name") or "")] + aliases(row)
+        names = [n for n in names if n]
+        host = str(row.get("host") or "").strip().lower()
+        port = str(row.get("port") or "").strip()
+        reason, rank = "", 9
+        if port_part:
+            if host and port == port_part and _host_part_matches(host, host_part):
+                reason, rank = f"address {text}", 0
+        elif any(n.lower() == key for n in names):
+            reason, rank = f"name '{next(n for n in names if n.lower() == key)}'", 0
+        elif key.isdigit() and port == key:
+            reason, rank = f"port {text}", 1
+        elif host and _host_part_matches(host, key):
+            reason, rank = ("address " if host == key else "address ending in ") + text, 2
+        elif len(key) >= 2 and any(key in n.lower() for n in names):
+            reason, rank = f"name '{next(n for n in names if key in n.lower())}' contains '{text}'", 3
+        if reason:
+            found.append((rank, Match(row, reason)))
+    found.sort(key=lambda pair: pair[0])
+    return [m for _, m in found]
+
+
+def _host_part_matches(host: str, part: str) -> bool:
+    """Whether ``part`` is ``host`` or its last whole dotted segments."""
+    if not part or not re.fullmatch(r"[\w.\-]+", part):
+        return False
+    return host == part or host.endswith("." + part)
 
 
 # A claim shallower than this is a whole filesystem, not a case: "/", "/opt",

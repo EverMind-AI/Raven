@@ -51,6 +51,19 @@ from raven.security.network import validate_url_target  # noqa: E402
 _NO_LLM_GATES = {"verify": {"enabled": False}, "forceFinalize": {"enabled": False}}
 
 
+@pytest.fixture(autouse=True)
+def _public_dns(monkeypatch):
+    """Keep the real URL checks, with deterministic DNS beside the stubbed HTTP.
+
+    Cases about resolution failure override this function-scoped fixture.
+    """
+
+    def resolve(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("8.8.8.8", port or 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+
+
 def _ctx(tmp_path: Path, slice_: dict, *, provider: object | None = None) -> PluginContext:
     return PluginContext(
         config=slice_,
@@ -66,6 +79,21 @@ def _patch_client(monkeypatch, transport):
         return real(transport=transport, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", factory)
+    _shorten_the_retry_ladder(monkeypatch)
+
+
+def _shorten_the_retry_ladder(monkeypatch):
+    """Collapse the fetch backoff to a millisecond a slot.
+
+    The suite shortens the ladders it knows about in `tests/conftest.py`, which
+    reaches `raven.*` and not this plugin -- so a case whose fallback walk
+    retries waited the real one, five seconds of a test session spent asleep.
+    The length stays, because that is how the walk counts its attempts; only
+    the seconds collapse.
+    """
+    from research_flow.tools import web
+
+    monkeypatch.setattr(web, "_RETRY_BACKOFF_S", tuple(0.001 for _ in web._RETRY_BACKOFF_S))
 
 
 class _PageTransport(httpx.AsyncBaseTransport):
@@ -378,6 +406,18 @@ def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
     assert isinstance(make_web_fetch(ctx), WebFetchTool)
 
 
+def test_a_search_vendor_with_an_anonymous_tier_is_contributed_without_a_key(tmp_path, monkeypatch):
+    """Keenable searches unauthenticated at a lower rate limit, so no key is
+    not a dud here: the tool is contributed and its calls go out keyless."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    slice_ = {"enabled": True, "search": {"provider": "keenable"}, **_NO_LLM_GATES}
+
+    tool = make_web_search(_ctx(tmp_path, slice_))
+
+    assert isinstance(tool, WebSearchTool)
+    assert tool.provider == "keenable" and tool.api_key == ""
+
+
 def test_a_bare_env_var_still_contributes_the_search_tool(tmp_path, monkeypatch):
     """The launcher accepts an exported key in place of a rendered one, so the
     gate has to ask the tool (which resolves both) and not the slice."""
@@ -613,6 +653,14 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"results": [{"title": "T", "link": "https://e.com/a", "description": "S"}]},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
+    "keenable": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "description": "", "snippet": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
+    "deepseek": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "short", "summary": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
 }
 
 
@@ -692,6 +740,27 @@ async def test_each_search_vendor_normalises_into_the_render_shape(monkeypatch, 
 
     assert seen == [[expected["link"]]], f"{vendor} row did not reach the ledger"
     assert expected["title"] in rendered and expected["link"] in rendered
+
+
+@pytest.mark.asyncio
+async def test_a_deepseek_query_over_the_vendor_limit_is_refused_before_the_request(monkeypatch):
+    """The mirrored adapter forwards the same unbounded query; DeepSeek answers
+    HTTP 400 and the model is only told the status. Refuse it here too, so both
+    adapters honour the vendor's documented 1-128 character limit."""
+    transport = _CaptureTransport({"results": []})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 129, count=3)
+
+    assert transport.seen == [], "an over-limit query must not spend a request"
+    assert "128" in rendered and "129" in rendered
+
+    allowed = transport.seen
+    allowed.clear()
+    await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 128, count=3)
+
+    assert len(allowed) == 1, "the limit itself is allowed"
 
 
 @pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
@@ -819,6 +888,8 @@ async def test_a_fetch_backend_with_no_anonymous_tier_refuses_before_the_request
         ("exa", {"results": [{"text": "page body"}]}),
         ("firecrawl", {"success": True, "data": {"markdown": "page body"}}),
         ("anysearch", {"code": 0, "data": {"content": "page body"}}),
+        ("keenable", {"url": "https://example.com/a", "title": "T", "content": "page body", "description": ""}),
+        ("deepseek", {"title": "T", "content": "page body"}),
     ],
 )
 @pytest.mark.asyncio
@@ -832,6 +903,73 @@ async def test_each_fetch_vendor_reads_a_page_its_own_way(monkeypatch, vendor, p
     # The extractor column is an instrument, not a label: the backends are not
     # interchangeable, so a row must say which one served the page.
     assert answer["extractor"] == FETCH_PROVIDERS[vendor].extractor
+
+
+@pytest.mark.asyncio
+async def test_keenable_searches_on_its_public_path_without_a_key(monkeypatch):
+    """No key, no refusal: the call goes to the public path with the app named
+    and no credential."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    transport = _CaptureTransport(_SEARCH_PAYLOADS["keenable"][0])
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(provider="keenable").execute(query="q", count=3)
+
+    assert "https://e.com/a" in rendered
+    sent = transport.seen[0]
+    assert str(sent.url) == "https://api.keenable.ai/v1/search/public"
+    assert json.loads(sent.content) == {"query": "q", "max_results": 3}
+    assert sent.headers["X-Keenable-Title"] == "Raven" and "x-api-key" not in sent.headers
+
+
+@pytest.mark.asyncio
+async def test_keenable_reads_a_page_on_its_public_path_without_a_key(monkeypatch):
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    transport = _CaptureTransport({"url": "https://example.com/a", "title": "T", "content": "page body"})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(provider="keenable").execute(url="https://example.com/a"))
+
+    assert answer["text"] == "page body"
+    sent = transport.seen[0]
+    assert sent.url.path == "/v1/fetch/public" and sent.url.params["url"] == "https://example.com/a"
+    assert sent.headers["X-Keenable-Title"] == "Raven" and "x-api-key" not in sent.headers
+
+
+@pytest.mark.asyncio
+async def test_keenable_searches_on_its_keyed_path_with_a_key(monkeypatch):
+    """A key moves the same request to the keyed path, in a header. The snippet
+    is page text, line breaks and all, so it is collapsed and cut to 300
+    characters before ``_snippet_line`` renders whatever it is handed."""
+    page = "# Heading\n\nA paragraph of page text.\n" * 200
+    transport = _CaptureTransport({"results": [{"title": "T", "url": "https://e.com/a", "snippet": page}]})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(api_key="K", provider="keenable").execute(query="q", count=3)
+
+    sent = transport.seen[0]
+    assert str(sent.url) == "https://api.keenable.ai/v1/search"
+    assert json.loads(sent.content) == {"query": "q", "max_results": 3}
+    assert sent.headers["X-Keenable-Title"] == "Raven" and sent.headers["x-api-key"] == "K"
+    snippet = rendered.split("https://e.com/a\n   ", 1)[1].split("\n", 1)[0]
+    assert len(snippet) == 300 and snippet.startswith("# Heading A paragraph of page text. # Heading")
+
+
+@pytest.mark.asyncio
+async def test_keenable_reads_a_page_on_its_keyed_path_with_a_key(monkeypatch):
+    transport = _CaptureTransport({"url": "https://example.com/a", "title": "T", "content": "page body"})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(api_key="K", provider="keenable").execute(url="https://example.com/a"))
+
+    assert answer["text"] == "page body"
+    sent = transport.seen[0]
+    assert sent.url.path == "/v1/fetch" and sent.url.params["url"] == "https://example.com/a"
+    assert sent.headers["X-Keenable-Title"] == "Raven" and sent.headers["x-api-key"] == "K"
 
 
 @pytest.mark.asyncio
@@ -945,6 +1083,68 @@ async def test_a_page_that_answered_is_never_re_read(monkeypatch):
 
     assert "served_url" not in answer and "fallbacks_tried" not in answer
     assert transport.asked == ["https://arxiv.org/abs/2410.04728"]
+
+
+_WALL = (
+    "Title: Human Verification\n\nURL Source: https://example.com/wall\n\n"
+    "Warning: Target URL returned error 405: Method Not Allowed\n"
+    "Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n"
+    "Markdown Content:\n" + "Complete the security check before continuing. " * 12
+)
+
+
+@pytest.mark.asyncio
+async def test_the_targets_own_status_and_a_captcha_wall_come_back_with_the_page(monkeypatch):
+    """The reader answers 200 for the wall it rendered; the target's refusal is in its header."""
+    _patch_client(monkeypatch, _PerUrlTransport({"https://example.com/wall": _WALL}))
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://example.com/wall"))
+
+    assert (answer["status"], answer["blocked"]) == (405, "captcha")
+    row = next(r for r in rows if r["op"] == "fetch")
+    assert (row["ok"], row["status"], row["blocked"]) == (True, 405, "captcha")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_fallback_is_its_own_refusal_and_the_stub_keeps_its_own_status(monkeypatch):
+    """The trail reads each row's status: swapping them would count the stub as refused
+    and the fallback the site refused as read."""
+    refused = (
+        "Title: Not Found\n\nURL Source: https://arxiv.org/html/2410.04728\n\n"
+        "Warning: Target URL returned error 404: Not Found\n"
+        "Warning: This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.\n\n"
+        "Markdown Content:\n" + "This page does not exist. " * 40
+    )
+    _patch_client(
+        monkeypatch,
+        _PerUrlTransport(
+            {"https://arxiv.org/abs/2410.04728": "Abstract page shell", "https://arxiv.org/html/2410.04728": refused}
+        ),
+    )
+    rows = _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://arxiv.org/abs/2410.04728"))
+
+    assert answer["served_url"] == "https://arxiv.org/html/2410.04728"
+    by_url = {r["url"]: r for r in rows if r["op"] == "fetch"}
+    fallback, stub = by_url["https://arxiv.org/html/2410.04728"], by_url["https://arxiv.org/abs/2410.04728"]
+    assert (fallback["status"], fallback.get("blocked")) == (404, "captcha")
+    assert (stub["status"], stub.get("blocked")) == (200, None)
+
+
+@pytest.mark.asyncio
+async def test_a_warning_quoted_in_the_page_body_is_not_the_readers(monkeypatch):
+    page = "Title: Notes\n\nMarkdown Content:\n" + "Warning: Target URL returned error 404 is a log line. " * 10
+    _patch_client(monkeypatch, _PerUrlTransport({"https://example.com/notes": page}))
+    _capture_ledger(monkeypatch)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool().execute(url="https://example.com/notes"))
+
+    assert answer["status"] == 200 and "blocked" not in answer
 
 
 @pytest.mark.asyncio
@@ -1067,3 +1267,42 @@ async def test_a_thin_dataset_card_falls_back_to_the_metadata_the_table_needs(mo
 )
 def test_each_rewrite_names_the_same_document_at_an_address_that_carries_it(url, expected):
     assert fetch_fallbacks(url) == expected
+
+
+@pytest.mark.parametrize(
+    "option,expected",
+    [
+        ({"label": "EU only", "id": 1}, "EU only"),
+        ({"label": "EU only", "value": "eu"}, "EU only"),
+        ({"label": "EU only", "description": "European region", "id": 1}, "EU only -- European region"),
+        ({"description": "EU only"}, "EU only"),
+        ("EU only", "EU only"),
+    ],
+)
+async def test_research_option_labels_reach_the_broker_as_text(option, expected):
+    from raven.agent.tools.registry import ToolRegistry
+
+    class Broker:
+        default_timeout_s = 1.0
+
+        def __init__(self):
+            self.choices = []
+
+        async def await_question(self, cid, *, prompt, choices, **kwargs):
+            self.choices.append(choices)
+            return choices[0]
+
+    broker = Broker()
+    tool = DRAskUserTool(delivery="tool")
+    tool.set_broker(broker)
+    tool.set_context("test:research_options")
+    tool.grant_round_trip()
+    registry = ToolRegistry()
+    registry.register(tool)
+    params = {"questions": [{"question": "Region?", "options": [option, "Global"]}]}
+    original = json.loads(json.dumps(params))
+    result = await registry.execute("ask_user", params)
+    assert broker.choices == [[expected, "Global"]]
+    assert "User answered" in result and expected in result
+    assert params == original
+    assert not tool._take_round_trip_grant()

@@ -6,7 +6,7 @@ descriptions), the accepted spellings (``cast_params`` maps the host's
 ``path`` / ``old_text`` / ``new_text`` onto the fork's names, so a call in
 either convention runs), and two pieces of conduct the fork measured its way
 to -- a read ledger that refuses to edit content unseen by the current session, and
-a post-write Python syntax verdict in the same tool result.
+post-write Python diagnostics in the same tool result.
 
 Everything else (path resolution against the bound working directory, the
 unified diff the UI renders, ``FileChange`` on the result, image reads) is
@@ -15,35 +15,13 @@ trunk's, inherited unchanged.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from typing import Any
 
+from code_flow.tools.diagnostics import UNKNOWN, PythonDiagnostics, read_before
 from code_flow.tools.read_state import Owner, ReadLedger, current_ledger
 from raven.agent.tools import filesystem as trunk
 from raven.contracts.tool import FileChange, ToolResult
-
-
-def python_syntax_note(fp: Path, text: str) -> str:
-    """Post-write syntax verdict for ``.py`` files, appended to the result.
-
-    Deterministic and in-band: a write or edit that leaves the file
-    unparseable is told so in the same tool result, costing zero extra
-    rounds. Syntax only -- a line that crashes at runtime still needs tests.
-    """
-    if fp.suffix != ".py":
-        return ""
-    try:
-        ast.parse(text)
-    except SyntaxError as exc:
-        location = f"line {exc.lineno}" if exc.lineno else "unknown line"
-        return (
-            f"\nWARNING: {fp.name} now has a Python syntax error at {location}: "
-            f"{exc.msg}. The file cannot even be parsed; fix it before moving on."
-        )
-    except Exception:  # noqa: BLE001 - a verdict the parser cannot give is no verdict
-        return ""
-    return ""
 
 
 def _append_note(result: str | ToolResult, note: str) -> str | ToolResult:
@@ -90,11 +68,9 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
     ALIASES = {"path": "file_path"}
 
     #: One line may spend this many characters before it is cut, the fork's
-    #: budget. Trunk numbers a line whole, so a minified bundle or a base64
-    #: blob on one line overruns the whole-result budget by itself: the result
-    #: comes back with NO body and a note telling the model to continue from
-    #: the same offset, which it can do forever. Cutting the line keeps the
-    #: read useful and makes the description's promise true.
+    #: budget. Cut on trunk's own hook, before the page's budget counts the
+    #: line, so a page of minified lines holds its lines rather than one
+    #: line's head; the mark makes the description's promise true.
     _MAX_LINE_CHARS = 2_000
 
     @property
@@ -128,62 +104,32 @@ class ReadFileTool(_Aliased, trunk.ReadFileTool):
         try:
             fp = self._resolve(file_path)
         except Exception:  # noqa: BLE001 - the read itself reported the path problem
-            return _cut_long_lines(result, self._MAX_LINE_CHARS)
-        if (ledger := self._ledger) is not None:
+            fp = None
+        if fp is not None and (ledger := self._ledger) is not None:
             ledger.note(fp)
-        if _bodyless(result):
-            # One line longer than the whole-result budget leaves trunk's read
-            # with nothing to show and a note pointing at the same offset, so
-            # the cut has to happen before that budget is spent, not after.
-            taken = self._read_cut(fp, offset, limit)
-            if taken is not None:
-                return taken
-        return _cut_long_lines(result, self._MAX_LINE_CHARS)
+        if trunk._machine_of(file_path) is not None:
+            # Answered by a registered machine's node, which runs trunk's tool
+            # without this fork's hook: cut after the read. Decided by where
+            # the read ran, never by a line's text -- a line whose own text
+            # ends like the mark was taken for a cut one and came back whole.
+            return _cut_long_lines(result, self._MAX_LINE_CHARS)
+        # Read here: every line was cut on the hook before the page's budget counted it.
+        return result
 
-    def _read_cut(self, fp: Path, offset: int, limit: int | None) -> str | None:
-        """Trunk's own numbering, with every line cut to the line budget first.
-
-        Returns ``None`` when the file cannot be read as text -- the caller
-        then keeps whatever trunk answered rather than inventing something.
-        """
-        try:
-            all_lines = fp.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return None
-        total = len(all_lines)
-        if total == 0:
-            return None
-        start = max(offset, 1) - 1
-        if start >= total:
-            return None
-        end = min(start + (limit or self._DEFAULT_LIMIT), total)
-        numbered = []
-        for index, line in enumerate(all_lines[start:end]):
-            if len(line) > self._MAX_LINE_CHARS:
-                line = line[: self._MAX_LINE_CHARS] + f"... (line truncated to {self._MAX_LINE_CHARS} chars)"
-            numbered.append(f"{start + index + 1}| {line}")
-        body, chars, kept = [], 0, 0
-        for line in numbered:
-            chars += len(line) + 1
-            if chars > self._MAX_CHARS and kept:
-                break
-            body.append(line)
-            kept += 1
-        shown_end = start + kept
-        text = "\n".join(body)
-        if shown_end < total:
-            text += f"\n\n(Showing lines {start + 1}-{shown_end} of {total}. Use offset={shown_end + 1} to continue.)"
-        else:
-            text += f"\n\n(End of file — {total} lines total)"
-        return text
+    def _cut_line(self, line: str) -> str:
+        """Trunk's hook: the line cut to the fork's budget before it is numbered and the page's budget counts it."""
+        return _cut(line, self._MAX_LINE_CHARS)
 
 
 class WriteFileTool(_Aliased, trunk.WriteFileTool):
     ALIASES = {"path": "file_path"}
 
-    def __init__(self, *args: Any, syntax_note: bool = True, **kwargs: Any) -> None:
+    def __init__(
+        self, *args: Any, syntax_note: bool = True, lint: bool = True, unused_imports: bool = False, **kwargs: Any
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._syntax_note = syntax_note
+        self._diagnostics = PythonDiagnostics(lint=lint, unused_imports=unused_imports)
 
     @property
     def description(self) -> str:
@@ -215,6 +161,7 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
         except (OSError, ValueError) as exc:
             return f"Error: {exc}"
         ledger = self._ledger
+        previous = await read_before(fp) if self._syntax_note and fp.suffix == ".py" and mode == "append" else UNKNOWN
         known = ledger is not None and ledger.status(fp) == ReadLedger.OK
         authored = mode == "overwrite" or not fp.exists()
         result = await super().execute(path=file_path, content=content, mode=mode, **kwargs)
@@ -233,11 +180,14 @@ class WriteFileTool(_Aliased, trunk.WriteFileTool):
                 ledger.forget(fp)
         if not self._syntax_note:
             return result
-        try:
-            text = fp.read_text(encoding="utf-8", errors="replace") if mode == "append" else content
-        except Exception:  # noqa: BLE001 - no verdict beats a wrong one
-            return result
-        return _append_note(result, python_syntax_note(fp, text))
+        if isinstance(result, ToolResult) and result.file_change is not None:
+            previous = result.file_change.before
+        elif mode != "append" and isinstance(result, ToolResult) and result.model_text.startswith("File unchanged:"):
+            # Nothing was written, so the content is its own baseline: name
+            # findings are not repeated, a syntax error still present is.
+            previous = content
+        note = await self._diagnostics.check(fp, text=None if mode == "append" else content, before=previous)
+        return _append_note(result, note)
 
 
 def _respell(result: str | ToolResult) -> str | ToolResult:
@@ -264,29 +214,25 @@ def _respell(result: str | ToolResult) -> str | ToolResult:
     return respelled(str(result))
 
 
+def _cut(line: str, budget: int) -> str:
+    """``line`` cut to ``budget`` characters and marked, or as it is when it fits."""
+    if len(line) <= budget:
+        return line
+    return line[:budget] + f"... (line truncated to {budget} chars)"
+
+
 def _cut_long_lines(result: str | ToolResult, budget: int) -> str | ToolResult:
-    """Cut any numbered line past ``budget`` characters, marking the cut."""
+    """Cut any line of a result past ``budget`` characters, marking the cut: a page cut nowhere else."""
 
     def cut(text: str) -> str:
         if not any(len(line) > budget for line in text.split("\n")):
             return text
-        out = []
-        for line in text.split("\n"):
-            if len(line) > budget:
-                line = line[:budget] + f"... (line truncated to {budget} chars)"
-            out.append(line)
-        return "\n".join(out)
+        return "\n".join(_cut(line, budget) for line in text.split("\n"))
 
     if isinstance(result, ToolResult):
         result.model_text = cut(result.model_text)
         return result
     return cut(str(result))
-
-
-def _bodyless(result: str | ToolResult) -> bool:
-    """A read that answered with a note and no numbered line at all."""
-    text = result.model_text if isinstance(result, ToolResult) else str(result)
-    return "| " not in text and "(Showing lines" in text
 
 
 def _failed(result: str | ToolResult) -> bool:
@@ -301,11 +247,14 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
         self,
         *args: Any,
         syntax_note: bool = True,
+        lint: bool = True,
+        unused_imports: bool = False,
         require_read: bool = True,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._syntax_note = syntax_note
+        self._diagnostics = PythonDiagnostics(lint=lint, unused_imports=unused_imports)
         self._require_read = require_read
 
     @property
@@ -407,11 +356,8 @@ class EditFileTool(_Aliased, trunk.EditFileTool):
             ledger.note(fp)
         if not self._syntax_note:
             return result
-        try:
-            after = fp.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            return result
-        return _append_note(result, python_syntax_note(fp, after))
+        note = await self._diagnostics.check(fp, text=result.file_change.after, before=result.file_change.before)
+        return _append_note(result, note)
 
     @staticmethod
     def _edit_occurrence(fp: Path, shown: str, old: str, new: str, occurrence: int) -> str | ToolResult:
@@ -472,5 +418,4 @@ __all__ = [
     "ReadFileTool",
     "ReadLedger",
     "WriteFileTool",
-    "python_syntax_note",
 ]

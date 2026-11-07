@@ -8,20 +8,39 @@
  *
  * The flag is written on `.chat` by reaching for that element: the column is
  * the chat's own ground, rendered by src/chrome/ChatTop.tsx's neighbours and
- * owned by nobody who could be handed the flag instead.
+ * owned by nobody who could be handed the flag instead. So is `data-readonly`,
+ * the column of an Imported Conversation: set by the session registry as a
+ * switch begins -- before the conversation is even asked for -- and read by the
+ * stylesheet, which takes the composer away and the header's verbs with it.
  */
 
-import { ask as drawAsk, dropSeg, note as drawNote } from '../../features/transcript/mount'
+import { ask as drawAsk, dropSeg, note as drawNote, tagTurn as tagSeg } from '../../features/transcript/mount'
 import { setStuck } from '../../features/transcript/tail'
 import { readMessage } from '../../lib/attachments'
+import { makeStore } from '../store'
 
 import type { NoteHandle } from '../../features/transcript/types'
 
+/* The same flag as a value, for a module that cannot read the column's
+   attribute: the trajectory island decides whether its toggle may appear by
+   whether the conversation on screen has content, and reaching for `.chat`
+   from a feature is not its to do. Written by the two verbs below, never
+   separately, so the attribute and the value cannot disagree. */
+const fresh = makeStore<boolean>(true)
+
+/** Whether the column is in its empty state. */
+export const isFresh = fresh.get
+/** For `useSyncExternalStore` and for a store that mirrors the flag. */
+export const onFresh = fresh.subscribe
+
 /* The empty state is the composer itself, moved to the visual centre -- no
    mark, no facts, no title. `unpitch` lifts the flag again. */
+const column = (): HTMLElement | null => document.querySelector<HTMLElement>('.chat')
+
 export function pitch(): void {
-  const c = document.querySelector('.chat') as HTMLElement | null
+  const c = column()
   if (c) c.dataset.fresh = '1'
+  fresh.set(true)
 }
 
 /* Leaving the empty state. Its own verb, because the flag drives a whole layout
@@ -31,8 +50,21 @@ export function pitch(): void {
    arriving, a stored conversation replaying, and either kind of switch through
    resetView). */
 export function unpitch(): void {
-  const c = document.querySelector('.chat') as HTMLElement | null
+  const c = column()
   if (c) delete c.dataset.fresh
+  fresh.set(false)
+}
+
+/** Lay the column out for a conversation nothing on the page may change, or back. */
+export function readOnly(on: boolean): void {
+  const c = column()
+  if (!c) return
+  if (on) c.dataset.readonly = ''
+  else delete c.dataset.readonly
+}
+
+export function _resetFreshForTests(): void {
+  fresh._resetForTests()
 }
 
 /* The composer appends an "[attachments]" note plus "- path" bullets for the
@@ -57,6 +89,11 @@ export function unask(id: number): void {
   dropSeg(id)
 }
 
+/* File the id of the turn a drawn bubble opened on it. */
+export function tagTurn(id: number, turnId: string): void {
+  tagSeg(id, turnId)
+}
+
 /* Writes what the row shows and what it can give back, together; `row` is the
    island handle `noteRow` returned. */
 export function noteSay(row: NoteHandle, label: string, detail: string): void {
@@ -65,16 +102,18 @@ export function noteSay(row: NoteHandle, label: string, detail: string): void {
 
 /* The one row for everything raven says about itself in the transcript, so a
    new kind of notice cannot arrive wearing its own shape. `label` leads, the
-   detail follows after a `.`, and the whole thing is one line: a failure and a
-   framework note differ only in colour. Options: `quiet` for a framework note
-   (no failure happened, so no red) and `retry`, which is the caller's -- this
-   row cannot know what should happen next. Omit it and no action appears. */
+   detail follows after a `.`, and the whole thing is one line until it is
+   opened: a failure and a framework note differ only in colour. Options:
+   `quiet` for a framework note (no failure happened, so no red); `retry`, which
+   is the caller's -- this row cannot know what should happen next, so omit it
+   and no action appears; and `full`, the account at length the row opens to --
+   omit it and the row opens to its detail, when the line cut any of it. */
 export function noteRow(
   label: string,
   detail: string,
   /* `host` is passed by one caller and has never been forwarded, for the reason
      below; it is in the type because that call site is real. */
-  opts?: { quiet?: boolean; retry?: (() => void) | null; host?: unknown } | null
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null; host?: unknown } | null
 ): NoteHandle {
   const o = opts ?? {}
   /* The row is an island segment; the handle keeps the two verbs the page still
@@ -84,5 +123,6 @@ export function noteRow(
   return drawNote(label, detail, {
     quiet: !!o.quiet,
     retry: typeof o.retry === 'function' ? o.retry : null,
+    full: o.full || '',
   })
 }

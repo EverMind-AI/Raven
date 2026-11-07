@@ -21,6 +21,7 @@ Layering note:
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -36,10 +37,49 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 #
 # Every part of the turn context is produced by a :class:`SegmentBuilder`.
-# seg1–5 (identity / bootstrap / memory / active-skills / skills) and the
-# Curator are all SegmentBuilders — there is no separate "lane" category.
-# :class:`ContextAssembler` runs them in two phases and routes their
-# outputs into the system / history slots.
+# seg1–5 (identity / bootstrap / active-skills / memory / skills) and the
+# history strategy are all SegmentBuilders — there is no separate "lane"
+# category. :class:`ContextAssembler` runs them in two phases and routes their
+# outputs into the system / user / history slots.
+
+
+@dataclass(frozen=True)
+class SessionRevision:
+    """Identity and high-water mark of one append-only session-log view.
+
+    ``log_id`` changes when a new logical log is started (``/new``), and
+    ``generation`` changes before an operation can hand an existing ordinal to
+    a different message (an undo). A ref into the log carries ``scope``, so a
+    ref minted before either change names a scope that no longer exists -- a
+    miss rather than a wrong answer.
+    """
+
+    log_id: str
+    generation: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.log_id, str) or re.fullmatch(r"[0-9a-f]{32}", self.log_id) is None:
+            raise ValueError("log_id must be a lowercase UUID hex string")
+        if not isinstance(self.generation, int) or isinstance(self.generation, bool) or self.generation < 0:
+            raise ValueError("generation must be non-negative")
+
+    @property
+    def scope(self) -> str:
+        """The scope refs into this revision of the log carry."""
+        return f"{self.log_id}@{self.generation}"
+
+
+@dataclass(frozen=True)
+class OverflowOutcome:
+    """What an engine reclaimed from a prompt the provider refused as too long.
+
+    Returned only when something was reclaimed: an engine with nothing to give
+    back returns ``None`` from ``on_context_overflow`` instead, so the caller
+    never re-sends a prompt of the same size on the strength of an outcome.
+    """
+
+    messages: list[dict[str, Any]]
+    reclaimed_tokens: int
 
 
 @dataclass(frozen=True)
@@ -93,6 +133,11 @@ class AssemblyContext:
     # failing loudly.
     task_brief: str = ""
     task_done_when: str = ""
+    # The log revision ``session_messages`` was read at, for a builder that
+    # names messages in it (a ref) or keeps state keyed by it. None where the
+    # caller has no session behind the turn. Appended last for the reason the
+    # pair above is.
+    session_revision: SessionRevision | None = None
 
 
 @dataclass
@@ -100,9 +145,11 @@ class Segment:
     """The uniform product of a :class:`SegmentBuilder`.
 
     - ``text`` — the segment's contribution to the **system** slot
-      (joined by ``order``); ``""`` means "no segment this turn".
-    - ``history`` — the **history** slot contribution; only the Curator
-      sets this (``None`` for every other builder).
+      (joined by ``order``), or to the turn scratch at the end of the user
+      message when the builder is not ``stable`` and the scratch is on;
+      ``""`` means "no segment this turn".
+    - ``history`` — the **history** slot contribution; only the history
+      strategy's builder sets this (``None`` for every other builder).
     - ``meta`` — merged into ``AssembledContext.metadata`` (e.g.
       ``injected_skill_ids`` / ``memory_hits`` / ``path``).
     """
@@ -136,7 +183,9 @@ class SegmentBuilder(Protocol):
     so one volatile segment ends the run for every stable segment behind it.
     The default ``False`` is the safe answer: a segment wrongly called stable
     would have its neighbours cached under a key that changes anyway, which
-    costs the write and returns nothing.
+    costs the write and returns nothing. With ``context.cache.turnScratch`` on,
+    a phase-A segment that declares ``False`` leaves the system prompt for the
+    end of the turn's user message.
     """
 
     name: str
@@ -156,10 +205,8 @@ class ContextEngine(ABC):
     :class:`ContextAssembler <raven.context_engine.assembler.ContextAssembler>`
     — assembles a flat list of :class:`SegmentBuilder` into the turn's
     messages. Phase A runs seg1–5 concurrently (identity / bootstrap /
-    memory+recall / active-skills / router-skills); phase B runs the
-    Curator (``# Curator Working State`` + budget-trimmed ``*history``).
-    ``owns_compaction=True``; AgentLoop defers compaction to
-    :meth:`after_turn`.
+    active-skills / memory+recall / router-skills); phase B runs the history
+    strategy ``context.history.strategy`` selects, which fills ``*history``.
     """
 
     @property
@@ -173,6 +220,18 @@ class ContextEngine(ABC):
         """If True, AgentLoop skips ``MemoryEngine.maybe_consolidate`` and
         lets the engine manage history compaction itself (Curator archives
         messages out-of-band)."""
+
+    @property
+    def mints_source_refs(self) -> bool:
+        """If True, this engine puts ``[[ref ...]]`` tags where the model can
+        read them, and the loop registers ``context_retrieve`` so they can be
+        cashed in.
+
+        Defaults False because the tool is only honest beside an engine that
+        mints them: registered next to one that does not, it is a capability
+        the model will reach for and always be told "found nothing".
+        """
+        return False
 
     def set_provider(self, provider: "LLMProvider", model: str) -> None:
         """Adopt the provider a live ``/model`` switch just built.
@@ -199,7 +258,7 @@ class ContextEngine(ABC):
         ``session_messages`` is what the engine should consider as candidate
         history. Whether it's ``session.messages`` (full append-only log) or
         ``session.get_history()`` (post-consolidation slice) is decided by
-        AgentLoop based on :attr:`owns_compaction`.
+        the Memory role based on :attr:`owns_compaction`.
         """
 
     async def after_turn(
@@ -210,6 +269,41 @@ class ContextEngine(ABC):
         """Optional post-turn hook. Curator updates its manifest / archives
         here; Legacy ignores it. Default is no-op so future engines can
         opt in incrementally.
+        """
+        return None
+
+    def note_request(
+        self,
+        session_key: str,
+        messages: list[dict[str, Any]],
+        *,
+        model: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Hear about a request the loop actually sent for ``session_key``.
+
+        ``messages`` is the payload as it went out, ``model`` the id it went
+        out under and ``tools`` the tool list it carried (``None`` when the
+        caller does not say). A history strategy that summarises by replaying
+        the previous request -- so the summarising call can reuse its cached
+        prefix -- keeps the last one here. Default is no-op.
+        """
+        return None
+
+    async def on_context_overflow(
+        self,
+        session_key: str,
+        messages: list[dict[str, Any]],
+        *,
+        attempt: int,
+        window: int,
+    ) -> OverflowOutcome | None:
+        """Reclaim room in a prompt the provider just refused as too long.
+
+        ``messages`` is the request that was refused, ``attempt`` counts the
+        refusals this turn from 1. ``None`` means the engine has nothing to say
+        about overflow and the caller's own shrink runs, which is the default
+        for every engine that never asked to own its history.
         """
         return None
 
@@ -246,14 +340,19 @@ class TurnContext:
     # turn carries it at all.
     task_brief: str = ""
     task_done_when: str = ""
+    # The revision the loop read the session at; carried through to
+    # ``AssemblyContext.session_revision``.
+    session_revision: SessionRevision | None = None
 
 
 __all__ = [
     "AssembledPrefix",
     "AssemblyContext",
     "ContextEngine",
+    "OverflowOutcome",
     "Segment",
     "SegmentBuilder",
+    "SessionRevision",
     "TurnContext",
 ]
 

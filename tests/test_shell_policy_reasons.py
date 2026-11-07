@@ -13,6 +13,8 @@ having to infer a cause from a generic string.
 
 from __future__ import annotations
 
+import shlex
+
 import pytest
 
 from raven.permissions.shell_policy import CommandDecision, ShellCommandPolicy
@@ -89,6 +91,64 @@ def test_an_allowed_command_has_no_reason_to_give(policy: ShellCommandPolicy) ->
 
     assert outcome.decision is CommandDecision.ALLOW
     assert outcome.reason_code == ""
+
+
+@pytest.mark.parametrize("payload", ["printf ready", "rm -rf /", "shutdown -h now"])
+@pytest.mark.parametrize("depth", range(7))
+def test_unscanned_nested_programs_cannot_bypass_builtin_rulings(payload: str, depth: int) -> None:
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.shell_policy import _MAX_EMBEDDED_SHELL_DEPTH
+
+    command = payload
+    for _ in range(depth):
+        command = f"sh -c {shlex.quote(command)}"
+    outcome = ShellCommandPolicy(deny_patterns=[]).classify(command)
+    ruling = BuiltinRulings().ruling("exec", {"command": command})
+    if depth > _MAX_EMBEDDED_SHELL_DEPTH:
+        assert outcome.decision is CommandDecision.HARD_DENY
+        assert outcome.reason_code == "shell_nesting_limit"
+        assert ruling is not None and "nesting" in ruling.reason
+    elif payload == "printf ready":
+        assert outcome.decision is CommandDecision.ALLOW
+        assert ruling is None
+    else:
+        assert outcome.decision is CommandDecision.HARD_DENY
+        assert ruling is not None
+
+
+def test_command_runners_share_the_shell_inspection_bound() -> None:
+    from raven.permissions.shell_policy import _MAX_EMBEDDED_SHELL_DEPTH
+
+    command = "printf ready"
+    for _ in range(_MAX_EMBEDDED_SHELL_DEPTH):
+        command = f"nice {command}"
+    policy = ShellCommandPolicy(deny_patterns=[])
+    assert policy.classify(command).decision is CommandDecision.ALLOW
+    assert policy.classify(f"nice {command}").reason_code == "shell_nesting_limit"
+
+
+@pytest.mark.parametrize("operation", ["-exec", "-execdir"])
+@pytest.mark.parametrize("payload", ["printf ready", "rm -rf /"])
+@pytest.mark.parametrize("depth", [3, 4])
+def test_find_payloads_cannot_exceed_the_shell_inspection_bound(operation: str, payload: str, depth: int) -> None:
+    from raven.permissions.builtin import BuiltinRulings
+
+    command = payload
+    for _ in range(depth):
+        command = f"sh -c {shlex.quote(command)}"
+    command = f"find . {operation} sh -c {shlex.quote(command)} sh {{}} \\;"
+    outcome = ShellCommandPolicy(deny_patterns=[]).classify(command)
+    ruling = BuiltinRulings().ruling("exec", {"command": command})
+    if depth == 4:
+        assert outcome.decision is CommandDecision.HARD_DENY
+        assert outcome.reason_code == "shell_nesting_limit"
+        assert ruling is not None and "nesting" in ruling.reason
+    elif payload == "printf ready":
+        assert outcome.decision is CommandDecision.ALLOW
+        assert ruling is None
+    else:
+        assert outcome.reason_code == "catastrophic_delete"
+        assert ruling is not None
 
 
 def test_an_approval_names_its_family(policy: ShellCommandPolicy) -> None:

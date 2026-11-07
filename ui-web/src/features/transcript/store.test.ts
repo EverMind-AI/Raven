@@ -64,3 +64,32 @@ describe('dagSpan', () => {
     expect(store.dagSpan([])).toBeNull()
   })
 })
+
+/* A node a branch left out never runs and never starts, so it carries no
+   stamp -- which is exactly the shape that, missing from the settled set, would keep
+   a finished graph's clock counting for as long as the web UI stayed open. */
+describe('a node a branch left out', () => {
+  it('is settled, so the graph clock closes', () => {
+    expect(store.nodeSettled('not_executed')).toBe(true)
+    expect(store.dagSpan([{ status: 'not_executed', started_at: 1, ended_at: 2 }])?.open).toBe(false)
+  })
+
+  it('does not hold a finished graph open for want of a start or an end', () => {
+    expect(store.dagSpan([
+      { status: 'completed', started_at: 1000, ended_at: 4000 },
+      { status: 'not_executed', started_at: null, ended_at: null },
+    ])).toEqual({ from: 1000, to: 4000, open: false })
+  })
+
+  it('does not close a graph another node is still running', () => {
+    expect(store.dagSpan([
+      { status: 'running', started_at: 1000, ended_at: null },
+      { status: 'not_executed', started_at: null, ended_at: null },
+    ])).toEqual({ from: 1000, to: null, open: true })
+  })
+
+  it('gets a tally class of its own, shared with no other status', () => {
+    expect(store.DOT_OF.not_executed).toBe('notx')
+    expect(Object.keys(store.DOT_OF).filter((status) => store.DOT_OF[status] === 'notx')).toEqual(['not_executed'])
+  })
+})

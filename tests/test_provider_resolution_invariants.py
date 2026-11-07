@@ -353,7 +353,7 @@ def test_the_wire_form_of_a_model_id_is_built_in_one_module() -> None:
         owner,
         # Decomposition, not construction: asks which upstream vendor a gateway
         # id names, to look up what that vendor's model can do.
-        "raven/providers/litellm_provider.py",
+        "raven/providers/litellm_shape.py",
         # Strips a known prefix off a model id to recover the vendor's own id for
         # a connectivity probe. Also decomposition.
         "raven/cli/onboard_commands.py",
@@ -567,13 +567,21 @@ def test_every_provider_construction_site_passes_the_users_model_overrides() -> 
     per-endpoint builder is exempt: it inherits the fallback's overrides rather
     than reading config itself.
     """
-    exempt = {"raven/providers/per_model_provider.py"}
+    exempt = {
+        "raven/providers/per_model_provider.py",
+        # The LLM relay forwards a construction made at one of the sites checked
+        # here, overrides included, as a whole: to the host, or back into the
+        # direct class when the host cannot be reached.
+        "raven/providers/relay_provider.py",
+        "raven/providers/relay_server.py",
+    }
+    builders = {"LiteLLMProvider", "RelayProvider", "litellm_provider"}
     offenders = []
     for path in _production_files():
         if _rel(path) in exempt:
             continue
         source = path.read_text()
-        if "LiteLLMProvider(" not in source:
+        if not any(f"{name}(" in source for name in builders):
             continue
         tree = ast.parse(source)
         for node in ast.walk(tree):
@@ -581,7 +589,7 @@ def test_every_provider_construction_site_passes_the_users_model_overrides() -> 
                 continue
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if name != "LiteLLMProvider":
+            if name not in builders:
                 continue
             if not any(kw.arg == "model_overrides" for kw in node.keywords):
                 offenders.append(f"{_rel(path)}:{node.lineno}")

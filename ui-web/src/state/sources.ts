@@ -18,8 +18,11 @@ import type { BrowserSource } from '../features/browser/types'
 import type { ComposerSource } from '../features/composer/types'
 import type { ConnectionsSource } from '../features/connections/types'
 import type { CronSource } from '../features/cron/types'
-import type { ExtAgentsSource } from '../features/extAgents/types'
+import type { ExportSource } from '../features/export/types'
+import type { ExtAgentsSource, MachinesSource } from '../features/extAgents/types'
+import type { ImportedSource } from '../features/imported/types'
 import type { ImportSyncSource } from '../features/importSync/types'
+import type { KnowledgeSource } from '../features/knowledge/types'
 import type { MemorySource } from '../features/memory/types'
 import type { ModelSource } from '../features/model/types'
 import type { OnboardSource } from '../features/onboard/types'
@@ -27,10 +30,12 @@ import type { RailSource } from '../features/rail/types'
 import type { SettingsSource } from '../features/settings/types'
 import type { SubagentsSource } from '../features/subagents/types'
 import type { TasksSource } from '../features/tasks/types'
+import type { TrajectorySource } from '../features/trajectory/types'
 import type { TranscriptSource } from '../features/transcript/types'
 import type { WorkspaceSource } from '../features/workspace/types'
 import type { ProseSource } from '../lib/prose'
 import type { BannerSource } from './banner'
+import type { EffortSource } from './effort'
 import type { TierSource } from './tier'
 
 /* Whether the extensions list has been read, and reading it. Declared here
@@ -48,9 +53,16 @@ export interface Sources {
   capabilities: CapabilitiesSource
   composer: ComposerSource
   connections: ConnectionsSource
+  /* This conversation's reasoning effort, read by the picker's effort row. */
+  effort: EffortSource
+  knowledge: KnowledgeSource
   cron: CronSource
+  /* The registered machines, read by the extAgents island's machines tab. */
+  machines: MachinesSource
+  export: ExportSource
   extAgents: ExtAgentsSource
   importSync: ImportSyncSource
+  imported: ImportedSource
   memory: MemorySource
   model: ModelSource
   onboard: OnboardSource
@@ -60,6 +72,7 @@ export interface Sources {
   subagents: SubagentsSource
   tasks: TasksSource
   tier: TierSource
+  trajectory: TrajectorySource
   transcript: TranscriptSource
   workspace: WorkspaceSource
 }

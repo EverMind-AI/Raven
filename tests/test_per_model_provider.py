@@ -425,3 +425,41 @@ def test_the_custom_spec_declares_no_env_var_to_write() -> None:
     assert spec.is_gateway is True, "if custom stopped being a gateway, re-derive which _setup_env branch applies"
     assert spec.env_key == "", "custom must name no env var: knn builds one provider per endpoint under this spec"
     assert spec.env_extras == ()
+
+
+@pytest.mark.asyncio
+async def test_a_routed_fallback_hop_reclamps_the_primarys_effort(monkeypatch):
+    """``PerModelProvider`` splits the chain into one ``fallback_models=[]``
+    call per hop, so the base loop's hop clamp never sees that this is a
+    fallback; the routed layer must re-clamp where the hop is still visible."""
+    from raven.providers import effort_levels
+
+    asked: list[str | None] = []
+
+    def levels(model, declared=(), *, provider=None, refresh=False):
+        asked.append(provider)
+        return ("low", "high") if model == "large" else ("low", "high", "max")
+
+    monkeypatch.setattr(effort_levels, "levels_for", levels)
+    p = _provider()
+    error_resp = LLMResponse(
+        content="boom",
+        finish_reason="error",
+        error_classification=ErrorClassification(category="server_error", should_fallback=True),
+    )
+    p._by_model["small"].chat_with_retry = AsyncMock(return_value=error_resp)
+
+    seen: list[str | None] = []
+
+    async def fake_large(messages, tools=None, **kwargs):
+        seen.append(kwargs.get("reasoning_effort"))
+        return LLMResponse(content="ok", finish_reason="stop")
+
+    p._by_model["large"].chat_with_retry = fake_large
+
+    out = await p.chat_with_retry(messages=[], model="small", fallback_models=["large"], reasoning_effort="max")
+
+    assert out.content == "ok"
+    assert p._by_model["small"].chat_with_retry.call_args.kwargs["reasoning_effort"] == "max"
+    assert seen == ["high"]
+    assert asked == ["custom"], "the hop's ladder must follow the endpoint that sends it"

@@ -1,6 +1,6 @@
 """Round-trip fidelity for the ``playbook.md`` three-region layout.
 
-The load side parses the frontmatter region with ``yaml.safe_load``, so the save
+The load side parses through the key-preserving loader, so the save
 side has to emit YAML rather than interpolate strings into it. ``description``
 is model-written prose, which makes the characters YAML reserves -- a colon, a
 leading ``#``, quotes, a newline -- ordinary content rather than edge cases.
@@ -16,6 +16,7 @@ from loguru import logger
 
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook import NodeSpec, ParamSpec, PlaybookExistsError, PlaybookSpec, PlaybookStore, Triggers
+from raven.playbook.store import _load_yaml
 
 _CJK_WORD = "\u7ade\u54c1"  # jing pin: "competitor"
 
@@ -167,6 +168,129 @@ def test_hand_written_directory_loads(tmp_path):
     assert spec.mode == "prompt" and spec.description == "written by hand"
 
 
+def test_an_unquoted_placeholder_still_answers_yaml_not_a_type_error(tmp_path):
+    """The playbook's own placeholder, left unquoted, is YAML a mapping keyed
+    by a mapping -- unhashable. The loader must keep answering that with
+    yaml.YAMLError (the type playbooks_validate catches to answer with a
+    finding), not let a bare TypeError escape as an internal error."""
+    import yaml
+
+    target = tmp_path / "unquoted-placeholder"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: unquoted-placeholder\ndescription: placeholder as a key\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [unquoted placeholder]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify\n"
+        "    promptTemplate: {{ params.topic }}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(yaml.YAMLError):
+        _store(tmp_path).load("unquoted-placeholder")
+
+
+def test_a_timestamp_route_name_loads_as_written(tmp_path):
+    """YAML 1.1 also resolves bare dates to timestamps, so ``2024-01-01`` as a
+    route name arrived as a datetime key and the playbook was dropped as
+    unloadable -- the same silent loss this loader exists to prevent."""
+    target = tmp_path / "date-routes"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: date-routes\ndescription: dates as route names\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "triggers:\n  keywords: [date routes]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify\n"
+        "    promptTemplate: pick a date\n"
+        "    routes:\n"
+        "      2024-01-01: the archive lane\n"
+        "      else: anything newer\n"
+        "  - id: handle\n"
+        "    subagent: raven\n"
+        "    nodeSummary: handle the archive\n"
+        "    promptTemplate: do it\n"
+        "    dependsOn: [triage]\n"
+        "    when: triage.2024-01-01\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    loaded = _store(tmp_path).load("date-routes")
+
+    assert loaded.nodes[0].routes == {"2024-01-01": "the archive lane", "else": "anything newer"}
+
+
+def test_a_scalar_shared_between_a_key_and_a_value_keeps_both_meanings(tmp_path):
+    """Anchors let one scalar serve as a key here and a value there; retagging
+    the shared node in place would turn the value into text (or be eaten by the
+    constructed-objects cache). The key reads as written, the value keeps its
+    type."""
+    target = tmp_path / "shared-scalar"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: shared-scalar\ndescription: anchor shared by a key and a value\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "params:\n"
+        "  count:\n"
+        "    type: number\n"
+        "    description: kept as a number below\n"
+        "triggers:\n"
+        "  keywords: [shared scalar]\n"
+        "nodes:\n"
+        "  - id: triage\n"
+        "    subagent: raven\n"
+        "    nodeSummary: classify\n"
+        "    promptTemplate: pick a lane\n"
+        "    routes:\n"
+        "      ? &one 1\n"
+        "      : the first lane\n"
+        "      else: another\n"
+        "  - id: handle\n"
+        "    subagent: raven\n"
+        "    nodeSummary: note the count\n"
+        "    promptTemplate: the count is {{ params.count }}\n"
+        "    dependsOn: [triage]\n"
+        "    when: triage.1\n"
+        "marker: *one\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    text = (target / "playbook.md").read_text(encoding="utf-8")
+    block = _load_yaml(text.split("playbook-spec\n", 1)[1].rsplit("```", 1)[0])
+    assert block["nodes"][0]["routes"] == {"1": "the first lane", "else": "another"}
+    assert block["marker"] == 1, "the aliased value keeps its type"
+
+
+def test_a_spec_block_that_is_not_a_mapping_answers_a_finding(tmp_path):
+    """A fenced block that parses to a list is an easy hand-authoring slip; the
+    load must answer with the ValueError playbooks_validate turns into a
+    finding, not a bare TypeError from the assignment below it."""
+    target = tmp_path / "list-block"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: list-block\ndescription: block is a list\n---\n\n"
+        "```yaml playbook-spec\n"
+        "- version: 1\n"
+        "- mode: dag\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="spec block"):
+        _store(tmp_path).load("list-block")
+
+
 def test_hand_written_invalid_graph_is_rejected_on_load(tmp_path):
     target = tmp_path / "broken-graph"
     target.mkdir()
@@ -214,6 +338,59 @@ def test_hand_written_duplicate_param_input_is_rejected_on_load(tmp_path):
 
     with pytest.raises(ValueError, match="must not be copied into node inputs"):
         _store(tmp_path).load("broken-project-path")
+
+
+def _load_triage(tmp_path, routes: str, chosen: str) -> PlaybookSpec:
+    """Load a hand-written two-node playbook whose decision node declares ``routes`` (YAML lines)."""
+    target = tmp_path / "triage"
+    target.mkdir()
+    (target / "playbook.md").write_text(
+        "---\nname: triage\ndescription: triage one report\n---\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "taskSummary: decide whether a report is a bug, and fix it if it is\n"
+        "triggers:\n  keywords: [triage]\n"
+        "nodes:\n"
+        "  - id: decide\n"
+        "    subagent: raven\n"
+        "    nodeSummary: decide whether it is a bug\n"
+        "    promptTemplate: read the report and say whether it describes a bug\n"
+        "    routes:\n" + "".join(f"      {line}\n" for line in routes.splitlines()) + "  - id: fix\n"
+        "    subagent: raven\n"
+        "    nodeSummary: fix the bug\n"
+        "    promptTemplate: fix the bug the report describes\n"
+        "    dependsOn: [decide]\n"
+        f"    when: decide.{chosen}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    return _store(tmp_path).load("triage")
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [("yes", "no"), ("on", "off"), ("true", "false"), ("1", "2"), ("007", "008")],
+    ids=["yes-no", "on-off", "true-false", "digits", "leading-zero-digits"],
+)
+def test_hand_written_route_names_load_as_written(tmp_path, first, second):
+    """YAML 1.1 reads a bare ``yes``, ``on``, ``true`` or ``1`` as a boolean or a number,
+    and a decision node's routes are naturally named that way. Read so, each failed the string
+    a route name is, and the runtime dropped the playbook from the library over it."""
+    spec = _load_triage(tmp_path, f"{first}: it describes a bug\n{second}: it describes something else", first)
+
+    assert spec.confirm is False
+    assert spec.nodes is not None
+    assert spec.nodes[0].routes == {first: "it describes a bug", second: "it describes something else"}
+    assert spec.nodes[1].when == f"decide.{first}"
+
+
+def test_route_names_a_merge_brings_in_load_as_written_too(tmp_path):
+    """Read before the merge, ``yes`` and ``1`` both became ``True`` -- one key, so a route
+    was lost without a word."""
+    spec = _load_triage(tmp_path, "<<: {yes: it describes a bug, 1: it describes a feature}\nno: it is neither", "yes")
+
+    assert spec.nodes is not None
+    assert spec.nodes[0].routes == {"yes": "it describes a bug", "1": "it describes a feature", "no": "it is neither"}
 
 
 def test_save_rejects_a_semantically_invalid_graph(tmp_path):

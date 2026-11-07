@@ -136,6 +136,26 @@ def test_an_instance_override_beats_the_tier():
     assert mgr.resolve_mode("s1", "coder", "inst") == "max", "a narrower statement wins"
 
 
+@pytest.mark.parametrize(
+    ("instance", "override", "expected"),
+    [
+        (None, "max", None),
+        ("", "max", None),
+        ("inst", None, None),
+        ("inst", "max", "max"),
+    ],
+    ids=["no-instance", "empty-instance", "override-absent", "override-present"],
+)
+def test_the_instance_override_answers_alone_without_the_tier(instance, override, expected):
+    """`session_effort_for` asks whether a person named this instance's mode, not
+    what the dispatch would run at. A session tier is in force throughout, so a
+    miss here must stay a miss rather than report the tier standing in for one."""
+    mgr = _manager("high", {"coder": ("medium", "high", "max")})
+    if override is not None:
+        mgr._instance_modes[("s1", "coder", "inst")] = override
+    assert mgr._instance_mode_override("s1", "coder", instance) == expected
+
+
 def test_a_manager_with_no_tier_reader_behaves_exactly_as_before():
     mgr = _manager("", {"coder": ("medium", "high", "max")})
     mgr._session_tier = None

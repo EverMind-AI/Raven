@@ -121,6 +121,31 @@ async def test_outputs_prints_the_whole_result_even_with_no_metrics(monkeypatch)
     assert '"metrics": {}' in out
 
 
+@pytest.mark.asyncio
+async def test_outputs_builds_its_backend_off_the_loop(monkeypatch):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop, that
+    wait held every other turn (reviewed 2026-10-20)."""
+    import asyncio
+
+    backend = FakeBackend(TIMESTEP, JobResult(JobStatus.SUCCEEDED, metrics={}, output={"cores": 4}))
+    where: list[bool] = []
+
+    def resolved(campaign, ledger):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return backend, FakeLedger(["t1"]), None
+
+    monkeypatch.setattr(mod, "_campaign_backend", resolved)
+
+    out = await OpsOutputsTool().execute(campaign="c", trial="t1")
+
+    assert '"cores": 4' in out
+    assert where == [False], "the backend was built on the event loop"
+
+
 @pytest.mark.parametrize("tool", [OpsOutputsTool()])
 def test_descriptions_suggest_no_verdict_and_no_action(tool):
     text = tool.description.lower()

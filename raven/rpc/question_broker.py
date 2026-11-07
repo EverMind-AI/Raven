@@ -9,10 +9,11 @@ the notification so a frontend that prefers to answer by request_id can.
 
 Like ConfirmBroker it is transport-agnostic: constructed with a notification
 emit callable (bound to ``RpcServer.send_frame`` in production), and every
-fail-safe path (timeout, cancel, internal error, connection EOF via
-:meth:`cancel_all`, and a surface that reports the question as undeliverable)
-resolves to the prompt's ``default`` rather than raising — the agent loop must
-always get a string back.
+fail-safe path (timeout, internal error, connection EOF via :meth:`cancel_all`,
+and a surface that reports the question as undeliverable) resolves to the
+prompt's ``default`` rather than raising — the agent loop must always get a
+string back. The one exit that raises is the caller's own cancellation: a turn
+that was stopped has no loop left to hand a string to.
 
 A batch answer is a separate concern from a single question's answer: a page
 that renders a whole ``ask_user`` batch as one stepped form answers it in one
@@ -125,9 +126,10 @@ class QuestionBroker:
     ) -> str:
         """Emit a ``clarify.request`` and await the matching answer.
 
-        Returns ``default`` on timeout, cancellation, EOF
-        (:meth:`cancel_all`), an undeliverable question, or any internal
-        error — never raises.
+        Returns ``default`` on timeout, EOF (:meth:`cancel_all`), an
+        undeliverable question, or any internal error. Raises only
+        ``CancelledError``, and only when a cancellation of the calling task
+        arrives while this wait is pending.
 
         ``timeout_s`` of ``None`` takes :attr:`default_timeout_s`, and is echoed
         in the notification so a surface can show how long the question
@@ -189,6 +191,13 @@ class QuestionBroker:
         self._by_request[request_id] = conversation_id
         if timeout_s is None:
             timeout_s = self.default_timeout_s
+        task = asyncio.current_task()
+        # The count is cumulative: a task that swallowed an earlier cancellation
+        # carries it for the rest of its life. Remember where this wait started,
+        # so only a cancellation that arrives while it is pending counts as its
+        # own; an old count must not turn someone else's cancelled future into
+        # the calling task's cancellation.
+        cancels_before = task.cancelling() if task is not None else 0
         answered = False
         try:
             # ``clarify.request`` is the ui-tui frontend's existing multi-choice
@@ -217,7 +226,18 @@ class QuestionBroker:
             answer = await asyncio.wait_for(future, timeout_s)
             answered = True
             return answer
-        except (asyncio.TimeoutError, asyncio.CancelledError):
+        except asyncio.TimeoutError:
+            return default
+        except asyncio.CancelledError:
+            # A stopped turn is not an unanswered question. Answered with the
+            # default, the cancellation ended here and the turn went on: the
+            # model read "the user did not answer" and carried on with its own
+            # recommendation -- or asked again -- while the person who pressed
+            # stop believed it had stopped. Only a cancellation
+            # aimed at this task propagates; the future being cancelled by
+            # someone else is still a question that went unanswered.
+            if task is not None and task.cancelling() > cancels_before:
+                raise
             return default
         except QuestionUndeliverableError as exc:
             # Expected, not exceptional: the conversation has no live surface.
@@ -251,8 +271,8 @@ class QuestionBroker:
 
         Spawned rather than awaited from the ``finally``: one of those exits is a
         cancelled turn, and awaiting while the calling task unwinds a
-        cancellation raises ``CancelledError`` again -- costing both this
-        notification and the default the agent loop is waiting for.
+        cancellation raises ``CancelledError`` again -- costing the notification,
+        and on the fail-safe exits the default the agent loop is waiting for.
         """
         frame = {
             "jsonrpc": "2.0",
@@ -281,7 +301,7 @@ class QuestionBroker:
         pending = self._pending.get(conversation_id)
         return pending.request_id if pending is not None else None
 
-    def reply(self, key: str, answer: str, *, answers: list[str] | None = None) -> bool:
+    def reply(self, key: str, answer: str, *, answers: list[str] | None = None, close: bool = False) -> bool:
         """Resolve a pending question by conversation_id OR request_id.
 
         Idempotent: unknown key / already-resolved → ``False``, and in that
@@ -293,6 +313,12 @@ class QuestionBroker:
         answered, the later positions are stashed for this conversation so
         the batch's later :meth:`await_question` calls can consume them
         without another round trip.
+
+        ``close`` is for an answer that did not come from the prompt the
+        question drew -- a message typed into the main composer. That prompt
+        drops itself only when it is the one answering, so it is sent the same
+        ``clarify.closed`` an unanswered question gets; without it the settled
+        question stays on screen, still offering choices that go nowhere.
         """
         conversation_id = key if key in self._pending else self._by_request.get(key)
         if conversation_id is None:
@@ -301,6 +327,8 @@ class QuestionBroker:
         if pending is None or pending.future.done():
             return False
         pending.future.set_result(answer)
+        if close:
+            self._close(conversation_id, pending.request_id)
         if answers is not None and len(answers) > pending.index + 1:
             self._stash[conversation_id] = _Stash(questions=list(pending.questions), answers=[str(a) for a in answers])
         return True
@@ -371,8 +399,10 @@ class RoutingQuestionBroker:
     def pending_req(self, conversation_id: str) -> str | None:
         return self._page.pending_req(conversation_id) or self._channel.pending_req(conversation_id)
 
-    def reply(self, key: str, answer: str, *, answers: list[str] | None = None) -> bool:
-        return self._page.reply(key, answer, answers=answers) or self._channel.reply(key, answer, answers=answers)
+    def reply(self, key: str, answer: str, *, answers: list[str] | None = None, close: bool = False) -> bool:
+        return self._page.reply(key, answer, answers=answers, close=close) or self._channel.reply(
+            key, answer, answers=answers, close=close
+        )
 
     def cancel_all(self) -> None:
         self._page.cancel_all()

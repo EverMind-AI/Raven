@@ -1,0 +1,575 @@
+# Working on registered machines
+
+Run a sub-agent on another computer -- a GPU box, a lab workstation, a
+server in the office -- from the Raven on your own. You register the machine
+once, put Raven's node on it, and name that machine in an agent entry. From
+then on the agent is dispatched there, works in its own directory there, and
+its files stay there; your conversation reads them by address and fetches one
+when you ask. If the connection drops, or you stop Raven, the agent keeps
+working and the result is picked up when you are back.
+
+This page is the full walk-through. [Working with Sub-agents](agent-collaboration.md)
+covers delegating in general; [Agent Integrations](agent-integrations.md) covers
+installing the agents themselves.
+
+## What you need
+
+- A machine reached over ssh, as the user the agent will run as: with a key,
+  or with a password that Raven keeps on this computer and hands to ssh on
+  every connection (see the registration section below).
+- Linux or macOS on that machine, with a POSIX shell for that user. The node
+  uses unix sockets and process groups, so a Windows machine cannot be a
+  destination. (Raven itself may run on Windows; see
+  [Limits and defaults](#limits-and-defaults).)
+- `uv` on the machine (on the PATH, or where its installer puts it), **or**
+  `curl` or `wget` so the installer can fetch one. The installer builds the
+  node with `uv` and stops without it, whatever Python the machine has. A
+  Python 3.12 or newer there is welcome but not required: with one, the node's
+  virtualenv is made from it; without one, `uv` brings a Python 3.12 of its
+  own, which takes more space.
+- The agent you want to run installed and signed in on that machine, for that
+  user: an ACP agent such as Claude Code, Codex or Qwen Code; a CLI agent; or an
+  OpenAI-compatible endpoint that answers on that machine's network.
+
+## 1. Register the machine
+
+```bash
+raven ops connection add
+```
+
+The command asks one thing at a time: what you call the machine, whether it is
+reached over ssh or is this computer, a short id for it, then the address,
+port, username and private-key path. It connects before writing anything;
+a machine that does not answer is not recorded. What the machine can say about
+itself -- cores, memory, GPUs -- is read off it, not typed. The last questions
+are for on-call jobs: what is installed on it (any short answer), the budget
+unit and jobs at once (Enter takes the defaults), and the directories that hold
+your work, which may be left blank. Directories you do list are also where a
+file can be read without a question later (see [section 6](#6-read-edit-and-fetch-by-address)).
+
+For a script, pass every answer as a flag:
+
+```bash
+raven ops connection add --id gpu1 --name "GPU box 1" \
+  --host <address> --port 22 --user alice --key ~/.ssh/id_ed25519 \
+  --non-interactive
+```
+
+What gets recorded, and where:
+
+- The row lands in `connections.json`: the file `RAVEN_CONNECTIONS` points at,
+  else the one beside your config, else the one in the Raven home (`~/.raven`).
+  [Oncall](oncall.md#prepare-the-agent-and-machine) describes the registry in
+  more detail.
+- The **path** of the private key is stored, never the key itself.
+- A machine you can only reach with a password is registered from the Agent
+  Hub with **Login: Password**, or with `raven ops connection add
+  --non-interactive --auth password --password-stdin --id <id> --name <name>
+  --host <address> --port 22 --user <user>` (the password on the first line of
+  stdin, never on the command line; `--password-stdin` is read before the first
+  question, so it works with or without `--non-interactive`). The password must
+  be at least six characters and is kept on this computer, under
+  `~/.raven/keys/<id>.password`, readable by your account alone (mode 0600),
+  and handed to ssh on every connection through OpenSSH's askpass hook: it is
+  in no registry row, log or answer, and never on a command line. Each of
+  those connections logs in on its own (connection sharing from your ssh
+  config, `ControlMaster`, is turned off for them), so a registration proves
+  the password it keeps and a password changed on the machine is noticed at
+  the next connection. It is started with no controlling terminal, so an
+  OpenSSH older than 8.4 -- which only uses askpass when it cannot open a
+  terminal -- still reaches the helper instead of prompting. A jump host does
+  not: `ProxyJump` and `ProxyCommand` are off for password connections, since
+  the jump's own ssh would be handed this machine's password; a machine
+  reached only through one has to be registered with a key. The helper
+  answers one prompt: ssh's own, for the password of the registered account
+  at the registered address (`user@host`), named as ssh resolves it -- the
+  `HostName` or `HostKeyAlias` your ssh config gives an alias, an address in
+  its canonical form -- so the address can be an alias from your ssh config.
+  Not one of the `Host <id>` aliases Raven itself writes for key machines,
+  though, when it points elsewhere: a password machine whose address is such
+  an id would log in at that other machine's address, so it is refused by name
+  and its password is not sent. So is a block Raven did not write as it is:
+  one of its two marker lines gone, a keyword Raven does not write
+  (`ProxyCommand`, `Include` ...), a missing or second `HostName`, or a second
+  name on its `Host` line. An alias whose `HostName` is the id itself (key
+  machine `gpu1` at `gpu1`) moves nothing, and the pair is accepted.
+  Registration refuses a redirecting pair in either order -- a password machine at
+  a key machine's id, or a key machine whose id is a password machine's
+  address -- and connecting refuses it again for a pair registered before.
+  A password connection also turns off `CanonicalizeHostname`, so it reaches
+  the host `ssh -G` names rather than one a DNS lookup picks later; a machine
+  that relied on canonicalization is registered at its full name. When ssh
+  cannot say how it resolves the address, the helper waits for the registered
+  spelling, and a refusal then says the resolution failed.
+  Another account's prompt, a second factor's (a verification code, a
+  passcode) and a one-time password's get no answer, so a machine whose login
+  also asks for one is registered with a key as well; a registration refused
+  that way says the password was not sent. The row carries `auth: password`
+  and no key
+  path. `raven ops connection doctor` counts the row usable, and Oncall
+  campaigns run on it too, logging in the same way at the registered address
+  alone: a campaign cannot point such a connection at another host, port or
+  user. The machine's sshd has to accept
+  password logins (`PasswordAuthentication yes`); one that does not refuses
+  every connection, and the refusal says so. A password the machine refuses at
+  registration is not kept. A failed or cancelled registration preserves the
+  password kept by another registration of the same machine, even if that
+  registration is still connecting and uses the same password.
+  When the machine's password changes, remove the
+  machine and register it again (a registration under an id in use is
+  refused). Not available when this computer is Windows, whose OpenSSH cannot
+  run the POSIX script that hands ssh the password. Such a machine gets no
+  `Host <id>` alias in `~/.ssh/config`: `scp` and `rsync` from a terminal ask
+  for the password, and an agent reads and writes its files through Raven's
+  own file tools. Removing the machine deletes the password kept here
+  ([section 8](#8-remove-a-machine)).
+- The machine's host key is accepted on the first connection and kept in
+  `~/.ssh/known_hosts`. A machine that later presents a different key is
+  refused until you check it yourself. With a password that first connection
+  carries the password, so on a network you do not trust, connect once from a
+  terminal first (`ssh user@host` shows the fingerprint to confirm) and
+  register after, or register with a key.
+- For a machine registered with a key, a managed `Host <id>` block is written
+  to `~/.ssh/config`, so `scp` and `rsync` on this computer can address the
+  machine by its id.
+
+`raven ops connection list` shows the machines. `raven ops connection doctor`
+lists what is wrong with each entry, blocking or advisory, and exits non-zero
+only when no entry is usable: a broken entry beside a usable one still exits
+zero, so read its output rather than its exit code.
+
+### From the Agent Hub
+
+The same registration without a terminal: the Agent Hub's **Machines** tab,
+beside **Agents** and **Channels** at the top of the hub,
+lists the registered machines, and **Register a machine** opens a form for
+the name, id, address, port, user name and private-key path, plus the work
+directories. The page reaches the machine once before writing anything, the
+way the command does, and a machine that does not answer is not recorded;
+the refusal says what kind it was (unreachable, login refused, changed host
+key, no answer in time) and what to do about it. What the page shows
+afterwards is what the machine is -- its name, id, link and node -- never its
+address, user or key path: those travel once, in the form, and are not read
+back. The private-key field starts filled with a key this computer has: ssh's
+own identities first (`~/.ssh/id_rsa` before `id_ed25519`, the order ssh tries them), then any pair you
+named, with the others to pick from; when none is found the form says so, and
+*Password* is the other way in.
+
+A card's state line is about the link now. *Not connected; the link opens
+when work is sent* is the resting state, not a fault: a link is opened by a
+dispatch, by **Test link** or by a node install, and opening the tab reaches
+no machine. **Test link** opens this one's and reads its node's version.
+
+## 2. Install the node
+
+```bash
+raven ops connection install-node gpu1
+```
+
+The node is Raven's own code in a small virtualenv on the machine. It is what
+starts agents there and answers file calls. The command looks at the machine
+once, prints what it would do, and asks before doing it (`--yes` skips the
+question). A successful run ends with two lines:
+
+```text
+Installed the Raven node <version>-<digest> in /home/alice/.raven-node (62 MB).
+The node answers: Python 3.12.3, code <digest>.
+```
+
+What lands on the machine:
+
+| Item | Where |
+| --- | --- |
+| The node | `<node_dir>/<version>-<digest>/`, with `node_dir` from the registry row, `~/.raven-node` by default |
+| Its runtime state | `run/` (the socket), `tasks/<task>/` (each agent's record, owner-only) and `log/` under `node_dir` |
+| `uv`, when the machine had none, or when its own is older than 0.4.23 while an install would give it an index, pip's own or a mirror chosen over it (such a `uv` ignores the index) | `<node_dir>/.uv`, version 0.13.0, fetched with the machine's `curl` or `wget`; the next install uses it |
+| A Python 3.12, when the machine had none | beside the node, kept by `uv` |
+
+Nothing else changes: no system package, no shell rc file, no environment
+variable, no service, no open port. The node's packages come from the index
+pip is configured with on the machine, else from PyPI. That index is timed
+from the machine first, with its `curl`, for a few seconds at most: when it
+cannot be reached there, or serves slower than 256 KB/s, the installer times
+two PyPI mirrors in mainland China (Tsinghua's TUNA and Alibaba Cloud's) and
+installs from the faster, with the machine's own index tried after it. The
+printed plan names the mirror and why. An index that answers with an error,
+asks for a sign-in, or shows a certificate the machine does not trust is
+kept, and `RAVEN_NO_MIRROR=1` on this computer keeps every install on the
+machine's own index. Space needed, as the installer checks it:
+
+| Part | About |
+| --- | --- |
+| The node | 60 MB |
+| A Python 3.12 brought by `uv` | 80 MB more |
+| `uv` itself, when fetched | 25 MB more |
+
+`--dir <path>` keeps the nodes somewhere other than `~/.raven-node`; the path
+is recorded in the registry row, so later commands find it. A machine that
+already has this Raven's node is left as it is. The node's name is recorded
+on the row as well (`node_install`), which is how the Agent Hub says a machine
+has the node before any link to it is up.
+
+### Installing from the Agent Hub
+
+**Install node** on a machine's card, or in its sheet, runs the same install
+in the background: the card says *Installing the node* until it ends, however
+long that takes, and the sheet keeps how it ended. The sheet's *Install into*
+field is the command's `--dir`. A machine whose node is another Raven's shows *needs updating* and
+offers **Update node**.
+
+Once the node is up, the card lists the agent entries on the machine,
+connected or switched off (*No agent connected here yet* until there is one;
+the state line, *Link up, no agent running*, is about this moment), and the sheet says the next
+step and offers **Connect an agent on this machine**: pick the agent, give
+its working directory there, and **Connect** adds `<preset>@<machine id>`
+(`codex@gpu1`) the way section 4's `subagents.add` does, one real prompt run
+on the machine first, and refused the same way when the machine already has
+that preset. While it runs, the form counts the seconds and offers
+**Cancel**, which stops the run on the machine and writes nothing
+(`subagents.test_cancel` by the entry's name, the call that stops a test);
+a Cancel that finds nothing left to stop -- the agent has answered and the
+entry is being written -- is said as too late to cancel, and the form waits
+for the connect to finish; a Cancel whose stop gives no answer is said as not
+confirmed, since only the stop's answer says whether anything was written;
+after ten minutes with no answer the form asks it to stop itself and says to look
+at the Agents page for whether it connected. The list has every preset a machine's node can start, including
+one already connected on this computer -- that is a second entry, on the
+machine, not a conflict. An entry on the machine that is switched off is shown
+too, marked *switched off*, on the card and in the form: it still holds the
+machine, so the form lists each such entry as a choice of its own, by name,
+and the button reads **Reconnect**, which switches that entry back on (with
+the same proof prompt) rather than adding another. An agent's own sheet connects it onto a
+machine too (*Runs on*), which lists the registered machines, lets only those
+with this Raven's node be picked (the others say why), and takes the working
+directory there; an agent that is not installed on this computer offers it
+as well, since what matters is that it is installed and signed in on the
+machine. Only a preset not yet on the roster offers it: a row that already
+exists, switched off, connects by its own button, which takes no machine.
+While an add on a machine is still running -- its proof prompt takes up to a
+minute -- the machine's connect form, opened again, greys that preset rather
+than adding it a second time.
+
+**Upgrading.** The node runs exactly the code of the Raven that installed it,
+checked by a digest on every connection. After you update Raven on this
+computer, run `install-node` again: the new node lands beside the old one, and
+`--prune` removes the nodes of other versions from the directory (the cached
+`uv` and Python stay). Until you do, a dispatch to that machine fails with
+*runs different code from this Raven; update it with `raven ops connection
+install-node gpu1`*.
+
+**The daemon.** Nothing is started by the install. The first time Raven uses
+the machine, its ssh session starts the node's daemon, which outlives the
+session; the daemon leaves on its own after 10 minutes with no connection and
+no agent running. After the machine reboots, the next use starts it again.
+
+## 3. Name the machine in an agent entry
+
+Take the entry you already have for the agent under `subagents.agents` in
+your config -- the one the sub-agent page or `raven_config` added -- and add
+`machine` to it. The value is the registry id. `remoteCwd` is where the agent works on that machine; it
+defaults to `~/raven-work`, with `~` being the registered user's home there.
+Each instance or task works in its own directory under it,
+`<remoteCwd>/<instance or task id>`.
+
+### ACP agents
+
+```json
+{
+  "name": "Claude Code on gpu1",
+  "preset": "claude_code",
+  "kind": "acp",
+  "enabled": true,
+  "command": "<the agent's ACP command, as in a local entry>",
+  "machine": "gpu1",
+  "remoteCwd": "/data/alice/projects"
+}
+```
+
+The node starts the entry's `command` on the machine, in the registered user's
+login environment (the profile and rc chain of a `bash` or `zsh` login; a user
+of another shell gets the environment ssh started the node with). The entry's
+`env` is laid over it and reaches the agent over the link, never on a command
+line. `cwd` names a directory on this computer and is not read for an entry on
+a machine.
+
+### CLI agents
+
+```json
+{
+  "name": "my-cli on gpu1",
+  "kind": "cli",
+  "enabled": true,
+  "command": "my-agent --prompt-file {prompt_file}",
+  "machine": "gpu1"
+}
+```
+
+The same command runs on the machine, split by that machine's POSIX shell
+rules. The prompt reaches it the three ways it does locally: `{prompt}` as one
+argument, `{prompt_file}` as a file written into the run's directory there,
+or on stdin, which the node closes after the prompt. Output lines come back as
+they are written, blank lines included. A cancel or a timeout ends the whole
+process tree on the machine, background commands included.
+
+### OpenAI-compatible endpoints
+
+```json
+{
+  "name": "vLLM on gpu1",
+  "kind": "openai",
+  "enabled": true,
+  "baseUrl": "http://127.0.0.1:8000/v1",
+  "model": "my-model",
+  "machine": "gpu1"
+}
+```
+
+For an endpoint that answers only on the machine, or only on its network. Each
+turn opens an ssh tunnel to the machine, sends the request through it to
+`baseUrl` as the machine resolves it, and closes the tunnel. `baseUrl` has to
+be `http`: the tunnel ends on this computer's loopback, which an `https`
+certificate would not name. There is no `remoteCwd` for this kind -- an
+endpoint has no working directory -- and one written here is dropped with a
+warning.
+
+### Built-in agents
+
+A built-in agent is Raven's own loop in this process, where its model keys and
+tools are. It has no process to start elsewhere: a `machine` on a built-in row
+is dropped with a warning at load, and the row runs here.
+
+## 4. Or add one from a conversation
+
+Ask Raven in a chat, for example *"add the Codex preset on machine gpu1"*. The
+main agent lists the usable registered machines and calls `subagents.add`
+with the preset, the machine and, for an ACP or CLI preset, an optional
+`remote_cwd`:
+
+```json
+{"preset": "codex", "machine": "gpu1", "remote_cwd": "/data/alice/projects"}
+```
+
+The entry is named `<preset>@<machine>` unless you give a name, so one preset
+can be added once per machine: a preset the machine already has is refused
+under the default name, and the refusal names the entry it has (connected or
+switched off). A second entry of one agent on one machine -- two working
+directories, say -- is added by giving it a name of its own. Before anything
+is stored, the add is proved
+the way a local add is: one real test prompt, run on that machine, through
+that agent -- so the agent has to be installed and signed in there already.
+The add is refused up front when the preset is a built-in agent, when an
+OpenAI preset is given a `remote_cwd`, or when the machine's entry cannot be
+used.
+
+On the page, the same add is the machine sheet's **Connect an agent on this
+machine**, or *Runs on* in the agent's own sheet.
+
+## 5. What happens when you dispatch
+
+Dispatch as usual: ask the host to delegate, or chat with the agent's instance.
+Three things differ from a local agent.
+
+**Attachments are named, not copied.** A file that comes with the task is
+named to the agent by its address on this computer, with a note that nothing
+was copied. The agent uses it where the machine can read it -- the same path
+on a disk both mount, a copy already there -- or says in its reply that it
+could not be found on the machine, and goes on.
+
+**Remote ACP agents can use granted MCP servers through the Raven node.**
+The servers run on the host, which retains their definitions, credentials,
+tool restrictions, and sandbox rules. The node associates each bridge with
+its task, and the host checks calls against that task's grant. Lending requires
+a node with MCP bridge support and an agent configured for session MCP delivery;
+the reply reports servers that could not be lent. Remote CLI agents run without
+lent MCP. After a host restart, task results can be recovered, but previous MCP
+connections are not restored. See [Working with sub-agents](agent-collaboration.md#work-on-a-registered-machine).
+
+**Its files stay on the machine.** Nothing is brought back when the turn
+ends. The reply closes with a line that says where it worked:
+
+```text
+[raven] Ran on machine 'GPU box 1' (gpu1), in alice@203.0.113.7:/data/alice/projects/task-3f9a;
+the files it wrote are there, not on this computer -- read_file, list_dir, find,
+grep, write_file and edit_file take that path as it is, and deliver_files fetches one by it.
+```
+
+The record of the dispatch names the directory the same way: *Working
+directory: on machine 'gpu1', /data/alice/projects/task-3f9a (made there when
+the run started)*.
+
+### How a path on a machine is written
+
+A path on a machine is written the way `scp` writes one, with the user,
+address and port from the registry. That is the one spelling a reply, a
+record or a tool result uses, and the one the tools read back:
+
+| Form | Example | When |
+| --- | --- | --- |
+| `user@host:/abs/path` | `alice@203.0.113.7:/data/alice/projects/task-3f9a/report.md` | port 22 |
+| `scp://user@host:port//abs/path` | `scp://alice@203.0.113.7:2222//data/alice/projects/task-3f9a/report.md` | any other port; note the double slash before an absolute path |
+| `<id>:/abs/path` | `gpu1:/data/alice/projects/task-3f9a/report.md` | what you may type yourself: the registry id works in place of the address |
+
+A path after the colon that does not start with `/` is relative to the user's
+home on the machine. A file on this computer whose name holds a colon is
+written as `./a:b` or as an absolute path. A spelling that names no registered
+machine is refused with a sentence that says so, before any ssh.
+
+## 6. Read, edit and fetch by address
+
+`read_file`, `list_dir`, `find`, `grep`, `write_file` and `edit_file` take a
+path on a machine as readily as a local one. The call runs on the machine,
+through its node, and only the answer travels: a read of 50 lines moves those
+50 lines. Line numbers, limits and footers are the same as for a local file.
+
+- **Reads ask no question** under the directories Raven's agents work in on
+  that machine: `~/raven-work`, the `remoteCwd` of every entry on that
+  machine, and the absolute `paths` listed on its registry row. A read
+  elsewhere asks, as a read outside the workspace does here.
+- **Writes always ask**, as they do here, and a grant is for the one file.
+  A whole-file write checks that the file is still what this conversation last
+  read; a file changed in between is left alone, with *changed after it was
+  read; nothing was written. Read it again before writing.*
+- The node confines every call to the directory the check allowed, resolving
+  the machine's own symlinks.
+
+`deliver_files` fetches one file by its address, so you can download it from
+the page. The file lands under the conversation's workspace at
+`pulled/<machine>/<key>/<name>`, the key being a digest of its path there, so
+two paths never land on each other. Only a file under the directories the
+agents work in is fetched, and only one of 20 MiB or less; a bigger file, or
+one elsewhere, is read on the machine instead. `pulled/` is not cleaned up;
+clear it when you no longer need what is in it.
+
+In `exec`, an `ssh` typed to a registered machine's address is refused with a
+pointer to the registered route; `scp` and `rsync` to it are fine, and can
+address it by id thanks to the alias written at registration.
+
+## 7. Disconnects and restarts
+
+Raven keeps one ssh link per machine and watches it with a heartbeat: a ping
+every 5 seconds, and 15 seconds without an answer means the link is gone. The
+agents are not: they run under the machine's daemon, which keeps every frame
+they write and every line of their stderr. Raven tries the link again on a
+backoff of 2, 4, 8, then 16 seconds for as long as any agent is waiting, and a
+link that comes back attaches each agent by its task id, from the frame and
+the stderr line Raven last read. The turn goes on as if nothing had happened;
+a cancel sent while the link was down is delivered when it is back.
+
+Stopping Raven does the same on purpose. An agent running on a machine is left
+to the daemon; what Raven keeps is a record under
+`<raven home>/machines/runs/`. The next start reads those records, attaches
+each run from where it was, reads what it wrote on stderr during that turn
+too (a command's whole stderr: the reason it failed, or the session id a CLI
+names only there), and announces the
+result into the conversation that asked, as a finished turn. Keep the
+machine's registration and the agent entry in place for that. `/restart` and a
+Raven that was killed are covered the same way.
+
+What is not recoverable: a machine that rebooted, or a daemon that was ended
+by hand, no longer knows the task. The turn is then announced as an error
+(*no longer runs 'agent' (task …)*), and nothing is left running there.
+
+A link that has carried no call and run no agent for 10 minutes is closed
+the next time Raven uses another machine; there is no timer, so the last link
+in use stays open until then. The daemon does keep a timer: it leaves after
+10 minutes with no connection and no agent. Neither is an error; the next use
+starts them again.
+
+## 8. Remove a machine
+
+```bash
+raven ops connection remove gpu1
+```
+
+Takes the machine out of the registry after asking (`--yes` skips the
+question) and removes its managed `Host gpu1` block from `~/.ssh/config`. A
+block with one of its two marker lines missing (edited by hand) is left as it
+is and named in a warning: take it out yourself. Nothing else in that file is
+touched.
+Refused while a connected agent entry names the machine: such an entry fails
+at its next dispatch, after the spawn has answered that it started, so
+disconnect those entries first (the Agent Hub, or the `subagents.agents`
+section of the config), or pass `--force` to remove the machine anyway and be
+told which entries are left pointing at nothing. A disconnected entry does not
+stand in the way; it is named, and connecting it again is refused until a
+machine is registered under that id again. The node under its `node_dir` stays on the machine,
+and removing it is a matter of deleting that directory there by hand. The
+password kept here for a machine registered with one is deleted with the row.
+
+The Agent Hub's **Remove machine**, in a machine's sheet, does the same after
+a confirmation, and also refuses while agents are running on the machine over
+the link from this computer; wait for them, or stop them, first. A run left on
+the machine by an earlier Raven process ([section 7](#7-disconnects-and-restarts))
+is not picked up once the machine is gone from the registry.
+
+## Limits and defaults
+
+| What | Value |
+| --- | --- |
+| Agents running at once on one machine | 8; a ninth launch is refused with *already runs 8 agents; wait for one to finish* |
+| A finished task's record on the machine | kept 7 days |
+| Heartbeat / link lost after | 5 s / 15 s |
+| Reconnect backoff | 2, 4, 8, 16 s |
+| Idle link closed | after 10 min without a call or an agent, at the next use of another machine; no timer |
+| Daemon leaves | after 10 min with no connection and no agent; a timer |
+| ssh connect timeout | 15 s |
+| A file call's answer | within 120 s, or the call fails |
+| A file fetched by `deliver_files` | 20 MiB at most |
+| Default working directory on the machine | `~/raven-work` |
+| Default node directory | `~/.raven-node` |
+| Ways to send the prompt to a CLI agent there | `{prompt}`, `{prompt_file}`, stdin |
+
+The registry row's `concurrency` and `budget_unit` govern on-call jobs, not
+these agents.
+
+**Windows.** The machine has to be Linux or macOS. Raven itself may run on
+Windows: there, a drive-relative path such as `C:file` is read as a local path
+and never as a machine named `C`, and a fetched file whose name holds a
+character Windows reserves lands with that character written as a percent
+code.
+
+## Troubleshooting
+
+Every failure is one sentence that names the machine by its id and display
+name, never by its address. ssh's own messages, which do name the address, go
+to an owner-only log under the Raven home (`logs/ssh/`).
+
+| The sentence says | It means | Do this |
+| --- | --- | --- |
+| *is not registered; add it with `raven ops connection add`* | No row has that id | Check the id in the entry against `raven ops connection list` |
+| *is registered, but its entry cannot be used; run `raven ops connection doctor`* | The row is incomplete or its id is listed twice | Run `doctor` and fix what it names |
+| *is this computer; remove `machine` from the agent's entry* | The row is a `local` transport | Drop `machine`; the agent runs here |
+| *refused the login; check the key it is registered with* | ssh's key login failed | Try `ssh -i <key> user@host` by hand; re-add if the key changed |
+| *presented a host key that differs from the one on record* | The machine's host key changed | Check the machine, then clear its `known_hosts` line |
+| *could not be reached* / *did not answer within the connection timeout* | Network or address | Check address, port and whether sshd is up |
+| *is not installed on machine …; install it with `raven ops connection install-node …`* | No node there | Run the install |
+| *runs different code from this Raven; update it with …* | The node is from another Raven version | Run `install-node` again |
+| *has no uv, and no curl or wget to fetch one with* | The installer needs `uv`, and the machine has neither it nor a way to fetch it; a Python there does not change this | Install `uv` on the machine (the sentence names its installer), or `curl` or `wget`, then retry |
+| *has uv 0.4.22, and only uv 0.4.23 or later installs from the index pip is configured with there; with no curl or wget to fetch uv 0.13.0, upgrade uv there* | pip on the machine is configured with an index, its `uv` is too old to read one (or does not say its version), and the installer has no way to fetch a newer one | Upgrade `uv` on the machine, or install `curl` or `wget` so the installer fetches one under `node_dir`, then retry |
+| *failed at the packages step: it did not finish within 15 minutes, installing packages from …* | Downloads from that index crawl on the machine, and no mirror did better (or `RAVEN_NO_MIRROR` is set, or the machine has no `curl` to time it with) | Point pip there at a nearer index (`index-url` in pip's configuration, or `PIP_INDEX_URL`), then retry |
+| *the agent's command was not found on machine …* | The agent is not installed there for that user | Install and sign in on the machine |
+| *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
+| *did not answer a heartbeat within 15s* | The link dropped | Nothing; Raven reconnects. The agent keeps running |
+| *no longer runs 'agent' (task …)* | The daemon lost the task (reboot, killed) | Dispatch again |
+| *changed after it was read; nothing was written* | Someone changed the file since this conversation read it | Read it again, then write |
+| *is over the 20.0 MB limit for a file brought back* | Too large for `deliver_files` | Read it on the machine, or copy it with `scp` |
+| *an endpoint reached through the machine has to be http* | `baseUrl` is `https` | Use the `http` address the machine reaches it at |
+| *this command reaches … over raw ssh* | A typed `ssh` to a registered address in `exec` | Use `exec(machine=…)`, or the file tools |
+
+## Security
+
+- The private key stays on this computer; the registry holds its path. The
+  ssh command line built from the row is held in memory and written to no
+  config, log or model-visible text.
+- The user, address and port do reach a model, because they name every file on
+  the machine (the `scp` spelling above). The key and the ssh line never do.
+- The node opens no network port. It listens on a socket under its own
+  directory, owned by the registered user, and only that user's ssh session
+  reaches it. Each task's record there is readable by that user alone.
+- The node runs file calls with Raven's own tools, fenced to the directory the
+  permission check allowed. It holds no conversation and calls no model;
+  nothing of your model keys goes to the machine.
+- An agent on a machine is that machine's install, signed in there. Raven
+  lends it no key of its own: `lendKeys` on an entry that names a machine
+  lends nothing. The entry's `env` is the one thing of yours it receives, over
+  the link.

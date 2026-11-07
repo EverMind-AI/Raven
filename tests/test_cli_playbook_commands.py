@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -125,7 +126,7 @@ class _FakeGenerator:
     def __init__(self, *args, **kwargs):
         pass
 
-    async def generate(self, user_input: str, skills=None) -> GeneratedPlaybook:
+    async def generate(self, user_input: str, skills=None, *, dag_only=False) -> GeneratedPlaybook:
         spec = PlaybookSpec(
             name="placeholder",
             description="generated from: " + user_input.splitlines()[0][:40],
@@ -161,6 +162,7 @@ def test_create_lands_in_the_user_layer_usable(library, monkeypatch):
     assert "name: weekly-scan" in text
     assert "Assumption: weekly cadence" in text
     assert "Usable now" in r.stdout
+    assert "schemaVersion: 2" in text
     assert "disable weekly-scan" in r.stdout
     # The bracketed capability name is the diagnostic: Rich must not eat it.
     assert "mcp[fs]" in r.output
@@ -433,6 +435,136 @@ def test_run_wires_the_playbooks_own_servers_over_the_hosts(library, monkeypatch
     assert "hunter2" not in r.stdout
 
 
+def _write_branching_md(root: Path, name: str) -> None:
+    """A dag playbook whose first step decides which of its two branches runs."""
+    target = root / name
+    target.mkdir(parents=True)
+    (target / "playbook.md").write_text(
+        f"---\nname: {name}\ndescription: triage a report and answer it\n---\n\nbody\n\n"
+        "```yaml playbook-spec\n"
+        "version: 1\nmode: dag\nconfirm: false\n"
+        "taskSummary: triage the report and answer it\n"
+        f"triggers:\n  keywords: [{name}]\n"
+        "nodes:\n"
+        "  - id: triage\n    subagent: echo\n    nodeSummary: classify the report\n"
+        "    promptTemplate: classify the report\n"
+        "    routes:\n      bug: the report describes a defect\n      question: the report asks a question\n"
+        "  - id: fix\n    subagent: echo\n    nodeSummary: fix the defect\n    promptTemplate: fix it\n"
+        "    dependsOn: [triage]\n    when: triage.bug\n"
+        "  - id: reply\n    subagent: echo\n    nodeSummary: answer the question\n    promptTemplate: answer it\n"
+        "    dependsOn: [triage]\n    when: triage.question\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+
+class _JudgingProvider:
+    """Judges every node: `outcome` as given, and `route` wherever the call offers one."""
+
+    def __init__(self, route: str, outcome: str = "accomplished") -> None:
+        self.route = route
+        self.outcome = outcome
+        self.judged: list[str] = []
+
+    def get_default_model(self) -> str:
+        return "fake-model"
+
+    async def chat_with_retry(self, *, messages, tools=None, model=None, tool_choice=None, **_kwargs):
+        offered = tools[0]["function"]["parameters"]["properties"]
+        self.judged.append("route" if "route" in offered else "plain")
+        args = {"outcome": self.outcome}
+        if self.outcome == "accomplished" and "route" in offered:
+            args["route"] = self.route
+        elif self.outcome != "accomplished":
+            args |= {"category": "other", "what_is_missing": "the answer cites no source"}
+        call = SimpleNamespace(arguments=json.dumps(args))
+        return SimpleNamespace(tool_calls=[call], finish_reason="tool_calls", content=None)
+
+
+def _branching_library(library) -> None:
+    _write_branching_md(library["user"], "triage")
+    library["config"].write_text(
+        json.dumps(
+            {
+                "playbooks": {"dir": str(library["user"])},
+                "subagents": {"agents": [{"name": "echo", "kind": "cli", "command": "cat"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_run_judges_its_nodes_so_a_branching_playbook_takes_its_branch(library, monkeypatch):
+    """A decision node chooses its route through the judge, and this command has a model.
+
+    Without a judge the run was refused before anything ran, so a playbook that branches --
+    which the composer here is invited to write -- could not run from the command line."""
+    _branching_library(library)
+    provider = _JudgingProvider("question")
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: provider)
+
+    r = runner.invoke(app, ["playbook", "run", "triage"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "2 completed, 0 failed, 0 cancelled, 0 skipped, 1 not executed (of 3)" in r.stdout
+    assert "selected_routes: question" in r.stdout
+    assert provider.judged == ["route", "plain"], "the decision node, then the branch it chose"
+
+
+def test_run_fails_a_node_that_falls_short_instead_of_waiting_on_an_answer(library, monkeypatch):
+    """Nobody here can answer a node that did not accomplish its task, so it fails on its
+    judge's reason and the run ends; waiting would hand the terminal a question it cannot
+    answer and then end the process under the waiting run."""
+    _branching_library(library)
+    provider = _JudgingProvider("question", outcome="not_accomplished")
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: provider)
+
+    r = runner.invoke(app, ["playbook", "run", "triage"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "0 completed, 1 failed, 0 cancelled, 2 skipped (of 3)" in r.stdout
+    assert "the answer cites no source" in r.stdout
+    assert "resolve_dag_node" not in r.stdout
+
+
+def test_run_judges_on_the_users_own_subagent_dag_settings(library, monkeypatch):
+    """The judge here reads `subagentDag` as a conversation's does: a decision node whose
+    judge outlasts the configured timeout fails for want of a route, under that timeout."""
+    import asyncio
+
+    _branching_library(library)
+    config = json.loads(library["config"].read_text(encoding="utf-8"))
+    library["config"].write_text(json.dumps({**config, "subagentDag": {"verdictTimeoutSeconds": 0.05}}))
+
+    class _Slow(_JudgingProvider):
+        async def chat_with_retry(self, **kwargs):
+            await asyncio.sleep(2)
+            return await super().chat_with_retry(**kwargs)
+
+    monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _Slow("question"))
+
+    r = runner.invoke(app, ["playbook", "run", "triage"])
+
+    assert r.exit_code == 0, r.stdout
+    assert "The route could not be determined: the judge call timed out after 0.05s" in r.stdout
+
+
+def test_validate_answers_a_yaml_syntax_error_as_a_finding(library, monkeypatch):
+    """A hand-edited file with a YAML syntax error in its spec block is the
+    case the RPC validator catches yaml.YAMLError for; the CLI must answer it
+    as a finding too, not crash with a traceback."""
+    _write_dag_md(library["user"], "broken")
+    block = library["user"] / "broken" / "playbook.md"
+    text = block.read_text(encoding="utf-8")
+    broken = text.replace("```yaml playbook-spec\n", "```yaml playbook-spec\n  nodes: [unclosed\n", 1)
+    block.write_text(broken, encoding="utf-8")
+
+    r = runner.invoke(app, ["playbook", "validate", "broken"])
+
+    assert r.exit_code == 1, r.stdout
+    assert "while parsing a flow sequence" in r.stdout, r.stdout
+
+
 def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, monkeypatch):
     """SubagentManager in playbook run receives tools.sandbox and tools.restrict_to_workspace (#798)."""
     _write_dag_md(library["user"], "audit")
@@ -451,6 +583,7 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
     monkeypatch.setattr("raven.providers.factory.make_provider", lambda config: _FakeProvider())
     monkeypatch.setattr("raven.playbook.PlaybookRuntime", _FakeRuntime)
 
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
 
     captured = {}
@@ -463,6 +596,15 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
 
     monkeypatch.setattr(SubagentManager, "__init__", recording_init)
 
+    tool_captured = {}
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        tool_captured.setdefault("tool", self)
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
     r = runner.invoke(app, ["playbook", "run", "audit"])
     assert r.exit_code == 0, r.stdout
 
@@ -472,10 +614,12 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
     assert manager._sandbox_config.backend == "none"
     assert manager._sandbox_config.allow_net is False
     assert manager.provider_pool is not None
+    assert tool_captured["tool"]._sandbox_for == manager.sandbox_executor_for
 
 
 def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(tmp_path, monkeypatch):
     """SubagentManager in _stint_driver receives tools.sandbox and tools.restrict_to_workspace (#798)."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
     from raven.agent.subagent.manager import SubagentManager
     from raven.cli.playbook_commands import _stint_driver
     from raven.config.schema import Config, SandboxConfig, ToolsConfig
@@ -499,6 +643,15 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
 
     monkeypatch.setattr(SubagentManager, "__init__", recording_init)
 
+    tool_captured = {}
+    orig_tool_init = SubAgentDagTool.__init__
+
+    def recording_tool_init(self, *args, **kwargs):
+        tool_captured.setdefault("tool", self)
+        return orig_tool_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(SubAgentDagTool, "__init__", recording_tool_init)
+
     driver = _stint_driver(config, tmp_path)
     assert driver is not None
 
@@ -507,6 +660,7 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
     assert manager._sandbox_config is not None
     assert manager._sandbox_config.backend == "none"
     assert manager.provider_pool is not None
+    assert tool_captured["tool"]._sandbox_for == manager.sandbox_executor_for
 
 
 def test_run_reports_a_server_waiting_on_authorization_and_does_not_wait_for_it(library, monkeypatch):

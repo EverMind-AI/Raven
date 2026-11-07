@@ -14,11 +14,11 @@ describe('splitMcp', () => {
 
 describe('verbOf / verbIngOf', () => {
   it('reads the catalogue for a known tool, done and in flight', () => {
-    expect(verbOf('write_file')).toBe('wrote')
-    expect(verbIngOf('write_file')).toBe('writing')
-    expect(verbOf('read_file')).toBe('read')
-    expect(verbOf('exec')).toBe('ran command')
-    expect(verbOf('web_fetch')).toBe('read page')
+    expect(verbOf('write_file')).toBe('Wrote')
+    expect(verbIngOf('write_file')).toBe('Writing')
+    expect(verbOf('read_file')).toBe('Read')
+    expect(verbOf('exec')).toBe('Ran command')
+    expect(verbOf('web_fetch')).toBe('Read page')
   })
 
   it('falls back to the bare tool name, underscores turned to spaces, for an MCP tool the catalogue does not carry', () => {
@@ -39,8 +39,8 @@ describe('actName', () => {
     expect(actName('plugin', { action: 'authorize', name: 'github' })).toBe('plugin_connect')
     expect(actName('raven_config', {})).toBe('raven_config')
     expect(actName('read_file', { action: 'get' })).toBe('read_file')
-    expect(verbOf(actName('raven_config', { action: 'describe' }))).toBe('checked settings')
-    expect(verbIngOf(actName('plugin', { action: 'connect' }))).toBe('connecting a plugin')
+    expect(verbOf(actName('raven_config', { action: 'describe' }))).toBe('Checked settings')
+    expect(verbIngOf(actName('plugin', { action: 'connect' }))).toBe('Connecting a plugin')
   })
 
   it('folds a run of them by kind of action, not by tool', () => {
@@ -49,14 +49,14 @@ describe('actName', () => {
       { name: 'raven_config', args: { action: 'get', path: 'tools' } },
       { name: 'raven_config', args: { action: 'set', path: 'tools.exec.timeout' } },
       { name: 'plugin', args: { action: 'list' } },
-    ])).toBe('checked settings 2 times · changed settings · checked plugins')
+    ])).toBe('Checked settings 2 times · Changed settings · Checked plugins')
   })
 })
 
 describe('phraseOf', () => {
   it('folds repeats into the catalogue\'s counted phrase and keeps a single call as its verb alone', () => {
     expect(phraseOf([{ name: 'write_file' }, { name: 'write_file' }, { name: 'read_file' }]))
-      .toBe('wrote 2 files · read')
+      .toBe('Wrote 2 files · Read')
   })
 })
 

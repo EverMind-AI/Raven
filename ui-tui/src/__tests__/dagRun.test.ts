@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunSnapshot, DagRunStartedEvent } from '../rpc/index.js'
 
-import { foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
+import { attemptOrder, foldDagEvent, foldDagSnapshot } from '../domain/dagRun.js'
 
 const started = (
   nodes: DagRunStartedEvent['payload']['nodes'],
@@ -142,7 +142,7 @@ describe('foldDagEvent', () => {
   })
 
   it('reports a node still called running on a finished run as interrupted', () => {
-    // The runner only ever reports the four terminal states, so a node left
+    // The runner only ever reports the five terminal states, so a node left
     // running when the run closed means its terminal write never arrived.
     const completed: DagRunCompletedEvent = {
       type: 'dag.run_completed',
@@ -235,6 +235,167 @@ describe('foldDagEvent', () => {
   })
 })
 
+describe('foldDagEvent on a branching run', () => {
+  const BRANCHING: DagRunStartedEvent['payload']['nodes'] = [
+    { id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'], select: 'one' },
+    { id: 'fix', subagent: 'echo', depends_on: ['triage'], when: 'triage.bug' },
+    { id: 'plain', subagent: 'echo', depends_on: [] }
+  ]
+
+  const open = () => foldDagEvent(null, started(BRANCHING))
+
+  const completion = (files: DagRunCompletedEvent['payload']['files'], summary = {}): DagRunCompletedEvent => ({
+    type: 'dag.run_completed',
+    payload: { run_id: 'dag-1', dir: '/w/mas_dag/dag-1', summary: { total: 3, ...summary }, files }
+  })
+
+  const nodeOf = (run: ReturnType<typeof open>, id: string) => run?.nodes.find(n => n.id === id)
+
+  it('keeps the reason, the selection and the guard', () => {
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+    })
+
+    expect(nodeOf(run, 'fix')).toMatchObject({ reason: 'when_false', status: 'not_executed', when: 'triage.bug' })
+  })
+
+  it('learns from the start frame which node decides and which is guarded', () => {
+    const run = open()
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routes: ['docs', 'bug'], select: 'one' })
+    expect(nodeOf(run, 'fix')?.when).toBe('triage.bug')
+  })
+
+  it('leaves a plain node with no branch key at all', () => {
+    // A key present and undefined would still be a shape no ordinary run had.
+    expect(nodeOf(open(), 'plain')).toStrictEqual({
+      id: 'plain',
+      subagent: 'echo',
+      dependsOn: [],
+      status: 'pending'
+    })
+  })
+
+  it('keeps what a decision node selected, and the evidence it gave', () => {
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'triage',
+        status: 'completed',
+        ended_at: 9,
+        selected_routes: ['docs'],
+        route_evidence: 'it asks how to configure the proxy'
+      }
+    })
+
+    expect(nodeOf(run, 'triage')).toMatchObject({
+      routeEvidence: 'it asks how to configure the proxy',
+      selectedRoutes: ['docs'],
+      status: 'completed'
+    })
+  })
+
+  it('keeps an empty selection, which is a decision that chose nothing', () => {
+    // Copied by presence, not truthiness: `[]` is a selection of nothing, and
+    // dropping it would read as a decision never made.
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: [] }
+    })
+
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+  })
+
+  it('gives no selection to a node whose frame carried none', () => {
+    const run = foldDagEvent(open(), updated('triage', 'completed'))
+
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('selectedRoutes')
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('routeEvidence')
+    expect(nodeOf(run, 'triage')).not.toHaveProperty('reason')
+  })
+
+  it('does not lose the selection to a later frame that does not repeat it', () => {
+    const decided = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: [], route_evidence: 'none' }
+    })
+    const run = foldDagEvent(decided, updated('triage', 'completed'))
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'none' })
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+  })
+
+  it('takes the reason, the selection and the evidence from the manifest, an empty selection included', () => {
+    const run = foldDagEvent(
+      open(),
+      completion(
+        [
+          { node: 'triage', status: 'completed', selected_routes: [], route_evidence: 'no route applies' },
+          { node: 'fix', status: 'not_executed', reason: 'when_unknown' },
+          { node: 'plain', status: 'completed' }
+        ],
+        { completed: 2, not_executed: 1 }
+      )
+    )
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'no route applies' })
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toStrictEqual([])
+    expect(nodeOf(run, 'fix')).toMatchObject({ reason: 'when_unknown', status: 'not_executed' })
+    expect(nodeOf(run, 'plain')).toStrictEqual({
+      id: 'plain',
+      subagent: 'echo',
+      dependsOn: [],
+      status: 'completed'
+    })
+  })
+
+  it('counts the nodes a branch left out in the summary', () => {
+    const run = foldDagEvent(
+      open(),
+      completion([{ node: 'fix', status: 'not_executed' }], { completed: 2, not_executed: 1 })
+    )
+
+    expect(run?.summary).toEqual({ total: 3, completed: 2, not_executed: 1 })
+  })
+
+  it('does not drop what the updated frames said when the manifest repeats none of it', () => {
+    const live = foldDagEvent(
+      foldDagEvent(open(), {
+        type: 'dag.node_updated',
+        payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: ['bug'], route_evidence: 'x' }
+      }),
+      {
+        type: 'dag.node_updated',
+        payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+      }
+    )
+    const run = foldDagEvent(
+      live,
+      completion([
+        { node: 'triage', status: 'completed' },
+        { node: 'fix', status: 'not_executed' }
+      ])
+    )
+
+    expect(nodeOf(run, 'triage')).toMatchObject({ routeEvidence: 'x', selectedRoutes: ['bug'] })
+    expect(nodeOf(run, 'fix')?.reason).toBe('when_false')
+  })
+
+  it('does not share the selection array with the event it came from', () => {
+    const selected = ['docs']
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: selected }
+    })
+
+    selected.push('bug')
+
+    expect(nodeOf(run, 'triage')?.selectedRoutes).toEqual(['docs'])
+  })
+})
+
 describe('foldDagSnapshot', () => {
   const snapshot = (files: DagRunSnapshot['files'], over: Partial<DagRunSnapshot> = {}): DagRunSnapshot => ({
     run_id: 'dag-1',
@@ -322,5 +483,589 @@ describe('foldDagSnapshot', () => {
     const run = foldDagSnapshot(live, snapshot([{ node: 'a', status: 'completed' }]))
 
     expect(run.nodes[0]!.promptTemplate).toBe('read the file')
+  })
+
+  describe('on a branching run', () => {
+    const BRANCHED: DagRunSnapshot['files'] = [
+      {
+        node: 'triage',
+        status: 'completed',
+        subagent: 'echo',
+        depends_on: [],
+        routes: ['docs', 'bug'],
+        select: 'many',
+        selected_routes: [],
+        route_evidence: 'no route applies'
+      },
+      {
+        node: 'fix',
+        status: 'not_executed',
+        subagent: 'echo',
+        depends_on: ['triage'],
+        when: 'triage.bug',
+        reason: 'when_false'
+      },
+      { node: 'plain', status: 'completed', subagent: 'echo', depends_on: [] }
+    ]
+
+    it('carries what each node asked and what was decided, an empty selection included', () => {
+      const run = foldDagSnapshot(null, snapshot(BRANCHED))
+
+      expect(run.nodes[0]).toMatchObject({
+        routeEvidence: 'no route applies',
+        routes: ['docs', 'bug'],
+        select: 'many'
+      })
+      expect(run.nodes[0]!.selectedRoutes).toStrictEqual([])
+      expect(run.nodes[1]).toMatchObject({ reason: 'when_false', status: 'not_executed', when: 'triage.bug' })
+    })
+
+    it('leaves a plain node with no branch key at all', () => {
+      expect(foldDagSnapshot(null, snapshot(BRANCHED)).nodes[2]).toStrictEqual({
+        id: 'plain',
+        subagent: 'echo',
+        dependsOn: [],
+        status: 'completed'
+      })
+    })
+
+    it('counts the nodes a branch left out in the summary', () => {
+      const run = foldDagSnapshot(null, snapshot(BRANCHED, { summary: { total: 3, completed: 2, not_executed: 1 } }))
+
+      expect(run.summary).toEqual({ total: 3, completed: 2, not_executed: 1 })
+    })
+
+    it('keeps the outcome the live frames reported when an unfinished run has none on disk yet', () => {
+      // A run still going has no manifest, so `dag.get` answers from the
+      // registry, where a write is best-effort and can be dropped. Letting it win
+      // outright would blank a selection and a reason that were reading fine a
+      // moment ago.
+      const live = foldDagEvent(
+        foldDagEvent(
+          foldDagEvent(
+            null,
+            started([
+              { id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'] },
+              { id: 'fix', subagent: 'echo', depends_on: ['triage'], when: 'triage.bug' }
+            ])
+          ),
+          {
+            type: 'dag.node_updated',
+            payload: {
+              run_id: 'dag-1',
+              node: 'triage',
+              status: 'completed',
+              selected_routes: ['docs'],
+              route_evidence: 'it asks how to configure the proxy'
+            }
+          }
+        ),
+        {
+          type: 'dag.node_updated',
+          payload: { run_id: 'dag-1', node: 'fix', status: 'not_executed', reason: 'when_false' }
+        }
+      )
+
+      const run = foldDagSnapshot(
+        live,
+        snapshot(
+          [
+            { node: 'triage', status: 'completed', routes: ['docs', 'bug'], select: 'one' },
+            { node: 'fix', status: 'not_executed', when: 'triage.bug' }
+          ],
+          { finalized: false }
+        )
+      )
+
+      expect(run.nodes[0]).toMatchObject({
+        routeEvidence: 'it asks how to configure the proxy',
+        selectedRoutes: ['docs']
+      })
+      expect(run.nodes[1]!.reason).toBe('when_false')
+    })
+
+    it('renders a not-executed node with no reason as it came, without inventing one', () => {
+      const run = foldDagSnapshot(null, snapshot([{ node: 'fix', status: 'not_executed' }], { finalized: false }))
+
+      expect(run.nodes[0]).toStrictEqual({ id: 'fix', subagent: '', dependsOn: [], status: 'not_executed' })
+    })
+
+    it('takes the disk over what the live frames said when both have an answer', () => {
+      const live = foldDagEvent(
+        foldDagEvent(null, started([{ id: 'triage', subagent: 'echo', depends_on: [], routes: ['docs', 'bug'] }])),
+        {
+          type: 'dag.node_updated',
+          payload: { run_id: 'dag-1', node: 'triage', status: 'completed', selected_routes: ['docs'] }
+        }
+      )
+      const run = foldDagSnapshot(
+        live,
+        snapshot([{ node: 'triage', status: 'completed', selected_routes: ['bug'], route_evidence: 'later' }])
+      )
+
+      expect(run.nodes[0]).toMatchObject({ routeEvidence: 'later', selectedRoutes: ['bug'] })
+    })
+  })
+})
+
+// A node handed to another agent mid-run. The frames of the attempt that gave
+// up can still be in flight when the next one starts, so a fold has to know
+// which attempt a frame speaks for: the history is the only thing that says.
+describe('foldDagEvent on a reassigned node', () => {
+  const open = () => foldDagEvent(null, started([{ id: 'fix', subagent: 'alpha', depends_on: [] }]))
+  const nodeOf = (run: ReturnType<typeof open>) => run?.nodes.find(n => n.id === 'fix')
+
+  it('moves identity, status and timing of one attempt together', () => {
+    const run = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 10,
+        subagent: 'beta',
+        instance: 'fix-minted',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+
+    expect(nodeOf(run)).toMatchObject({
+      attemptAgents: ['alpha', 'beta'],
+      instance: 'fix-minted',
+      startedAt: 10,
+      status: 'running',
+      subagent: 'beta'
+    })
+  })
+
+  it('keeps every attempt of an A -> B -> A reassignment', () => {
+    const first = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 10,
+        subagent: 'alpha',
+        attempt_agents: ['alpha']
+      }
+    })
+    const second = foldDagEvent(first, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 20,
+        subagent: 'beta',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+    const third = foldDagEvent(second, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 30,
+        subagent: 'alpha',
+        attempt_agents: ['alpha', 'beta', 'alpha']
+      }
+    })
+
+    expect(nodeOf(third)).toMatchObject({
+      attemptAgents: ['alpha', 'beta', 'alpha'],
+      startedAt: 30,
+      status: 'running',
+      subagent: 'alpha'
+    })
+  })
+
+  it('does not let a delayed frame from an earlier attempt overwrite the newer one', () => {
+    const newer = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 20,
+        subagent: 'beta',
+        instance: 'fix-minted',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+    const delayed = foldDagEvent(newer, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'exception',
+        started_at: 10,
+        ended_at: 15,
+        subagent: 'alpha',
+        instance: 'fix-alpha',
+        attempt_agents: ['alpha']
+      }
+    })
+
+    expect(nodeOf(delayed)).toMatchObject({
+      attemptAgents: ['alpha', 'beta'],
+      instance: 'fix-minted',
+      startedAt: 20,
+      status: 'running',
+      subagent: 'beta'
+    })
+    expect(nodeOf(delayed)?.endedAt).toBeUndefined()
+  })
+
+  it('treats a frame that names no attempt as older than the history the node carries', () => {
+    // Every frame of a reassigned node carries its history. One without it is
+    // from before the reassignment, however late it arrives.
+    const live = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'running', started_at: 10, attempt_agents: ['alpha'] }
+    })
+    const stale = foldDagEvent(live, {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'completed', started_at: 1, ended_at: 2 }
+    })
+
+    expect(nodeOf(stale)).toMatchObject({ attemptAgents: ['alpha'], startedAt: 10, status: 'running' })
+  })
+
+  it('applies a frame of the same attempt by the established status and timing policy', () => {
+    const running = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 10,
+        subagent: 'beta',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+    const done = foldDagEvent(running, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'completed',
+        ended_at: 30,
+        subagent: 'beta',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+    const late = foldDagEvent(done, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'completed',
+        subagent: 'beta',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+
+    expect(nodeOf(done)).toMatchObject({ endedAt: 30, startedAt: 10, status: 'completed' })
+    expect(nodeOf(late)).toMatchObject({ endedAt: 30, startedAt: 10, status: 'completed' })
+  })
+
+  it('clears the displayed handle on a stateless retry, and only on a frame that says so', () => {
+    const stateful = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        subagent: 'beta',
+        instance: 'fix-minted',
+        instance_auto: true,
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+    const stateless = foldDagEvent(stateful, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 20,
+        subagent: 'gamma',
+        instance: null,
+        instance_auto: false,
+        attempt_agents: ['alpha', 'beta', 'gamma']
+      }
+    })
+
+    expect(nodeOf(stateless)?.instance).toBeUndefined()
+    expect(nodeOf(stateless)).toMatchObject({ attemptAgents: ['alpha', 'beta', 'gamma'], subagent: 'gamma' })
+  })
+
+  it('ignores a malformed history rather than half-adopting it', () => {
+    const live = foldDagEvent(open(), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'running', started_at: 10, attempt_agents: ['alpha'] }
+    })
+    const malformed = foldDagEvent(live, {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'completed',
+        subagent: 'beta',
+        attempt_agents: ['alpha', 7, ''] as never
+      }
+    })
+
+    expect(nodeOf(malformed)).toMatchObject({ attemptAgents: ['alpha'], status: 'running', subagent: 'alpha' })
+  })
+
+  it('leaves a node no reassignment touched exactly as it was', () => {
+    const run = foldDagEvent(open(), updated('fix', 'completed'))
+
+    expect(nodeOf(run)).toStrictEqual({ id: 'fix', subagent: 'alpha', dependsOn: [], status: 'completed' })
+  })
+})
+
+describe('foldDagSnapshot on a reassigned node', () => {
+  const snapshot = (files: DagRunSnapshot['files'], over: Partial<DagRunSnapshot> = {}): DagRunSnapshot => ({
+    run_id: 'dag-1',
+    dir: '/w/mas_dag/dag-1',
+    finalized: false,
+    files,
+    summary: { total: files.length, completed: 0, failed: 0, skipped: 0 },
+    ...over
+  })
+  // A node the live frames already moved twice: alpha gave up, beta runs it now.
+  const live = () =>
+    foldDagEvent(foldDagEvent(null, started([{ id: 'fix', subagent: 'alpha', depends_on: [] }])), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 20,
+        subagent: 'beta',
+        instance: 'fix-minted',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+
+  it('does not let a delayed snapshot without history replace a node that carries one', () => {
+    // The read was issued before the reassignment landed; the frames are newer.
+    const run = foldDagSnapshot(live(), snapshot([{ node: 'fix', status: 'exception', subagent: 'alpha' }]))
+
+    expect(run.nodes[0]).toMatchObject({
+      attemptAgents: ['alpha', 'beta'],
+      instance: 'fix-minted',
+      startedAt: 20,
+      status: 'running',
+      subagent: 'beta'
+    })
+  })
+
+  it('does not let a snapshot with a shorter history overwrite the newer attempt', () => {
+    const run = foldDagSnapshot(
+      live(),
+      snapshot([
+        {
+          node: 'fix',
+          status: 'exception',
+          subagent: 'alpha',
+          attempt_agents: ['alpha']
+        }
+      ])
+    )
+
+    expect(run.nodes[0]).toMatchObject({ attemptAgents: ['alpha', 'beta'], status: 'running', subagent: 'beta' })
+  })
+
+  it('lets a snapshot with a longer history move the node on', () => {
+    const run = foldDagSnapshot(
+      live(),
+      snapshot([
+        {
+          node: 'fix',
+          status: 'completed',
+          subagent: 'gamma',
+          instance: null,
+          started_at: 40,
+          ended_at: 50,
+          attempt_agents: ['alpha', 'beta', 'gamma']
+        }
+      ])
+    )
+
+    expect(run.nodes[0]).toMatchObject({
+      attemptAgents: ['alpha', 'beta', 'gamma'],
+      endedAt: 50,
+      startedAt: 40,
+      status: 'completed',
+      subagent: 'gamma'
+    })
+    expect(run.nodes[0]?.instance).toBeUndefined()
+  })
+
+  it('answers a snapshot of the same attempt with the durable record', () => {
+    const run = foldDagSnapshot(
+      live(),
+      snapshot([
+        {
+          node: 'fix',
+          status: 'completed',
+          subagent: 'beta',
+          started_at: 20,
+          ended_at: 60,
+          output_file: '/w/fix.out.md',
+          attempt_agents: ['alpha', 'beta']
+        }
+      ])
+    )
+
+    expect(run.nodes[0]).toMatchObject({
+      attemptAgents: ['alpha', 'beta'],
+      endedAt: 60,
+      outputFile: '/w/fix.out.md',
+      status: 'completed'
+    })
+  })
+
+  it('reads a node that was never reassigned exactly as it came', () => {
+    const run = foldDagSnapshot(null, snapshot([{ node: 'fix', status: 'completed', subagent: 'alpha' }]))
+
+    expect(run.nodes[0]).toStrictEqual({ id: 'fix', subagent: 'alpha', dependsOn: [], status: 'completed' })
+  })
+
+  it('leaves the node untouched when a stale row carries its own output and failure', () => {
+    // The read was asked before the reassignment landed. Its status, agent and
+    // handle were already known to be old; its output file, error and branch
+    // outcome are the same attempt's, and taking them would mix two attempts.
+    const before = live()
+    const run = foldDagSnapshot(
+      before,
+      snapshot([
+        {
+          node: 'fix',
+          status: 'failed',
+          subagent: 'alpha',
+          started_at: 1,
+          ended_at: 2,
+          output_file: '/w/alpha.out.md',
+          error: 'alpha gave up',
+          reason: 'when_false',
+          attempt_agents: ['alpha']
+        }
+      ])
+    )
+
+    expect(run.nodes[0]).toBe(before?.nodes[0])
+    expect(run.nodes[0]?.outputFile).toBeUndefined()
+    expect(run.nodes[0]?.error).toBeUndefined()
+    expect(run.nodes[0]?.reason).toBeUndefined()
+  })
+
+  it('ignores a malformed stored history rather than crashing on it', () => {
+    const run = foldDagSnapshot(
+      live(),
+      snapshot([{ node: 'fix', status: 'exception', attempt_agents: 'nope' as never }])
+    )
+
+    expect(run.nodes[0]).toMatchObject({ attemptAgents: ['alpha', 'beta'], status: 'running', subagent: 'beta' })
+  })
+})
+
+describe('foldDagEvent completion of a reassigned node', () => {
+  const live = () =>
+    foldDagEvent(foldDagEvent(null, started([{ id: 'fix', subagent: 'alpha', depends_on: [] }])), {
+      type: 'dag.node_updated',
+      payload: {
+        run_id: 'dag-1',
+        node: 'fix',
+        status: 'running',
+        started_at: 10,
+        subagent: 'beta',
+        attempt_agents: ['alpha', 'beta']
+      }
+    })
+  const completion = (files: DagRunCompletedEvent['payload']['files']): DagRunCompletedEvent => ({
+    type: 'dag.run_completed',
+    payload: { run_id: 'dag-1', dir: '/w/dag-1', summary: { total: 1, completed: 1 }, files }
+  })
+
+  it('folds the finishing attempt and its history from the manifest', () => {
+    const run = foldDagEvent(
+      live(),
+      completion([{ node: 'fix', status: 'completed', subagent: 'gamma', attempt_agents: ['alpha', 'beta', 'gamma'] }])
+    )
+    const node = run?.nodes[0]
+
+    expect(node).toMatchObject({
+      attemptAgents: ['alpha', 'beta', 'gamma'],
+      status: 'completed',
+      subagent: 'gamma'
+    })
+    // The frame carries no node timings, so the previous attempt's do not date
+    // the attempt it introduces.
+    expect([node?.startedAt, node?.endedAt]).toEqual([undefined, undefined])
+  })
+
+  it('does not let a manifest naming fewer attempts rewind the node', () => {
+    const before = live()
+    const run = foldDagEvent(
+      before,
+      completion([{ node: 'fix', status: 'exception', subagent: 'alpha', attempt_agents: ['alpha'] }])
+    )
+
+    // A row of an attempt the node has moved past is not this node's word at
+    // all: status, agent, handle, clock, output and error all belong to that
+    // attempt, exactly as the node's own stale-frame rule says.
+    expect(run?.nodes[0]).toBe(before?.nodes[0])
+  })
+
+  it('leaves a stale manifest row with its own output and failure out of the node', () => {
+    const before = live()
+    const run = foldDagEvent(
+      before,
+      completion([
+        {
+          node: 'fix',
+          status: 'failed',
+          subagent: 'alpha',
+          output_file: '/w/alpha.out.md',
+          error: 'alpha gave up',
+          attempt_agents: ['alpha']
+        }
+      ])
+    )
+
+    expect(run?.nodes[0]?.outputFile).toBeUndefined()
+    expect(run?.nodes[0]?.error).toBeUndefined()
+  })
+
+  it('leaves a node no reassignment touched as the manifest names it', () => {
+    const opened = foldDagEvent(foldDagEvent(null, started([{ id: 'fix', subagent: 'alpha', depends_on: [] }])), {
+      type: 'dag.node_updated',
+      payload: { run_id: 'dag-1', node: 'fix', status: 'running', started_at: 10 }
+    })
+    const run = foldDagEvent(opened, completion([{ node: 'fix', status: 'completed' }]))
+
+    expect(run?.nodes[0]).toStrictEqual({
+      id: 'fix',
+      subagent: 'alpha',
+      dependsOn: [],
+      status: 'completed',
+      startedAt: 10
+    })
+  })
+})
+
+describe('attemptOrder', () => {
+  it('places a report against the attempt the node holds', () => {
+    expect(attemptOrder(['alpha', 'beta'], undefined)).toBe('stale')
+    expect(attemptOrder(['alpha', 'beta'], ['alpha'])).toBe('stale')
+    expect(attemptOrder(undefined, ['alpha'])).toBe('newer')
+    expect(attemptOrder(['alpha'], ['alpha', 'beta'])).toBe('newer')
+    expect(attemptOrder(['alpha'], ['alpha'])).toBe('same')
   })
 })

@@ -2,7 +2,7 @@
 """Host-side launcher for the Raven-Research ACP server -- the B side.
 
 The retired vendored Raven-Research carried a whole fork checkout; this
-product carries none. It renders its config and execs the
+product carries none. It renders its config and serves the
 installed raven's own ``raven acp``, so every turn runs through the same
 assembly door (build_runtime) as the host's TUI and gateway. The machinery
 of rendering lives in the launcher library
@@ -23,14 +23,14 @@ architecture doing the job the fork used to:
 * the home is answered by the path paper (``raven.home``), never re-derived;
 * identity is a workspace asset -- raven reads
   ``agent_memory/profile/soul.md``, so ``soul.md`` beside this file is
-  copied there on first launch -- not a config override;
+  rendered there on every launch -- not a config override;
 * modes are overlays: ``modes/*.json`` diffs become ``acp.modes`` entries a
   client's picker shows, applied per session over the baseline flow config
   instead of being compiled into the loop the way the fork did.
 
-After rendering, this process execs ``python -m raven acp`` on its own
-interpreter (the row's ``{PYTHON}`` resolves at install time to one that
-imports raven), so the server inherits this pid, process group and stdio.
+After rendering, the launcher serves ``python -m raven acp`` on this
+interpreter with inherited stdio. POSIX replaces the launcher; Windows
+keeps it alive until the child exits, preserving the rendered config's owner.
 stdout belongs to the protocol; every diagnostic goes to stderr.
 """
 
@@ -39,9 +39,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
-from typing import get_args
+from typing import Callable, get_args
 
 from raven.config import product_render as render
 from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
@@ -161,18 +162,33 @@ PLUGIN_WEB_MIRROR = {
 SEARCH_ENV_VAR = WEB_VENDOR_ENV_VARS[DEFAULT_SEARCH_VENDOR]
 
 
-def vendor_key(config: dict, vendor: str) -> str:
+def vendor_key(config: dict, vendor: str, host: dict | None = None) -> str:
     """One vendor's credential, in trunk raven's own resolution order.
 
     The vendor slot first, then the pre-vendor leaf for the two vendors that
-    still have one. Restated here rather than imported because the launcher
-    reads plain JSON, not the schema objects ``WebToolsConfig.vendor_key``
-    walks; the order is pinned against it by the launcher tests.
+    still have one, then the LLM provider key a vendor shares an account with
+    (DeepSeek serves its web endpoints on the chat account). Restated here
+    rather than imported because the launcher reads plain JSON, not the schema
+    objects ``WebToolsConfig.vendor_key`` walks; the order is pinned against it
+    by the launcher tests. ``host`` is the second borrow source: a product
+    running on its own LLM key never inherited the host's ``providers`` block,
+    but the borrowed web key still belongs to the deployment.
     """
-    if key := render.dig(config, ("tools", "web", "providers", vendor, "apiKey")):
-        return key
+    key = render.dig(config, ("tools", "web", "providers", vendor, "apiKey"))
     legacy = LEGACY_VENDOR_SLOTS.get(vendor)
-    return render.dig(config, legacy) if legacy else ""
+    if not key and legacy:
+        key = render.dig(config, legacy)
+    if key:
+        return key
+    from raven.config import schema
+
+    # This file can outlive its raven, so a name this PR introduced is looked up
+    # at call time; a launcher on an older raven borrows nothing instead of
+    # raising on its first key lookup.
+    borrow = getattr(schema, "borrowed_web_key", None)
+    if borrow is None:
+        return ""
+    return borrow(vendor, config.get("providers") or {}) or borrow(vendor, (host or {}).get("providers") or {})
 
 
 def selected_vendors(config: dict) -> tuple[str, str]:
@@ -208,17 +224,22 @@ def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
-def require_search(config: dict) -> None:
+def require_search(config: dict, host: dict | None = None) -> None:
     """Refuse to launch when search has no key anywhere.
 
     Search is what this agent is for; withheld, the tool is absent and a run
     answers from the model's own memory -- which reads as an ordinary run, in
     the one failure mode nobody inspects. The bare env var counts because the
-    tool resolves its key at call time from the config value or that var.
+    tool resolves its key at call time from the config value or that var, and
+    a vendor that searches without a key (Keenable) needs neither. ``host`` is
+    the deployment's config, so a vendor whose key is borrowed from the LLM
+    provider is found even on the product's own-key branch.
     """
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+
     vendor, _ = selected_vendors(config)
     env_var = WEB_VENDOR_ENV_VARS.get(vendor, SEARCH_ENV_VAR)
-    if vendor_key(config, vendor) or os.environ.get(env_var):
+    if not SEARCH_PROVIDERS[vendor].needs_key or vendor_key(config, vendor, host) or os.environ.get(env_var):
         return
     raise SystemExit(
         f"error: search has no key for {vendor}; put RESEARCH_{env_var} in "
@@ -226,19 +247,33 @@ def require_search(config: dict) -> None:
     )
 
 
+def write_generated(target: Path, text: Callable[[], str]) -> None:
+    """Regenerate one product-owned workspace file, or refuse to launch.
+
+    A raven older than ``write_generated`` -- a home tree copied out by a newer
+    wheel serves an older checkout too -- seeds the file once instead, and says
+    that it will not be refreshed.
+    """
+    generate = getattr(render, "write_generated", None)
+    if generate is None:
+        render.seed_once(target, text)
+        log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
+        return
+    try:
+        generate(target, text(), owner=PRODUCT, notify=lambda message: log(f"[run] {message}"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
+
+
 def seed_identity(workspace: Path, flow_slice: dict) -> None:
-    """Seed the product identity into the workspace raven reads it from.
+    """Write the product identity into the workspace raven reads it from.
 
     Rendered, not copied: the flow inserts its measured guidance into the
     identity text the way the vendored twin did at prompt-build time, so the
-    workspace copy is the model-visible text. Once (``seed_once``'s
-    contract): the workspace copy is the live one afterwards, and a product
-    update must not silently overwrite what an operator tuned in place.
+    workspace copy is the model-visible text. Regenerated on every launch
+    (``write_generated``): an operator's own lines go in ``soul.local.md``.
     """
-    render.seed_once(
-        workspace / "agent_memory" / "profile" / "soul.md",
-        lambda: rendered_identity(flow_slice),
-    )
+    write_generated(workspace / "agent_memory" / "profile" / "soul.md", lambda: rendered_identity(flow_slice))
 
 
 def _flow_prompts(flow_slice: dict):
@@ -289,16 +324,14 @@ def rendered_identity(flow_slice: dict) -> str:
 
 
 def seed_contract(workspace: Path, flow_slice: dict) -> None:
-    """Write the contract beside the identity, once, as ``agent.md``.
+    """Write the contract beside the identity as ``agent.md``.
 
     Bootstrap renders both files in order: the identity from ``soul.md``, the
     contract from ``agent.md`` -- the two halves of the segment the fork built
-    in code. Same once-only rule as the identity.
+    in code. Regenerated like the identity, so the contract the model reads
+    is the one this release's gates enforce.
     """
-    render.seed_once(
-        workspace / "agent_memory" / "profile" / "agent.md",
-        lambda: _flow_prompts(flow_slice)[1],
-    )
+    write_generated(workspace / "agent_memory" / "profile" / "agent.md", lambda: _flow_prompts(flow_slice)[1])
 
 
 def iteration_cap(base_flow: dict, base_cap, overlay: dict):
@@ -370,7 +403,7 @@ def render_config(source: Path) -> Path:
             )
         log(f"[run] llm: inherited from the host ({taken})")
 
-    require_search(config)
+    require_search(config, host)
 
     root = state_root()
     defaults = config.setdefault("agents", {}).setdefault("defaults", {})
@@ -408,7 +441,7 @@ def render_config(source: Path) -> Path:
         # anonymously on the other.
         slots.append((DEFAULT_FETCH_VENDOR, ("fetch", "fallbackApiKey")))
     for vendor, slice_path in slots:
-        if key := vendor_key(config, vendor):
+        if key := vendor_key(config, vendor, host):
             render.put(flow_slice, slice_path, key)
     log(f"[run] web: search={search_vendor} fetch={fetch_vendor}")
     # Same mirror, same reason as the web keys: the fork's assembly was CALLED
@@ -455,8 +488,11 @@ def main() -> int:
     args = parser.parse_args()
 
     rendered = render_config(Path(args.config).resolve())
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

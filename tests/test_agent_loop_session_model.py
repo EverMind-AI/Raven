@@ -33,7 +33,7 @@ from raven.context_engine.segments.skills import SkillsSegmentBuilder
 from raven.providers.base import LLMResponse
 from raven.providers.binding import ModelBinding, active_binding
 from raven.spine.message import ChatType, Source
-from raven.spine.turn import Origin, TurnRequest
+from raven.spine.turn import Origin, TurnRequest, direct_lane
 
 
 def _configure_pins(**blocks: dict) -> None:
@@ -82,7 +82,10 @@ def _loop(tmp_path) -> AgentLoop:
         # Push discovery, because that is what builds the skills segment and the
         # gate these tests reach for. Upstream had no such switch and got the
         # segment unconditionally; here the default is pull, which drops it.
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
 
 
@@ -184,6 +187,37 @@ async def test_a_turn_runs_on_its_own_session_model(tmp_path) -> None:
     assert seen["loop"] == ("prov-a", "vendor-a/model")
     assert seen["subagents"] == ("prov-a", "vendor-a/model")
     assert seen["consolidator"] == "prov-a"
+
+
+@pytest.mark.asyncio
+async def test_a_direct_chat_turn_runs_on_its_session_model(tmp_path) -> None:
+    """A direct chat is a sub-conversation of its session, so it follows the
+    session's switch. Its ``conversation`` is the instance's lane though, and
+    nothing ever stores a binding under a lane -- the switch lives on the
+    session key -- so resolving the lane as a session of its own sent the
+    direct chat to the default while the rest of the conversation ran on the
+    model the user picked.
+    """
+    loop = _loop(tmp_path)
+    loop.set_session_binding("tui:a", _binding("prov-a", "vendor-a/model"))
+
+    seen: list[str] = []
+
+    async def _body(*args, **kwargs):
+        seen.append(loop.model)
+        return "done"
+
+    loop._run_turn = _body
+    req = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="default", sender_id="user", chat_type=ChatType.DM),
+        text="hi",
+        conversation=direct_lane("tui:a", "Raven", "h1"),
+        direct_target=("Raven", "h1"),
+    )
+    await loop.run_turn(req, None, None)
+
+    assert seen == ["vendor-a/model"], "the direct chat must run on the session's choice, not the default"
 
 
 @pytest.mark.asyncio
@@ -420,7 +454,7 @@ def test_a_configured_pin_survives_a_real_factory_build(tmp_path) -> None:
     cfg.providers.gemini.api_key = "AIza"
 
     _configure_pins(context={"curatorModel": "gemini-2.5-flash"})
-    context_config = ContextConfig()
+    context_config = ContextConfig(history={"strategy": "curator"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -455,7 +489,7 @@ def test_the_factory_hands_the_pool_the_pin_the_user_configured(tmp_path) -> Non
     cfg.providers.openrouter.api_key = "sk-or"
 
     _configure_pins(context={"curatorModel": "claude-haiku-4-5", "curatorProvider": "openrouter"})
-    context_config = ContextConfig()
+    context_config = ContextConfig(history={"strategy": "curator"})
     loop = AgentLoop(
         provider=_Provider("boot"),
         workspace=tmp_path,
@@ -488,7 +522,7 @@ def test_the_factory_hands_the_pool_the_gate_pin_the_user_configured(tmp_path) -
         model="boot/model",
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
@@ -516,7 +550,9 @@ def test_a_stored_model_is_restored_onto_a_resumed_session(tmp_path) -> None:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
 
     assert loop.session_model("tui:a") == "boot/model", "a fresh process has no override"
@@ -539,7 +575,9 @@ def test_a_stored_model_that_cannot_be_built_leaves_the_default(tmp_path) -> Non
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
 
     loop.restore_session_model("tui:a", "gemini-2.5-flash")
@@ -561,7 +599,9 @@ def _restorable_loop(tmp_path, stored: dict[str, dict[str, str]]) -> AgentLoop:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=ProviderPool(cfg),
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig()),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}), skill_forge_config=SkillForgeConfig()
+        ),
     )
     for key, metadata in stored.items():
         record = loop.sessions.get_or_create(key)
@@ -681,7 +721,7 @@ def test_a_configured_gate_pin_survives_a_real_factory_build(tmp_path) -> None:
         model="boot/model",
         provider_pool=ProviderPool(cfg),
         engine=EngineWiring(
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             skill_forge_config=SkillForgeConfig(discovery="push"),
         ),
     )
@@ -850,7 +890,10 @@ def _pooled_loop(tmp_path) -> tuple[AgentLoop, _Pool]:
         workspace=tmp_path,
         model="boot/model",
         provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
     pool.bindings["boot/model"] = loop.default_binding
     return loop, pool
@@ -951,7 +994,10 @@ def test_a_provider_that_cannot_name_its_vendor_is_never_re_paired(tmp_path) -> 
         workspace=tmp_path,
         model="anthropic/some-model",
         provider_pool=pool,
-        engine=EngineWiring(context_config=ContextConfig(), skill_forge_config=SkillForgeConfig(discovery="push")),
+        engine=EngineWiring(
+            context_config=ContextConfig(history={"strategy": "curator"}),
+            skill_forge_config=SkillForgeConfig(discovery="push"),
+        ),
     )
 
     binding = loop.binding_for_session("tui:a")

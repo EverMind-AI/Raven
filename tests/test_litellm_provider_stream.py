@@ -696,3 +696,344 @@ async def test_api_stream_usage_survives_sdk_reassembly(monkeypatch, name, cost)
     assert response.usage["prompt_tokens"] == 100
     assert response.usage["cache_read_input_tokens"] == 60
     assert response.usage["cache_creation_input_tokens"] == 10
+
+
+# ---------- how the upstream said the reply ended --------------------------------
+
+
+def _response_with(message: Any, *, finish_reason: str | None = "stop", usage: Any = None) -> Any:
+    """A real ``ModelResponse`` around ``message``.
+
+    ``Choices`` writes ``stop`` over a finish reason of None when it is built, so
+    a choice that never carried one has to be cleared after.
+    """
+    from litellm.types.utils import Choices, ModelResponse, Usage
+
+    response = ModelResponse(
+        choices=[Choices(finish_reason="stop", index=0, message=message)],
+        usage=usage or Usage(prompt_tokens=3, completion_tokens=2, total_tokens=5),
+    )
+    response.choices[0].finish_reason = finish_reason
+    return response
+
+
+def test_a_missing_finish_reason_reads_unknown() -> None:
+    """A reply that never said how it ended was reported as ``stop``, which made a
+    reply cut by the connection indistinguishable from a finished one."""
+    from litellm.types.utils import Message
+
+    parsed = _make_provider()._parse_response(
+        _response_with(Message(content="hi", role="assistant"), finish_reason=None)
+    )
+
+    assert parsed.content == "hi"
+    assert parsed.finish_reason == "unknown"
+
+
+def test_a_structured_refusal_is_a_refusal() -> None:
+    """OpenAI-shaped upstreams put a refusal in ``message.refusal`` and leave
+    ``content`` null, so the reply read as an empty response, whatever the
+    ``stop`` beside it said."""
+    from litellm.types.utils import Message
+
+    parsed = _make_provider()._parse_response(
+        _response_with(Message(content=None, role="assistant", refusal="I can't"))
+    )
+
+    assert parsed.content == "I can't"
+    assert parsed.finish_reason == "refusal"
+
+
+def test_a_refusal_is_an_answer_whatever_its_accounting_says() -> None:
+    """An empty reply whose prompt was billed as a token is judged a request the
+    upstream never processed. A refusal is the reply, so that judgment must not
+    reach it."""
+    from litellm.types.utils import Message, Usage
+
+    refused = _response_with(
+        Message(content=None, role="assistant", refusal="I can't"),
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    parsed = _make_provider()._parse_response(refused, sent_chars=12000)
+
+    assert parsed.finish_reason == "refusal"
+    assert parsed.error_classification is None
+
+
+@dataclass
+class _RefusingDelta(_FakeDelta):
+    refusal: str | None = None
+
+
+class _SdkLikeWrapper:
+    """A stream wrapper that keeps the SDK's finish bookkeeping: no reason is
+    received until a chunk carrying one has gone by, so everything before the final
+    chunk is read while both records are still empty."""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        self._chunks = iter(chunks)
+        self.received_finish_reason: str | None = None
+        self.intermittent_finish_reason: str | None = None
+
+    def __aiter__(self) -> "_SdkLikeWrapper":
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            chunk = next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+        reason = chunk.choices[0].finish_reason if chunk.choices else None
+        if reason:
+            self.received_finish_reason = self.intermittent_finish_reason = reason
+        return chunk
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _refusal_stream() -> _SdkLikeWrapper:
+    return _SdkLikeWrapper(
+        [
+            _FakeChunk(choices=[_FakeChoice(delta=_RefusingDelta(refusal="I can't"))]),
+            _FakeChunk(choices=[_FakeChoice(delta=_FakeDelta(content=None), finish_reason="stop")]),
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_refusal_keeps_its_finish(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A refusal streams as ``delta.refusal`` and the stream then closes on a plain
+    ``stop``. The refusal is the verdict; the stop only says the stream is over."""
+    from raven.providers.streaming import stream_llm_call
+
+    async def fake_acompletion(**_: Any):
+        return _refusal_stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    response = await stream_llm_call(
+        _make_provider(), messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    assert response.content == "I can't"
+    assert response.finish_reason == "refusal"
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_refusal_is_not_taken_for_a_made_up_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wrapper has recorded no finish reason when a refusal goes by, which is
+    the very state that marks a stop as the library's own invention. A refusal is
+    read off a chunk the upstream sent, so it is never that."""
+
+    async def fake_acompletion(**_: Any):
+        return _refusal_stream()
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", fake_acompletion)
+
+    deltas = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+
+    assert (deltas[0].content, deltas[0].finish_reason) == ("I can't", "refusal")
+    assert deltas[0].finish_synthesized is False
+
+
+def test_a_delta_without_a_refusal_is_unchanged() -> None:
+    """The SDK's own delta type does not declare the field, so most chunks never
+    carry one."""
+    delta = _make_provider()._normalize_stream_chunk(_chunk("token"))
+
+    assert delta is not None
+    assert (delta.content, delta.finish_reason) == ("token", None)
+
+
+# ---------- a refusal as litellm hands it over -------------------------------------
+
+_REFUSAL = "I can't help with that."
+
+
+def _refusing_openai_upstream(request: Any) -> Any:
+    """An OpenAI chat-completions endpoint that refuses, in the shape it answers each call with."""
+    import json
+
+    import httpx
+
+    body = json.loads(request.content)
+    if not body.get("stream"):
+        message = {"role": "assistant", "content": None, "refusal": _REFUSAL}
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-r",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "finish_reason": "stop", "logprobs": None, "message": message}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+            },
+        )
+    head = {"id": "chatcmpl-r", "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o"}
+    deltas = [
+        ({"role": "assistant", "content": None, "refusal": ""}, None),
+        ({"refusal": "I can't "}, None),
+        ({"refusal": "help with that."}, None),
+        ({}, "stop"),
+    ]
+    events = [
+        "data: "
+        + json.dumps({**head, "choices": [{"index": 0, "delta": delta, "finish_reason": finish, "logprobs": None}]})
+        + "\n\n"
+        for delta, finish in deltas
+    ]
+    return httpx.Response(
+        200, content=("".join(events) + "data: [DONE]\n\n").encode(), headers={"content-type": "text/event-stream"}
+    )
+
+
+def _through_litellm(monkeypatch: pytest.MonkeyPatch, upstream: Any = _refusing_openai_upstream) -> None:
+    """Send the provider's calls through litellm's own OpenAI route, onto ``upstream`` (the refusing one)."""
+    import httpx
+    import litellm
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key="test-key",
+        base_url="http://upstream.invalid/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+    )
+
+    async def acompletion(**kwargs: Any) -> Any:
+        return await litellm.acompletion(**kwargs, client=client)
+
+    monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
+
+
+@pytest.mark.asyncio
+async def test_an_openai_refusal_is_read_where_litellm_files_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Converting the upstream's body, litellm moves every field its ``Message`` does
+    not declare into ``provider_specific_fields``, so the refusal is not on
+    ``message.refusal`` by the time the provider reads the reply."""
+    _through_litellm(monkeypatch)
+
+    response = await _make_provider().chat(messages=[{"role": "user", "content": "hi"}])
+
+    assert (response.content, response.finish_reason) == (_REFUSAL, "refusal")
+
+
+def test_a_refusal_filed_with_a_chunks_provider_fields_is_read() -> None:
+    """A delta litellm builds keeps an undeclared field where it was given, so a
+    refusal filed with its provider fields reads like one on ``delta.refusal``."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk = ModelResponseStream(choices=[StreamingChoices(delta=Delta(provider_specific_fields={"refusal": _REFUSAL}))])
+
+    delta = _make_provider()._normalize_stream_chunk(chunk)
+
+    assert delta is not None
+    assert (delta.content, delta.finish_reason) == (_REFUSAL, "refusal")
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_openai_refusal_never_reaches_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    """litellm's stream wrapper drops a chunk whose only payload is a refusal: its
+    test for an empty chunk does not count the field. What reaches the provider is
+    the opening chunk, whose refusal is still empty, and a bare ``stop``, which the
+    stream reads as an empty reply. The loop reads the refusal on its first resend,
+    which goes out unstreamed (the end-to-end test below). Pinned as litellm's
+    behaviour, so a litellm that starts passing the words on fails here, and this
+    becomes the test that the stream reads them."""
+    from raven.providers.streaming import stream_llm_call
+
+    _through_litellm(monkeypatch)
+
+    deltas = [d async for d in _make_provider().chat_stream(messages=[{"role": "user", "content": "hi"}])]
+    response = await stream_llm_call(
+        _make_provider(), messages=[{"role": "user", "content": "hi"}], tools=None, model="openai/gpt-4o"
+    )
+
+    assert [(d.content, d.finish_reason) for d in deltas if d.content or d.finish_reason] == [(None, "stop")]
+    assert (response.content, response.finish_reason) == ("", "stop")
+
+
+# ---------- through the loop: the first resend of an empty streamed reply ----------
+
+_ANSWER = "Here it is."
+
+
+def _refuses_then_a_fallback_answers(seen: list[tuple[str, bool]]) -> Any:
+    """``gpt-4o`` refuses as ``_refusing_openai_upstream`` does; any other model streams ``_ANSWER``.
+
+    Every call is written down as (model, streamed), so a test reads which calls streamed.
+    """
+    import json
+
+    import httpx
+
+    def upstream(request: Any) -> Any:
+        body = json.loads(request.content)
+        seen.append((body["model"], bool(body.get("stream"))))
+        if body["model"] == "gpt-4o":
+            return _refusing_openai_upstream(request)
+        head = {"id": "chatcmpl-a", "object": "chat.completion.chunk", "created": 1, "model": body["model"]}
+        events = [
+            "data: "
+            + json.dumps({**head, "choices": [{"index": 0, "delta": delta, "finish_reason": finish, "logprobs": None}]})
+            + "\n\n"
+            for delta, finish in [({"role": "assistant", "content": _ANSWER}, None), ({}, "stop")]
+        ]
+        return httpx.Response(
+            200, content=("".join(events) + "data: [DONE]\n\n").encode(), headers={"content-type": "text/event-stream"}
+        )
+
+    return upstream
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallbacks", [["openai/gpt-4o-mini"], []], ids=["a_fallback_left", "none_left"])
+async def test_a_streamed_refusal_is_resent_once_unstreamed_and_read_as_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any, fallbacks: list[str]
+) -> None:
+    """litellm drops the refusal from the stream, so the loop sees an empty stop. Its first resend goes
+    out unstreamed, where the refusal is read: the turn takes the refusal's one switch to a fallback
+    model, or fails with the model's explanation, instead of resending an empty stream three times."""
+    import asyncio
+
+    from raven.agent.loop import AgentLoop, turn_path
+    from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+    from raven.agent.loop.recovery import REFUSAL_EXPLANATION, REFUSAL_FAILURE
+
+    class _NoWait:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(asyncio, name)
+
+        async def sleep(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(turn_path, "asyncio", _NoWait())
+    seen: list[tuple[str, bool]] = []
+    _through_litellm(monkeypatch, _refuses_then_a_fallback_answers(seen))
+    loop = AgentLoop(
+        provider=_make_provider(),
+        workspace=tmp_path,
+        model="openai/gpt-4o",
+        policy=TurnPolicy(max_iterations=5),
+        host=HostWiring(),
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    shown: list[str] = []
+
+    async def sink(delta: str) -> None:
+        shown.append(delta)
+
+    final, _used, _messages, outcome = await loop._run_agent_loop(
+        [{"role": "user", "content": "hi"}], on_token_delta=sink, fallback_models=fallbacks
+    )
+
+    if fallbacks:
+        assert seen == [("gpt-4o", True), ("gpt-4o", False), ("gpt-4o-mini", True)]
+        assert final == _ANSWER and outcome.status == "completed"
+        assert shown == [_REFUSAL, _ANSWER], "the refusal as a stream would have shown it, then the answer"
+    else:
+        assert seen == [("gpt-4o", True), ("gpt-4o", False)]
+        assert outcome.status == "error"
+        assert outcome.error == REFUSAL_FAILURE + REFUSAL_EXPLANATION.format(text=_REFUSAL)

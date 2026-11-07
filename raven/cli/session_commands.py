@@ -23,6 +23,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from raven.agent.task_board.store import copy_board, reset_board
 from raven.cli._log_silence import mute_subsystem_logs_unless_debug
 from raven.config.paths import get_workspace_path
 from raven.session.export import default_export_path, write_transcript
@@ -222,8 +223,16 @@ def session_delete(
         console.print(f"[red]Session not found: {id_or_key!r}[/red]")
         raise typer.Exit(code=1)
 
+    # Found while the transcript is still there: a session another process filed under
+    # its project's slug is found only by its transcript, and the board sits beside it.
+    board_dir = manager.session_dir(key)
     if manager.delete(key):
         console.print(f"[green]✓[/green] Deleted session {_bare_id(key)}")
+        # This process attaches no host's delete observer, so the board goes here.
+        try:
+            reset_board(board_dir)
+        except OSError as exc:
+            console.print(f"[yellow]Its task board stays in {board_dir}: {exc}[/yellow]")
     else:
         console.print(f"[red]Failed to delete session {id_or_key!r}[/red]")
         raise typer.Exit(code=1)
@@ -239,9 +248,10 @@ def session_fork(
 ) -> None:
     """Fork a session into a new diverging copy (fork-at-head).
 
-    Resolves the id/prefix within the cli channel, copies its full history
-    into a fresh session, records the source as the child's parent, and prints
-    the new child id (first line) for use with ``raven agent --session``.
+    Resolves the id/prefix within the cli channel, copies its full history and
+    its task board into a fresh session, records the source as the child's
+    parent, and prints the new child id (first line) for use with
+    ``raven agent --session``.
     """
     manager = _open_manager()
     key = resolve_session(manager, id_or_prefix)
@@ -253,6 +263,10 @@ def session_fork(
     child_bare = _bare_id(child.key)
     console.print(child_bare)
     console.print(f"[dim]  (forked from {_bare_id(key)}; use: raven agent --session {child.key})[/dim]")
+    try:
+        copy_board(manager.session_dir(key), manager.session_dir(child.key))
+    except OSError as exc:
+        console.print(f"[yellow]Its task board was not copied: {exc}[/yellow]")
 
 
 # ── export ────────────────────────────────────────────────────────────

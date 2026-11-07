@@ -24,7 +24,15 @@ import { atom } from 'nanostores'
 import type { DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunStartedEvent, SubagentCall } from '../rpc/generated.js'
 import type { SubagentProgress } from '../types.js'
 
-export type LiveAgentStatus = 'cancelled' | 'completed' | 'exception' | 'failed' | 'pending' | 'running' | 'skipped'
+export type LiveAgentStatus =
+  | 'cancelled'
+  | 'completed'
+  | 'exception'
+  | 'failed'
+  | 'not_executed'
+  | 'pending'
+  | 'running'
+  | 'skipped'
 
 export interface LiveAgentRow {
   agent?: string
@@ -48,7 +56,7 @@ export interface LiveAgentRow {
   status: LiveAgentStatus
 }
 
-const TERMINAL: ReadonlySet<LiveAgentStatus> = new Set(['cancelled', 'completed', 'failed', 'skipped'])
+const TERMINAL: ReadonlySet<LiveAgentStatus> = new Set(['cancelled', 'completed', 'failed', 'not_executed', 'skipped'])
 
 export const isTerminal = (status: LiveAgentStatus): boolean => TERMINAL.has(status)
 
@@ -235,10 +243,26 @@ const DAG_TO_LIVE: Record<string, LiveAgentStatus> = {
   completed: 'completed',
   exception: 'exception',
   failed: 'failed',
+  not_executed: 'not_executed',
   pending: 'pending',
   running: 'running',
   skipped: 'skipped'
 }
+
+/**
+ * Who runs a node now, as a frame or a list row reports it.
+ *
+ * `subagent` speaks only when it names one; `instance` speaks whenever its key
+ * is present -- a present null is a clear, because that attempt keeps no
+ * session, while an absent key is a source that does not speak for it.
+ */
+const identityOf = (
+  subagent: string | null | undefined,
+  wire: { instance?: string | null }
+): Pick<LiveAgentRow, 'agent' | 'instance'> => ({
+  ...(subagent ? { agent: subagent } : {}),
+  ...(Object.hasOwn(wire, 'instance') ? { instance: wire.instance ?? undefined } : {})
+})
 
 /** Node statuses folded onto a run: what its line counts. */
 export interface DagRunCounts {
@@ -385,8 +409,11 @@ export const applyDagEvent = (event: DagEvent): void => {
       })
     }
   } else if (event.type === 'dag.node_updated') {
-    const { ended_at, node, run_id, status } = event.payload
+    const { ended_at, node, run_id, status, subagent } = event.payload
     rows = upsert(rows, {
+      // Once the node has been reassigned, the frame names the agent and handle
+      // running it now.
+      ...identityOf(subagent, event.payload),
       endedAtMs: ended_at ?? undefined,
       id: `${run_id}/${node}`,
       kind: 'dag-node',
@@ -408,6 +435,10 @@ export const applyDagEvent = (event: DagEvent): void => {
       rows = upsert(
         rows,
         {
+          // A moved node's manifest entry names the attempt that ran it last;
+          // for every other node these keys are absent and the row keeps what
+          // its own frames said.
+          ...identityOf(file.subagent, file),
           endedAtMs: known ?? now,
           id: `${event.payload.run_id}/${file.node}`,
           kind: 'dag-node',
@@ -438,6 +469,9 @@ const WIRE_TO_LIVE: Record<string, LiveAgentStatus> = {
   // gateway; never on the event wire, only in `subagent.list` snapshots.
   interrupted: 'cancelled',
   exception: 'exception',
+  // The list leaves these rows out today, as it does a skipped node's; mapped so
+  // that one which does arrive settles its row instead of being dropped unread.
+  not_executed: 'not_executed',
   ok: 'completed',
   queued: 'pending',
   run: 'running',
@@ -569,11 +603,15 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
       // same node is the lossy wire folding failed/interrupted/exception
       // together, not a fresher answer. Let a real resolution arrive the way
       // it always does, as a dag event; don't let this poll manufacture one.
-      if (isTerminal(status) && !isTerminal(existing.status) && existing.status !== 'exception') {
-        rows = rows.map(r =>
-          r.id === existing.id ? { ...r, endedAtMs: isoToMs(item.ended_at) ?? now, settledAtMs: now, status } : r
-        )
-      }
+      const resolved =
+        isTerminal(status) && !isTerminal(existing.status) && existing.status !== 'exception'
+          ? { endedAtMs: isoToMs(item.ended_at) ?? now, settledAtMs: now, status }
+          : {}
+
+      // Who runs the row is the disk's to say too, not only whether it ended:
+      // a client that missed the reassignment repaints the agent and handle of
+      // the attempt the snapshot says ran last.
+      rows = rows.map(r => (r.id === existing.id ? { ...r, ...identityOf(item.agent, item), ...resolved } : r))
 
       continue
     }
@@ -587,7 +625,7 @@ export const reconcileFromList = (items: SubagentCall[]): void => {
       callId: isDag ? undefined : item.id,
       endedAtMs: isoToMs(item.ended_at),
       id: item.id,
-      instance: item.instance,
+      instance: item.instance ?? undefined,
       kind: isDag ? 'dag-node' : 'spawn',
       label: item.label,
       nodeId: isDag ? item.node : undefined,
@@ -615,11 +653,28 @@ export const liveAgentCounts = (rows: LiveAgentRow[]): { pending: number; runnin
   return { pending, running }
 }
 
+/**
+ * The rows that stand for an agent that was asked to do something.
+ *
+ * A DAG node a branch left out never called one, so a list of agents has no row
+ * for it: `completed` would say an agent ran and finished, and `interrupted`
+ * would light the failed filter for a run that went as written. The graph's own
+ * panel is where such a node is shown, and `subagent.list` and `instances.list`
+ * leave it out for the same reason. The store still holds the row, which is how
+ * the run learns the node is settled.
+ */
+export const agentRows = (rows: readonly LiveAgentRow[]): LiveAgentRow[] =>
+  rows.filter(row => row.status !== 'not_executed')
+
 const LIVE_TO_PROGRESS: Record<LiveAgentStatus, SubagentProgress['status']> = {
   cancelled: 'interrupted',
   completed: 'completed',
   exception: 'interrupted',
   failed: 'failed',
+  // Unreachable: `agentRows` keeps these rows out of the overlay, and no status
+  // here is true of a node that never called an agent. The entry keeps the table
+  // total over `LiveAgentStatus`, so a status added later still has to be placed.
+  not_executed: 'completed',
   pending: 'queued',
   running: 'running',
   skipped: 'interrupted'

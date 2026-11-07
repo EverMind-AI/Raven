@@ -12,7 +12,8 @@ Steps:
   4. EverOS long-term memory (optional; llm/embedding required once enabled,
      rerank/multimodal optional)
   5. Web access (optional; pick a search vendor and a page reader and give
-     each its key; keys are mirrored to ~/.raven/env so sub-agents inherit them)
+     each its key; keys are mirrored to ~/.raven/env, which POSIX cli/acp
+     sub-agents read through their login shell)
   6. Sub-agents shipped in this checkout (optional; per folder, own key or
      this raven's LLM)
   7. Cold-start import from other AI tools (optional)
@@ -32,7 +33,6 @@ already written.
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import typer
@@ -56,6 +56,7 @@ from raven.cli._onboard_shared import (  # noqa: F401  (re-exports: tests and
     _step_header,
     console,
 )
+from raven.cli._tty_guard import die_if_not_tty
 from raven.core.provider_stack import DEFAULT_PROBE_MESSAGE, send_probe
 from raven.i18n import t
 from raven.providers.registry import (
@@ -142,6 +143,7 @@ _CURATED_GROUPS: list[dict[str, Any]] = [
             {"name": "ph8", "label": "PH8"},
             {"name": "aionly", "label": "AIOnly"},
             {"name": "radeon_cloud", "label": "AMD GPU Cloud"},
+            {"name": "opper", "label": "Opper"},
             {"name": "azure_openai", "label": "Azure OpenAI"},
         ],
     },
@@ -249,16 +251,10 @@ def _pick_language() -> None:
 
 
 def _check_tty_or_die(non_interactive: bool) -> None:
-    """Bail when stdout isn't a TTY and the user didn't opt into headless mode."""
+    """Bail when the terminal isn't interactive and the user didn't opt into headless mode."""
     if non_interactive:
         return
-    if not sys.stdout.isatty():
-        console.print(
-            "[red]Non-interactive terminal detected.[/red]\n"
-            "Re-run with: "
-            "[accent]raven onboard --non-interactive --provider <name> --api-key <key>[/accent]"
-        )
-        raise typer.Exit(2)
+    die_if_not_tty("raven onboard --non-interactive --provider <name> --api-key <key>")
 
 
 def _configured_providers() -> list[str]:
@@ -333,23 +329,23 @@ def _handle_existing_config(*, reset: bool, yes: bool, non_interactive: bool) ->
 def _bootstrap_empty_config() -> None:
     """Make sure ``~/.raven/config.json`` + workspace dir exist before we patch.
 
-    We seed the user-facing extension defaults (memory / plugins / skillForge),
-    including ``memory.backend = "everos"`` (the schema default). EverOS
-    degrades gracefully when its models aren't configured yet (empty recall + a
-    warning, never a crash), so an enabled-but-modelless install is safe. The
-    wizard's Step 4 — and its skip / non-interactive guard — resolve the backend
-    back to ``None`` when the user opts out or never configures the one required
-    model (``_memory_enabled`` gates on the llm role being present, not just the
-    backend name; embedding and rerank only cost recall quality).
+    The base config stays sparse: ``save_config`` dumps with
+    ``exclude_defaults``, so the memory / plugins / skillForge blocks are not
+    materialized and their readers answer from the declarations. The one
+    deliberate exception is the Skill Hub endpoint -- its schema default is
+    ``None`` so programmatic loads stay Hub-disabled, which makes onboarding
+    (the user's opt-in) the place that writes it by default; the settings
+    switch can change it later.
 
-    Seeding runs on EVERY onboard, not just a brand-new config: the writer is
-    ``setdefault``-based (non-clobbering), so it backfills these blocks into a
-    pre-existing config that predates them without touching any value the user
-    already set. The base ``Config()`` is only written when the file is absent —
-    overwriting an existing file there would clobber it.
+    Runs on every onboard: an existing endpoint, explicit null included, wins,
+    and every value the user already carries is left untouched. The base
+    ``Config()`` is only written when the file is absent — overwriting an
+    existing file there would clobber it.
     """
-    from raven.config.loader import get_config_path, load_config, save_config
+    from raven.config.live import skill_hub_on
+    from raven.config.loader import get_config_path, load_config, read_raw_or_raise, save_config
     from raven.config.paths import get_workspace_path
+    from raven.config.update import initialize_skill_hub_endpoint
     from raven.utils.workspace import sync_workspace_templates
 
     path = get_config_path()
@@ -357,6 +353,16 @@ def _bootstrap_empty_config() -> None:
         # Creates the file; save_config dumps with exclude_defaults, so a
         # fresh config is sparse -- it records what the user set, nothing else.
         save_config(load_config())
+    seeded = initialize_skill_hub_endpoint(config_path=path)
+    if seeded is not None and skill_hub_on(read_raw_or_raise(path)):
+        console.print(
+            t(
+                "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
+                "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
+                "skillForge.router.hub.enabled to false.[/dim]",
+                endpoint=seeded,
+            )
+        )
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))
@@ -700,9 +706,15 @@ def _run_oauth_login(provider: str) -> bool:
 def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, str, Optional[list[str]]]:
     """Hit ``GET /v1/models`` to verify the credentials we just stored.
 
+    With the key itself confirmed where the catalogue says nothing about it
+    (``check_credential``): OpenRouter's list answers anyone, and reading that
+    200 as "connected" told a person with a mistyped key that it worked, with
+    468 models to choose from, until the test message failed a step later.
+
     Returns ``(ok, status, model_ids)``. ``status`` is one of the ops-library
     failure codes (``invalid_key`` / ``no_credits`` / ``rate_limited`` /
-    ``network_error`` / …) and drives the failure submenu's wording.
+    ``network_error`` / …) and drives the failure submenu's wording; ``valid``,
+    ``skipped`` and ``unchecked`` are the three ways through.
     """
     from raven.config.update_providers import test_provider as probe
 
@@ -713,7 +725,7 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
         console.print(t("  [dim]⏳ Reaching the server…[/dim]"))
     else:
         console.print(t("  [dim]⏳ Verifying your API key…[/dim]"))
-    result = probe(provider)
+    result = probe(provider, check_credential=True)
     if result["ok"]:
         models = result.get("models_count")
         suffix = t(" ({models} models available)", models=models) if models else ""
@@ -746,11 +758,35 @@ def _verify_provider(provider: str, *, skip_test: bool = False) -> tuple[bool, s
                 )
             )
         return True, "skipped", None
+    if status == "key_unchecked":
+        # The catalogue answered without looking at the key, and this vendor
+        # has no path that would. Not a failure -- the list it returned is
+        # real -- and not a confirmation either: the test message is the
+        # check that remains, and the line says so rather than "Connected!".
+        if skip_test:
+            console.print(
+                t(
+                    "  [dim]Reached the provider; its model list answers without checking the key, so the key is not confirmed; connectivity is not tested (--skip-test).[/dim]"
+                )
+            )
+        else:
+            console.print(
+                t(
+                    "  [dim]Reached the provider; its model list answers without checking the key, so the test message below is what confirms it.[/dim]"
+                )
+            )
+        return True, "unchecked", result.get("model_ids")
     hint_map = {
         "invalid_key": t("Auth failed: the API key is invalid — check for typos / stray spaces."),
         "no_credits": t("Account out of credits or not provisioned — top up and retry."),
         "rate_limited": t("Rate limited — wait a bit and retry, or switch provider."),
         "network_error": t("Network error reaching the provider — check network / proxy / VPN."),
+        "certificate_untrusted": t(
+            "The provider's TLS certificate was refused — if a corporate proxy or a private CA signs it, "
+            "add that CA to the system certificate store. If SSL_CERT_FILE already trusts that CA, macOS "
+            "and Windows may still refuse the certificate by their own rules; RAVEN_NO_SYSTEM_CA=1 turns "
+            "those off. An expired certificate, or one for another host, is the server's to fix."
+        ),
         "oauth_token_missing": t("Run: raven provider login {a0}", a0=provider.replace("_", "-")),
     }
     msg = hint_map.get(status, t("Verification failed: {status}", status=status))
@@ -856,7 +892,7 @@ def _pick_model(
             # had failed.
             console.print(
                 t("  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]")
-                if probe_status == "skipped"
+                if probe_status in ("skipped", "unchecked")
                 else t("  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]")
             )
             model_ids = known
@@ -1349,7 +1385,9 @@ def _resolve_model_with_test(
                     *([(t("Re-enter server URL"), "rebase")] if auth_shape(provider) == SHAPE_LOCAL else []),
                     (t("Continue anyway"), "continue"),
                 ]
-                if status == "network_error"
+                # A certificate this machine does not trust ends the connection
+                # before the key is sent, the same as a network that is down.
+                if status in ("network_error", "certificate_untrusted")
                 else [
                     # What to offer depends on what the provider is reached by.
                     # A local deployment has no key to re-enter, so offering that
@@ -2008,22 +2046,58 @@ def _step4_memory(
         return None
 
     ui = _onboard_ui()
-    for name, step in steps:
-        outcome = step.run(
-            ui,
-            step_no=4,
-            non_interactive=non_interactive,
-            main_model=main_model,
-            warnings=warnings,
-            skip_test=skip_test,
-        )
-        if outcome is StepOutcome.BACK:
-            return _BACK
-        if outcome is StepOutcome.CONFIGURED:
-            set_memory_backend(name)
-            return None
-    set_memory_backend(None)
+    chosen = _choose_memory_backend(steps) if len(steps) > 1 else steps[0][0]
+    if chosen is _BACK:
+        return _BACK
+    if chosen is None:
+        set_memory_backend(None)
+        return None
+    step = dict(steps)[chosen]
+    outcome = step.run(
+        ui,
+        step_no=4,
+        non_interactive=non_interactive,
+        main_model=main_model,
+        warnings=warnings,
+        skip_test=skip_test,
+    )
+    if outcome is StepOutcome.BACK:
+        return _BACK
+    set_memory_backend(chosen if outcome is StepOutcome.CONFIGURED else None)
     return None
+
+
+_MEMORY_OFF = object()
+
+
+def _choose_memory_backend(steps: list[tuple[str, "OnboardStep"]]) -> Any:
+    """Which memory backend's screen to run when more than one plugin is installed.
+
+    One backend is active at a time, so the wizard asks rather than walking
+    every screen in registry order -- the second install would otherwise have
+    to decline the first backend to reach its own. Returns the contribution
+    name, ``None`` for "off", or ``_BACK`` for the previous step. A dismissed
+    question (Esc, Ctrl-C) ends the wizard without writing anything: a question
+    nobody answered must not turn memory off.
+    """
+    questionary = _require_questionary()
+    from raven.cli._styles import RAVEN_STYLE
+
+    names = [name for name, _ in steps]
+    current = _selected_backend()
+    choices = [questionary.Choice(name, value=name) for name in names]
+    choices.append(questionary.Choice(t("Off"), value=_MEMORY_OFF))
+    choices.append(questionary.Choice(t("Back"), value=_BACK))
+    chosen = questionary.select(
+        t("Which memory backend?"),
+        choices=choices,
+        default=current if current in names else None,
+        style=RAVEN_STYLE,
+        qmark=_QMARK,
+    ).ask()
+    if chosen is None:
+        raise typer.Exit(1)
+    return None if chosen is _MEMORY_OFF else chosen
 
 
 # ---------------------------------------------------------------------------
@@ -2847,12 +2921,12 @@ def register(app: typer.Typer) -> None:
         search_provider: Optional[str] = typer.Option(
             None,
             "--search-provider",
-            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave, firecrawl or serply",
+            help="web_search vendor: serper, anysearch, serpapi, tavily, exa, brave, firecrawl, serply, keenable or deepseek",
         ),
         fetch_provider: Optional[str] = typer.Option(
             None,
             "--fetch-provider",
-            help="web_fetch vendor: jina, anysearch, tavily, exa or firecrawl",
+            help="web_fetch vendor: jina, anysearch, tavily, exa, firecrawl, keenable or deepseek",
         ),
         search_api_key: Optional[str] = typer.Option(
             None,

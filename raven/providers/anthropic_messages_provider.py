@@ -39,6 +39,7 @@ from raven.providers.first_byte import (
 )
 from raven.providers.prompt_cache import accepts_cache_control
 from raven.providers.rates import DEFAULT_MAX_OUTPUT_TOKENS
+from raven.providers.relay import relayed
 from raven.providers.tool_names import normalized_tool_name
 from raven.providers.usage import reported_cost, token_count
 
@@ -421,6 +422,7 @@ def _visible_reserve(max_tokens: int) -> int:
     return max(1024, max_tokens // 2)
 
 
+@relayed(keep=bool)
 def _litellm_budgets() -> dict[str, int]:
     """litellm's own effort-to-budget table, or empty when it cannot be imported.
 
@@ -662,7 +664,12 @@ def _merge_usage(target: dict[str, Any], raw: Any) -> None:
 
 
 def _finish_reason(reason: Any) -> str:
-    return _FINISH_REASONS.get(str(reason or "end_turn"), str(reason or "stop"))
+    # Absent is not a normal end: a reply that never said how it ended must stay
+    # distinguishable from one that did. Anything unmapped (``refusal``) is the
+    # upstream's own word and goes through as it came.
+    if not reason:
+        return "unknown"
+    return _FINISH_REASONS.get(str(reason), str(reason))
 
 
 def parse_message(payload: dict[str, Any]) -> LLMResponse:
@@ -855,7 +862,7 @@ async def consume_message_stream(
             yield ChatDelta(
                 content=None,
                 usage=usage or None,
-                finish_reason="stop",
+                finish_reason="unknown",
                 thinking_blocks=list(thinking.values()) or None,
             )
 
@@ -876,10 +883,15 @@ class AnthropicMessagesProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
         model_overrides: dict[str, dict[str, Any]] | None = None,
+        tls_verify: bool = True,
     ) -> None:
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        # Same knob as the litellm client's: False posts through an httpx
+        # client built with verification off, for a gateway whose certificate
+        # the machine holds no root for.
+        self.tls_verify = tls_verify
         self.model_overrides = model_overrides or {}
         self._provider_name = provider_name or "anthropic"
         # Output ceilings learned from a model's own 400, so the next request
@@ -1011,7 +1023,9 @@ class AnthropicMessagesProvider(LLMProvider):
             # ``httpx_timeout`` puts connect/write/pool on the first-byte bound
             # while leaving the read wide. A plain float reached httpx as the
             # same number on all four phases, so a dead route cost 1800s.
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+            ) as client:
                 for _attempt in range(3):
                     response = await asyncio.wait_for(
                         client.post(url, headers=build_headers(self.api_key or "", url, self.extra_headers), json=body),
@@ -1025,7 +1039,16 @@ class AnthropicMessagesProvider(LLMProvider):
                     break
             if response.status_code != 200:
                 raise ProviderHTTPError(response.status_code, _error_text(response))
-            return self._parse_response(response.json())
+            payload = response.json()
+            # An overloaded upstream can answer 200 with an error object in place
+            # of a message; raised here so the same classifier that reads the
+            # stream's error event reads this one.
+            if isinstance(payload, dict) and payload.get("type") == "error":
+                error = payload.get("error")
+                error = error if isinstance(error, dict) else {}
+                detail = ": ".join(str(part) for part in (error.get("type"), error.get("message")) if part)
+                raise RuntimeError(f"Anthropic Messages returned an error: {detail or payload}")
+            return self._parse_response(payload)
         except Exception as exc:
             return self._error_response(exc)
 
@@ -1063,7 +1086,9 @@ class AnthropicMessagesProvider(LLMProvider):
         # response headers is a read, and httpx leaves read on the call budget.
         first_byte = stream_first_byte_budget(self.generation)
         try:
-            async with httpx.AsyncClient(timeout=httpx_timeout(self.generation) or self.generation.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx_timeout(self.generation) or self.generation.timeout, verify=self.tls_verify
+            ) as client:
                 for _attempt in range(3):
                     async with contextlib.AsyncExitStack() as opened:
                         response = await self._open_stream(opened, client, url, body, first_byte)

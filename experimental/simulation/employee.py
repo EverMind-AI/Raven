@@ -79,7 +79,7 @@ def hire(
         baseline,
         root,
         timeout=timeout,
-        children=lambda current: prepare_children(current, root, ["Raven", *housed]),
+        children=lambda current: prepare_children(current, root, [GENERIC_AGENT, *housed]),
         withheld=withheld(scenario),
     )
 
@@ -107,7 +107,7 @@ def replicate(
     shutil.copytree(employee.baseline.workdir, workdir, symlinks=True)
     baseline = prepare(config, workdir=workdir, task=employee.baseline.task, home=workspace)
     housed = house(baseline, model=subagent_model, deployment=root / "deployment")
-    children = prepare_children(baseline, root, ["Raven", *housed])
+    children = prepare_children(baseline, root, [GENERIC_AGENT, *housed])
     if children.keys() != employee.children.keys():
         raise ValueError(f"a replica has child harnesses {sorted(children)}, the employee {sorted(employee.children)}")
     for name, child in children.items():

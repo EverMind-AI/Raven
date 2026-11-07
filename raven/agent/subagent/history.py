@@ -117,7 +117,12 @@ def nodes_root(session_dir: Path) -> Path:
     conversation: giving each run a directory made the same id resolvable only
     through the index that knew which run owned it.
     """
-    return session_history_root(session_dir) / _NODES_DIRNAME
+    return nodes_root_in(session_history_root(session_dir))
+
+
+def nodes_root_in(history_root: Path | str) -> Path:
+    """The node-artifact root inside a history root, as :func:`session_history_root` names one."""
+    return Path(history_root) / _NODES_DIRNAME
 
 
 def spawn_live_key(root: Path, node_id: str) -> str:
@@ -258,9 +263,10 @@ def add_turn_to_instance_log(
     if session_dir is None or not agent or not handle:
         return []
     # A transport that narrated as it went already has that prose on the steps it
-    # was said before, so the closing row is what it said last -- not `output`,
-    # which is every burst joined for the caller receiving the answer. A lane
-    # that cannot tell them apart reports None and `output` stands in whole.
+    # was said before, so the closing row is what it said after the last one --
+    # not `output`, which for a turn that ended on a step is the message before
+    # that step, already on its row. A lane that cannot tell them apart reports
+    # None and `output` stands in whole.
     closing = getattr(activity, "closing", None)
     answer = output if closing is None else (closing or None)
     try:
@@ -391,9 +397,7 @@ class SpawnRecord:
             if (whole := persisted_output(activity, output)) is not None:
                 self.file("out.md").write_text(whole, encoding="utf-8")
             if error is not None:
-                from raven.config.held_secrets import scrub_held_secrets
-
-                self.file("error.md").write_text(scrub_held_secrets(error), encoding="utf-8")
+                self.file("error.md").write_text(error, encoding="utf-8")
             meta = self._read_meta()
             meta.update(status=status, ended_at_ms=int(time.time() * 1000))
             if activity is not None:
@@ -408,10 +412,10 @@ class SpawnRecord:
                         encoding="utf-8",
                     )
                 # What it said after its last step, when the lane can tell that
-                # apart from the whole reply. The context read draws this as
+                # apart from everything it said. The context read draws this as
                 # the answer row, so a narrating agent's progress notes stay
-                # on the steps they preceded instead of opening the answer a
-                # second time; `out.md` keeps the whole reply for the caller.
+                # on the steps they preceded; `out.md` keeps the whole reply,
+                # before the cap the caller's copy went through.
                 closing = getattr(activity, "closing", None)
                 if output is not None and isinstance(closing, str) and closing.strip():
                     self.file("closing.md").write_text(closing, encoding="utf-8")

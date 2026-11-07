@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   absorb,
+  forget,
   gone,
   has,
   hasBinaryFrames,
@@ -16,7 +17,10 @@ import {
   hasUpdateFlag,
   resetCapabilities,
   serves,
+  servesBugReport,
   servesChannels,
+  servesFolderDialog,
+  supportsModelSelectionOnly,
 } from './capabilities'
 
 beforeEach(() => {
@@ -26,6 +30,14 @@ beforeEach(() => {
 describe('the absent-method registry', () => {
   it('answers for a name nothing has refused', () => {
     expect(has('subagent')).toBe(true)
+  })
+
+  it('forgets one refusal at a time, leaving the others in place', () => {
+    gone('trajectory', { code: -32601, message: 'no such method' })
+    gone('subagent', { code: -32601, message: 'no such method' })
+    forget('trajectory')
+    expect(has('trajectory')).toBe(true)
+    expect(has('subagent')).toBe(false)
   })
 
   it('records a name only when the gateway said -32601', () => {
@@ -75,6 +87,29 @@ describe("the handshake's own list", () => {
   it('survives a gateway that sends no list at all', () => {
     absorb(undefined)
     expect(serves('subscriptions')).toBe(false)
+  })
+
+  it('offers the bug report only where the gateway announced a receiver', () => {
+    absorb(['jsonrpc-2.0', 'trajectory-v1'])
+    expect(servesBugReport()).toBe(false)
+    absorb(['jsonrpc-2.0', 'trajectory-v1', 'bugreport-v1'])
+    expect(servesBugReport()).toBe(true)
+  })
+  it('offers the host\'s folder dialog only where the gateway announced one', () => {
+    absorb(['jsonrpc-2.0', 'trajectory-v1'])
+    expect(servesFolderDialog()).toBe(false)
+    absorb(['jsonrpc-2.0', 'trajectory-v1', 'folder-dialog-v1'])
+    expect(servesFolderDialog()).toBe(true)
+  })
+
+  it('enables selection-only reads only while the connected gateway announces them', () => {
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(['model.options.selection_only'])
+    expect(supportsModelSelectionOnly()).toBe(true)
+    absorb(['jsonrpc-2.0'])
+    expect(supportsModelSelectionOnly()).toBe(false)
+    absorb(undefined)
+    expect(supportsModelSelectionOnly()).toBe(false)
   })
 })
 

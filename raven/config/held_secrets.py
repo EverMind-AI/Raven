@@ -25,6 +25,10 @@ from raven.security.redact import redact_home_config_read
 #: Shorter strings are too likely to be ordinary text ("true", a port). Six,
 #: not eight: a mailbox password (``hunter2``) is a credential too.
 _MIN_LEN = 6
+#: The floor a machine's password is held to when it is kept
+#: (``raven.ops.connection_add.store_password``): one shorter would pass the
+#: scrubber as ordinary text, so the doors refuse it rather than keep it.
+PASSWORD_MIN_LEN = _MIN_LEN
 #: Values a credential field holds when it holds nothing.
 _PLACEHOLDERS = frozenset({"EMPTY", "empty", "dummy", "changeme", "not-needed", "sk-xxx"})
 
@@ -63,28 +67,72 @@ def _worth_holding(path: str) -> bool:
     return True
 
 
+# Where ``raven.ops.connection_add.store_password`` keeps a machine's password:
+# ``<home>/keys/<id>.password``. Spelled here rather than imported, so the
+# config package does not draw ``raven.ops`` into its import cycle; the test
+# beside ``store_password`` holds the two spellings together.
+MACHINE_PASSWORD_GLOB = ("keys", "*.password")
+
+
+def _machine_password_files() -> list[Path]:
+    """The passwords kept for registered machines, by file."""
+    try:
+        from raven.home import raven_home
+
+        return sorted((raven_home() / MACHINE_PASSWORD_GLOB[0]).glob(MACHINE_PASSWORD_GLOB[1]))
+    except Exception as exc:  # noqa: BLE001 - no home to look in holds nothing to scrub
+        logger.debug("held_secrets: machine passwords not looked at: {}", exc)
+        return []
+
+
+def _machine_passwords(files: list[Path]) -> list[tuple[str, str]]:
+    """``(value, where)`` for each kept password: one more credential Raven holds, scrubbed like the rest."""
+    out: list[tuple[str, str]] = []
+    for file in files:
+        try:
+            value = file.read_text(encoding="utf-8").strip("\r\n")
+        except OSError:
+            continue
+        if len(value) >= _MIN_LEN:
+            out.append((value, f"the password kept for machine {file.name[: -len('.password')]}"))
+    return out
+
+
 def held_secrets() -> tuple[tuple[str, str], ...]:
-    """``(value, path)`` for every credential in Raven's config, longest first; re-read when the file changes."""
+    """``(value, path)`` for every credential Raven holds, longest first.
+
+    The config's credentials, re-read when the file changes, and the passwords
+    kept for registered machines, read on every call: they are a few tiny
+    files, and an in-place rewrite can keep the old mtime, so a stamp on it
+    would hold a replaced password's old value until something else
+    invalidated the cache.
+    """
     global _cache
     path = get_config_path()
     try:
         mtime = path.stat().st_mtime
     except OSError:
-        return ()
-    if _cache is not None and _cache[0] == path and _cache[1] == mtime:
-        return _cache[2]
-    found: list[tuple[str, str]] = []
-    try:
-        _collect(read_raw(path), "", found)
-    except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
-        logger.debug("held_secrets: config unreadable: {}", exc)
-    unique = {value: where for value, where in found}
+        # No config file: an empty set of config credentials, not the end of
+        # the call. The machine passwords below live under the Raven home on
+        # their own, and a missing config does not imply they are absent.
+        mtime = None
+    if mtime is None:
+        config_held: tuple[tuple[str, str], ...] = ()
+    else:
+        if _cache is None or _cache[0] != path or _cache[1] != mtime:
+            found: list[tuple[str, str]] = []
+            try:
+                _collect(read_raw(path), "", found)
+            except Exception as exc:  # noqa: BLE001 - an unreadable config holds nothing to scrub
+                logger.debug("held_secrets: config unreadable: {}", exc)
+            _cache = (path, mtime, tuple(found))
+        config_held = _cache[2]
+    unique = dict(config_held)
+    unique.update(_machine_passwords(_machine_password_files()))
     # As a JSON file prints it too: a quote or a backslash in the value is
     # escaped there, and `cat config.json` shows that spelling.
     unique.update({json.dumps(value)[1:-1]: where for value, where in list(unique.items())})
-    held = tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
-    _cache = (path, mtime, held)
-    return held
+    return tuple(sorted(unique.items(), key=lambda pair: -len(pair[0])))
 
 
 def scrub_held_secrets(text: str) -> str:

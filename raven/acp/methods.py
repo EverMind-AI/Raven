@@ -43,7 +43,9 @@ from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.providers.usage import reported_cost
 from raven.security import redact
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -284,11 +286,27 @@ class AcpMethods:
             return await self._session_cancel(params)
         if method == protocol.STEER_METHOD:
             return await self._session_steer(params)
+        if method == protocol.RESIDENT_WORK_METHOD:
+            return self._resident_work()
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
 
     # -- handlers ---------------------------------------------------------
+
+    def _resident_work(self) -> dict[str, Any]:
+        """What this agent holds that runs with nobody asking (``_raven/residentWork``).
+
+        An armed cron job of this agent's partition fires only from this
+        process, and a plugin service lives only as long as it does, so a client
+        about to close the agent for idleness asks first. Read at the moment of
+        asking: a one-shot wake that has fired no longer counts.
+        """
+        loop = self._agent_loop
+        cron = getattr(loop, "cron_service", None)
+        jobs = len(cron.armed_jobs()) if cron is not None else 0
+        services = len(getattr(loop, "running_plugin_services", ()) or ())
+        return {"resident": bool(jobs or services), "cronJobs": jobs, "services": services}
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer the handshake and keep what the client declared.
@@ -334,7 +352,14 @@ class AcpMethods:
         # Offered at creation so a client can put a model picker in the session
         # menu without a second round trip. Absent rather than empty when there
         # is nothing to offer -- an empty list is a menu that opens onto nothing.
-        options = await self._config_options(session.session_key)
+        try:
+            options = await self._config_options(session.session_key)
+        except asyncio.CancelledError:
+            if not self._translator.closing:
+                raise
+            # The session exists; optional metadata must not suppress its EOF reply.
+            logger.debug("acp: returning {} without model options during shutdown", session.session_id)
+            options = []
         if options:
             result["configOptions"] = options
         return self._with_modes(result, session.session_id)
@@ -372,12 +397,11 @@ class AcpMethods:
         self._bind_workdir(session_id, cwd)
         session = self._translator.get(session_id)
         if session is None:
-            session = AcpSession(
-                session_id=session_id,
-                session_key=session_id,
-                cwd=cwd,
-                subscription_id=await self._subscribe(session_id),
-            )
+            session = AcpSession(session_id=session_id, session_key=session_id, cwd=cwd)
+            # Before the subscription, so nothing is awaited between subscribing
+            # and adding: an event in that gap finds no session and is dropped.
+            await self._seed_cost(session)
+            session.subscription_id = await self._subscribe(session_id)
             self._translator.add(session)
         else:
             # Loading a session this connection already holds. Its stream is
@@ -392,6 +416,32 @@ class AcpMethods:
         logger.info("acp: replayed {} update(s) for {}", len(updates), session_id)
         self._announce_commands(session_id)
         return self._with_modes({}, session_id)
+
+    async def _seed_cost(self, session: AcpSession) -> None:
+        """Start a session opened here from what it had already spent.
+
+        ``usage_update.cost`` is the session's cumulative cost, and turns run
+        before this process -- or on another connection -- are part of it. Read
+        from ``session.usage``, the account that outlives the process, once per
+        session opened rather than per turn: it walks every day of telemetry
+        since the session began. Unreadable, the session sends no cost at all; a
+        total counted from here would understate it. An answer whose spend is
+        not an amount by ``reported_cost`` is unreadable too.
+        """
+        try:
+            spent = await self._call("session.usage", {"session_id": session.session_key})
+        except Exception as exc:  # noqa: BLE001 - accounting must not refuse the session
+            logger.warning("acp: what session {} had spent could not be read: {}", session.session_id, exc)
+            session.cost_known = False
+            return
+        cost = spent.get("cost_usd") if isinstance(spent, dict) else None
+        if cost is None:
+            return
+        if (amount := reported_cost(cost)) is None:
+            logger.warning("acp: what session {} had spent is not an amount: {!r}", session.session_id, cost)
+            session.cost_known = False
+            return
+        session.cost_usd = amount
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -428,12 +478,11 @@ class AcpMethods:
         self._bind_workdir(session_id, cwd)
         session = self._translator.get(session_id)
         if session is None:
-            session = AcpSession(
-                session_id=session_id,
-                session_key=session_id,
-                cwd=cwd,
-                subscription_id=await self._subscribe(session_id),
-            )
+            session = AcpSession(session_id=session_id, session_key=session_id, cwd=cwd)
+            # Before the subscription, so nothing is awaited between subscribing
+            # and adding: an event in that gap finds no session and is dropped.
+            await self._seed_cost(session)
+            session.subscription_id = await self._subscribe(session_id)
             self._translator.add(session)
         else:
             session.cwd = cwd
@@ -497,7 +546,15 @@ class AcpMethods:
             self._translator.release_session(session_id)
         await self._release_per_session_mcp(session_id)
         if manager is not None:
-            manager.delete(session_id)
+            from raven.agent.task_board.service import remove_unheard
+
+            # Found before the transcript goes, as the store finds it for its observers.
+            board_dir = manager.session_dir(session_id)
+            removed = manager.delete(session_id)
+            transcript_kept = not removed and manager.exists(session_id)
+            remove_unheard(
+                getattr(self._agent_loop, "task_board", None), session_id, board_dir, transcript_kept=transcript_kept
+            )
         self._titles.pop(session_id, None)
         logger.info("acp: deleted session {}", session_id)
         return {}
@@ -915,9 +972,15 @@ class AcpMethods:
 
     @staticmethod
     def _stop_reason(stop: Any, sessions: Any, session_key: str, filed_before: int) -> Any:
-        """``stop``, refined to ``max_tokens`` when this turn hit the ceiling.
+        """``stop``, refined to the limit that cut this turn short, if one did.
 
-        The protocol already has a word for it, and the schema's own enum
+        ``max_turn_requests`` when the turn's own budget ended it (the tool cap,
+        the wall clock or a stalled tool) and a wrap-up answered in its place;
+        ``max_tokens`` when generation stopped at the output ceiling. The budget
+        is read first: it is what ended the turn, and a wrap-up that was then
+        cut too does not make the turn any less over budget.
+
+        The protocol already has a word for each, and the schema's own enum
         carries it -- so a turn cut at the output ceiling is reported the way
         every conforming agent reports one, rather than through a private
         ``_meta`` key the client would have to be taught and that no other agent
@@ -935,8 +998,12 @@ class AcpMethods:
         """
         if stop != "end_turn" or sessions is None:
             return stop
-        at = getattr(sessions.get_or_create(session_key), "metadata", {}).get("output_limit_turn_at")
-        return "max_tokens" if isinstance(at, int) and at >= filed_before else stop
+        metadata = getattr(sessions.get_or_create(session_key), "metadata", {})
+        for key, refined in ((BUDGET_STOP_TURN_AT, "max_turn_requests"), (OUTPUT_LIMIT_TURN_AT, "max_tokens")):
+            at = metadata.get(key)
+            if isinstance(at, int) and at >= filed_before:
+                return refined
+        return stop
 
     async def _session_cancel(self, params: dict[str, Any]) -> None:
         """Cancel the session's turn, and make sure its prompt is answered.

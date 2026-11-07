@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import json
+import os
 import shlex
 import sys
 import time
@@ -26,19 +28,33 @@ from unittest.mock import patch
 import pytest
 from loguru import logger
 
-from raven.acp_client.acp_agent import AcpAgentBackend, AcpEmptyTurnError
+from raven.acp_client.acp_agent import (
+    _SESSION_STATE,
+    AcpAgentBackend,
+    AcpEmptyTurnError,
+    _records_of,
+    _session_state,
+)
+from raven.acp_client.acp_dialects import ToolCall
 from raven.acp_client.capabilities import (
+    AcpEffortChoice,
     AcpMode,
     AcpModelChoice,
     CapabilitySnapshot,
     SnapshotStore,
-    relearn_session_modes,
+    read_session_effort,
+    relearn_session_menus,
     snapshot_fingerprint,
     verify_agent,
 )
 from raven.acp_client.pool import close_pool, get_pool
-from raven.acp_client.protocol import AcpRemoteError
-from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, third_party_agent_meta
+from raven.acp_client.protocol import AcpError, AcpRemoteError
+from raven.agent.subagent.backends import (
+    acp_snapshot_for,
+    agent_meta,
+    build_third_party_backend,
+    third_party_agent_meta,
+)
 from raven.agent.subagent.instances import InstanceRegistry
 from raven.agent.subagent.manager import SubagentManager
 from raven.agent.subagent.probe import capabilities_wanted, probe_one, record_capabilities, run_test
@@ -46,6 +62,8 @@ from raven.agent.subagent.probe_state import fingerprint
 from raven.agent.subagent.registry import _row_for
 from raven.config.schema import SubagentsConfig, ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 from raven.config.update_subagents import reject_unsupported_acp_fields
+from raven.utils.commands import command_quote
+from tests._windows_dirs import scratch_root, windows_removal
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 
@@ -53,7 +71,7 @@ _STUB = Path(__file__).with_name("acp_stub_server.py")
 def stub_config(name: str = "stub", *, mode: str = "ok", **kw: Any) -> ThirdPartyAcpSubagentConfig:
     return ThirdPartyAcpSubagentConfig(
         name=name,
-        command=f"{sys.executable} {_STUB}",
+        command=f"{command_quote(sys.executable)} {command_quote(str(_STUB))}",
         env={"ACP_STUB_MODE": mode},
         ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
         **kw,
@@ -67,7 +85,11 @@ async def _no_pooled_connections():
     The pool is process state by design (two backends of one agent must share a
     connection), so without this a stub process would outlive its test and the
     next test would be handed a connection configured for a different mode.
+    The session records are module state for the same reason -- a hot apply
+    replaces the backend while the session continues -- held per pool slot, and
+    they are cleared with the pool so no record outlives the test that made it.
     """
+    _SESSION_STATE.clear()
     yield
     await close_pool()
 
@@ -178,6 +200,16 @@ async def test_verify_reads_capabilities_from_the_handshake() -> None:
         ("stub:model-a", "model-a", "Stub"),
         ("stub:model-b", "model-b", "Stub"),
     ]
+    # The reasoning effort is a second option, not part of the model ids: the
+    # entry is found by its thought_level category and keeps its own id, which
+    # is what a later session/set_config_option sends the value through.
+    assert snapshot.effort_option == "effort"
+    assert [(c.value, c.name) for c in snapshot.effort_choices] == [
+        ("low", "low"),
+        ("high", "high"),
+        ("max", "max"),
+        ("default", "default"),
+    ]
     assert snapshot.auth_methods == ("stub-auth",)
 
 
@@ -216,6 +248,490 @@ def test_the_per_session_mcp_promise_is_read_from_meta_and_survives_storage() ->
     # A row written before the field existed degrades to "did not promise".
     older = {k: v for k, v in stored.to_row().items() if k != "sessionMcp"}
     assert CapabilitySnapshot.from_row(older).session_mcp is False
+
+
+def test_a_snapshot_row_with_a_malformed_effort_list_reads_as_none() -> None:
+    stored = CapabilitySnapshot(agent="a", fingerprint="fp", status="ready", detail="", measured_at_ms=1)
+    row = stored.to_row()
+    row["effortChoices"] = "not a list"
+    assert CapabilitySnapshot.from_row(row).effort_choices == ()
+
+
+def test_a_grouped_effort_option_is_read_and_junk_entries_are_skipped() -> None:
+    option, current, choices = read_session_effort(
+        {
+            "configOptions": [
+                {
+                    "id": "effort",
+                    "category": "thought_level",
+                    "currentValue": "low",
+                    "options": [
+                        "junk",
+                        {"group": "ladder", "options": [{"value": "high", "name": "High"}]},
+                    ],
+                }
+            ]
+        }
+    )
+    assert (option, current) == ("effort", "low")
+    assert choices == (AcpEffortChoice(value="high", name="High"),)
+
+
+def test_a_mode_menu_of_effort_levels_is_offered_as_reasoning_effort() -> None:
+    """Pi, Grok, Kimi and DSH advertise effort as `modes`, not as thought_level.
+
+    The menu is taken as effort only when every id is a level name; the parser
+    has nothing else to go on, so one permission mode in the list disqualifies
+    the whole menu.
+    """
+    cfg = stub_config("a")
+    effort_like = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    assert [(c.value, c.name) for c in effort_like.mode_efforts()] == [("low", "Low"), ("high", "High")]
+    assert [c.value for c in agent_meta(cfg, snapshot=effort_like).effort_choices] == ["low", "high"]
+
+    permission_modes = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(
+            AcpMode("default", "Default"),
+            AcpMode("acceptEdits", "Accept edits"),
+            AcpMode("plan", "Plan"),
+        ),
+    )
+    assert permission_modes.mode_efforts() == ()
+    assert agent_meta(cfg, snapshot=permission_modes).effort_choices == ()
+
+
+@pytest.mark.parametrize(
+    "modes",
+    [
+        (AcpMode("default", "Default"),),
+        (AcpMode("none", "None"),),
+        (AcpMode("default", "Default"), AcpMode("none", "None")),
+    ],
+)
+def test_a_mode_menu_naming_no_level_is_not_an_effort_menu(modes: tuple[AcpMode, ...]) -> None:
+    """``default`` and ``none`` are in the level vocabulary because a real effort
+    menu may carry them beside its levels. On their own they name no level at
+    all: an agent whose only mode is ``default`` would otherwise grow an Effort
+    picker offering ``default``, and an instance mode override on it would
+    withhold the row's effort."""
+    neutral = CapabilitySnapshot(
+        agent="a", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    assert neutral.mode_efforts() == ()
+    assert agent_meta(stub_config("a"), snapshot=neutral).effort_choices == ()
+
+    with_a_level = replace(neutral, available_modes=(*modes, AcpMode("high", "High")))
+    assert [c.value for c in with_a_level.mode_efforts()] == [*(m.id for m in modes), "high"]
+
+
+def test_one_derivation_names_a_snapshots_menus_and_the_channel_its_effort_takes() -> None:
+    """A refresh, the roster and the dispatch resolver all read a row's menus
+    through ``acp_menus``. The channel is part of the answer: a mode menu that is
+    the effort menu shares its channel with an instance's mode override, and the
+    resolver has to know that to rank the two."""
+    from raven.agent.subagent.backends import acp_menus
+
+    levels = (AcpMode("low", "Low"), AcpMode("high", "High"))
+    base: dict[str, Any] = {"agent": "a", "fingerprint": "fp", "status": "ready", "detail": "", "measured_at_ms": 1}
+    thought = CapabilitySnapshot(
+        **base, available_modes=levels, effort_choices=(AcpEffortChoice("max", "Max"),), effort_option="effort"
+    )
+    modes = CapabilitySnapshot(**base, available_modes=levels)
+
+    assert [c.value for c in acp_menus(thought).efforts] == ["max"] and not acp_menus(thought).effort_via_modes
+    assert [c.value for c in acp_menus(modes).efforts] == ["low", "high"] and acp_menus(modes).effort_via_modes
+    assert acp_menus(None) == ((), (), False)
+    cfg = stub_config("a")
+    assert agent_meta(cfg, snapshot=modes).effort_via_modes is True
+    assert agent_meta(cfg, snapshot=thought).effort_via_modes is False
+
+
+def test_a_thought_level_menu_wins_over_effort_like_modes() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("high", "High"),),
+        effort_choices=(AcpEffortChoice("low", "low"),),
+    )
+    assert snapshot.mode_efforts() == ()
+
+
+def test_ravens_own_modes_are_run_tiers_not_reasoning_effort() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        agent_name="raven",
+        available_modes=(AcpMode("medium", "Medium"), AcpMode("high", "High")),
+    )
+    assert snapshot.mode_efforts() == ()
+
+
+async def test_an_effort_on_a_mode_menu_is_sent_through_set_mode() -> None:
+    """The row's effort wins over the tier sent just before it; a clear sends
+    the mode the session opened on back, because set_mode has no unset."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+    backend._note_session_mode(client, "s1", {"modes": {"currentModeId": "low"}})
+
+    await backend._set_effort(client, "s1", "high", fallback_mode=None, budget=1)
+    await backend._set_effort(client, "s1", None, fallback_mode=None, budget=1)
+
+    assert calls == [
+        ("session/set_mode", {"sessionId": "s1", "modeId": "high"}),
+        ("session/set_mode", {"sessionId": "s1", "modeId": "low"}),
+    ]
+
+
+async def test_a_cleared_effort_leaves_the_tier_already_sent_in_place() -> None:
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+
+    await backend._set_effort(client, "s1", "high", fallback_mode="low", budget=1)
+    await backend._set_effort(client, "s1", None, fallback_mode="low", budget=1)
+
+    assert calls[-1] == ("session/set_mode", {"sessionId": "s1", "modeId": "low"})
+
+
+async def test_effort_refusals_and_missing_baselines_do_not_escape() -> None:
+    """Every refusal arm leaves the turn runnable, and a clear with no recorded
+    baseline says why once instead of sending a guessed value."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    calls: list[tuple[str, dict]] = []
+
+    class _Client:
+        def __init__(self, error: Exception | None = None) -> None:
+            self.error = error
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            calls.append((method, params))
+            if self.error is not None:
+                raise self.error
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    # One connection per backend: the effort record is held per connection, so
+    # the refusals are this client's answers rather than other connections'.
+    client = _Client()
+    backend._note_session_mode(client, None, {})
+    backend._note_session_effort(client, None, {})
+
+    state = _session_state(client, "s1")
+    state.pushed = "high"
+    await backend._set_effort(client, "s1", None, budget=1)
+    client.error = AcpRemoteError("session/set_config_option", -32000, "no")
+    await backend._set_effort(client, "s1", "high", budget=1)
+    client.error = AcpError("broken")
+    await backend._set_effort(client, "s1", "high", budget=1)
+
+    mode_snapshot = CapabilitySnapshot(
+        agent="b",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+    )
+    mode_backend = AcpAgentBackend(name="b", command="unused", snapshot=mode_snapshot)
+    mode_client = _Client()
+    await mode_backend._set_effort(mode_client, "s2", None, budget=1)
+    mode_state = _session_state(mode_client, "s2")
+    mode_state.mode_pushed = "high"
+    await mode_backend._set_effort(mode_client, "s2", None, budget=1)
+    mode_state.mode_baseline = "low"
+    mode_client.error = AcpRemoteError("session/set_mode", -32000, "no")
+    await mode_backend._set_effort(mode_client, "s2", "high", budget=1)
+    mode_client.error = AcpError("broken")
+    await mode_backend._set_effort(mode_client, "s2", "high", budget=1)
+
+    assert calls  # every attempt reached the wire; none escaped as an exception
+
+
+async def test_a_transport_failure_setting_an_effort_names_the_effort_and_the_session() -> None:
+    """The warning a reader debugs an unapplied effort from must put each value
+    in its own slot: the session id is not an effort, and the effort is not a
+    session."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        effort_choices=(AcpEffortChoice("high", "High"),),
+        effort_option="effort",
+    )
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            raise AcpError("broken")
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    with _loguru_capture("WARNING") as captured:
+        await backend._set_effort(_Client(), "sess-123", "high", budget=1)
+
+    assert any("could not set effort 'high' on session sess-123" in line for line in captured), captured
+
+
+async def test_an_effort_the_sessions_own_model_does_not_take_is_not_pushed() -> None:
+    """The row's effort is checked against the row's own model, but an instance
+    can be moved to another one. The model switch answers with that model's
+    options, so the session knows its own menu: an effort it does not hold is
+    said once and not sent, rather than refused by the agent on every turn. A
+    rung the new model does take still goes out."""
+    snapshot = CapabilitySnapshot(
+        agent="a",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("max", "Max")),
+        effort_option="effort",
+    )
+    sent: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            sent.append((method, params))
+            return {}
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=snapshot)
+    client = _Client()
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "low"}, {"value": "max"}]))
+    no_rungs = _menu_reply(models=[{"value": "prov/B", "name": "B"}])
+    backend._note_session_effort(client, "s1", no_rungs)
+
+    with _loguru_capture("WARNING") as captured:
+        await backend._set_effort(client, "s1", "max", budget=1)
+        await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [], "the session's model offers no effort, so nothing is sent"
+    assert len([line for line in captured if "offers no effort 'max'" in line]) == 1, captured
+
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "low"}]))
+    await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [], "a menu without the rung is the same answer"
+
+    backend._note_session_effort(client, "s1", _menu_reply(efforts=[{"value": "max"}]))
+    await backend._set_effort(client, "s1", "max", budget=1)
+    assert sent == [("session/set_config_option", {"sessionId": "s1", "configId": "effort", "value": "max"})]
+
+    unknown = AcpAgentBackend(name="b", command="unused", snapshot=snapshot)
+    other = _Client()
+    await unknown._set_effort(other, "s9", "max", budget=1)
+    assert sent[-1][1]["sessionId"] == "s9", "a session that never named its menu is sent the pick as before"
+
+
+@pytest.mark.parametrize(
+    ("effort", "refuse", "expected"),
+    [
+        ("low", (), ["low"]),
+        ("low", ("low",), ["low", "medium"]),
+        (None, (), ["medium"]),
+    ],
+)
+async def test_an_effort_on_the_mode_channel_is_the_only_mode_its_session_is_put_on(
+    tmp_path: Path, effort: str | None, refuse: tuple[str, ...], expected: list[str]
+) -> None:
+    """On an agent whose mode menu is its effort menu, the tier and the effort go
+    out on one channel and the effort is sent last, so sending the tier first
+    switched every turn's session twice for nothing. The tier is sent only when
+    there is no effort, or when the agent refuses the one there is."""
+    modes = (AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="pi", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    put_on: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                menu = [{"id": m.id, "name": m.name} for m in modes]
+                return {"sessionId": "s1", "modes": {"currentModeId": "high", "availableModes": menu}}
+            if method == "session/set_mode":
+                put_on.append(params["modeId"])
+                if params["modeId"] in refuse:
+                    raise AcpRemoteError("session/set_mode", -32602, "no such mode")
+            return {}
+
+    backend = AcpAgentBackend(
+        name="pi", command="unused", snapshot=snapshot, registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+    await backend._open_session(
+        _Client(),
+        cwd=str(tmp_path),
+        skey="s",
+        handle="h1",
+        budget=1,
+        mcp_servers=[],
+        mode="medium",
+        session_effort=effort,
+    )
+
+    assert put_on == expected
+
+
+async def test_an_instance_mode_override_is_the_last_mode_its_session_is_put_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lane end to end on a mode menu that is the effort menu: the manager
+    resolves both values, the real ``_open_session`` sends them, and the row's
+    effort must not land after the person's instance override on the one
+    channel the two share."""
+    modes = (AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High"))
+    snapshot = CapabilitySnapshot(
+        agent="pi", fingerprint="fp", status="ready", detail="", measured_at_ms=1, available_modes=modes
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr(
+        "raven.agent.subagent.manager.get_registry", lambda: InstanceRegistry(path=tmp_path / "manager.json")
+    )
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="pi", command="pi --acp", effort="low")],
+    )
+    mgr.set_instance_mode("s", "pi", "h1", "high")
+    put_on: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                menu = [{"id": m.id, "name": m.name} for m in modes]
+                return {"sessionId": "s1", "modes": {"currentModeId": "medium", "availableModes": menu}}
+            if method == "session/set_mode":
+                put_on.append(params["modeId"])
+            return {}
+
+    backend = AcpAgentBackend(
+        name="pi", command="unused", snapshot=snapshot, registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+    await backend._open_session(
+        _Client(),
+        cwd=str(tmp_path),
+        skey="s",
+        handle="h1",
+        budget=1,
+        mcp_servers=[],
+        mode=mgr.resolve_mode("s", "pi", "h1"),
+        session_effort=mgr.session_effort_for("s", "pi", "h1"),
+    )
+
+    assert put_on == ["high"]
+
+
+@pytest.mark.parametrize("channel", ["config_option", "mode"])
+async def test_two_connections_holding_one_session_id_keep_separate_effort_records(channel: str) -> None:
+    """The pool holds one connection per parent binding under one agent name,
+    and each process numbers its own sessions, so two of them can both hold
+    ``s1``. A record keyed by agent and session id alone was shared between
+    them: clearing one emptied the other's note of what it pushed, and the
+    second session was never sent back."""
+    snapshot = CapabilitySnapshot(
+        agent="same",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        available_modes=(AcpMode("low", "Low"), AcpMode("high", "High")),
+        effort_choices=(AcpEffortChoice("high", "High"), AcpEffortChoice("default", "Default"))
+        if channel == "config_option"
+        else (),
+        effort_option="effort" if channel == "config_option" else "",
+    )
+    sent: list[tuple[str, str]] = []
+
+    class _Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                return {
+                    "sessionId": "s1",
+                    "modes": {
+                        "currentModeId": "low",
+                        "availableModes": [{"id": "low", "name": "Low"}, {"id": "high", "name": "High"}],
+                    },
+                    "configOptions": [
+                        {
+                            "id": "effort",
+                            "category": "thought_level",
+                            "currentValue": "default",
+                            "options": [{"value": "high", "name": "High"}, {"value": "default", "name": "Default"}],
+                        }
+                    ]
+                    if channel == "config_option"
+                    else [],
+                }
+            sent.append((self.name, params.get("value") or params.get("modeId")))
+            return {}
+
+    backend = AcpAgentBackend(name="same", command="unused", snapshot=snapshot)
+    first, second = _Client("first"), _Client("second")
+    for client in (first, second):
+        await backend._open_session(
+            client, cwd="/w", skey="s", handle=client.name, budget=1, mcp_servers=[], session_effort="high"
+        )
+    for client in (first, second):
+        await backend._set_effort(client, "s1", None, budget=1)
+
+    baseline = "default" if channel == "config_option" else "low"
+    assert sent == [("first", "high"), ("second", "high"), ("first", baseline), ("second", baseline)]
 
 
 async def test_verify_reports_a_rejected_handshake_as_present_but_unusable() -> None:
@@ -327,6 +843,87 @@ async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
     assert reason in pinged.detail
 
 
+def _held_by_running_agents(monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[list[Any], list[Path]]:
+    """Every agent launched from here on, and a removal under ``root`` refused while one is not yet closed.
+
+    Windows refuses to remove a directory a live process works in, and a check
+    hands its agent one of these: as its working directory (the ping), or its
+    session's, where an agent may start a worker of its own (the handshake --
+    Claude Code does). Holding until the close is the order under test.
+    """
+    from raven.acp_client.client import AcpClient
+
+    launched: list[Any] = []
+    real_launch = AcpClient.__dict__["launch"].__func__
+
+    async def launch(cls, *args, **kwargs):
+        client = await real_launch(cls, *args, **kwargs)
+        launched.append(client)
+        return client
+
+    monkeypatch.setattr(AcpClient, "launch", classmethod(launch))
+    refused = windows_removal(
+        monkeypatch, lambda path: path.parent == root and any(not client.closed for client in launched)
+    )
+    return launched, refused
+
+
+async def test_a_ping_removes_its_directory_only_once_its_agent_has_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other order failed every Connect of an `npx` agent on native Windows with WinError 32.
+
+    The directory went before the pool that ends the agent's tree, Windows
+    refused, and the refusal was reported as the agent not answering a test
+    message -- after it had answered.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    root = scratch_root(tmp_path, monkeypatch)
+    launched, refused = _held_by_running_agents(monkeypatch, root)
+
+    pinged = await ping_agent(stub_config())
+
+    assert pinged.ok is True, pinged.detail
+    assert len(launched) == 1 and launched[0].closed
+    assert refused == []
+    assert list(root.iterdir()) == []
+
+
+async def test_a_handshake_removes_its_session_directory_only_once_its_agent_has_ended(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removed while the agent ran, the session directory came back as "verify failed: [WinError 32]".
+
+    That is the Test button's verdict for an agent that answered the whole
+    handshake, and the snapshot a Connect records after its ping passed.
+    """
+    root = scratch_root(tmp_path, monkeypatch)
+    launched, refused = _held_by_running_agents(monkeypatch, root)
+
+    snapshot = await verify_agent(stub_config())
+
+    assert snapshot.status == "ready", snapshot.detail
+    assert len(launched) == 1 and launched[0].closed
+    assert refused == []
+    assert list(root.iterdir()) == []
+
+
+async def test_a_handshake_with_nowhere_to_make_its_session_directory_says_so_and_ends_its_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "gone"))
+    launched, _refused = _held_by_running_agents(monkeypatch, tmp_path / "gone")
+
+    snapshot = await verify_agent(stub_config())
+
+    assert snapshot.status == "unknown"
+    assert snapshot.detail.startswith("verify failed:") and "gone" in snapshot.detail
+    assert len(launched) == 1 and launched[0].closed
+
+
 async def test_a_handshake_refused_over_a_credential_carries_its_fix_into_the_test() -> None:
     """Test is the sheet's way back for an unauthorized row, so its verdict names the fix.
 
@@ -351,15 +948,35 @@ def _through_npx(tmp_path: Path, mode: str, **kw: Any) -> ThirdPartyAcpSubagentC
     """A row whose command is ``npx ...``, run by a stand-in ``npx`` that starts the stub.
 
     What is under test is how a command that fetches on first use is read, so the
-    launcher has to be named npx; nothing here goes near a registry.
+    launcher has to be named npx; nothing here goes near a registry. A fetch
+    (``--package=``) is answered the way npx answers one: the stub's ``npm_*``
+    modes fail it in npm's own words, and any other mode succeeds -- after
+    ``STAND_IN_DELAY`` seconds, writing ``STAND_IN_ENTRY``'s package.json when one
+    is named, the way a download that took that long ends. ``STAND_IN_LOG`` gets
+    every invocation's arguments, one line each. The npm cache is the test's own,
+    so whatever this machine's npx holds is never read.
     """
     npx = tmp_path / "npx"
-    npx.write_text(f"#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n")
+    npx.write_text(
+        "#!/bin/sh\n"
+        'echo "$*" >> "${STAND_IN_LOG:-/dev/null}"\n'
+        'case " $* " in\n'
+        '  *" --package="*)\n'
+        '    case "$ACP_STUB_MODE" in\n'
+        "      npm_*) ;;\n"
+        "      *)\n"
+        '        sleep "${STAND_IN_DELAY:-0}"\n'
+        '        if [ -n "$STAND_IN_ENTRY" ]; then mkdir -p "$STAND_IN_ENTRY" && echo "{}" > "$STAND_IN_ENTRY/package.json"; fi\n'
+        "        exit 0 ;;\n"
+        "    esac ;;\n"
+        "esac\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n"
+    )
     npx.chmod(0o755)
     return ThirdPartyAcpSubagentConfig(
         name=kw.pop("name", "Claude Code"),
         command=f"{shlex.quote(str(npx))} -y @agentclientprotocol/claude-agent-acp@0.79.0",
-        env={"ACP_STUB_MODE": mode},
+        env={"ACP_STUB_MODE": mode, "npm_config_cache": str(tmp_path / "npm-cache"), **kw.pop("env", {})},
         ready_timeout_ms=kw.pop("ready_timeout_ms", 15000),
         **kw,
     )
@@ -388,7 +1005,9 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
         "connect again, or run this agent's launch command once in a terminal"
     ), pinged.detail
     assert str(tmp_path) not in pinged.detail
-    assert "connection ended (exit 1)" in pinged.detail, "the original error is kept for the fold"
+    assert "npx could not fetch @agentclientprotocol/claude-agent-acp@0.79.0 (exit 1)" in pinged.detail, (
+        "the original error is kept for the fold"
+    )
 
     # The same death from a command that fetches nothing is not a download: it
     # is a launch that quit, and what it said on its way out is the reason.
@@ -397,8 +1016,24 @@ async def test_npx_that_cannot_reach_the_registry_is_a_download_failure_not_a_si
     assert plain.remedy == Remedy("exited")
 
 
-async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_still_be_running(tmp_path: Path) -> None:
-    """A first download on a slow line is a start that runs out, and says so.
+async def test_a_start_that_runs_out_after_its_fetch_is_not_called_a_download(tmp_path: Path) -> None:
+    """The fetch ran before the handshake and finished, so a start that then runs out is the agent's own.
+
+    Saying npx "may still have been downloading" would send the reader to the
+    network about an adapter that is already on disk.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    pinged = await ping_agent(_through_npx(tmp_path, "silent", ready_timeout_ms=1000))
+    assert pinged.ok is False
+    assert pinged.remedy is None
+    assert "downloading" not in pinged.detail
+
+
+async def test_a_start_that_runs_out_under_an_npx_the_fetch_leaves_alone_may_still_be_downloading(
+    tmp_path: Path,
+) -> None:
+    """A launch the fetch cannot repeat exactly still downloads inside its handshake, and says so.
 
     Not proof of a download -- an adapter can hang on its own -- so the sentence
     says npx "may still have been downloading", and the fix is the same one: the
@@ -408,6 +1043,13 @@ async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_stil
     from raven.agent.subagent.probe_state import Remedy
 
     cfg = _through_npx(tmp_path, "silent", ready_timeout_ms=1000)
+    npx = shlex.split(cfg.command)[0]
+    cfg = cfg.model_copy(
+        update={
+            "command": f"{shlex.quote(npx)} --registry=https://registry.npmjs.org/ -y "
+            "@agentclientprotocol/claude-agent-acp@0.79.0"
+        }
+    )
     pinged = await ping_agent(cfg)
     assert pinged.ok is False
     assert pinged.remedy == Remedy("download")
@@ -416,6 +1058,44 @@ async def test_a_start_that_runs_out_under_npx_is_named_a_download_that_may_stil
     # A session that opens and then says nothing started fine: not this story.
     quiet = await ping_agent(stub_config(mode="silent", ready_timeout_ms=1000))
     assert quiet.remedy is None
+
+
+async def test_a_pi_older_than_its_adapter_needs_reads_alike_on_connect_test_and_the_roster(tmp_path: Path) -> None:
+    """pi-acp 0.0.34 refuses every session over a pi older than 0.81.0, with this one error.
+
+    Nothing else in it names pi, so the reader is told which program to upgrade and
+    how, rather than handed an internal error -- in the same words wherever the
+    refusal is seen: a connect, the Test button, and the roster showing what Test
+    recorded. Read for the preset only: the same words from another agent are passed
+    through as they came.
+    """
+    from raven.agent.subagent.presets import upgrade_hint_for
+    from raven.agent.subagent.probe import ping_agent, probe_one, run_test
+    from raven.agent.subagent.probe_state import Remedy
+    from raven.config.loader import shim_agent_floor
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "pi").write_text("#!/bin/sh\n")
+    (bin_dir / "pi").chmod(0o755)
+    pi = stub_config(mode="pi_needs_newer_pi", preset="pi")
+    pi = pi.model_copy(update={"env": {**pi.env, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}})
+    floor = shim_agent_floor("pi")
+    assert floor is not None
+    lead = f"its pi is older than {'.'.join(map(str, floor.oldest))}, the first pi that answers what its adapter asks"
+
+    connected = await ping_agent(pi)
+    tested = await run_test(pi, source="config")
+    listed = await probe_one(pi, source="config")
+
+    for seen in (connected.detail, tested.detail, listed.detail):
+        assert seen.startswith(lead), seen
+        assert "Unknown command: get_available_thinking_levels" in seen, "pi's own words are kept"
+    assert connected.remedy == tested.remedy == Remedy("upgrade", upgrade_hint_for(pi))
+    assert upgrade_hint_for(pi) == "npm install -g @earendil-works/pi-coding-agent@latest"
+
+    other = await ping_agent(stub_config(mode="pi_needs_newer_pi"))
+    assert other.remedy is None
 
 
 async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_install(tmp_path: Path) -> None:
@@ -450,6 +1130,65 @@ async def test_a_handshake_npx_could_not_fetch_is_not_recorded_as_an_absent_inst
     other = await verify_agent(stub_config(mode="abort"))
     assert other.status == "missing"
     assert other.unfetched is False
+
+
+async def test_an_npx_entry_left_incomplete_is_named_with_the_command_that_clears_it(tmp_path: Path) -> None:
+    """A download ended part-way leaves npx's entry the package and no package.json, for good.
+
+    From npm 11.2 every later ``npx`` of an exact-version spec finds the package,
+    skips the install, fails to read that package.json and exits 254. Nothing
+    the network fixes, so it is not a download failure, and nothing is absent
+    that an installer brings: the fix is npm's own command for that one entry.
+    """
+    from raven.agent.subagent.probe import ping_agent
+    from raven.agent.subagent.probe_state import Remedy
+
+    cfg = _through_npx(tmp_path, "npm_npx_entry_incomplete")
+    clears = Remedy("exited", "npm cache npx rm 523186a76b483a0d")
+
+    pinged = await ping_agent(cfg)
+    assert pinged.ok is False
+    assert pinged.remedy == clears
+    assert "/home/someone/.npm/_npx/523186a76b483a0d" in pinged.detail
+
+    snapshot = await verify_agent(cfg)
+    assert snapshot.status == "attention"
+    assert snapshot.unfetched is False
+
+    tested = await run_test(cfg, source="config")
+    assert tested.ok is False
+    assert tested.remedy == clears
+
+
+@pytest.mark.slow
+async def test_a_first_fetch_longer_than_the_connect_s_bounds_still_connects(tmp_path: Path) -> None:
+    """The download is not the handshake's: a connect waits it out before its own bounds start.
+
+    Inside them, a slow line ran the bounds out mid-download and the teardown's
+    SIGKILL left npx's entry incomplete -- see the test above for what that
+    costs. Here the fetch takes longer than the handshake and the answer
+    together, and the connect still lands. Slow on purpose: the fetch has to
+    outlast those two seconds for real, so the test waits three.
+    """
+    from raven.agent.subagent.probe import ping_agent
+
+    log = tmp_path / "npx.log"
+    entry = tmp_path / "npm-cache" / "_npx" / "523186a76b483a0d"
+    cfg = _through_npx(
+        tmp_path,
+        "ok",
+        ready_timeout_ms=1000,
+        timeout=1,
+        env={"STAND_IN_DELAY": "3", "STAND_IN_ENTRY": str(entry), "STAND_IN_LOG": str(log)},
+    )
+
+    pinged = await ping_agent(cfg)
+
+    assert pinged.ok is True, pinged.detail
+    invocations = log.read_text().splitlines()
+    assert invocations[0] == "-y --package=@agentclientprotocol/claude-agent-acp@0.79.0 -- node -e 0"
+    assert invocations[-1] == "-y @agentclientprotocol/claude-agent-acp@0.79.0"
+    assert (entry / "package.json").is_file()
 
 
 async def test_a_download_fix_names_only_the_preset_s_own_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -524,6 +1263,13 @@ _NPM9_ENOTFOUND = (
         (_NPM9_ENOTFOUND, "ENOTFOUND"),
         ("npm error code E404\nnpm error 404 Not Found - GET https://registry.example/pkg\n", "E404"),
         ("npm error code ETARGET\nnpm error notarget No matching version found\n", "ETARGET"),
+        # The shape a registered machine's node relays: the code line follows
+        # Raven's own "stderr tail: " marker instead of starting the text.
+        (
+            "acp agent 'x': connection ended (exit 1); stderr tail: npm error code ETARGET\n"
+            "npm error notarget No matching version found\n",
+            "ETARGET",
+        ),
         ("npm error network request to https://registry.example failed\n", "network"),
         # A local failure: no network, registry or proxy setting fixes it.
         ("npm error code EACCES\nnpm error syscall mkdir\n", None),
@@ -540,6 +1286,16 @@ def test_a_fetch_failure_is_read_off_npm_s_own_error_code(stderr: str, verdict: 
     assert npx_fetch_failure("npx -y some-adapter@1.0.0", died) == verdict
 
 
+def test_an_etarget_lead_names_the_metadata_cache_before_the_pin() -> None:
+    """npm states a missing version from a cache it may have fallen back to on its own."""
+    from raven.acp_client.capabilities import npx_fetch_lead
+
+    lead = npx_fetch_lead("ETARGET")
+    assert lead.startswith("npx could not download it (ETARGET"), lead
+    assert "cached metadata" in lead
+    assert npx_fetch_lead("ENOTFOUND").endswith("check the network, the npm registry or the proxy")
+
+
 def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_verdicts() -> None:
     from raven.acp_client.capabilities import npx_fetch_failure
     from raven.acp_client.protocol import AcpConnectionError, AcpTimeoutError
@@ -549,7 +1305,10 @@ def test_only_a_command_that_fetches_and_only_a_start_that_ran_out_are_download_
     assert npx_fetch_failure("/usr/local/bin/npx -y a@1", died) == "ENOTFOUND", "npx wherever it lives"
 
     start = AcpTimeoutError("initialize timed out after 120s", method="initialize")
-    assert npx_fetch_failure("npx -y a@1", start) == "timeout"
+    assert npx_fetch_failure("npx --registry=https://registry.npmjs.org/ -y a@1", start) == "timeout", (
+        "an npx the fetch leaves alone still downloads inside its handshake"
+    )
+    assert npx_fetch_failure("npx -y a@1", start) is None, "fetched ahead, so the start that ran out is the agent's"
     later = AcpTimeoutError("session/prompt timed out after 60s", method="session/prompt")
     assert npx_fetch_failure("npx -y a@1", later) is None, "it started; whatever went quiet, it was not the fetch"
 
@@ -753,9 +1512,10 @@ async def test_a_failed_test_after_a_config_edit_keeps_the_capabilities_the_rost
 
 async def test_the_connect_records_what_a_test_would(tmp_path: Path, monkeypatch) -> None:
     """``record_capabilities`` is the writer the manual test and the connect
-    share, and ``capabilities_wanted`` is the boot backfill's own three cases:
-    no record, a record for a launch config that changed, a record from before
-    the menu was measured. A complete record is not re-measured."""
+    share, and ``capabilities_wanted`` decides when a connect measures: no
+    record, a record for a launch config that changed, a record from before the
+    menu was measured, among the cases its docstring lists. A complete record is
+    not re-measured."""
     path = tmp_path / "caps.json"
     monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
     cfg = stub_config("a")
@@ -824,7 +1584,7 @@ async def test_a_row_recorded_before_the_menu_reads_attention_until_it_is_measur
     assert (await probe_one(cfg, source="config")).status == "ready"
 
 
-# ---- relearning the mode menu from a live session --------------------------
+# ---- relearning the session menus from a live session ----------------------
 
 
 def _with_modes(cfg: Any, *modes: AcpMode) -> CapabilitySnapshot:
@@ -866,7 +1626,7 @@ def test_a_session_response_rewrites_a_mode_description_the_probe_missed(tmp_pat
     stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="old wording"))
     store.record(stored)
 
-    updated = relearn_session_modes(
+    updated = relearn_session_menus(
         stored, _session_result({"id": "fast", "name": "Fast", "description": "new"}), store=store
     )
 
@@ -889,7 +1649,7 @@ def test_relearning_keeps_the_fingerprint_it_was_measured_under(tmp_path: Path) 
         available_modes=(AcpMode(id="fast", description="old"),),
     )
 
-    updated = relearn_session_modes(stored, _session_result({"id": "fast", "description": "new"}), store=store)
+    updated = relearn_session_menus(stored, _session_result({"id": "fast", "description": "new"}), store=store)
 
     assert updated is not None and updated.fingerprint == "measured-under-this"
     assert store.load([cfg]) == {}
@@ -905,8 +1665,8 @@ def test_a_response_without_modes_leaves_the_menu_alone(tmp_path: Path) -> None:
     stored = _with_modes(cfg, AcpMode(id="fast", description="kept"))
     store.record(stored)
 
-    assert relearn_session_modes(stored, {"sessionId": "s1"}, store=store) is None
-    assert relearn_session_modes(stored, _session_result(), store=store) is None
+    assert relearn_session_menus(stored, {"sessionId": "s1"}, store=store) is None
+    assert relearn_session_menus(stored, _session_result(), store=store) is None
     assert [m.description for m in store.load([cfg])["a"].available_modes] == ["kept"]
 
 
@@ -918,7 +1678,7 @@ def test_an_unchanged_menu_is_not_rewritten(tmp_path: Path) -> None:
     stored = _with_modes(cfg, AcpMode(id="fast", name="Fast", description="same"))
 
     assert (
-        relearn_session_modes(
+        relearn_session_menus(
             stored, _session_result({"id": "fast", "name": "Fast", "description": "same"}), store=store
         )
         is None
@@ -927,11 +1687,676 @@ def test_an_unchanged_menu_is_not_rewritten(tmp_path: Path) -> None:
 
 
 def test_nothing_is_invented_for_an_agent_never_measured(tmp_path: Path) -> None:
-    """A snapshot carries a fingerprint and a status this response cannot supply,
-    so there is nothing to update -- the probe is what creates one."""
+    """A caller that cannot name the row's agent and launch config gets nothing:
+    the fingerprint is what makes a minted record loadable at all."""
     store = SnapshotStore(path=tmp_path / "caps.json")
-    assert relearn_session_modes(None, _session_result({"id": "fast"}), store=store) is None
+    assert relearn_session_menus(None, _session_result({"id": "fast"}), store=store) is None
     assert not (tmp_path / "caps.json").exists()
+
+
+def test_a_first_session_mints_the_capabilities_a_failed_probe_never_wrote(tmp_path: Path) -> None:
+    """The boot probe runs before the provider is configured, fails, and writes
+    no row, so every dispatch read an empty menu and no number of successful
+    sessions repaired it. A session that opened is evidence the probe never got."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+
+    minted = relearn_session_menus(
+        None,
+        _session_result({"id": "medium", "name": "Medium", "description": "balanced"}),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    assert minted is not None
+    assert minted.status == "ready"
+    assert [m.id for m in minted.available_modes] == ["medium"]
+    assert minted.effort_measured is False, "the effort ladder belongs to the row's model, not this session's"
+    loaded = store.load([cfg])["a"]
+    assert [m.id for m in loaded.available_modes] == ["medium"]
+    assert loaded.effort_measured is False, "the row keeps the marker the backfill reads"
+
+
+def test_a_minted_record_asks_the_next_boot_to_finish_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe measures the effort menu against the row's own model; a minted
+    record did not, so the backfill must complete it rather than skip a row
+    that looks ready."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    minted = relearn_session_menus(
+        None,
+        _menu_reply(models=[{"value": "stub:model-a", "name": "model-a"}], modes=[{"id": "medium"}]),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+    assert minted is not None and minted.model_menu_measured is True
+    assert capabilities_wanted(cfg) is True
+
+    store.record(replace(minted, effort_measured=True))
+
+    assert capabilities_wanted(cfg) is False
+
+
+async def test_a_minted_row_reads_attention_until_a_probe_measures_its_effort_menu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row's menus are usable, but the free probe must not call it a complete
+    measurement: its effort ladder belongs to the row's model and only a probe
+    reads that."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    store = SnapshotStore(path=path)
+    minted = relearn_session_menus(
+        None,
+        _menu_reply(models=[{"value": "stub:model-a", "name": "model-a"}], modes=[{"id": "medium"}]),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+    assert minted is not None
+
+    probed = await probe_one(cfg, source="config")
+    assert probed.status == "attention"
+    assert "reasoning-effort menu has not been measured" in probed.detail
+
+    store.record(replace(minted, effort_measured=True))
+
+    assert (await probe_one(cfg, source="config")).status == "ready"
+
+
+def test_a_minted_record_never_overwrites_the_one_a_probe_wrote(tmp_path: Path) -> None:
+    """The row got there first, and a probe's is the record the roster was built
+    on: a session response may fill an empty file, never replace one."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(
+        CapabilitySnapshot(
+            agent="a",
+            fingerprint=snapshot_fingerprint(cfg),
+            status="ready",
+            detail="probed",
+            measured_at_ms=1,
+            can_load=True,
+        )
+    )
+
+    kept = relearn_session_menus(
+        None,
+        _session_result({"id": "medium"}),
+        store=store,
+        agent="a",
+        fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    assert kept is not None and kept.detail == "probed" and kept.can_load
+    assert store.load([cfg])["a"].detail == "probed"
+
+
+def test_a_first_session_without_a_menu_mints_nothing(tmp_path: Path) -> None:
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    assert relearn_session_menus(None, {"sessionId": "s1"}, store=store, agent="a", fingerprint="fp") is None
+    assert not (tmp_path / "caps.json").exists()
+
+
+def test_a_first_session_without_an_id_mints_nothing(tmp_path: Path) -> None:
+    """``status`` would claim a session this response never confirmed."""
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    result = _session_result({"id": "medium"})
+    result.pop("sessionId")
+    assert relearn_session_menus(None, result, store=store, agent="a", fingerprint="fp") is None
+    assert not (tmp_path / "caps.json").exists()
+
+
+def test_the_acp_backend_mints_from_the_first_session_it_opens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wiring the unit tests above cannot see: the backend has to carry the
+    launch fingerprint, or the row it writes belongs to no config and the next
+    read skips it."""
+    cfg = stub_config("a")
+    snapshot_path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: snapshot_path)
+    backend = AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=None,
+        capability_fingerprint=snapshot_fingerprint(cfg),
+    )
+
+    backend._relearn_menus(_session_result({"id": "medium"}))
+
+    loaded = SnapshotStore(path=snapshot_path).load([cfg])
+    assert [m.id for m in loaded["a"].available_modes] == ["medium"]
+    assert loaded["a"].effort_measured is False
+
+
+def test_the_backend_factory_carries_the_launch_fingerprint() -> None:
+    cfg = stub_config("a")
+    backend = build_third_party_backend(cfg)
+    assert backend._capability_fingerprint == snapshot_fingerprint(cfg)
+
+
+def _menu_reply(
+    *,
+    models: list[dict[str, Any]] | None = None,
+    efforts: list[dict[str, str]] | None = None,
+    modes: list[dict[str, str]] | None = None,
+    unread: bool = False,
+) -> dict[str, Any]:
+    """A session response carrying whichever menus are given, in the wire shapes."""
+    from raven.acp_client.protocol import MENU_UNREAD_META
+
+    reply: dict[str, Any] = {"sessionId": "s1"}
+    options: list[dict[str, Any]] = []
+    if models is not None:
+        options += [
+            {"id": "mode", "category": "mode", "type": "select", "options": [{"value": "not-a-model"}]},
+            {"id": "model", "category": "model", "type": "select", "currentValue": "x", "options": models},
+        ]
+    if efforts is not None:
+        options.append(
+            {
+                "id": "effort",
+                "name": "Effort",
+                "category": "thought_level",
+                "type": "select",
+                "currentValue": "default",
+                "options": efforts,
+            }
+        )
+    if options:
+        reply["configOptions"] = options
+    if modes is not None:
+        reply["modes"] = {"currentModeId": "fast", "availableModes": modes}
+    if unread:
+        reply["_meta"] = {"raven": {MENU_UNREAD_META: True}}
+    return reply
+
+
+_GROUPED_MODELS: list[dict[str, Any]] = [
+    {"group": "vendor-a", "name": "Vendor A", "options": [{"value": "a/new-1", "name": "new-1"}]},
+    {"group": "vendor-b", "name": "Vendor B", "options": [{"value": "b/new-2", "name": "new-2"}, {"name": "no-value"}]},
+]
+_GROUPED_CHOICES = (
+    AcpModelChoice(value="a/new-1", name="new-1", group="Vendor A"),
+    AcpModelChoice(value="b/new-2", name="new-2", group="Vendor B"),
+)
+
+
+def test_a_session_response_rewrites_a_model_menu_the_probe_captured_long_ago(tmp_path: Path) -> None:
+    """The model menu has the gap the mode menu had.
+
+    Nothing expires a snapshot by age, and an agent that renamed its models
+    launches identically, so the row's picker went on offering the ids it held
+    at the last Test. The dispatch already holds the agent's current list; it
+    is read with the probe's own parser, groups included, and kept under the
+    measurement stamp and fingerprint the rest of the record was taken with.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old"))
+    store.record(stored)
+
+    updated = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.model_choices == _GROUPED_CHOICES
+    assert (updated.fingerprint, updated.measured_at_ms) == (stored.fingerprint, stored.measured_at_ms)
+    assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
+
+
+def test_a_session_response_names_its_effort_option_per_session_and_leaves_the_row_menu_alone(
+    tmp_path: Path,
+) -> None:
+    """The thought_level menu a session reports belongs to the model that session
+    is on -- OpenCode 1.19.4 offers one only for a model that reasons -- so it is
+    a fact about the session, not about the row. The row's menu is the probe's,
+    measured on the row's own model; taking a session's menu over it rebuilt the
+    whole agent table on every model switch whose menu differed.
+
+    The option id is still read off every response, per session: it is the
+    configId a later turn sends the value through, so a version that renames it
+    must not leave the old one in place."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = replace(
+        _with_model_choices(cfg, AcpModelChoice(value="old/retired", name="retired", group="Old")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    store.record(stored)
+    reply = _menu_reply(efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}])
+
+    assert relearn_session_menus(stored, reply, store=store) is None
+    assert store.load([cfg])["a"].effort_choices == stored.effort_choices
+
+    backend = AcpAgentBackend(name="a", command="unused", snapshot=stored)
+    client = _NamedClient()
+    backend._note_session_effort(client, "s1", reply)
+    renamed = _menu_reply(efforts=[{"value": "max", "name": "Max"}])
+    renamed["configOptions"][-1].update(id="reasoning", currentValue="max")
+    backend._note_session_effort(client, "s1", renamed)
+
+    state = _session_state(client, "s1")
+    assert (state.option, state.baseline) == ("reasoning", "default"), "the id follows; the baseline is the first"
+
+
+class _NamedClient:
+    """A connection's client stand-in for the effort record, which is held per connection."""
+
+
+async def test_two_connections_holding_one_session_id_keep_separate_model_records() -> None:
+    """Sessions are numbered per agent process, so two pooled connections can
+    both hold ``s1``. A record shared between them let clearing on the second
+    send the first's baseline to a connection that never moved it."""
+    backend = AcpAgentBackend(name="x", command="unused")
+
+    class _Client:
+        def __init__(self) -> None:
+            self.frames: list[dict[str, Any]] = []
+
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            self.frames.append(params)
+            return {"configOptions": [{"id": "model", "category": "model", "currentValue": "prov/A", "options": []}]}
+
+    opened = {"configOptions": [{"id": "model", "category": "model", "currentValue": "prov/A", "options": []}]}
+    first, second = _Client(), _Client()
+    backend._note_session_model(first, "s1", opened)
+    backend._note_session_model(second, "s1", opened)
+
+    await backend._set_model(first, "s1", "prov/B", budget=1)
+    await backend._set_model(second, "s1", None, budget=1)
+
+    assert len(first.frames) == 1
+    assert second.frames == [], "this connection never moved the session, so it has nothing to restore"
+
+
+def test_restoring_a_measurement_leaves_a_newer_one_alone(tmp_path: Path) -> None:
+    """A refused write puts the previous capability row back. Stamped, like
+    ``revise``: a Test or a refresh that recorded in the meantime is newer
+    evidence and the rollback must not overwrite it."""
+    cfg = stub_config("restore")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older = _snapshot("restore", cfg, can_resume=True)
+    newer = replace(older, measured_at_ms=2)
+    store.record(newer)
+
+    store.restore("restore", older, only_if_stamp=1)
+    assert store.load([cfg])["restore"].measured_at_ms == 2, "a newer measurement stands"
+
+    store.restore("restore", older, only_if_stamp=2)
+    assert store.load([cfg])["restore"].measured_at_ms == 1
+
+    store.restore("restore", None, only_if_stamp=1)
+    assert store.load([cfg]) == {}, "a measurement taken where none existed is dropped"
+
+
+async def test_a_model_switch_with_its_own_effort_menu_leaves_the_agent_table_alone() -> None:
+    """Base never read a menu off the model switch. Reading the effort menu
+    there revised the agent-wide snapshot whenever the new model's menu
+    differed, and the revision rebuilt every backend in the table. The model
+    menu the switch answers with is not taken either: the next session's own
+    response is where a moved model menu is relearned."""
+    cfg = stub_config("switcher")
+    stored = replace(
+        _snapshot("switcher", cfg, can_resume=False),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    backend = AcpAgentBackend(name="switcher", command="unused", snapshot=stored)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            return _menu_reply(
+                models=_GROUPED_MODELS, efforts=[{"value": "low", "name": "Low"}, {"value": "max", "name": "Max"}]
+            )
+
+    client = _Client()
+    await backend._set_model(client, "s1", "prov/B", budget=1)
+
+    assert rebuilds == []
+    assert backend._snapshot is stored
+    assert _session_state(client, "s1").model_pushed == "prov/B"
+    assert _session_state(client, "s1").option == "effort", "the session still learns its option"
+
+
+async def test_clearing_a_model_after_a_switch_whose_effort_menu_differs_restores_the_session(
+    tmp_path: Path,
+) -> None:
+    """The reviewer's chain, in order: open on prov/A, switch to prov/C whose
+    effort menu differs, then clear. The rebuild used to hand the next turn a
+    fresh backend with no note of the switch, and the clear sent nothing."""
+    cfg = stub_config("chain")
+    stored = replace(
+        _snapshot("chain", cfg, can_resume=False),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    table = {"backend": AcpAgentBackend(name="chain", command="unused", snapshot=stored)}
+
+    def rebuild() -> None:
+        table["backend"] = AcpAgentBackend(name="chain", command="unused", snapshot=stored)
+
+    table["backend"].bind_caps_listener(rebuild)
+
+    def options(model: str, efforts: list[str]) -> list[dict]:
+        return [
+            {"id": "model", "category": "model", "currentValue": model, "options": []},
+            {
+                "id": "effort",
+                "category": "thought_level",
+                "currentValue": "low",
+                "options": [{"value": e, "name": e.title()} for e in efforts],
+            },
+        ]
+
+    sent: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            if method == "session/new":
+                return {"sessionId": "s1", "configOptions": options("prov/A", ["low", "high"])}
+            sent.append(params["value"])
+            return {"configOptions": options(params["value"], ["low", "max"])}
+
+    client = _Client()
+    sid, _ = await table["backend"]._open_session(
+        client, cwd=str(tmp_path), skey="s", handle="h1", budget=1, mcp_servers=[], session_model="prov/C"
+    )
+    await table["backend"]._set_model(client, sid, None, budget=1)
+
+    assert sent == ["prov/C", "prov/A"]
+
+
+def test_a_relearned_record_measured_under_an_old_launch_config_stays_stale(tmp_path: Path) -> None:
+    """Re-reading the menus is not a handshake, so a record already flagged
+    stale against the agent's current launch config is handed back flagged."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    store.record(replace(_with_model_choices(cfg, AcpModelChoice(value="old/retired")), fingerprint="an-older-config"))
+    stale = store.load([cfg], allow_stale=True)["a"]
+    assert stale.stale is True
+
+    updated = relearn_session_menus(stale, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.stale is True
+    assert updated.fingerprint == "an-older-config"
+
+
+def test_a_response_without_a_model_menu_keeps_the_one_recorded(tmp_path: Path) -> None:
+    """Silence is "this route did not report it", never "the agent has none".
+
+    Four silences, each one a shape a live route returns: no ``configOptions``
+    at all, options with no ``model`` entry, a ``model`` entry whose list is
+    empty (a resumed session's answer), and raven's own adapter saying its
+    catalog read failed. Erasing the menu on any of them takes the picker off
+    the row until someone presses Test.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    kept = (AcpModelChoice(value="v/kept", name="kept", group="V"),)
+    stored = _with_model_choices(cfg, *kept)
+    store.record(stored)
+
+    no_model_entry = {"sessionId": "s1", "configOptions": [{"id": "mode", "category": "mode", "options": []}]}
+    for reply in (
+        {"sessionId": "s1"},
+        no_model_entry,
+        _menu_reply(models=[]),
+        _menu_reply(models=[{"name": "no-value-anywhere"}]),
+        _menu_reply(models=[], unread=True),
+    ):
+        assert relearn_session_menus(stored, reply, store=store) is None, reply
+    assert store.load([cfg])["a"].model_choices == kept
+
+
+def test_a_menu_the_catalog_failed_to_read_is_not_taken(tmp_path: Path) -> None:
+    """Raven's adapter flags a reply whose catalog read failed. Whatever it
+    carries beside that flag is not a measurement of the agent's models."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    kept = (AcpModelChoice(value="v/kept"),)
+    stored = _with_model_choices(cfg, *kept)
+    store.record(stored)
+
+    assert relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS, unread=True), store=store) is None
+    assert store.load([cfg])["a"].model_choices == kept
+
+
+def test_the_model_and_mode_menus_are_relearned_independently(tmp_path: Path) -> None:
+    """One reply may carry either menu, both, or neither, and each is judged on
+    its own: a reply naming models only must not cost the modes, and one naming
+    modes only must not cost the models."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    stored = replace(
+        _with_modes(cfg, AcpMode(id="fast", description="old")),
+        model_choices=(AcpModelChoice(value="old/model"),),
+    )
+    store.record(stored)
+
+    models_only = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+    assert models_only is not None
+    assert models_only.model_choices == _GROUPED_CHOICES
+    assert models_only.available_modes == stored.available_modes
+
+    modes_only = relearn_session_menus(models_only, _session_result({"id": "deep", "description": "new"}), store=store)
+    assert modes_only is not None
+    assert [m.id for m in modes_only.available_modes] == ["deep"]
+    assert modes_only.model_choices == _GROUPED_CHOICES
+
+    flat = [{"value": "flat/one", "name": "one"}]
+    both = relearn_session_menus(
+        modes_only, _menu_reply(models=flat, modes=[{"id": "fast", "description": "back"}]), store=store
+    )
+    assert both is not None
+    assert both.model_choices == (AcpModelChoice(value="flat/one", name="one", group=""),)
+    assert [m.id for m in both.available_modes] == ["fast"]
+
+    reread = store.load([cfg])["a"]
+    assert (reread.model_choices, reread.available_modes) == (both.model_choices, both.available_modes)
+
+
+def test_an_unchanged_model_menu_is_not_rewritten(tmp_path: Path) -> None:
+    """Every route into a session carries the menu; a write per dispatch is the
+    cost the mode relearn already refuses."""
+    cfg = stub_config("a")
+    stored = _with_model_choices(cfg, *_GROUPED_CHOICES)
+
+    assert (
+        relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=SnapshotStore(tmp_path / "c")) is None
+    )
+    assert not (tmp_path / "c").exists()
+
+
+def test_a_menu_never_measured_becomes_measured_once_a_reply_carries_it(tmp_path: Path) -> None:
+    """A row recorded before the menu existed reads back with an empty one. The
+    same menu read off a reply is a measurement, and the row must say so, or the
+    boot backfill goes on re-measuring a menu that is already known."""
+    cfg = stub_config("a")
+    path = tmp_path / "caps.json"
+    stored = replace(_with_model_choices(cfg), model_menu_measured=False)
+    store = SnapshotStore(path=path)
+    store.record(stored)
+    assert store.has_model_menu("a") is False
+
+    updated = relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert updated is not None and updated.model_menu_measured is True
+    assert store.has_model_menu("a") is True
+    assert store.load([cfg])["a"].model_choices == _GROUPED_CHOICES
+
+
+def test_a_relearn_from_an_older_record_does_not_overwrite_a_newer_measurement(tmp_path: Path) -> None:
+    """A Test, or the boot backfill, may record while a dispatch is in flight on
+    a backend built from the record before it. That backend's relearn holds the
+    older record whole, and writing it back would undo the newer verdict,
+    fingerprint included -- so it stands down when the stamp it was built from
+    is no longer the one stored. The newer measurement brought its own menus,
+    and what comes back is that record, unrevised, for the caller to build on."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+    stored_bytes = (tmp_path / "caps.json").read_bytes()
+
+    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store) == newer
+    assert relearn_session_menus(older, _session_result({"id": "deep"}), store=store) == newer
+    assert store.load([cfg])["a"] == newer
+    assert (tmp_path / "caps.json").read_bytes() == stored_bytes, "standing down writes nothing at all"
+
+
+def _older_and_newer(cfg: Any, store: SnapshotStore) -> tuple[CapabilitySnapshot, CapabilitySnapshot]:
+    """A record a backend was built from, and the newer measurement stored over it."""
+    older = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+    store.record(older)
+    newer = replace(
+        older,
+        status="attention",
+        detail="measured after the dispatch began",
+        measured_at_ms=older.measured_at_ms + 1,
+        model_choices=(AcpModelChoice(value="test/fresh"),),
+    )
+    store.record(newer)
+    return older, newer
+
+
+def test_a_relearn_that_stood_down_builds_on_the_newer_record_next_time(tmp_path: Path) -> None:
+    """Standing down must not become standing down forever.
+
+    The record handed back is the newer one, so the next reply is judged
+    against the stamp actually stored and lands -- onto that record, keeping
+    its verdict, and writing only the menu the reply reported. Without it, a
+    backend no rebuild reached (a failed hot-apply, another process sharing the
+    store) refused every reply until it was replaced.
+    """
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+
+    base = relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store)
+    assert base == newer
+    again = relearn_session_menus(base, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert again is not None and again.model_choices == _GROUPED_CHOICES
+    stored = store.load([cfg])["a"]
+    assert stored == replace(newer, model_choices=_GROUPED_CHOICES)
+    assert (stored.status, stored.detail, stored.measured_at_ms) == ("attention", newer.detail, newer.measured_at_ms)
+
+
+def test_a_newer_record_from_another_launch_config_is_handed_back_stale(tmp_path: Path) -> None:
+    """The newer measurement may be of a config the caller was not launched
+    with -- a Test after an edit. Handed to a caller holding the older record,
+    it is not proof about that caller's launch, so it comes back flagged."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    older, newer = _older_and_newer(cfg, store)
+    edited = replace(newer, fingerprint="after-an-edit", measured_at_ms=newer.measured_at_ms + 1)
+    store.record(edited)
+
+    handed = relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=store)
+
+    assert handed is not None and handed.stale is True
+    assert replace(handed, stale=False) == edited
+    assert store.load([cfg], allow_stale=True)["a"] == replace(edited, stale=True)
+
+
+def test_a_backend_that_stood_down_refreshes_on_its_next_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """End to end through the backend's own hook and the real store: the first
+    reply after a newer measurement is refused and the backend takes that
+    record on; the second refreshes the stored menu under the newer stamp."""
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    older, newer = _older_and_newer(cfg, SnapshotStore(path=path))
+    backend = AcpAgentBackend(name="a", command="true", snapshot=older)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+
+    backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot == newer
+    assert SnapshotStore(path=path).load([cfg])["a"] == newer
+
+    backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert SnapshotStore(path=path).load([cfg])["a"] == replace(newer, model_choices=_GROUPED_CHOICES)
+    assert backend._snapshot.model_choices == _GROUPED_CHOICES
+    assert rebuilds == [1, 1]
+
+
+def test_a_newer_row_this_build_cannot_read_is_neither_overwritten_nor_adopted(tmp_path: Path) -> None:
+    """A newer measurement written by a Raven that knows a status this one does
+    not: its stamp still says it is newer, so nothing is written over it, and
+    it cannot be loaded, so there is no record to hand back either. The
+    backend keeps what it holds and rebuilds nothing."""
+    cfg = stub_config("a")
+    path = tmp_path / "caps.json"
+    older = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+    SnapshotStore(path=path).record(older)
+    unreadable = {**older.to_row(), "status": "a-status-from-a-later-release", "measuredAtMs": 2}
+    path.write_text(json.dumps({"version": 1, "snapshots": [unreadable]}), encoding="utf-8")
+    stored_bytes = path.read_bytes()
+
+    assert relearn_session_menus(older, _menu_reply(models=_GROUPED_MODELS), store=SnapshotStore(path=path)) is None
+    assert path.read_bytes() == stored_bytes
+
+    backend = AcpAgentBackend(name="a", command="true", snapshot=older)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+    with patch("raven.acp_client.capabilities.default_snapshot_path", lambda: path):
+        backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot is older
+    assert rebuilds == []
+    assert path.read_bytes() == stored_bytes
+
+
+def test_a_snapshot_file_that_cannot_be_written_costs_only_the_refresh(tmp_path: Path) -> None:
+    """The store is a cache: a write that fails is said once in the log and
+    the relearn reports nothing learned, rather than raising into the turn or
+    handing the backend a record that was never stored."""
+    cfg = stub_config("a")
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("a file where the store's directory should be", encoding="utf-8")
+    store = SnapshotStore(path=blocker / "caps.json")
+    stored = _with_model_choices(cfg, AcpModelChoice(value="old/retired"))
+
+    with _loguru_capture("WARNING") as logs:
+        assert relearn_session_menus(stored, _menu_reply(models=_GROUPED_MODELS), store=store) is None
+    assert any("acp capability snapshot write failed" in line for line in logs), logs
+    assert blocker.read_text(encoding="utf-8") == "a file where the store's directory should be"
+
+    backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
+    rebuilds: list[int] = []
+    backend.bind_caps_listener(lambda: rebuilds.append(1))
+    with patch("raven.acp_client.capabilities.default_snapshot_path", lambda: blocker / "caps.json"):
+        backend._relearn_menus(_menu_reply(models=_GROUPED_MODELS))
+    assert backend._snapshot is stored
+    assert rebuilds == []
+
+
+def test_a_relearn_writes_only_the_menu_its_reply_reported(tmp_path: Path) -> None:
+    """Backends of one agent each hold the record they were built from, and a
+    relearn on one does not reach the others' copies. A second backend whose
+    reply reported only modes must therefore leave the model menu the first
+    one stored alone, rather than writing back the one it was built with."""
+    cfg = stub_config("a")
+    store = SnapshotStore(path=tmp_path / "caps.json")
+    built_from = replace(
+        _with_modes(cfg, AcpMode(id="fast", description="old")),
+        model_choices=(AcpModelChoice(value="old/retired"),),
+    )
+    store.record(built_from)
+
+    assert relearn_session_menus(built_from, _menu_reply(models=_GROUPED_MODELS), store=store) is not None
+    other = relearn_session_menus(built_from, _session_result({"id": "deep", "description": "new"}), store=store)
+
+    assert other is not None and other.model_choices == _GROUPED_CHOICES
+    reread = store.load([cfg])["a"]
+    assert reread.model_choices == _GROUPED_CHOICES
+    assert [m.id for m in reread.available_modes] == ["deep"]
 
 
 def test_has_model_menu_is_false_for_a_row_recorded_before_the_key_existed(tmp_path: Path) -> None:
@@ -1000,9 +2425,9 @@ def test_the_backend_rebuilds_the_agent_table_when_the_menu_moved(tmp_path: Path
     rebuilds: list[int] = []
     backend.bind_caps_listener(lambda: rebuilds.append(1))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
     assert rebuilds == [1]
     assert [m.description for m in backend._snapshot.available_modes] == ["new"]
@@ -1016,13 +2441,13 @@ def test_a_failed_rebuild_does_not_reach_the_turn() -> None:
     backend = AcpAgentBackend(name="a", command="true", snapshot=stored)
     backend.bind_caps_listener(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.side_effect = RuntimeError("store is unwritable")
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
-    with patch("raven.acp_client.acp_agent.relearn_session_modes") as fake:
+    with patch("raven.acp_client.acp_agent.relearn_session_menus") as fake:
         fake.return_value = _with_modes(cfg, AcpMode(id="fast", description="new"))
-        backend._relearn_modes(_session_result({"id": "fast", "description": "new"}))
+        backend._relearn_menus(_session_result({"id": "fast", "description": "new"}))
 
     assert [m.description for m in backend._snapshot.available_modes] == ["new"]
 
@@ -1077,7 +2502,7 @@ def test_the_relearned_menu_reaches_the_roster_the_clamp_and_picker_read(
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, max_concurrent=1, agents=[cfg])
     assert "what it used to say" in [m.description for m in mgr.agent_modes("a")]
 
-    updated = relearn_session_modes(
+    updated = relearn_session_menus(
         stored,
         _session_result({"id": "fast", "name": "Fast", "description": "what it says now"}),
         store=SnapshotStore(path=path),
@@ -1329,7 +2754,7 @@ async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_p
     recorded mid-turn has to be readable there before the record lands."""
     from raven.acp_client.acp_agent import _TurnCollector
     from raven.agent.subagent import activity
-    from raven.rpc.methods.tasks import _overlay_live
+    from raven.agent.subagent.task_rows import _overlay_live
 
     with activity.collecting(live_key="acp-live") as did:
         col = _TurnCollector(workspace=tmp_path)
@@ -1349,7 +2774,6 @@ async def test_a_running_acp_node_shows_its_files_through_the_live_account(tmp_p
             "tokens_in": None,
             "tokens_out": None,
             "tool_call_count": None,
-            "tool_failure_count": None,
         }
         _overlay_live(node, activity.live("acp-live"))
 
@@ -1852,6 +3276,57 @@ async def test_a_dispatch_relearns_the_menu_the_agent_now_serves(
     ]
 
 
+async def test_a_dispatch_relearns_the_model_menu_from_its_own_session_and_nothing_else(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model menu rides the same reply, and costs nothing to read off it.
+
+    Pinned both ways: the stored menu moves to what the agent serves now, and
+    the dispatch sends the one ``session/new`` it was always going to send --
+    no verify, no probe, no second launch. A refresh that bought its evidence
+    with a handshake would spend a process start on every dispatch.
+    """
+    from raven.acp_client.client import AcpClient
+
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    SnapshotStore(path=path).record(
+        _with_model_choices(cfg, AcpModelChoice(value="stub:retired", name="retired", group="Stub"))
+    )
+
+    async def no_handshake(*_a: Any, **_kw: Any) -> Any:
+        raise AssertionError("a dispatch must not measure the agent to refresh its menu")
+
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", no_handshake)
+    monkeypatch.setattr("raven.agent.subagent.probe.record_capabilities", no_handshake)
+    monkeypatch.setattr("raven.agent.subagent.probe.ping_agent", no_handshake)
+    sent: list[str] = []
+    launches: list[str] = []
+    real_request, real_launch = AcpClient.request, AcpClient.launch.__func__
+
+    async def counting_request(self: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+        sent.append(method)
+        return await real_request(self, method, *args, **kwargs)
+
+    async def counting_launch(cls: Any, **kwargs: Any) -> Any:
+        launches.append(kwargs.get("name", ""))
+        return await real_launch(cls, **kwargs)
+
+    monkeypatch.setattr(AcpClient, "request", counting_request)
+    monkeypatch.setattr(AcpClient, "launch", classmethod(counting_launch))
+
+    backend = build_third_party_backend(cfg)
+    assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "pong"
+
+    assert SnapshotStore(path=path).load([cfg])["a"].model_choices == (
+        AcpModelChoice(value="stub:model-a", name="model-a", group="Stub"),
+        AcpModelChoice(value="stub:model-b", name="model-b", group="Stub"),
+    )
+    assert launches == ["a"], "one process, the dispatch's own"
+    assert sent.count("initialize") == 1 and sent.count("session/new") == 1, sent
+
+
 async def test_dispatch_records_the_runs_own_transcript(tmp_path: Path) -> None:
     """The acp lane can see every step, so the record keeps them.
 
@@ -1933,6 +3408,244 @@ async def test_dispatch_accepts_the_managers_full_keyword_set(tmp_path: Path) ->
     assert reply == "pong"
 
 
+_TURN_COUNTS = {"inputTokens": 1200, "outputTokens": 34, "cachedReadTokens": 800, "totalTokens": 2034}
+
+
+async def _counted(tmp_path: Path, **env: str) -> tuple[int | None, int | None]:
+    """The run record's token counts for one turn of a stub reporting usage as ``env`` says."""
+    from raven.agent.subagent import activity
+
+    cfg = stub_config("a")
+    cfg.env.update(env)
+    backend = build_third_party_backend(cfg)
+    with activity.collecting() as did:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    return did.tokens_in, did.tokens_out
+
+
+async def test_the_turns_token_counts_reach_the_run_record(tmp_path: Path) -> None:
+    """claude-agent-acp and codex-acp put a turn's counts on the prompt response.
+
+    Their ``usage_update`` carries the window (``used``, ``size``) and the cost,
+    no counts, and only it was read -- so every ACP run's record said nothing
+    about tokens, and the tasks board showed none for an agent that sent them.
+    """
+    assert await _counted(tmp_path, ACP_STUB_PROMPT_USAGE=json.dumps(_TURN_COUNTS)) == (1200, 34)
+
+
+async def test_counts_in_both_places_are_counted_once(tmp_path: Path) -> None:
+    """``note_usage`` adds, so an agent that repeats its counts in the update
+    must not have the turn's tokens doubled."""
+    both = {
+        "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+        "ACP_STUB_USAGE_UPDATE": json.dumps({"used": 42, "size": 1000, "inputTokens": 1200, "outputTokens": 34}),
+    }
+    assert await _counted(tmp_path, **both) == (1200, 34)
+
+
+async def test_an_agent_counting_only_in_its_update_is_still_read(tmp_path: Path) -> None:
+    """The spelling an earlier agent was seen sending stays read."""
+    update = {"used": 42, "size": 1000, "inputTokens": 1200, "outputTokens": 34}
+    assert await _counted(tmp_path, ACP_STUB_USAGE_UPDATE=json.dumps(update)) == (1200, 34)
+
+
+@pytest.mark.parametrize(
+    ("agent", "version", "counted"),
+    [
+        ("claude-agent-acp", "0.94.0", (1200, 34)),
+        ("codex-acp", "2.2.2", (1200, 34)),
+        ("codex-acp", "2.1.1", (None, None)),
+        ("codex-acp", "", (None, None)),
+    ],
+)
+async def test_prompt_usage_is_read_only_where_it_counts_the_turn(
+    tmp_path: Path, agent: str, version: str, counted: tuple[int | None, int | None]
+) -> None:
+    """claude-agent-acp sums the turn's calls, and so does codex-acp from 2.2.1.
+    Before that codex-acp sent the last call alone (``tokenUsage.last``), so a
+    twenty-call turn would be recorded as one call's tokens -- a confident
+    undercount where there was no count before."""
+    env = {
+        "ACP_STUB_AGENT_NAME": agent,
+        "ACP_STUB_AGENT_VERSION": version,
+        "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+    }
+    assert await _counted(tmp_path, **env) == counted
+
+
+async def _booked(
+    tmp_path: Path,
+    runs: int = 1,
+    *,
+    bound: bool = False,
+    preset: str | None = None,
+    raises: type[Exception] | None = None,
+    **env: str,
+):
+    """What the usage ledger holds for ``runs`` turns on one instance of a stub reporting as ``env`` says.
+
+    ``raises`` is what each turn is expected to fail with.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise import usage_context
+    from raven.token_wise.usage_tracker import delegated_usage
+
+    cfg = stub_config("a")
+    cfg.env.update(env)
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    if bound:
+        await registry.commit("cli:root", "a", "work", "earlier-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+        preset=preset,
+    )
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    ledger = tmp_path / "telemetry"
+    with usage_context.bind("cli:root", {"root_session_key": "cli:root", "telemetry_dir": str(ledger)}):
+        for n in range(runs):
+            turn = backend.run(
+                "ping", task_id=f"t{n}", workspace=tmp_path, session_key="cli:root", instance="work", executor=None
+            )
+            if raises is None:
+                await turn
+            else:
+                with pytest.raises(raises):
+                    await turn
+    return delegated_usage("cli:root", since, telemetry_dir=ledger)
+
+
+_CLAUDE_TURN = {
+    "ACP_STUB_AGENT_NAME": "claude-agent-acp",
+    "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+}
+
+
+async def test_a_third_party_agents_turn_is_booked_in_the_usage_ledger(tmp_path: Path) -> None:
+    """An in-process sub-agent's calls are booked under the conversation that
+    delegated them; an ACP agent's turn was not, so its spend was missing from
+    every total that conversation reported."""
+    got = await _booked(tmp_path, ACP_STUB_COST_PER_PROMPT="0.0125", **_CLAUDE_TURN)
+
+    assert (got.calls, got.input_tokens, got.output_tokens) == (1, 1200, 34)
+    assert got.cost_usd == pytest.approx(0.0125)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        {},
+        {
+            "ACP_STUB_AGENT_NAME": "codex-acp",
+            "ACP_STUB_AGENT_VERSION": "2.1.1",
+            "ACP_STUB_PROMPT_USAGE": json.dumps(_TURN_COUNTS),
+        },
+    ],
+    ids=["no-counts", "last-call-counts"],
+)
+async def test_a_turn_whose_counts_are_unknown_still_books_its_cost(tmp_path: Path, reported: dict[str, str]) -> None:
+    """``usage_update`` carries the window and the cost and no counts, so a turn
+    can arrive with a cost and no counts that are the turn's. Its cost is booked
+    and its counts are left missing: not dropped with them, nor written as zeros."""
+    got = await _booked(tmp_path, ACP_STUB_COST_PER_PROMPT="0.0125", **reported)
+
+    assert got.calls == 1
+    assert got.cost_usd == pytest.approx(0.0125) and got.cost_missing_calls == 0
+    assert (got.input_missing_calls, got.output_missing_calls) == (1, 1)
+
+
+async def test_a_turn_with_neither_counts_nor_cost_books_nothing(tmp_path: Path) -> None:
+    """A row that knows nothing would still count as a call."""
+    got = await _booked(tmp_path)
+
+    assert got.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("preset", "failed"),
+    [
+        (None, {"ACP_STUB_EMPTY_PROMPTS": "1"}),
+        ("github_copilot", {"ACP_STUB_REPLY": "Error: 402 Your credit balance is too low. Please add credits."}),
+    ],
+    ids=["empty", "refused"],
+)
+async def test_a_turn_that_answered_nothing_usable_still_books_its_spend(
+    tmp_path: Path, preset: str | None, failed: dict[str, str]
+) -> None:
+    """The turn is booked before the empty-turn and refusal checks fail it: what
+    it answered is unusable, and what it spent was still spent."""
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+
+    got = await _booked(tmp_path, preset=preset, raises=AcpEmptyTurnError, **_CLAUDE_TURN, **failed)
+
+    assert (got.calls, got.input_tokens, got.output_tokens) == (1, 1200, 34)
+
+
+@pytest.mark.parametrize("amount", [float("inf"), float("nan"), -0.5, True, "0.5"])
+def test_a_reported_cost_that_is_no_finite_amount_is_unknown_and_keeps_the_baseline(amount: Any) -> None:
+    """A baseline of ``inf`` or ``nan`` would leave every later turn of the session unpriced."""
+    from raven.acp_client.acp_agent import _turn_cost
+
+    assert _turn_cost({"cost": {"amount": amount, "currency": "USD"}}, 0.25) == (None, 0.25)
+
+
+async def test_a_sessions_cumulative_cost_is_booked_once(tmp_path: Path) -> None:
+    """``usage_update.cost`` is the session's cumulative cost, so each turn books
+    what it added: two turns reporting 0.01 then 0.02 cost 0.02, not 0.03."""
+    got = await _booked(tmp_path, 2, ACP_STUB_COST_PER_PROMPT="0.01", **_CLAUDE_TURN)
+
+    assert got.calls == 2
+    assert got.cost_usd == pytest.approx(0.02)
+
+
+async def test_a_resumed_session_whose_earlier_spend_is_unknown_books_no_cost(tmp_path: Path) -> None:
+    """A session this process did not open (a restart, then a resume) reports a
+    total that includes turns booked before; its counts are booked, its cost is
+    left unknown rather than charged again."""
+    got = await _booked(tmp_path, bound=True, ACP_STUB_COST_PER_PROMPT="0.5", **_CLAUDE_TURN)
+
+    assert (got.calls, got.input_tokens) == (1, 1200)
+    assert got.cost_usd is None and got.cost_missing_calls == 1
+
+
+async def test_a_session_nobody_can_resume_leaves_no_spend_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cumulative cost is kept to measure a resumed session's next turn by.
+    A stateless agent's sessions are never resumed, and keeping one entry per
+    dispatch would grow for as long as the process lives.
+
+    Stateless is a measured record here, not the absence of one: a live session
+    now mints its capabilities from the same handshake a probe reads, so an
+    unmeasured agent that advertises ``loadSession`` is stateful from its first
+    dispatch on.
+    """
+    path = tmp_path / "caps.json"
+    monkeypatch.setattr("raven.acp_client.capabilities.default_snapshot_path", lambda: path)
+    cfg = stub_config("a")
+    cfg.env.update({**_CLAUDE_TURN, "ACP_STUB_COST_PER_PROMPT": "0.01"})
+    SnapshotStore(path=path).record(_snapshot("a", cfg, can_resume=False))
+    backend = build_third_party_backend(cfg)
+
+    await backend.run("ping", task_id="t1", workspace=tmp_path, session_key="cli:root", executor=None)
+
+    assert backend.is_stateful is False
+    assert backend._session_spend == {}
+
+
+async def test_a_raven_agent_is_not_booked_twice(tmp_path: Path) -> None:
+    """A raven agent books its own calls under the delegating conversation (the
+    prompt's ``raven.usage``); booking its turn here as well counts it twice."""
+    env = {**_CLAUDE_TURN, "ACP_STUB_AGENT_NAME": "raven", "ACP_STUB_COST_PER_PROMPT": "0.0125"}
+    got = await _booked(tmp_path, **env)
+
+    assert got.calls == 0
+
+
 async def test_dispatch_truncates_to_max_output_chars(tmp_path: Path) -> None:
     backend = build_third_party_backend(stub_config("a", max_output_chars=2))
     assert await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None) == "po"
@@ -1956,9 +3669,10 @@ async def test_dispatch_streams_the_answer_and_nothing_else(tmp_path: Path) -> N
     assert reply == "pong"
 
 
-async def test_dispatch_streams_no_more_than_it_returns(tmp_path: Path) -> None:
-    """The reply is truncated to ``max_output_chars``; an uncapped stream would
-    render text the record never stores."""
+async def test_a_streamed_message_is_capped_like_the_reply(tmp_path: Path) -> None:
+    """The reply is truncated to ``max_output_chars``, and so is each message
+    the stream carries; an uncapped stream would render text the record never
+    stores."""
     seen: list[str] = []
 
     async def on_delta(text: str) -> None:
@@ -1981,6 +3695,143 @@ async def test_an_empty_turn_is_a_failure_carrying_the_stderr_tail(tmp_path: Pat
         await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
     assert "no content" in str(excinfo.value)
     assert "HTTP 401" in str(excinfo.value)
+
+
+async def test_an_empty_turn_that_spent_nothing_says_so(tmp_path: Path) -> None:
+    """A turn that produced nothing and spent nothing never reached a model.
+
+    Measured on a live ``opencode acp``: its inference endpoint refused the call
+    with a 426, the agent swallowed the refusal, and the turn came back empty
+    with zero tokens and nothing on stderr -- so the one fact that separated
+    "the model refused" from "the agent had nothing to say" was the token
+    count, and it was in the answer all along.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn_no_tokens"))
+    with pytest.raises(AcpEmptyTurnError) as excinfo:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert "no content" in str(excinfo.value)
+    assert "reported 0 tokens" in str(excinfo.value)
+    assert excinfo.value.tokens == 0
+    # The build that answered the handshake, for a floor to be read against.
+    assert excinfo.value.agent_version == "9.9.9"
+
+
+async def test_a_turn_that_reported_no_usage_is_not_read_as_one_that_spent_nothing(tmp_path: Path) -> None:
+    """The absence of a number is not a number.
+
+    The stub's plain ``empty_turn`` reports no usage at all, and an agent that
+    does not count its tokens says nothing about what it spent.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with pytest.raises(AcpEmptyTurnError) as excinfo:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert "reported 0 tokens" not in str(excinfo.value)
+    assert excinfo.value.tokens is None
+
+
+async def test_an_empty_turn_whose_count_is_no_count_still_ends_as_empty(tmp_path: Path) -> None:
+    """A total that is no count leaves the empty turn's error intact.
+
+    ``Infinity`` is valid to the frame parser, and read as a token count it
+    used to raise from inside the empty-turn branch, so the turn ended on an
+    ``OverflowError`` that named neither the agent nor its stderr.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn_unreadable_tokens"))
+    with pytest.raises(AcpEmptyTurnError) as excinfo:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    assert "no content" in str(excinfo.value)
+    assert "reported 0 tokens" not in str(excinfo.value)
+    assert excinfo.value.tokens is None
+
+
+def test_a_reported_total_is_a_count_by_the_rule_the_ledger_reads() -> None:
+    """The empty turn's total is read by ``token_count``, like the same answer's ledger counts.
+
+    A flag, a negative, a string, a fraction or a non-finite amount is no
+    count: ``false`` or ``"0"`` read as zero would say the model was never
+    reached when the agent said nothing of the kind.
+    """
+    from raven.acp_client.acp_agent import _tokens_reported
+
+    for value in (float("inf"), float("nan"), True, False, -1, "0", 12.7):
+        assert _tokens_reported({"usage": {"totalTokens": value}}) is None, value
+    assert _tokens_reported({"usage": {"totalTokens": 2034}}) == 2034
+
+
+def test_a_count_nobody_reported_is_not_read_as_one() -> None:
+    """The count comes off the agent's own answer, so an answer without one says nothing.
+
+    A turn that reports no usage, or reports something that is not a count, is
+    not read as one that spent nothing -- and a connection whose handshake
+    cannot be read has no version to give.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.acp_agent import _agent_version, _tokens_reported
+
+    assert _tokens_reported(None) is None
+    assert _tokens_reported({"usage": "none"}) is None
+    assert _tokens_reported({"usage": {"inputTokens": 3}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": "many"}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": None}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": ""}}) is None
+    assert _tokens_reported({"usage": {"totalTokens": 0}}) == 0
+    assert _tokens_reported({"usage": {"total_tokens": 7}}) == 7
+    assert _agent_version(SimpleNamespace(initialize=None)) == ""
+
+
+def test_a_version_nobody_can_read_is_not_a_reason_to_fail_the_turn() -> None:
+    """Never fatal, like the mode and the model beside it.
+
+    A connection whose handshake cannot be read has no version to give, and
+    the turn that asked for it still ends the way it would have.
+    """
+
+    class _Unreadable:
+        @property
+        def initialize(self) -> object:
+            raise RuntimeError("no handshake here")
+
+    from raven.acp_client.acp_agent import _agent_version
+
+    assert _agent_version(_Unreadable()) == ""
+
+
+def test_a_version_survives_a_handshake_field_it_cannot_read() -> None:
+    """``protocolVersion`` is not part of reading the agent's own version.
+
+    An agent that spells it ``"1.0"`` makes the shared handshake parser raise on
+    ``int()``, so reading the version through that parser returned nothing at
+    all -- while ``agentInfo.version`` was there the whole time.
+    """
+    from raven.acp_client.acp_agent import _agent_version
+
+    connection = SimpleNamespace(initialize={"protocolVersion": "1.0", "agentInfo": {"version": "1.14.31"}})
+    assert _agent_version(connection) == "1.14.31"
+
+
+def test_the_handshake_version_reaches_the_floor_note_end_to_end() -> None:
+    """Handshake -> ``AcpEmptyTurnError.agent_version`` -> the probe's floor note, in one test.
+
+    The ACP test pinned the stub's own version and the probe test hand-attached
+    one, so a break in the middle stage -- reading the version off the handshake
+    -- was covered by neither and would have shown up only on a user's machine.
+    """
+    from raven.acp_client.acp_agent import _agent_version
+    from raven.agent.subagent import probe as probe_mod
+
+    connection = SimpleNamespace(
+        initialize={"protocolVersion": "1.0", "agentInfo": {"name": "OpenCode", "version": "1.14.31"}}
+    )
+    empty = AcpEmptyTurnError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>",
+        agent_version=_agent_version(connection),
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "1.14.31" in text
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
 
 
 async def test_an_empty_turn_names_a_request_raven_could_not_answer(tmp_path: Path) -> None:
@@ -2080,10 +3931,12 @@ async def test_two_messages_in_one_turn_are_kept_apart(tmp_path: Path) -> None:
         seen.append(text)
 
     out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
-    assert out == "let me look.\n\nit is a repo."
-    # The live view and the stored reply must agree, or a direct chat renders
-    # the run-on version and the record keeps the readable one.
+    # The live view carries the break too, or a direct chat renders the two
+    # messages as one run-on paragraph.
     assert "".join(seen) == "let me look.\n\nit is a repo."
+    # The reply is the last message alone, and whole: the usage update inside it
+    # does not end it.
+    assert out == "it is a repo."
 
 
 async def test_the_partial_notice_reaches_a_caller_that_streamed(tmp_path: Path) -> None:
@@ -2123,6 +3976,27 @@ async def test_the_notice_survives_a_reply_that_used_the_whole_budget(tmp_path: 
 
     await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
     assert "stopReason=cancelled" in "".join(seen), "the reply's budget swallowed the notice"
+
+
+async def test_the_live_budget_is_spent_per_message_like_the_reply(tmp_path: Path) -> None:
+    """The cap guards the reply, and the reply is one message.
+
+    Spent across the whole turn, narration would use up the budget and cut a
+    direct chat's report short on screen -- with no notice, because the reply it
+    stands for fits and is never capped. The break between messages is raven's
+    own, so it spends no message's budget either: the cap here is exactly the
+    reply's length, the one size at which a break that counted would cut it.
+    """
+    cfg = stub_config("a", mode="two_messages", max_output_chars=len("it is a repo."))
+    backend = build_third_party_backend(cfg)
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, on_delta=on_delta)
+    assert out == "it is a repo."
+    assert "".join(seen) == "let me look.\n\nit is a repo."
 
 
 async def test_a_finished_turn_carries_no_notice(tmp_path: Path) -> None:
@@ -2245,6 +4119,123 @@ async def test_a_pruned_session_falls_back_to_a_fresh_one(tmp_path: Path) -> Non
     assert rebound is not None and rebound != "pruned-session"
 
 
+async def test_a_pruned_session_takes_its_record_with_it(tmp_path: Path) -> None:
+    """The binding is dropped when the agent no longer holds the session, and
+    nothing can route into that id again, so its record goes too."""
+    cfg = stub_config("pruned")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "pruned", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="pruned",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("pruned", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    connection = await get_pool().acquire(
+        name="pruned", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    _session_state(connection.client, "pruned-session").model_pushed = "stub:model-b"
+
+    await backend.run("go", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+
+    assert "pruned-session" not in (_records_of(connection.client) or {})
+
+
+async def test_a_pruned_session_says_its_reply_starts_over(tmp_path: Path) -> None:
+    """The fresh session is a working outcome, and it is not the one asked for.
+
+    The caller reused the handle to continue a conversation; the agent no
+    longer has it, so the reply comes from a session with none of that context
+    -- "apply the fix you proposed" answered from an empty history. Logged and
+    nothing else, the caller read it as the follow-up it asked for.
+    """
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = await backend.run(
+        "now apply it",
+        task_id="t1",
+        workspace=tmp_path,
+        session_key="s",
+        instance="work",
+        executor=None,
+        on_delta=on_delta,
+    )
+
+    note = (
+        "\n\n[raven] Instance 'work' could not pick up its earlier conversation (Session not found), "
+        "so this reply comes from a fresh session that has none of it."
+    )
+    assert reply.endswith(note)
+    assert seen[-1] == note, "a caller that streamed reads it too"
+
+
+async def test_the_note_waits_for_a_reply_when_the_fresh_sessions_turn_fails(tmp_path: Path) -> None:
+    """The binding is dropped when the load is refused, so the next dispatch on the
+    handle opens yet another fresh session with no refusal of its own to report.
+    A note handed out only by the turn that hit the refusal is lost whenever that
+    turn fails -- and a caller retries precisely to continue the conversation."""
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+
+    cfg = stub_config("a")
+    cfg.env["ACP_STUB_EMPTY_PROMPTS"] = "1"
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "pruned-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    with pytest.raises(AcpEmptyTurnError):
+        await backend.run(
+            "now apply it", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None
+        )
+    reply = await backend.run(
+        "now apply it", task_id="t2", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+
+    assert "could not pick up its earlier conversation (Session not found)" in reply
+    again = await backend.run(
+        "and the tests", task_id="t3", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+    assert "[raven]" not in again, "said once, to the first reply"
+
+
+async def test_a_resumed_session_carries_no_such_note(tmp_path: Path) -> None:
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "live-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+
+    reply = await backend.run(
+        "go on", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None
+    )
+
+    assert "[raven]" not in reply
+
+
 async def test_load_fallback_reuses_the_same_mcp_grant(tmp_path: Path) -> None:
     cfg = stub_config("a")
     registry = InstanceRegistry(path=tmp_path / "instances.json")
@@ -2273,6 +4264,71 @@ async def test_load_fallback_reuses_the_same_mcp_grant(tmp_path: Path) -> None:
     assert (session_id, resumed) == ("fresh-session", False)
     assert [method for method, _params in calls] == ["session/load", "session/new"]
     assert [params["mcpServers"] for _method, params in calls] == [mcp_servers, mcp_servers]
+
+
+async def _open_after_load_refusal(
+    tmp_path: Path, refusal: AcpRemoteError, *, mode: str | None = None
+) -> tuple[tuple[str, bool], list[str], str | None]:
+    """Open a bound instance whose ``session/load`` the agent refuses with ``refusal``."""
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "held-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    methods: list[str] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            methods.append(method)
+            if method == "session/load":
+                raise refusal
+            return {"sessionId": "fresh-session"} if method == "session/new" else {}
+
+    opened = await backend._open_session(
+        _Client(), cwd=str(tmp_path), skey="s", handle="work", budget=5, mcp_servers=[], mode=mode
+    )
+    return opened, methods, await registry.lookup("s", "a", "work", kind="acp")
+
+
+async def test_a_session_the_agent_still_holds_is_continued_not_replaced(tmp_path: Path) -> None:
+    """GitHub Copilot answers ``session/load`` for a session its process already holds
+    with ``-32602 Session <id> is already loaded``. That session is live and keeps its
+    context, so treating it as pruned dropped the conversation the caller asked to
+    continue and told the parent model it could continue it. The mode the caller asked
+    for is still put on it, since the resume path does that on every route."""
+    refusal = AcpRemoteError("session/load", -32602, "Session held-session is already loaded")
+
+    opened, methods, bound = await _open_after_load_refusal(tmp_path, refusal, mode="deep")
+
+    assert opened == ("held-session", True)
+    assert methods == ["session/load", "session/set_mode"]
+    assert bound == "held-session"
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        AcpRemoteError("session/load", -32602, "Session held-session not found"),
+        AcpRemoteError("session/load", -32001, "Session held-session is already loaded"),
+        AcpRemoteError("session/load", -32000, "session not found"),
+    ],
+)
+async def test_any_other_refusal_of_a_load_still_starts_a_fresh_session(
+    tmp_path: Path, refusal: AcpRemoteError
+) -> None:
+    """Only the one refusal that says the process holds the session is read that way;
+    a pruned id, the right words under another code, and the right code under other
+    words all keep the old recovery."""
+    opened, methods, bound = await _open_after_load_refusal(tmp_path, refusal)
+
+    assert opened == ("fresh-session", False)
+    assert methods == ["session/load", "session/new"]
+    assert bound is None
 
 
 async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:
@@ -2429,16 +4485,24 @@ def test_the_launch_key_covers_every_launch_parameter() -> None:
     # handler does not make the running process the wrong one. `ready_timeout_s`
     # is how long this caller waits for the handshake, not what was launched: two
     # entries differing only in patience share the connection they both wanted.
-    outside = {"self", "name", "on_request", "ready_timeout_s"}
+    # `launcher` is how a process on a `machine` is started, derived from the
+    # launch arguments the key already covers.
+    outside = {"self", "name", "on_request", "ready_timeout_s", "launcher"}
     params = {p for p in inspect.signature(AcpConnectionPool.acquire).parameters} - outside
     assert params == set(LAUNCH_PARAMS)
 
     base = {"command": "agent acp", "cwd": "/w", "env": {"A": "1"}}
-    for field, other in (("command", "agent acp --url x"), ("cwd", "/other"), ("env", {"A": "2"})):
+    for field, other in (
+        ("command", "agent acp --url x"),
+        ("cwd", "/other"),
+        ("env", {"A": "2"}),
+        ("machine", "box"),
+    ):
         assert launch_key(**base) != launch_key(**{**base, field: other}), field
     assert launch_key(**base) == launch_key(**base)
-    # An absent env and an empty one are the same launch.
+    # An absent env and an empty one are the same launch, and so is a machine that is this computer.
     assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env={})
+    assert launch_key(command="a", cwd=None, env=None) == launch_key(command="a", cwd=None, env=None, machine=None)
 
 
 async def test_two_bindings_of_one_agent_hold_their_own_connections(tmp_path: Path) -> None:
@@ -2507,10 +4571,15 @@ def trace_dir(tmp_path, monkeypatch):
 
 
 def _spans_written(trace_dir: Path) -> list[dict]:
+    """The spans on record as the trajectory reads them: a span written more than once
+    -- a run on record while it runs, a step written running and then settled -- is
+    its last record (``merge_snapshots``)."""
+    from raven.trajectory.entries import merge_snapshots
+
     log = trace_dir / "logs" / "audit-spans.log"
     if not log.exists():
         return []
-    return [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+    return merge_snapshots(json.loads(line) for line in log.read_text().splitlines() if line.strip())
 
 
 async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, tmp_path: Path) -> None:
@@ -2544,6 +4613,650 @@ async def test_dispatch_records_its_own_span_under_the_calling_span(trace_dir, t
     assert {e["name"] for e in span["events"]} >= {"acp.tool_call", "acp.usage_update"}
 
 
+async def test_the_run_writes_what_its_agent_said_and_ran_as_steps_inside_it(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """The live lane writes the run's own steps under its span, and inside it.
+
+    The run's clock starts before the span opens -- the MCP grant is resolved
+    first -- so a first step anchored on that clock would begin before the run
+    it belongs to. A slow grant makes the gap big enough to see.
+    """
+    from datetime import datetime
+
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    resolve = backend.resolve_mcp_grant_async
+
+    async def slow_grant(*args: Any, **kwargs: Any) -> Any:
+        await asyncio.sleep(0.2)
+        return await resolve(*args, **kwargs)
+
+    monkeypatch.setattr(backend, "resolve_mcp_grant_async", slow_grant)
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    written = _spans_written(trace_dir)
+    run = next(s for s in written if s.get("name") == "subagent.external")
+    steps = [s for s in written if s.get("parentSpanId") == run["spanId"]]
+    assert [s["name"] for s in steps] == ["llm.call"] * 4 + ["tool.call", "llm.call"]
+    assert run["attributes"]["subagent.external.steps"] == len(steps)
+    said = [
+        s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview")
+        for s in steps
+        if s["name"] == "llm.call"
+    ]
+    assert said == ["ping", "let me ", "planning", "look.", "it is a repo."]
+    assert "tool.output.artifact_path" in steps[4]["attributes"]
+    opened, closed = (datetime.fromisoformat(run[key]) for key in ("startTime", "endTime"))
+    for step in steps:
+        start, end = (datetime.fromisoformat(step[key]) for key in ("startTime", "endTime"))
+        assert opened <= start <= end <= closed, (step["name"], step["startTime"], run["startTime"])
+
+
+def _steps_of_the_run(trace_dir: Path) -> tuple[dict, list[dict]]:
+    written = _spans_written(trace_dir)
+    run = next(s for s in written if s.get("name") == "subagent.external")
+    return run, [s for s in written if s.get("parentSpanId") == run["spanId"]]
+
+
+def _said(steps: list[dict]) -> list[str]:
+    return [s["attributes"].get("llm.input_preview") or s["attributes"].get("llm.output_preview") for s in steps]
+
+
+@pytest.mark.parametrize("mode", ["many_steps", "many_steps_held"], ids=["ends_at_once", "held_past_the_interval"])
+async def test_a_long_run_writes_its_steps_without_holding_the_event_loop(
+    trace_dir, tmp_path: Path, monkeypatch, mode: str
+) -> None:
+    """A run's steps reach disk as it goes and when it ends, up to 400 of them,
+    each a span and its artifacts. Written in one go they held the event loop for
+    a quarter of a second (400 steps, measured), and every other conversation on
+    the gateway stalled with it; the loop has to turn between batches of them.
+    Held open past the live writer's interval, the run's steps are all due when
+    its timer fires, which is when a burst would be written whole."""
+    from raven.tracing import spans as tracing_spans
+
+    ticks = 0
+    running = True
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while running:
+            ticks += 1
+            await asyncio.sleep(0)
+
+    at_emit: list[tuple[str | None, int]] = []
+    emit = tracing_spans.emit
+
+    def counted(record: dict) -> None:
+        at_emit.append((record.get("parentSpanId"), ticks))
+        emit(record)
+
+    monkeypatch.setattr(tracing_spans, "emit", counted)
+    backend = build_third_party_backend(stub_config("a", mode=mode))
+    turning = asyncio.create_task(ticker())
+    try:
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    finally:
+        running = False
+        await turning
+
+    run, steps = _steps_of_the_run(trace_dir)
+    assert len(steps) == 202
+    assert run["attributes"]["subagent.external.steps"] == len(steps)
+    marks = [tick for parent, tick in at_emit if parent == run["spanId"]]
+    longest = max(sum(1 for _ in group) for _, group in itertools.groupby(marks))
+    assert longest <= 50, f"{longest} steps written without the loop turning"
+
+
+async def test_a_running_external_run_shows_its_steps_while_it_runs(trace_dir, tmp_path: Path) -> None:
+    """The trajectory reads only the span log, so a step that waits for the turn
+    to end is invisible for as long as the agent works -- minutes, on a real
+    run. The run is on record from the moment it opens, each step reaches the
+    log as soon as it is known, and the one still going is marked running; the
+    turn's end only settles what is left."""
+    backend = build_third_party_backend(stub_config("a", mode="cancel_aware"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+
+    def live() -> tuple[dict | None, list[dict]]:
+        written = _spans_written(trace_dir)
+        ext = next((s for s in written if s.get("name") == "subagent.external"), None)
+        if ext is None:
+            return None, []
+        return ext, [s for s in written if s.get("parentSpanId") == ext["spanId"]]
+
+    for _ in range(100):
+        ext, steps = live()
+        if ext is not None and len({s["spanId"] for s in steps}) >= 2:
+            break
+        await asyncio.sleep(0.05)
+    assert not run.done(), "the agent is still working"
+    assert ext is not None and ext["attributes"].get("subagent.external.in_progress") is True
+    by_id = {s["spanId"]: s for s in steps}
+    assert _said(list(by_id.values())) == ["ping", "working"]
+    assert [s["attributes"].get("subagent.external.in_progress") for s in by_id.values()] == [None, True]
+
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    final, settled = _steps_of_the_run(trace_dir)
+    last = {s["spanId"]: s for s in settled}
+    assert _said(list(last.values())) == ["ping", "working"]
+    assert all(s["attributes"].get("subagent.external.in_progress") is None for s in last.values())
+    closed = [s for s in _spans_written(trace_dir) if s.get("spanId") == final["spanId"]][-1]
+    assert closed["attributes"].get("subagent.external.in_progress") is False
+    assert closed["attributes"]["subagent.external.steps"] == 2
+
+
+async def test_a_turn_that_fails_before_settling_its_steps_writes_none_after_it_ended(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """A write the live writer was still waiting to make, when the turn fails before
+    settling its steps, must not land after the turn: it would leave a step marked
+    running under a run that is over."""
+
+    def unreadable(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("the journal cannot be read")
+
+    monkeypatch.setattr(AcpAgentBackend, "_frames", staticmethod(unreadable))
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    with pytest.raises(RuntimeError, match="journal cannot be read"):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    log = trace_dir / "logs" / "audit-spans.log"
+    written = log.read_text().count("\n")
+    await asyncio.sleep(1.3)
+    assert log.read_text().count("\n") == written
+
+
+async def test_a_cancelled_run_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """A run cut short by its caller writes what its agent said and ran until then.
+
+    The cut-short run is the one a reader opens the trajectory for, and its
+    frames were already kept; the steps that make them readable went only with
+    an answer. The count goes on the run too, so a backfill leaves it alone.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="cancel_aware"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    await asyncio.sleep(1.0)
+    run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "working"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+
+
+async def test_a_run_past_its_prompt_deadline_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The prompt's own deadline ends the turn with an error, not a cancel: the
+    frames and the steps are written on that way out as well."""
+    from raven.acp_client.protocol import AcpTimeoutError
+
+    cfg = stub_config("a", mode="cancel_aware")
+    backend = AcpAgentBackend(name="a", command=cfg.command, env=dict(cfg.env), timeout=1)
+    with pytest.raises(AcpTimeoutError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "working"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+    assert "subagent.external.frames.path" in ext["attributes"]
+
+
+async def test_a_run_whose_agent_died_mid_turn_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The connection going under the prompt is the third way a turn ends
+    without an answer; half an answer is still what the agent said."""
+    backend = build_third_party_backend(stub_config("a", mode="dies_mid_turn"))
+    with pytest.raises(Exception, match="exit 5"):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping", "half"]
+    assert ext["attributes"]["subagent.external.steps"] == len(steps)
+
+
+async def test_a_turn_the_checks_reject_still_writes_the_steps_it_took(trace_dir, tmp_path: Path) -> None:
+    """The checks after the prompt raise on a turn that answered nothing usable,
+    and that turn is the one a reader opens the trajectory for: its steps are
+    written before the error leaves, not only after a turn that passed."""
+    backend = build_third_party_backend(stub_config("a", mode="empty_turn"))
+    with pytest.raises(AcpEmptyTurnError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert _said(steps) == ["ping"]
+    assert ext["attributes"]["subagent.external.steps"] == 1
+
+
+async def test_a_prompt_that_never_went_out_writes_no_steps(trace_dir, tmp_path: Path, monkeypatch) -> None:
+    """A turn that failed before its prompt was sent records no step: a prompt
+    step there would say the agent was asked what it never received."""
+    from raven.acp_client import client as client_mod
+    from raven.acp_client.protocol import AcpConnectionError
+
+    real = client_mod.AcpClient.request
+
+    async def refuse_prompt(self, method, params=None, **kwargs):
+        if method == "session/prompt":
+            raise AcpConnectionError("acp agent 'a': connection is not open")
+        return await real(self, method, params, **kwargs)
+
+    monkeypatch.setattr(client_mod.AcpClient, "request", refuse_prompt)
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    with pytest.raises(AcpConnectionError):
+        await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert steps == []
+    assert "subagent.external.steps" not in ext["attributes"]
+
+
+async def test_a_backfill_after_a_live_run_writes_no_second_copy_of_its_steps(trace_dir, tmp_path: Path) -> None:
+    """The run's journal is on disk as well, so the backfill could read the
+    same steps out of it again under ids of its own, and every step would be
+    drawn twice. A run that wrote its steps live is left alone."""
+    from raven.trajectory import frames_backfill
+
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+    before = _spans_written(trace_dir)
+    run = next(s for s in before if s.get("name") == "subagent.external")
+    assert Path(run["attributes"]["subagent.external.frames.path"]).exists(), "else the backfill has nothing to read"
+
+    result = frames_backfill.backfill(trace_dir)
+
+    assert (result["runs"], result["written"], result["already"]) == (1, 0, 1)
+    assert _spans_written(trace_dir) == before
+
+
+async def test_a_cancel_while_the_steps_go_to_disk_costs_the_turn_neither_its_usage_nor_its_binding(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """Writing the steps lets the loop through, so a cancel can land in it. The
+    turn had already answered: its spend is booked and a first turn's session
+    is bound before the writing starts, or the next dispatch would open a fresh
+    session and the ledger would miss what the turn spent."""
+    from raven.agent.subagent import activity
+    from raven.agent.subagent.backends import observability
+    from raven.tracing import spans as tracing_spans
+
+    booked: list[dict] = []
+
+    async def book(counts: dict, **kwargs: Any) -> None:
+        booked.append(counts)
+
+    monkeypatch.setattr(activity, "note_ledger_usage", book)
+    # The live writer held off, so the thirtieth step is written at the turn's
+    # end, where this cancel belongs: a turn running past the writer's interval
+    # had it written live, and the cancel land mid-turn, before any booking.
+    monkeypatch.setattr(observability.LiveSteps, "touch", lambda self, events: None)
+    cfg = stub_config("a", mode="many_steps")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    run = asyncio.create_task(
+        backend.run("ping", task_id="t1", workspace=tmp_path, session_key="s", instance="work", executor=None)
+    )
+    emit = tracing_spans.emit
+    steps_out = 0
+
+    def cancel_part_way(record: dict) -> None:
+        nonlocal steps_out
+        emit(record)
+        if record.get("name") in ("llm.call", "tool.call") and record.get("parentSpanId"):
+            steps_out += 1
+            if steps_out == 30:
+                run.cancel()
+
+    monkeypatch.setattr(tracing_spans, "emit", cancel_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    assert steps_out >= 30
+    assert [(row["prompt_tokens"], row["completion_tokens"]) for row in booked] == [(120, 30)]
+    assert await registry.lookup("s", "a", "work", kind="acp") is not None
+
+
+async def test_a_cancel_while_the_turn_books_its_spend_still_writes_its_steps(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """Booking the spend awaits the ledger, so a cancel can land there, after the
+    turn answered and before anything else of its ending ran: the steps it took
+    are written on the way out all the same."""
+    from raven.agent.subagent import activity
+
+    run: asyncio.Task[Any] | None = None
+
+    async def book_then_get_cancelled(counts: dict, **kwargs: Any) -> None:
+        assert run is not None
+        run.cancel()
+        await asyncio.sleep(10)
+
+    monkeypatch.setattr(activity, "note_ledger_usage", book_then_get_cancelled)
+    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    with pytest.raises(asyncio.CancelledError):
+        await run
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert len(steps) == 202
+    assert ext["attributes"]["subagent.external.steps"] == 202
+
+
+class _LiveRun:
+    """A run span for the live step writer: who it is, when it opened, what it was set."""
+
+    def __init__(self) -> None:
+        self.attrs: dict[str, Any] = {}
+
+    def identity(self) -> dict[str, Any]:
+        return {
+            "trace_id": "t",
+            "span_id": "ext",
+            "session_key": None,
+            "channel": None,
+            "chat_id": None,
+            "surface": None,
+            "start": "2026-10-31T09:00:00+00:00",
+        }
+
+    def set(self, **attrs: Any) -> "_LiveRun":
+        self.attrs.update(attrs)
+        return self
+
+
+def _live_writes(monkeypatch) -> list[dict]:
+    from raven.tracing import spans as tracing_spans
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(tracing_spans, "persist_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tracing_spans, "emit", emitted.append)
+    return emitted
+
+
+def _marks(emitted: list[dict]) -> list[tuple[str, bool]]:
+    """Each write as (step id, whether it was written as still running)."""
+    return [(r["spanId"], r["attributes"].get("subagent.external.in_progress") is True) for r in emitted]
+
+
+def _at(seconds: int) -> str:
+    return f"2026-10-31T09:00:{seconds:02d}+00:00"
+
+
+async def test_live_steps_write_a_settled_step_once_and_the_last_one_running_until_it_settles(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    assert _marks(emitted) == [("ext.0", False), ("ext.1", True)]
+    steps.touch(events)
+    assert len(emitted) == 2, "nothing moved, so nothing is written again"
+    events.append({"t": "say", "text": "second", "at": _at(9)})
+    steps.touch(events)
+    assert _marks(emitted)[2:] == [("ext.1", False), ("ext.2", True)]
+
+
+async def test_live_steps_keep_a_call_running_until_its_result_lands(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    ls = ToolCall(id="c1", name="ls", argument=".", title="ls", raw_input={"path": "."})
+    events: list[dict] = [
+        {"t": "call", "id": "c1", "call": ls, "at": _at(5)},
+        {"t": "say", "text": "while it runs", "at": _at(6)},
+    ]
+    steps.touch(events)
+    assert dict(_marks(emitted))["ext.1"] is True, "no result yet, though a later step has begun"
+    events.append({"t": "result", "id": "c1", "ok": True, "text": "a.py", "at": _at(8)})
+    steps.touch(events)
+    settled = [r for r in emitted if r["spanId"] == "ext.1"][-1]
+    assert settled["attributes"].get("subagent.external.in_progress") is None
+    assert settled["attributes"]["tool.result_preview"] == "a.py"
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
+async def test_a_live_step_heard_in_the_repeated_hour_of_a_fall_back_starts_when_it_was_heard(monkeypatch) -> None:
+    """When the clocks fall back, 01:30 comes twice. A stamp without its offset
+    cannot say which, so a step heard in the second one read back an hour early
+    and was pulled to its run's start; the transcript keeps the local time it showed."""
+    from datetime import datetime, timezone
+
+    from raven.acp_client import acp_agent
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    heard = datetime(2026, 11, 1, 6, 30, tzinfo=timezone.utc)
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            return datetime.fromtimestamp(heard.timestamp(), tz)
+
+    class _Run(_LiveRun):
+        def identity(self) -> dict[str, Any]:
+            return {**super().identity(), "start": "2026-11-01T06:10:00+00:00"}
+
+    emitted = _live_writes(monkeypatch)
+    monkeypatch.setattr(acp_agent, "datetime", _Clock)
+    before = os.environ.get("TZ")
+    try:
+        os.environ["TZ"] = "America/New_York"
+        time.tzset()
+        if time.tzname != ("EST", "EDT"):
+            pytest.skip("this machine has no zone database entry for America/New_York")
+        col = acp_agent._TurnCollector(prompt="do it", steps=LiveSteps(_Run(), prompt="do it", interval=0))
+        await col(
+            "session/update",
+            {"update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "hmm"}}},
+        )
+        shown = col.messages()[-1]["timestamp"]
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+    thought = [r for r in emitted if r["spanId"] == "ext.1"][-1]
+    assert datetime.fromisoformat(thought["startTime"]) == heard
+    assert shown == "2026-11-01T01:30:00"
+
+
+async def test_a_turn_converts_each_event_stamp_for_its_transcript_once(monkeypatch) -> None:
+    """The transcript is republished on every update, each time from every event.
+    Converting every stamp on each republish made a long turn's republishing
+    quadratic, enough to carry a slow runner's turn past the live writer's interval."""
+    from datetime import datetime
+
+    from raven.acp_client import acp_agent
+
+    parsed: list[str] = []
+
+    class _Counting(datetime):
+        @classmethod
+        def fromisoformat(cls, text):  # type: ignore[override]
+            parsed.append(text)
+            return datetime.fromisoformat(text)
+
+    monkeypatch.setattr(acp_agent, "datetime", _Counting)
+    col = acp_agent._TurnCollector(prompt="do it")
+
+    async def feed(update: dict) -> None:
+        await col("session/update", {"update": update})
+
+    for i in range(20):
+        await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"step {i}."}})
+        await feed({"sessionUpdate": "tool_call", "toolCallId": f"t{i}", "title": "ls", "status": "pending"})
+        await feed({"sessionUpdate": "tool_call_update", "toolCallId": f"t{i}", "status": "completed"})
+
+    # Every stamp the collector holds: one per event, and the answer's own.
+    stamps = {ev["at"] for ev in col.events if ev.get("at")} | {col.answer_at}
+    assert len(col.events) == 60
+    assert len(parsed) <= len(stamps)
+
+
+async def test_live_steps_fold_touches_inside_the_interval_into_one_later_write(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0.2)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    written = len(emitted)
+    events.append({"t": "say", "text": "second", "at": _at(6)})
+    steps.touch(events)
+    events.append({"t": "say", "text": "third", "at": _at(7)})
+    steps.touch(events)
+    assert len(emitted) == written, "inside the interval, the touches wait"
+    await asyncio.sleep(0.4)
+    assert _marks(emitted)[written:] == [("ext.1", False), ("ext.2", False), ("ext.3", True)]
+
+
+async def test_live_steps_write_a_burst_a_batch_at_a_time_letting_the_loop_through(monkeypatch) -> None:
+    from raven.agent.subagent.backends import observability
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": f"said {i}", "at": _at(i % 60)} for i in range(100)]
+    steps.touch(events)
+    assert len(emitted) == observability._STEP_BATCH, "no more than one batch before the loop turns"
+    for _ in range(10):
+        await asyncio.sleep(0)
+    marks = _marks(emitted)
+    assert [span_id for span_id, _ in marks] == [f"ext.{i}" for i in range(101)]
+    assert [running for _, running in marks] == [False] * 100 + [True]
+
+
+async def test_live_steps_closed_with_a_write_still_waiting_write_nothing_after_the_turn(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    steps = LiveSteps(_LiveRun(), prompt="do it", interval=0.2)
+    events: list[dict] = [{"t": "say", "text": "first", "at": _at(5)}]
+    steps.touch(events)
+    events.append({"t": "say", "text": "second", "at": _at(6)})
+    steps.touch(events)
+    written = len(emitted)
+    steps.close()
+    await asyncio.sleep(0.4)
+    assert len(emitted) == written
+
+
+async def test_live_steps_finish_settles_the_running_step_and_counts_every_step_first(monkeypatch) -> None:
+    from raven.agent.subagent.backends.observability import STEPS_KEY, LiveSteps
+
+    emitted = _live_writes(monkeypatch)
+    run = _LiveRun()
+    steps = LiveSteps(run, prompt="do it", interval=0)
+    events: list[dict] = [{"t": "say", "text": "done", "at": _at(5)}]
+    steps.touch(events)
+    await steps.finish(events, elapsed_ms=10)
+    assert _marks(emitted) == [("ext.0", False), ("ext.1", True), ("ext.1", False)]
+    assert run.attrs[STEPS_KEY] == 2
+
+
+async def test_a_step_the_store_cannot_write_never_fails_the_run(monkeypatch) -> None:
+    """The steps are an audit trail, written after the answer is settled: a store
+    that refuses one stops the writing there and the run goes on, its count on
+    it; a collector event that cannot be read writes nothing and fails nothing."""
+    from raven.agent.subagent.backends import observability
+    from raven.tracing import spans as tracing_spans
+
+    class Run:
+        def __init__(self) -> None:
+            self.attrs: dict[str, Any] = {}
+
+        def identity(self) -> dict[str, Any]:
+            return {
+                "trace_id": "t",
+                "span_id": "ext",
+                "session_key": None,
+                "channel": None,
+                "chat_id": None,
+                "surface": None,
+            }
+
+        def set(self, **attrs: Any) -> "Run":
+            self.attrs.update(attrs)
+            return self
+
+    emitted: list[dict] = []
+
+    def refuse_after_the_first(record: dict) -> None:
+        if emitted:
+            raise OSError("no space left on device")
+        emitted.append(record)
+
+    monkeypatch.setattr(tracing_spans, "persist_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tracing_spans, "emit", refuse_after_the_first)
+    full = Run()
+    await observability.LiveSteps(full, prompt="do it").finish(
+        [{"t": "say", "text": f"said {i}", "at": None} for i in range(3)], elapsed_ms=10
+    )
+    assert len(emitted) == 1
+    assert full.attrs[observability.STEPS_KEY] == 4
+
+    unreadable = Run()
+    await observability.LiveSteps(unreadable, prompt="do it").finish([None], elapsed_ms=10)  # type: ignore[list-item]
+    assert unreadable.attrs[observability.STEPS_KEY] == 0
+
+
+async def test_a_run_cancelled_while_its_steps_go_to_disk_gets_no_second_copy_from_a_backfill(
+    trace_dir, tmp_path: Path, monkeypatch
+) -> None:
+    """The steps are written in batches with the loop let through between them,
+    so a cancel can land half way. The run's count is on it before the first
+    step is, so a backfill still leaves the run alone instead of writing every
+    step again beside the ones that reached the log."""
+    from raven.tracing import spans as tracing_spans
+    from raven.trajectory import frames_backfill
+
+    backend = build_third_party_backend(stub_config("a", mode="many_steps"))
+    run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
+    emit = tracing_spans.emit
+    steps_out = 0
+
+    def cancel_part_way(record: dict) -> None:
+        nonlocal steps_out
+        emit(record)
+        if record.get("name") in ("llm.call", "tool.call") and record.get("parentSpanId"):
+            steps_out += 1
+            if steps_out == 30:
+                run.cancel()
+
+    monkeypatch.setattr(tracing_spans, "emit", cancel_part_way)
+    with pytest.raises(asyncio.CancelledError):
+        await run
+    monkeypatch.setattr(tracing_spans, "emit", emit)
+
+    ext, steps = _steps_of_the_run(trace_dir)
+    assert 30 <= len(steps) < 202
+    # The count is the run's plan at the moment it settles, not a promise that
+    # the stub delivered all 202 updates before the cancel: the live writer can
+    # now emit the thirtieth step while the tail is still on the wire.
+    assert ext["attributes"]["subagent.external.steps"] >= len(steps)
+    assert frames_backfill.backfill(trace_dir)["written"] == 0
+
+
+async def test_the_span_measures_the_reply_it_handed_back(trace_dir, tmp_path: Path) -> None:
+    """`answer_chars` is the length of the answer on both transports.
+
+    The cli lane counts what it returns; counting the narration here as well
+    would make the same attribute mean two different things.
+    """
+    backend = build_third_party_backend(stub_config("a", mode="two_messages"))
+    out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    span = next(s for s in _spans_written(trace_dir) if s.get("name") == "subagent.external")
+    assert span["attributes"]["subagent.external.answer_chars"] == len(out) == len("it is a repo.")
+
+
 async def test_the_call_names_its_own_stretch_of_the_wire_journal(trace_dir, tmp_path: Path) -> None:
     """The span points at the frames rather than copying them.
 
@@ -2567,6 +5280,9 @@ async def test_the_call_names_its_own_stretch_of_the_wire_journal(trace_dir, tmp
     assert path.is_file()
     assert 0 < handshake_end <= start < end <= path.stat().st_size
     assert attrs["subagent.external.frames.session_id"] == attrs["subagent.external.session_id"]
+    # A journal of an adopted connection has no handshake in it; the run keeps
+    # the agent info the live turn read so replay can pick the same dialect.
+    assert attrs["subagent.external.frames.initialize"]["agentInfo"]["name"] == "stub-agent"
 
     # The range is a byte range into the file, so it has to slice cleanly.
     lines = [json.loads(line) for line in path.read_bytes()[start:end].decode().splitlines() if line.strip()]
@@ -2713,6 +5429,14 @@ async def test_a_failed_turn_marks_the_span_and_still_stores_the_transcript(trac
 # ---- the cli lane records too -----------------------------------------------
 
 
+def _stored_text(path) -> str:
+    """A stored artifact's plaintext, whichever encoding it was written under."""
+    from raven.tracing.codec import decompress_bytes, is_compressed
+
+    data = Path(path).read_bytes()
+    return (decompress_bytes(data) if is_compressed(data) else data).decode("utf-8")
+
+
 def _cli_stub_config(name: str = "clistub", *, exit_code: int = 0) -> ThirdPartyCliSubagentConfig:
     script = (
         "import sys; "
@@ -2746,7 +5470,7 @@ async def test_the_cli_lane_records_the_same_span_shape(trace_dir, tmp_path: Pat
     assert "subagent.external.update_counts" not in attrs
     assert not span["events"]
 
-    stored = json.loads(Path(attrs["subagent.external.transcript.artifact_path"]).read_text(encoding="utf-8"))
+    stored = json.loads(_stored_text(attrs["subagent.external.transcript.artifact_path"]))
     assert stored["invocations"][0]["stdout"].strip() == "hello from the cli"
     assert stored["invocations"][0]["stderr"].strip() == "some diagnostics"
 
@@ -2762,9 +5486,7 @@ async def test_a_failed_cli_invocation_keeps_its_transcript(trace_dir, tmp_path:
     span = next(s for s in _spans_written(trace_dir) if s.get("name") == SPAN_NAME)
     assert span["status"]["code"] == "ERROR"
     assert span["attributes"]["subagent.external.exit_code"] == 3
-    stored = json.loads(
-        Path(span["attributes"]["subagent.external.transcript.artifact_path"]).read_text(encoding="utf-8")
-    )
+    stored = json.loads(_stored_text(span["attributes"]["subagent.external.transcript.artifact_path"]))
     assert stored["invocations"][0]["stdout"].strip() == "hello from the cli"
 
 
@@ -3070,6 +5792,129 @@ async def test_a_request_after_the_child_died_still_names_the_exit_and_the_reaso
         await client.close()
     with pytest.raises(AcpConnectionError, match="connection is not open"):
         await client.request("initialize", acp_protocol.initialize_params(), timeout=10)
+
+
+def _without_killpg(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], int]]:
+    """Windows as ``close`` sees it: no ``os.killpg``, and a ``taskkill`` on PATH.
+
+    Record real ``taskkill`` runs on Windows and simulate them on POSIX.
+    """
+    import shutil
+    import subprocess
+
+    real_which = shutil.which
+    real_run = subprocess.run
+    native = not hasattr(os, "killpg")
+    taskkill = real_which("taskkill") if native else r"C:\Windows\System32\taskkill.exe"
+    if taskkill is None:
+        pytest.skip("taskkill is unavailable")
+    ran: list[tuple[list[str], int]] = []
+
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess:
+        if argv[0] != taskkill:
+            return real_run(argv, **kw)
+        result = real_run(argv, **kw) if native else subprocess.CompletedProcess(argv, 0)
+        ran.append((list(argv[1:]), result.returncode))
+        return result
+
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.setattr(shutil, "which", lambda name: taskkill if name == "taskkill" else real_which(name))
+    monkeypatch.setattr(subprocess, "run", run)
+    return ran
+
+
+async def test_close_without_killpg_ends_the_tree(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows has no ``os.killpg``, and calling it raised before any teardown ran.
+
+    The connection was left marked closed with its process, its read loops and
+    its transport all still there. ``taskkill /T`` reaches what the launcher
+    started, which a bare ``Process.kill`` does not.
+    """
+    from raven.acp_client import protocol
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("windows-close")
+    client = await AcpClient.launch(name="windows-close", command=cfg.command, env=dict(cfg.env))
+    try:
+        await client.request("initialize", protocol.initialize_params(), timeout=15)
+        proc = client._proc
+        ran = _without_killpg(monkeypatch)
+
+        await client.close()
+
+        if sys.platform == "win32":
+            assert ran == [], "the Job Object owns the native Windows tree"
+        else:
+            assert ran == [(["/T", "/F", "/PID", str(proc.pid)], 0)]
+        assert proc.returncode is not None, "close must stop the launcher"
+        assert client.closed and not client.alive
+    finally:
+        await client.close()
+
+
+async def test_close_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Once the launcher has exited, its pid may already name another process."""
+    from raven.acp_client.client import AcpClient
+
+    cfg = stub_config("abort", mode="abort")
+    client = await AcpClient.launch(name="abort", command=cfg.command, env=dict(cfg.env))
+    try:
+        for _ in range(200):
+            if client._proc.returncode is not None:
+                break
+            await asyncio.sleep(0.025)
+        assert client._proc.returncode is not None, "the stub must be gone before the close, or this tests nothing"
+        ran = _without_killpg(monkeypatch)
+
+        await client.close()
+
+        assert ran == []
+        assert client.closed
+    finally:
+        await client.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
+async def test_close_kills_a_worker_the_launcher_started(tmp_path: Path) -> None:
+    """``close`` ends the launcher's whole process group, not only the launcher.
+
+    An ACP server that hands its work to a child would otherwise leave that
+    child running once the connection is gone: ``Process.kill`` reaches the
+    launcher alone.
+    """
+    from raven.acp_client.client import AcpClient
+
+    pid_file = tmp_path / "worker.pid"
+    script = tmp_path / "launch.sh"
+    script.write_text(
+        f"#!/bin/sh\nsleep 100 &\necho $! > {shlex.quote(str(pid_file))}\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    client = await AcpClient.launch(name="group", command=f"sh {shlex.quote(str(script))}", env={"ACP_STUB_MODE": "ok"})
+    try:
+        for _ in range(100):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+        else:
+            raise AssertionError("the worker never started")
+        worker = int(pid_file.read_text().strip())
+        os.kill(worker, 0)
+    finally:
+        await client.close()
+
+    for _ in range(40):
+        try:
+            os.kill(worker, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError("the worker outlived close")
 
 
 async def test_an_unanswered_request_does_not_stall_the_read_loop() -> None:
@@ -3804,7 +6649,7 @@ async def test_a_deny_check_that_raises_refuses(host_rules, monkeypatch) -> None
     assert answer == {"outcome": {"outcome": "selected", "optionId": "no"}}
 
 
-async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -> None:
+async def test_the_logged_refusal_and_approval_preserve_the_agents_command(host_rules) -> None:
     """The command is the sub-agent's to author and the log is retained."""
     from raven.acp_client.permissions import auto_approver
 
@@ -3824,8 +6669,8 @@ async def test_the_logged_refusal_and_approval_carry_no_credential(host_rules) -
         logger.remove(sink)
     logged = [line for line in lines if "refusing" in line or "approving" in line]
     assert len(logged) == 2, lines
-    assert all(secret not in line for line in logged), logged
-    assert all("[redacted]" in line for line in logged), logged
+    assert denied["toolCall"]["title"] in logged[0]
+    assert allowed["toolCall"]["title"] in logged[1]
 
 
 async def test_a_rule_tightened_while_running_binds_the_next_request(host_rules) -> None:
@@ -4331,8 +7176,8 @@ async def test_narration_lands_on_the_step_it_preceded(tmp_path: Path) -> None:
     with activity.collecting() as did:
         out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
 
-    # Unchanged: the caller receiving the run's answer wants all of it.
-    assert out == "let me look.\n\nit is a repo."
+    # The caller is handed the report, not the notes on the way to it.
+    assert out == "it is a repo."
 
     call = next(m for m in did.transcript if m.get("tool_calls"))
     assert call["content"] == "let me look.", "the preamble belongs to the step it announced"
@@ -4344,7 +7189,7 @@ async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Pa
 
     End to end, because the split spans three places -- the collector decides
     it, the activity record carries it, and the log writer prefers it over the
-    run's full output.
+    run's output.
     """
     from raven.agent.subagent import activity
     from raven.agent.subagent.history import SpawnRecord
@@ -4364,6 +7209,27 @@ async def test_the_answer_row_is_what_was_said_last_not_every_burst(tmp_path: Pa
     rows = [json.loads(x) for x in transcript_path(session_dir, "a", "h1").read_text(encoding="utf-8").splitlines()]
     assert rows[-1] == {"role": "assistant", "content": "it is a repo.", "timestamp": rows[-1]["timestamp"]}
     assert sum(1 for r in rows if "let me look." in str(r.get("content"))) == 1
+    # What a later task reads through `{{ ref:@nodes/<id>.out.md }}` is the reply
+    # the caller was handed, so it carries no narration either.
+    assert record.file("out.md").read_text(encoding="utf-8") == "it is a repo."
+
+
+async def test_a_turn_that_ends_on_a_step_hands_back_its_last_message(tmp_path: Path) -> None:
+    """With nothing said after the last call, the message before it is the reply.
+
+    Not every message joined, which would hand the narration back, and not
+    nothing, which would turn a run that finished its work into an empty-turn
+    failure. The record still knows the turn ended on a step: the closing is
+    empty, so no answer row repeats the prose already on that step.
+    """
+    from raven.agent.subagent import activity
+
+    backend = build_third_party_backend(stub_config("a", mode="ends_on_a_step"))
+    with activity.collecting() as did:
+        out = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "saving it to notes.md."
+    assert did.closing == ""
 
 
 async def test_a_turn_that_ends_on_a_step_writes_no_answer_row(tmp_path: Path) -> None:
@@ -4387,6 +7253,242 @@ async def test_a_turn_that_ends_on_a_step_writes_no_answer_row(tmp_path: Path) -
     assert col.closing_text == ""
     call = next(m for m in col.messages() if m.get("tool_calls"))
     assert call["content"] == "on it."
+
+
+async def test_a_blank_burst_after_the_last_step_is_not_the_reply() -> None:
+    """Whitespace after the last call says nothing, so the reply is the message
+    before it -- handing back a blank answer would read as a run that answered."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    col = _TurnCollector()
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "found it."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "t1", "kind": "edit", "title": "write"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "\n"}})
+
+    assert col.closing_text == ""
+    assert col.reply == "found it."
+
+
+async def test_a_steer_inside_the_final_message_does_not_cut_the_reply() -> None:
+    """Raven puts a steer on the wire as it arrives and reads it only before its
+    next model call, so the words after it can finish the message it landed in.
+
+    The steer is set apart in that message and does not end it: the caller gets
+    the message whole, and the live view spends one budget on it -- the steer
+    does not renew it, and its break spends it like the agent's words, since the
+    break is in the reply the cap counts.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task", limit=len("REPORT PART ONE. ") + 3)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "r1", "kind": "read", "title": "Read"})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "r1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART ONE. "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "also cover the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "REPORT PART TWO."}})
+
+    assert col.reply == "REPORT PART ONE. \n\nREPORT PART TWO."
+    assert "".join(seen) == "Looking.\n\nREPORT PART ONE. \n\nR"
+    assert col.closing_text == "REPORT PART TWO.", "the transcript still draws the steer as a row of its own"
+
+
+async def test_the_reply_ends_a_message_where_the_live_view_does() -> None:
+    """One rule decides where a message ends, for the stream and the caller alike.
+
+    Text that arrives while a call is still open streams as a message of its
+    own, so the caller is handed the message after it rather than the two run
+    together with nothing between them.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Alpha."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "w1", "kind": "edit", "title": "Write"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "while it runs."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "w1", "status": "completed"})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Saved."}})
+
+    assert "".join(seen) == "Alpha.\n\nwhile it runs.\n\nSaved."
+    assert col.reply == "Saved."
+
+
+@pytest.mark.parametrize("status", ["in_progress", "pending"])
+async def test_a_progress_frame_on_an_open_call_does_not_end_the_message(status: str) -> None:
+    """A pending or in-progress call ends nothing.
+
+    Raven's own held prompt beats an ``in_progress`` update on its open wait call
+    every minute while the wake turn's report streams, and ending the message
+    there handed the caller only the words after the beat while ``closing.md``
+    kept the whole report. The opening frame says ``in_progress`` too, and still
+    ends the message said before the call.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Filed job 7."}})
+    await feed({"sessionUpdate": "tool_call", "toolCallId": "hold-1", "kind": "other", "status": "in_progress"})
+    await feed(
+        {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Round 2: loss converged, "}}
+    )
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": status})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "killed job 7."}})
+    await feed({"sessionUpdate": "tool_call_update", "toolCallId": "hold-1", "status": "completed"})
+
+    assert col.reply == "Round 2: loss converged, killed job 7."
+    assert col.closing_text == col.reply, "out.md and closing.md hold the same report"
+    assert "".join(seen) == "Filed job 7.\n\nRound 2: loss converged, killed job 7."
+
+
+async def test_a_status_less_update_still_ends_the_message() -> None:
+    """Only an update marked pending or in_progress is passed over.
+
+    claude-agent-acp reports a finished call's result on an update with no
+    status at all, sent from its PostToolUse hook -- the captured frame below --
+    so a status-less update is a step, like a completed one. The frames are
+    captured; the words around them are not.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from tests import acp_frames
+
+    col = _TurnCollector(prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking."}})
+    await feed(acp_frames.CLAUDE_BASH_WITH_DESCRIPTION)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Listing it."}})
+    await feed(acp_frames.CLAUDE_UPDATE_WITHOUT_KIND)
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "It is messages.json."}})
+
+    assert col.reply == "It is messages.json."
+
+
+async def test_a_steer_sets_apart_only_the_words_right_after_it() -> None:
+    """One break per steer: what the agent keeps saying after it is one run of
+    text, not a break before every chunk."""
+    from raven.acp_client.acp_agent import _TurnCollector
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="the task")
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Half the report, "}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "the docs "}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "too."}})
+
+    assert col.reply == "Half the report, \n\nthe docs too."
+    assert "".join(seen) == col.reply
+
+
+@pytest.mark.parametrize("over", [-2, -1, 0])
+async def test_a_steered_message_streams_whole_only_when_its_reply_comes_back_whole(over: int) -> None:
+    """The live view's budget counts what the reply's cap counts.
+
+    A steer's break is raven's, but it is inside the message the reply returns,
+    and the cap counts it. Left out of the budget, a steered message within a
+    break of the cap streamed whole and came back cut, with the truncation
+    notice under a message the screen had shown complete.
+    """
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent.backends.base import clamp_output
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    reply = "x" * 30 + "\n\n" + "y" * 30
+    limit = len(reply) + over
+    col = _TurnCollector(on_delta, prompt="the task", limit=limit)
+
+    async def feed(payload: dict) -> None:
+        await col("session/update", {"update": payload})
+
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "x" * 30}})
+    await feed({"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": "and the docs"}})
+    await feed({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "y" * 30}})
+
+    assert col.reply == reply
+    assert "".join(seen) == reply[:limit]
+    returned = await clamp_output(col.reply, limit, agent="probe")
+    assert ("".join(seen) == reply) == (returned == reply)
+
+
+@pytest.mark.parametrize("prefix", ["   ", "\n\t", " " * 40])
+@pytest.mark.parametrize("steers", [0, 1, 2])
+@pytest.mark.parametrize("after_step", [False, True])
+async def test_blank_prefixes_do_not_spend_the_returned_reply_budget(
+    prefix: str, steers: int, after_step: bool
+) -> None:
+    from raven.acp_client.acp_agent import _TurnCollector
+    from raven.agent.subagent.backends.base import clamp_output
+
+    seen: list[str] = []
+
+    async def on_delta(text: str) -> None:
+        seen.append(text)
+
+    col = _TurnCollector(on_delta, prompt="task", limit=30)
+
+    async def say(kind: str, text: str) -> None:
+        await col("session/update", {"update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}})
+
+    if after_step:
+        await say("agent_message_chunk", "Earlier narration.")
+        await col("session/update", {"update": {"sessionUpdate": "tool_call", "toolCallId": "read-1", "kind": "read"}})
+        seen.clear()
+    await say("agent_message_chunk", prefix)
+    for index in range(steers):
+        await say("user_message_chunk", f"steer {index}")
+        await say("agent_message_chunk", prefix)
+    await say("agent_message_chunk", "x" * 15)
+    await say("agent_message_chunk", "y" * 15)
+
+    assert col.reply == "x" * 15 + "y" * 15
+    assert "".join(seen).startswith(("\n\n" if after_step else "") + prefix)
+    assert "".join(seen).lstrip() == col.reply
+    assert await clamp_output(col.reply, 30, agent="probe") == col.reply
 
 
 async def test_the_live_transcript_streams_only_the_closing_burst() -> None:
@@ -4637,9 +7739,14 @@ async def test_a_plan_is_one_row_that_moves() -> None:
 
 @pytest.mark.asyncio
 async def test_only_the_first_plan_frame_breaks_the_message() -> None:
-    """A moving plan must not fragment the narration around it."""
+    """A moving plan must not fragment the narration around it, while its
+    opening frame ends the message said before it, as a call's does."""
     collector = _TurnCollector(dialect=CodexDialect())
 
+    await collector(
+        "session/update",
+        {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Reading the task."}}},
+    )
     await collector("session/update", {"update": acp_frames.CODEX_PLAN_FIRST})
     await collector(
         "session/update",
@@ -4651,7 +7758,8 @@ async def test_only_the_first_plan_frame_breaks_the_message() -> None:
         {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": " Nearly done."}}},
     )
 
-    assert collector.text == "Working on it. Nearly done."
+    assert collector.text == "Reading the task.\n\nWorking on it. Nearly done."
+    assert collector.reply == "Working on it. Nearly done."
 
 
 @pytest.mark.asyncio
@@ -5038,7 +8146,7 @@ async def test_a_steer_reaches_the_running_turn_and_is_written_where_it_was_said
         assert await run.steer("the docs first") == "injected"
         reply = await asyncio.wait_for(turn, timeout=10)
 
-    assert reply.startswith("on it") and reply.endswith("steered: the docs first"), reply
+    assert reply == "on it\n\nsteered: the docs first", "a steer does not end the message it lands in"
     roles = [(m["role"], m.get("content")) for m in run.transcript]
     assert ("user", "the docs first") in roles, roles
     said_before = next(i for i, m in enumerate(run.transcript) if m.get("content") == "on it")
@@ -5274,6 +8382,87 @@ async def test_no_model_asked_for_sends_no_frame(tmp_path: Path) -> None:
     assert "session/set_config_option" not in connection.client.stderr_tail()
 
 
+async def test_an_effort_reaches_the_session_before_it_is_prompted(tmp_path: Path) -> None:
+    """The reasoning effort is its own option: the agent names the id
+    (``effort`` here), and the value goes through session/set_config_option
+    beside the model rather than as a suffix on the model id."""
+    cfg = stub_config("effortful")
+    backend = build_third_party_backend(cfg)
+
+    reply = await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_effort="high")
+
+    connection = await get_pool().acquire(
+        name="effortful", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert reply == "pong"
+    assert "session/set_config_option effort=high" in connection.client.stderr_tail()
+
+
+async def test_clearing_an_effort_puts_the_session_back_on_the_agents_own(tmp_path: Path) -> None:
+    """The option takes a value and has no unset, so a cleared effort is sent
+    back as the value the session opened on -- on the same remote session, which
+    is the only shape the bug has."""
+    cfg = stub_config("cleareffort")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="cleareffort",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("cleareffort", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    await backend.run("ping", task_id="t1", session_effort="high", **key)
+    await backend.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="cleareffort", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "effort=" in ln]
+    assert any("effort=high" in ln for ln in frames), "the switch"
+    assert frames[-1].endswith("effort=default"), f"the restore, got {frames!r}"
+
+
+async def test_clearing_an_effort_survives_a_backend_replacement(tmp_path: Path) -> None:
+    """A config change hot-applies the table and replaces every backend instance.
+
+    The session outlives that replacement, so the baseline and the pushed value
+    have to live somewhere other than the instance: a fresh backend that only
+    trusts its own empty ``pushed`` never sends the session back, and a live
+    direct chat keeps the effort the row just cleared."""
+    cfg = stub_config("cleareffort2")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    snapshot = _snapshot("cleareffort2", cfg, can_resume=True, can_load=True)
+    key = {"workspace": tmp_path, "executor": None, "session_key": "s", "instance": "h1"}
+
+    first = AcpAgentBackend(
+        name="cleareffort2",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=snapshot,
+        registry=registry,
+    )
+    await first.run("ping", task_id="t1", session_effort="high", **key)
+
+    # The hot-applied replacement, sharing only the session registry.
+    second = AcpAgentBackend(
+        name="cleareffort2",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=snapshot,
+        registry=registry,
+    )
+    await second.run("ping", task_id="t2", **key)
+
+    connection = await get_pool().acquire(
+        name="cleareffort2", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "effort=" in ln]
+    assert any("effort=high" in ln for ln in frames), "the switch"
+    assert frames[-1].endswith("effort=default"), f"the restore, got {frames!r}"
+
+
 def _own_backend(cfg: Any) -> AcpAgentBackend:
     """A row of raven's own: the same build as the roster's, with a handshake that named raven."""
     return AcpAgentBackend(
@@ -5453,6 +8642,348 @@ async def test_clearing_a_model_puts_the_session_back_on_the_agents_own(tmp_path
 
     connection = await get_pool().acquire(
         name="clearmodel", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert any("model=stub:model-b" in ln for ln in frames), "the switch"
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_clearing_a_model_survives_a_backend_replacement(tmp_path: Path) -> None:
+    """A hot apply replaces every backend instance, and the picker's own menu
+    refresh triggers one. The model record has to outlive the replacement, as
+    the effort record already does -- otherwise the clear finds nothing pushed
+    and sends no restore, while every surface reports the agent's own."""
+    cfg = stub_config("rebuild")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+
+    def build() -> AcpAgentBackend:
+        return AcpAgentBackend(
+            name="rebuild",
+            command=cfg.command,
+            env=dict(cfg.env),
+            snapshot=_snapshot("rebuild", cfg, can_resume=True, can_load=True),
+            registry=registry,
+        )
+
+    first = build()
+    await first.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    # What registry.apply does on a config change: a fresh backend over the same
+    # pooled connection, resuming the same session.
+    second = build()
+    await second.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name="rebuild", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    # The stub opens every session on model-a, so that is the baseline to restore.
+    assert frames[-1].endswith("model=stub:model-a"), f"the restore, got {frames!r}"
+
+
+async def test_a_session_nothing_can_resume_leaves_no_record_behind(tmp_path: Path) -> None:
+    """Each session's model, effort and mode records are held per pool slot so
+    a backend replacement cannot lose them, and a slot lives as long as the
+    agent does. A session no route can reach again -- every turn of a stateless
+    agent -- has to take its record with it, or the slot carries one per spawn
+    for its whole life. A session an instance can resume
+    keeps its record: the clear on its next turn is what reads it."""
+    once = stub_config("oneshot")
+    stateless = AcpAgentBackend(
+        name="oneshot",
+        command=once.command,
+        env=dict(once.env),
+        snapshot=_snapshot("oneshot", once, can_resume=False),
+        registry=InstanceRegistry(path=tmp_path / "once.json"),
+    )
+    for task_id in ("t1", "t2", "t3"):
+        await stateless.run("ping", task_id=task_id, workspace=tmp_path, executor=None, session_model="stub:model-b")
+    connection = await get_pool().acquire(
+        name="oneshot", command=once.command, cwd=str(tmp_path), env=dict(once.env), ready_timeout_s=15.0
+    )
+    assert not _records_of(connection.client), "no record outlives a session nothing can resume"
+
+    kept = stub_config("kept")
+    stateful = AcpAgentBackend(
+        name="kept",
+        command=kept.command,
+        env=dict(kept.env),
+        snapshot=_snapshot("kept", kept, can_resume=True, can_load=True),
+        registry=InstanceRegistry(path=tmp_path / "kept.json"),
+    )
+    await stateful.run(
+        "ping",
+        task_id="t4",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+    connection = await get_pool().acquire(
+        name="kept", command=kept.command, cwd=str(tmp_path), env=dict(kept.env), ready_timeout_s=15.0
+    )
+    records = _records_of(connection.client) or {}
+    assert [state.model_pushed for state in records.values()] == ["stub:model-b"], "the resumable one is kept"
+
+
+@pytest.mark.parametrize(
+    ("mode", "cancel", "stateful", "kept"),
+    [
+        ("kimi_refuses", False, False, 0),
+        ("kimi_refuses", False, True, 0),
+        ("cancel_aware", True, False, 0),
+        ("cancel_aware", True, True, 1),
+        ("cancel_deaf", True, True, 0),
+    ],
+)
+async def test_a_turn_that_ends_without_an_answer_keeps_a_record_only_for_a_bound_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, cancel: bool, stateful: bool, kept: int
+) -> None:
+    """The same rule on the turns that never reach the booking: a prompt the agent
+    refused, and a cancel. A first turn that failed bound nothing, so its session
+    goes; a cancelled first turn of a resumable agent is bound on the cancel, so
+    its session stays -- unless the cancel never settled, which unbinds it."""
+    from raven.acp_client import client as client_mod
+
+    monkeypatch.setattr(client_mod, "_CANCEL_SETTLE_S", 0.3)
+    cfg = stub_config(f"{mode}{int(stateful)}", mode=mode)
+    backend = AcpAgentBackend(
+        name=cfg.name,
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot(cfg.name, cfg, can_resume=stateful, can_load=stateful),
+        registry=InstanceRegistry(path=tmp_path / "instances.json"),
+    )
+    turn = asyncio.create_task(
+        backend.run(
+            "ping",
+            task_id="t1",
+            workspace=tmp_path,
+            executor=None,
+            session_key="s",
+            instance="h1",
+            session_model="stub:model-b",
+        )
+    )
+    if cancel:
+        await asyncio.sleep(0.8)
+        turn.cancel()
+    with pytest.raises(BaseException):  # noqa: B017 - a refusal or a cancel, either ends the turn
+        await turn
+
+    connection = await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    assert len(_records_of(connection.client) or {}) == kept
+
+
+@pytest.mark.parametrize(
+    ("first", "restore"),
+    [
+        ({"session_model": "stub:model-b"}, "model=stub:model-a"),
+        ({"session_effort": "high"}, "effort=default"),
+    ],
+)
+async def test_a_cleared_pin_is_sent_back_after_the_pool_closes_the_idle_agent(
+    tmp_path: Path, first: dict[str, str], restore: str
+) -> None:
+    """The pool closes an idle agent that can reload its sessions, and the
+    instance's next turn reopens the same session with ``session/load`` in a new
+    process. The record of what this host pushed has to outlive that process,
+    or a cleared pin finds nothing pushed and is never sent back -- and an agent
+    that keeps a session's settings across a reload runs on the cleared pin."""
+    cfg = stub_config("idleclose")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="idleclose",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("idleclose", cfg, can_resume=True, can_load=True),
+        registry=registry,
+    )
+    await backend.run("ping", task_id="t1", workspace=tmp_path, executor=None, session_key="s", instance="h1", **first)
+    bound = await registry.lookup("s", "idleclose", "h1", kind="acp")
+    assert await get_pool().close_idle(0.0) == ["idleclose"]
+
+    await backend.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    assert await registry.lookup("s", "idleclose", "h1", kind="acp") == bound, "the second turn resumed it"
+    connection = await get_pool().acquire(
+        name="idleclose", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
+    assert frames and frames[-1].endswith(restore), f"the restore on the new process, got {frames!r}"
+
+
+async def test_an_adopted_connections_session_record_outlives_the_idle_close(tmp_path: Path) -> None:
+    """A run picked up from a registered machine adopts the agent still running
+    there, and that connection serves the name's later dispatches. The pool
+    closes an idle agent that can reload its sessions, so the record of what
+    this host pushed has to outlive the process exactly as it does for a
+    connection the pool launched -- they fill the same slot.
+
+    Adopted clients were given no slot, so their records stayed per client and
+    the idle close took them: a clear on the next turn found nothing pushed and
+    sent nothing back.
+    """
+    from tests.test_acp_client_resume import _Pipe
+
+    cfg = stub_config("adopted")
+    pipe = _Pipe()
+    adopted, _held = await get_pool().adopt(
+        name="adopted",
+        endpoint=pipe,
+        initialize={"agentCapabilities": {"loadSession": True}},
+        launch="k",
+        config="c",
+        next_id=1,
+    )
+    state = _session_state(adopted.client, "s1")
+    state.model_baseline, state.model_pushed = "stub:model-a", "stub:model-b"
+    assert await get_pool().close_idle(0.0) == ["adopted"]
+
+    connection = await get_pool().acquire(
+        name="adopted", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+
+    assert _session_state(connection.client, "s1").model_pushed == "stub:model-b", (
+        "the next turn reads the record the adopted connection wrote; without it a clear sends nothing"
+    )
+
+
+async def test_a_fresh_session_starts_on_an_empty_record_whatever_its_id() -> None:
+    """Session ids are numbered per process, so a process started after another
+    can hand out an id the earlier one used. A new session has pushed nothing:
+    a record left under its id belongs to a session that is gone, and clearing
+    on it would send that session's baseline to this one."""
+    sent: list[tuple[str, dict]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict, *, timeout: float) -> dict:
+            sent.append((method, params))
+            if method == "session/new":
+                return {"sessionId": "s1"}
+            return {}
+
+    client = _Client()
+    stale = _session_state(client, "s1")
+    stale.model_baseline, stale.model_pushed = "prov/old-base", "prov/old-pin"
+    stale.option, stale.baseline, stale.pushed = "effort", "low", "max"
+    backend = AcpAgentBackend(name="fresh", command="unused")
+
+    await backend._open_session(
+        client, cwd="/tmp", skey="s", handle="h1", budget=1, mcp_servers=[], session_model=None, session_effort=None
+    )
+
+    assert [method for method, _ in sent] == ["session/new"], "nothing of the earlier session is sent back"
+    assert (_session_state(client, "s1").model_pushed, _session_state(client, "s1").pushed) == ("", "")
+
+
+async def test_a_picker_refresh_that_recomposes_the_table_keeps_the_model_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The order the UI produces: open a session, move its instance model, let the
+    picker's own refresh recompose the agent table, then clear.
+
+    The refresh is the hot-apply path the picker triggers, and a recompose
+    replaces every backend instance. The model record has to outlive that
+    replacement, or the clear finds nothing pushed and sends no restore while
+    every surface reports the agent's own."""
+    from raven.agent.subagent.registry import AgentRegistry
+    from raven.rpc.methods import subagents as subagents_mod
+
+    cfg = stub_config("pickerrefresh")
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": cfg.name,
+                            "kind": "acp",
+                            "command": cfg.command,
+                            "env": dict(cfg.env),
+                            "readyTimeoutMs": cfg.ready_timeout_ms,
+                            "enabled": True,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr(subagents_mod, "get_config_path", lambda: path)
+    instances = InstanceRegistry(path=tmp_path / "instances.json")
+    monkeypatch.setattr("raven.acp_client.acp_agent.get_registry", lambda: instances)
+
+    def snapshot_for(measured_cfg, *, measured_at_ms, can_steer, models):
+        return CapabilitySnapshot(
+            agent=measured_cfg.name,
+            fingerprint=snapshot_fingerprint(measured_cfg),
+            status="ready",
+            detail="",
+            measured_at_ms=measured_at_ms,
+            can_load=True,
+            can_steer=can_steer,
+            model_choices=tuple(AcpModelChoice(value=value, name=value, group="") for value in models),
+        )
+
+    # The first backend needs a resumable snapshot to commit the session it
+    # opens; the store starts empty in a real picker flow, which would make the
+    # later lookup miss for a reason that is not this finding.
+    SnapshotStore().record(snapshot_for(cfg, measured_at_ms=0, can_steer=False, models=("stub:model-a",)))
+
+    async def fake_record(measured_cfg):
+        # A capability the stored row does not have, so the read does recompose
+        # the table rather than taking the no-change path.
+        snapshot = snapshot_for(measured_cfg, measured_at_ms=1, can_steer=True, models=("stub:model-a",))
+        SnapshotStore().record(snapshot)
+        return snapshot
+
+    monkeypatch.setattr(subagents_mod, "record_capabilities", fake_record)
+
+    registry = AgentRegistry()
+    registry.apply([cfg])
+    first = registry.backend(cfg.name)
+    assert first is not None
+
+    # One handle, so the later turn resumes the SAME remote session.
+    await first.run(
+        "ping",
+        task_id="t1",
+        workspace=tmp_path,
+        executor=None,
+        session_key="s",
+        instance="h1",
+        session_model="stub:model-b",
+    )
+
+    class _Loop:
+        def apply_agents(self, configs: list) -> None:
+            registry.apply(configs)
+
+    out = await subagents_mod.subagents_refresh_models(
+        {"name": cfg.name, "source": "config", "force": True}, agent_loop_factory=lambda: _Loop()
+    )
+    assert out["ok"] is True
+    second = registry.backend(cfg.name)
+    assert second is not first, "the picker's refresh is the path that replaces the backend"
+
+    await second.run("ping", task_id="t2", workspace=tmp_path, executor=None, session_key="s", instance="h1")
+
+    connection = await get_pool().acquire(
+        name=cfg.name, command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
     )
     frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
     assert any("model=stub:model-b" in ln for ln in frames), "the switch"

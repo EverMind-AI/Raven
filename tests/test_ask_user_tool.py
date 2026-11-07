@@ -781,6 +781,29 @@ async def test_execute_holds_the_conversation_lock_against_a_relayed_asker():
 
 
 @pytest.mark.asyncio
+async def test_a_stopped_relayed_question_raises_rather_than_answering_empty():
+    """The ACP route is the real one: `AskViaTool` -> `ask_direct` -> broker.
+    The elicitation tests use a fake asker; this pins what the route actually
+    does when the task waiting on it is stopped."""
+    from raven.acp_client.asker import AskViaTool
+    from raven.rpc.question_broker import QuestionBroker
+
+    asked = asyncio.Event()
+
+    async def send_frame(frame: dict) -> None:
+        asked.set()
+
+    broker = QuestionBroker(send_frame)
+    tool = AskUserTool(broker=broker, conversation_id="tui:test")
+    task = asyncio.create_task(AskViaTool(tool).ask("Relayed?", None, "tui:test"))
+    await asyncio.wait_for(asked.wait(), 1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_ask_direct_takes_no_lock_of_its_own():
     """Both relayed routes hold ``question_lock`` across their whole exchange and
     reach the broker through ``ask_direct``; the lock is not re-entrant, so a
@@ -959,3 +982,165 @@ async def test_invalid_questions_json_reports_location_without_asking(malformed,
     assert "requires at least one question" not in registered
     assert broker.asked == registry_broker.asked == []
     assert args == original
+
+
+# --- what the model is told when the shape is wrong ------------------------
+#
+# Re-created from live glm-5.3-flash calls. Each one either failed with only
+# "missing required questions[0].question" -- the normalizer had already turned
+# the option objects into strings, so the misplaced `question` was gone before
+# the registry looked -- or ran and showed the user something the model never
+# wrote.
+
+
+@pytest.mark.asyncio
+async def test_a_question_written_inside_its_options_is_reported_where_it_went():
+    """Twice in a row on one live turn: each option an object carrying its own
+    `question` and `description`, and no `question` on the entry itself."""
+    registry, broker = _registered({})
+
+    out = await registry.execute(
+        "ask_user",
+        {
+            "questions": [
+                {
+                    "header": "Scope",
+                    "options": [
+                        {"description": "prepare only", "recommended": 0, "question": "Prepare now?"},
+                        {"description": "prepare, then restart", "question": "Restart as well?"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert broker.asked == []
+    located = next(line for line in out.splitlines() if "missing required questions[0].question" in line)
+    assert "questions[0].options[0]" in located
+    assert "questions[0].options[1]" in located
+    assert "questions[0].options[0] should be string" in out
+    assert "questions[0].options[1] should be string" in out
+
+
+@pytest.mark.asyncio
+async def test_a_question_split_across_two_option_items_is_reported_not_rendered():
+    """The real options nested in one item, the question alone in the next.
+    Rendered, the second item became an option reading `{'question': ...}`."""
+    registry, broker = _registered({})
+
+    out = await registry.execute(
+        "ask_user",
+        {
+            "questions": [
+                {
+                    "header": "Create PR",
+                    "options": [
+                        {"description": "fix the wording first", "options": ["Fix, then create", "Create as is"]},
+                        {"question": "Create the pull request now?"},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert broker.asked == []
+    assert "{'question'" not in out
+    located = next(line for line in out.splitlines() if "missing required questions[0].question" in line)
+    assert "questions[0].options[1]" in located
+
+
+@pytest.mark.asyncio
+async def test_choices_nested_inside_option_objects_are_not_silently_dropped():
+    """The question was well formed and the call ran -- showing the user two
+    descriptions and never the choices that were nested inside them."""
+    registry, broker = _registered({"Which class is the ID number?": "anything"})
+
+    out = await registry.execute(
+        "ask_user",
+        {
+            "questions": [
+                {
+                    "question": "Which class is the ID number?",
+                    "options": [
+                        {"description": "per the report", "options": ["non-sensitive", "sensitive"], "recommended": 0},
+                        {"description": "per the task notes", "options": ["non-sensitive", "sensitive"]},
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert broker.asked == []
+    assert "questions[0].options[0] should be string" in out
+
+
+@pytest.mark.asyncio
+async def test_ask_direct_still_hands_the_broker_only_strings():
+    """Host-side questions never pass the registry's validation, so an option
+    object that the model-facing path now leaves for the validator must still
+    reach the broker as text here."""
+    tool, broker = _tool({"Proceed?": "yes"})
+
+    await tool.ask_direct("Proceed?", [{"question": "odd"}, "plain"], "tui:test")
+
+    assert all(isinstance(choice, str) for choice in broker.asked[0][1])
+
+
+def test_an_option_object_with_no_words_is_left_for_the_validator():
+    """A live sub-agent call sent `{"recommended": true}` as an option; rendered, the
+    user saw its repr. A name that is not text is no name either."""
+    from raven.agent.tools.ask_user import AskUserTool
+
+    payload = {"questions": [{"question": "Q?", "options": [{"recommended": True}, {"value": 3}, "plain"]}]}
+
+    options = AskUserTool().cast_params(payload)["questions"][0]["options"]
+
+    assert options == [{"recommended": True}, {"value": 3}, "plain"]
+
+
+def test_options_written_as_one_object_are_one_option() -> None:
+    """A bare object where the array belongs, on the model-facing path: it becomes
+    a one-element list rather than being iterated as its own keys, and its own
+    words are rendered. A `recommended` flag inside it is not read -- `_flagged`
+    reads flags from the list the schema declares, and this value is not one.
+    """
+    from raven.agent.tools.ask_user import AskUserTool
+
+    payload = {"questions": [{"question": "Q?", "options": {"option": "only", "recommended": True}}]}
+
+    entry = AskUserTool().cast_params(payload)["questions"][0]
+
+    assert entry["options"] == ["only"]
+
+
+async def test_kernel_options_with_unknown_metadata_are_rejected_before_the_broker():
+    tool, broker = _tool({"Region?": "Global"})
+    registry = ToolRegistry()
+    registry.register(tool)
+    result = await registry.execute(
+        "ask_user",
+        {
+            "questions": [{"question": "Region?", "options": [{"label": "EU only", "id": 1}, "Global"]}],
+        },
+    )
+    assert "Invalid parameters" in result
+    assert "options[0] should be string" in result and "id" in result
+    assert broker.asked == []
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_turn_ends_inside_the_question_instead_of_answering_it():
+    from raven.rpc.question_broker import QuestionBroker
+
+    asked = asyncio.Event()
+
+    async def send_frame(frame: dict) -> None:
+        asked.set()
+
+    tool = AskUserTool(broker=QuestionBroker(send_frame), conversation_id="tui:test")
+    task = asyncio.create_task(tool.execute(questions=[{"question": "A or B?", "options": ["A", "B"]}]))
+    await asyncio.wait_for(asked.wait(), 1.0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol, get_args, get_origin
 from loguru import logger
 from pydantic import BaseModel, ValidationError
 
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_profiles import AgentProfileSource, validate_agent_capabilities
 from raven.playbook.llm_result import (
     ProviderFailure,
@@ -180,7 +181,13 @@ class PlaybookGenerator:
         self._inventory = inventory
         self._model = model
 
-    async def generate(self, user_input: str, skills: list[str] | None = None) -> GeneratedPlaybook:
+    async def generate(
+        self,
+        user_input: str,
+        skills: list[str] | None = None,
+        *,
+        dag_only: bool = False,
+    ) -> GeneratedPlaybook:
         """One draft from user input plus optional pinned skills.
 
         ``skills`` entries are names, or paths to a skill file whose content
@@ -198,14 +205,22 @@ class PlaybookGenerator:
             inline_skill_docs=inline_docs,
         )
         known_skills = [name for name, _ in candidates] + pinned + [name for name, _ in inline_docs]
+        system = SYSTEM_PROMPT
+        if dag_only:
+            system += (
+                "\n\n# This creation target is Playbook v2\n"
+                "Emit mode dag and concrete nodes only. Prompt mode is legacy and may be read but is not created. "
+                "When the user gave no steps, plan the smallest faithful DAG yourself; do not add filler steps."
+            )
         return await self._loop(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": user_msg},
             ],
             known_skills=known_skills,
             fixed_name=None,
             agent_profiles=profiles,
+            require_dag=dag_only,
         )
 
     async def revise(self, spec: PlaybookSpec, user_feedback: str) -> GeneratedPlaybook:
@@ -237,18 +252,22 @@ class PlaybookGenerator:
         known_skills: list[str],
         fixed_name: str | None,
         agent_profiles: dict[str, "PlaybookAgentProfile"],
+        require_dag: bool = False,
     ) -> GeneratedPlaybook:
         errors: list[str] = []
         for round_no in range(1 + _MAX_REPAIR_ROUNDS):
-            response = await self._provider.chat_with_retry(
-                messages=messages,
-                tools=emit_tool(),
-                model=self._model or None,
-                tool_choice={"type": "function", "function": {"name": EMIT_TOOL_NAME}},
-            )
+            with _llm_purpose("playbook"):
+                response = await self._provider.chat_with_retry(
+                    messages=messages,
+                    tools=emit_tool(),
+                    model=self._model or None,
+                    tool_choice={"type": "function", "function": {"name": EMIT_TOOL_NAME}},
+                )
             args = _required_tool_args(response)
 
             spec, errors, missing, reported = self._check(args, known_skills, fixed_name, agent_profiles)
+            if spec is not None and require_dag and spec.mode != "dag":
+                errors.append("mode: new Playbook v2 artifacts require a concrete dag; prompt mode is legacy-only")
             if spec is not None and not errors:
                 # The model proposes the L1 vocabulary; the guards decide what
                 # is indexable. Without this the schema hands the model a

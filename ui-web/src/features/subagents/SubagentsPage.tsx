@@ -4,6 +4,7 @@ import { useSyncExternalStore } from 'react'
 import { AgentMark, isOwnAgent } from '../../components/AgentMark'
 import { SendGlyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
+import { agentKindLabel } from '../../lib/agentKind'
 import * as lang from '../../state/lang'
 import { ds } from '../../state/sources'
 import { composing, fmtSize } from '../composer/store'
@@ -40,6 +41,16 @@ function IcoPlus(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M12 6v12M6 12h12" />
+    </svg>
+  )
+}
+
+/* The stop square, in the size and rounding the page composer's stop button
+   holds (composer/store.ts ICON_STOP): one glyph, learned once. */
+function StopGlyph(): JSX.Element {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
+      <rect width="10" height="10" rx="2" />
     </svg>
   )
 }
@@ -294,7 +305,7 @@ export function AgentList({ s, onOpen, compact = false }: {
                 </span>
                 <AgentMark preset={registered?.preset} own={isOwnAgent(registered)} />
                 <b title={name}>{name}</b>
-                <span className="agent-kind">{registered?.kind || children[0]?.kind || 'agent'}</span>
+                <span className="agent-kind">{agentKindLabel(registered?.kind || children[0]?.kind)}</span>
               </button>
               {/* Outside the head, not inside it: the head is a button, and a
                   button cannot hold another one.
@@ -457,7 +468,8 @@ function InstanceComposer(
   }
   const up = uploader()
   /* The page composer's `addFiles`, for one instance: bytes go up through the
-     same seam into <workspace>/uploads, and the message carries paths. */
+     same seam into <workspace>/uploads, and the message carries paths -- an
+     upload's being the file it wrote, as the main composer stages it. */
   const addFiles = (files: ArrayLike<File>): void => {
     if (!up) return
     Array.from(files).forEach((file) => {
@@ -469,7 +481,7 @@ function InstanceComposer(
         const b64 = String(reader.result).split(',')[1] || ''
         up({ name: file.name, content_b64: b64 })
           .then((r) => {
-            entry.path = r.path
+            entry.path = r.abs_path || r.path
             entry.size = r.size
             entry.uploading = false
             paintAtts(held.current.slice())
@@ -583,6 +595,18 @@ function InstanceComposer(
             </>
           ) : null}
           {fail || hold ? <span className="why">{fail || hold}</span> : <span />}
+          {/* Stop while this instance is answering: the turn a send started is
+              one the reader can end, on the surface that started it. The send
+              button keeps its own job beside it -- while the turn runs, a send
+              queues rather than replaces. The disc is the send button's own
+              shared class, with the stop state as an attribute, the way the
+              page composer's go button names its own. */}
+          {chat.busy && store.canCancel() && (
+            <button className="go" data-state="stop" title={t('gui.stop')} aria-label={t('gui.stop')}
+              onClick={() => store.cancelInstanceTurn(open.agent, open.handle)}>
+              <StopGlyph />
+            </button>
+          )}
           <button className="go" disabled={!text.trim() && !atts.length} onClick={send} aria-label={t('gui.ws.instance_say')}>
             <SendGlyph />
           </button>

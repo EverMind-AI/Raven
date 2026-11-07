@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 from raven.memory_engine.skill_forge.types import RouterHit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from raven.skill_hub import SkillHubClient
 
 logger = logging.getLogger(__name__)
@@ -40,10 +42,14 @@ class HubSkillSource:
         *,
         weight: float = 0.85,
         min_safety: float = 0.7,
+        enabled_reader: "Callable[[], bool] | None" = None,
     ) -> None:
         self._client = client
         self.weight = weight
         self._min_safety = min_safety
+        # Asked per search, not captured: the settings switch must stop the
+        # next query, and the loop that built this source keeps serving.
+        self._enabled_reader = enabled_reader
 
     async def search(
         self,
@@ -52,6 +58,8 @@ class HubSkillSource:
         k: int,
     ) -> list[RouterHit]:
         del history  # Hub search takes only the query + limit.
+        if self._enabled_reader is not None and not self._enabled_reader():
+            return []
         items = await self._client.search(query, limit=max(1, k))
         hits: list[RouterHit] = []
         for it in items:

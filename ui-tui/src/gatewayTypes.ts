@@ -382,6 +382,12 @@ export interface ModelOptionProvider {
      `is_gateway`). The web settings page filters its catalogue on it; here it
      is declared so the drift check stays honest about what the wire sends. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`). The web roles card offers the image role these providers; here
+     it is declared for the same reason `gateway` is. */
+  image_api?: boolean
+  /* The registry's `video_api`, the same answer for the video tool. */
+  video_api?: boolean
   /* Every model-id prefix that names this provider: its own name plus the ones
      it used to answer to. A surface comparing two spellings of one model strips
      any of them, the way `providers/wire.py`'s `merge_key` does. The web picker
@@ -692,4 +698,4 @@ export type GatewayEvent =
       session_id?: string
       type: 'message.complete'
     }
-  | { payload?: { message?: string }; session_id?: string; type: 'error' }
+  | { payload?: { message?: string; usage?: Usage }; session_id?: string; type: 'error' }

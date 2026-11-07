@@ -77,9 +77,11 @@ describe('the chat makes room for the anchored desk', () => {
   })
 
   it('moves them together, so the composer stays under the column', () => {
-    /* The panel does not reach the composer -- it ends far above it. The
-       composer moves because it is centred UNDER the column, and a column that
-       slides while the composer does not reads as a layout fault. */
+    /* The composer moves because it is centred UNDER the column, and a column
+       that slides while the composer does not reads as a layout fault. At its
+       default height the palette ends far above the composer; pulled all the
+       way down it ends level with the card's bottom edge, and this inset is
+       then also what keeps the card beside it. */
     const body = rule('.chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock')
     expect(body).not.toBeNull()
     const list = /transition:([^;]*)/.exec(body)
@@ -87,6 +89,24 @@ describe('the chat makes room for the anchored desk', () => {
     for (const prop of ['translate', 'max-width', 'padding-right']) {
       expect(list[1]).toContain(prop)
     }
+  })
+
+  it('does not animate the inset while the corner grab is sizing the desk', () => {
+    /* The reserve changes on every frame of that gesture, and a transition
+       retargeted every frame restarts from where it stands each time -- so the
+       composer stayed put while the palette's left edge ran over it, and the
+       palette's height, measured against the card, dropped above it and came
+       back once the card caught up. DeskPalette sets the flag for the gesture
+       alone. */
+    const body = rule(':root[data-desk-resize] .chat:not([data-fresh]) .scroll > *, :root[data-desk-resize] .chat:not([data-fresh]) .dock')
+    expect(body).not.toBeNull()
+    expect(body).toMatch(/transition:\s*none/)
+    /* The pill takes the same half of the reserve as the column, so the same
+       restart would hold it while the column ran left; it keeps only its rise. */
+    const pill = rule(':root[data-desk-resize] .backpill')
+    expect(pill).not.toBeNull()
+    expect(pill).toMatch(/transition:\s*bottom [^;]*;?\s*$/)
+    expect(pill).not.toMatch(/left/)
   })
 
   it('does not animate the inset for a reader who asked for no motion', () => {

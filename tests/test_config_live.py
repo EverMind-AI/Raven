@@ -33,11 +33,65 @@ from raven.config.live import (
     max_tool_iterations,
     reasoning_effort,
     skill_gate_pin,
+    skill_hub_enabled,
 )
 
 
 def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+class TestCronTimezoneAdmission:
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    @pytest.mark.parametrize("invalid", [7, False, "", "Not/AZone", [], {}])
+    def test_invalid_edits_keep_the_last_zone(self, tmp_path, spelling, invalid):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {spelling: "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: invalid}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "Europe/Paris"
+
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    def test_null_returns_new_jobs_to_local_time(self, tmp_path, spelling):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {spelling: "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {spelling: None}})
+        assert live_module.cron_default_timezone(live) is None
+
+    @pytest.mark.parametrize("removed", [{}, {"cron": {}}])
+    def test_removal_forgets_the_admitted_zone(self, tmp_path, removed):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {"defaultTimezone": "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, removed)
+        assert live_module.cron_default_timezone(live) is None
+        _write(path, {"cron": {"defaultTimezone": 7}})
+        assert live_module.cron_default_timezone(live) is None
+
+    @pytest.mark.parametrize("invalid", [None, [], 7])
+    def test_an_invalid_section_keeps_the_zone_without_changing_initial_defaults(self, tmp_path, invalid):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": invalid})
+        assert live_module.cron_default_timezone(live) is None
+        _write(path, {"cron": {"default_timezone": "UTC"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": invalid})
+        assert live_module.cron_default_timezone(live) == "UTC"
+
+    def test_alias_precedence_matches_the_schema(self, tmp_path):
+        path = tmp_path / "config.json"
+        live = LiveConfig(path)
+        _write(path, {"cron": {"defaultTimezone": "UTC", "default_timezone": "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
+        _write(path, {"cron": {"defaultTimezone": 7, "default_timezone": "Europe/Paris"}})
+        assert live_module.cron_default_timezone(live) == "UTC"
 
 
 class TestReadingNowRatherThanOnce:
@@ -179,6 +233,124 @@ class TestBothSpellingsCount:
         path = tmp_path / "config.json"
         _write(path, {"tools": {"disabledTools": "exec"}})
         assert disabled_tool_names(LiveConfig(path)) == frozenset()
+
+
+class TestTheHubSwitch:
+    """The conversational Hub source is read live: its off switch must stop the
+    next query, not the next process, and a hand-written value must read the
+    way the loader reads it."""
+
+    def _live(self, tmp_path: Path, payload: dict) -> LiveConfig:
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        return LiveConfig(path)
+
+    def test_no_block_is_off(self, tmp_path: Path) -> None:
+        assert skill_hub_enabled(self._live(tmp_path, {})) is False
+
+    def test_an_endpoint_is_on(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        assert skill_hub_enabled(live) is True
+
+    def test_an_explicit_off_is_off(self, tmp_path: Path) -> None:
+        live = self._live(
+            tmp_path,
+            {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": False}}}},
+        )
+        assert skill_hub_enabled(live) is False
+
+    @pytest.mark.parametrize("written", [0, "false", "off"])
+    def test_a_hand_written_false_reads_like_the_loader(self, tmp_path: Path, written) -> None:
+        live = self._live(
+            tmp_path,
+            {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": written}}}},
+        )
+        assert skill_hub_enabled(live) is False
+
+    def test_the_snake_case_block_is_read(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skill_forge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        assert skill_hub_enabled(live) is True
+
+    def test_both_spellings_are_off_like_the_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "skillForge": {"router": {"hub": {"endpoint": "https://cam.test"}}},
+                "skill_forge": {"router": {"hub": {"endpoint": "https://snake.test"}}},
+            },
+        )
+        assert skill_hub_enabled(LiveConfig(path)) is False
+
+    def test_a_switch_off_is_the_next_answer(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        live = LiveConfig(path)
+        assert skill_hub_enabled(live) is True
+
+        _write(path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": False}}}})
+        assert skill_hub_enabled(live) is False
+
+    def test_an_invalid_hub_block_is_off(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": 7}}}})
+        assert skill_hub_enabled(live) is False
+
+    @pytest.mark.parametrize(
+        ("payload", "on"),
+        [
+            ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetchBodies": 1}}}}, True),
+            ({"skill_forge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetch_bodies": 1}}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "prefetchBodies": 1}}}, True),
+            ({"skill_router": {"hub": {"endpoint": "https://legacy.test"}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}}, False),
+            (
+                {
+                    "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
+                    "skillForge": {"router": {"hub": {"enabled": False}}},
+                },
+                False,
+            ),
+        ],
+    )
+    def test_a_shape_the_loader_migrates_reads_like_the_loader(self, tmp_path: Path, payload: dict, on: bool) -> None:
+        """The loader rewrites these shapes in memory only -- ``_persist_migrations``
+        never writes them back -- so the file keeps them for good, and a reader
+        of the raw file that skips the migration turns off a Hub the runtime built."""
+        from raven.config.raven import load_raven_config
+
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        hub = load_raven_config(path).skill_forge.router.hub
+
+        assert (bool(hub.endpoint) and hub.enabled) is on
+        assert skill_hub_enabled(LiveConfig(path)) is on
+
+    def test_a_section_the_migration_cannot_walk_answers_off(self, tmp_path: Path) -> None:
+        """The migration walks the whole file for this one answer. A hand edit
+        that breaks an unrelated section is a file the loader refuses: it costs
+        the Hub, not every search that asks."""
+        live = self._live(tmp_path, {"tools": [], "skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+
+        assert skill_hub_enabled(live) is False
+
+    def test_the_migration_runs_once_per_change_of_the_file(self, tmp_path: Path, monkeypatch) -> None:
+        """Asked before every Hub search and tool call: the copy-and-migrate is
+        paid when the bytes change, not per ask."""
+        import raven.config.loader as loader
+
+        real = loader._migrate_config
+        calls: list[int] = []
+        monkeypatch.setattr(loader, "_migrate_config", lambda data, **kw: calls.append(1) or real(data, **kw))
+        path = tmp_path / "config.json"
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test"}}})
+        live = LiveConfig(path)
+
+        assert [skill_hub_enabled(live) for _ in range(3)] == [True, True, True]
+        assert len(calls) == 1
+
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}})
+        assert skill_hub_enabled(live) is False
+        assert len(calls) == 2
 
 
 class TestThePlaybookSwitch:
@@ -393,6 +565,224 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         )
         cfg = media_tool_config(live, "image")
         assert cfg is not None and cfg.api_key == "sk-own", "the borrow is not consulted, so it cannot veto"
+
+    def test_a_section_pointed_elsewhere_borrows_no_openrouter_key(self, tmp_path):
+        """The OpenRouter key is borrowed only by a section that calls OpenRouter. A keyless
+        section whose apiBase names another endpoint would send that endpoint the
+        OpenRouter credential as its bearer token."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        runs_on = {"openrouter": {"apiKey": "sk-or"}}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://relay.test/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == ""
+
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "apiBase": "https://openrouter.ai/api/v1"}}},
+                "providers": runs_on,
+            },
+        )
+        assert media_tool_config(live, "image").api_key == "sk-or", "OpenRouter's own address, spelled out, borrows"
+
+    def test_a_named_provider_supplies_its_address_and_key_together(self, tmp_path):
+        """A section naming a provider runs on that provider, address and key as one
+        pair, and its own apiKey and apiBase stand aside: a key the section holds for
+        OpenRouter must not travel to the provider's address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        own = {"apiKey": "sk-own", "apiBase": "https://openrouter.ai/api/v1"}
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "openai/gpt-image-2", "provider": "openai", **own}}},
+                "providers": {
+                    "openai": {"apiKey": "sk-openai", "apiBase": "https://compat.test/v1"},
+                    "openrouter": {"apiKey": "sk-or"},
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.provider, cfg.api_base, cfg.api_key) == ("openai", "https://compat.test/v1", "sk-openai")
+
+    def test_a_named_provider_with_no_address_of_its_own_runs_on_its_public_one(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai"}}},
+                "providers": {"openai": {"apiKey": "sk-openai"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_base, cfg.api_key) == ("https://api.openai.com/v1", "sk-openai")
+
+    def test_a_named_provider_without_a_key_leaves_the_section_keyless(self, tmp_path):
+        """Keyless is the answer -- not the OpenRouter key, and not the section's own."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "openai", "apiKey": "sk-own"}}},
+                "providers": {"openrouter": {"apiKey": "sk-or"}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.api_key == "" and cfg.api_base == "https://api.openai.com/v1"
+
+    def test_an_invalid_edit_of_the_named_provider_keeps_the_lent_pair(self, tmp_path):
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        image = {"model": "gpt-image-2", "provider": "openai"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": "sk-openai"}}})
+        assert media_tool_config(live, "image").api_key == "sk-openai"
+
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"openai": {"apiKey": 123}}})
+        kept = media_tool_config(live, "image")
+        assert kept is not None and kept.api_key == "sk-openai"
+
+    def test_a_named_provider_with_no_address_takes_no_key(self, tmp_path):
+        """An empty address means the tool's own default, which is OpenRouter's: a key
+        taken with no address of its own would be sent there."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "anthropic"}}},
+                "providers": {"anthropic": {"apiKey": "sk-ant", "extraHeaders": {"X-Tenant": "t1"}}},
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.api_base, cfg.api_key, cfg.extra_headers) == ("", "", {})
+
+    def test_a_named_provider_supplies_its_headers_with_its_address_and_key(self, tmp_path):
+        """Headers are part of the connection; the section's own stand aside with its
+        own key and address."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {
+                "tools": {"media": {"image": {"model": "m", "provider": "custom", "extraHeaders": {"X-Own": "o"}}}},
+                "providers": {
+                    "custom": {"apiKey": "sk-c", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "t1"}}
+                },
+            },
+        )
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-c", {"X-Tenant": "t1"})
+
+    def test_the_headers_come_from_the_endpoint_the_key_comes_from(self, tmp_path):
+        """An endpoint inherits the section's flat headers unless it names its own,
+        the way every other caller of ``provider_endpoints`` reads it."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        custom = {
+            "apiBase": "https://relay.test/v1",
+            "extraHeaders": {"X-Tenant": "flat"},
+            "endpoints": [{"label": "a", "apiKey": "sk-a"}],
+        }
+        image = {"model": "m", "provider": "custom"}
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        cfg = media_tool_config(live, "image")
+        assert (cfg.api_key, cfg.extra_headers) == ("sk-a", {"X-Tenant": "flat"})
+
+        custom["endpoints"] = [{"label": "a", "apiKey": "sk-a", "extraHeaders": {"X-Tenant": "own"}}]
+        self._write(path, {"tools": {"media": {"image": image}}, "providers": {"custom": custom}})
+        assert media_tool_config(live, "image").extra_headers == {"X-Tenant": "own"}
+
+    def test_an_unrelated_providers_bad_edit_does_not_hold_the_answer(self, tmp_path):
+        """Only the borrowed-from provider's section is validated."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        providers = {"openrouter": {"apiKey": "sk-or"}, "anthropic": {"apiKey": 123}}
+        self._write(path, {"tools": {"media": {"image": {"model": "a"}}}, "providers": providers})
+        assert media_tool_config(live, "image").model == "a"
+
+        self._write(path, {"tools": {"media": {"image": {"model": "b"}}}, "providers": providers})
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and (cfg.model, cfg.api_key) == ("b", "sk-or")
+
+    def test_a_section_naming_only_a_provider_is_not_switched_on(self, tmp_path):
+        """No model and no key of its own: the provider's key must not enable a tool
+        that bills per call, any more than a chat key does."""
+        from raven.config.live import media_tool_config
+
+        live, path = self._live(tmp_path)
+        self._write(
+            path,
+            {"tools": {"media": {"image": {"provider": "openai"}}}, "providers": {"openai": {"apiKey": "sk-openai"}}},
+        )
+        cfg = media_tool_config(live, "image")
+        assert cfg is not None and cfg.provider == "openai" and cfg.api_key == "" and cfg.model == ""
+
+    @pytest.mark.parametrize(
+        ("providers", "named"),
+        [
+            ({"openai": {"apiBase": "https://relay.test/v1"}, "OpenAI": {"apiKey": "sk-oa"}}, "openai"),
+            ({"zhipu": {"apiKey": "sk-z", "apiBase": "https://z.test/v1"}}, "zai"),
+            ({"fireworks": {"apiKey": "sk-fw", "apiBase": "https://fw.test/v1"}}, "fireworks_ai"),
+        ],
+        ids=["second-spelling", "former-name", "field-alias"],
+    )
+    def test_the_live_reader_finds_the_provider_the_boot_reader_does(self, tmp_path, providers, named):
+        """Both go through ``ProvidersConfig``, which folds a provider's spellings,
+        former names and field aliases into one section: a live reader taking the
+        first match alone registered the tool with a key and then ran it without one."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        payload = {"tools": {"media": {"image": {"model": "m", "provider": named}}}, "providers": providers}
+        self._write(path, payload)
+        boot = Config.model_validate(payload).effective_media_config().image
+        cfg = media_tool_config(live, "image")
+        assert boot.api_key and (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key)
+
+    @pytest.mark.parametrize(
+        ("kind", "runs_on"),
+        [
+            ("image", ("https://relay.test/v1", "sk-oa")),
+            ("speech", ("", "sk-or")),
+            ("video", ("https://relay.test/v1", "sk-oa")),
+        ],
+    )
+    def test_the_image_and_video_sections_run_on_a_named_provider(self, tmp_path, kind, runs_on):
+        """Speech speaks OpenRouter's request shapes alone, so a provider written into
+        its section is ignored like any unknown key; the image and video sections take
+        the named provider's connection. Both readers agree."""
+        from raven.config.live import media_tool_config
+        from raven.config.schema import Config
+
+        live, path = self._live(tmp_path)
+        providers = {
+            "openai": {"apiKey": "sk-oa", "apiBase": "https://relay.test/v1"},
+            "openrouter": {"apiKey": "sk-or"},
+        }
+        payload = {"tools": {"media": {kind: {"model": "m", "provider": "openai"}}}, "providers": providers}
+        self._write(path, payload)
+        boot = getattr(Config.model_validate(payload).effective_media_config(), kind)
+        cfg = media_tool_config(live, kind)
+        assert (cfg.api_base, cfg.api_key) == (boot.api_base, boot.api_key) == runs_on
 
 
 def test_permissions_node_that_stops_validating_keeps_the_last_policy(tmp_path):
@@ -970,6 +1360,99 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
         _write(path, {"tools": {"web": {"jinaApiKey": ""}}})
 
         assert live_vendor_key(LiveConfig(path), "jina", boot="sk-jina-boot") == ""
+
+    def test_a_borrowing_vendor_reads_the_llm_providers_key_live(self, tmp_path: Path) -> None:
+        """DeepSeek's web slot is optional; the key under ``providers.deepseek``
+        pays for it too, and a rotation there has to reach the next call the way
+        every other key in this reader does."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-llm"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-llm"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-rotated"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "sk-rotated"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": ""}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "", "a cleared LLM key revokes"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == "sk-boot", "no file entry keeps boot"
+
+    def test_a_borrow_follows_the_section_address_and_its_endpoints_live(self, tmp_path: Path) -> None:
+        """The live answer obeys the same host rule as the boot one, and an
+        endpoint's key replaces the flat one it supersedes."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-gw", "apiBase": "https://llm-gw.corp.example/v1"}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-gw") == ""
+
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-old", "endpoints": [{"label": "a", "apiKey": "sk-new"}]}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-new"
+
+    def test_a_rejected_provider_edit_keeps_the_last_live_borrowed_key(self, tmp_path: Path) -> None:
+        """A file being rewritten is briefly invalid; a rejected edit must keep
+        the last admitted borrowed key serving and not roll it back to boot,
+        while removing the provider section still hands the boot value back."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-1"}}})
+        live = LiveConfig(path)
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": {"nested": 1}}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1", "a rejected edit keeps the last admitted key"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-2"}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-2"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(live, "deepseek", boot="sk-boot") == "sk-boot", "an absent provider falls back to boot"
+
+    def test_an_empty_provider_key_without_a_web_slot_is_a_revocation(self, tmp_path: Path) -> None:
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": ""}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == ""
+
+    def test_a_malformed_provider_section_dispenses_no_live_answer(self, tmp_path: Path) -> None:
+        """A provider block the schema rejects is named but carries no answer;
+        the live reader admits it through its last-good memory. A provider the
+        file does not name at all is a different state -- the boot value keeps
+        serving."""
+        from raven.config.schema import live_borrowed_web_answer
+
+        assert live_borrowed_web_answer("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) == (True, None)
+        assert live_borrowed_web_answer("deepseek", {"openai": {"apiKey": "x"}}) == (False, None)
+        assert live_borrowed_web_answer("deepseek", ["not", "a", "dict"]) == (False, None)
 
     def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
         from raven.config.live import web_jina_key

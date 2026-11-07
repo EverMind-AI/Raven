@@ -386,6 +386,10 @@ async def build_rpc_stack(
         # emitter, same routing; without it the announce's reply arrives as an
         # assistant turn nobody visibly asked.
         agent_loop.subagents.set_delivery_sink(emitter.emit)
+        # The host's task board announces each write on the same emitter, so the
+        # page's tasks tab follows the post-turn update without polling.
+        if (task_board := getattr(agent_loop, "task_board", None)) is not None:
+            task_board.set_sink(emitter.emit)
 
         # Backfill the acp capability snapshots at startup: an acp row's
         # statefulness comes from its snapshot, and before this the only writers
@@ -396,8 +400,12 @@ async def build_rpc_stack(
         # row launching another child), and the host's own stack does it.
         if channel != "acp":
             from raven.agent.subagent.probe import schedule_snapshot_verification
+            from raven.agent.subagent.resume_remote import schedule_remote_resume
 
             schedule_snapshot_verification(agent_loop.subagents)
+            # The runs a process before this one left on registered machines
+            # are picked up and reported to their conversations.
+            schedule_remote_resume(agent_loop.subagents)
 
         # Per-server MCP events, broadcast rather than conversation-scoped: a
         # server connecting is not part of anybody's turn. Clients already listen
@@ -433,6 +441,9 @@ async def build_rpc_stack(
     # turn.send binds a turn's addressee into it and the spine's outlet/sink read
     # it back to tag that turn's events (see build_rpc_spine).
     direct_targets: dict[str, dict[str, str]] = {}
+    # Owned here for the same reason: the spine keeps what each running turn has
+    # measured in it, and turn.cancel reads a stopped turn's reading back.
+    live_usages: dict[str, dict[str, Any]] = {}
     turn_teardown = None
     if agent_loop is not None:
         from raven.core.cron_stack import make_on_cron_job, make_on_session_wake
@@ -455,6 +466,7 @@ async def build_rpc_stack(
             # is not necessarily removing that method.
             approval_responder=approval_responder or approval_broker,
             credential_asker=credential_broker if credential_cards else None,
+            live_usages=live_usages,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -503,6 +515,7 @@ async def build_rpc_stack(
         send_frame=send_frame,
         default_channel=channel,
         ensure_stack=ensure_stack,
+        live_usages=live_usages,
     )
     if agent_loop is not None:
         _lend_settings_writers(agent_loop, dispatcher)
@@ -550,7 +563,11 @@ async def build_rpc_stack(
         if owns_loop:
             try:
                 from raven.acp_client.client import begin_drain
+                from raven.acp_client.remote import leave_agents_running
 
+                # The agents on registered machines stay with their daemons
+                # (see the gateway's shutdown): the next process picks them up.
+                leave_agents_running()
                 begin_drain()
                 if agent_loop is not None:
                     await agent_loop.subagents.cancel_all(reason="the server stopped")
@@ -572,6 +589,10 @@ async def build_rpc_stack(
                 await agent_loop.stop_plugin_services()
             except Exception:
                 logger.exception("plugin services stop failed; continuing shutdown")
+            try:
+                agent_loop.context.skills.stop_file_watcher()
+            except Exception:
+                logger.exception("serve: skill watcher stop failed; continuing shutdown")
         if agent_loop is not None and agent_loop.backend is not None:
             try:
                 # Drain before stop, the same order the CLI hosts follow:
@@ -600,11 +621,15 @@ async def build_rpc_stack(
         except Exception:
             logger.exception("serve: browser close failed; continuing shutdown")
         # ACP agents are launched with start_new_session, so they do not get the
-        # terminal's signals and outlive this process unless the pool is closed.
+        # terminal's signals and outlive this process unless the pool is closed;
+        # so does the ssh of a Raven node on a registered machine, whose pool is
+        # closed after the agents' so a closing agent still has its link.
         try:
             from raven.acp_client.pool import close_pool
+            from raven.node.client import close_node_pool
 
             await close_pool()
+            await close_node_pool()
         except Exception:
             logger.exception("serve: acp pool close failed; continuing shutdown")
 

@@ -35,11 +35,13 @@ import asyncio
 import contextlib
 import os
 import re
+import shutil
 import signal
-import tempfile
+import subprocess
 from typing import Any
 
 from raven.agent.subagent.probe_state import Remedy
+from raven.utils.scratch import ScratchDir
 
 PRESET = "kimi_code"
 
@@ -52,6 +54,9 @@ retries those at the pace the provider asks for. The ones it retries with
 backoff take about 150s and are not waited for: an ask that runs out says
 nothing, and the connect's own verdict stands.
 """
+
+_TASKKILL_TIMEOUT_S = 5.0
+"""How long ending an ask on Windows waits for ``taskkill`` before killing the `kimi` alone."""
 
 _FAILED = re.compile(r"^error: failed to run prompt: (.+)$", re.MULTILINE)
 # With FORCE_COLOR in its environment Kimi Code prints that whole line in bright
@@ -336,22 +341,21 @@ async def doctor(cfg: Any) -> str | None:
 async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
     """Run the row's `kimi` with ``args`` in the environment its ACP launch gets, in a fresh directory.
 
-    The process group goes on any way out -- a timeout, or the connect itself
-    being cancelled when the page that asked goes away -- so an ask never
-    outlives the question.
+    The process group (on Windows, the process tree) goes on any way out -- a
+    timeout, or the connect itself being cancelled when the page that asked goes
+    away -- so an ask never outlives the question.
     """
-    from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+    from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
     from raven.agent.subagent.role import subagent_role_env
 
     # The map `AcpClient.launch` builds, so the `kimi` asked is the one the
     # connect ran, reading the same home and config.
     base = await asyncio.to_thread(login_shell_env)
     env = {**base, **host_identity_env(), **subagent_role_env(), **(getattr(cfg, "env", None) or {})}
-    with tempfile.TemporaryDirectory(prefix="raven_subagent_ask_") as cwd:
+    async with ScratchDir("raven_subagent_ask_") as cwd:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "kimi",
-                *args,
+                *resolve_program(["kimi", *args], env),
                 cwd=cwd,
                 env=env,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -367,11 +371,38 @@ async def _run(cfg: Any, *args: str) -> tuple[int | None, str]:
             return None, ""
         finally:
             if proc.returncode is None:
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.killpg(proc.pid, signal.SIGKILL)
+                await _end_tree(proc)
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(proc.wait(), 1.0)
     return proc.returncode, (out + err).decode("utf-8", "replace")
+
+
+async def _end_tree(proc: asyncio.subprocess.Process) -> None:
+    """End the asked `kimi` and what it started: its process group, or on Windows its tree.
+
+    Windows has no ``os.killpg``, and calling it there raised ``AttributeError``
+    in place of the timeout's answer or the cancel, with the `kimi` left running.
+    ``taskkill /T`` ends the tree from its pid instead; the caller only asks while
+    the `kimi` is alive, so that pid is still its own.
+    """
+    if hasattr(os, "killpg"):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        return
+    taskkill = shutil.which("taskkill")
+    if taskkill:
+        with contextlib.suppress(OSError, RuntimeError, subprocess.SubprocessError):
+            await asyncio.to_thread(
+                subprocess.run,
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_TASKKILL_TIMEOUT_S,
+                check=False,
+            )
+    if proc.returncode is None:
+        with contextlib.suppress(OSError):
+            proc.kill()
 
 
 def _in_chain(exc: BaseException | None, kind: type[BaseException]) -> Any:

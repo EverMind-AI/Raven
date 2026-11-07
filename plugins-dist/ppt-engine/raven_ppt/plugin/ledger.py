@@ -49,6 +49,17 @@ JOURNAL_FILENAME = ".deck-words.json"
 # the two spellings against each other.
 SUMMARY_MARKER = "[Context summary — earlier steps were compacted to fit the context window]"
 
+# The host builds each turn's user message as a runtime-context header, the
+# user's text, then a block of recalled memory and routed skills for that turn
+# only (raven.context_engine.scratch), and records on the message exactly what it
+# appended under the private key. The journal reads that message off the live
+# window, so both ends are cut here the way the trunk cuts them before filing.
+# Spelled here so the plugin does not import trunk internals; the test suite pins
+# the spellings against the trunk.
+TURN_SCRATCH_KEY = "_turn_scratch"
+TURN_SCRATCH_TAG = "[Turn Scratch — recalled for this turn only, not conversation history]"
+RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
+
 #: The ledger quotes the user, never trims them; this is the safety stop for a
 #: session of hundreds of long messages, and the note says when it was hit.
 WORDS_CAP_CHARS = 24_000
@@ -79,6 +90,28 @@ def _text(content: Any) -> str:
             str(part.get("text") or "") for part in content if isinstance(part, dict) and part.get("type") == "text"
         )
     return ""
+
+
+def _users_text(message: Any) -> str:
+    """A user message's text with the host's per-turn header and tail taken off."""
+    content = message.get("content")
+    scratch = message.get(TURN_SCRATCH_KEY)
+    if isinstance(scratch, str) and scratch.startswith(TURN_SCRATCH_TAG):
+        if isinstance(content, str):
+            head, sep, tail = content.rpartition(f"\n\n{scratch}")
+            content = head + tail if sep else content
+        elif isinstance(content, list):
+            content = [part for part in content if not (isinstance(part, dict) and part.get("text") == scratch)]
+    if isinstance(content, list):
+        content = [
+            part
+            for part in content
+            if not (isinstance(part, dict) and str(part.get("text") or "").startswith(RUNTIME_CONTEXT_TAG))
+        ]
+    text = _text(content)
+    if text.startswith(RUNTIME_CONTEXT_TAG):
+        text = text.split("\n\n", 1)[1] if "\n\n" in text else ""
+    return text
 
 
 def summary_index(messages: list[dict[str, Any]]) -> int | None:
@@ -185,7 +218,10 @@ def users_words(history: list[dict[str, Any]] | None) -> list[str]:
     (``LOOP_AUTHORED_KEYS``), and it overwrites an elided tool body in place
     (``ELIDED_TOOL_BODY``). Both are skipped, because the journal is fed from
     the live window where the trunk has not yet stripped them, and the ledger
-    spends a 24k budget on what it finds.
+    spends a 24k budget on what it finds. For the same reason the turn's own
+    user message loses the host's runtime-context header and its turn scratch:
+    recalled memory and skill bodies quoted back as the user's words would be
+    the worst thing to spend that budget on.
     """
     words: list[str] = []
     for message in history or []:
@@ -193,7 +229,7 @@ def users_words(history: list[dict[str, Any]] | None) -> list[str]:
             continue
         role = message.get("role")
         if role == "user":
-            text = _text(message.get("content")).strip()
+            text = _users_text(message).strip()
             if text and not text.startswith(SUMMARY_MARKER) and LEDGER_MARKER not in text:
                 words.append(f"User: {text}")
         elif role == "tool" and message.get("name") == "ask_user":

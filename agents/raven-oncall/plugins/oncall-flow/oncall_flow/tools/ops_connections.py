@@ -29,8 +29,12 @@ class OpsConnectionsTool(Tool):
             "as belonging on a machine. Where a path looks like it lives decides nothing. "
             "This is the only way in: "
             "credentials belong to the connection and never to you, so there is nothing "
-            "to work out with exec or ssh, and an address in a task statement does not "
-            "identify a machine by itself (two of these can share one). "
+            "to work out with exec or ssh. "
+            'When the owner named the machine -- by an address or part of one ("100.27", '
+            '"27"), a port ("64106"), a nickname, or its name -- pass those words as '
+            "'hint': the answer says which machines they can mean, without addresses. "
+            "Several machines can share one address, so a hint can match more than one; "
+            "the answer then says how to settle it. "
             "When more than one could serve, pick the one the work calls for -- a "
             "CPU-only solver on the CPU box, a run that needs device memory on the GPU "
             "machine -- and say which you picked and why. When none of them fits, ask "
@@ -39,9 +43,23 @@ class OpsConnectionsTool(Tool):
 
     @property
     def parameters(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {}, "required": []}
+        return {
+            "type": "object",
+            "properties": {
+                "hint": {
+                    "type": "string",
+                    "description": (
+                        "The owner's own words for the machine, as written: an address or "
+                        "its last part, a port, a nickname, a name. Leave out when they "
+                        "named none."
+                    ),
+                }
+            },
+            "required": [],
+        }
 
     async def execute(self, **kwargs: Any) -> str:
         from oncall_flow.connections import describe
 
-        return describe()
+        hint = str(kwargs.get("hint") or "").strip()
+        return describe(hint) if hint else describe()

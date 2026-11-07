@@ -380,6 +380,98 @@ jobs:
         # buy nothing -- the plugin only has to exist.
         run: uvx --python 3.12 --from "pytest>=8,<10" --with pytest-asyncio --with pytest-xdist pytest --noconftest tests/integration/test_cli_upgrade_real_uv.py -q
 
+  windows-acp:
+    name: Windows ACP stdio
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Install the test environment
+        run: uv sync --frozen --python 3.13 --extra dev
+
+      - name: Test that the suite keeps out of the runner's own home
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_conftest_home.py -q -n 0 --tb=short
+
+      - name: Test SSH probes and configuration with portable subprocesses
+        run: >-
+          uv run --frozen --python 3.13 --no-sync pytest
+          tests/test_ops_connection_add.py::test_a_machine_that_answers_and_then_goes_silent_is_given_up_on
+          tests/test_ops_connection_add.py::test_a_machine_that_refuses_says_what_ssh_said
+          tests/test_ops_connection_add.py::test_ssh_defaults_reads_what_ssh_resolves_and_keeps_only_keys_that_exist
+          tests/test_ops_connection_add.py::test_ssh_defaults_is_empty_when_ssh_cannot_answer
+          -q -n 0 --tb=short
+
+      - name: Test ACP handshakes and bundled launchers
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_acp_stdio_smoke.py -m integration -q -n 0 --tb=short
+
+      - name: Test the registered launcher command
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_cli_agents_commands.py::test_register_pins_the_resolved_row_into_the_host_roster -q -n 0 --tb=short
+
+      - name: Test a connect's checks against a live process tree
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_subagent_connect_windows_real_process.py -m integration -q -n 0 --tb=short
+
+      - name: Test Windows ACP teardown
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_acp.py -k close_without_killpg -q -n 0 --tb=short
+
+      # The job object is the only thing that ends an agent's tree on host
+      # exit, and Git Bash is the runtime that exercises a breakaway leak. The
+      # Ubuntu shards skip the Windows-only cases, so they run here.
+      - name: Test the Windows job object and the on-call hand-off
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_windows.py tests/test_agents_oncall_flow_windows_backend.py -q -n 0 --tb=short
+
+      - name: Test conditional DAG paths
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_core.py -k at_nodes -q -n 0 --tb=short
+
+      - name: Test DAG finish-text paths
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_dag_runner.py -k 'test_the_finish_text or test_branch_e2e_one_tool_call' -q -n 0 --tb=short
+
+      # A file reference is confined with the host's path rules -- a backslash
+      # separates and a drive anchors -- which the Linux shards never exercise.
+      # One pytest call: a failing native command earlier in a PowerShell step
+      # does not fail the step.
+      - name: Test DAG file-reference confinement
+        run: |
+          $env:PATH = (Join-Path $env:ProgramFiles 'Git\usr\bin') + ';' + $env:PATH
+          uv run --frozen --python 3.13 --no-sync pytest tests/test_subagent_prompt_template.py tests/test_playbook_validate.py tests/test_subagent_dag_core.py tests/test_subagent_dag_runner.py -k 'template or validate or reference or node_root or nodes_prefix or may_not_execute or both_ref_forms or history or addressable or reachable_by_path' -q -n 0 --tb=short
+
+      # A launch rewrites the agents' prompt files. Keeping a private file's
+      # DACL and recovering from a read-only one are Windows facts the Linux
+      # shards skip.
+      - name: Test regenerated prompt files
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_config_product_render.py tests/test_atomic_io.py::test_a_failed_replace_takes_its_tmp_with_it tests/test_atomic_io.py::test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace -q -n 0 --tb=short
+
+      # On Windows the Mirasim desktop host is reached over the loopback port
+      # and its token file, never a unix socket, and the unit shards run on
+      # Linux only -- so the adapter's own road is exercised natively here.
+      - name: Test the Mirasim adapter over the loopback port
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_acp_mirasim_host.py tests/test_acp_mirasim_server.py tests/test_subagent_mirasim.py tests/test_acp_client_teardown.py -q -n 0 --tb=short
+
+      - name: Test Raven-Code file diagnostics and worker limits on Windows
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_agents_code_diagnostic_workers.py tests/test_agents_code_tools_plugin.py -q -n 0 --tb=short
+
+      - name: Test Raven-Code exec diagnostics with the native Windows executor
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_agents_code_flow_exec.py -k test_exec_ -q -n 0 --tb=short
+
+      - name: Test Windows MCP lending and endpoint lifetimes
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_mcp_transport.py tests/test_mcp_bridge.py tests/test_mcp_endpoint.py tests/test_cli_mcp_commands.py tests/test_subagent_acp_mcp_lifecycle.py tests/test_node_client.py -q -n 0 --tb=short
+
+      - name: Test Windows MCP transports against real servers
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/integration/test_mcp_bridge_e2e.py tests/integration/test_mcp_streamable_http_e2e.py -m integration -q -n 0 --tb=short
+
+      # Which sub-agent a trajectory entry belongs to is read from span ancestry
+      # in a log the trace store writes with CRLF line ends here, and the unit
+      # shards run on Linux only.
+      - name: Test the trajectory projection and index on Windows
+        run: uv run --frozen --python 3.13 --no-sync pytest tests/test_trajectory_entries.py tests/test_trajectory_index.py -q -n 0 --tb=short
+
   core-wheel:
     name: kernel wheel smoke
     runs-on: ubuntu-latest
@@ -430,6 +522,7 @@ jobs:
           npm run lint
           npm run lint:rpc
           npm run lint:i18n
+          npm run lint:shared
           npm run type-check
           npm test
           npm run build
@@ -463,6 +556,34 @@ jobs:
           npm run type-check
           npm test
         working-directory: ui-web
+
+  web-browser:
+    name: web layout in a real browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      # The browser extra carries playwright; the runner's own Chrome is the
+      # browser measured with, so no browser download runs here. The dev group
+      # carries pytest-xdist, which the project's addopts require.
+      - name: Install the test environment
+        run: uv sync --frozen --extra browser --extra dev --dev --python 3.12
+
+      # A real-environment test, so it is wired to its own job: the unit shards
+      # leave tests/integration out, and happy-dom lays nothing out, so this is
+      # the only place the tasks board card's agent line is measured.
+      - name: Measure the tasks board card's agent line in Chromium
+        run: uv run --frozen --python 3.12 --no-sync pytest tests/integration/test_web_task_card_real_browser.py -m integration -q -n 0 --tb=short
 
   page:
     name: page checks

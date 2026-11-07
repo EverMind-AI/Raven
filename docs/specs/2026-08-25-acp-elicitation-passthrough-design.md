@@ -157,8 +157,9 @@ runs would otherwise attribute one run's work to the other.
 (`raven/agent/tools/ask_user.py:127-141`) already exists for host-side questions
 outside a model tool call, with exactly the right contract: `None` means the
 round-trip is structurally unavailable (no broker, no conversation), `""` means
-timeout or cancellation (the broker never raises), anything else is the user's
-answer. It already has a precedent caller - the graph-level confirm gate in front
+timeout or EOF (the broker fails safe), and cancelling the asking task raises
+`CancelledError` rather than answering; anything else is the user's answer. It
+already has a precedent caller - the graph-level confirm gate in front
 of a whole DAG. Reusing it means sub-agent questions and raven's own `ask_user`
 share one broker and one frontend contract.
 

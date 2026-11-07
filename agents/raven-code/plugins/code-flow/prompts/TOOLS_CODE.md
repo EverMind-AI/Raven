@@ -85,8 +85,10 @@ the host exec instead; follow that tool's stated limits and failure behavior.
   to change only the nth non-overlapping exact
   match, counted from 1 in file order. `occurrence` normalizes CRLF to LF but
   does not use fuzzy whitespace matching; do not combine it with `replace_all`
-- If a write or edit reports a Python syntax error, fix it before moving on.
-  An absent syntax note is not a successful test; run the relevant checks
+- If a write or edit reports a Python syntax error, check the project's Python
+  version before changing newer syntax, and fix confirmed errors before relying
+  on execution results. An absent diagnostics note is not a successful test;
+  run the relevant checks
 
 ## grep / glob — search, truncation, spill
 

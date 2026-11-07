@@ -86,7 +86,7 @@ _ELLIPSIS = "..."
 
 #: One clause per category ``LLMProvider._classify`` can return (which is where
 #: ``tool_image_unsupported`` comes from too), plus ``upstream_transport_failure``,
-#: which litellm_provider attaches directly. A category with no clause falls to
+#: which ``transport_failure_response`` attaches directly. A category with no clause falls to
 #: the default rather than going unsaid -- the trajectory replay's
 #: ``replay_divergence`` is the one in-tree case -- and
 #: ``test_error_classification`` holds the table to the classifier.
@@ -867,10 +867,10 @@ class LLMProvider(_LLMProviderPaper):
         """The reasoning keys a request for this effort would carry.
 
         Asked when a caller needs to know whether two efforts are the *same
-        request*, which is not answerable from the labels: the empty-response
-        retry only pays for itself if the request it re-sends differs, and on a
-        wire that collapses two rungs onto one value the second retry is the
-        first failure again at full price.
+        request*, which is not answerable from the labels: the step-down that
+        asks a thinking-only reply again at a lower effort only pays for itself
+        if the request it sends differs, and on a wire that collapses two rungs
+        onto one value the lower rung is the first failure again at full price.
 
         Here the effort travels as the label the caller named, so the label is
         the shape and every rung is its own request. An adapter that translates
@@ -928,7 +928,7 @@ class LLMProvider(_LLMProviderPaper):
         if reasoning_effort is self._SENTINEL:
             reasoning_effort = self.generation.reasoning_effort
 
-        from raven.providers import prompt_cache
+        from raven.providers import effort_levels, prompt_cache
 
         model_chain = [model, *(fallback_models or [])]
         response: LLMResponse | None = None
@@ -970,13 +970,33 @@ class LLMProvider(_LLMProviderPaper):
             # answer and all three declare 131072. A bound we do not send is
             # one we can neither move nor report.
             sent = send_max_tokens(self.generation, wire_id, pinned=max_tokens)
+            hop_effort = reasoning_effort
+            if idx and isinstance(reasoning_effort, str) and reasoning_effort:
+                # A fallback is another model, often another vendor; the
+                # primary's word is not evidence about what this hop accepts.
+                # Re-clamp it here, or a recovery call fails on the very word
+                # the fallback was chosen to get away from.
+                hop_effort = effort_levels.downgrade(
+                    reasoning_effort,
+                    effort_levels.levels_for(
+                        current_model or "",
+                        provider=getattr(self, "provider_name", "") or "",
+                    ),
+                )
+                if hop_effort != reasoning_effort:
+                    logger.debug(
+                        "fallback model={} does not declare reasoning_effort={}; sending {}",
+                        current_model,
+                        reasoning_effort,
+                        hop_effort or "none",
+                    )
             response = await self._chat_attempt_with_retry(
                 messages=messages,
                 tools=tools,
                 model=current_model,
                 max_tokens=sent,
                 temperature=temperature,
-                reasoning_effort=reasoning_effort,
+                reasoning_effort=hop_effort,
                 tool_choice=tool_choice,
             )
             if response.finish_reason != "error":

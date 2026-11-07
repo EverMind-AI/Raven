@@ -1,4 +1,4 @@
-"""Unix socket endpoints that put a host-held MCP connection within a sub-agent's reach.
+"""Local endpoints that put a host-held MCP connection within a sub-agent's reach.
 
 One endpoint per (node, server). A downstream connection gets its own upstream
 transport, and frames are relayed at the JSON-RPC message level -- which is what
@@ -22,6 +22,7 @@ import asyncio
 import hashlib
 import itertools
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -30,13 +31,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 from loguru import logger
 from pydantic import ValidationError
 
 from raven.mcp.bridge import iter_raw_frames
 from raven.mcp.client import open_mcp_transport, resolve_transport
 from raven.mcp.naming import spellings
+from raven.mcp.transport import TOKEN_BYTES, authenticate, unix_sockets_available
 from raven.sandbox import SandboxInitError
 
 _SOCKET_SUBDIR = "raven-mcp"
@@ -51,6 +53,19 @@ Same shape ``MCPConnectionManager`` takes, and for the same reason: it is
 awaited only when an upstream is actually dialled, so an endpoint nobody
 connects to never spins the sandbox up.
 """
+
+_jsonrpc_adapter_cache: Any = None
+
+
+def _jsonrpc_adapter() -> Any:
+    """The validator for mcp 2.x's ``JSONRPCMessage``, which is a union type."""
+    global _jsonrpc_adapter_cache
+    if _jsonrpc_adapter_cache is None:
+        from mcp.types import JSONRPCMessage
+        from pydantic import TypeAdapter
+
+        _jsonrpc_adapter_cache = TypeAdapter(JSONRPCMessage)
+    return _jsonrpc_adapter_cache
 
 
 def socket_dir() -> Path:
@@ -73,7 +88,7 @@ def bridge_command(*, path: str | None = None) -> list[str] | None:
     The PATH lookup stays for the case this cannot serve: a raven installed
     where the adapter runs but not beside this interpreter.
     """
-    own = Path(sys.executable).with_name("raven")
+    own = Path(sys.executable).with_name("raven.exe" if sys.platform == "win32" else "raven")
     if own.is_file() and os.access(own, os.X_OK):
         return [str(own), "mcp", "bridge"]
     exe = shutil.which("raven", path=path)
@@ -122,9 +137,9 @@ class _DenyPolicy:
 
     def refuse(self, message: Any) -> bytes | None:
         """The error frame this request is owed, or ``None`` to forward it as-is."""
-        from mcp.types import INVALID_PARAMS, ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCRequest
+        from mcp.types import INVALID_PARAMS, ErrorData, JSONRPCError, JSONRPCRequest
 
-        root = message.root
+        root = message
         if not self._disabled or not isinstance(root, JSONRPCRequest):
             return None
         if root.method == "tools/list":
@@ -136,12 +151,10 @@ class _DenyPolicy:
         if not isinstance(name, str) or not self.denies(name):
             return None
         logger.warning("mcp endpoint: refused disabled tool {!r} on server {!r}", name, self._server)
-        reply = JSONRPCMessage(
-            JSONRPCError(
-                jsonrpc="2.0",
-                id=root.id,
-                error=ErrorData(code=INVALID_PARAMS, message=f"tool {name!r} is disabled by the host"),
-            )
+        reply = JSONRPCError(
+            jsonrpc="2.0",
+            id=root.id,
+            error=ErrorData(code=INVALID_PARAMS, message=f"tool {name!r} is disabled by the host"),
         )
         return reply.model_dump_json(by_alias=True, exclude_none=True).encode() + b"\n"
 
@@ -151,7 +164,7 @@ class _DenyPolicy:
 
         if not self._listing:
             return
-        root = message.root
+        root = message
         if isinstance(root, JSONRPCError) and root.id in self._listing:
             self._listing.discard(root.id)
             return
@@ -175,7 +188,7 @@ class _Upstream:
     server: str
     cfg: Any = field(repr=False)
     transport: str
-    http_auth: httpx.Auth | None = None
+    http_auth: httpx2.Auth | None = None
     resolve_executor: ExecutorProvider | None = None
     disabled_tools: frozenset[str] = frozenset()
 
@@ -213,10 +226,13 @@ async def _upstream_executor(up: _Upstream) -> Any:
 
 
 async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    from mcp.shared.message import SessionMessage
-    from mcp.types import JSONRPCMessage
+    from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+    from mcp.shared.message import ClientMessageMetadata, SessionMessage
+    from mcp.types import JSONRPCRequest, JSONRPCResponse
 
     policy = _DenyPolicy(up.server, up.disabled_tools)
+    initialize_id: str | int | None = None
+    protocol_version: str | None = None
     # One writer, two producers: ``up_to_down`` forwards results and
     # ``down_to_up`` answers a refused call itself. Concurrent ``drain`` on one
     # StreamWriter trips an assertion in the flow-control mixin.
@@ -232,9 +248,10 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
         async with open_mcp_transport(up.cfg, up.transport, executor, http_auth=up.http_auth) as (up_read, up_write):
 
             async def down_to_up() -> None:
+                nonlocal initialize_id, protocol_version
                 async for frame in iter_raw_frames(reader):
                     try:
-                        message = JSONRPCMessage.model_validate_json(frame)
+                        message = _jsonrpc_adapter().validate_json(frame)
                     except ValidationError as exc:
                         # One malformed frame must not take the connection with
                         # it: the SDK's own stdio reader wraps a decode failure
@@ -244,9 +261,18 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                     if (refusal := policy.refuse(message)) is not None:
                         await send_down(refusal)
                         continue
-                    await up_write.send(SessionMessage(message))
+                    if isinstance(message, JSONRPCRequest) and message.method == "initialize":
+                        initialize_id = message.id
+                        protocol_version = None
+                    metadata = (
+                        ClientMessageMetadata(headers={MCP_PROTOCOL_VERSION_HEADER: protocol_version})
+                        if protocol_version is not None
+                        else None
+                    )
+                    await up_write.send(SessionMessage(message, metadata=metadata))
 
             async def up_to_down() -> None:
+                nonlocal initialize_id, protocol_version
                 # The close belongs here rather than after teardown: an upstream
                 # that dies mid-request leaves the sub-agent waiting on a reply
                 # that will never come, and only an EOF on its side turns that
@@ -256,6 +282,12 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         if isinstance(item, Exception):
                             logger.debug("mcp endpoint: upstream stream error: {}", item)
                             continue
+                        message = item.message
+                        if isinstance(message, JSONRPCResponse) and message.id == initialize_id:
+                            version = message.result.get("protocolVersion")
+                            if isinstance(version, str) and version:
+                                protocol_version = version
+                            initialize_id = None
                         policy.redact(item.message)
                         payload = item.message.model_dump_json(by_alias=True, exclude_none=True)
                         await send_down(payload.encode() + b"\n")
@@ -318,7 +350,7 @@ _CLOSE_TIMEOUT_S = 10.0
 @dataclass
 class _Endpoint:
     listener: asyncio.AbstractServer
-    path: Path
+    path: Path | None
     relays: set[asyncio.Task]
     """In-flight relays for this endpoint. Tracked because ``close`` has to
     cancel them: ``Server.wait_closed`` returns only once every accepted
@@ -385,7 +417,7 @@ class McpEndpoints:
                 self._executor_memo.append(await provider())
             return self._executor_memo[0] if self._executor_memo else None
 
-    async def open(self, node_id: str, server: str, cfg, http_auth: httpx.Auth | None = None) -> Path:
+    async def open(self, node_id: str, server: str, cfg, http_auth: httpx2.Auth | None = None) -> Path | str:
         # No None guard: resolve_transport returns None only for a config naming
         # neither a command nor a url, and resolve_grant already recorded that
         # one as invalid_transport rather than granting it.
@@ -398,19 +430,35 @@ class McpEndpoints:
             resolve_executor=self._resolve_executor if self._executor_provider is not None else None,
             disabled_tools=self._disabled_tools,
         )
-        path = self.path_for(node_id, server)
-        path.unlink(missing_ok=True)
+        path = self.path_for(node_id, server) if unix_sockets_available() else None
+        token = secrets.token_hex(TOKEN_BYTES) if path is None else None
         relays: set[asyncio.Task] = set()
 
+        async def _serve(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                if token is None or await authenticate(reader, writer, token):
+                    await _relay(upstream, reader, writer)
+            finally:
+                writer.close()
+
         def _accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            task = asyncio.create_task(_relay(upstream, reader, writer))
+            task = asyncio.create_task(_serve(reader, writer))
             relays.add(task)
             task.add_done_callback(relays.discard)
+            # Cancellation before the first step never enters _serve's finally.
+            task.add_done_callback(lambda _: writer.close())
 
-        listener = await asyncio.start_unix_server(_accept, path=str(path))
-        path.chmod(0o600)
+        if path is not None:
+            path.unlink(missing_ok=True)
+            listener = await asyncio.start_unix_server(_accept, path=str(path))
+            path.chmod(0o600)
+            address = path
+        else:
+            listener = await asyncio.start_server(_accept, "127.0.0.1", 0)
+            port = listener.sockets[0].getsockname()[1]
+            address = f"tcp://127.0.0.1:{port}/{token}"
         self._by_node.setdefault(node_id, []).append(_Endpoint(listener, path, relays))
-        return path
+        return address
 
     async def close(self, node_id: str) -> None:
         for endpoint in self._by_node.pop(node_id, []):
@@ -421,8 +469,9 @@ class McpEndpoints:
             try:
                 await asyncio.wait_for(_settle(endpoint, relays), timeout=_CLOSE_TIMEOUT_S)
             except asyncio.TimeoutError:
-                logger.warning("mcp endpoint: {} did not settle in {}s", endpoint.path.name, _CLOSE_TIMEOUT_S)
-            endpoint.path.unlink(missing_ok=True)
+                logger.warning("mcp endpoint: node {!r} did not settle in {}s", node_id, _CLOSE_TIMEOUT_S)
+            if endpoint.path is not None:
+                endpoint.path.unlink(missing_ok=True)
 
     async def aclose(self) -> None:
         for node_id in list(self._by_node):

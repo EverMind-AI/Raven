@@ -86,6 +86,15 @@ def reject_unsupported_openai_fields(entries: list[dict]) -> None:
                 f"mcps/allowMcpSecrets/sessionMcp are not supported for kind 'openai' (sub-agent "
                 f"{name!r}): the backend has no tool loop; remove the field(s)"
             )
+        if "remoteCwd" in entry or "remote_cwd" in entry:
+            # The schema drops it with a warning on load; on a write the caller
+            # can be told. An endpoint reached from a machine works in no
+            # directory there, so the field would be written and do nothing.
+            name = entry.get("name") or "<unnamed>"
+            raise ValueError(
+                f"remoteCwd is not supported for kind 'openai' (sub-agent {name!r}): an endpoint reached "
+                "from a machine has no working directory there; remove the field"
+            )
 
 
 def reject_unsupported_acp_fields(entries: list[dict]) -> None:
@@ -131,6 +140,14 @@ def reject_unsupported_acp_fields(entries: list[dict]) -> None:
                 f"command for acp sub-agent {name!r} contains {found}: an acp command starts a "
                 "server, not one task -- the task is delivered as a session/prompt request, so the "
                 "placeholder would be passed through literally and the handshake would fail"
+            )
+        machine = entry.get("machine")
+        lent = entry.get("lendKeys") or entry.get("lend_keys")
+        if isinstance(machine, str) and machine.strip() and lent:
+            raise ValueError(
+                f"acp sub-agent {name!r} runs on machine {machine.strip()!r}, so it cannot be started with "
+                f"Raven's keys {sorted(lent)}: they would have to be copied to that machine; sign it in there "
+                "and remove lendKeys"
             )
 
 
@@ -312,3 +329,22 @@ __all__ = [
     "set_agents",
     "validate_agents",
 ]
+
+
+def agents_on_machine(machine_id: str, *, only_enabled: bool = False, config_path: Path | None = None) -> list[str]:
+    """The names of the configured agents whose entry names ``machine_id``.
+
+    What taking the machine out of the registry is refused over: a connected
+    (enabled) entry that names a machine no longer registered fails at its
+    next dispatch, after the spawn has answered that it started. A
+    disconnected one dispatches nothing, so ``only_enabled`` leaves it out;
+    the caller still names it, since connecting it again is refused until the
+    machine is registered under that id again. Raises ``ValidationError`` on
+    a malformed section, like :func:`get_agents`.
+    """
+    wanted = str(machine_id or "").strip()
+    return [
+        str(entry.get("name") or "")
+        for entry in get_agents(config_path=config_path)
+        if str(entry.get("machine") or "").strip() == wanted and (entry.get("enabled", True) or not only_enabled)
+    ]

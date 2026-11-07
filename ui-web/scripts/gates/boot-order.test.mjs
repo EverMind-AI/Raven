@@ -26,7 +26,7 @@ const installText = moduleText('app/install.ts')
    rest of the draw shells. */
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen',
-  'drawPerm', 'loadTier', 'drawCtx', 'bumpWs', 'drawSettings',
+  'drawPerm', 'loadTier', 'loadEffort', 'drawCtx', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 
@@ -41,8 +41,9 @@ const STEPS = [
  * `connect` returns a promise nothing resolves, so the sequence parks at its
  * first await and the rest of it cannot interleave with what is being measured.
  */
-async function harness(rows = []) {
+async function harness(rows = [], { connected = false, selectionOnly = true } = {}) {
   const calls = []
+  let hello = () => {}
   const step = (name) => (...args) => calls.push([name, ...args])
   const part = await loadPart(() => import('../../src/app/boot'), {
     fakes: {
@@ -50,11 +51,14 @@ async function harness(rows = []) {
       'src/chrome/behaviour/panes': { load: step('paneLoad') },
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/tier': { load: step('loadTier') },
+      'src/state/effort': { load: step('loadEffort') },
       'src/state/ctxChip': { draw: step('drawCtx') },
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
-      'src/state/rail': { set: step('setRail') },
+      /* `stands` answers the width the step asks about; the harness has no
+         window worth measuring, so the rail stands as it does on a desktop. */
+      'src/state/rail': { set: step('setRail'), stands: () => true },
       'src/state/envChip': { setRuntime: step('setRuntime') },
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/ws': { bump: step('bumpWs') },
@@ -62,7 +66,16 @@ async function harness(rows = []) {
       'src/app/install': { installPage: step('installPage') },
       'src/rpc/gateway': {
         gateway: () => ({
-          connect: () => { calls.push(['connect']); return new Promise(() => {}) },
+          connect: () => { calls.push(['connect']); return connected ? Promise.resolve(true) : new Promise(() => {}) },
+          call: (method, params) => {
+            calls.push(['rpc', method, params])
+            if (method === 'system.hello') {
+              hello()
+              return Promise.resolve({})
+            }
+            if (method === 'model.options') return Promise.resolve({ model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] })
+            return new Promise(() => {})
+          },
         }),
       },
       'src/features/onboard/store': {
@@ -81,10 +94,26 @@ async function harness(rows = []) {
       },
     },
   })
+  const { absorb } = await import('../../src/rpc/capabilities')
+  hello = () => absorb(selectionOnly ? ['model.options.selection_only'] : [])
   return { part, calls }
 }
 
 describe('the page boot order', () => {
+  it.each([true, false])('reads the selection before waiting for language, version or session history (selection-only: %s)', async (selectionOnly) => {
+    const { part, calls } = await harness([], { connected: true, selectionOnly })
+    const model = await import('../../src/features/model/store')
+    part.boot()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(calls.filter(([name]) => name === 'rpc')).toEqual([
+      ['rpc', 'system.hello', { client_version: '0.1.0', surface: 'page' }],
+      ['rpc', 'model.options', selectionOnly ? { include_providers: false } : {}],
+      ['rpc', 'config.get', { keys: ['language'] }],
+    ])
+    expect(model.current()).toBe('deepseek/deepseek-chat')
+    expect(model.loadStatus()).toBe('ready')
+  })
+
   it('draws the first frame from what the page already holds, in order', async () => {
     const row = { id: 'fixture' }
     const { part, calls } = await harness([row])
@@ -125,6 +154,20 @@ describe('the page boot order', () => {
 
     expect(calls.map(([name]) => name))
       .toEqual(['holdRail', 'watchNote', 'installPage', 'connect', ...STEPS.filter((n) => n !== 'sessionOpen')])
+  })
+
+  /* The connections hub is warmed at boot, not when its module is opened. All
+     three reads are fire-and-forget: nothing on the first screen reads them,
+     and the agents one carries no probe. */
+  it('warms the connections hub after releasing the rail, without awaiting it', () => {
+    const at = bootText.indexOf('releaseRail()')
+    expect(at).toBeGreaterThan(-1)
+    const after = bootText.slice(at)
+
+    expect(after).toContain('void warmConnections()')
+    expect(after).toContain('void warmAgents()')
+    expect(after).toContain('void machinesStore.load()')
+    expect(after).not.toMatch(/await\s+(warmConnections|warmAgents|machinesStore\.load)\(/)
   })
 
   /* And the queue is written in one place. Two modules could each queue a

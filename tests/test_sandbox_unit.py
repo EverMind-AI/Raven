@@ -12,7 +12,7 @@ import sys
 import tempfile
 import textwrap
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1060,6 +1060,81 @@ class TestBoxliteTranslateCwd:
         assert e._translate_cwd("/completely/outside") == "/workspace"
 
 
+class TestBoxliteTranslateProcessCwd:
+    """The strict twin used to launch a long-running server."""
+
+    def _make_executor(self, workspace: Path) -> BoxliteExecutor:
+        return BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=workspace,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+
+    def test_none_returns_workspace_mount(self, tmp_path):
+        assert self._make_executor(tmp_path)._translate_process_cwd(None) == "/workspace"
+
+    def test_a_subdirectory_translates(self, tmp_path):
+        e = self._make_executor(tmp_path)
+        assert e._translate_process_cwd(str(tmp_path / "sub")) == "/workspace/sub"
+
+    def test_a_path_outside_every_volume_is_refused(self, tmp_path):
+        """A server must not be launched in the wrong directory.
+
+        ``_translate_cwd`` falls back to the workspace mount because a
+        one-shot command still has work to do; a server would answer with
+        the wrong files for as long as it lives, so this raises instead.
+        """
+        e = self._make_executor(tmp_path)
+        with pytest.raises(ValueError, match="not inside any volume mounted into the sandbox"):
+            e._translate_process_cwd("/completely/outside")
+
+    def test_guest_mount_path_uses_posix_separators(self):
+        relative = PureWindowsPath("packages/demo/bin").relative_to(PureWindowsPath("."))
+
+        assert BoxliteExecutor._guest_mount_path("/workspace", relative) == "/workspace/packages/demo/bin"
+
+
+class TestBoxliteTranslateProcessPath:
+    def test_windows_path_suffix_uses_posix_separators(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PureWindowsPath("C:/workspace"), "/workspace")],
+        )
+
+        translated = executor._translate_process_path(r"C:\workspace\packages\demo\bin;C:\outside\bin")
+
+        assert translated == r"/workspace/packages/demo/bin;C:\outside\bin"
+
+    def test_every_occurrence_of_one_root_is_translated(self, tmp_path):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        root = str(tmp_path.resolve())
+
+        translated = executor._translate_process_path(f"cd {root}/pkgs/p && node {root}/pkgs/p/server.js")
+
+        assert translated == "cd /workspace/pkgs/p && node /workspace/pkgs/p/server.js"
+
+    def test_a_posix_tail_keeps_its_backslashes(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        # A POSIX-shaped root keeps the premise of this test true on every host;
+        # tmp_path on Windows would make the translator take the Windows branch.
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PurePosixPath("/srv/work"), "/workspace")],
+        )
+        backslash = "\\"
+
+        translated = executor._translate_process_path(f"--data=/srv/work/d --sep={backslash}t")
+
+        assert translated == f"--data=/workspace/d --sep={backslash}t"
+
+
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
 # ---------------------------------------------------------------------------
@@ -1572,7 +1647,7 @@ class TestBoxliteStartProcessBridges:
         await asyncio.sleep(0.05)
 
         msg = await asyncio.wait_for(read_recv.receive(), timeout=1.0)
-        # MCP SDK 1.x: read stream carries SessionMessage wrapping JSONRPCMessage
+        # MCP SDK 2.x: read stream carries SessionMessage wrapping JSONRPCMessage
         assert isinstance(msg, SessionMessage)
         assert isinstance(msg.message, mcp_types.JSONRPCMessage)
 
@@ -1642,10 +1717,11 @@ class TestBoxliteStartProcessBridges:
 
         _, write_send = await executor.start_process("mcp-server", [])
 
-        # MCP SDK 1.x: write stream carries SessionMessage
+        # MCP SDK 2.x: write stream carries SessionMessage
         from mcp.shared.message import SessionMessage
+        from pydantic import TypeAdapter
 
-        rpc_msg = JSONRPCMessage.model_validate({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+        rpc_msg = TypeAdapter(JSONRPCMessage).validate_python({"jsonrpc": "2.0", "id": 1, "method": "ping"})
         await write_send.send(SessionMessage(message=rpc_msg))
         await asyncio.sleep(0.05)
 
@@ -1656,6 +1732,69 @@ class TestBoxliteStartProcessBridges:
 
         payload = json.loads(raw.decode())
         assert payload["method"] == "ping"
+
+    async def test_start_process_translates_command_args_and_env(self, tmp_path):
+        """Every host path handed to the VM is translated, not only the cwd.
+
+        A package server's command, its placeholder-expanded arguments and its
+        PLUGIN_ROOT/PLUGIN_DATA variables are host paths. Boxlite knows only
+        its own mounts, so passing them through unchanged launches a path that
+        does not exist inside the VM.
+        """
+        pytest.importorskip("mcp", reason="mcp not installed")
+        plugin_data = tmp_path / "plugin-data"
+        plugin_data.mkdir()
+        executor = BoxliteExecutor(
+            image="ubuntu:22.04",
+            workspace=tmp_path,
+            extra_volumes=[[str(plugin_data), "/plugin-data", "rw"]],
+            sandbox_home=_TEST_SANDBOX_HOME,
+        )
+        mock_box = MagicMock()
+
+        async def _stdout():
+            return
+            yield
+
+        async def _stderr():
+            return
+            yield
+
+        execution = MagicMock()
+        execution.stdout.return_value = _stdout()
+        execution.stderr.return_value = _stderr()
+        execution.stdin.return_value = MagicMock(send_input=AsyncMock())
+        mock_box.exec = AsyncMock(return_value=execution)
+        executor._box = mock_box
+
+        package_root = tmp_path / "packages" / "demo"
+        await executor.start_process(
+            str(package_root / "bin" / "server"),
+            ["--assets", str(package_root / "assets"), "--plugin-data", str(plugin_data)],
+            env={
+                "PLUGIN_ROOT": str(package_root),
+                "PLUGIN_DATA": str(plugin_data),
+                "PATH": f"{package_root / 'bin'}:/usr/bin",
+                "KEEP": "value",
+            },
+            cwd=str(package_root),
+        )
+
+        command, args, env_tuples = mock_box.exec.call_args.args
+        assert command == "/workspace/packages/demo/bin/server"
+        assert args == [
+            "--assets",
+            "/workspace/packages/demo/assets",
+            "--plugin-data",
+            "/plugin-data",
+        ]
+        assert dict(env_tuples) == {
+            "PLUGIN_ROOT": "/workspace/packages/demo",
+            "PLUGIN_DATA": "/plugin-data",
+            "PATH": "/workspace/packages/demo/bin:/usr/bin",
+            "KEEP": "value",
+        }
+        assert mock_box.exec.call_args.kwargs["cwd"] == "/workspace/packages/demo"
 
 
 # ---------------------------------------------------------------------------
@@ -1865,7 +2004,7 @@ class TestConnectOneMcpServer:
 
         @asynccontextmanager
         async def fake_streamable_http_client(url, http_client):
-            yield object(), object(), None
+            yield object(), object()
 
         class FakeSession:
             def __init__(self, read, write):
@@ -1906,7 +2045,7 @@ class TestConnectOneMcpServer:
         from contextlib import AsyncExitStack, asynccontextmanager
         from types import SimpleNamespace
 
-        import httpx
+        import httpx2
         import mcp
         import mcp.client.sse
 
@@ -1950,9 +2089,9 @@ class TestConnectOneMcpServer:
                 return SimpleNamespace(capabilities=SimpleNamespace(tools=object()))
 
             async def list_tools(self, *, params=None):
-                return SimpleNamespace(tools=[], nextCursor=None)
+                return SimpleNamespace(tools=[], next_cursor=None)
 
-        monkeypatch.setattr(httpx, "AsyncClient", fake_http_client)
+        monkeypatch.setattr(httpx2, "AsyncClient", fake_http_client)
         monkeypatch.setattr(mcp, "ClientSession", FakeSession)
         monkeypatch.setattr(mcp.client.sse, "sse_client", fake_sse_client)
 
@@ -1969,7 +2108,7 @@ class TestConnectOneMcpServer:
         assert clients[0]["headers"] == {"X-Config": "config", "X-Shared": "sdk", "X-SDK": "sdk"}
         assert clients[0]["timeout"] == "timeout"
         assert clients[0]["auth"] == "auth"
-        # Not merely the default: httpx applies client-level headers to every
+        # Not merely the default: the client applies client-level headers to every
         # hop of a redirect chain and scrubs only Authorization when the origin
         # changes, so a server answering 302 could read a custom header meant
         # for it alone -- and cfg.headers is where the plugin market renders the
@@ -2012,7 +2151,7 @@ class TestConnectOneMcpServer:
             def supports_process_spawning(self) -> bool:
                 return True
 
-            async def start_process(self, command, args, env=None):
+            async def start_process(self, command, args, env=None, cwd=None):
                 raise RuntimeError("start_process called -- expected in test")
 
         cfg = MagicMock()
@@ -2025,6 +2164,38 @@ class TestConnectOneMcpServer:
         # before any transport is opened, so its message would surface instead.
         with pytest.raises(RuntimeError, match="start_process called"):
             await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+
+    async def test_stdio_sandboxed_process_gets_the_servers_working_directory(self):
+        """A server that names a cwd gets it; an unset one stays unset."""
+        from contextlib import AsyncExitStack
+
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.mcp.client import connect_mcp_server
+
+        seen: list = []
+
+        class SpawningExecutor(MockExecutor):
+            @property
+            def supports_process_spawning(self) -> bool:
+                return True
+
+            async def start_process(self, command, args, env=None, cwd=None):
+                seen.append(cwd)
+                raise RuntimeError("start_process called -- expected in test")
+
+        for configured, expected in (("/opt/pkg", "/opt/pkg"), ("", None)):
+            cfg = MagicMock()
+            cfg.type = "stdio"
+            cfg.command = "mcp-server"
+            cfg.args = []
+            cfg.env = None
+            cfg.cwd = configured
+            cfg.tool_timeout = 30
+
+            with pytest.raises(RuntimeError, match="start_process called"):
+                await connect_mcp_server("svc", cfg, ToolRegistry(), AsyncExitStack(), executor=SpawningExecutor())
+
+        assert seen == ["/opt/pkg", None]
 
 
 # ---------------------------------------------------------------------------
@@ -2131,11 +2302,11 @@ class TestSubagentSandboxLifecycle:
         assert req.delegated == {"kind": "spawn", "label": "label", "status": "ok"}
 
     async def test_announce_dag_result_marks_the_turn_and_the_event_alike(self, mock_provider, tmp_path):
-        """A graph's announce is the other injection shape -- the whole content is
-        the fence, with none of a spawn's framing -- and it has to carry the same
-        identity on the request AND on the event. A client watching live reads it
-        from the event; a client replaying the session reads it off the stored
-        entry, and the two must agree."""
+        """A graph's announce is the other injection shape -- the summary inside the
+        fence with none of a spawn's framing, only the reply-rules note after it --
+        and it has to carry the same identity on the request AND on the event. A
+        client watching live reads it from the event; a client replaying the
+        session reads it off the stored entry, and the two must agree."""
         from raven.agent.subagent import SubagentManager
 
         captured: dict = {}

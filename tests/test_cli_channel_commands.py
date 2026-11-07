@@ -694,6 +694,217 @@ def test_enable_star_item_in_list_triggers_gate(tmp_config: Path) -> None:
     assert section["allowFrom"] == ["a", "*"]
 
 
+def test_set_open_allowfrom_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``set --allow-from '*'`` runs the same confirm gate as enable."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    calls: list[dict] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        calls.append({"prompt": prompt, "default": kwargs.get("default", args[0] if args else None)})
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert calls, "typer.confirm must be invoked when set resolves allow_from to '*'"
+    assert calls[0]["default"] is False
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["alice"]
+
+
+def test_set_open_allowfrom_nontty_warns(tmp_config: Path) -> None:
+    """A non-TTY set to the wildcard prints the same risk warning enable does."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
+def test_set_restricted_allowfrom_skips_gate(tmp_config: Path) -> None:
+    """Restricting senders needs no confirmation in any terminal mode."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "bob"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["bob"]
+
+
+def test_set_without_allowfrom_skips_gate(tmp_config: Path) -> None:
+    """Updating another field must not re-confirm an already accepted wildcard."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--token", "def"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
+def test_set_enabled_on_open_channel_requires_confirm(
+    tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``set --enabled`` on a closed channel storing ``allow_from='*'`` asks
+    exactly as ``enable`` does; declining leaves the channel off."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"], input="y\n")
+    assert seed.exit_code == 0, seed.stdout
+    off = runner.invoke(app, ["channels", "disable", "telegram"])
+    assert off.exit_code == 0, off.stdout
+    calls: list[dict] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        calls.append({"prompt": prompt, "default": kwargs.get("default", args[0] if args else None)})
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled"])
+    assert calls, "typer.confirm must run when set --enabled would turn on an open channel"
+    assert calls[0]["default"] is False
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
+@pytest.mark.parametrize("enabled_args", [["--enabled"], ["--enabled", "true"]])
+def test_set_enabled_on_open_channel_nontty_refuses(tmp_config: Path, enabled_args: list[str]) -> None:
+    """Every spelling that resolves the write to enabled=True is refused on a
+    non-TTY when the stored allow list is open."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", *enabled_args])
+    assert r.exit_code != 0
+    assert "Refusing to enable" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
+def test_set_enabled_on_restricted_channel_skips_gate(tmp_config: Path) -> None:
+    """Enabling a channel whose allow list is restricted needs no confirmation."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" not in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["alice"]
+
+
+@pytest.mark.parametrize("disable_args", [["--no-enabled"], ["--enabled", "false"]])
+def test_set_disable_on_open_channel_skips_gate(tmp_config: Path, disable_args: list[str]) -> None:
+    """Turning an open channel off never meets the gate: only a write that
+    resolves ``enabled`` to true does, so closing it always goes through."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "*"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", *disable_args])
+    assert r.exit_code == 0, r.stdout
+    assert "Refusing" not in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["enabled"] is False
+
+
+def test_set_enabled_with_explicit_wildcard_nontty_warns(tmp_config: Path) -> None:
+    """Pairing --enabled with an explicit wildcard is the same acceptance
+    ``enable`` takes: warn, then write."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    runner.invoke(app, ["channels", "disable", "telegram"])
+    r = runner.invoke(app, ["channels", "set", "telegram", "--enabled", "--allow-from", "*"])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
+
+
+@pytest.mark.parametrize("spelling", ["*", '["*"]', '["alice", "*"]', "*, alice"])
+def test_set_wildcard_spellings_trigger_gate(tmp_config: Path, spelling: str) -> None:
+    """Every allow_from spelling the writer accepts reaches the wildcard gate."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", spelling])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert "*" in _read(tmp_config)["channels"]["telegram"]["allowFrom"]
+
+
+def test_set_json_wildcard_requires_confirm(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The JSON array spelling must reach the interactive confirm too."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    prompts: list[str] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    r = runner.invoke(app, ["channels", "set", "telegram", "--allow-from", '["*"]'])
+    assert prompts
+    assert r.exit_code != 0
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["alice"]
+
+
+def test_enable_json_wildcard_nontty_warns(tmp_config: Path) -> None:
+    """The same spelling gap is closed on this PR's twin, ``enable``."""
+    r = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", '["*"]'])
+    assert r.exit_code == 0, r.stdout
+    assert "anyone" in r.stdout
+    assert _read(tmp_config)["channels"]["telegram"]["allowFrom"] == ["*"]
+
+
+def test_set_open_allowfrom_prompt_is_verb_neutral(tmp_config: Path, tty_mock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared prompt must not call a ``set`` an enable."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    prompts: list[str] = []
+
+    def fake_confirm(prompt, *args, **kwargs):
+        prompts.append(prompt)
+        return False
+
+    monkeypatch.setattr("raven.cli.channel_commands.typer.confirm", fake_confirm)
+    runner.invoke(app, ["channels", "set", "telegram", "--allow-from", "*"])
+    assert prompts
+    assert "Enable" not in prompts[0]
+    assert "telegram" in prompts[0]
+
+
+def test_reset_says_the_channel_is_off_with_the_open_default(tmp_config: Path) -> None:
+    """``reset --yes`` writes ``enabled: false`` beside the open default, so it
+    says the channel is off rather than calling it open to anyone."""
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
+    assert r.exit_code == 0, r.stdout
+    out = " ".join(r.stdout.split())
+    assert "telegram is off" in out
+    assert "can command the agent" not in out
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is False
+    assert section["allowFrom"] == ["*"]
+
+
+def test_reset_warns_when_the_defaults_leave_the_channel_open(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema whose defaults turn the channel on with ``'*'`` makes reset
+    the step that opens it, so reset warns that anyone can command it."""
+    from raven.config import update_channels
+
+    monkeypatch.setitem(update_channels._SOCKET_SCHEMA["enabled"], "default", True)
+    seed = runner.invoke(app, ["channels", "enable", "telegram", "--token", "abc", "--allow-from", "alice"])
+    assert seed.exit_code == 0, seed.stdout
+    r = runner.invoke(app, ["channels", "reset", "telegram", "--yes"])
+    assert r.exit_code == 0, r.stdout
+    out = " ".join(r.stdout.split())
+    assert "can command the agent" in out
+    assert "is off" not in out
+    section = _read(tmp_config)["channels"]["telegram"]
+    assert section["enabled"] is True
+    assert section["allowFrom"] == ["*"]
+
+
 def test_enable_missing_token_exits_nonzero(tmp_config: Path) -> None:
     """Bare ``enable telegram`` (required --token unset) must error on the first
     line and exit non-zero; the schema table stays as follow-up detail."""

@@ -42,8 +42,10 @@
  *     placeholder).
  *   - div#atts, which is not in the markup: it exists only once something is
  *     staged and the composer inserts it before .field. React never re-orders
- *     these children -- none of them is conditional -- so a node put between
- *     two of them stays between them.
+ *     these children, so a node put between two of them stays between them.
+ *     The one that comes and goes, the Task Board's Move on bar, is inserted
+ *     before .field as well, so the two only ever trade places with each
+ *     other.
  *   - the children of #sheetRack, #queued and #slashList. Each is shared
  *     ground: the sheet rack and the composer's own roots fill them, and
  *     page.css reads `.dock .sheets:has(>*)` off the rack, so it renders with
@@ -58,15 +60,16 @@
 
 import { useSyncExternalStore } from 'react'
 
+import { MoveOnBar } from '../features/tasks/MoveOnBar'
 import { TaskRuns } from '../features/tasks/TasksPage'
 import { t } from '../i18n/t'
 import * as lang from '../state/lang'
+import { At } from './AtMenu'
 import { CtxChip } from './CtxChip'
 import { ModelChip } from './ModelChip'
 import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
 import { Plus } from './PlusMenu'
-import { WorkdirChip } from './WorkdirChip'
 
 import type { JSX } from 'react'
 
@@ -76,7 +79,20 @@ function DockIn(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
     <div className="dock-in">
+      {/* The height seam: dragged from the card's top edge between the field's
+          resting height and half the visual viewport (features/composer/store.ts).
+          No interior of its own. */}
+      <div
+        className="chrome-composer-grip"
+        id="composerGrip"
+        role="separator"
+        aria-orientation="horizontal"
+        title={lang.attr('gui.composer.resize')}
+        aria-label={lang.attr('gui.composer.resize')}
+      />
       <div className="queued" id="queued" />
+      {/* The Task Group the next message moves on, while one is picked. */}
+      <MoveOnBar />
       <div className="field">
         <textarea id="ta" rows={1} placeholder={t('gui.composer_ph')} />
       </div>
@@ -85,10 +101,12 @@ function DockIn(): JSX.Element {
            nothing shares the row the reader types in. */}
       <div className="under">
         {/* A file or a deck template, behind one button (src/chrome/PlusMenu.tsx);
-            then the folder a draft runs in (src/chrome/WorkdirChip.tsx), which
-            a conversation says beside its title instead. */}
+            then what the conversation is pointed at -- the folder it runs in
+            and the bases it may search -- behind another (src/chrome/AtMenu.tsx).
+            The folder a conversation settled on it says beside its title
+            instead, where it cannot be changed. */}
         <Plus />
-        <WorkdirChip />
+        <At />
         <span className="chrome-anch">
           <PermChip />
           <PermPopover />

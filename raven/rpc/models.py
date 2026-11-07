@@ -20,13 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
 # ``additionalProperties: false`` in the generated JSON Schema, matching the
 # OpenRPC schema's explicit ``additionalProperties: false`` on every object.
+# ``defer_build`` builds each model's validator on its first use: a host
+# validates only the methods its clients call, and building all of them at
+# import held about 6 MiB for the life of the process.
 # ---------------------------------------------------------------------------
 
 
 class _Strict(BaseModel):
     """Base class for all RPC models — forbids extra fields by default."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", defer_build=True)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +108,13 @@ class SubagentRow(_Strict):
     description: str
     enabled: bool
     configured: bool
+    machine: str | None = Field(
+        default=None,
+        description=(
+            "The registered machine a row runs on -- an openai row: reaches its endpoint from -- by its id in "
+            "the machine registry; null for this computer, and on a server that predates the field."
+        ),
+    )
     vendored: bool = Field(
         default=False,
         description=(
@@ -217,6 +227,22 @@ class SubagentRow(_Strict):
             "host-qualified id under either rule, since it runs on raven's providers whatever it advertised."
         ),
     )
+    effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort this row sends, or null to use the agent's own. A value from "
+            "`effort_choices`; set through the agent's thought_level config option, separately from `model`, "
+            "or as a session mode on an agent whose modes are its effort menu."
+        ),
+    )
+    effort_choices: list["SubagentEffortChoice"] = Field(
+        default_factory=list,
+        description=(
+            "The reasoning efforts this row's agent offers on the row's own model: its thought_level option, "
+            "or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that "
+            "packs effort into model ids instead has no such menu."
+        ),
+    )
 
 
 class DirectTarget(_Strict):
@@ -243,7 +269,11 @@ class InstanceRow(_Strict):
 
     ``runId`` / ``nodeId`` name the DAG node an instance belongs to. They are on
     a ``dag-node`` row and also on the ordinary row of a stateful node, which is
-    what lets one invocation's two rows be reported as one.
+    what lets one invocation's two rows be reported as one. What a branch decided
+    about that node travels the same way: ``selectedRoutes`` / ``routeEvidence``
+    are on a decision node's ``dag-node`` row and on the ordinary row a stateful
+    node is reported on, and ``reason`` is on the ``dag-node`` row of a node that
+    was not executed.
 
     ``resumable`` is the exception to "verbatim": the registry does not store it,
     because whether a row can be talked to depends on the agent's configured
@@ -262,6 +292,28 @@ class InstanceRow(_Strict):
     agent_id: str | None = Field(default=None, alias="agentId")
     run_id: str | None = Field(default=None, alias="runId")
     node_id: str | None = Field(default=None, alias="nodeId")
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only on the dag-node row of a node that was not executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        alias="selectedRoutes",
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node "
+            "row, or the ordinary row a stateful node is reported on."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        alias="routeEvidence",
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Present only when the "
+            "judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the "
+            "ordinary row a stateful node is reported on."
+        ),
+    )
     created_at_ms: int | None = Field(default=None, alias="createdAtMs")
     updated_at_ms: int | None = Field(default=None, alias="updatedAtMs")
     resumable: bool | None = None
@@ -281,6 +333,30 @@ class InstanceRow(_Strict):
         description=(
             "What the graph this instance belongs to was dispatched for. Absent -- not empty -- for an "
             "instance that came from no orchestration, so its presence is what says the row has a source."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        alias="attemptAgents",
+        description=(
+            "The agent of each attempt of this DAG node, in order. Present only on the row of a node that "
+            "was reassigned, so its presence is what marks one; a run without a move carries no key."
+        ),
+    )
+    node_instance: str | None = Field(
+        default=None,
+        alias="nodeInstance",
+        description=(
+            "The handle of the node's last attempt -- null when that attempt kept no session. Rides beside "
+            "attemptAgents because the row's own handle is the node's name, not a conversation."
+        ),
+    )
+    node_instance_auto: bool | None = Field(
+        default=None,
+        alias="nodeInstanceAuto",
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "with attemptAgents; absent on every row of a run that never reassigned a node."
         ),
     )
     turn_started_at_ms: int | None = Field(
@@ -462,9 +538,8 @@ class TurnStartedDelegated(_Strict):
     node_id: str | None = Field(
         None,
         description=(
-            "Which node of the run this is about. Present only on `kind: dag` "
-            "with `status: exception`, where the report concerns one node rather "
-            "than the whole run."
+            "Which node of the run this is about. Present only on a `kind: dag` "
+            "node's own report, which concerns one node rather than the whole run."
         ),
     )
     content: str | None = Field(
@@ -472,7 +547,24 @@ class TurnStartedDelegated(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim; a client shows "
             "the reader-facing part of it by keeping only what sits INSIDE the "
-            "untrusted fence."
+            "untrusted fence, or `output` instead where a node's report carries it."
+        ),
+    )
+    output: str | None = Field(
+        None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -511,11 +603,21 @@ class EpisodeStartEvent(_Strict):
 class NoticePayload(_Strict):
     kind: str = Field(
         ...,
-        description="Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.",
+        description=(
+            "Which runtime decision this reports: `action_blocked`, `llm_retry`, `organ_degraded` or `silent_turn`."
+        ),
     )
     detail: str = Field(
         "",
-        description="What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.",
+        description=(
+            "What `kind` says it is: the blocking tool's own first line, the failed call's error category "
+            "(or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning "
+            "step-down), or the organ that dropped out. For `silent_turn`, what the reply read as the marker had "
+            "streamed before it was: a think block the model inlined ahead of it, which goes out as it comes, counted "
+            "over the step it was drawn in (its call and a cut answer's continuations, or the wrap-up alone). A "
+            "client that drew it takes back exactly that suffix of the step's text, and nothing it drew before. "
+            "Empty when the reply showed nothing."
+        ),
     )
     transient: bool = Field(
         False,
@@ -778,6 +880,22 @@ class ErrorEventPayload(_Strict):
     message: str
     reason: Literal["cancelled_by_client", "internal"] | None = None
     detail: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded detail, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
+    usage: TurnUsage | None = Field(
+        None,
+        description=(
+            "What a failed or stopped turn measured, in message.complete's shape: its last reported call, "
+            "so a client's context gauge moves on with the turn's stored record. Absent when that call "
+            "read no window."
+        ),
+    )
     target: DirectTarget | None = None
 
 
@@ -812,9 +930,27 @@ class SubagentDeliveredPayload(_Strict):
         description=(
             "The text that re-entered the conversation, verbatim. A client shows the "
             "reader-facing part of it by keeping only what sits INSIDE the untrusted "
-            "fence -- and a client replaying this turn later reads the same string from "
+            "fence, or `output` instead where a node's report carries it -- and a client "
+            "replaying this turn later reads the same string from "
             "the stored entry's `text`, so one rule over one input keeps the live view "
             "and the reloaded one from disagreeing about what was delivered."
+        ),
+    )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
         ),
     )
 
@@ -881,7 +1017,11 @@ class SubagentStatusEvent(_Strict):
     payload: SubagentStatusPayload
 
 
-DagNodeStatus = Literal["pending", "running", "completed", "failed", "skipped", "cancelled", "exception"]
+DagNodeStatus = Literal[
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "exception", "not_executed"
+]
+
+DagNotExecutedReason = Literal["when_false", "when_unknown", "upstream_not_executed"]
 
 
 class _FromAStint(_Strict):
@@ -918,6 +1058,27 @@ class DagRunStartedNode(_Strict):
     depends_on: list[str]
     instance: str | None = None
     node_summary: str | None = None
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
 
 
 class DagRunStartedPayload(_FromAStint):
@@ -945,6 +1106,47 @@ class DagNodeUpdatedPayload(_FromAStint):
     status: DagNodeStatus
     started_at: int | None = None
     ended_at: int | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected, on the frame that finishes it. An empty list is a decision "
+            "that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node "
+            "failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
+    subagent: str | None = Field(
+        default=None,
+        description=(
+            "The agent running the node now. Sent with every frame of a reassigned node from its new "
+            "attempt's running update on, so a client that missed the reassignment still learns who has it."
+        ),
+    )
+    instance: str | None = Field(
+        default=None,
+        description=(
+            "The handle that attempt runs on, or null for an agent that keeps no session. A present null "
+            "clears the handle a client was showing; an absent key means this frame does not speak for it."
+        ),
+    )
+    instance_auto: bool | None = Field(
+        default=None,
+        description="Whether that handle was minted for the node rather than named by the graph.",
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order, sent on every frame of a reassigned node. "
+            "A client uses the length to place a delayed frame in the attempt it belongs to."
+        ),
+    )
 
 
 class DagNodeUpdatedEvent(_Strict):
@@ -986,13 +1188,59 @@ class DagRunSummary(_Strict):
     failed: int | None = None
     skipped: int | None = None
     cancelled: int | None = None
+    not_executed: int | None = Field(
+        default=None,
+        description=(
+            "Nodes a branch left out. Present only when there is at least one, so a run that never "
+            "branches carries the five counts it always did."
+        ),
+    )
 
 
 class DagRunFile(_Strict):
+    """One node of a finished run, as the completion frame closes the graph from it.
+
+    The reason and the selection repeat what the node's own frame said: a client
+    that settles every node from this list would otherwise overwrite them."""
+
     node: str
     status: DagNodeStatus
     output_file: str | None = None
     error: str | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Sent only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description="The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.",
+    )
+    subagent: str | None = Field(
+        default=None,
+        description=(
+            "The agent the node's last attempt ran on. Sent only for a node that was reassigned: every "
+            "other node's frame already named it, and an unchanged one would only repeat that."
+        ),
+    )
+    instance: str | None = Field(
+        default=None,
+        description="The handle that attempt ran on, or null when it kept no session. Sent with subagent.",
+    )
+    instance_auto: bool | None = Field(
+        default=None,
+        description="Whether that handle was minted for the node rather than named by the graph. Sent with subagent.",
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description="The agent of each attempt of this node, in order. Present only on a node that was reassigned.",
+    )
 
 
 class DagRunCompletedPayload(_FromAStint):
@@ -1016,7 +1264,7 @@ class DagRunCompletedEvent(_Strict):
 # server infers for a node the registry still calls running on a run nothing is
 # executing. Nothing on the event wire may claim that.
 DagSnapshotNodeStatus = Literal[
-    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception"
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception", "not_executed"
 ]
 
 
@@ -1025,6 +1273,20 @@ class DagSnapshotNode(_Strict):
     subagent: str | None = None
     depends_on: list[str] | None = None
     instance: str | None = None
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "only for a node that was reassigned, whose handle may have changed under it."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order. Present only for a node that was "
+            "reassigned; an empty list on every node would claim a move that never happened."
+        ),
+    )
     status: DagSnapshotNodeStatus
     started_at: int | None = None
     ended_at: int | None = None
@@ -1038,6 +1300,45 @@ class DagSnapshotNode(_Strict):
         description=(
             "What this node was handed, per key: a literal string, {file: path}, or {node: id}. "
             "The other half of prompt_template -- a template's {{ inputs.k }} does not say where k came from."
+        ),
+    )
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
         ),
     )
 
@@ -1141,6 +1442,13 @@ class TaskCounts(_Strict):
             "is waiting on a decision, not working."
         ),
     )
+    not_executed: int = Field(
+        ...,
+        description=(
+            "Nodes a branch left out. They never ran, and an unselected branch does not move the task's "
+            "status: a run of completed and not_executed nodes is completed."
+        ),
+    )
 
 
 class TaskReplan(_Strict):
@@ -1172,6 +1480,20 @@ class TaskNode(_Strict):
     node_summary: str | None = None
     agent: str
     instance: str | None = None
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the node's current handle was minted for it rather than named by the graph. Present "
+            "only for a node that was reassigned, whose handle may have changed under it."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description=(
+            "The agent of each attempt of this node, in order. Present only for a node that was "
+            "reassigned; an empty list on every node would claim a move that never happened."
+        ),
+    )
     status: DagSnapshotNodeStatus
     depends_on: list[str]
     started_at: int | None = None
@@ -1182,12 +1504,50 @@ class TaskNode(_Strict):
     )
     tokens_out: int | None = None
     tool_call_count: int | None = None
-    tool_failure_count: int | None = None
     has_output: bool | None = None
     prompt_template: str | None = None
     inputs: dict[str, Any] | None = None
     skills: list[str] | None = None
     mcps: list[str] | None = None
+    reason: DagNotExecutedReason | None = Field(
+        default=None,
+        description="Why the node did not execute. Present only with status not_executed.",
+    )
+    selected_routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
+            "and on one that failed to decide."
+        ),
+    )
+    route_evidence: str | None = Field(
+        default=None,
+        description=(
+            "The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none."
+        ),
+    )
+    routes: list[str] | None = Field(
+        default=None,
+        description=(
+            "The route names a decision node chooses between, in declaration order; only the judge sees "
+            "their conditions. Absent on a node that decides nothing."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description=(
+            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "Always sent with routes, 'one' where the graph left it unset."
+        ),
+    )
+    when: str | None = Field(
+        default=None,
+        description=(
+            "The guard: this node runs only if the expression holds once its dependencies settle. "
+            "Absent on a node with no guard."
+        ),
+    )
     files: list[TaskFile]
 
 
@@ -1215,6 +1575,137 @@ class TasksListParams(_Strict):
 
 class TasksListResult(_Strict):
     tasks: list[TaskRow]
+
+
+TaskGroupStatus = Literal["needs_you", "running", "idle", "completed"]
+
+
+class TaskLinkRef(_Strict):
+    """A Task a Progress Step started, addressed the way ``tasks.list`` addresses it."""
+
+    kind: TaskKind
+    id: str
+    summary: str
+
+
+class ProgressStep(_Strict):
+    """One turn's advance on one Task Group, keyed by its turn's opening timestamp.
+
+    On a step that left its group ``needs_you``, ``summary`` opens with what the user is asked and
+    ``questions`` lists each question about the matter; ``questions`` is empty on every other step.
+    """
+
+    id: str
+    turn_at: str
+    turn_id: str | None = None
+    title: str
+    summary: str
+    questions: list[str]
+    tasks: list[TaskLinkRef]
+
+
+class TaskGroup(_Strict):
+    """One matter a conversation is pushing, with its Progress Steps in time order."""
+
+    id: str
+    title: str
+    summary: str
+    status: TaskGroupStatus
+    created_at: int
+    updated_at: int
+    steps: list[ProgressStep]
+
+
+class PendingDispatch(_Strict):
+    """A dispatch whose turn's board update never landed; the next update places it."""
+
+    handle: str
+    summary: str
+    turn_at: str
+    turn_id: str | None = None
+
+
+class TaskBoard(_Strict):
+    """One host conversation's Task Board."""
+
+    version: int
+    groups: list[TaskGroup]
+    unassigned: list[PendingDispatch]
+
+
+class TasksBoardParams(_Strict):
+    session_key: str
+
+
+TaskBoardCategory = Literal["needs_you", "running", "idle", "completed"]
+
+
+class TaskBoardCard(_Strict):
+    """One Task Group on the Task Board page: where it came from, what it is, and what it needs."""
+
+    session_key: str
+    session_title: str
+    group_id: str
+    title: str
+    summary: str
+    status: TaskGroupStatus
+    created_at: int
+    updated_at: int
+    category: TaskBoardCategory
+    running_since_ms: int | None = None
+    events: int
+    sub_agents: int
+
+
+class TasksBoardsParams(_Strict):
+    include_completed: bool = False
+
+
+class TasksBoardsResult(_Strict):
+    cards: list[TaskBoardCard]
+    completed_count: int
+    needs_you_count: int
+
+
+class TasksBoardResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksSetGroupStatusParams(_Strict):
+    session_key: str
+    group_id: str
+    status: Literal["completed", "idle"]
+
+
+class TasksSetGroupStatusResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksIgnoreQuestionParams(_Strict):
+    session_key: str
+    group_id: str
+    step_id: str
+    question: str
+
+
+class TasksIgnoreQuestionResult(_Strict):
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksBoardUpdatedPayload(_Strict):
+    session_key: str
+    board: TaskBoard
+    lineage: dict[str, str]
+
+
+class TasksBoardUpdatedEvent(_Strict):
+    """A conversation's Task Board after a write; a reconnecting client reads ``tasks.board``."""
+
+    type: Literal["tasks.board_updated"]
+    payload: TasksBoardUpdatedPayload
 
 
 class CronMissedItem(_Strict):
@@ -1361,6 +1852,7 @@ TurnEvent = Annotated[
         MediaEvent,
         SessionTitledEvent,
         SessionNamingEndedEvent,
+        TasksBoardUpdatedEvent,
     ],
     Field(discriminator="type"),
 ]
@@ -1369,6 +1861,13 @@ TurnEvent = Annotated[
 # ---------------------------------------------------------------------------
 # session.* methods
 # ---------------------------------------------------------------------------
+
+
+class SessionListImported(_Strict):
+    """What an Imported Conversation's row says about the package it came from."""
+
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str = Field(..., description="The file name the package was imported from.")
 
 
 class SessionListItem(_Strict):
@@ -1391,11 +1890,20 @@ class SessionListItem(_Strict):
             "session that runs where the policy default puts it. What the rail groups by."
         ),
     )
+    imported: SessionListImported | None = Field(
+        default=None, description="Present only on an Imported Conversation's row (source 'imported')."
+    )
 
 
 class SessionListParams(_Strict):
     limit: int | None = Field(default=None, description="Max sessions to return.")
-    channels: list[str] | None = Field(default=None, description="Session channels to include; defaults to tui.")
+    channels: list[str] | None = Field(
+        default=None,
+        description=(
+            "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations "
+            "to a list of live sessions (never to the archived one)."
+        ),
+    )
     archived: bool | None = Field(
         default=None, description="True lists only archived sessions; absent or false lists the live ones."
     )
@@ -1421,6 +1929,20 @@ class SessionCreateParams(_Strict):
         description=(
             "Absolute directory this session's turns run in, persisted as the session's workdir override. "
             "How a client attached to a shared gateway keeps its launch directory."
+        ),
+    )
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
+    harness: str | None = Field(
+        default=None,
+        description=(
+            "Name of a stored Harness to open this session on. A snapshot of it is frozen onto the session, "
+            "so the window keeps the Harness it was opened on after the library entry changes."
         ),
     )
 
@@ -1606,7 +2128,10 @@ class SessionUsageResult(_Strict):
     )
     cost_missing_calls: int = Field(..., description="Calls with no reported price, left out of cost_usd.")
     context_max: int = Field(..., description="Context window of the session's model; 0 when unknown.")
-    context_used: int = Field(..., description="Estimated tokens the next call would send.")
+    context_used: int = Field(
+        ...,
+        description="Tokens the session's last model call filled the window with; a tiktoken estimate when no call recorded one.",
+    )
     context_percent: int = Field(..., description="context_used as a percentage of context_max.")
     context_estimated: bool = Field(..., description="True when context_used is a tiktoken estimate.")
 
@@ -1636,6 +2161,8 @@ class SessionHistoryResult(_Strict):
 class TurnSendParams(_Strict):
     session_key: str
     content: str
+    playbook_mode: Literal["off", "task", "persona"] | None = None
+    """Optional per-turn override for dynamic Playbook generation."""
     channel: str | None = None
     chat_id: str | None = None
     sender_id: str | None = None
@@ -1657,6 +2184,10 @@ class TurnSendParams(_Strict):
     # at its next tool-loop gap, the way a channel's mid-turn message is
     # merged. On an idle lane it is an ordinary send.
     busy: Literal["inject"] | None = None
+    # A Task Group the message moves on. Noted on the board before the turn is
+    # submitted, so the note and the message arrive together; ignored for a
+    # message merged into a running turn or sent to an instance.
+    move_on: str | None = None
 
 
 class TurnSendResult(_Strict):
@@ -1703,10 +2234,24 @@ class TurnCancelParams(_Strict):
     # handler looks up a key nothing was ever registered under and reports
     # "nothing to cancel" for a turn that is plainly running.
     target: DirectTarget | None = None
+    # The turn to cancel, by the id its opening frame carried. Present, the
+    # cancel reaches the lane's running turn only when that turn has this id,
+    # whoever opened it -- the one way to stop a turn the runtime opened (a
+    # delegated result re-entering), which binds no handle. Absent, the cancel
+    # reaches only what this surface bound: a turn.send turn or a pending inject.
+    turn_id: str | None = None
 
 
 class TurnCancelResult(_Strict):
     cancelled: bool
+    # Only on a refusal: whether the lane still has a turn to run -- the one
+    # that replaced the turn named, one queued, or a message waiting to run as
+    # a turn of its own. A client cannot learn it from the frames in time: the
+    # reply goes out as soon as the handler returns, while the frame opening a
+    # turn that has just started can still be waiting out the subscription's
+    # coalescing window. Absent from an accepted cancel, and from an older
+    # server, which is why it is optional.
+    busy: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1794,6 +2339,10 @@ class ModelLabel(_Strict):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    #: The words a provider's ``model_overlay.reasoningEfforts`` declares for
+    #: this model; the picker's effort row reads the live answer instead, and
+    #: this carries what the label itself can state.
+    reasoning_efforts: list[str] = Field(default_factory=list)
     #: The bucket a model list files this model under, from what it writes
     #: (``registry_data.kind_of``): a model that reads images is still text.
     kind: Literal["text", "image", "audio", "video", "embedding", "reranker"]
@@ -1856,6 +2405,11 @@ class ModelOptionProvider(_Strict):
     #: vendor/model ids. The catalogue's filter reads it; no client can derive
     #: it from a slug.
     gateway: bool = False
+    #: The registry's ``image_api``: the image tool can run on this provider's
+    #: address and key. The roles card offers the image role these providers.
+    image_api: bool = False
+    #: The registry's ``video_api``, the same answer for the video tool.
+    video_api: bool = False
     #: Every model-id prefix that names this provider: its own name plus the
     #: ones it used to answer to (``ProviderSpec.route_names``). A client
     #: comparing two spellings of one model has to strip any of them, the way
@@ -1871,6 +2425,7 @@ class ModelOptionProvider(_Strict):
 
 class ModelOptionsParams(_Strict):
     session_id: str | None = None
+    include_providers: bool = True
 
 
 class ModelOptionsResult(_Strict):
@@ -1909,6 +2464,60 @@ class ModelDisconnectParams(_Strict):
 
 class ModelDisconnectResult(_Strict):
     disconnected: bool
+
+
+class ModelCheckKeyParams(_Strict):
+    """Ask the vendor about a credential before it is stored."""
+
+    slug: str
+    # The key a form holds; empty for a local deployment, which is reached by
+    # address and has no key.
+    api_key: str = ""
+    api_base: str | None = None
+
+
+class ModelCheckKeyResult(_Strict):
+    """What the vendor said about the credential, and whether that refuses it.
+
+    ``refused`` is the one verdict that holds a key back from being stored: the
+    vendor itself answered this key with 401, or named it invalid. Every other
+    answer -- a catalogue that checks no keys, a vendor that cannot be reached,
+    a code nobody mapped -- is reported here and leaves the key worth storing.
+    """
+
+    ok: bool
+    status: str = Field(
+        description=(
+            "The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, "
+            "`network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, "
+            "`not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe "
+            "gave no word."
+        )
+    )
+    http_status: int | None = Field(None, description="The HTTP status the probe met, when it met one.")
+    models_count: int | None = Field(None, description="How many models the vendor listed, when it listed any.")
+    error: str | None = Field(None, description="What went wrong, when something did.")
+    refused: bool = Field(
+        description=(
+            "The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it "
+            "would store a key that cannot work. Every other answer leaves the key worth storing."
+        )
+    )
+
+
+class ModelRevealKeyParams(_Strict):
+    slug: str
+
+
+class ModelRevealKeyResult(_Strict):
+    api_key: str | None = Field(
+        None,
+        description=(
+            "The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none "
+            "is saved there, or when an endpoints list or key list replaces it and requests do not carry it. A key "
+            "the provider takes from the environment is not read back."
+        ),
+    )
 
 
 class ModelFetchModelsParams(_Strict):
@@ -1955,6 +2564,14 @@ class ModelFetchModelsResult(_Strict):
     models: list[ModelCandidate]
     status: str
     error: str | None = None
+    refused: bool = Field(
+        default=False,
+        description=(
+            "With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. "
+            "`invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), "
+            "so a surface that says a key was rejected reads this, not the status."
+        ),
+    )
 
 
 class ModelAddModelParams(_Strict):
@@ -1964,6 +2581,11 @@ class ModelAddModelParams(_Strict):
     carries the icon row every other model has. Names outside the published
     vocabulary are refused rather than stored -- a surface draws one icon per
     name and has nothing to draw for a name it has never heard of.
+
+    ``reasoning_efforts`` is not display data: it is this model's declaration
+    for the per-conversation effort picker, and the server validates it against
+    the effort ladder. ``None`` leaves a stored declaration alone; ``[]`` clears
+    it.
     """
 
     slug: str
@@ -1975,6 +2597,7 @@ class ModelAddModelParams(_Strict):
     capabilities: list[str] | None = None
     input_modalities: list[str] | None = None
     output_modalities: list[str] | None = None
+    reasoning_efforts: list[str] | None = None
     session_id: str | None = None
 
 
@@ -2088,11 +2711,11 @@ class ConfigSetParams(_Strict):
     key: str
     value: JsonValue
     # Scope extras for the two keys with a per-conversation reading, ``model``
-    # and ``permissions.mode``: this conversation, or the default a new one
-    # starts on.
+    # and ``permissions.mode``: this conversation, the default a new one starts
+    # on, or -- for ``model`` alone -- both at once.
     session_id: str | None = None
     provider: str | None = None
-    scope: Literal["session", "default"] | None = None
+    scope: Literal["session", "default", "both"] | None = None
 
 
 class ConfigUnsetParams(_Strict):
@@ -2116,7 +2739,7 @@ class ConfigSetResult(_Strict):
     previous: JsonValue = Field(...)
     # Present on a model switch: what was applied, and where it reached.
     value: str | None = None
-    scope: Literal["session", "default"] | None = None
+    scope: Literal["session", "default", "both"] | None = None
     session_id: str | None = None
     # Does the asking conversation now run this model? A default-scoped switch
     # moves the sessions that never chose one, so scope alone cannot answer it
@@ -2513,6 +3136,17 @@ class SubagentCall(_Strict):
     )
     agent: str | None = Field(default=None, description="The external agent that ran it, or null for a raven subagent.")
     instance: str | None = Field(default=None, description="The handle sharing one stateful agent session, if any.")
+    instance_auto: bool | None = Field(
+        default=None,
+        description=(
+            "dag rows only: whether the node's current handle was minted for it rather than named by the "
+            "graph. Present only for a node that was reassigned."
+        ),
+    )
+    attempt_agents: list[str] | None = Field(
+        default=None,
+        description="dag rows only: the agent of each attempt of the node, in order. Present only after a reassignment.",
+    )
     started_at: str | None = Field(default=None, description="ISO 8601; the record stores epoch millis.")
     ended_at: str | None = Field(default=None, description="Absent while it is still running.")
     message_count: int = Field(..., description="What was asked, plus the answer once there is one.")
@@ -2607,6 +3241,34 @@ class SubagentsListResult(_Strict):
     rows: list[SubagentRow]
 
 
+class SubagentsPresetsParams(_Strict):
+    pass
+
+
+class PresetChoice(_Strict):
+    """One preset as the machines tab's connect form offers it: what it is, and where an entry of it already runs."""
+
+    preset: str
+    name: str
+    kind: Literal["acp", "cli"]
+    description: str
+    connected_here: bool
+    """Whether an entry of this preset runs on this computer; one on a machine is a second entry, not a conflict."""
+    on_machines: list[str]
+    """The registered machines (ids) a connected entry of this preset runs on."""
+    off_on_machines: list[PresetOffEntry]
+    """The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on."""
+
+
+class PresetOffEntry(_Strict):
+    machine: str
+    name: str
+
+
+class SubagentsPresetsResult(_Strict):
+    presets: list[PresetChoice]
+
+
 class SubagentsAddParams(_Strict):
     preset: str
     name: str | None = None
@@ -2620,6 +3282,23 @@ class SubagentsAddParams(_Strict):
         description=(
             "A Raven provider (e.g. openrouter) whose key the agent is started with, read from Raven's config at "
             "each start; refused unless the preset reads a key for it and Raven holds one."
+        ),
+    )
+    machine: str | None = Field(
+        default=None,
+        description=(
+            "A registered machine, by its id in the machine registry: an acp or cli preset's command is started "
+            "there by the machine's Raven node and signed in there; an openai preset's endpoint is reached from "
+            "that machine through an ssh tunnel. The row's name defaults to <preset>@<machine>, and under that default a "
+            "preset the machine already has is refused, naming the entry there (give `name` to add a second one on "
+            "purpose). Refused for a built-in agent, and unless the machine is registered and usable."
+        ),
+    )
+    remote_cwd: str | None = Field(
+        default=None,
+        description=(
+            "Where on `machine` an acp or cli agent works (`~/raven-work` when unset); ignored without `machine`, "
+            "refused with an openai preset, which has no working directory there."
         ),
     )
     api_key: str | None = None
@@ -2647,7 +3326,13 @@ class SubagentsUpdateParams(_Strict):
         default=None,
         description="The Raven providers whose key an acp agent is started with; [] lends none.",
     )
-    model: str | None = None
+    model: str | None = Field(
+        default=None,
+        description=(
+            "A model from the row's `model_choices`. On an acp row the move re-measures the effort menu on the "
+            "new model, and a stored `effort` that menu does not offer is dropped; it is kept when the read fails."
+        ),
+    )
     provider: str | None = Field(
         default=None,
         description=(
@@ -2659,6 +3344,19 @@ class SubagentsUpdateParams(_Strict):
     clear_model: bool = Field(
         default=False,
         description="Drop the row's own model, reverting to the agent's default. Wins over `model` when both are sent.",
+    )
+    effort: str | None = Field(
+        default=None,
+        description=(
+            "A reasoning effort from the row's `effort_choices`, sent on every turn through the agent's "
+            "thought_level option, or as a session mode on an agent whose modes are its effort menu, where an "
+            "instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent "
+            "with a model move, it is judged on the new model's menu, and refused when that menu could not be read."
+        ),
+    )
+    clear_effort: bool = Field(
+        default=False,
+        description="Drop the row's own effort, reverting to the agent's default. Wins over `effort` when both are sent.",
     )
 
 
@@ -2726,6 +3424,180 @@ class SubagentsTestCancelParams(_Strict):
 
 class SubagentsTestCancelResult(_Strict):
     cancelled: bool
+
+
+class SubagentsRefreshModelsParams(_Strict):
+    name: str
+    source: Literal["config", "preset", "vendored"] = "config"
+    force: bool = Field(
+        False,
+        description=(
+            "Read the agent's handshake even when its menu was just read. A reader that pressed refresh "
+            "after changing the menu in the agent itself means it; an automatic read on opening a picker "
+            "does not, and skips a handshake for a menu already read moments ago."
+        ),
+    )
+
+
+class SubagentsRefreshModelsResult(_Strict):
+    ok: bool = Field(
+        ...,
+        description="Whether the handshake answered and reported the menu. False leaves the recorded menu in place.",
+    )
+    detail: str = Field("", description="Why the menu could not be read, when it could not.")
+    models: list["SubagentModelChoice"] = Field(
+        ...,
+        description=(
+            "The menu now recorded for the agent, which is the previous one when this read failed. Each "
+            "choice is the agent's own id, name and group, exactly as ``subagents.list`` sends them."
+        ),
+    )
+    effort_choices: list["SubagentEffortChoice"] = Field(
+        default_factory=list,
+        description=(
+            "The effort menu recorded by the same read, in ``subagents.list``'s shape. A model-specific "
+            "menu (OpenCode 1.19.4) moves with the model, so it is sent beside the models rather than left "
+            "for a later listing."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# machines.* methods -- the Agent Hub's machines tab over the machine registry
+# (raven/ops/connections.py). A row carries what a machine is and how its link
+# and node are doing, never the way onto it: no address, no account, no key.
+# ---------------------------------------------------------------------------
+
+
+class MachineInstall(_Strict):
+    """The last node install asked for from the page: in flight, or how it ended."""
+
+    running: bool
+    ok: bool | None = None
+    detail: str
+
+
+class MachineRow(_Strict):
+    id: str
+    name: str
+    transport: Literal["ssh", "local"]
+    state: Literal["connected", "idle", "lost", "off", "error"]
+    detail: str
+    agents: int
+    node_version: str | None = None
+    """Live while a link is up, else as recorded at the last install or contact; None when none is known."""
+    node_current: bool
+    """Whether that node is this Raven's own code, which a dispatch there needs."""
+    auth: Literal["key", "password"] | None = None
+    """How this computer logs in to an ssh row: with the key whose path the row carries, or with the password kept
+    here for it. Absent for a local row."""
+    install: MachineInstall
+    paths: list[str]
+    problems: list[str]
+    agents_here: list[str]
+    """The connected agent entries that run on the machine, by name; what tells a reader the next step is on the agents side."""
+    agents_off_here: list[str]
+    """The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere."""
+
+
+class MachinesListParams(_Strict):
+    refresh: bool = False
+    id: str | None = None
+
+
+class MachinesListResult(_Strict):
+    rows: list[MachineRow]
+
+
+class MachinesAddParams(_Strict):
+    id: str
+    name: str
+    host: str
+    port: int | None = None
+    user: str
+    auth: Literal["key", "password"] | None = Field(
+        default=None,
+        description=(
+            "How Raven logs in: `key` (the default; `key` names the private key's path) or `password` (`password` "
+            "is kept here and used on every connection; such a row gets no ssh alias)."
+        ),
+    )
+    key: str | None = Field(
+        default=None,
+        description="Path to the private key on this computer; the path is stored, never the key. Required with auth `key`.",
+    )
+    password: str | None = Field(
+        default=None,
+        description=(
+            "The account's password, with auth `password`: kept on this computer for Raven's own logins, readable by "
+            "the owner alone and used on every connection; never in the registry, a log or an answer. Not offered on "
+            "Windows."
+        ),
+    )
+    paths: list[str] | None = None
+
+
+class MachinesAddResult(_Strict):
+    ok: bool
+    detail: str
+    reason: Literal[
+        "",
+        "unreachable",
+        "login",
+        "prompt",
+        "hostkey",
+        "timeout",
+        "nossh",
+        "platform",
+        "duplicate",
+        "invalid",
+        "registry",
+    ]
+    row: MachineRow | None = None
+
+
+class MachinesInstallNodeParams(_Strict):
+    id: str
+    node_dir: str | None = None
+
+
+class MachinesInstallNodeResult(_Strict):
+    started: bool
+    detail: str
+
+
+class MachinesDoctorParams(_Strict):
+    pass
+
+
+class MachineProblem(_Strict):
+    id: str
+    blocking: bool
+    detail: str
+
+
+class MachinesDoctorResult(_Strict):
+    problems: list[MachineProblem]
+
+
+class MachinesRemoveParams(_Strict):
+    id: str
+    force: bool = False
+
+
+class MachinesRemoveResult(_Strict):
+    removed: bool
+    detail: str
+    agents: list[str]
+
+
+class MachinesLocalKeysParams(_Strict):
+    pass
+
+
+class MachinesLocalKeysResult(_Strict):
+    keys: list[str]
+    """Private keys on this computer the register form proposes, as `~/.ssh/<name>` paths, ssh's own defaults first."""
 
 
 # ---------------------------------------------------------------------------
@@ -2905,6 +3777,13 @@ class SubagentModelChoice(_Strict):
     group: str = Field("", description="The agent's own bucketing, a provider typically. Empty when it offered none.")
 
 
+class SubagentEffortChoice(_Strict):
+    """One reasoning effort an agent offers, from its thought_level config option."""
+
+    value: str = Field(..., description="The value the agent takes back, e.g. low, high or max.")
+    name: str = Field("", description="What the agent asked to be shown, usually the same word.")
+
+
 class SubagentsInstanceSetModelParams(_Strict):
     session_key: str
     agent: str
@@ -2935,6 +3814,40 @@ class SubagentsInstanceSetModelResult(_Strict):
     )
 
 
+class SessionSetKnowledgeParams(_Strict):
+    session_id: str
+    knowledge_bases: list[str] | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all."
+        ),
+    )
+
+
+class SessionSetKnowledgeResult(_Strict):
+    """The selection as it now stands.
+
+    Replaced rather than added to: the picker sends what is ticked, and a call
+    that added would have no way to say that something was unticked.
+    """
+
+    knowledge_bases: list[str]
+
+
+class SessionSetHarnessParams(_Strict):
+    session_key: str
+    harness: str | None = Field(
+        None,
+        description="A stored Harness name to bind. Null unbinds. Omit the key entirely to report without changing.",
+    )
+
+
+class SessionSetHarnessResult(_Strict):
+    session_key: str
+    harness: str | None = Field(None, description="The Harness now bound to this session.")
+
+
 class SessionSetModeParams(_Strict):
     session_key: str
     mode: str | None = Field(None, description="The tier id to switch to. Omit it to report without changing.")
@@ -2951,6 +3864,40 @@ class SessionSetModeResult(_Strict):
         alias="availableModes",
         description="Every tier this build offers, so one reply is enough to draw the control.",
     )
+
+
+class SessionSetEffortParams(_Strict):
+    session_key: str
+    effort: str | None = Field(
+        None,
+        description="The reasoning effort this session's own model calls run at, one of the words in options. "
+        "Omit it to report without changing.",
+    )
+    clear: bool = Field(
+        False,
+        description="Drop the session's own pick and follow the default again. Wins over effort when both are given.",
+    )
+    model: str | None = Field(
+        None,
+        description="The model to answer for when the caller has no session yet (a draft). "
+        "Omit for a session's own model.",
+    )
+
+
+class SessionSetEffortResult(_Strict):
+    session_key: str
+    effort: str | None = Field(
+        None,
+        description="The session's own pick where the model declares it, else null: a stored pick the model "
+        "does not offer reads as null, and the turn runs at default.",
+    )
+    default: str | None = Field(
+        None,
+        description="What the session runs at with no pick of its own: its mode's effort where the catalogue sets "
+        "one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the "
+        "model.",
+    )
+    options: list[str] = Field(default_factory=list, description="The words this model accepts, least first.")
 
 
 # ---------------------------------------------------------------------------
@@ -3254,7 +4201,13 @@ class SessionInitInfo(_Strict):
     usage: SessionUsage
     version: str
     cwd: str
+    #: Ids of the knowledge bases this session's turns may search, as it was
+    #: left. Beside ``cwd`` and for the same reason: a reader reopening a
+    #: conversation has to see what it is pointed at, or the picker draws it
+    #: as pointed at nothing.
+    knowledge_bases: list[str] = Field(default_factory=list)
     mcp_servers: list[JsonValue]
+    harness: str | None = Field(default=None, description="The Harness this session is bound to, if any.")
     update_available: bool | None = None
     update_command: str | None = Field(default=None, description="The command that would install the newer release.")
     config_notices: list[str] | None = Field(
@@ -3277,6 +4230,17 @@ class SessionInitInfo(_Strict):
         ),
     )
     running: bool = Field(default=False, description="A turn is in flight on this session right now.")
+    reasoning_effort: str | None = Field(
+        default=None,
+        description=(
+            "The reasoning effort this session's own model calls run at: its own pick (session.set_effort), "
+            "else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands."
+        ),
+    )
+    read_only: bool | None = Field(
+        default=None,
+        description="True for an Imported Conversation, which nothing can change; absent on every other session.",
+    )
     running_ms: int | None = Field(
         default=None,
         description=(
@@ -3294,6 +4258,14 @@ class TranscriptTurnEnded(_Strict):
 
     status: str = Field(..., description="'cancelled' (a person stopped it) or 'failed'.")
     reason: str | None = None
+    full_detail: str | None = Field(
+        None,
+        description=(
+            "The failure's long account beside the bounded reason, for a reader who expands the row: "
+            "the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the "
+            "bounded text already is the whole account."
+        ),
+    )
 
 
 class TranscriptNotice(_Strict):
@@ -3317,6 +4289,23 @@ class TranscriptDelegated(_Strict):
     node_id: str | None = Field(
         default=None,
         description="Set for a dag node's own message, so a client can place it against that row.",
+    )
+    output: str | None = Field(
+        default=None,
+        description=(
+            "What a dag node itself returned on the attempt its report is about -- its error, "
+            "when it raised -- carried for the reader beside the report the model was given. "
+            "Set only on a node's own report, and present even when empty: an empty string is "
+            "a node that said nothing, an absent one a report about no attempt (a stall notice) "
+            "or a server that never sent it."
+        ),
+    )
+    output_truncated: bool | None = Field(
+        default=None,
+        description=(
+            "Whether output is limited to the first 20,000 characters. "
+            "Separate from the node's text; absent on older records and reports without output."
+        ),
     )
 
 
@@ -3421,7 +4410,8 @@ class TranscriptMessage(_Strict):
             "re-entering the conversation. Same rule as `notice` and for the same "
             "reason -- the model reads `text`, a reader must not. Render the delivery "
             "row a live client draws from `subagent.delivered`, and take the readable "
-            "body from inside the untrusted fence in `text`; drawing `text` as prose "
+            "body from inside the untrusted fence in `text`, or from `delegated.output` "
+            "where a node's report carries it; drawing `text` as prose "
             "attributes to the user a question they never asked, fence markers "
             "included. `origin` names who opened the turn; this says which run came back."
         ),
@@ -3433,6 +4423,29 @@ class TranscriptMessage(_Strict):
             "opened one. A reader draws it INSIDE the turn: no new turn number, no fold "
             "closed over the narration above it, and the text before it is still that "
             "turn's narration rather than its answer."
+        ),
+    )
+    silent: bool | None = Field(
+        default=None,
+        description=(
+            "Set on an assistant entry whose text, the model's last word in its turn, is its silence "
+            "marker (from a turn the runtime opened, possibly with a note around it), not an "
+            "answer. A reader draws one muted line and never treats `text` as the answer. A turn "
+            "the message tool had already answered can still carry it: that reply reached the "
+            "reader, and a reload draws the muted line after it. Distinct from `notice`, which "
+            "marks a row the runtime wrote; this row is the model's own."
+        ),
+    )
+    replied_via_tool: bool | None = Field(
+        default=None,
+        description=(
+            "Set on one assistant entry of a turn whose reader got its reply from a tool: a message-tool send "
+            "that went out (the tool hands every send to the turn's own reader, whatever chat the call names) or a "
+            "file delivery. A send that failed does not set it. The entry "
+            "is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files "
+            "after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last "
+            "reply had no text, the last entry that made a tool call, which need not be the call that sent the "
+            "message. Such a turn answered whatever it ends on, and is not a Silent Turn."
         ),
     )
 
@@ -3602,6 +4615,14 @@ class CronSaveParams(_Strict):
 
 class CronSaveResult(_Strict):
     job: CronJobInfo
+    outcome: Literal["created", "updated", "skipped"] = Field(
+        description=(
+            "How the request landed: 'created' stored a new job, 'updated' edited the returned "
+            "existing job in place, 'skipped' wrote nothing and returned the matching existing "
+            "job (identical message, fire still ahead); the returned job's stored schedule stays "
+            "in effect."
+        ),
+    )
 
 
 class CronDeleteParams(_Strict):
@@ -3652,6 +4673,20 @@ class SettingsGetResult(_Strict):
     settings: dict[str, JsonValue] = Field(..., description="Raw config.json with secret-looking values masked.")
     config_path: str
     raven_version: str
+    skill_hub_on: bool = Field(
+        ...,
+        description=(
+            "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: "
+            "an endpoint is required, and enabled=false turns it off."
+        ),
+    )
+    skill_hub_awaiting_reload: bool = Field(
+        ...,
+        description=(
+            "skill_hub_on, while the agent loop serving now was built without a Hub client: "
+            "retrieval starts after a reload."
+        ),
+    )
 
 
 class SettingsSetParams(_Strict):
@@ -3794,6 +4829,32 @@ class SettingsEverosResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+    reason: str | None = Field(
+        default=None,
+        description=(
+            "Why available is false, when the page should draw none of the role slots: "
+            "'other_backend' means memory.backend names a backend that does not read "
+            "EverOS's roles. Absent when the plugin is merely not installed, which keeps "
+            "the slots drawn with their not-installed note."
+        ),
+    )
+
+
+class SettingsEverosCloudParams(_Strict):
+    pass
+
+
+class SettingsEverosCloudResult(_Strict):
+    available: bool = Field(description="Whether the everos-cloud-memory distribution is installed.")
+    selected: bool = Field(description="Whether memory.backend names everos-cloud; the card is drawn only then.")
+    api_key_set: bool = Field(description="Whether a key resolves, from the file or the environment.")
+    key_source: str | None = Field(default=None, description="'file' or 'env' when a key resolves; null otherwise.")
+    base_url: str = Field(default="", description="The cloud address in force: the slice's base_url or the default.")
+    status: str | None = Field(
+        default=None,
+        description="The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.",
+    )
+    hint: str | None = Field(default=None, description="What a person should look at, in the backend's own words.")
 
 
 class SettingsEverosSetParams(_Strict):
@@ -3949,6 +5010,14 @@ class FsDirsResult(_Strict):
     parent: str | None = Field(..., description="One level up; null at the filesystem root.")
     home: str = Field(..., description="The user's home directory, where the browser starts.")
     ok: bool = Field(..., description="Whether the listed directory itself may be a session's working directory.")
+    roots: list[FsDirEntry] = Field(
+        default_factory=list,
+        description=(
+            "The filesystem roots, listed only while the directory listed is one: a root has no parent, "
+            "so on a host with several (Windows drives) they are reachable no other way. Every drive is "
+            "listed, the one the browser stands on included, each judged as a folder row is."
+        ),
+    )
     entries: list[FsDirEntry] = Field(
         ..., description="Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found."
     )
@@ -3983,12 +5052,30 @@ class FsReadResult(_Strict):
 class FsUploadParams(_Strict):
     name: str
     content_b64: str
-    session: str | None = None
+    session: str | None = Field(
+        None, description="An existing session key, or a channel prefix such as tui: for a draft."
+    )
+    workdir: str | None = Field(
+        None, description="A draft's selected working directory, used only to avoid attachment name collisions."
+    )
 
 
 class FsUploadResult(_Strict):
-    path: str = Field(..., description="Workspace-relative path to hand the agent; uploads never return bytes.")
-    abs_path: str
+    path: str = Field(
+        ...,
+        description=(
+            "The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the "
+            "conversation's own working directory first, so a same-named file there answers for it; uploads "
+            "never return bytes."
+        ),
+    )
+    abs_path: str = Field(
+        ...,
+        description=(
+            "The file the upload wrote, and the path to hand turn.send: it names the upload whatever the "
+            "conversation's own directory holds."
+        ),
+    )
     size: int
 
 
@@ -4027,6 +5114,12 @@ class DeckTemplatesPagesResult(_Strict):
 
 class DeckTemplatesPickParams(_Strict):
     name: str = Field(..., description="A row's name from deck.templates.list.")
+    session: str | None = Field(
+        None, description="An existing session key, or a channel prefix such as tui: for a draft."
+    )
+    workdir: str | None = Field(
+        None, description="A draft's selected working directory, used only to avoid attachment name collisions."
+    )
 
 
 class FsRevealParams(_Strict):
@@ -4565,6 +5658,9 @@ class KnowledgeStatusResult(_Strict):
 
     configured: bool
     model: str
+    #: Who serves that model. The two together are what a picker selects with:
+    #: a model id names no credential, so half the pin cannot be preselected.
+    provider: str = ""
     #: Filename extensions some registered parser can index, each with its
     #: leading dot. What a surface that walks a folder filters by; it moves
     #: with the optional extras installed, so it is reported rather than
@@ -4584,10 +5680,17 @@ class KnowledgeBase(_Strict):
     name: str
     description: str
     embedding_model: str
+    #: Which account that model is reached through. Empty means the configured
+    #: endpoint -- what every base built before the pair was recorded says.
+    embedding_provider: str = ""
     dimensions: int
     created_at: str
     updated_at: str
     documents: int
+    #: How many pieces the base holds. Not how many documents are in it: one
+    #: that failed, one still queued and one in a base with no model all count
+    #: as documents and hold nothing.
+    chunks: int = 0
     #: At most this many chunks come back from one search of this base. A
     #: property of the base rather than of each call: how much context this
     #: material is worth is a fact about the material.
@@ -4597,12 +5700,26 @@ class KnowledgeBase(_Strict):
     smart_chunking: bool = True
     #: Where a plain split may cut, when smart chunking is off.
     separator: str = "\n\n"
+    #: Tokens of the prose around a table or a figure to carry into the chunk
+    #: that holds it. Zero is off.
+    table_context_size: int = 64
+    image_context_size: int = 64
+    #: Empty when the base's model can be reached; otherwise why not. Answered
+    #: from what is recorded rather than by calling the endpoint.
+    embedding_reach: str = ""
     #: What a chunk is aimed at, and how much of the previous one each carries.
     chunk_size: int = 2048
     chunk_overlap: int = 215
     #: Which pre-processing a file goes through on the way in. Empty is
     #: "don't use", the only setting there is so far.
     file_processing: str = ""
+    #: Kept at the head of the list. A property of the base rather than of the
+    #: browser looking at it: pinning says something about the base, not about
+    #: this machine.
+    pinned: bool = False
+    #: Marked by the reader, and the whole of what the starred tab shows. Not
+    #: the same fact as ``pinned``, which is about order.
+    starred: bool = False
 
 
 class KnowledgeBasesListParams(_Strict):
@@ -4628,11 +5745,18 @@ class KnowledgeDocument(_Strict):
     status: str
     chunk_count: int
     error: str
+    #: What the parse could not do, on a document that was indexed anyway --
+    #: pictures no model could read, most often. Not a second ``error``: this
+    #: row is searchable, and the line says which part of the file is not in
+    #: the index. Empty when there was nothing to report.
+    warning: str = ""
     created_at: str
     updated_at: str
     #: Which kind of data source this arrived through: ``file``, ``note`` or
     #: ``url``. A folder is not one of them -- the browser walks it and sends
     #: the files, so each lands here as a file.
+    #: Which folder of its base it is filed under. Empty is Root.
+    folder_id: str = ""
     origin: str = "file"
     #: What the origin points back at: a url document's page. Empty otherwise.
     origin_ref: str = ""
@@ -4643,9 +5767,13 @@ class KnowledgeBasesCreateParams(_Strict):
     description: str | None = None
     #: Whether the base is searched by vector. False is a base that keeps its
     #: documents and is never embedded -- the choice a surface offers as
-    #: "Disabled", and one that cannot be changed afterwards, because a
-    #: collection's width is fixed when it is made.
+    #: "Disabled".
     embedding: bool = True
+    #: The model to build the base on, and who serves it. Omitted, the base is
+    #: built on the configured pin; a surface that offers a picker sends the
+    #: pair it picked, because a model id alone names no credential.
+    embedding_model: str | None = None
+    embedding_provider: str | None = None
 
 
 class KnowledgeBasesCreateResult(_Strict):
@@ -4667,14 +5795,25 @@ class KnowledgeBasesRenameResult(_Strict):
 class KnowledgeBasesSettingsParams(_Strict):
     """Every field is optional; the ones left out are untouched.
 
-    The embedding model is deliberately not among them: the collection is
-    sized to its width, so changing it is a rebuild of every vector in the
-    base rather than a setting."""
+    ``embedding_model`` is the one field that is not a setting: the collection
+    is sized to the model's width and holds vectors that model made, so sending
+    it rebuilds the base -- the collection is made again and every document
+    goes back to the queue. Empty turns embedding off."""
 
     base_id: str
     top_k: int | None = None
     smart_chunking: bool | None = None
     separator: str | None = None
+    table_context_size: int | None = None
+    image_context_size: int | None = None
+    #: Where this base's model is reached. Sent alone, it only moves the
+    #: address the same model is called at, which costs nothing.
+    embedding_provider: str | None = None
+    pinned: bool | None = None
+    starred: bool | None = None
+    #: The model itself. Sent, the base is rebuilt onto it; empty turns
+    #: embedding off. Every document is requeued either way.
+    embedding_model: str | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     file_processing: str | None = None
@@ -4699,15 +5838,24 @@ class KnowledgeDocumentsListParams(_Strict):
     base_id: str
 
 
+class KnowledgeDocumentsMoveResult(_Strict):
+    document: KnowledgeDocument
+
+
 class KnowledgeDocumentsListResult(_Strict):
     documents: list[KnowledgeDocument]
 
 
 class KnowledgeHit(_Strict):
-    """One search hit. ``score`` is a similarity, so higher is nearer -- the
-    direction every caller already reads."""
+    """One search hit. ``score`` runs one direction whatever found it -- higher
+    is nearer -- and ``retrieval`` says what it is."""
 
     score: float
+    #: How this hit was found: ``vector`` for a cosine similarity in 0..1,
+    #: ``keyword`` for a BM25 score on the index's own unbounded scale. The two
+    #: are not comparable by value, and a surface that labels both "similarity"
+    #: is stating something false about each.
+    retrieval: Literal["vector", "keyword"] = "vector"
     document_id: str
     text: str
     #: Which piece of its document this was, and of how many. A chunk read on
@@ -4777,6 +5925,234 @@ class KnowledgeDocumentsIndexResult(_Strict):
     document: KnowledgeDocument
 
 
+class KnowledgeChunkPart(_Strict):
+    """One piece of a chunk that merged several, and where it came from.
+
+    The naive strategy merges across section boundaries, so a chunk can hold
+    two pages, two headings and two sections. The flattened fields on the chunk
+    can only carry the first of each, which is why this exists: without it a
+    merged chunk reads as a chunk of its first section, and the half that came
+    from elsewhere is attributed to a place it was never written.
+    """
+
+    #: Where this piece sits in the chunk's own text.
+    char_start: int
+    char_end: int
+    layout_type: str = ""
+    page_number: int | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    #: Which section of the document this piece was cut from. The section
+    #: identity: a heading path is not one, because two same-named children of
+    #: a parent share it. Absent when the parser recorded none.
+    section_ordinal: int | None = None
+
+
+class KnowledgeFolder(_Strict):
+    """One folder inside a knowledge base.
+
+    One level deep. Root is not one of these but the absence of one, so a
+    document with no folder is in Root and nothing had to be written to put
+    every pre-folder document somewhere sensible.
+    """
+
+    id: str
+    base_id: str
+    name: str
+    created_at: str
+    #: How many documents are filed under it.
+    documents: int
+
+
+class KnowledgeFoldersListParams(_Strict):
+    base_id: str
+
+
+class KnowledgeFoldersListResult(_Strict):
+    folders: list[KnowledgeFolder] = Field(default_factory=list)
+
+
+class KnowledgeFoldersCreateParams(_Strict):
+    base_id: str
+    name: str
+
+
+class KnowledgeFoldersCreateResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersRenameParams(_Strict):
+    folder_id: str
+    name: str
+
+
+class KnowledgeFoldersRenameResult(_Strict):
+    folder: KnowledgeFolder
+
+
+class KnowledgeFoldersDeleteParams(_Strict):
+    folder_id: str
+
+
+class KnowledgeFoldersDeleteResult(_Strict):
+    #: How many documents returned to Root.
+    moved: int
+
+
+class KnowledgeDocumentsMoveParams(_Strict):
+    document_id: str
+    #: Empty is Root.
+    folder_id: str | None = None
+
+
+class KnowledgeChunkRegion(_Strict):
+    """One place on a page that a chunk was cut from.
+
+    Points (1/72 inch) with the origin at the top left, which is the frame
+    every parser here records positions in, so a viewer scales by the page it
+    is drawing and nothing converts twice.
+    """
+
+    page_number: int
+    x0: float
+    top: float
+    x1: float
+    bottom: float
+
+
+class KnowledgeChunk(_Strict):
+    """One indexed piece of a document, as the search sees it.
+
+    Positional fields are optional because only some formats have them: a
+    parser reports a page and a box for a document laid out on pages, and
+    nothing for a text file that has no such thing. Absent means the format
+    does not know, never that the value is zero.
+    """
+
+    #: Where the piece sits in its document, and how many there are. This is
+    #: the reading order: the chunker numbers pieces as it walks the sections
+    #: the parser produced, so the sequence is the document's own.
+    chunk_index: int
+    total_chunks: int
+    text: str
+    #: What the region is, as the source file marked it -- a heading, a table,
+    #: a figure caption. Empty when the parser had nothing to go on.
+    layout_type: str = ""
+    #: The 1-based page the piece starts on, for a format that has pages.
+    page_number: int | None = None
+    #: The 1-based page it ends on. Equal to ``page_number`` unless the piece
+    #: runs over a page boundary, which it can whenever it merged.
+    page_end: int | None = None
+    #: The heading path the piece sits under, outermost first. The path of the
+    #: section it *starts* in when it merged several; each part carries its own.
+    heading_path: list[str] = Field(default_factory=list)
+    #: Where each piece of a merged chunk came from. Empty for a chunk that
+    #: merged nothing -- the fields above already say where that one is -- so a
+    #: non-empty list is itself the statement that this chunk crossed a
+    #: boundary.
+    parts: list[KnowledgeChunkPart] = Field(default_factory=list)
+    #: What addresses this piece. Derived from its text, so it survives a
+    #: rebuild of the same document. Empty on rows written before ids existed:
+    #: readable, but not actionable until the document is reindexed.
+    chunk_id: str = ""
+    #: Whether this piece may be retrieved at all. Disabled is not a ranking
+    #: penalty -- it is never searched and never reaches the agent.
+    enabled: bool = True
+    #: Whether a person wrote this piece rather than a parser cutting it.
+    manual: bool = False
+    #: Whether a picture of the region this piece was cut from is stored for
+    #: it, at ``/knowledge/crop?document=<id>&chunk=<chunk_id>``. False for a
+    #: format with no pages, for a piece a person wrote, and for one whose
+    #: parser knew the page but not the position on it.
+    has_crop: bool = False
+    #: Every place on a page this piece was cut from, in reading order, for a
+    #: viewer that draws where it came from. A chunk that merged several pieces
+    #: reports each one's region, so this can cross a page boundary.
+    regions: list[KnowledgeChunkRegion] = Field(default_factory=list)
+
+
+class KnowledgeDocumentsChunksParams(_Strict):
+    document_id: str
+    page: int | None = None
+    page_size: int | None = None
+    available: bool | None = None
+    query: str | None = None
+
+
+class KnowledgeDocumentsChunksResult(_Strict):
+    """A document's chunks in reading order.
+
+    Empty is an ordinary answer, not an error: a document that failed, one
+    still queued, and one in a base with no embedding model all have nothing
+    indexed to show.
+    """
+
+    chunks: list[KnowledgeChunk]
+    total: int
+
+
+class KnowledgePage(_Strict):
+    """One page of a document, as the reader's side draws it."""
+
+    #: 1-based, and the number a chunk's region names.
+    number: int
+    #: Points. What a region's x coordinates are a fraction of.
+    width: float
+    #: Points. What a region's y coordinates are a fraction of.
+    height: float
+
+
+class KnowledgeDocumentsPagesParams(_Strict):
+    document_id: str
+
+
+class KnowledgeDocumentsPagesResult(_Strict):
+    """Every page of one document, numbered and measured.
+
+    Empty for everything that is not pages -- a text file, a note, a format
+    that cannot be rendered. Not a failure: the page frames the file instead.
+    """
+
+    pages: list[KnowledgePage]
+
+
+class KnowledgeChunksSwitchParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+    enabled: bool
+
+
+class KnowledgeChunksSwitchResult(_Strict):
+    changed: int
+
+
+class KnowledgeChunksDeleteParams(_Strict):
+    document_id: str
+    chunk_ids: list[str]
+
+
+class KnowledgeChunksDeleteResult(_Strict):
+    remaining: int
+
+
+class KnowledgeChunksCreateParams(_Strict):
+    document_id: str
+    text: str
+
+
+class KnowledgeChunksCreateResult(_Strict):
+    chunk: KnowledgeChunk
+
+
+class KnowledgeChunksUpdateParams(_Strict):
+    document_id: str
+    chunk_id: str
+    text: str
+
+
+class KnowledgeChunksUpdateResult(_Strict):
+    chunk: KnowledgeChunk
+
+
 class KnowledgeDocumentsDeleteParams(_Strict):
     document_id: str
 
@@ -4795,6 +6171,13 @@ class KnowledgeSearchParams(_Strict):
     top_k: int | None = None
 
 
+class KnowledgeFallback(_Strict):
+    """One base that answered by words, and why its vectors were out of reach."""
+
+    base_id: str
+    reason: str
+
+
 class KnowledgeSearchResult(_Strict):
     """The hits, and what each half of the search cost.
 
@@ -4803,6 +6186,11 @@ class KnowledgeSearchResult(_Strict):
     job. A surface reporting one number as the search time wants the second."""
 
     hits: list[KnowledgeHit]
+    #: The bases that answered by words rather than by meaning, each with the
+    #: reason its vectors could not be reached. Empty on an ordinary search.
+    #: Carried because an unreachable endpoint otherwise produces a normal
+    #: looking result set on a different scale, with nothing saying so.
+    by_keyword: list[KnowledgeFallback] = Field(default_factory=list)
     search_ms: float = 0.0
     embed_ms: float = 0.0
 
@@ -4822,6 +6210,19 @@ class PlaybookNodeShape(_Strict):
     depends_on: list[str]
 
 
+class PlaybookWorkerShape(_Strict):
+    """One durable Harness alias and the registered agent behind it."""
+
+    label: str
+    agent: str
+
+
+class PlaybookWorker(PlaybookWorkerShape):
+    """The full worker detail; its brief is the durable per-job instruction."""
+
+    brief: str
+
+
 class PlaybookRow(_Strict):
     """One playbook as the library list needs it.
 
@@ -4834,6 +6235,19 @@ class PlaybookRow(_Strict):
     name: str
     description: str
     task_summary: str
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    coordinator: bool = Field(
+        default=False,
+        description="True when the Harness carries a coordinator seat, which is what makes it a Persona.",
+    )
+    coordinator_brief: str | None = Field(
+        None,
+        description=(
+            "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
+        ),
+    )
+    workers: list[PlaybookWorkerShape]
     mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
@@ -4893,7 +6307,8 @@ class PlaybookNode(_Strict):
     three are the fields an author may leave blank for the caller to fill at run
     time. ``skills`` / ``mcps`` are three-state -- null means the author said
     nothing, ``[]`` means the author wrote an empty list, and a list names what
-    to consider."""
+    to consider. ``routes`` / ``select`` / ``when`` declare a branch and are
+    absent unless the author wrote them."""
 
     id: str
     subagent: str
@@ -4904,6 +6319,21 @@ class PlaybookNode(_Strict):
     mcps: list[str] | None = None
     instance: str
     inputs: dict[str, Any]
+    routes: dict[str, str] | None = Field(
+        default=None,
+        description=(
+            "Makes this node a decision: route name -> the condition, in plain words, under which its "
+            "answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+        ),
+    )
+    select: Literal["one", "many"] | None = Field(
+        default=None,
+        description="How many routes the decision selects, as the author wrote it. Absent means 'one'.",
+    )
+    when: str | None = Field(
+        default=None,
+        description="The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.",
+    )
 
 
 class PlaybookRole(_Strict):
@@ -4976,6 +6406,19 @@ class PlaybookDetail(_Strict):
     description: str
     task_summary: str
     version: int
+    schema_version: int
+    artifact_kind: Literal["legacy", "workflow", "harness", "composite"]
+    coordinator: bool = Field(
+        default=False,
+        description="True when the Harness carries a coordinator seat, which is what makes it a Persona.",
+    )
+    coordinator_brief: str | None = Field(
+        None,
+        description=(
+            "What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat."
+        ),
+    )
+    workers: list[PlaybookWorker]
     mode: Literal["dag", "prompt", "stint"]
     confirm: bool
     origin: str
@@ -5202,6 +6645,45 @@ class PlaybooksValidateResult(_Strict):
         description=("Every finding, in the order the validator reports them. Empty when the playbook is sound."),
     )
     path: str = Field(..., description="The file the findings refer to.")
+
+
+class PlaybooksDraftParams(_Strict):
+    session_key: str = Field(
+        ...,
+        description=(
+            "The conversation whose generated Persona this is. A draft belongs to the session that asked for it."
+        ),
+    )
+
+
+class PlaybooksDraftResult(_Strict):
+    draft: PlaybookRow | None = Field(
+        None,
+        description="The unsaved Persona, in the row shape the library answers, with origin 'draft'.",
+    )
+
+
+class PlaybooksDraftSaveParams(_Strict):
+    session_key: str
+    name: str | None = Field(
+        None,
+        description=(
+            "The name to keep it under. Kebab-case, because the name resolves a directory under the "
+            "library root. Omitted keeps the generated one."
+        ),
+    )
+
+
+class PlaybooksDraftSaveResult(_Strict):
+    name: str = Field(..., description="The name it was saved under, which a collision may have suffixed.")
+
+
+class PlaybooksDraftDiscardParams(_Strict):
+    session_key: str
+
+
+class PlaybooksDraftDiscardResult(_Strict):
+    discarded: bool
 
 
 class PlaybooksDeleteParams(_Strict):
@@ -5441,6 +6923,411 @@ class SubagentCancelInstanceResult(_Strict):
     handle: str
 
 
+# ---------------------------------------------------------------------------
+# trajectory.* -- the Web trajectory view's read surface
+# ---------------------------------------------------------------------------
+
+TrajectoryPhase = Literal["scanning", "ready", "failed"]
+TrajectoryStatus = Literal["running", "ok", "error", "cancelled", "unknown"]
+TrajectoryTimingBasis = Literal["zero", "span_full", "shared", "not_recorded", "unknown"]
+TrajectoryOrigin = Literal["main", "subagent"]
+TrajectoryAvailability = Literal[
+    "available", "empty", "not_recorded", "missing", "truncated", "unreadable", "unsupported"
+]
+TrajectoryRenderer = Literal["text", "json", "messages", "key_values", "items", "references"]
+
+
+class _StrictParams(_Strict):
+    """Params models that reject coercion: a string "20" or a bool is not a limit."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class TrajectoryStateParams(_StrictParams):
+    pass
+
+
+class TrajectoryStateResult(_Strict):
+    enabled: bool
+    policy_revision: int
+    recording_enabled: bool
+
+
+class TrajectoryIndexState(_Strict):
+    """Where the session index stands; ``scanning`` means an empty list is not yet an answer."""
+
+    phase: TrajectoryPhase
+    scanned_bytes: int
+    total_bytes: int
+    head_truncated: int
+    recovering_traces: int
+    unresolved_traces: int
+    unresolved_dropped: int
+    oversized_lines_dropped: int
+    preview_pending: int
+    failure: str | None = None
+
+
+class TrajectoryEntry(_Strict):
+    """One row of the trajectory view; see raven/trajectory/entries.py."""
+
+    entry_id: str
+    revision: int
+    kind: str
+    span_name: str
+    slot: str
+    trace_id: str
+    span_id: str
+    parent_span_id: str | None = None
+    turn_span_id: str | None = None
+    turn_number: int | None = None
+    turn_start: bool
+    origin: TrajectoryOrigin
+    subagent_scope: str | None = None
+    opens_subagent_scope: str | None = None
+    dispatched_by_subagent_scope: str | None = None
+    sort_key: list[JsonValue]
+    event_time: str
+    preview: str | None = None
+    operation_status: TrajectoryStatus
+    status_evidence: list[str]
+    failure_entry: bool
+    integrity: list[str]
+    operation_start: str | None = None
+    operation_end: str | None = None
+    duration_ms: int | None = None
+    charged_ms: int | None = None
+    timing_basis: TrajectoryTimingBasis
+    duration_owner: str | None = None
+    meta: dict[str, JsonValue]
+
+
+class TrajectoryListParams(_StrictParams):
+    session_key: str
+    cursor: str | None = None
+    limit: int = Field(default=200, ge=1, le=500)
+
+
+class TrajectoryListResult(_Strict):
+    epoch: str
+    snapshot_revision: int
+    entries: list[TrajectoryEntry]
+    next_cursor: str | None = None
+    index_state: TrajectoryIndexState
+    complete: bool
+
+
+class TrajectoryChangesParams(_StrictParams):
+    session_key: str
+    epoch: str = Field(min_length=1)
+    after_revision: int = Field(ge=0)
+    limit: int = Field(default=500, ge=1, le=500)
+
+
+class TrajectoryRemoved(_Strict):
+    entry_id: str
+    revision: int
+    replaced_by: str | None = None
+
+
+class TrajectoryChangesResult(_Strict):
+    epoch: str
+    from_revision: int
+    to_revision: int
+    upserts: list[TrajectoryEntry]
+    removed: list[TrajectoryRemoved]
+    has_more: bool
+    reset_required: bool
+    index_state: TrajectoryIndexState
+
+
+class TrajectoryDetailParams(_StrictParams):
+    session_key: str
+    entry_id: str = Field(min_length=1)
+    entry_revision: int | None = Field(default=None, ge=0)
+
+
+class TrajectoryBlockDescriptor(_Strict):
+    id: str
+    renderer: TrajectoryRenderer
+    availability: TrajectoryAvailability
+    preview: JsonValue = None
+    total_items: int | None = None
+    related_operation: str | None = None
+    reason: str | None = None
+
+
+class TrajectoryDetailResult(_Strict):
+    session_key: str
+    epoch: str
+    entry_id: str
+    entry_revision: int
+    kind: str
+    span_name: str
+    slot: str
+    operation_status: TrajectoryStatus
+    status_evidence: list[str]
+    failure_entry: bool
+    integrity: list[str]
+    notes: list[str]
+    blocks: list[TrajectoryBlockDescriptor]
+    revision_changed: bool
+    truncated: bool
+
+
+class TrajectoryBlockParams(_StrictParams):
+    session_key: str
+    entry_id: str = Field(min_length=1)
+    entry_revision: int = Field(ge=0)
+    epoch: str = Field(min_length=1)
+    block_id: str = Field(min_length=1)
+    cursor: str | None = None
+
+
+class TrajectoryBlockResult(_Strict):
+    entry_id: str
+    entry_revision: int
+    epoch: str
+    block_id: str
+    renderer: TrajectoryRenderer
+    availability: TrajectoryAvailability
+    reason: str | None = None
+    data: JsonValue = None
+    next_cursor: str | None = None
+    total_items: int | None = None
+    integrity: list[str]
+    truncated: bool
+
+
+class TrajectoryTurnsParams(_StrictParams):
+    session_key: str
+
+
+class TrajectoryTurn(_Strict):
+    """One main-line turn of a session; see raven/trajectory/selection.py."""
+
+    trace_id: str
+    number: int
+    start: str
+    input_preview: str
+    in_progress: bool
+
+
+class TrajectoryTurnsResult(_Strict):
+    title: str
+    turns: list[TrajectoryTurn]
+
+
+class TrajectoryExportParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    file_name: str
+
+
+class TrajectoryExportResult(_Strict):
+    job_id: str
+
+
+class TrajectoryExportStatusParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCounts(_Strict):
+    spans: int
+    artifacts: int
+    messages: int
+
+
+class TrajectoryExportStatusResult(_Strict):
+    job_id: str
+    state: Literal["running", "done", "failed", "cancelled"]
+    phase: Literal["collecting", "writing", "done"]
+    file_name: str
+    download_url: str | None = None
+    size_bytes: int | None = None
+    counts: TrajectoryExportCounts | None = None
+    error: str | None = None
+
+
+class TrajectoryExportCancelParams(_StrictParams):
+    job_id: str
+
+
+class TrajectoryExportCancelResult(_Strict):
+    ok: bool
+
+
+class BugReportProblem(_Strict):
+    description: str
+    expected: str = ""
+    actual: str = ""
+    severity: Literal["", "low", "medium", "high", "critical"] = ""
+    steps: str = ""
+    reporter: str = ""
+
+
+class BugReportProbeParams(_StrictParams):
+    pass
+
+
+class BugReportProbeResult(_Strict):
+    reachable: bool
+    target: str
+    reason: str
+
+
+class BugReportStartParams(_StrictParams):
+    session_key: str
+    trace_ids: list[str]
+    problem: BugReportProblem
+
+
+class BugReportStartResult(_Strict):
+    report_id: str
+
+
+class BugReportStatusParams(_StrictParams):
+    report_id: str
+
+
+class BugReportFailure(_Strict):
+    message: str
+    retryable: bool
+    status: int | None = None
+
+
+class BugReportHistory(_Strict):
+    state: Literal["on", "off", "corrupt", "unavailable"]
+    auto_kept: int
+    auto_redacted: int
+    warning: str | None = None
+
+
+class BugReportSource(_Strict):
+    label: str
+    count: int
+
+
+class BugReportItem(_Strict):
+    """One Review Item still to decide: the value in full, which is what the reader
+    decides on, and its masked sample. A confirmed item, replaced whatever the
+    reader says, has no value of its own and shows its replacement."""
+
+    id: str
+    kind: Literal["suspected", "confirmed"]
+    category: str
+    value: str
+    masked_sample: str
+    count: int
+    sources: list[BugReportSource]
+    linked: list[str]
+    hint: Literal["kept", "redacted"] | None = None
+
+
+class BugReportSummary(_Strict):
+    classification: Literal["clean", "needs_review"]
+    warnings: list[str]
+    size_bytes: int | None = None
+    auto_replaced: int
+    kept: int
+    redacted: int
+    acknowledged: int
+    completeness: str
+
+
+class BugReportReceipt(_Strict):
+    receipt_id: str
+    duplicate: bool
+
+
+class BugReportStatusResult(_Strict):
+    report_id: str
+    bug_report_id: str | None = None
+    phase: Literal[
+        "collecting", "deciding", "finishing", "ready", "uploading", "uploaded", "upload_failed", "failed", "cancelled"
+    ]
+    error: BugReportFailure | None = None
+    history: BugReportHistory
+    items: list[BugReportItem] | None = None
+    summary: BugReportSummary | None = None
+    receipt: BugReportReceipt | None = None
+    record_dir: str | None = None
+
+
+class BugReportItemParams(_StrictParams):
+    report_id: str
+    item_id: str
+
+
+class BugReportContextGroup(_Strict):
+    label: str
+    text: str
+    spans: list[list[int]]
+    count: int
+
+
+class BugReportItemResult(_Strict):
+    groups: list[BugReportContextGroup]
+    total_groups: int
+
+
+class BugReportDecision(_Strict):
+    item_id: str
+    action: Literal["kept", "redacted"]
+
+
+class BugReportDecideParams(_StrictParams):
+    report_id: str
+    decisions: list[BugReportDecision]
+    acknowledged: list[str]
+
+
+class BugReportUploadParams(_StrictParams):
+    report_id: str
+    risk_accepted: bool
+
+
+class BugReportRetryParams(_StrictParams):
+    report_id: str
+
+
+class BugReportCancelParams(_StrictParams):
+    report_id: str
+
+
+class BugReportOkResult(_Strict):
+    ok: bool
+
+
+# ---------------------------------------------------------------------------
+# imported.* -- packages read back in as read-only Imported Conversations
+# ---------------------------------------------------------------------------
+
+
+class ImportedUploadParams(_StrictParams):
+    name: str = Field(..., description="The file name the package was picked under; only its last segment is kept.")
+    content_b64: str = Field(..., description="The whole package, base64; at most the upload channel's limit decoded.")
+    force: bool = Field(
+        default=False,
+        description="Import a second copy of a package already imported, instead of answering with that one.",
+    )
+
+
+class ImportedUploadResult(_Strict):
+    status: str = Field(
+        ...,
+        description=(
+            "'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes "
+            "nothing and every other field describes the copy already there."
+        ),
+    )
+    session_key: str = Field(..., description="imported:<id>, the key session.* and trajectory.* take.")
+    title: str
+    kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
+    source_name: str
+    imported_at: str = Field(..., description="When it was imported, ISO 8601 in UTC.")
+
+
 METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # knowledge.* -- bases and their documents, served by the in-process engine
     "knowledge.status": (KnowledgeStatusParams, KnowledgeStatusResult),
@@ -5458,7 +7345,18 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     ),
     "knowledge.documents.add_url": (KnowledgeDocumentsAddUrlParams, KnowledgeDocumentsAddUrlResult),
     "knowledge.documents.index": (KnowledgeDocumentsIndexParams, KnowledgeDocumentsIndexResult),
+    "knowledge.documents.move": (KnowledgeDocumentsMoveParams, KnowledgeDocumentsMoveResult),
+    "knowledge.folders.list": (KnowledgeFoldersListParams, KnowledgeFoldersListResult),
+    "knowledge.folders.create": (KnowledgeFoldersCreateParams, KnowledgeFoldersCreateResult),
+    "knowledge.folders.rename": (KnowledgeFoldersRenameParams, KnowledgeFoldersRenameResult),
+    "knowledge.folders.delete": (KnowledgeFoldersDeleteParams, KnowledgeFoldersDeleteResult),
     "knowledge.documents.delete": (KnowledgeDocumentsDeleteParams, KnowledgeDocumentsDeleteResult),
+    "knowledge.documents.chunks": (KnowledgeDocumentsChunksParams, KnowledgeDocumentsChunksResult),
+    "knowledge.documents.pages": (KnowledgeDocumentsPagesParams, KnowledgeDocumentsPagesResult),
+    "knowledge.chunks.switch": (KnowledgeChunksSwitchParams, KnowledgeChunksSwitchResult),
+    "knowledge.chunks.delete": (KnowledgeChunksDeleteParams, KnowledgeChunksDeleteResult),
+    "knowledge.chunks.create": (KnowledgeChunksCreateParams, KnowledgeChunksCreateResult),
+    "knowledge.chunks.update": (KnowledgeChunksUpdateParams, KnowledgeChunksUpdateResult),
     "knowledge.search": (KnowledgeSearchParams, KnowledgeSearchResult),
     # playbooks.* -- the stored library, read-only
     "playbooks.list": (PlaybooksListParams, PlaybooksListResult),
@@ -5471,6 +7369,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "playbooks.set_enabled": (PlaybooksSetEnabledParams, PlaybooksSetEnabledResult),
     "playbooks.validate": (PlaybooksValidateParams, PlaybooksValidateResult),
     "playbooks.delete": (PlaybooksDeleteParams, PlaybooksDeleteResult),
+    "playbooks.draft": (PlaybooksDraftParams, PlaybooksDraftResult),
+    "playbooks.draft_save": (PlaybooksDraftSaveParams, PlaybooksDraftSaveResult),
+    "playbooks.draft_discard": (PlaybooksDraftDiscardParams, PlaybooksDraftDiscardResult),
     "playbooks.run": (PlaybooksRunParams, PlaybooksRunResult),
     "playbooks.create": (PlaybooksCreateParams, PlaybooksCreateResult),
     # playbooks.stints.* -- the multi-round runs a `mode: stint` playbook started
@@ -5514,7 +7415,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "session.compress": (SessionCompressParams, SessionCompressResult),
     "session.usage": (SessionUsageParams, SessionUsageResult),
     "session.status": (SessionStatusParams, SessionStatusResult),
+    "session.set_knowledge": (SessionSetKnowledgeParams, SessionSetKnowledgeResult),
+    "session.set_harness": (SessionSetHarnessParams, SessionSetHarnessResult),
     "session.set_mode": (SessionSetModeParams, SessionSetModeResult),
+    "session.set_effort": (SessionSetEffortParams, SessionSetEffortResult),
     # ext.list / cron.* / settings.* / channels.status / fs.* -- the console
     "ext.list": (ExtListParams, ExtListResult),
     "cron.list": (CronListParams, CronListResult),
@@ -5529,6 +7433,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "settings.everos": (SettingsEverosParams, SettingsEverosResult),
     "settings.everosSet": (SettingsEverosSetParams, SettingsEverosSetResult),
     "settings.everos_set": (SettingsEverosSetParams, SettingsEverosSetResult),
+    "settings.everosCloud": (SettingsEverosCloudParams, SettingsEverosCloudResult),
     "clipboard.paste": (ClipboardPasteParams, ClipboardPasteResult),
     "command.dispatch": (CommandDispatchParams, CommandDispatchResult),
     "delegation.status": (DelegationStatusParams, DelegationStatusResult),
@@ -5558,6 +7463,26 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
+    # trajectory.* -- the Web trajectory view
+    "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),
+    "trajectory.list": (TrajectoryListParams, TrajectoryListResult),
+    "trajectory.changes": (TrajectoryChangesParams, TrajectoryChangesResult),
+    "trajectory.detail": (TrajectoryDetailParams, TrajectoryDetailResult),
+    "trajectory.block": (TrajectoryBlockParams, TrajectoryBlockResult),
+    "trajectory.turns": (TrajectoryTurnsParams, TrajectoryTurnsResult),
+    "trajectory.export": (TrajectoryExportParams, TrajectoryExportResult),
+    "trajectory.export_status": (TrajectoryExportStatusParams, TrajectoryExportStatusResult),
+    "trajectory.export_cancel": (TrajectoryExportCancelParams, TrajectoryExportCancelResult),
+    # bugreport.* -- the web page's bug report, held as a Report Session
+    "bugreport.probe": (BugReportProbeParams, BugReportProbeResult),
+    "bugreport.start": (BugReportStartParams, BugReportStartResult),
+    "bugreport.status": (BugReportStatusParams, BugReportStatusResult),
+    "bugreport.item": (BugReportItemParams, BugReportItemResult),
+    "bugreport.decide": (BugReportDecideParams, BugReportOkResult),
+    "bugreport.upload": (BugReportUploadParams, BugReportOkResult),
+    "bugreport.retry_upload": (BugReportRetryParams, BugReportOkResult),
+    "bugreport.cancel": (BugReportCancelParams, BugReportOkResult),
+    "imported.upload": (ImportedUploadParams, ImportedUploadResult),
     # the round-trip answer sinks
     "approval.respond": (ApprovalRespondParams, ApprovalRespondResult),
     "approval.revoke": (ApprovalRevokeParams, ApprovalRevokeResult),
@@ -5590,6 +7515,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "model.set_protocol": (ModelSetProtocolParams, ModelSetProtocolResult),
     "model.save_key": (ModelSaveKeyParams, ModelSaveKeyResult),
     "model.disconnect": (ModelDisconnectParams, ModelDisconnectResult),
+    "model.reveal_key": (ModelRevealKeyParams, ModelRevealKeyResult),
+    "model.check_key": (ModelCheckKeyParams, ModelCheckKeyResult),
     "model.add_model": (ModelAddModelParams, ModelAddModelResult),
     "model.add_models": (ModelAddModelsParams, ModelAddModelsResult),
     "model.set_fields": (ModelSetFieldsParams, ModelSetFieldsResult),
@@ -5608,6 +7535,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagent.context": (SubagentContextParams, SubagentContextResult),
     # subagents.*
     "subagents.list": (SubagentsListParams, SubagentsListResult),
+    "subagents.presets": (SubagentsPresetsParams, SubagentsPresetsResult),
     "subagents.add": (SubagentsAddParams, SubagentsAddResult),
     "subagents.update": (SubagentsUpdateParams, SubagentsUpdateResult),
     "subagents.remove": (SubagentsRemoveParams, SubagentsRemoveResult),
@@ -5616,6 +7544,13 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.probe": (SubagentsProbeParams, SubagentsProbeResult),
     "subagents.test": (SubagentsTestParams, SubagentsTestResult),
     "subagents.test_cancel": (SubagentsTestCancelParams, SubagentsTestCancelResult),
+    "subagents.refresh_models": (SubagentsRefreshModelsParams, SubagentsRefreshModelsResult),
+    "machines.list": (MachinesListParams, MachinesListResult),
+    "machines.add": (MachinesAddParams, MachinesAddResult),
+    "machines.install_node": (MachinesInstallNodeParams, MachinesInstallNodeResult),
+    "machines.doctor": (MachinesDoctorParams, MachinesDoctorResult),
+    "machines.remove": (MachinesRemoveParams, MachinesRemoveResult),
+    "machines.local_keys": (MachinesLocalKeysParams, MachinesLocalKeysResult),
     # subagents.instance*
     "subagents.instances": (SubagentsInstancesParams, SubagentsInstancesResult),
     "subagents.instance.create": (SubagentsInstanceCreateParams, SubagentsInstanceCreateResult),
@@ -5674,6 +7609,10 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "dag.get": (DagGetParams, DagGetResult),
     "dag.node": (DagNodeParams, DagNodeResult),
     "tasks.list": (TasksListParams, TasksListResult),
+    "tasks.board": (TasksBoardParams, TasksBoardResult),
+    "tasks.boards": (TasksBoardsParams, TasksBoardsResult),
+    "tasks.set_group_status": (TasksSetGroupStatusParams, TasksSetGroupStatusResult),
+    "tasks.ignore_question": (TasksIgnoreQuestionParams, TasksIgnoreQuestionResult),
 }
 
 __all__ = [
@@ -5784,12 +7723,35 @@ __all__ = [
     "PlaybookStint",
     "PlaybookNode",
     "PlaybookNodeShape",
+    "PlaybookWorker",
+    "PlaybookWorkerShape",
     "PlaybookParam",
     "PlaybookRow",
     "PlaybooksGetParams",
     "PlaybooksGetResult",
     "PlaybooksListParams",
     "PlaybooksListResult",
+    # trajectory
+    "TrajectoryAvailability",
+    "TrajectoryBlockDescriptor",
+    "TrajectoryBlockParams",
+    "TrajectoryBlockResult",
+    "TrajectoryChangesParams",
+    "TrajectoryChangesResult",
+    "TrajectoryDetailParams",
+    "TrajectoryDetailResult",
+    "TrajectoryEntry",
+    "TrajectoryIndexState",
+    "TrajectoryListParams",
+    "TrajectoryListResult",
+    "TrajectoryOrigin",
+    "TrajectoryPhase",
+    "TrajectoryRemoved",
+    "TrajectoryRenderer",
+    "TrajectoryStateParams",
+    "TrajectoryStateResult",
+    "TrajectoryStatus",
+    "TrajectoryTimingBasis",
     # registry
     "METHOD_MODELS",
 ]

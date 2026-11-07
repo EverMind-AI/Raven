@@ -145,11 +145,24 @@ docker compose run --rm raven status
   `ui-tui/`, which the image does not build.
 - **`sandbox`.** The extra is off by default: inside a container the container
   is the boundary. Turn it on with `RAVEN_EXTRAS` if you want boxlite as well.
-- **LibreOffice is in the image.** The page cannot draw a `.docx`, `.xlsx` or
-  `.pptx`, so the gateway converts those to PDF to show them; without it every
-  office file in a knowledge base, and every deck, answers the viewer with
-  "LibreOffice is not installed" -- a hosted image telling its user to install
-  something on it. It is the largest thing here, roughly 500 MB with the CJK
-  fonts it needs to render anything but Latin text. Build with
+- **LibreOffice is in the image.** The gateway uses it to convert `.docx`,
+  `.xlsx`, and `.pptx` files to PDF for browser previews. LibreOffice and the
+  CJK fonts add roughly 500 MB to the image. Build with
   `--build-arg RAVEN_OFFICE=0`, or `RAVEN_OFFICE=0` in the environment Compose
   reads, for a deployment that will never preview one.
+- **The tokenizer dictionary and the deepdoc models are in the image**, about
+  160 MB. They are fetched at build time rather than at first use so the
+  container needs no egress to read a PDF or to segment Chinese -- a deployment
+  without it would otherwise fail the first time somebody uploaded one, long
+  after the build that could have said so. Build with
+  `--build-arg RAVEN_RESOURCES=0`, or `RAVEN_RESOURCES=0` in the environment
+  Compose reads, for a smaller image that does neither; both features report
+  their own absence rather than failing obscurely.
+
+  **Before you push this image anywhere**, read the "deepdoc models" section of
+  `NOTICES.md`. One of the four, `layout.onnx`, stamps `AGPL-3.0` into its own
+  metadata under `author: Ultralytics`, and its metadata contradicts itself
+  about that. Building the image here is your own fetch happening inside a
+  container; pushing it to a registry, or shipping an appliance built from it,
+  is redistribution, and that is where the question becomes yours to answer.
+  `RAVEN_RESOURCES=0` is the build that carries none of them.

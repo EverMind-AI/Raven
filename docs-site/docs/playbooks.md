@@ -37,8 +37,7 @@ instead of, or alongside, `--input`. Inspect the generated parameters and
 steps before running: generation does not promise the exact example below.
 `get` prints the file to stdout and its source path to stderr.
 
-**Newly created Playbooks are usable immediately**, despite older CLI help
-describing them as disabled on creation. Use `raven playbook disable brief-review`
+**Newly created Playbooks are usable immediately.** Use `raven playbook disable brief-review`
 to withhold one during review. For review before discovery, author the file
 outside the library, validate it by path, and install it only when ready.
 
@@ -78,13 +77,13 @@ params:
     description: The brief to inspect
 nodes:
   - id: inspect
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Identify gaps
     skills: []
     mcps: []
     promptTemplate: "Find gaps in this brief: {{ params.brief }}. Do not edit files or contact external services."
   - id: summarize
-    subagent: raven
+    subagent: Raven-General
     nodeSummary: Prioritize feedback
     dependsOn: [inspect]
     skills: []
@@ -93,7 +92,7 @@ nodes:
 ```
 ````
 
-`raven` is the generic built-in agent. To use Raven-Code or another specialized
+`Raven-General` is the generic built-in agent. To use Raven-Code or another specialized
 agent, substitute a registered name and verify its setup through
 [Agent Integrations](agent-integrations.md). A stored Playbook uses the
 underlying agent registry, not temporary worker labels advertised for an
@@ -139,14 +138,17 @@ prompts: |
 In a conversation, `load_playbook` returns this filled guidance; the caller
 composes and submits `run_subagent_dag`. The CLI instead uses its configured
 model to compose the graph, with a limited repair attempt. Both paths use the
-ordinary DAG contract. Prompt mode is assembly guidance, not a runtime
-branching language; inspect the submitted graph's options, including approval.
+ordinary DAG contract. Prompt mode is assembly guidance, read once to compose
+the graph: it decides nothing while the graph runs, and a branch is chosen by a
+decision node in the graph it composed. Inspect the submitted graph's options,
+including approval.
 
 ## Parameters and blank fields
 
 Declare inputs in `params`. Supported declarations are `string`, `integer`,
 `number`, `boolean`, `enum`, `path`, and `secret`. Ordinary parameter references
-belong directly in `promptTemplate` or `prompts`, not in node `inputs`.
+belong directly in `promptTemplate`, `prompts`, or a route condition, not in
+node `inputs`.
 Both `{{ params.brief }}` and the dollar-brace parameter form are supported.
 
 The current resolver substitutes text and detects missing required values; it
@@ -178,8 +180,10 @@ Node fields use the [DAG contract](orchestration.md#node-contract-and-data-flow)
 Omitting `skills` or `mcps` preserves that agent's/default selection; `[]`
 requests none. Non-empty lists request a specific selection, subject to backend
 support. A shared `instance` needs a stateful agent and dependency-ordered
-nodes targeting the same agent. Do not expect isolated working copies from
-parallelism alone.
+nodes targeting the same agent. For parallel writes, provide separate working
+copies or explicit file ownership in the workflow. The host's coding skill
+instructs coding agents to create worktrees; the DAG scheduler does not create
+them. See [Working with sub-agents](agent-collaboration.md#models-modes-and-shared-files).
 
 A DAG Playbook can carry `mcpServers` definitions, using the host MCP config
 schema. Its definition takes precedence over a same-named host server for

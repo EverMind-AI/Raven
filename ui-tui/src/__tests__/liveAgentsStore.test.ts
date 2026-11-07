@@ -2,17 +2,28 @@
 // Copyright (c) 2026 EverMind.
 // See NOTICES.md.
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import type { DagRunStartedEvent, SubagentCall } from '../rpc/index.js'
+import type {
+  DagNodeUpdatedEvent,
+  DagRunCompletedEvent,
+  DagRunStartedEvent,
+  SubagentCall
+} from '../rpc/index.js'
 
 import {
   $dagRuns,
   $liveAgents,
+  agentRows,
   applyDagEvent,
   applySubagentStatus,
   dagRunCounts,
+  isDagRunSettled,
+  isTerminal,
   liveAgentCounts,
+  reconcileFromList,
   resetLiveAgents,
   toSubagentProgress
 } from '../app/liveAgentsStore.js'
@@ -434,5 +445,262 @@ describe('$dagRuns reconcile', () => {
     const row = $liveAgents.get().find(r => r.id === 'run-3/stuck')
     expect(row).toMatchObject({ status: 'exception' })
     expect(row?.settledAtMs).toBeUndefined()
+  })
+})
+
+describe('a node a branch left out', () => {
+  const nodeUpdated = (
+    node: string,
+    status: DagNodeUpdatedEvent['payload']['status'],
+    extra: Partial<DagNodeUpdatedEvent['payload']> = {}
+  ): DagNodeUpdatedEvent => ({ payload: { node, run_id: 'run-1', status, ...extra }, type: 'dag.node_updated' })
+
+  const rowFor = (id: string) => $liveAgents.get().find(r => r.id === id)
+
+  // Read off the generated union rather than listed here: the next status the
+  // schema grows is the one nobody remembered to map.
+  const wireStatuses = () => {
+    const source = readFileSync(fileURLToPath(new URL('../rpc/generated.ts', import.meta.url)), 'utf8')
+    const start = source.indexOf('export type DagNodeStatus =')
+
+    return [...source.slice(start, source.indexOf(';', start)).matchAll(/'([a-z_]+)'/g)].map(
+      m => m[1]!
+    ) as DagNodeUpdatedEvent['payload']['status'][]
+  }
+
+  const completion = (statuses: Record<string, DagNodeUpdatedEvent['payload']['status']>) => ({
+    payload: {
+      dir: '/tmp/run-1',
+      files: Object.entries(statuses).map(([node, status]) => ({ node, status })),
+      run_id: 'run-1',
+      summary: {}
+    },
+    type: 'dag.run_completed' as const
+  })
+
+  it('settles rather than staying running', () => {
+    // An unmapped status falls back to `running`, which is a node that never
+    // finishes: the strip keeps its row and the graph keeps its clock.
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('write', 'not_executed', { reason: 'when_false' }))
+
+    const row = rowFor('run-1/write')
+
+    expect(row?.status).toBe('not_executed')
+    expect(row?.settledAtMs).toBeDefined()
+    expect(isTerminal('not_executed')).toBe(true)
+  })
+
+  it('keeps the end a frame stamped it with', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('write', 'not_executed', { ended_at: 5_000 }))
+
+    expect(rowFor('run-1/write')).toMatchObject({ endedAtMs: 5_000, status: 'not_executed' })
+  })
+
+  it('stays settled when a late frame says it is running', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('write', 'not_executed'))
+    applyDagEvent(nodeUpdated('write', 'running'))
+
+    expect(rowFor('run-1/write')?.status).toBe('not_executed')
+    expect(dagRunCounts($dagRuns.get()[0]!)).toMatchObject({ running: 0 })
+  })
+
+  it('is settled by the run manifest, which gives it an end', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(completion({ research: 'completed', write: 'not_executed' }))
+
+    expect(rowFor('run-1/write')).toMatchObject({ status: 'not_executed' })
+    expect(rowFor('run-1/write')?.endedAtMs).toBeDefined()
+  })
+
+  it('counts as done on its run, neither failed nor still moving', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('research', 'completed'))
+    applyDagEvent(nodeUpdated('write', 'not_executed'))
+
+    expect(dagRunCounts($dagRuns.get()[0]!)).toEqual({ done: 2, failed: 0, pending: 0, running: 0, total: 2 })
+  })
+
+  it('ends a run whose last node it is, though the completion frame never came', () => {
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('research', 'completed'))
+    expect($dagRuns.get()[0]?.endedAtMs).toBeUndefined()
+
+    applyDagEvent(nodeUpdated('write', 'not_executed'))
+
+    expect(isDagRunSettled($dagRuns.get()[0]!)).toBe(true)
+    expect($dagRuns.get()[0]?.endedAtMs).toBeDefined()
+  })
+
+  it('is seeded settled from a list row that names it', () => {
+    reconcileFromList([
+      { id: 'r9/n2', kind: 'dag', label: 'n2', message_count: 0, node: 'n2', run_id: 'r9', status: 'not_executed' }
+    ])
+
+    expect(rowFor('r9/n2')).toMatchObject({ kind: 'dag-node', status: 'not_executed' })
+    expect(rowFor('r9/n2')?.settledAtMs).toBeDefined()
+  })
+
+  it('is no agent, so the overlay has no row for it', () => {
+    // `completed` would say an agent ran and finished, and `interrupted` would
+    // light the failed filter for a run that went as written.
+    applyDagEvent(dagStarted())
+    applyDagEvent(nodeUpdated('research', 'completed'))
+    applyDagEvent(nodeUpdated('write', 'not_executed', { reason: 'when_false' }))
+
+    expect(agentRows($liveAgents.get()).map(r => r.id)).toEqual(['run-1/research'])
+    // The store keeps the row: it is how the run learns the node is settled.
+    expect(rowFor('run-1/write')).toMatchObject({ status: 'not_executed' })
+    expect(isDagRunSettled($dagRuns.get()[0]!)).toBe(true)
+  })
+
+  it('leaves every row of a run no branch touched in the overlay, as it was', () => {
+    const legacy = wireStatuses().filter(status => status !== 'not_executed')
+
+    applyDagEvent({
+      payload: { nodes: legacy.map(id => ({ depends_on: [], id, subagent: 'echo' })), run_id: 'run-1' },
+      type: 'dag.run_started'
+    })
+    legacy.forEach(status => applyDagEvent(nodeUpdated(status, status)))
+
+    const rows = $liveAgents.get()
+    const kept = agentRows(rows)
+
+    expect(rows.map(r => r.status)).toEqual(legacy)
+    expect(kept).toHaveLength(rows.length)
+    kept.forEach((row, i) => expect(row).toBe(rows[i]))
+  })
+
+  it('maps every status the wire can send, so that none falls back to running', () => {
+    const wire = wireStatuses()
+
+    expect(wire).toContain('not_executed')
+    expect(wire.length).toBeGreaterThan(6)
+
+    for (const status of wire) {
+      resetLiveAgents()
+      applyDagEvent(dagStarted())
+      applyDagEvent(nodeUpdated('write', status))
+
+      expect(rowFor('run-1/write')?.status, status).toBe(status)
+      expect($dagRuns.get()[0]?.nodes.write, status).toBe(status)
+    }
+  })
+})
+
+// The strip and the overlay name the agent a node is on, which moves when the
+// node is handed to another agent. A frame carries it only once it has.
+describe('a dag row whose node was reassigned', () => {
+  const rowFor = (id: string) => $liveAgents.get().find(r => r.id === id)
+  const update = (over: Record<string, unknown> = {}): DagNodeUpdatedEvent => ({
+    type: 'dag.node_updated',
+    payload: { run_id: 'run-1', node: 'write', status: 'running', ...over }
+  })
+
+  beforeEach(() => {
+    applyDagEvent(dagStarted())
+  })
+
+  it('moves the agent and the handle with the frame that carries them', () => {
+    applyDagEvent(
+      update({ subagent: 'claude', instance: 'write-minted', attempt_agents: ['research-raven', 'claude'] })
+    )
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
+  })
+
+  it('keeps what an earlier frame said when this one names neither', () => {
+    applyDagEvent(update({ subagent: 'claude', instance: 'write-minted' }))
+    applyDagEvent(update({ status: 'completed' }))
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted', status: 'completed' })
+  })
+
+  it('clears the handle on a stateless retry', () => {
+    applyDagEvent(update({ subagent: 'claude', instance: 'write-minted' }))
+    applyDagEvent(update({ instance: null, subagent: 'codex' }))
+
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+    expect(rowFor('run-1/write')?.agent).toBe('codex')
+  })
+
+  it('leaves a run that never reassigned its rows exactly as they were', () => {
+    applyDagEvent(update({ status: 'completed' }))
+
+    expect(rowFor('run-1/write')).toMatchObject({
+      agent: 'content-raven',
+      id: 'run-1/write',
+      kind: 'dag-node',
+      status: 'completed'
+    })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  const completed = (files: DagRunCompletedEvent['payload']['files']): DagRunCompletedEvent => ({
+    payload: { dir: '/tmp/run-1', files, run_id: 'run-1', summary: {} },
+    type: 'dag.run_completed'
+  })
+
+  // The manifest is the only reassignment account a client that missed the moved
+  // attempt's update ever sees, so it has to carry the identity the same way.
+  it('moves the agent and clears the handle from the run manifest', () => {
+    applyDagEvent(update({ instance: 'old', subagent: 'alpha' }))
+    applyDagEvent(
+      completed([
+        { attempt_agents: ['alpha', 'beta'], instance: null, node: 'write', status: 'completed', subagent: 'beta' }
+      ])
+    )
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'beta', status: 'completed' })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  it('keeps the identity a manifest entry does not speak for', () => {
+    applyDagEvent(update({ instance: 'write-minted', subagent: 'claude' }))
+    applyDagEvent(completed([{ node: 'write', status: 'completed' }]))
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
+  })
+
+  // The snapshot is the repair path for a client that missed the reassignment
+  // entirely; a row already on the strip must not keep its superseded identity.
+  it('repairs an existing row from the list snapshot', () => {
+    applyDagEvent(update({ instance: 'old', subagent: 'alpha' }))
+    reconcileFromList([
+      {
+        agent: 'beta',
+        id: 'run-1/write',
+        instance: null,
+        kind: 'dag',
+        label: 'write',
+        message_count: 1,
+        node: 'write',
+        run_id: 'run-1',
+        status: 'run'
+      }
+    ])
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'beta', status: 'running' })
+    expect(rowFor('run-1/write')?.instance).toBeUndefined()
+  })
+
+  it('keeps a handle the list snapshot does not carry', () => {
+    applyDagEvent(update({ instance: 'write-minted', subagent: 'claude' }))
+    reconcileFromList([
+      {
+        agent: 'claude',
+        id: 'run-1/write',
+        kind: 'dag',
+        label: 'write',
+        message_count: 1,
+        node: 'write',
+        run_id: 'run-1',
+        status: 'run'
+      }
+    ])
+
+    expect(rowFor('run-1/write')).toMatchObject({ agent: 'claude', instance: 'write-minted' })
   })
 })

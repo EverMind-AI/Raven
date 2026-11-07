@@ -137,7 +137,7 @@ class _FakeToolDef:
     def __init__(self, name: str) -> None:
         self.name = name
         self.description = "stub"
-        self.inputSchema = {"type": "object", "properties": {}}
+        self.input_schema = {"type": "object", "properties": {}}
 
 
 def _wrapper(server: str, tool: str, *, taken=frozenset()):

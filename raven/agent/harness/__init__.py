@@ -44,6 +44,7 @@ def default_harness_modules(
     system_prompt: Callable[[list[Any] | None], str],
     compaction: Callable[[], Any],
     output_ceiling: Callable[[str | None], int],
+    headroom: Callable[[], Any] | None = None,
 ) -> HarnessModules:
     """Assemble the default four around this generation's own organs."""
     memory = DefaultMemory(
@@ -55,6 +56,7 @@ def default_harness_modules(
         system_prompt=system_prompt,
         compaction=compaction,
         output_ceiling=output_ceiling,
+        headroom=headroom,
     )
     return HarnessModules(
         memory=bind_memory(memory),

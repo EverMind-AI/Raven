@@ -13,12 +13,14 @@ failure path.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from raven.agent.context.silence import SILENCE_INSTRUCTION, is_silence, teaches_silence
 from raven.core.cron_stack import make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
@@ -126,6 +128,17 @@ async def test_reminder_note_carries_schedule_origin(spine):
     assert "set at" in text
 
 
+async def test_the_reminder_teaches_the_silence_marker(spine):
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback)
+
+    await handler(_make_job(name="b5"))
+
+    text = spine.captured[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text), "so the turn reads the loose rule the lesson asks for"
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Reply read-back and heartbeat suppression
 # ─────────────────────────────────────────────────────────────────────
@@ -189,6 +202,27 @@ async def test_spine_path_missing_readback_uses_turn_reply_state(explicit_reply:
         system_events.enqueue.assert_called_once()
         assert "(no response)" in system_events.enqueue.call_args.args[0].text
         wake.request_wake_now.assert_called_once_with("cron:job_t2")
+
+
+async def test_a_silent_run_succeeds_without_waking_heartbeat():
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True)
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    assert await handler(_make_job(channel="telegram", to="c1", name="s1")) is None
+
+    system_events.enqueue.assert_not_called()
+    wake.request_wake_now.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -269,6 +303,58 @@ async def test_a_cancelled_turn_says_it_was_cut_rather_than_that_it_failed():
     wake.request_wake_now.assert_called_once_with("cron:job_f3:fail")
 
 
+async def test_a_no_output_failure_is_recorded_without_waking_heartbeat():
+    """The model gave nothing back on every attempt: the job still records a
+    failure (the handler raises), but heartbeat has nothing to follow up."""
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnFailed(error="the model returned nothing", cancelled=False, reported=True, no_output=True)
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    with pytest.raises(RuntimeError, match="^the model returned nothing$"):
+        await handler(_make_job(name="n1"))
+
+    assert system_events.mock_calls == []
+    assert wake.mock_calls == []
+
+
+@pytest.mark.parametrize("reported", [True, False])
+async def test_other_failures_still_wake_heartbeat(reported: bool):
+    system_events = MagicMock()
+    wake = MagicMock()
+
+    class _Handle:
+        async def result(self):
+            return TurnFailed(
+                error="the model sent only reasoning", cancelled=False, reported=reported, no_output=False
+            )
+
+    handler = make_on_cron_job(
+        submit=lambda req: _Handle(),
+        readback_texts={},
+        system_events=system_events,
+        wake=wake,
+    )
+
+    with pytest.raises(RuntimeError, match="^the model sent only reasoning$"):
+        await handler(_make_job(name="o1"))
+
+    system_events.enqueue.assert_called_once()
+    event = system_events.enqueue.call_args.args[0]
+    assert "the model sent only reasoning" in event.text
+    assert event.context_key == "cron:job_o1:fail"
+    wake.request_wake_now.assert_called_once_with("cron:job_o1:fail")
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Anti-runaway count point: record_fire after a successful recurring turn
 # ─────────────────────────────────────────────────────────────────────
@@ -299,6 +385,34 @@ async def test_record_fire_not_called_on_turn_failure():
         await handler(_make_job(name="r2", kind="every"))
 
     cron_service.record_fire.assert_not_called()
+
+
+async def test_a_silent_run_does_not_count_toward_auto_disable():
+    """A silent run sent the user nothing to respond to, so counting it would
+    disable an hourly check that mostly answers [SILENT] at its twelfth fire."""
+    cron_service = MagicMock()
+    cron_service.record_fire.return_value = False
+    outcomes = iter(
+        [
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True),
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True),
+        ]
+    )
+
+    class _Handle:
+        async def result(self):
+            return next(outcomes)
+
+    handler = make_on_cron_job(submit=lambda req: _Handle(), readback_texts={}, cron_service=cron_service)
+    job = _make_job(name="r7", kind="every")
+
+    await handler(job)
+    cron_service.record_fire.assert_not_called()
+
+    # The same job counts a run that replied, so the gate above is the silence, not the setup.
+    await handler(job)
+    cron_service.record_fire.assert_called_once_with("job_r7")
+    assert job.enabled is True
 
 
 async def test_record_fire_not_called_for_oneshot_at_job(spine):
@@ -474,7 +588,8 @@ def _instance_job(*, agent: str = "Raven-Oncall", handle: str = "inst-7", name: 
     return job
 
 
-async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine):
+@pytest.mark.parametrize("destination", ["default", "issue#42"])
+async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine, destination):
     """The gap this closes, measured 2026-08-25 through ``/new-instance``.
 
     An on-call wake's message is addressed to the agent holding the campaign --
@@ -486,14 +601,17 @@ async def test_a_wake_naming_an_instance_runs_as_that_instance_turn(spine):
     """
     handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="tui")
 
-    response = await handler(_instance_job())
+    job = _instance_job()
+    job.payload.to = destination
+    response = await handler(job)
 
     req = spine.captured[0]
     assert req.direct_target == ("Raven-Oncall", "inst-7")
     # Derived from this job's own (channel, to), not hardcoded: the direct lane
     # hangs off the session key the main-agent lane for this outlet uses, which
     # is what lets RpcOutlet map it back to the client's one subscription.
-    assert req.conversation == "tui:default#Raven-Oncall/inst-7"
+    assert req.conversation == f"tui:{destination}#Raven-Oncall/inst-7"
+    assert req.parent_session == f"tui:{destination}"
     # Read back off the lane the request actually used, not "cron:<job id>".
     assert response == "resolved body"
 
@@ -508,8 +626,25 @@ async def test_the_instance_gets_the_wake_message_not_the_reminder_wrapper(spine
 
     await handler(job)
 
-    assert spine.captured[0].text == job.payload.message
-    assert "[Scheduled Task]" not in spine.captured[0].text
+    text = spine.captured[0].text
+    assert text.startswith(job.payload.message)
+    assert "[Scheduled Task]" not in text
+
+
+async def test_an_instance_wake_teaches_the_silence_marker(spine):
+    """A wake turn is CRON-origin but its prompt is the task's own words, not the reminder wrapper.
+    Without the lesson it reads the strict rule, so a scheduled instruction saying "reply NO_REPLY
+    when nothing changed" would deliver that sentence to the instance's pane. The lesson at the end
+    keeps the wake as quiet as the loose rule made it before the match was narrowed."""
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="tui")
+
+    await handler(_instance_job(name="d4"))
+
+    text = spine.captured[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text)
+    assert is_silence("No reply.", Origin.CRON, taught=teaches_silence(text))
 
 
 async def test_an_ordinary_reminder_is_untouched_by_the_instance_branch(spine):
@@ -537,6 +672,96 @@ def test_every_process_opens_the_one_cron_store(monkeypatch, tmp_path) -> None:
 
     assert service.store_path == tmp_path / "cron" / "jobs.json"
     assert service.allowed_channels == {"tui"}
+
+
+def test_a_new_cron_keeps_local_time_when_no_setting_was_written(monkeypatch, tmp_path):
+    from raven.core.cron_stack import build_cron_service
+
+    monkeypatch.setattr("raven.home._current_config_path", tmp_path / "config.json")
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz is None
+
+
+def test_the_zone_an_old_bootstrap_planted_leaves_new_crons_on_local_time(monkeypatch, tmp_path):
+    """Up to 0.1.12 onboarding wrote ``cron.defaultTimezone: "Asia/Shanghai"`` into
+    every config without the owner choosing it. Once loaded, as every entry point
+    does before it creates a job, an upgraded config must not move a new "every
+    day at 9" onto Shanghai's clock.
+    """
+    from raven.config.loader import _stamp_path, load_config
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    config.write_text(
+        json.dumps({"cron": {"defaultTimezone": "Asia/Shanghai", "notifyMissed": True}}), encoding="utf-8"
+    )
+    _stamp_path(config).write_text(json.dumps({"version": 12}), encoding="utf-8")
+    load_config(config)
+
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz is None
+
+
+def test_a_chosen_timezone_survives_a_config_save(monkeypatch, tmp_path):
+    """``save_config`` drops every value equal to its schema default.
+
+    That is lossless only while the default means what the value means. A
+    chosen ``Asia/Shanghai`` must not read as "unset" after a save and move
+    new reminders onto the host's local time. Chosen means written after the
+    planted copy was cleared, so the config is stamped past that migration.
+    """
+    from raven.config.loader import _stamp_path, load_config, save_config
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    config.write_text(json.dumps({"cron": {"defaultTimezone": "Asia/Shanghai"}}), encoding="utf-8")
+    _stamp_path(config).write_text(json.dumps({"version": 13}), encoding="utf-8")
+    save_config(load_config(config), config)
+
+    assert json.loads(config.read_text(encoding="utf-8"))["cron"] == {"defaultTimezone": "Asia/Shanghai"}
+    service = build_cron_service(allowed_channels=None)
+    job = service.add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily")
+    assert job.schedule.tz == "Asia/Shanghai"
+
+
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+def test_cron_creation_keeps_the_last_admitted_timezone(monkeypatch, tmp_path, spelling):
+    from raven.config.live import LiveConfig
+    from raven.core.cron_stack import build_cron_service
+
+    config = tmp_path / "config.json"
+    monkeypatch.setattr("raven.home._current_config_path", config)
+    live = LiveConfig(config)
+    monkeypatch.setattr("raven.config.live.default_live", lambda: live)
+    service = build_cron_service(allowed_channels=None)
+    sequence = 0
+
+    def create():
+        nonlocal sequence
+        sequence += 1
+        return service.add_job(
+            "daily", CronSchedule(kind="cron", expr="0 9 * * *"), f"daily-{sequence}", to=f"recipient-{sequence}"
+        )
+
+    config.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+    original = create()
+    assert original.schedule.tz == "UTC"
+    for invalid in (7, "Not/AZone"):
+        config.write_text(json.dumps({"cron": {spelling: invalid}}), encoding="utf-8")
+        assert create().schedule.tz == "UTC"
+    config.write_text('{"cron":', encoding="utf-8")
+    assert create().schedule.tz == "UTC"
+    config.write_text(json.dumps({"cron": {spelling: "Europe/Paris"}}), encoding="utf-8")
+    assert create().schedule.tz == "Europe/Paris"
+    config.write_text(json.dumps({"cron": {spelling: None}}), encoding="utf-8")
+    assert create().schedule.tz is None
+    config.write_text('{"cron": {}}', encoding="utf-8")
+    assert create().schedule.tz is None
+    assert next(job for job in service.list_jobs() if job.id == original.id).schedule.tz == "UTC"
 
 
 # --- make_on_session_wake: a wake runs on the session that armed it ------------
@@ -577,8 +802,26 @@ async def test_a_session_wake_runs_on_the_conversation_that_armed_it():
     assert req.conversation == "acp:20260904_111956_61f0b5"
     assert req.origin is Origin.CRON
     assert (req.source.channel, req.source.chat_id, req.source.sender_id) == ("acp", "20260904_111956_61f0b5", "cron")
-    assert req.text == "reminder body source", "the wake's own words, unwrapped: the agent is the addressee"
+    assert req.text.startswith("reminder body source"), "the wake's own words, unwrapped: the agent is the addressee"
+    assert "[Scheduled Task]" not in req.text
     assert getattr(on_job, "runs_on_session", False) is True
+
+
+@pytest.mark.asyncio
+async def test_a_session_wake_teaches_the_silence_marker():
+    """This wake is CRON-origin too, and its prompt is the job's message rather than the reminder
+    wrapper that carries the lesson. Appending the lesson keeps a "no news, reply NO_REPLY"
+    instruction from being delivered as the turn's reply after the loose rule was narrowed."""
+    from raven.core.cron_stack import make_on_session_wake
+
+    submit, seen = _capturing_submit()
+    await make_on_session_wake(submit=submit, channel="acp")(_make_job(channel="acp", to="s1", name="wake-teach"))
+
+    text = seen[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text)
+    assert is_silence("No reply.", Origin.CRON, taught=teaches_silence(text))
 
 
 @pytest.mark.asyncio
@@ -640,3 +883,48 @@ async def test_a_failed_turn_reaches_the_job_record_through_the_real_scheduler(t
     stored = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["state"]
     assert stored["lastStatus"] == "error"
     assert stored["lastError"] == "ValueError: the provider refused the call"
+
+
+@pytest.mark.asyncio
+async def test_a_no_output_failure_reaches_the_job_record_but_not_heartbeat(tmp_path):
+    """Through the real lane: the runner's report is flagged ``no_output`` on the
+    turn's failure, the job file keeps it as an error, and heartbeat is never told."""
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.system_events import SystemEventQueue
+    from raven.proactive_engine.wake import WakeScheduler
+    from raven.spine import AnswerlessTurnError, OriginPools, Scheduler
+
+    class _EmptyRunner:
+        async def run(self, req, emit, drain):
+            raise AnswerlessTurnError("the model returned nothing", no_output=True)
+
+    async def _sink(event) -> None:
+        pass
+
+    sched = Scheduler(_EmptyRunner(), OriginPools(user=1, system=1), _sink)
+    queue = SystemEventQueue()
+    wake = WakeScheduler(coalesce_s=0.01)
+    svc = CronService(
+        tmp_path / "jobs.json",
+        on_job=make_on_cron_job(submit=sched.submit, readback_texts={}, system_events=queue, wake=wake),
+    )
+    job = svc.add_job(
+        name="empty",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="do the thing",
+        channel="tui",
+        to="direct",
+    )
+
+    try:
+        assert await svc.run_job(job.id, force=True) is True
+        await asyncio.sleep(0.05)
+    finally:
+        wake.stop()
+        await sched.shutdown(grace=1)
+
+    stored = json.loads((tmp_path / "jobs.json").read_text(encoding="utf-8"))["jobs"][0]["state"]
+    assert stored["lastStatus"] == "error"
+    assert stored["lastError"] == "the model returned nothing"
+    assert queue.peek_all() == []
+    assert not wake.wake_event.is_set()

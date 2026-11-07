@@ -8,7 +8,7 @@ import * as store from './store'
 import type { SettingsSnapshot, SettingsSource } from './types'
 
 const snapOf = (model: string): SettingsSnapshot => ({
-  raw: {}, configPath: '', everos: null, providers: [], curProvider: '', model, tools: [], skills: [], mcp: [],
+  raw: {}, configPath: '', skillHub: { on: false, awaitingReload: false }, everos: null, providers: [], curProvider: '', model, tools: [], skills: [], mcp: [],
 })
 
 afterEach(() => {
@@ -30,6 +30,19 @@ describe('settings store', () => {
     off()
     store.set({ err: 'x' })
     expect(n).toBe(2)
+  })
+
+  it('patches the cloud probe into the snapshot when it lands after load', async () => {
+    let land: (c: SettingsSnapshot['everosCloud']) => void = () => {}
+    const probe = new Promise<SettingsSnapshot['everosCloud']>((resolve) => { land = resolve })
+    setSources({ settings: { load: async () => snapOf('m'), everosCloud: () => probe } as unknown as SettingsSource })
+    await store.refresh()
+    expect(store.get().snap.everosCloud ?? null).toBe(null)
+    const cloud = { available: true, selected: true, api_key_set: true, key_source: 'file', base_url: 'http://fake', status: 'ok', hint: null }
+    land(cloud)
+    await probe
+    await Promise.resolve()
+    expect(store.get().snap.everosCloud).toEqual(cloud)
   })
 
   it('setTab closes every drawer of the section it leaves', () => {

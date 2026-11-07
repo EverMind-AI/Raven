@@ -16,6 +16,7 @@ them are healthy, is the judgement under measurement.
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,7 @@ class OpsOutputsTool(Tool):
         }
 
     async def execute(self, campaign: str, trial: str, ledger: str | None = None, **kwargs: Any) -> str:
-        resolved = _campaign_backend(campaign, ledger)
+        resolved = await asyncio.to_thread(_campaign_backend, campaign, ledger)
         if isinstance(resolved, str):
             return resolved
         backend, led, _ = resolved

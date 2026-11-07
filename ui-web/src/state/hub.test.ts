@@ -5,12 +5,16 @@ import * as hub from './hub'
 import * as page from './page'
 
 /* The two pages the hub switches between, and the drawer a page switch closes,
-   so page.show runs against the markup it writes on. */
+   so page.show runs against the markup it writes on. Knowledge is not one the
+   hub reaches, but `page.show` writes the flag on every page in the table, so
+   its section has to be here for the write to land on something. */
 beforeEach(() => {
   document.body.innerHTML =
     '<div class="app"></div>' +
     '<section class="page" id="extAgentsPage" data-open="false"><div class="work"></div></section>' +
     '<section class="page" id="connectionsPage" data-open="false"><div class="work"></div></section>' +
+    '<section class="page" id="knowledgePage" data-open="false"><div class="work"></div></section>' +
+    '<section class="page" id="tasksBoardPage" data-open="false"><div class="work"></div></section>' +
     '<aside class="detail" id="detail" data-open="false"></aside>'
   hub._resetForTests()
 })
@@ -60,5 +64,27 @@ describe('the connections hub', () => {
     hub.onOpen('channels', channels)
     hub.open('channels')
     expect(channels).toHaveBeenCalledTimes(1)
+  })
+
+  /* The machines share the agents page, so the page switch cannot say which
+     of the two the reader was on: the island says it, and the rail row goes
+     back to that one -- and a switch onto the page from the channels lands on
+     the agents until the island says otherwise. */
+  it('goes back to the machines when the island said it showed them, on the page it shares', () => {
+    const agents = vi.fn()
+    const machines = vi.fn()
+    hub.onOpen('agents', agents)
+    hub.onOpen('channels', vi.fn())
+    hub.onOpen('machines', machines)
+    hub.visited('machines')
+    page.show('extAgentsPage')
+    page.show(null)
+    expect(hub.lastOpened()).toBe('machines')
+    hub.open()
+    expect(machines).toHaveBeenCalledTimes(1)
+    expect(agents).not.toHaveBeenCalled()
+    page.show('connectionsPage')
+    page.show('extAgentsPage')
+    expect(hub.lastOpened()).toBe('agents')
   })
 })

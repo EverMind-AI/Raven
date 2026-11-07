@@ -116,6 +116,18 @@
           "title": "Description",
           "type": "string"
         },
+        "effort": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Effort"
+        },
         "enabled": {
           "default": true,
           "title": "Enabled",
@@ -156,6 +168,18 @@
           },
           "title": "Lendkeys",
           "type": "array"
+        },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Machine"
         },
         "maxOutputChars": {
           "default": 30000,
@@ -237,6 +261,18 @@
           "default": 30000,
           "title": "Readytimeoutms",
           "type": "integer"
+        },
+        "remoteCwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remotecwd"
         },
         "routes": {
           "items": {
@@ -349,6 +385,18 @@
           "title": "Kind",
           "type": "string"
         },
+        "machine": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Machine"
+        },
         "maxOutputChars": {
           "default": 30000,
           "title": "Maxoutputchars",
@@ -429,6 +477,18 @@
           "default": true,
           "title": "Readslocalfiles",
           "type": "boolean"
+        },
+        "remoteCwd": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Remotecwd"
         },
         "resumeCommand": {
           "anyOf": [

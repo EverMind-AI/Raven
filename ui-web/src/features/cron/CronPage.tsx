@@ -135,12 +135,13 @@ function CronNew({ draft }: { draft: CronDraft }): JSX.Element {
     store
       .source()
       .save(draft)
-      .then((saved) => {
+      .then(({ row, outcome }) => {
         store.closeSheet()
-        store.viewSaved(saved)
-        toast(t('gui.job.saved_x', { name: saved.name }), {
+        store.viewSaved(row)
+        const label = outcome === 'skipped' ? t('gui.cron.existing_kept') : t('gui.job.saved_x', { name: row.name })
+        toast(label, {
           label: t('gui.job.run_once'),
-          fn: () => void store.source().runNow(saved).then(() => store.refresh()),
+          fn: () => void store.source().runNow(row).then(() => store.refresh()),
         })
       })
       .catch((e: unknown) => jobRefuse(draft, e))
@@ -402,9 +403,9 @@ function commitDraft(draft: CronDraft): void {
   store
     .source()
     .save(draft)
-    .then(() => {
+    .then(({ outcome }) => {
       void store.refresh()
-      toast(t('gui.cron.saved'))
+      toast(t(outcome === 'skipped' ? 'gui.cron.existing_kept' : 'gui.cron.saved'))
     })
     .catch((e: unknown) => jobRefuse(draft, e))
 }

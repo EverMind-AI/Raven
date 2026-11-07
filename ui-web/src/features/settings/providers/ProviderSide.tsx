@@ -5,7 +5,7 @@
  * "which could I have" are one question asked twice, and the page used to
  * answer only the first -- fifty-odd vendors Raven supports were reachable
  * from a dropdown inside an "add" form and nowhere else. A column of
- * fifty-five needs a search box and a filter, which is what turns the full
+ * fifty-six needs a search box and a filter, which is what turns the full
  * list from noise into an index.
  *
  * Connected first because that is the question asked most often; registry

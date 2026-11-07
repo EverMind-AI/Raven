@@ -4,21 +4,31 @@ Both variables here are captured from raven's own environment and re-applied ove
 a login shell's, which is the step that drops them if it is missed: the capture
 runs `$SHELL -lic` from a minimal base precisely so raven's own variables do not
 leak, so anything the host means the child to see has to be overlaid back.
+
+Windows has no login shell, so the same boundary is crossed there by a registry
+read; the sections at the end cover that capture and the launch that consumes it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shlex
 import sys
 from pathlib import Path
+from typing import Any, NoReturn
 
 import pytest
 
+import raven.agent.subagent.probe as probe_mod
+from raven.acp_client import leftovers, npx_fetch, windows
 from raven.acp_client.client import AcpClient
+from raven.acp_client.protocol import AcpConnectionError
 from raven.agent.subagent.backends import env as backend_env
+from raven.agent.subagent.probe import probe_all
 from raven.agent.subagent.role import SUBAGENT_ENV_VAR, is_subagent_process
+from raven.config.schema import ThirdPartyAcpSubagentConfig
 
 
 def _reporting_child(script: Path, variable: str) -> str:
@@ -92,3 +102,655 @@ async def test_acp_child_is_told_it_serves_as_a_subagent(tmp_path: Path, monkeyp
     # the written form alone would pass while the child ignored it.
     monkeypatch.setenv(SUBAGENT_ENV_VAR, arrived)
     assert is_subagent_process(), f"the child was handed {arrived!r}, which it does not read as a sub-agent role"
+
+
+async def _reported(observed: Path) -> str:
+    for _ in range(200):
+        if observed.exists():
+            break
+        await asyncio.sleep(0.01)
+    return observed.read_text(encoding="utf-8")
+
+
+def _launch_reporting_child(script: Path) -> str:
+    """A child that reports the arguments it got, staged and renamed like
+    :func:`_reporting_child`'s report."""
+    script.write_text(
+        "import json, os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "partial = target.with_name(target.name + '.partial')\n"
+        "partial.write_text(json.dumps({'args': sys.argv[1:]}))\n"
+        "os.replace(partial, target)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    return f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+
+
+async def test_an_acp_child_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``uvx <agent>`` and ``npx <agent>`` fetch the agent the first time it
+    runs. The launch asks with the argv it is about to start, the environment
+    the child would get and the directory it starts in, and starts the argv it
+    is answered with."""
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    command = _launch_reporting_child(tmp_path / "child.py")
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+
+    client = await AcpClient.launch(name="mirror-probe", command=command, cwd=str(tmp_path), env={"FROM_ENTRY": "1"})
+    try:
+        arrived = json.loads(await _reported(observed))
+    finally:
+        await client.close()
+
+    assert arrived == {"args": ["--as-the-answer-says"]}
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable, "asked about the program the entry names"
+    assert (env["OUTPUT"], env["FROM_ENTRY"]) == (str(observed), "1"), "asked with the environment the child gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
+async def test_an_acp_launch_asks_the_mirror_before_it_fetches_the_package(tmp_path, monkeypatch):
+    """The fetch goes to the default registry, the very one the mirror
+    fallback decides about: asked the other way round, the fetch fails
+    before the fallback can answer, and a launch on a machine that cannot
+    reach the registry never starts."""
+    from raven.acp_client import npx_fetch
+    from raven.utils import mirrors
+
+    observed = tmp_path / "observed.json"
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import os, pathlib, sys, time\n"
+        "target = pathlib.Path(os.environ['OUTPUT'])\n"
+        "target.write_text(' '.join(sys.argv[1:]), encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    started = [sys.executable, str(child)]
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": os.environ["PATH"], "OUTPUT": str(observed)})
+    asked: list[list[str]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append(list(argv))
+        return [*started, "--as-the-answer-says"]
+
+    async def ensure_fetched(name, command, *, env, cwd) -> None:
+        asked.append([str(word) for word in command])
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    monkeypatch.setattr(npx_fetch, "ensure_fetched", ensure_fetched)
+
+    client = await AcpClient.launch(
+        name="mirror-probe", command="npx -y @scope/server", cwd=str(tmp_path), env={"FROM_ENTRY": "1"}
+    )
+    try:
+        arrived = await _reported(observed)
+    finally:
+        await client.close()
+
+    assert asked[0] == ["npx", "-y", "@scope/server"], "asked about the launch as it is configured"
+    assert asked[1] == [*started, "--as-the-answer-says"], (
+        "and the fetch is given the answer, so it does not go to the registry the fallback is about"
+    )
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_acp_launch_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: dict(os.environ))
+    folder = tmp_path / "agent's saved files"
+    script = folder / "reply argv.py"
+    config = folder / "config.json"
+    quote = shlex.quote if legacy else commands.command_quote
+    command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))}"
+    started: list[tuple[str, ...]] = []
+    _record_acp_spawn(monkeypatch, started)
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="stored-command", command=command)
+
+    assert started == [(sys.executable, str(script), "--config", str(config))]
+
+
+# --- Windows: the capture --------------------------------------------------
+#
+# Windows has no login shell. The capture rebuilds PATH from the two registry
+# stores a new terminal's Path is assembled from, and keeps every other value
+# raven already has. The fixtures are shaped the way Windows hands them over:
+# the stores' REG_EXPAND_SZ values unexpanded, and raven's own environment with
+# every name upper-cased, which is how CPython's ``os.environ`` holds it there.
+
+
+class _FakeKey:
+    def __init__(self, values: dict[str, str]) -> None:
+        self.values = values
+
+    def __enter__(self) -> "_FakeKey":
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+
+class _FakeWinreg:
+    """``winreg`` over two stores a test edits; a store set to ``None`` refuses the read."""
+
+    HKEY_LOCAL_MACHINE = 0x80000002
+    HKEY_CURRENT_USER = 0x80000001
+    REG_EXPAND_SZ = 2
+
+    def __init__(self, machine: dict[str, str] | None, user: dict[str, str] | None) -> None:
+        self.machine = machine
+        self.user = user
+
+    def OpenKey(self, hive: int, _subkey: str) -> _FakeKey:
+        store = self.machine if hive == self.HKEY_LOCAL_MACHINE else self.user
+        if store is None:
+            raise PermissionError(5, "Access is denied")
+        return _FakeKey(dict(store))
+
+    def QueryInfoKey(self, key: _FakeKey) -> tuple[int, int, int]:
+        return (0, len(key.values), 0)
+
+    def EnumValue(self, key: _FakeKey, index: int) -> tuple[str, str, int]:
+        name = list(key.values)[index]
+        return (name, key.values[name], self.REG_EXPAND_SZ)
+
+
+# What `reg query` shows in each store on a default install.
+_STOCK_MACHINE = {
+    "ComSpec": r"%SystemRoot%\system32\cmd.exe",
+    "Path": r"%SystemRoot%\system32;%SystemRoot%",
+    "PSModulePath": r"%ProgramFiles%\WindowsPowerShell\Modules",
+    "TEMP": r"%SystemRoot%\TEMP",
+    "TMP": r"%SystemRoot%\TEMP",
+    "USERNAME": "SYSTEM",
+    "windir": r"%SystemRoot%",
+}
+_STOCK_USER = {
+    "Path": r"%USERPROFILE%\AppData\Local\Microsoft\WindowsApps",
+    "TEMP": r"%USERPROFILE%\AppData\Local\Temp",
+    "TMP": r"%USERPROFILE%\AppData\Local\Temp",
+}
+# Raven's own environment, as the logon built it from those stores.
+_LOGON = {
+    "COMSPEC": r"C:\Windows\system32\cmd.exe",
+    "PATH": r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps",
+    "SYSTEMROOT": r"C:\Windows",
+    "TEMP": r"C:\Users\me\AppData\Local\Temp",
+    "TMP": r"C:\Users\me\AppData\Local\Temp",
+    "USERNAME": "me",
+    "USERPROFILE": r"C:\Users\me",
+    "WINDIR": r"C:\Windows",
+}
+
+
+@pytest.fixture
+def windows_host(monkeypatch: pytest.MonkeyPatch) -> _FakeWinreg:
+    """Raven started on Windows over the stock stores, with no capture taken yet.
+
+    The ambient environment goes first: on Linux it can hold one variable under two
+    spellings (``HTTP_PROXY`` beside ``http_proxy``), which Windows never can, and a
+    test that read it would measure the machine it ran on.
+    """
+    for name in list(os.environ):
+        if not name.startswith("PYTEST_"):
+            monkeypatch.delenv(name)
+    for name, value in _LOGON.items():
+        monkeypatch.setenv(name, value)
+    registry = _FakeWinreg(dict(_STOCK_MACHINE), dict(_STOCK_USER))
+    monkeypatch.setitem(sys.modules, "winreg", registry)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+    return registry
+
+
+def _no_shell(argv: list[str], **_: Any) -> NoReturn:
+    raise AssertionError(f"no shell is started on Windows, got {argv}")
+
+
+# ---- the PATH a capture leaves for config to read ---------------------------------
+
+
+@pytest.fixture
+def no_capture_yet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+
+
+def test_a_capture_records_the_path_a_launch_gets_for_config_to_read(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Config moves a row onto an adapter build only beside the agent that build needs, so it
+    reads that agent on the PATH a launch gets -- the login shell's, which only a capture can
+    tell, and config starts no process to take one."""
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/the/login/shell/bin"})
+    assert login_path.recall() is None
+
+    backend_env.login_shell_env()
+
+    assert login_path.recall() == "/the/login/shell/bin"
+
+
+def test_a_capture_that_falls_back_records_ravens_own_path(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch after a failed capture runs on raven's own environment, so that PATH is the one."""
+    from raven.config import login_path
+
+    monkeypatch.setenv("PATH", "/ravens/own/bin")
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+
+    assert backend_env.login_shell_env()["PATH"] == "/ravens/own/bin"
+    assert login_path.recall() == "/ravens/own/bin"
+
+
+def test_a_refresh_records_the_path_it_took_and_a_failed_one_keeps_the_last(
+    no_capture_yet: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.config import login_path
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/first"})
+    backend_env.login_shell_env()
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: {"PATH": "/after/an/install"})
+    assert backend_env.refresh_login_shell_env() is True
+    assert login_path.recall() == "/after/an/install"
+
+    monkeypatch.setattr(backend_env, "_capture_now", lambda **_: None)
+    assert backend_env.refresh_login_shell_env() is False
+    assert login_path.recall() == "/after/an/install"
+
+
+def test_what_config_reads_is_nothing_until_a_well_formed_record_exists() -> None:
+    from raven.config import login_path
+    from raven.home import raven_home
+
+    record = raven_home() / "cache" / "login-path.json"
+    assert login_path.recall() is None
+    for written in ("", "not json", json.dumps(["/a"]), json.dumps({"PATH": 7}), json.dumps({"PATH": ""})):
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(written, encoding="utf-8")
+        assert login_path.recall() is None, written
+
+    login_path.remember("/a:/b")
+
+    assert json.loads(record.read_text(encoding="utf-8")) == {"PATH": "/a:/b"}
+    assert login_path.recall() == "/a:/b"
+
+
+def test_windows_capture_takes_path_from_the_stores_and_every_other_value_from_raven(
+    windows_host: _FakeWinreg,
+) -> None:
+    r"""The reported failure: an installer ran after the gateway started. Only PATH moves.
+
+    A terminal opened after ``uv tool install`` builds its Path from the store the
+    installer wrote, and so does this capture. The stores' other values are what
+    Windows builds an environment *from* -- ``ComSpec`` and ``TEMP`` unexpanded, the
+    machine's own ``USERNAME`` -- so copied over raven's they would hand a child a
+    ``ComSpec`` that ``Popen(shell=True)`` cannot start, a ``TEMP`` that is no
+    directory, and a second spelling of names raven already has.
+    """
+    windows_host.user["Path"] += r";C:\Users\me\.local\bin"
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"] == (
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps;C:\Users\me\.local\bin;"
+        r"C:\Windows\system32;C:\Windows;C:\Users\me\AppData\Local\Microsoft\WindowsApps"
+    )
+    assert {name: value for name, value in captured.items() if name != "PATH"} == {
+        name: value for name, value in os.environ.items() if name != "PATH"
+    }
+
+
+def test_windows_capture_expands_stored_references_with_ravens_own_values_first(
+    windows_host: _FakeWinreg,
+) -> None:
+    r"""A reference in a stored Path resolves to what a terminal of this logon would get.
+
+    Raven's own values win because they are the logon's -- the machine store's
+    ``USERNAME`` is ``SYSTEM`` -- and the child carries them beside this PATH. A
+    variable an installer added after raven started is only in the stores, where the
+    user's shadows the machine's and may hold a reference of its own.
+    """
+    windows_host.machine.update({"Path": r"C:\Users\%USERNAME%\bin;%NVM_HOME%", "NVM_HOME": r"C:\nvm\machine"})
+    windows_host.user.update({"Path": "%NVM_SYMLINK%", "NVM_HOME": r"C:\nvm\user", "NVM_SYMLINK": r"%NVM_HOME%\nodejs"})
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"].split(";")[:3] == [r"C:\Users\me\bin", r"C:\nvm\user", r"C:\nvm\user\nodejs"]
+
+
+def test_windows_capture_keeps_the_users_store_when_the_machines_refuses(windows_host: _FakeWinreg) -> None:
+    """HKLM can refuse a read; the user's entries must not be lost with it."""
+    windows_host.machine = None
+
+    captured = backend_env._capture_windows(consequence="subagents inherit raven's environment")
+
+    assert captured is not None
+    assert captured["PATH"] == r"C:\Users\me\AppData\Local\Microsoft\WindowsApps;" + _LOGON["PATH"]
+
+
+def test_windows_capture_reports_failure_when_no_store_reads(windows_host: _FakeWinreg) -> None:
+    """Both stores refusing is the one case the caller must fall back on ``os.environ``."""
+    windows_host.machine = None
+    windows_host.user = None
+
+    assert backend_env._capture_windows(consequence="subagents inherit raven's environment") is None
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (r"C:\50%;%userprofile%\bin", r"C:\50%;C:\Users\me\bin"),
+        (r"%UNKNOWN%;%USERPROFILE%\bin", r"%UNKNOWN%;C:\Users\me\bin"),
+        (r"%EMPTY%;%NESTED%", r";C:\Users\me\bin"),
+        (r"C:\plain%", r"C:\plain%"),
+    ],
+)
+def test_windows_expansion_keeps_literal_percent_and_later_references(value, expected):
+    context = {"USERPROFILE": r"C:\Users\me", "EMPTY": "", "NESTED": r"%USERPROFILE%\bin"}
+    assert backend_env._expand_windows(value, context) == expected
+
+
+def test_windows_expansion_resolves_each_name_once():
+    """A name is expanded once, however many references reach it.
+
+    ``A`` refers to ``B`` twice and ``B`` to ``C`` twice, so a walk without the memo
+    reads ``C`` once per path to it -- eight times here, and exponentially more as
+    the graph branches deeper -- while the result is the same either way.
+    """
+
+    class _Counting(dict):
+        def __init__(self, values):
+            super().__init__(values)
+            self.reads = dict.fromkeys(values, 0)
+
+        def __getitem__(self, name):
+            self.reads[name] += 1
+            return super().__getitem__(name)
+
+    context = _Counting({"A": "%B%%B%", "B": "%C%%C%", "C": "c"})
+
+    assert backend_env._expand_windows("%A%%A%", context) == "cccccccc"
+    assert context.reads == {"A": 1, "B": 1, "C": 1}
+
+
+@pytest.mark.parametrize("references", [{"A": "%A%"}, {"A": "%B%", "B": "%A%"}])
+def test_windows_expansion_refuses_cycles(references):
+    with pytest.raises(ValueError, match="cyclic"):
+        backend_env._expand_windows("%A%", references)
+
+
+def test_windows_expansion_bounds_output_before_joining(monkeypatch):
+    monkeypatch.setattr(backend_env, "_MAX_EXPANDED_ENV_CHARS", 16)
+    assert backend_env._expand_windows("%B%%B%", {"A": "abcd", "B": "%A%%A%"}) == "abcd" * 4
+    with pytest.raises(ValueError, match="limit"):
+        backend_env._expand_windows("%B%%B%x", {"A": "abcd", "B": "%A%%A%"})
+
+
+def test_windows_expansion_bounds_reference_depth(monkeypatch):
+    monkeypatch.setattr(backend_env, "_MAX_ENV_REFERENCE_DEPTH", 2)
+    assert backend_env._expand_windows("%A%", {"A": "%B%", "B": "done"}) == "done"
+    with pytest.raises(ValueError, match="nested"):
+        backend_env._expand_windows("%A%", {"A": "%B%", "B": "%C%", "C": "done"})
+
+
+def test_windows_invalid_expansion_keeps_the_last_capture(windows_host):
+    before = backend_env.login_shell_env()
+    windows_host.user.update({"Path": "%LOOP%", "LOOP": "%LOOP%"})
+    assert backend_env.refresh_login_shell_env() is False
+    assert backend_env.login_shell_env() == before
+
+
+def test_windows_registry_non_strings_do_not_become_path_components(windows_host):
+    windows_host.machine["Path"] = 123
+    windows_host.user["Path"] = r"C:\valid"
+    captured = backend_env._capture_windows(consequence="keeping the old capture")
+    assert captured["PATH"] == r"C:\valid;" + _LOGON["PATH"]
+
+
+@pytest.mark.parametrize("program", [r"C:\tools\agent.exe", r".\agent.exe", "bin/agent.exe"])
+def test_windows_explicit_program_is_not_looked_up_again(monkeypatch, program):
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+
+    def unexpected_lookup(*args, **kwargs):
+        raise AssertionError("an explicit program must bypass PATH lookup")
+
+    monkeypatch.setattr(backend_env.shutil, "which", unexpected_lookup)
+    assert backend_env.resolve_program([program, "acp"], {"PATH": "elsewhere"}) == [program, "acp"]
+
+
+def test_a_refresh_on_windows_reads_the_stores_again(
+    windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Check again, Connect and Test each refresh the capture; on Windows that is another registry read.
+
+    Routed to the login-shell capture instead, a refresh found no shell, kept the
+    first capture, and an agent installed after it stayed missing until a restart --
+    the case the Windows capture exists for. Git for Windows exports ``SHELL`` to
+    what it starts, and driving that bash would have been worse: an MSYS
+    environment, a ``:``-joined PATH of ``/c/...`` entries and no ``SystemRoot``,
+    swapped in for every probe and spawn after it.
+    """
+    monkeypatch.setenv("SHELL", r"C:\Program Files\Git\usr\bin\bash.exe")
+    monkeypatch.setattr(backend_env.subprocess, "run", _no_shell)
+    assert r"C:\Users\me\.local\bin" not in backend_env.login_shell_env()["PATH"]
+
+    windows_host.user["Path"] += r";C:\Users\me\.local\bin"
+
+    assert backend_env.refresh_login_shell_env() is True
+    assert r"C:\Users\me\.local\bin" in backend_env.login_shell_env()["PATH"]
+
+
+async def test_windows_probe_finds_agents_on_the_captured_path(
+    tmp_path: Path, windows_host: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The capture is read by name -- ``probe_all`` asks it for ``PATH`` -- so it is checked through the probe.
+
+    One agent sits on the PATH raven started with, one only in a directory the
+    user's store gained afterwards. Stored under the registry's ``Path`` spelling,
+    the capture left the probe an empty PATH and both read as missing, the first of
+    them found before the capture existed.
+    """
+    boot_bin, fresh_bin = tmp_path / "boot-bin", tmp_path / "fresh-bin"
+    for directory, name in ((boot_bin, "on-boot-agent"), (fresh_bin, "fresh-agent")):
+        _executable(directory, f"{name}.exe")
+    monkeypatch.setenv("PATH", str(boot_bin))
+    windows_host.user["Path"] = str(fresh_bin)
+    monkeypatch.setattr(os, "pathsep", ";")
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    rows = [
+        ThirdPartyAcpSubagentConfig(name=name, command=f"{name}.exe --acp") for name in ("on-boot-agent", "fresh-agent")
+    ]
+
+    results = await probe_all([(cfg, "config") for cfg in rows])
+
+    assert [(r.name, r.status, r.target) for r in results] == [
+        ("on-boot-agent", "attention", str(boot_bin / "on-boot-agent.exe")),
+        ("fresh-agent", "attention", str(fresh_bin / "fresh-agent.exe")),
+    ]
+
+
+# --- Windows: the launch ---------------------------------------------------
+
+
+def _unbound(argv: list[str], env: Any, cwd: str | None) -> list[str]:
+    """The wrapper that ties an agent to its host on Linux and macOS is no part of a simulated Windows launch."""
+    return argv
+
+
+def _recording_refusal(started: list[tuple[str, ...]]) -> Any:
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    return refuse
+
+
+def _record_acp_spawn(monkeypatch: pytest.MonkeyPatch, started: list[tuple[str, ...]]) -> None:
+    refuse = _recording_refusal(started)
+
+    async def refuse_windows(argv, **kwargs):
+        await refuse(*argv, **kwargs)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    monkeypatch.setattr(windows, "launch", refuse_windows)
+
+
+async def test_on_windows_a_bare_program_starts_from_the_childs_own_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CreateProcess finds a bare name on the gateway's own PATH, never on the env block it is handed.
+
+    So an agent installed after raven started, which the refreshed capture and the
+    probe both find, would still not start. The launch looks the name up on the
+    child's PATH itself, by CreateProcess's own rule that a name with no extension
+    means ``.exe``.
+    """
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+    _record_acp_spawn(monkeypatch, started)
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="fresh", command="fresh-agent acp")
+
+    assert started == [(str(fresh_bin / "fresh-agent.exe"), "acp")]
+
+
+async def test_off_windows_the_launch_leaves_the_lookup_to_exec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """POSIX ``exec`` already resolves a bare name on the PATH of the env it is handed."""
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: False)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+    _record_acp_spawn(monkeypatch, started)
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(name="fresh", command="fresh-agent acp")
+
+    assert started == [("fresh-agent", "acp")]
+
+
+def test_on_windows_a_shim_on_the_childs_path_is_not_made_the_program(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.cmd`` shim runs through cmd.exe, whose parser would get the arguments -- a cli agent's prompt among them."""
+    npm_bin = tmp_path / "npm"
+    npm_bin.mkdir()
+    (npm_bin / "codex.cmd").write_text("", encoding="utf-8")
+    (npm_bin / "codex.cmd").chmod(0o755)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    child_env = {"PATH": str(npm_bin)}
+
+    assert backend_env.resolve_program(["codex", "exec", "a & b"], child_env) == ["codex", "exec", "a & b"]
+    assert backend_env.resolve_program(["codex.cmd", "exec"], child_env) == ["codex.cmd", "exec"]
+
+
+def _executable(directory: Path, name: str) -> Path:
+    directory.mkdir(exist_ok=True)
+    program = directory / name
+    program.write_text("", encoding="utf-8")
+    program.chmod(0o755)
+    return program
+
+
+async def test_on_windows_an_acp_server_that_is_a_batch_file_starts_from_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An npm-installed acp server has no ``.exe`` to find, only ``npx.cmd``.
+
+    Its argv is configuration -- the turns travel over stdio -- so the acp launch
+    lets the batch file stand in, found on the child's PATH like any program.
+    """
+    npx = _executable(tmp_path / "npm", "npx.cmd")
+    # Fetched already, so the launch goes straight to the batch file (`npx_fetch`).
+    entry = tmp_path / "npm-cache" / "_npx" / npx_fetch.cache_key("@scope/server")
+    entry.mkdir(parents=True)
+    (entry / "package.json").write_text("{}")
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env, "login_shell_env", lambda: {"PATH": str(npx.parent)})
+    started: list[tuple[str, ...]] = []
+    _record_acp_spawn(monkeypatch, started)
+    monkeypatch.setattr(leftovers, "bind_to_host", _unbound)
+
+    with pytest.raises(AcpConnectionError):
+        await AcpClient.launch(
+            name="npm", command="npx -y @scope/server", env={"npm_config_cache": str(tmp_path / "npm-cache")}
+        )
+
+    assert started == [(str(npx), "-y", "@scope/server")]
+
+
+def test_on_windows_the_lookup_takes_path_order_then_exe_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The order a terminal finds a name in, so the program that starts is the one the user runs there."""
+    early_batch = _executable(tmp_path / "early", "agent.cmd")
+    late_exe = _executable(tmp_path / "late", "agent.exe")
+    both_exe = _executable(tmp_path / "both", "tool.exe")
+    _executable(tmp_path / "both", "tool.cmd")
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    child_env = {"PATH": os.pathsep.join(str(tmp_path / d) for d in ("early", "late", "both"))}
+
+    assert backend_env.resolve_program(["agent", "acp"], child_env, batch_files=True) == [str(early_batch), "acp"]
+    assert backend_env.resolve_program(["agent", "acp"], child_env) == [str(late_exe), "acp"]
+    assert backend_env.resolve_program(["tool", "acp"], child_env, batch_files=True) == [str(both_exe), "acp"]
+
+
+def test_on_windows_only_a_bare_startable_name_is_looked_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A path already names its program, and CreateProcess starts no ``.js``, whatever the PATH holds."""
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    monkeypatch.setattr(backend_env.shutil, "which", lambda program, path=None: f"/elsewhere/{program}")
+    child_env = {"PATH": "/elsewhere"}
+
+    for argv in ([r"C:\Tools\npx", "-y"], ["tools/npx", "-y"], ["server.js", "--stdio"]):
+        assert backend_env.resolve_program(argv, child_env, batch_files=True) == argv
+    assert backend_env.resolve_program(["npx", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.exe", "-y"]
+    assert backend_env.resolve_program(["npx.cmd", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.cmd", "-y"]

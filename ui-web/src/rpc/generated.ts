@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 205 methods, 119 component schemas.
+// 255 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -11,12 +11,19 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
- * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  */
 export type DagNodeStatus =
-  'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled'
+  | 'exception'
+  | 'not_executed';
 /**
- * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
  */
 export type DagSnapshotNodeStatus =
   | 'pending'
@@ -26,7 +33,12 @@ export type DagSnapshotNodeStatus =
   | 'skipped'
   | 'cancelled'
   | 'interrupted'
-  | 'exception';
+  | 'exception'
+  | 'not_executed';
+/**
+ * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+ */
+export type DagNotExecutedReason = 'when_false' | 'when_unknown' | 'upstream_not_executed';
 /**
  * Discriminated union of turn streaming events. The 'type' field is the discriminator.
  */
@@ -55,13 +67,18 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TasksBoardUpdatedEvent;
+/**
+ * Where a Task Group stands. needs_you: the reply asks the user to answer, confirm or decide about it, an error only the user can resolve included, even while a run it started still works. running: a run it started is still working. idle: nothing is in flight and nothing is asked. completed: finished, or dropped by the user -- nothing further moves it.
+ */
+export type TaskGroupStatus = 'needs_you' | 'running' | 'idle' | 'completed';
 /**
  * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
  */
 export type TaskKind = 'spawn' | 'dag';
 /**
- * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state.
+ * A task's state, derived from its nodes' recorded states, first rule that matches: a run superseded by a replan that started is cancelled (one that did not start is failed); any failed node -> failed; any interrupted -> interrupted; any pending/running/exception -> running; any cancelled or skipped -> cancelled; else completed. A spawn is its one node's state. A node a branch left out (not_executed) sits on none of these rungs: an unselected branch does not stop a run.
  */
 export type TaskStatus = 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled';
 
@@ -128,7 +145,15 @@ export interface SessionInitInfo {
   usage: SessionUsage;
   version: string;
   cwd: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search, as it was left. Beside `cwd` and for the same reason: a reader reopening a conversation has to see what it is pointed at, or the picker draws it as pointed at nothing.
+   */
+  knowledge_bases?: string[];
   mcp_servers: JsonValue[];
+  /**
+   * The Harness this session is bound to, if any.
+   */
+  harness?: string | null;
   update_available?: boolean;
   /**
    * The command that would install the newer release.
@@ -150,6 +175,14 @@ export interface SessionInitInfo {
    * A turn is in flight on this session right now.
    */
   running?: boolean;
+  /**
+   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   */
+  reasoning_effort?: string | null;
+  /**
+   * True for an Imported Conversation, which nothing can change; absent on every other session.
+   */
+  read_only?: boolean;
   /**
    * How long the turn in flight has been running, in milliseconds, measured on the server; null when nothing is running or the question carries no readable stamp. The elapsed rather than the stamp it was measured from: that stamp is a server wall clock, and a client in another timezone reading it against its own clock gets the offset between the two back as the turn's age.
    */
@@ -226,6 +259,14 @@ export interface TranscriptMessage {
    * Set on a user entry merged into a turn already running, not the prompt that opened one. A reader draws it INSIDE the turn: no new turn number, no fold closed over the narration above it, and the text before it is still that turn's narration rather than its answer.
    */
   mid_turn?: boolean;
+  /**
+   * Set on an assistant entry whose text, the model's last word in its turn, is its silence marker (from a turn the runtime opened, possibly with a note around it), not an answer. A reader draws one muted line and never treats `text` as the answer. A turn the message tool had already answered can still carry it: that reply reached the reader, and a reload draws the muted line after it. Distinct from `notice`, which marks a row the runtime wrote; this row is the model's own.
+   */
+  silent?: boolean;
+  /**
+   * Set on one assistant entry of a turn whose reader got its reply from a tool: a message-tool send that went out (the tool hands every send to the turn's own reader, whatever chat the call names) or a file delivery. A send that failed does not set it. The entry is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last reply had no text, the last entry that made a tool call, which need not be the call that sent the message. Such a turn answered whatever it ends on, and is not a Silent Turn.
+   */
+  replied_via_tool?: boolean;
 }
 export interface TranscriptToolCall {
   id: string;
@@ -287,6 +328,10 @@ export interface TranscriptTurnEnded {
    */
   status: string;
   reason?: string;
+  /**
+   * The failure's long account beside the bounded reason, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+   */
+  full_detail?: string;
 }
 /**
  * Marks an assistant entry the runtime wrote rather than the model.
@@ -313,6 +358,14 @@ export interface TranscriptDelegated {
    * Set for a dag node's own message, so a client can place it against that row.
    */
   node_id?: string;
+  /**
+   * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+   */
+  output?: string;
+  /**
+   * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+   */
+  output_truncated?: boolean | null;
 }
 export interface ExtPluginRow {
   id: string;
@@ -719,6 +772,19 @@ export interface SessionListItem {
    * The directory this session was pinned to when it was created, absolute; absent for a session that runs where the policy default puts it. What the rail groups by.
    */
   workdir?: string;
+  /**
+   * Present only on an Imported Conversation's row (source 'imported').
+   */
+  imported?: {
+    /**
+     * 'export', 'bugreport' or 'report'.
+     */
+    kind: string;
+    /**
+     * The file name the package was imported from.
+     */
+    source_name: string;
+  };
 }
 export interface SessionMessage {
   /**
@@ -791,9 +857,17 @@ export interface SubagentCall {
    */
   agent?: string;
   /**
-   * The handle sharing one stateful agent session, if any.
+   * The handle sharing one stateful agent session. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
    */
-  instance?: string;
+  instance?: string | null;
+  /**
+   * dag rows only: whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned.
+   */
+  instance_auto?: boolean;
+  /**
+   * dag rows only: the agent of each attempt of the node, in order. Present only after a reassignment.
+   */
+  attempt_agents?: string[];
   /**
    * ISO 8601; the record stores epoch millis.
    */
@@ -822,6 +896,10 @@ export interface SubagentRow {
   description: string;
   enabled: boolean;
   configured: boolean;
+  /**
+   * The registered machine a row runs on -- an openai row: reaches its endpoint from -- by its id in the machine registry; null for this computer, and on a server that predates the field.
+   */
+  machine?: string;
   /**
    * Discovered under the `agents/` product tree rather than written into config: one of the agent products that ship with this raven, materialized as a row on every table build. Like `builtin` it leaves `configured` false -- there is no config entry to delete, and removing it means removing its folder -- but unlike `builtin` it is a real subprocess with a command, so it is probed and it can be unready (a missing engine wheel leaves it listed and disabled). The wire name predates the tree's rename. Absent from a server that predates discovery.
    */
@@ -928,6 +1006,23 @@ export interface SubagentRow {
    * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
+  /**
+   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model, or as a session mode on an agent whose modes are its effort menu.
+   */
+  effort?: string | null;
+  /**
+   * The reasoning efforts this row's agent offers on the row's own model: its thought_level option, or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that packs effort into model ids instead has no such menu.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 export interface ModelOptionProvider {
   slug: string;
@@ -981,6 +1076,14 @@ export interface ModelOptionProvider {
    */
   gateway?: boolean;
   /**
+   * The registry's image_api: the image tool can run on this provider's address and key. The roles card offers the image role these providers; absent means false.
+   */
+  image_api?: boolean;
+  /**
+   * The registry's video_api: the video tool can run on this provider's address and key. The roles card offers the video role these providers; absent means false.
+   */
+  video_api?: boolean;
+  /**
    * Every model-id prefix that names this provider: its own name plus the ones it used to answer to (ProviderSpec.route_names). A client comparing two spellings of one model strips any of them, the way providers/wire.py's merge_key does. Absent means the provider's own name alone.
    */
   route_names?: string[];
@@ -1015,6 +1118,10 @@ export interface ModelLabel {
    * What the model writes: text, image, video, audio, vector.
    */
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.
+   */
+  reasoning_efforts?: string[];
   /**
    * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
    */
@@ -1078,6 +1185,18 @@ export interface InstanceRow {
   agentId?: string;
   runId?: string;
   nodeId?: string;
+  /**
+   * Why the node did not execute. Present only on the dag-node row of a node that was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  selectedRoutes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Present only when the judge gave one, and only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   */
+  routeEvidence?: string;
   createdAtMs?: number;
   updatedAtMs?: number;
   /**
@@ -1092,6 +1211,18 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * The agent of each attempt of this DAG node, in order. Present only on the row of a node that was reassigned, so its presence is what marks one; a run without a move carries no key.
+   */
+  attemptAgents?: string[];
+  /**
+   * The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a conversation.
+   */
+  nodeInstance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present with attemptAgents; absent on every row of a run that never reassigned a node.
+   */
+  nodeInstanceAuto?: boolean;
   /**
    * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
    */
@@ -1215,14 +1346,22 @@ export interface TurnStartedEvent {
       label: string;
       status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled';
       /**
-       * Which node of the run this is about. Present only on `kind: dag` with `status: exception`, where the report concerns one node rather than the whole run.
+       * Which node of the run this is about. Present only on a `kind: dag` node's own report, which concerns one node rather than the whole run.
        */
       node_id?: string;
       run_id?: string;
       /**
-       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence.
+       * The text that re-entered the conversation, verbatim; a client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it.
        */
       content?: string;
+      /**
+       * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+       */
+      output?: string;
+      /**
+       * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+       */
+      output_truncated?: boolean | null;
     };
     target?: DirectTarget;
   };
@@ -1286,11 +1425,11 @@ export interface NoticeEvent {
   type: 'notice';
   payload: {
     /**
-     * Which runtime decision this reports: `action_blocked`, `llm_retry` or `organ_degraded`.
+     * Which runtime decision this reports: `action_blocked`, `llm_retry`, `organ_degraded` or `silent_turn`.
      */
     kind: string;
     /**
-     * What `kind` says it is: the blocking tool's own first line, the failed call's error category, or the organ that dropped out.
+     * What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. For `silent_turn`, what the reply read as the marker had streamed before it was: a think block the model inlined ahead of it, which goes out as it comes, counted over the step it was drawn in (its call and a cut answer's continuations, or the wrap-up alone). A client that drew it takes back exactly that suffix of the step's text, and nothing it drew before. Empty when the reply showed nothing.
      */
     detail?: string;
     /**
@@ -1416,8 +1555,26 @@ export interface ErrorEvent {
     message: string;
     reason?: 'cancelled_by_client' | 'internal';
     detail?: string;
+    /**
+     * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
+     */
+    full_detail?: string;
+    usage?: TurnUsage1;
     target?: DirectTarget;
   };
+}
+/**
+ * What a failed or stopped turn measured, in message.complete's shape: its last reported call, so a client's context gauge moves on with the turn's stored record. Absent when that call read no window.
+ */
+export interface TurnUsage1 {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+  context_used?: number;
+  context_max?: number;
+  context_percent?: number;
+  cost_missing_calls?: number;
 }
 export interface CronDeliveredEvent {
   type: 'cron.delivered';
@@ -1476,13 +1633,21 @@ export interface SubagentDeliveredEvent {
      */
     run_id?: string;
     /**
-     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
+     * The text that re-entered the conversation, verbatim. A client shows the reader-facing part of it by keeping only what sits INSIDE the untrusted fence, or `output` instead where a node's report carries it -- and a client replaying this turn later reads the same string from the stored entry's `text`, so one rule over one input keeps the live view and the reloaded one from disagreeing about what was delivered.
      */
     content?: string;
     /**
      * Set for a dag node's own message, so a client can place it against that row.
      */
     node_id?: string;
+    /**
+     * What a dag node itself returned on the attempt its report is about -- its error, when it raised -- carried for the reader beside the report the model was given. Set only on a node's own report, and present even when empty: an empty string is a node that said nothing, an absent one a report about no attempt (a stall notice) or a server that never sent it.
+     */
+    output?: string;
+    /**
+     * Whether output is limited to the first 20,000 characters. Separate from the node's text; absent on older records and reports without output.
+     */
+    output_truncated?: boolean | null;
   };
 }
 /**
@@ -1518,7 +1683,18 @@ export interface DagSnapshotNode {
   node: string;
   subagent?: string;
   depends_on?: string[];
-  instance?: string;
+  /**
+   * The stateful handle of the node's last attempt. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
+   */
+  instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   started_at?: number;
   ended_at?: number;
@@ -1536,6 +1712,30 @@ export interface DagSnapshotNode {
   inputs?: {
     [k: string]: JsonValue;
   };
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
 }
 /**
  * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.
@@ -1559,6 +1759,10 @@ export interface DagRunSnapshot {
     failed?: number;
     skipped?: number;
     cancelled?: number;
+    /**
+     * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+     */
+    not_executed?: number;
   };
 }
 /**
@@ -1574,9 +1778,17 @@ export interface DagNodeDetail {
   output_chars: number;
   output_truncated: boolean;
   /**
-   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal.
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
    */
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'exception';
+  status?:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'failed'
+    | 'skipped'
+    | 'cancelled'
+    | 'exception'
+    | 'not_executed';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */
@@ -1622,6 +1834,18 @@ export interface DagRunStartedEvent {
        * One line, for the user, on what this node was asked to do. Absent on a run that predates the field.
        */
       node_summary?: string;
+      /**
+       * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+       */
+      routes?: string[];
+      /**
+       * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+       */
+      select?: 'one' | 'many';
+      /**
+       * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+       */
+      when?: string;
     }[];
   };
 }
@@ -1649,6 +1873,34 @@ export interface DagNodeUpdatedEvent {
     status: DagNodeStatus;
     started_at?: number;
     ended_at?: number;
+    /**
+     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+     */
+    reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+    /**
+     * The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
+     */
+    selected_routes?: string[];
+    /**
+     * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+     */
+    route_evidence?: string;
+    /**
+     * The agent running the node now. Sent with every frame of a reassigned node from its new attempt's running update on, so a client that missed the reassignment still learns who has it.
+     */
+    subagent?: string;
+    /**
+     * The handle that attempt runs on, or null for an agent that keeps no session. A present null clears the handle a client was showing; an absent key means this frame does not speak for it.
+     */
+    instance?: string | null;
+    /**
+     * Whether that handle was minted for the node rather than named by the graph.
+     */
+    instance_auto?: boolean;
+    /**
+     * The agent of each attempt of this node, in order, sent on every frame of a reassigned node. A client uses the length to place a delayed frame in the attempt it belongs to.
+     */
+    attempt_agents?: string[];
   };
 }
 /**
@@ -1703,12 +1955,44 @@ export interface DagRunCompletedEvent {
       failed?: number;
       skipped?: number;
       cancelled?: number;
+      /**
+       * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
+       */
+      not_executed?: number;
     };
     files: {
       node: string;
       status: DagNodeStatus;
       output_file?: string;
       error?: string;
+      /**
+       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+       */
+      reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+      /**
+       * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
+       */
+      selected_routes?: string[];
+      /**
+       * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+       */
+      route_evidence?: string;
+      /**
+       * The agent the node's last attempt ran on. Sent only for a node that was reassigned: every other node's frame already named it, and an unchanged one would only repeat that.
+       */
+      subagent?: string;
+      /**
+       * The handle that attempt ran on, or null when it kept no session. Sent with subagent.
+       */
+      instance?: string | null;
+      /**
+       * Whether that handle was minted for the node rather than named by the graph. Sent with subagent.
+       */
+      instance_auto?: boolean;
+      /**
+       * The agent of each attempt of this node, in order. Present only on a node that was reassigned.
+       */
+      attempt_agents?: string[];
     }[];
   };
 }
@@ -1739,6 +2023,72 @@ export interface MediaEvent {
   };
 }
 /**
+ * A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
+ */
+export interface TasksBoardUpdatedEvent {
+  type: 'tasks.board_updated';
+  payload: TasksBoardUpdatedPayload;
+}
+export interface TasksBoardUpdatedPayload {
+  session_key: string;
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.
+ */
+export interface TaskBoard {
+  version: number;
+  groups: TaskGroup[];
+  unassigned: PendingDispatch[];
+}
+/**
+ * One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.
+ */
+export interface TaskGroup {
+  id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  steps: ProgressStep[];
+}
+/**
+ * One turn's advance on one Task Group: a title, and a summary of what moved and what is next or awaited -- on a step that left its group needs_you, opening with what the user is asked. questions: each question that step's reply asked the user about the matter, empty on every other step. turn_at is the timestamp the session log stores on the message that opened the turn.
+ */
+export interface ProgressStep {
+  id: string;
+  turn_at: string;
+  turn_id?: string | null;
+  title: string;
+  summary: string;
+  questions: string[];
+  tasks: TaskLinkRef[];
+}
+/**
+ * A Task a Progress Step started, in the address tasks.list rows use (spawn: node id, dag: run id), with the summary the dispatching call gave.
+ */
+export interface TaskLinkRef {
+  kind: TaskKind;
+  id: string;
+  summary: string;
+}
+/**
+ * A dispatch whose turn's board update never landed; the next update has to place it.
+ */
+export interface PendingDispatch {
+  handle: string;
+  summary: string;
+  turn_at: string;
+  turn_id?: string | null;
+}
+/**
  * One base as the list view needs it.
  *
  * ``embedding_model`` and ``dimensions`` are the base's own, recorded when it
@@ -1751,16 +2101,44 @@ export interface KnowledgeBase {
   name: string;
   description: string;
   embedding_model: string;
+  /**
+   * Which account this base reaches its model through. Empty means the configured endpoint, which is what every base built before the pair was recorded says.
+   */
+  embedding_provider?: string;
   dimensions: number;
   created_at: string;
   updated_at: string;
   documents: number;
+  /**
+   * How many pieces the base holds. Not how many documents are in it: one that failed, one still queued and one in a base with no model all count as documents and hold nothing.
+   */
+  chunks?: number;
   top_k?: number;
   smart_chunking?: boolean;
   separator?: string;
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  /**
+   * Tokens of the prose around a table to carry into the chunk that holds it. Zero is off.
+   */
+  table_context_size?: number;
+  /**
+   * Tokens of the prose around a figure to carry into the chunk that holds it. Zero is off.
+   */
+  image_context_size?: number;
+  /**
+   * Empty when this base's model can be reached. Otherwise why not: `no_provider` for a base whose model is not the configured one and which records no provider of its own, `no_credential` for one whose recorded provider has no usable credential. Answered from what is recorded rather than by calling the endpoint, so an endpoint that is merely down still reads as reachable here.
+   */
+  embedding_reach?: string;
+  /**
+   * Kept at the head of the list.
+   */
+  pinned?: boolean;
+  /**
+   * Marked by the reader, and the whole of what the starred tab shows. Not the same fact as `pinned`, which is about order.
+   */
+  starred?: boolean;
 }
 /**
  * One uploaded document and where its indexing got to.
@@ -1778,10 +2156,103 @@ export interface KnowledgeDocument {
   status: string;
   chunk_count: number;
   error: string;
+  /**
+   * What the parse could not do, on a document that was indexed anyway -- pictures no model could read, most often. Not a second `error`: the document is searchable, and this says which part of it is not in the index.
+   */
+  warning?: string;
   created_at: string;
   updated_at: string;
   origin?: string;
   origin_ref?: string;
+  /**
+   * Which folder of its base it is filed under. Empty is Root.
+   */
+  folder_id?: string;
+}
+/**
+ * One indexed piece of a document, as the search sees it. The positional fields are absent for a format that does not have them -- absent means the parser did not know, never that the value is zero.
+ */
+export interface KnowledgeChunk {
+  /**
+   * Where the piece sits in its document. This is the reading order: the chunker numbers pieces as it walks the sections the parser produced.
+   */
+  chunk_index: number;
+  total_chunks: number;
+  text: string;
+  /**
+   * What the region is, as the source file marked it. Empty when the parser had nothing to go on.
+   */
+  layout_type?: string;
+  /**
+   * The 1-based page the piece starts on, where the format has pages.
+   */
+  page_number?: number | null;
+  /**
+   * The 1-based page this piece ends on. Equal to `page_number` unless it runs over a page boundary, which it can whenever it merged.
+   */
+  page_end?: number;
+  /**
+   * The headings the piece sits under, outermost first.
+   */
+  heading_path?: string[];
+  /**
+   * Where each piece of a merged chunk came from. Empty for a chunk that merged nothing, so a non-empty list is itself the statement that this chunk crossed a section boundary.
+   */
+  parts?: KnowledgeChunkPart[];
+  /**
+   * What addresses this piece. Derived from its text, so it survives a rebuild of the same document. Empty on rows written before ids existed, which can be read but not acted on until the document is reindexed.
+   */
+  chunk_id?: string;
+  /**
+   * Whether this piece may be retrieved. A disabled piece is never searched and never reaches the agent.
+   */
+  enabled?: boolean;
+  /**
+   * Whether a person wrote this piece. It is deleted with every other piece when the document is reindexed.
+   */
+  manual?: boolean;
+  /**
+   * Whether a picture of the region this piece was cut from is stored for it. Fetch it from `/knowledge/crop?document=<id>&chunk=<chunk_id>`. False for a format with no pages, for a piece a person wrote, and for one whose parser knew the page but not the position.
+   */
+  has_crop?: boolean;
+  /**
+   * Every place on a page this chunk was cut from, in reading order, for a viewer that draws where a piece came from. Empty for a format with no pages and for a piece a person wrote. A chunk that merged several pieces reports each one's region, so this can cross a page boundary.
+   */
+  regions?: KnowledgeChunkRegion[];
+}
+/**
+ * One piece of a chunk that merged several, and where it came from. The naive strategy merges across section boundaries, so a chunk can hold two pages, two headings and two sections; the flattened fields on the chunk can only carry the first of each.
+ */
+export interface KnowledgeChunkPart {
+  char_start: number;
+  char_end: number;
+  layout_type?: string;
+  page_number?: number;
+  heading_path?: string[];
+  /**
+   * Which section of the document this piece was cut from. The section identity: a heading path is not one, because two same-named children of a parent share it.
+   */
+  section_ordinal?: number;
+}
+/**
+ * One place on a page that a chunk was cut from. Coordinates are in the page's own points (1/72 inch) with the origin at the top left, which is the frame every parser in this tree records positions in.
+ */
+export interface KnowledgeChunkRegion {
+  /**
+   * The 1-based page this region sits on.
+   */
+  page_number: number;
+  x0: number;
+  top: number;
+  x1: number;
+  bottom: number;
+}
+/**
+ * One base that answered by words, and why its vectors were out of reach.
+ */
+export interface KnowledgeFallback {
+  base_id: string;
+  reason: string;
 }
 /**
  * One search hit. ``score`` is a similarity, so higher is nearer -- the
@@ -1789,6 +2260,10 @@ export interface KnowledgeDocument {
  */
 export interface KnowledgeHit {
   score: number;
+  /**
+   * How this hit was found, and therefore what `score` is: `vector` is a cosine similarity in 0..1, `keyword` a BM25 score on the index's own unbounded scale. The two are not comparable by value.
+   */
+  retrieval?: 'vector' | 'keyword';
   document_id: string;
   text: string;
   chunk_index?: number;
@@ -1806,6 +2281,21 @@ export interface PlaybookNodeShape {
   depends_on: string[];
 }
 /**
+ * One durable Harness alias and the registered agent behind it.
+ */
+export interface PlaybookWorkerShape {
+  label: string;
+  agent: string;
+}
+/**
+ * The full worker detail; its brief is the durable per-job instruction.
+ */
+export interface PlaybookWorker {
+  label: string;
+  agent: string;
+  brief: string;
+}
+/**
  * One playbook as the library list needs it. ``error`` is empty unless the
  * file would not parse, in which case it carries the reason and ``nodes`` is
  * empty -- one unreadable file in a directory of user-edited text must not
@@ -1817,12 +2307,23 @@ export interface PlaybookRow {
   name: string;
   description: string;
   task_summary: string;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorkerShape[];
   mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
   disabled: boolean;
   nodes: PlaybookNodeShape[];
   error: string;
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
 }
 /**
  * One runtime input. ``description`` is the sentence the caller is asked when
@@ -1840,7 +2341,7 @@ export interface PlaybookParam {
  * be empty: those three are the fields an author may leave blank for the
  * caller to fill at run time. ``skills`` / ``mcps`` are three-state -- null
  * means the author said nothing, ``[]`` means the author wrote an empty list,
- * and a list names what to consider.
+ * and a list names what to consider. ``routes`` / ``select`` / ``when`` declare a branch and are absent unless the author wrote them.
  */
 export interface PlaybookNode {
   id: string;
@@ -1854,6 +2355,20 @@ export interface PlaybookNode {
   inputs: {
     [k: string]: JsonValue;
   };
+  /**
+   * Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
+   */
+  routes?: {
+    [k: string]: string;
+  };
+  /**
+   * How many routes the decision selects, as the author wrote it. Absent means 'one'.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard, as the author wrote it: this node runs only if it holds once its dependencies settle.
+   */
+  when?: string;
 }
 /**
  * One whole playbook: its identity, its runtime inputs, and the shape it runs as -- the graph (``mode: dag``), the assembly guidance a model turns into one (``mode: prompt``), or the roles and stopping rules of a multi-round run (``mode: stint``, under ``rounds``). ``path`` is the file this was read from.
@@ -1866,6 +2381,13 @@ export interface PlaybookDetail {
   description: string;
   task_summary: string;
   version: number;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorker[];
   mode: 'dag' | 'prompt' | 'stint';
   confirm: boolean;
   origin: string;
@@ -1880,6 +2402,10 @@ export interface PlaybookDetail {
   mcp_servers?: {
     [k: string]: PlaybookMcpServer;
   };
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
   stint?: PlaybookStint;
 }
 /**
@@ -1970,7 +2496,7 @@ export interface OkResult {
   ok: boolean;
 }
 /**
- * How many of the task's nodes sit in each state. Counted from graph.json, so skipped nodes are counted too.
+ * How many of the task's nodes sit in each state. Counted from graph.json, so skipped and not_executed nodes are counted too.
  */
 export interface TaskCounts {
   total: number;
@@ -1985,6 +2511,10 @@ export interface TaskCounts {
    * Nodes suspended on a verdict, waiting for resolve_dag_node. A running row with one of these is waiting on a decision, not working.
    */
   exception: number;
+  /**
+   * Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed.
+   */
+  not_executed: number;
 }
 /**
  * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
@@ -2032,6 +2562,14 @@ export interface TaskNode {
    * The stateful handle, named or minted. Null for a node of an agent that keeps no session.
    */
   instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   /**
    * May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node.
@@ -2059,10 +2597,6 @@ export interface TaskNode {
    */
   tool_call_count?: number | null;
   /**
-   * How many of those calls reported failure. A completed node with all its calls failed is not a clean run.
-   */
-  tool_failure_count?: number | null;
-  /**
    * Whether the node wrote an output at all. A completed node without one is why a downstream reference of it fails.
    */
   has_output?: boolean | null;
@@ -2084,6 +2618,30 @@ export interface TaskNode {
    * Same three-valued reading as skills.
    */
   mcps?: string[];
+  /**
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   */
+  reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
+  /**
+   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   */
+  selected_routes?: string[];
+  /**
+   * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
+   */
+  route_evidence?: string;
+  /**
+   * The route names a decision node chooses between, in declaration order; only the judge sees their conditions. Absent on a node that decides nothing.
+   */
+  routes?: string[];
+  /**
+   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   */
+  select?: 'one' | 'many';
+  /**
+   * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
+   */
+  when?: string;
   files: TaskFile[];
 }
 /**
@@ -2178,13 +2736,281 @@ export interface StintTakeUp {
   questions: StintQuestionRow[];
   reply: string;
 }
+/**
+ * One folder inside a knowledge base. One level deep: Root is not a folder but the absence of one, so a document with no folder is in Root.
+ */
+export interface KnowledgeFolder {
+  id: string;
+  base_id: string;
+  name: string;
+  created_at: string;
+  /**
+   * How many documents are filed under it.
+   */
+  documents: number;
+}
+/**
+ * One page of a document, as the reader's side draws it.
+ */
+export interface KnowledgePage {
+  /**
+   * 1-based, and the number a chunk's region names.
+   */
+  number: number;
+  /**
+   * Points. What a region's x coordinates are a fraction of.
+   */
+  width: number;
+  /**
+   * Points. What a region's y coordinates are a fraction of.
+   */
+  height: number;
+}
+/**
+ * Where the session index stands.
+ */
+export interface TrajectoryIndexState {
+  /**
+   * scanning: the log chain is still being read, so an empty list is not an answer yet.
+   */
+  phase: 'scanning' | 'ready' | 'failed';
+  scanned_bytes: number;
+  total_bytes: number;
+  /**
+   * Entries dropped from the head to stay under the entry limit.
+   */
+  head_truncated: number;
+  recovering_traces: number;
+  unresolved_traces: number;
+  unresolved_dropped: number;
+  oversized_lines_dropped: number;
+  /**
+   * Spans whose list previews are still being filled.
+   */
+  preview_pending: number;
+  failure?: string | null;
+}
+/**
+ * One row of the trajectory view.
+ */
+export interface TrajectoryEntry {
+  /**
+   * trace:span:slot, stable across re-reads and checkpoint upgrades.
+   */
+  entry_id: string;
+  revision: number;
+  kind: string;
+  span_name: string;
+  slot: string;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  turn_span_id?: string | null;
+  turn_number?: number | null;
+  turn_start: boolean;
+  /**
+   * Whether the entry's trace was dispatched from another trace (a follow-up turn such as a sub-agent's report, or a trace linked in from another session). Not the sub-agent boundary: see subagent_scope.
+   */
+  origin: 'main' | 'subagent';
+  /**
+   * The Sub-agent Scope the entry belongs to: trace_id:span_id of the nearest sub-agent boundary above its span (a subagent.run span, or a run_subagent_dag / resolve_dag_node tool call; a boundary's own entries, and the permission reviewer's llm.call recorded under the call it reviews, look only for a subagent.run above). Null for the main session. Decided by span ancestry, never by time; kept when the boundary is trimmed to a skeleton.
+   */
+  subagent_scope?: string | null;
+  /**
+   * On a boundary's own entries, the Sub-agent Scope it opens: always for a subagent.run, for a graph tool call only while at least one entry belongs to that scope. Null otherwise.
+   */
+  opens_subagent_scope?: string | null;
+  /**
+   * On the root entries of a dispatched session.turn trace, the Sub-agent Scope that dispatched it: the dispatching span when it is a boundary, else that span's own subagent_scope. Null when the span is unknown or in the main session, or names a graph scope no entry belongs to. The turn itself belongs to the main session.
+   */
+  dispatched_by_subagent_scope?: string | null;
+  sort_key: JsonValue[];
+  event_time: string;
+  /**
+   * One-line preview; null until the lazy preview fill reaches it.
+   */
+  preview?: string | null;
+  /**
+   * The owning operation's recorded status.
+   */
+  operation_status: 'running' | 'ok' | 'error' | 'cancelled' | 'unknown';
+  status_evidence: string[];
+  /**
+   * True on exactly one entry of a failed span: the one carrying the failure mark.
+   */
+  failure_entry: boolean;
+  integrity: string[];
+  operation_start?: string | null;
+  operation_end?: string | null;
+  duration_ms?: number | null;
+  /**
+   * The time charged to this entry, so a span is counted once however many entries it has; null means unknown, never zero.
+   */
+  charged_ms?: number | null;
+  /**
+   * Why charged_ms is what it is.
+   */
+  timing_basis: 'zero' | 'span_full' | 'shared' | 'not_recorded' | 'unknown';
+  duration_owner?: string | null;
+  meta: {
+    [k: string]: JsonValue;
+  };
+}
+/**
+ * An entry that left the list.
+ */
+export interface TrajectoryRemoved {
+  entry_id: string;
+  revision: number;
+  /**
+   * The entry that took this one's place (an error placeholder replaced by the real output), so a selection can follow.
+   */
+  replaced_by?: string | null;
+}
+/**
+ * One block of an entry's detail: a tab, and its overview summary.
+ */
+export interface TrajectoryBlockDescriptor {
+  id: string;
+  /**
+   * How the block's body renders.
+   */
+  renderer: 'text' | 'json' | 'messages' | 'key_values' | 'items' | 'references';
+  /**
+   * Whether the block's data could be served.
+   */
+  availability:
+    'available' | 'empty' | 'not_recorded' | 'missing' | 'truncated' | 'unreadable' | 'unsupported';
+  preview?: JsonValue;
+  total_items?: number | null;
+  related_operation?: string | null;
+  reason?: string | null;
+}
+export interface TrajectoryTurn {
+  trace_id: string;
+  /**
+   * 1-based position among the session's main-line turns.
+   */
+  number: number;
+  start: string;
+  input_preview: string;
+  /**
+   * The latest turn, still running; it cannot be selected.
+   */
+  in_progress: boolean;
+}
+export interface BugReportProblem {
+  description: string;
+  expected?: string;
+  actual?: string;
+  severity?: '' | 'low' | 'medium' | 'high' | 'critical';
+  steps?: string;
+  reporter?: string;
+}
+export interface BugReportItem {
+  id: string;
+  kind: 'suspected' | 'confirmed';
+  category: string;
+  /**
+   * The value in full, for the reader to decide on; a confirmed item, replaced whatever the reader says, shows its replacement.
+   */
+  value: string;
+  masked_sample: string;
+  count: number;
+  sources: {
+    label: string;
+    count: number;
+  }[];
+  linked: string[];
+  /**
+   * A remembered decision the history could not apply on its own.
+   */
+  hint?: 'kept' | 'redacted' | null;
+}
+export interface BugReportContextGroup {
+  label: string;
+  text: string;
+  spans: number[][];
+  count: number;
+}
+export interface BugReportDecision {
+  item_id: string;
+  action: 'kept' | 'redacted';
+}
+export interface MachineRow {
+  id: string;
+  name: string;
+  transport: 'ssh' | 'local';
+  /**
+   * The link from this computer, as the roster shows it: connected (agents running), idle (a link, no agent), lost (the link is down, agents wait), off (no link), error.
+   */
+  state: 'connected' | 'idle' | 'lost' | 'off' | 'error';
+  /**
+   * One sentence for lost and error; empty otherwise. Never an address.
+   */
+  detail: string;
+  agents: number;
+  /**
+   * The node's Raven version: live while a link is up, else as recorded at its last install or contact from this computer. Absent when none is known.
+   */
+  node_version?: string;
+  /**
+   * Whether the node named by node_version is this Raven's own code, which a dispatch there needs; false when none is known.
+   */
+  node_current: boolean;
+  /**
+   * How this computer logs in to an ssh row: key (the path the row carries) or password (kept on this computer for Raven's own logins). Absent for a local row.
+   */
+  auth?: 'key' | 'password';
+  /**
+   * The last node install asked for from this page: in flight, or how it ended.
+   */
+  install: {
+    running: boolean;
+    /**
+     * How the last install asked for from this page ended; absent while it runs or when none was asked for.
+     */
+    ok?: boolean;
+    detail: string;
+  };
+  paths: string[];
+  /**
+   * What the registry's doctor says about this row, one sentence each; empty when nothing.
+   */
+  problems: string[];
+  /**
+   * The connected agent entries that run on the machine, by name: empty on a machine whose next step is to connect one.
+   */
+  agents_here: string[];
+  /**
+   * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
+   */
+  agents_off_here: string[];
+}
+/**
+ * One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is the earliest start among its runs still running, on a card of any category; null when none runs or none that runs reports a start.
+ */
+export interface TaskBoardCard {
+  session_key: string;
+  session_title: string;
+  group_id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  category: 'needs_you' | 'running' | 'idle' | 'completed';
+  running_since_ms?: number | null;
+  events: number;
+  sub_agents: number;
+}
 export interface SessionListParams {
   /**
    * Max sessions to return.
    */
   limit?: number;
   /**
-   * Session channels to include; defaults to tui.
+   * Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one).
    */
   channels?: string[];
   /**
@@ -2214,6 +3040,16 @@ export interface SessionCreateParams {
    * Absolute directory this session's turns run in, persisted as the session's workdir override. How a client attached to a shared gateway keeps its launch directory.
    */
   workdir?: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
+  /**
+   * Name of a stored Harness to open this session on. A snapshot of it is frozen onto the session, so the window keeps the Harness it was opened on after the library entry changes.
+   */
+  harness?: string;
 }
 /**
  * The key is minted lazily -- no file is written until the first save.
@@ -2391,6 +3227,7 @@ export interface SessionHistoryResult {
 export interface TurnSendParams {
   session_key: string;
   content: string;
+  playbook_mode?: 'off' | 'task' | 'persona';
   channel?: string;
   chat_id?: string;
   sender_id?: string;
@@ -2400,6 +3237,7 @@ export interface TurnSendParams {
   media?: string[];
   target?: DirectTarget;
   busy?: 'inject';
+  move_on?: string;
 }
 export interface TurnSendResult {
   turn_id: string;
@@ -2428,9 +3266,14 @@ export interface TurnUnsubscribeResult {
 export interface TurnCancelParams {
   session_key: string;
   target?: DirectTarget;
+  turn_id?: string;
 }
 export interface TurnCancelResult {
   cancelled: boolean;
+  /**
+   * Only on a refusal: whether the lane still has a turn to run -- the one that replaced the turn named, one queued, or a message waiting to run as a turn of its own. A client cannot learn it from the frames in time: this reply goes out as soon as the handler returns, while the frame opening a turn that has just started can still be waiting out the subscription's coalescing window. Absent from an accepted cancel, and from an older server.
+   */
+  busy?: boolean;
 }
 export interface McpListParams {}
 export interface McpListResult {
@@ -2473,6 +3316,7 @@ export interface SkillUnpinResult {
 }
 export interface ModelOptionsParams {
   session_id?: string;
+  include_providers?: boolean;
 }
 export interface ModelOptionsResult {
   model: string;
@@ -2503,6 +3347,43 @@ export interface ModelDisconnectParams {
 export interface ModelDisconnectResult {
   disconnected: boolean;
 }
+export interface ModelRevealKeyParams {
+  slug: string;
+}
+export interface ModelRevealKeyResult {
+  /**
+   * The key saved in the provider's own section -- the one `model.save_key` writes -- or null when none is saved there, or when an endpoints list or key list replaces it and requests do not carry it. A key the provider takes from the environment is not read back.
+   */
+  api_key?: string | null;
+}
+export interface ModelCheckKeyParams {
+  slug: string;
+  api_key?: string;
+  api_base?: string;
+}
+export interface ModelCheckKeyResult {
+  ok: boolean;
+  /**
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe gave no word.
+   */
+  status: string;
+  /**
+   * The HTTP status the probe met, when it met one.
+   */
+  http_status?: number | null;
+  /**
+   * How many models the vendor listed, when it listed any.
+   */
+  models_count?: number | null;
+  /**
+   * What went wrong, when something did.
+   */
+  error?: string | null;
+  /**
+   * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
+   */
+  refused: boolean;
+}
 export interface ModelFetchModelsParams {
   slug: string;
   verify?: boolean;
@@ -2510,10 +3391,14 @@ export interface ModelFetchModelsParams {
 export interface ModelFetchModelsResult {
   models: ModelCandidate[];
   /**
-   * `ok` when the vendor answered, otherwise why it did not (`not_configured`, `unauthorized`, `network_error`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list.
+   * `ok` when the vendor answered, otherwise why it did not (`not_configured`, `invalid_key`, `network_error`, `certificate_untrusted`, `proxy_unreachable`, `no_probe_endpoint`, `http_NNN`). The models are the bundled catalogue unioned with whatever the vendor named, so a failure to reach it costs currency, not the list.
    */
   status: string;
   error?: string;
+  /**
+   * With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. `invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), so a surface that says a key was rejected reads this, not the status.
+   */
+  refused?: boolean;
 }
 export interface ModelAddModelParams {
   slug: string;
@@ -2526,6 +3411,10 @@ export interface ModelAddModelParams {
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words this model accepts, least first. Omit to leave a stored declaration alone; [] clears it.
+   */
+  reasoning_efforts?: string[];
   session_id?: string;
 }
 export interface ModelAddModelResult {
@@ -2615,13 +3504,13 @@ export interface ConfigSetParams {
   value: JsonValue;
   session_id?: string;
   provider?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
 }
 export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
   value?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
   session_id?: string;
   applies_to_session?: boolean;
   /**
@@ -2683,12 +3572,38 @@ export interface SubagentsListParams {
 export interface SubagentsListResult {
   rows: SubagentRow[];
 }
+export interface SubagentsPresetsParams {}
+export interface SubagentsPresetsResult {
+  presets: {
+    preset: string;
+    name: string;
+    kind: 'acp' | 'cli';
+    description: string;
+    /**
+     * An entry of this preset runs on this computer; one on a machine is a second entry, not a conflict.
+     */
+    connected_here: boolean;
+    /**
+     * The registered machines (ids) a connected entry of this preset runs on.
+     */
+    on_machines: string[];
+    /**
+     * The machines where an entry of this preset exists but is switched off, with that entry's name: it still holds the machine for the add, and is what the form offers to switch back on.
+     */
+    off_on_machines: {
+      machine: string;
+      name: string;
+    }[];
+  }[];
+}
 export interface SubagentsAddParams {
   preset: string;
   name?: string;
   description?: string;
   model?: string;
   lend_key?: string;
+  machine?: string;
+  remote_cwd?: string;
   api_key?: string;
   mcps?: string[];
   allow_mcp_secrets?: boolean;
@@ -2706,6 +3621,9 @@ export interface SubagentsUpdateParams {
   mcps?: string[];
   allow_mcp_secrets?: boolean;
   lend_keys?: string[];
+  /**
+   * A model from the row's model_choices. On an acp row the move re-measures the effort menu on the new model, and a stored effort that menu does not offer is dropped; it is kept when the read fails.
+   */
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
@@ -2715,6 +3633,14 @@ export interface SubagentsUpdateParams {
    * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
    */
   clear_model?: boolean;
+  /**
+   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent with a model move, it is judged on the new model's menu, and refused when that menu could not be read.
+   */
+  effort?: string;
+  /**
+   * Drop the row's own effort, reverting to the agent's default. Wins over effort when both are sent.
+   */
+  clear_effort?: boolean;
 }
 export interface SubagentsUpdateResult {
   updated: boolean;
@@ -2767,6 +3693,51 @@ export interface SubagentsTestCancelParams {
 }
 export interface SubagentsTestCancelResult {
   cancelled: boolean;
+}
+export interface SubagentsRefreshModelsParams {
+  name: string;
+  source?: 'config' | 'preset' | 'vendored';
+  force?: boolean;
+}
+export interface SubagentsRefreshModelsResult {
+  /**
+   * Whether the handshake answered and reported the menu. False leaves the recorded menu in place.
+   */
+  ok: boolean;
+  /**
+   * Why the menu could not be read, when it could not.
+   */
+  detail?: string;
+  /**
+   * The menu now recorded for the agent, which is the previous one when this read failed.
+   */
+  models: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+  /**
+   * The effort menu recorded by the same read, in subagents.list's shape.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 export interface SubagentsInstancesParams {
   session_key: string;
@@ -2874,6 +3845,96 @@ export interface SubagentsInstanceSetModelResult {
     group?: string;
   }[];
 }
+export interface MachinesListParams {
+  refresh?: boolean;
+  id?: string;
+}
+export interface MachinesListResult {
+  rows: MachineRow[];
+}
+export interface MachinesAddParams {
+  id: string;
+  name: string;
+  host: string;
+  port?: number;
+  user: string;
+  auth?: 'key' | 'password';
+  key?: string;
+  password?: string;
+  paths?: string[];
+}
+export interface MachinesAddResult {
+  ok: boolean;
+  /**
+   * What the probe found, or why the row was not written. Never an address.
+   */
+  detail: string;
+  /**
+   * Why the row was not written, as a kind the page can explain: the machine could not be reached, refused the login, asked a question the kept password does not answer (so the password was not sent), presented a changed host key, did not answer in time, ssh is missing here, this computer cannot use the login picked (a password on Windows), the id is taken, the fields are not usable, or the registry file cannot be changed. Empty when it was written.
+   */
+  reason:
+    | ''
+    | 'unreachable'
+    | 'login'
+    | 'prompt'
+    | 'hostkey'
+    | 'timeout'
+    | 'nossh'
+    | 'platform'
+    | 'duplicate'
+    | 'invalid'
+    | 'registry';
+  row?: MachineRow;
+}
+export interface MachinesInstallNodeParams {
+  id: string;
+  node_dir?: string;
+}
+export interface MachinesInstallNodeResult {
+  started: boolean;
+  detail: string;
+}
+export interface MachinesDoctorParams {}
+export interface MachinesDoctorResult {
+  problems: {
+    id: string;
+    blocking: boolean;
+    detail: string;
+  }[];
+}
+export interface MachinesRemoveParams {
+  id: string;
+  force?: boolean;
+}
+export interface MachinesRemoveResult {
+  removed: boolean;
+  /**
+   * What was removed, or why nothing was. Never an address.
+   */
+  detail: string;
+  /**
+   * The agent entries that name the machine: the connected ones to disconnect first when the removal was refused over them; after a removal, the ones left pointing at nothing.
+   */
+  agents: string[];
+}
+export interface MachinesLocalKeysParams {}
+export interface MachinesLocalKeysResult {
+  keys: string[];
+}
+export interface SessionSetHarnessParams {
+  session_key: string;
+  /**
+   * A stored Harness name to bind. Null unbinds.
+   */
+  harness?: string;
+}
+export interface SessionSetHarnessResult {
+  session_key: string;
+  /**
+   * The Harness now bound to this session.
+   */
+  harness?: string | null;
+}
 export interface SessionSetModeParams {
   session_key: string;
   mode?: string;
@@ -2892,6 +3953,48 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+export interface SessionSetEffortParams {
+  session_key: string;
+  /**
+   * One of the words in options. Omit it to report without changing.
+   */
+  effort?: string;
+  /**
+   * Drop the session's own pick and follow the default again. Wins over effort when both are given.
+   */
+  clear?: boolean;
+  /**
+   * The model to answer for when the caller has no session yet (a draft). Omit for a session's own model.
+   */
+  model?: string;
+}
+export interface SessionSetEffortResult {
+  session_key: string;
+  /**
+   * The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default.
+   */
+  effort?: string | null;
+  /**
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model.
+   */
+  default?: string | null;
+  /**
+   * The words this model accepts, least first.
+   */
+  options?: string[];
+}
+export interface SessionSetKnowledgeParams {
+  session_id: string;
+  /**
+   * Ids of the knowledge bases this session's turns may search. The reader's choice, not the agent's: the search tool takes a query and never a base, so a model cannot reach material nobody offered it. Empty, or absent, means the tool is not offered at all.
+   *
+   * @maxItems 32
+   */
+  knowledge_bases?: string[];
+}
+export interface SessionSetKnowledgeResult {
+  knowledge_bases: string[];
 }
 export interface SystemHelloParams {
   client_version: string;
@@ -3435,6 +4538,10 @@ export interface CronSaveParams {
 }
 export interface CronSaveResult {
   job: CronJobInfo;
+  /**
+   * How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead); the returned job's stored schedule stays in effect.
+   */
+  outcome: 'created' | 'updated' | 'skipped';
 }
 export interface CronDeleteParams {
   id: string;
@@ -3478,6 +4585,14 @@ export interface SettingsGetResult {
   };
   config_path: string;
   raven_version: string;
+  /**
+   * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.
+   */
+  skill_hub_on: boolean;
+  /**
+   * skill_hub_on, while the agent loop serving now was built without a Hub client: retrieval starts after a reload.
+   */
+  skill_hub_awaiting_reload: boolean;
 }
 export interface SettingsSetParams {
   /**
@@ -3540,6 +4655,10 @@ export interface SettingsEverosResult {
    */
   note?: string | null;
   /**
+   * Why available is false, when the page should draw none of the role slots: 'other_backend' means memory.backend names a backend that does not read EverOS's roles. Absent when the plugin is merely not installed, which keeps the slots drawn with their not-installed note.
+   */
+  reason?: string | null;
+  /**
    * Whether raven manages this EverOS root. False makes the role slots read-only: raven neither writes that install's config nor starts or stops its server.
    */
   owned?: boolean;
@@ -3582,6 +4701,37 @@ export interface SettingsEverosSetResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   warning?: string | null;
+}
+export interface SettingsEverosCloudParams {}
+export interface SettingsEverosCloudResult {
+  /**
+   * Whether the everos-cloud-memory distribution is installed.
+   */
+  available: boolean;
+  /**
+   * Whether memory.backend names everos-cloud; the card is drawn only then.
+   */
+  selected: boolean;
+  /**
+   * Whether a key resolves, from the file or the environment.
+   */
+  api_key_set: boolean;
+  /**
+   * 'file' or 'env' when a key resolves; null otherwise.
+   */
+  key_source?: string | null;
+  /**
+   * The cloud address in force: the slice's base_url or the default.
+   */
+  base_url?: string;
+  /**
+   * The health probe's verdict when selected: 'ok', 'degraded' or 'missing'; null when not probed.
+   */
+  status?: string | null;
+  /**
+   * What a person should look at, in the backend's own words.
+   */
+  hint?: string | null;
 }
 export interface ChannelsStatusParams {}
 export interface ChannelsStatusResult {
@@ -3675,6 +4825,10 @@ export interface FsDirsResult {
    */
   ok: boolean;
   /**
+   * The filesystem roots, listed only while the directory listed is one: a root has no parent, so on a host with several (Windows drives) they are reachable no other way. Every drive is listed, the one the browser stands on included, each judged as a folder row is.
+   */
+  roots?: FsDirEntry[];
+  /**
    * Subdirectories only, dotfiles omitted, sorted by name; at most the first 500 found.
    */
   entries: FsDirEntry[];
@@ -3709,13 +4863,23 @@ export interface FsReadResult {
 export interface FsUploadParams {
   name: string;
   content_b64: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
   session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 export interface FsUploadResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }
@@ -3753,12 +4917,23 @@ export interface DeckTemplatesPickParams {
    * A row's name from deck.templates.list.
    */
   name: string;
+  /**
+   * An existing session key, or a channel prefix such as tui: for a draft.
+   */
+  session?: string;
+  /**
+   * A draft's selected working directory, used only to avoid attachment name collisions.
+   */
+  workdir?: string;
 }
 export interface DeckTemplatesPickResult {
   /**
-   * Workspace-relative path to hand the agent; uploads never return bytes.
+   * The file relative to agent home (uploads/<name>). turn.send looks for a relative path under the conversation's own working directory first, so a same-named file there answers for it; uploads never return bytes.
    */
   path: string;
+  /**
+   * The file the upload wrote, and the path to hand turn.send: it names the upload whatever the conversation's own directory holds.
+   */
   abs_path: string;
   size: number;
 }
@@ -4064,6 +5239,70 @@ export interface PlaybooksCreateResult {
    */
   adopted: boolean;
 }
+export interface PlaybooksDraftParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+}
+export interface PlaybooksDraftResult {
+  draft?: PlaybookRow1;
+}
+/**
+ * One playbook as the library list needs it. ``error`` is empty unless the
+ * file would not parse, in which case it carries the reason and ``nodes`` is
+ * empty -- one unreadable file in a directory of user-edited text must not
+ * take the page down with it. ``disabled`` lives in config rather than in the
+ * file, because the file is the distribution unit and the switch is local to
+ * this machine.
+ */
+export interface PlaybookRow1 {
+  name: string;
+  description: string;
+  task_summary: string;
+  schema_version: number;
+  artifact_kind: 'legacy' | 'workflow' | 'harness' | 'composite';
+  /**
+   * True when the Harness carries a coordinator seat, which is what makes it a Persona.
+   */
+  coordinator?: boolean;
+  workers: PlaybookWorkerShape[];
+  mode: 'dag' | 'prompt' | 'stint';
+  confirm: boolean;
+  origin: string;
+  disabled: boolean;
+  nodes: PlaybookNodeShape[];
+  error: string;
+  /**
+   * What the main Raven is in this Persona's words, empty when the Harness carries no coordinator seat.
+   */
+  coordinator_brief?: string;
+}
+export interface PlaybooksDraftSaveParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+  /**
+   * The name to keep it under. Kebab-case, because the name resolves a directory under the library root. Omitted keeps the generated one.
+   */
+  name?: string;
+}
+export interface PlaybooksDraftSaveResult {
+  /**
+   * The name it was saved under, which a collision may have suffixed.
+   */
+  name: string;
+}
+export interface PlaybooksDraftDiscardParams {
+  /**
+   * The conversation whose generated Persona this is. A draft belongs to the session that asked for it.
+   */
+  session_key: string;
+}
+export interface PlaybooksDraftDiscardResult {
+  discarded: boolean;
+}
 export interface ApprovalRespondParams {
   approval_id: string;
   /**
@@ -4343,7 +5582,7 @@ export interface SessionUsageResult {
    */
   context_max: number;
   /**
-   * Estimated tokens the next call would send.
+   * Tokens the session's last model call filled the window with; a tiktoken estimate when no call recorded one.
    */
   context_used: number;
   /**
@@ -4735,6 +5974,10 @@ export interface KnowledgeStatusParams {}
 export interface KnowledgeStatusResult {
   configured: boolean;
   model: string;
+  /**
+   * Who serves the configured model. The two together are what a picker selects with: a model id names no credential, so half the pin cannot be preselected.
+   */
+  provider?: string;
   extensions?: string[];
 }
 export interface KnowledgeBasesListParams {}
@@ -4745,6 +5988,14 @@ export interface KnowledgeBasesCreateParams {
   name: string;
   description?: string;
   embedding?: boolean;
+  /**
+   * The model to build the base on. Omitted, the configured pin is used.
+   */
+  embedding_model?: string;
+  /**
+   * Who serves that model. A model id names no credential, so the pair travels together.
+   */
+  embedding_provider?: string;
 }
 export interface KnowledgeBasesCreateResult {
   base: KnowledgeBase;
@@ -4765,6 +6016,15 @@ export interface KnowledgeBasesSettingsParams {
   chunk_size?: number;
   chunk_overlap?: number;
   file_processing?: string;
+  table_context_size?: number;
+  image_context_size?: number;
+  embedding_provider?: string;
+  /**
+   * The model this base holds vectors from. Not a setting: sending it rebuilds the base -- the collection is made again at the new width and every document goes back to the queue. Empty turns embedding off.
+   */
+  embedding_model?: string;
+  pinned?: boolean;
+  starred?: boolean;
 }
 export interface KnowledgeBasesSettingsResult {
   base: KnowledgeBase;
@@ -4837,8 +6097,110 @@ export interface KnowledgeSearchParams {
 }
 export interface KnowledgeSearchResult {
   hits: KnowledgeHit[];
+  /**
+   * The bases that answered by keyword rather than by meaning, each with the reason its vectors could not be reached. Empty on an ordinary search.
+   */
+  by_keyword?: KnowledgeFallback[];
   search_ms?: number;
   embed_ms?: number;
+}
+export interface KnowledgeDocumentsChunksParams {
+  document_id: string;
+  /**
+   * 1-based page of the reading order. Defaults to the first.
+   */
+  page?: number;
+  page_size?: number;
+  /**
+   * Filter by state; omit for both.
+   */
+  available?: boolean | null;
+  /**
+   * When set, the pieces are the ones that answer this query, best first, rather than a page of the reading order -- the same retrieval a search of the base does, narrowed to this document, by keyword where the model cannot be reached.
+   */
+  query?: string;
+}
+export interface KnowledgeDocumentsChunksResult {
+  chunks: KnowledgeChunk[];
+  /**
+   * How many pieces the filter admits, which is what a pager counts.
+   */
+  total: number;
+}
+export interface KnowledgeDocumentsPagesParams {
+  document_id: string;
+}
+export interface KnowledgeDocumentsPagesResult {
+  pages: KnowledgePage[];
+}
+export interface KnowledgeChunksSwitchParams {
+  document_id: string;
+  chunk_ids: string[];
+  enabled: boolean;
+}
+export interface KnowledgeChunksSwitchResult {
+  /**
+   * How many pieces the store actually changed.
+   */
+  changed: number;
+}
+export interface KnowledgeChunksDeleteParams {
+  document_id: string;
+  chunk_ids: string[];
+}
+export interface KnowledgeChunksDeleteResult {
+  remaining: number;
+}
+export interface KnowledgeChunksCreateParams {
+  document_id: string;
+  text: string;
+}
+export interface KnowledgeChunksCreateResult {
+  chunk: KnowledgeChunk;
+}
+export interface KnowledgeChunksUpdateParams {
+  document_id: string;
+  chunk_id: string;
+  text: string;
+}
+export interface KnowledgeChunksUpdateResult {
+  chunk: KnowledgeChunk;
+}
+export interface KnowledgeFoldersListParams {
+  base_id: string;
+}
+export interface KnowledgeFoldersListResult {
+  folders?: KnowledgeFolder[];
+}
+export interface KnowledgeFoldersCreateParams {
+  base_id: string;
+  name: string;
+}
+export interface KnowledgeFoldersCreateResult {
+  folder: KnowledgeFolder;
+}
+export interface KnowledgeFoldersRenameParams {
+  folder_id: string;
+  name: string;
+}
+export interface KnowledgeFoldersRenameResult {
+  folder: KnowledgeFolder;
+}
+export interface KnowledgeFoldersDeleteParams {
+  folder_id: string;
+}
+export interface KnowledgeFoldersDeleteResult {
+  /**
+   * How many documents returned to Root.
+   */
+  moved: number;
+}
+export interface KnowledgeDocumentsMoveParams {
+  document_id: string;
+  folder_id?: string;
+}
+export interface KnowledgeDocumentsMoveResult {
+  document: KnowledgeDocument;
 }
 export interface ClipboardPasteParams {}
 export interface ClipboardPasteResult {
@@ -4988,6 +6350,61 @@ export interface TasksListParams {
 export interface TasksListResult {
   tasks: TaskRow[];
 }
+export interface TasksBoardParams {
+  /**
+   * Whose board to read.
+   */
+  session_key: string;
+}
+export interface TasksBoardResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+export interface TasksBoardsParams {
+  /**
+   * Also return the completed cards. The counts are returned either way.
+   */
+  include_completed?: boolean;
+}
+export interface TasksBoardsResult {
+  cards: TaskBoardCard[];
+  completed_count: number;
+  needs_you_count: number;
+}
+export interface TasksSetGroupStatusParams {
+  session_key: string;
+  group_id: string;
+  status: 'completed' | 'idle';
+}
+export interface TasksSetGroupStatusResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+export interface TasksIgnoreQuestionParams {
+  session_key: string;
+  group_id: string;
+  step_id: string;
+  question: string;
+}
+export interface TasksIgnoreQuestionResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
 export interface ImportScanParams {}
 export interface ImportScanResult {
   ready: boolean;
@@ -5124,6 +6541,287 @@ export interface PlaybooksStintsExtendResult {
   questions: StintQuestionRow[];
   reply: string;
 }
+export interface TrajectoryStateParams {}
+export interface TrajectoryStateResult {
+  enabled: boolean;
+  policy_revision: number;
+  recording_enabled: boolean;
+}
+export interface TrajectoryListParams {
+  session_key: string;
+  cursor?: string | null;
+  limit?: number;
+}
+export interface TrajectoryListResult {
+  epoch: string;
+  snapshot_revision: number;
+  entries: TrajectoryEntry[];
+  next_cursor?: string | null;
+  index_state: TrajectoryIndexState;
+  complete: boolean;
+}
+export interface TrajectoryChangesParams {
+  session_key: string;
+  epoch: string;
+  after_revision: number;
+  limit?: number;
+}
+export interface TrajectoryChangesResult {
+  epoch: string;
+  from_revision: number;
+  to_revision: number;
+  upserts: TrajectoryEntry[];
+  removed: TrajectoryRemoved[];
+  has_more: boolean;
+  reset_required: boolean;
+  index_state: TrajectoryIndexState;
+}
+export interface TrajectoryDetailParams {
+  session_key: string;
+  entry_id: string;
+  entry_revision?: number | null;
+}
+export interface TrajectoryDetailResult {
+  session_key: string;
+  epoch: string;
+  entry_id: string;
+  entry_revision: number;
+  kind: string;
+  span_name: string;
+  slot: string;
+  /**
+   * The owning operation's recorded status.
+   */
+  operation_status: 'running' | 'ok' | 'error' | 'cancelled' | 'unknown';
+  status_evidence: string[];
+  failure_entry: boolean;
+  integrity: string[];
+  notes: string[];
+  blocks: TrajectoryBlockDescriptor[];
+  revision_changed: boolean;
+  truncated: boolean;
+}
+export interface TrajectoryBlockParams {
+  session_key: string;
+  entry_id: string;
+  entry_revision: number;
+  epoch: string;
+  block_id: string;
+  cursor?: string | null;
+}
+export interface TrajectoryBlockResult {
+  entry_id: string;
+  entry_revision: number;
+  epoch: string;
+  block_id: string;
+  /**
+   * How the body renders.
+   */
+  renderer: 'text' | 'json' | 'messages' | 'key_values' | 'items' | 'references';
+  /**
+   * Whether the data could be served.
+   */
+  availability:
+    'available' | 'empty' | 'not_recorded' | 'missing' | 'truncated' | 'unreadable' | 'unsupported';
+  reason?: string | null;
+  data?: JsonValue;
+  next_cursor?: string | null;
+  total_items?: number | null;
+  integrity: string[];
+  truncated: boolean;
+}
+export interface TrajectoryTurnsParams {
+  session_key: string;
+}
+export interface TrajectoryTurnsResult {
+  /**
+   * The session's title; empty when it has none.
+   */
+  title: string;
+  turns: TrajectoryTurn[];
+}
+export interface TrajectoryExportParams {
+  session_key: string;
+  trace_ids: string[];
+  file_name: string;
+}
+export interface TrajectoryExportResult {
+  job_id: string;
+}
+export interface TrajectoryExportStatusParams {
+  job_id: string;
+}
+export interface TrajectoryExportStatusResult {
+  job_id: string;
+  state: 'running' | 'done' | 'failed' | 'cancelled';
+  phase: 'collecting' | 'writing' | 'done';
+  file_name: string;
+  /**
+   * Same-origin path that downloads the package; set once done.
+   */
+  download_url?: string | null;
+  size_bytes?: number | null;
+  /**
+   * How many span records, artifacts and message blobs the package holds; set once done.
+   */
+  counts?: {
+    spans: number;
+    artifacts: number;
+    messages: number;
+  } | null;
+  /**
+   * Why the job failed; set only when it did.
+   */
+  error?: string | null;
+}
+export interface TrajectoryExportCancelParams {
+  job_id: string;
+}
+export interface TrajectoryExportCancelResult {
+  ok: boolean;
+}
+export interface BugreportProbeParams {}
+export interface BugreportProbeResult {
+  reachable: boolean;
+  /**
+   * The receiver's scheme and host, as the page may show it.
+   */
+  target: string;
+  /**
+   * Why the receiver cannot be used; empty when it is reachable.
+   */
+  reason: string;
+}
+export interface BugreportStartParams {
+  session_key: string;
+  trace_ids: string[];
+  problem: BugReportProblem;
+}
+export interface BugreportStartResult {
+  /**
+   * The Report Session's handle; the bug report id appears in bugreport.status once collected.
+   */
+  report_id: string;
+}
+export interface BugreportStatusParams {
+  report_id: string;
+}
+export interface BugreportStatusResult {
+  report_id: string;
+  /**
+   * The br-* id, once the snapshot is collected.
+   */
+  bug_report_id?: string | null;
+  phase:
+    | 'collecting'
+    | 'deciding'
+    | 'finishing'
+    | 'ready'
+    | 'uploading'
+    | 'uploaded'
+    | 'upload_failed'
+    | 'failed'
+    | 'cancelled';
+  /**
+   * Why the last step failed; retryable says whether retry_upload may help.
+   */
+  error?: {
+    message: string;
+    retryable: boolean;
+    status?: number | null;
+  } | null;
+  history: {
+    state: 'on' | 'off' | 'corrupt' | 'unavailable';
+    auto_kept: number;
+    auto_redacted: number;
+    warning?: string | null;
+  };
+  /**
+   * The items still to decide, set only while deciding; confirmed items first.
+   */
+  items?: BugReportItem[] | null;
+  /**
+   * What will ship, set once the report is frozen.
+   */
+  summary?: {
+    classification: 'clean' | 'needs_review';
+    warnings: string[];
+    size_bytes?: number | null;
+    auto_replaced: number;
+    kept: number;
+    redacted: number;
+    acknowledged: number;
+    completeness: string;
+  } | null;
+  receipt?: {
+    receipt_id: string;
+    duplicate: boolean;
+  } | null;
+  /**
+   * Where the landed record and package stay on this machine.
+   */
+  record_dir?: string | null;
+}
+export interface BugreportItemParams {
+  report_id: string;
+  item_id: string;
+}
+export interface BugreportItemResult {
+  groups: BugReportContextGroup[];
+  total_groups: number;
+}
+export interface BugreportDecideParams {
+  report_id: string;
+  decisions: BugReportDecision[];
+  acknowledged: string[];
+}
+export interface BugreportDecideResult {
+  ok: boolean;
+}
+export interface BugreportUploadParams {
+  report_id: string;
+  risk_accepted: boolean;
+}
+export interface BugreportUploadResult {
+  ok: boolean;
+}
+export interface BugreportRetryUploadParams {
+  report_id: string;
+}
+export interface BugreportRetryUploadResult {
+  ok: boolean;
+}
+export interface BugreportCancelParams {
+  report_id: string;
+}
+export interface BugreportCancelResult {
+  ok: boolean;
+}
+export interface ImportedUploadParams {
+  name: string;
+  content_b64: string;
+  force?: boolean;
+}
+export interface ImportedUploadResult {
+  /**
+   * 'imported', or 'duplicate' when the same bytes were imported before; a duplicate writes nothing and every other field describes the copy already there.
+   */
+  status: string;
+  /**
+   * imported:<id>, the key session.* and trajectory.* take.
+   */
+  session_key: string;
+  title: string;
+  /**
+   * 'export', 'bugreport' or 'report'.
+   */
+  kind: string;
+  source_name: string;
+  /**
+   * When it was imported, ISO 8601 in UTC.
+   */
+  imported_at: string;
+}
 
 // ---------------------------------------------------------------------------
 // Method map -- generated from the contract's method list.
@@ -5158,6 +6856,8 @@ export interface RpcMethods {
   'model.set_protocol': { params: ModelSetProtocolParams; result: ModelSetProtocolResult };
   'model.save_key': { params: ModelSaveKeyParams; result: ModelSaveKeyResult };
   'model.disconnect': { params: ModelDisconnectParams; result: ModelDisconnectResult };
+  'model.reveal_key': { params: ModelRevealKeyParams; result: ModelRevealKeyResult };
+  'model.check_key': { params: ModelCheckKeyParams; result: ModelCheckKeyResult };
   'model.fetch_models': { params: ModelFetchModelsParams; result: ModelFetchModelsResult };
   'model.add_model': { params: ModelAddModelParams; result: ModelAddModelResult };
   'model.add_models': { params: ModelAddModelsParams; result: ModelAddModelsResult };
@@ -5173,6 +6873,7 @@ export interface RpcMethods {
   'subagent.list': { params: SubagentListParams; result: SubagentListResult };
   'subagent.context': { params: SubagentContextParams; result: SubagentContextResult };
   'subagents.list': { params: SubagentsListParams; result: SubagentsListResult };
+  'subagents.presets': { params: SubagentsPresetsParams; result: SubagentsPresetsResult };
   'subagents.add': { params: SubagentsAddParams; result: SubagentsAddResult };
   'subagents.update': { params: SubagentsUpdateParams; result: SubagentsUpdateResult };
   'subagents.remove': { params: SubagentsRemoveParams; result: SubagentsRemoveResult };
@@ -5181,6 +6882,7 @@ export interface RpcMethods {
   'subagents.probe': { params: SubagentsProbeParams; result: SubagentsProbeResult };
   'subagents.test': { params: SubagentsTestParams; result: SubagentsTestResult };
   'subagents.test_cancel': { params: SubagentsTestCancelParams; result: SubagentsTestCancelResult };
+  'subagents.refresh_models': { params: SubagentsRefreshModelsParams; result: SubagentsRefreshModelsResult };
   'subagents.instances': { params: SubagentsInstancesParams; result: SubagentsInstancesResult };
   'subagents.instance.create': { params: SubagentsInstanceCreateParams; result: SubagentsInstanceCreateResult };
   'subagents.instance.history': { params: SubagentsInstanceHistoryParams; result: SubagentsInstanceHistoryResult };
@@ -5188,7 +6890,16 @@ export interface RpcMethods {
   'subagents.instance.steer': { params: SubagentsInstanceSteerParams; result: SubagentsInstanceSteerResult };
   'subagents.instance.set_mode': { params: SubagentsInstanceSetModeParams; result: SubagentsInstanceSetModeResult };
   'subagents.instance.set_model': { params: SubagentsInstanceSetModelParams; result: SubagentsInstanceSetModelResult };
+  'machines.list': { params: MachinesListParams; result: MachinesListResult };
+  'machines.add': { params: MachinesAddParams; result: MachinesAddResult };
+  'machines.install_node': { params: MachinesInstallNodeParams; result: MachinesInstallNodeResult };
+  'machines.doctor': { params: MachinesDoctorParams; result: MachinesDoctorResult };
+  'machines.remove': { params: MachinesRemoveParams; result: MachinesRemoveResult };
+  'machines.local_keys': { params: MachinesLocalKeysParams; result: MachinesLocalKeysResult };
+  'session.set_harness': { params: SessionSetHarnessParams; result: SessionSetHarnessResult };
   'session.set_mode': { params: SessionSetModeParams; result: SessionSetModeResult };
+  'session.set_effort': { params: SessionSetEffortParams; result: SessionSetEffortResult };
+  'session.set_knowledge': { params: SessionSetKnowledgeParams; result: SessionSetKnowledgeResult };
   'system.hello': { params: SystemHelloParams; result: SystemHelloResult };
   'system.ping': { params: SystemPingParams; result: SystemPingResult };
   'system.version': { params: SystemVersionParams; result: SystemVersionResult };
@@ -5238,6 +6949,7 @@ export interface RpcMethods {
   'settings.everos': { params: SettingsEverosParams; result: SettingsEverosResult };
   'settings.everosSet': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
   'settings.everos_set': { params: SettingsEverosSetParams; result: SettingsEverosSetResult };
+  'settings.everosCloud': { params: SettingsEverosCloudParams; result: SettingsEverosCloudResult };
   'channels.status': { params: ChannelsStatusParams; result: ChannelsStatusResult };
   'channels.configure': { params: ChannelsConfigureParams; result: ChannelsConfigureResult };
   'channels.qr': { params: ChannelsQrParams; result: ChannelsQrResult };
@@ -5266,6 +6978,9 @@ export interface RpcMethods {
   'playbooks.delete': { params: PlaybooksDeleteParams; result: PlaybooksDeleteResult };
   'playbooks.run': { params: PlaybooksRunParams; result: PlaybooksRunResult };
   'playbooks.create': { params: PlaybooksCreateParams; result: PlaybooksCreateResult };
+  'playbooks.draft': { params: PlaybooksDraftParams; result: PlaybooksDraftResult };
+  'playbooks.draft_save': { params: PlaybooksDraftSaveParams; result: PlaybooksDraftSaveResult };
+  'playbooks.draft_discard': { params: PlaybooksDraftDiscardParams; result: PlaybooksDraftDiscardResult };
   'approval.respond': { params: ApprovalRespondParams; result: ApprovalRespondResult };
   'approval.revoke': { params: ApprovalRevokeParams; result: ApprovalRevokeResult };
   'approval.pending': { params: ApprovalPendingParams; result: ApprovalPendingResult };
@@ -5313,6 +7028,17 @@ export interface RpcMethods {
   'knowledge.documents.index': { params: KnowledgeDocumentsIndexParams; result: KnowledgeDocumentsIndexResult };
   'knowledge.documents.delete': { params: KnowledgeDocumentsDeleteParams; result: KnowledgeDocumentsDeleteResult };
   'knowledge.search': { params: KnowledgeSearchParams; result: KnowledgeSearchResult };
+  'knowledge.documents.chunks': { params: KnowledgeDocumentsChunksParams; result: KnowledgeDocumentsChunksResult };
+  'knowledge.documents.pages': { params: KnowledgeDocumentsPagesParams; result: KnowledgeDocumentsPagesResult };
+  'knowledge.chunks.switch': { params: KnowledgeChunksSwitchParams; result: KnowledgeChunksSwitchResult };
+  'knowledge.chunks.delete': { params: KnowledgeChunksDeleteParams; result: KnowledgeChunksDeleteResult };
+  'knowledge.chunks.create': { params: KnowledgeChunksCreateParams; result: KnowledgeChunksCreateResult };
+  'knowledge.chunks.update': { params: KnowledgeChunksUpdateParams; result: KnowledgeChunksUpdateResult };
+  'knowledge.folders.list': { params: KnowledgeFoldersListParams; result: KnowledgeFoldersListResult };
+  'knowledge.folders.create': { params: KnowledgeFoldersCreateParams; result: KnowledgeFoldersCreateResult };
+  'knowledge.folders.rename': { params: KnowledgeFoldersRenameParams; result: KnowledgeFoldersRenameResult };
+  'knowledge.folders.delete': { params: KnowledgeFoldersDeleteParams; result: KnowledgeFoldersDeleteResult };
+  'knowledge.documents.move': { params: KnowledgeDocumentsMoveParams; result: KnowledgeDocumentsMoveResult };
   'clipboard.paste': { params: ClipboardPasteParams; result: ClipboardPasteResult };
   'command.dispatch': { params: CommandDispatchParams; result: CommandDispatchResult };
   'delegation.status': { params: DelegationStatusParams; result: DelegationStatusResult };
@@ -5325,6 +7051,10 @@ export interface RpcMethods {
   'subagent.cancel_session': { params: SubagentCancelSessionParams; result: SubagentCancelSessionResult };
   'subagent.cancel_instance': { params: SubagentCancelInstanceParams; result: SubagentCancelInstanceResult };
   'tasks.list': { params: TasksListParams; result: TasksListResult };
+  'tasks.board': { params: TasksBoardParams; result: TasksBoardResult };
+  'tasks.boards': { params: TasksBoardsParams; result: TasksBoardsResult };
+  'tasks.set_group_status': { params: TasksSetGroupStatusParams; result: TasksSetGroupStatusResult };
+  'tasks.ignore_question': { params: TasksIgnoreQuestionParams; result: TasksIgnoreQuestionResult };
   'import.scan': { params: ImportScanParams; result: ImportScanResult };
   'import.run': { params: ImportRunParams; result: ImportRunResult };
   'import.status': { params: ImportStatusParams; result: ImportStatusResult };
@@ -5336,6 +7066,24 @@ export interface RpcMethods {
   'playbooks.stints.pause': { params: PlaybooksStintsPauseParams; result: PlaybooksStintsPauseResult };
   'playbooks.stints.resume': { params: PlaybooksStintsResumeParams; result: PlaybooksStintsResumeResult };
   'playbooks.stints.extend': { params: PlaybooksStintsExtendParams; result: PlaybooksStintsExtendResult };
+  'trajectory.state': { params: TrajectoryStateParams; result: TrajectoryStateResult };
+  'trajectory.list': { params: TrajectoryListParams; result: TrajectoryListResult };
+  'trajectory.changes': { params: TrajectoryChangesParams; result: TrajectoryChangesResult };
+  'trajectory.detail': { params: TrajectoryDetailParams; result: TrajectoryDetailResult };
+  'trajectory.block': { params: TrajectoryBlockParams; result: TrajectoryBlockResult };
+  'trajectory.turns': { params: TrajectoryTurnsParams; result: TrajectoryTurnsResult };
+  'trajectory.export': { params: TrajectoryExportParams; result: TrajectoryExportResult };
+  'trajectory.export_status': { params: TrajectoryExportStatusParams; result: TrajectoryExportStatusResult };
+  'trajectory.export_cancel': { params: TrajectoryExportCancelParams; result: TrajectoryExportCancelResult };
+  'bugreport.probe': { params: BugreportProbeParams; result: BugreportProbeResult };
+  'bugreport.start': { params: BugreportStartParams; result: BugreportStartResult };
+  'bugreport.status': { params: BugreportStatusParams; result: BugreportStatusResult };
+  'bugreport.item': { params: BugreportItemParams; result: BugreportItemResult };
+  'bugreport.decide': { params: BugreportDecideParams; result: BugreportDecideResult };
+  'bugreport.upload': { params: BugreportUploadParams; result: BugreportUploadResult };
+  'bugreport.retry_upload': { params: BugreportRetryUploadParams; result: BugreportRetryUploadResult };
+  'bugreport.cancel': { params: BugreportCancelParams; result: BugreportCancelResult };
+  'imported.upload': { params: ImportedUploadParams; result: ImportedUploadResult };
 }
 
 /** The literal union of callable method names. */
@@ -5359,6 +7107,14 @@ export const RPC_METHODS = [
   "browser.state",
   "browser.tabs",
   "browser.watch",
+  "bugreport.cancel",
+  "bugreport.decide",
+  "bugreport.item",
+  "bugreport.probe",
+  "bugreport.retry_upload",
+  "bugreport.start",
+  "bugreport.status",
+  "bugreport.upload",
   "channels.configure",
   "channels.qr",
   "channels.status",
@@ -5403,21 +7159,39 @@ export const RPC_METHODS = [
   "import.scan",
   "import.status",
   "import.stop",
+  "imported.upload",
   "input.detect_drop",
   "knowledge.bases.create",
   "knowledge.bases.delete",
   "knowledge.bases.list",
   "knowledge.bases.rename",
   "knowledge.bases.settings",
+  "knowledge.chunks.create",
+  "knowledge.chunks.delete",
+  "knowledge.chunks.switch",
+  "knowledge.chunks.update",
   "knowledge.documents.add",
   "knowledge.documents.add_note",
   "knowledge.documents.add_url",
+  "knowledge.documents.chunks",
   "knowledge.documents.delete",
   "knowledge.documents.index",
   "knowledge.documents.list",
+  "knowledge.documents.move",
+  "knowledge.documents.pages",
   "knowledge.documents.update_note",
+  "knowledge.folders.create",
+  "knowledge.folders.delete",
+  "knowledge.folders.list",
+  "knowledge.folders.rename",
   "knowledge.search",
   "knowledge.status",
+  "machines.add",
+  "machines.doctor",
+  "machines.install_node",
+  "machines.list",
+  "machines.local_keys",
+  "machines.remove",
   "mcp.list",
   "mcp.test",
   "mcp.tools",
@@ -5426,6 +7200,7 @@ export const RPC_METHODS = [
   "model.add_endpoint",
   "model.add_model",
   "model.add_models",
+  "model.check_key",
   "model.disconnect",
   "model.endpoints",
   "model.fetch_models",
@@ -5433,6 +7208,7 @@ export const RPC_METHODS = [
   "model.options",
   "model.remove_endpoint",
   "model.remove_model",
+  "model.reveal_key",
   "model.save_key",
   "model.set_fields",
   "model.set_protocol",
@@ -5441,6 +7217,9 @@ export const RPC_METHODS = [
   "playbooks.credentials.get",
   "playbooks.credentials.set",
   "playbooks.delete",
+  "playbooks.draft",
+  "playbooks.draft_discard",
+  "playbooks.draft_save",
   "playbooks.get",
   "playbooks.list",
   "playbooks.oauth.authorize",
@@ -5489,6 +7268,9 @@ export const RPC_METHODS = [
   "session.pin",
   "session.resume",
   "session.save",
+  "session.set_effort",
+  "session.set_harness",
+  "session.set_knowledge",
   "session.set_mode",
   "session.status",
   "session.steer",
@@ -5496,6 +7278,7 @@ export const RPC_METHODS = [
   "session.undo",
   "session.usage",
   "settings.everos",
+  "settings.everosCloud",
   "settings.everosSet",
   "settings.everos_set",
   "settings.get",
@@ -5531,7 +7314,9 @@ export const RPC_METHODS = [
   "subagents.instance.steer",
   "subagents.instances",
   "subagents.list",
+  "subagents.presets",
   "subagents.probe",
+  "subagents.refresh_models",
   "subagents.remove",
   "subagents.test",
   "subagents.test_cancel",
@@ -5542,9 +7327,22 @@ export const RPC_METHODS = [
   "system.ping",
   "system.upgrade",
   "system.version",
+  "tasks.board",
+  "tasks.boards",
+  "tasks.ignore_question",
   "tasks.list",
+  "tasks.set_group_status",
   "terminal.resize",
   "tools.configure",
+  "trajectory.block",
+  "trajectory.changes",
+  "trajectory.detail",
+  "trajectory.export",
+  "trajectory.export_cancel",
+  "trajectory.export_status",
+  "trajectory.list",
+  "trajectory.state",
+  "trajectory.turns",
   "turn.cancel",
   "turn.send",
   "turn.subscribe",

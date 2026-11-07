@@ -17,6 +17,7 @@ from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
 from raven.permissions.builtin import BuiltinRulings
 from raven.permissions.gate import PermissionGate
 from raven.permissions.turn import current_turn
+from raven.rpc.models import ErrorEvent
 from raven.rpc.spine import (
     RpcOutlet,
     RpcTurnRunner,
@@ -177,6 +178,38 @@ async def test_runner_drives_run_turn_and_stashes_rich_usage():
     # for the sink to attach to message.complete.
     assert usages["tui:c1"] == rich
     assert outcome.explicit_reply is True
+
+
+async def test_a_cron_turn_stashes_its_own_usage_over_the_turn_before():
+    """A wake runs on the session's own conversation, and its
+    ``message.complete`` reports the lane's usage slot. Left unwritten, the slot
+    still held the turn before -- a sub-agent result that does not own the lane
+    and so never cleared it -- and that turn's spend was reported a second time."""
+    earlier = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2, "cost_usd": 0.5}
+    own = {"prompt_tokens": 3, "completion_tokens": 5, "total_tokens": 8, "cost_usd": 0.01, "context_used": 42}
+    usages: dict[str, dict] = {"tui:c1": dict(earlier)}
+    runner = RpcTurnRunner(_RunTurnLoop(usage=own, reply_text="done"), FakeEmitter(), usages, {})
+    req = TurnRequest(origin=Origin.CRON, source=_src(), text="wake", conversation="tui:c1", turn_id="w1")
+    _events, emit = _collect()
+
+    await runner.run(req, emit, lambda: [])
+
+    assert usages["tui:c1"] == own
+
+    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
+    from raven.spine.delivery import DeliveryHub
+    from raven.spine.events import TurnEnded
+
+    hub, emitter = DeliveryHub(), FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {})
+    hub.register(outlet)
+    sink = _make_rpc_sink(hub, outlet, "tui", {}, usages, {}, None)
+    await sink(
+        TurnEnded(usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=True, conversation_id="tui:c1", turn_id="w1")
+    )
+
+    (complete,) = [e for _k, e in emitter.emitted if e["type"] == "message.complete"]
+    assert complete["payload"]["usage"] == own, "the wake's message.complete reports its own spend"
 
 
 async def test_user_turn_receives_tui_approval_capability(tmp_path):
@@ -430,6 +463,60 @@ async def test_a_cron_turn_binds_no_asker_even_in_a_watched_conversation():
     await runner.run(req, emit, lambda: [])
 
     assert loop.bound == (None, "cron:j1")
+
+
+class _QuestionLoop:
+    """A runner whose turn asks the user and waits, as the real loop does."""
+
+    def __init__(self, tool: AskUserTool) -> None:
+        self.tool = tool
+        self.tools = {"ask_user": tool}
+        self.subagent_questions_config = SubagentQuestionsConfig()
+        self.started = asyncio.Event()
+        self.raised: BaseException | None = None
+
+    async def run_turn(self, req, emit, drain, **kwargs) -> TurnOutcome:
+        self.started.set()
+        try:
+            await self.tool.execute(questions=[{"question": "A or B?", "options": ["A", "B"]}])
+        except BaseException as exc:
+            self.raised = exc
+            raise
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
+
+
+async def test_a_cancelled_turn_ends_while_its_question_is_on_the_screen():
+    """The lane's stop has to reach the caller the broker is holding. Answered
+    with its default, the cancellation used to end inside the broker: the tool
+    returned "the user did not answer", and the turn went on -- and could put a
+    second question up -- after the person had pressed stop."""
+    from raven.rpc.question_broker import QuestionBroker
+
+    frames: list[dict] = []
+
+    async def send_frame(frame: dict) -> None:
+        frames.append(frame)
+
+    broker = QuestionBroker(send_frame)
+    loop = _QuestionLoop(AskUserTool(broker=broker, conversation_id="tui:c1"))
+    emitter = FakeEmitter()
+    scheduler, _hub, _turn_ids, teardown = build_rpc_spine(loop, emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await asyncio.wait_for(loop.started.wait(), 1.0)
+        for _ in range(100):
+            if any(frame.get("method") == "clarify.request" for frame in frames):
+                break
+            await asyncio.sleep(0.01)
+        assert any(frame.get("method") == "clarify.request" for frame in frames), "the question was never put up"
+
+        await handle.cancel()
+        await asyncio.wait_for(handle.result(), 2.0)
+
+        assert isinstance(loop.raised, asyncio.CancelledError), "the stop ended inside the question"
+        assert broker.pending_req("tui:c1") is None
+    finally:
+        await teardown()
 
 
 async def test_runner_emits_eve22_synthetic_tool_complete_when_message_tool_fired():
@@ -842,6 +929,33 @@ async def test_a_degraded_organ_reaches_the_page_as_a_closing_notice():
     ]
 
 
+async def test_a_silent_turn_notice_reaches_clients():
+    """A silent turn sends no text, so without this frame a client sees a turn
+    that ended with nothing at all, which is also what a stalled one looks like.
+    It closes the turn, so it is a row that stays and not a status."""
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(Notice(kind=NoticeKind.SILENT_TURN, conversation_id="tui:c1"))
+    assert emitter.emitted == [
+        ("tui:c1", {"type": "notice", "payload": {"kind": "silent_turn", "detail": "", "transient": False}})
+    ]
+    TypeAdapter(TurnEvent).validate_python(emitter.emitted[0][1])
+
+
+async def test_a_silent_turn_notice_carries_what_its_reply_showed():
+    """The detail is the text the reply had streamed before it was read as the marker, for a client
+    to take back; the outlet passes it through as it came."""
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.deliver(Notice(kind=NoticeKind.SILENT_TURN, detail="<think>x</think>", conversation_id="tui:c1"))
+    payload = {"kind": "silent_turn", "detail": "<think>x</think>", "transient": False}
+    assert emitter.emitted == [("tui:c1", {"type": "notice", "payload": payload})]
+
+
 async def test_a_retry_wait_rides_notice_marked_transient_and_tagged_with_its_lane():
     """The other notice the runtime raises about a turn, and the opposite of a
     blocked action: the turn is still running, so a client must draw it where the
@@ -1042,7 +1156,15 @@ async def test_the_boundary_carries_the_delivery_identity_and_text():
                 text="[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]",
                 conversation="tui:c1",
                 turn_id="t1",
-                delegated={"kind": "dag", "label": "run-7", "status": "ok", "run_id": "run-7"},
+                delegated={
+                    "kind": "dag",
+                    "label": "run-7",
+                    "status": "exception",
+                    "run_id": "run-7",
+                    "node_id": "n1",
+                    "output": "node's words",
+                    "output_truncated": True,
+                },
             )
         )
         await handle.result()
@@ -1052,6 +1174,7 @@ async def test_the_boundary_carries_the_delivery_identity_and_text():
     start = next(e for k, e in emitter.emitted if e["type"] == "turn.started")
     d = start["payload"]["delegated"]
     assert d["kind"] == "dag" and d["label"] == "run-7" and d["run_id"] == "run-7"
+    assert d["output"] == "node's words" and d["output_truncated"] is True
     # The text that re-entered the conversation rides along, verbatim.
     assert d["content"] == "[BEGIN UNTRUSTED subagent #ab12cd34 ...]\nresult\n[END UNTRUSTED subagent #ab12cd34]"
 
@@ -1549,6 +1672,120 @@ class TestDagProgressSink:
             "ended_at": 42,
         }
 
+    async def test_run_started_carries_the_declaration_of_a_node_that_branches(self):
+        """What a decision node chooses between and what a guarded node waits on
+        are the graph's structure, so the live graph can draw them before any
+        node reports. The runner sends each key only where the node declares it;
+        a plain node's entry keeps exactly the keys it had."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_started",
+            {
+                "run_id": "dag-1",
+                "nodes": [
+                    {"id": "triage", "subagent": "echo", "depends_on": [], "routes": ["bug", "docs"], "select": "one"},
+                    {"id": "fix", "subagent": "echo", "depends_on": ["triage"], "when": "triage.bug"},
+                    {
+                        "id": "audit",
+                        "subagent": "echo",
+                        "depends_on": ["triage"],
+                        "routes": ["a", "b"],
+                        "select": "many",
+                        "when": "triage.bug or triage.docs",
+                    },
+                    {"id": "reply", "subagent": "echo", "depends_on": ["triage"]},
+                ],
+            },
+        )
+
+        triage, fix, audit, reply = emitter.emitted[0][1]["payload"]["nodes"]
+        assert triage == {
+            "id": "triage",
+            "subagent": "echo",
+            "depends_on": [],
+            "routes": ["bug", "docs"],
+            "select": "one",
+        }
+        assert fix == {"id": "fix", "subagent": "echo", "depends_on": ["triage"], "when": "triage.bug"}
+        assert (audit["routes"], audit["select"], audit["when"]) == (["a", "b"], "many", "triage.bug or triage.docs")
+        assert reply == {"id": "reply", "subagent": "echo", "depends_on": ["triage"]}
+
+    async def test_run_started_without_a_declaration_is_what_it_was_before_branches(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_started",
+            {"run_id": "dag-1", "nodes": [{"id": "a", "subagent": "x", "depends_on": []}]},
+        )
+
+        assert emitter.emitted[0][1]["payload"] == {
+            "run_id": "dag-1",
+            "nodes": [{"id": "a", "subagent": "x", "depends_on": []}],
+        }
+
+    async def test_node_updated_carries_the_reason_and_the_selection(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "fix", "status": "not_executed", "reason": "when_false"},
+        )
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {
+                "run_id": "dag-1",
+                "node": "triage",
+                "status": "completed",
+                "started_at": 10,
+                "ended_at": 42,
+                "selected_routes": ["docs"],
+                "route_evidence": "the reporter asks how to configure it",
+            },
+        )
+
+        not_executed, decided = (event["payload"] for _key, event in emitter.emitted)
+        assert not_executed == {"run_id": "dag-1", "node": "fix", "status": "not_executed", "reason": "when_false"}
+        assert decided["selected_routes"] == ["docs"]
+        assert decided["route_evidence"] == "the reporter asks how to configure it"
+        assert (decided["started_at"], decided["ended_at"]) == (10, 42)
+
+    async def test_an_empty_selection_is_sent_as_a_selection(self):
+        """A `select: many` decision that chose nothing has still decided. The
+        frame keeps `[]`, so a client can tell it from a node that carries no
+        selection at all -- which is what dropping a falsy value would say."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "triage", "status": "completed", "selected_routes": []},
+        )
+
+        assert emitter.emitted[0][1]["payload"]["selected_routes"] == []
+
+    async def test_node_updated_is_assembled_field_by_field(self):
+        """A key the wire has no field for does not ride along: the guard is the
+        run-started frame's, and the contract declares it nowhere else."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_node_updated",
+            {"run_id": "dag-1", "node": "fix", "status": "running", "when": "triage.bug", "routes": ["x", "y"]},
+        )
+
+        assert emitter.emitted[0][1]["payload"] == {"run_id": "dag-1", "node": "fix", "status": "running"}
+
     async def test_run_completed_flattens_the_manifest_and_drops_node_output_text(self):
         """``terminal_outputs`` holds every sink node's full text -- already in the
         tool result the model and the transcript both get. Repeating it here would
@@ -1582,6 +1819,124 @@ class TestDagProgressSink:
             {"node": "b", "status": "failed", "error": "boom"},
         ]
         assert "terminal_outputs" not in payload
+
+    async def test_run_completed_carries_the_not_executed_count_and_status(self):
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "summary": {
+                        "total": 2,
+                        "completed": 1,
+                        "failed": 0,
+                        "skipped": 0,
+                        "cancelled": 0,
+                        "not_executed": 1,
+                    },
+                    "files": [
+                        {"node": "triage", "status": "completed", "selected_routes": ["docs"]},
+                        {"node": "fix", "status": "not_executed", "reason": "when_false"},
+                    ],
+                },
+            },
+        )
+
+        payload = emitter.emitted[0][1]["payload"]
+        assert payload["summary"]["not_executed"] == 1
+        assert [(f["node"], f["status"]) for f in payload["files"]] == [
+            ("triage", "completed"),
+            ("fix", "not_executed"),
+        ]
+
+    async def test_run_completed_files_carry_what_each_node_decided(self):
+        """The completion frame closes the graph from `files`, so a file entry that
+        dropped the reason and the selection would let a client overwrite what the
+        node frames had already told it. `[]` is a selection: a `select: many`
+        decision that chose nothing has still decided."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "files": [
+                        {
+                            "node": "triage",
+                            "status": "completed",
+                            "selected_routes": ["docs"],
+                            "route_evidence": "the reporter asks how to configure it",
+                        },
+                        {"node": "scan", "status": "completed", "selected_routes": []},
+                        {"node": "fix", "status": "not_executed", "reason": "when_false"},
+                        {"node": "reply", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/reply.out.md"},
+                    ],
+                },
+            },
+        )
+
+        triage, scan, fix, reply = emitter.emitted[0][1]["payload"]["files"]
+        assert triage == {
+            "node": "triage",
+            "status": "completed",
+            "selected_routes": ["docs"],
+            "route_evidence": "the reporter asks how to configure it",
+        }
+        assert scan == {"node": "scan", "status": "completed", "selected_routes": []}
+        assert fix == {"node": "fix", "status": "not_executed", "reason": "when_false"}
+        assert reply == {"node": "reply", "status": "completed", "output_file": "/w/.ravenx_dag/dag-1/reply.out.md"}
+
+    async def test_run_completed_files_are_assembled_field_by_field(self):
+        """A manifest entry holds far more than the wire declares for a file (the
+        clocks, the paths, the instance), under `additionalProperties: false`. A
+        no-branch entry keeps exactly the four keys it had, whatever else rides on it."""
+        emitter = FakeEmitter()
+        sink = make_dag_progress_sink(emitter)
+        entry = {
+            "subagent": "echo",
+            "depends_on": ["a"],
+            "instance": "shared",
+            "instance_auto": False,
+            "started_at": 1,
+            "ended_at": 2,
+            "prompt_file": "/w/p.md",
+        }
+
+        await sink(
+            "tui:c1",
+            "dag_run_completed",
+            {
+                "run_id": "dag-1",
+                "manifest": {
+                    "dir": "/w/.ravenx_dag/dag-1",
+                    "files": [
+                        {"node": "a", "status": "completed", "output_file": "/w/a.out.md", "error": None, **entry},
+                        {"node": "b", "status": "failed", "error": "boom", **entry},
+                        {
+                            "node": "c",
+                            "status": "completed",
+                            "selected_routes": ["x"],
+                            "route_evidence": None,
+                            **entry,
+                        },
+                    ],
+                },
+            },
+        )
+
+        a, b, c = emitter.emitted[0][1]["payload"]["files"]
+        assert a == {"node": "a", "status": "completed", "output_file": "/w/a.out.md"}
+        assert b == {"node": "b", "status": "failed", "error": "boom"}
+        assert c == {"node": "c", "status": "completed", "selected_routes": ["x"]}, "a null quote is no key"
 
     async def test_run_completed_always_carries_files_even_with_no_manifest_to_flatten(self):
         """A run that ends without a manifest still has to close its graph.
@@ -1684,7 +2039,15 @@ async def test_the_turns_end_drops_the_binding():
     assert targets == {}
 
 
-async def test_a_failed_direct_turn_reports_against_its_target():
+@pytest.mark.parametrize(
+    ("parent", "lane"),
+    [
+        ("tui:c1", "tui:c1"),
+        ("tui:c1", "tui:c1#Raven-Code/refactor-auth"),
+        ("tui:issue#42", "tui:issue#42#Raven-Code/refactor-auth"),
+    ],
+)
+async def test_a_failed_direct_turn_reports_against_its_target(parent, lane):
     """The error is what clears the spinner, so it has to name the same view the
     turn was streaming into -- and it is emitted after the binding is dropped."""
 
@@ -1693,12 +2056,12 @@ async def test_a_failed_direct_turn_reports_against_its_target():
             raise RuntimeError("boom")
 
     emitter = FakeEmitter()
-    targets = {"tui:c1": {"agent": "Raven-Code", "handle": "refactor-auth"}}
+    targets = {lane: {"agent": "Raven-Code", "handle": "refactor-auth"}}
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter, direct_targets=targets)
     try:
-        turn_ids["tui:c1"] = "t1"
+        turn_ids[lane] = "t1"
         handle = scheduler.submit(
-            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t1")
+            TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation=lane, turn_id="t1")
         )
         await handle.result()
     finally:
@@ -1706,6 +2069,7 @@ async def test_a_failed_direct_turn_reports_against_its_target():
 
     errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
     assert errors[0]["payload"]["target"] == {"agent": "Raven-Code", "handle": "refactor-auth"}
+    assert {key for key, event in emitter.emitted if event["type"] == "error"} == {parent}
 
 
 async def test_a_main_agent_turn_emits_no_target_key_at_all():
@@ -1814,22 +2178,25 @@ async def test_a_direct_turn_does_not_block_the_main_agent():
         await teardown()
 
 
-async def test_a_direct_turns_events_reach_the_sessions_subscription():
+@pytest.mark.parametrize("parent", ["tui:c1", "tui:issue#42"])
+async def test_a_direct_turns_events_reach_the_sessions_subscription(parent):
     """The client holds one subscription per session and demultiplexes on the
     event's target; emitting on the lane key would reach nobody."""
     emitter = FakeEmitter()
     loop = _RunTurnLoop(events=[StreamDelta(delta="a"), Text(content="b")])
-    targets = {"tui:c1#A/one": {"agent": "A", "handle": "one"}}
+    lane = f"{parent}#A/one#part"
+    targets = {lane: {"agent": "A", "handle": "one#part"}}
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(loop, emitter, direct_targets=targets)
     try:
-        turn_ids["tui:c1#A/one"] = "t1"
+        turn_ids[lane] = "t1"
         handle = scheduler.submit(
             TurnRequest(
                 origin=Origin.USER,
                 source=_src(),
                 text="hi",
-                conversation="tui:c1#A/one",
-                direct_target=("A", "one"),
+                conversation=lane,
+                direct_target=("A", "one#part"),
+                parent_session=parent,
                 turn_id="t1",
             )
         )
@@ -1837,5 +2204,163 @@ async def test_a_direct_turns_events_reach_the_sessions_subscription():
     finally:
         await teardown()
 
-    assert {key for key, _e in emitter.emitted} == {"tui:c1"}
-    assert all(e["payload"].get("target") == {"agent": "A", "handle": "one"} for _k, e in emitter.emitted)
+    assert {key for key, _e in emitter.emitted} == {parent}
+    assert all(e["payload"].get("target") == {"agent": "A", "handle": "one#part"} for _k, e in emitter.emitted)
+
+
+async def test_outlet_emit_error_includes_the_long_account_when_present():
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter)
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short", full_detail="the long one")
+    await outlet.emit_error("tui:c1", -32099, "turn_failed", "internal", "short")
+    assert emitter.emitted[0][1]["payload"]["full_detail"] == "the long one"
+    assert "full_detail" not in emitter.emitted[1][1]["payload"]
+
+
+async def test_a_failed_turn_sends_the_runners_long_account():
+    class _BoomLoop:
+        async def run_turn(self, req, emit, drain, *, stream, usage_sink=None) -> TurnOutcome:
+            exc = RuntimeError("boom")
+            exc.full_detail = "RuntimeError: boom, at length"
+            raise exc
+
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_BoomLoop(), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    payload = emitter.emitted[-1][1]["payload"]
+    assert payload["detail"] == "RuntimeError: boom"
+    assert payload["full_detail"] == "RuntimeError: boom, at length"
+
+
+# --- a failed turn's usage reaches the page on its error event ---
+
+
+_A_FAILED_TURNS_LAST_CALL = {
+    "prompt_tokens": 7000,
+    "completion_tokens": 0,
+    "total_tokens": 7000,
+    "context_max": 40000,
+    "context_used": 7000,
+    "context_percent": 18,
+}
+
+
+class _MeasuresThenFails(_RunTurnLoop):
+    """Fills the usage sink the way a loop that made calls does, then gives up."""
+
+    async def run_turn(self, req, emit, drain, *, stream, usage_sink=None, text_sink=None) -> TurnOutcome:
+        if usage_sink is not None and self._usage:
+            usage_sink.update(self._usage)
+        raise AnswerlessTurnError("The model returned no content on 3 attempt(s).")
+
+
+async def test_runner_keeps_what_a_turn_measured_under_its_own_id():
+    """A turn that fails still measured the calls it made, and its stored record
+    carries that reading, so its end has to report it as well. Kept under the
+    turn's id, never in the per-lane register a queued turn shares."""
+    usages: dict[str, dict] = {}
+    live: dict[str, dict] = {}
+    runner = RpcTurnRunner(
+        _MeasuresThenFails(usage=_A_FAILED_TURNS_LAST_CALL), FakeEmitter(), usages, {}, live_usages=live
+    )
+    req = TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1", turn_id="t-1")
+    _events, emit = _collect()
+
+    with pytest.raises(AnswerlessTurnError):
+        await runner.run(req, emit, lambda: [])
+
+    assert live == {"t-1": _A_FAILED_TURNS_LAST_CALL}
+    assert "tui:c1" not in usages
+
+
+_A_LAST_CALL_THAT_READ_NO_WINDOW = {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0,
+    "context_max": 40000,
+    "context_used": 0,
+    "context_percent": 0,
+}
+
+
+@pytest.mark.parametrize(
+    ("measured", "carried"),
+    [
+        (_A_FAILED_TURNS_LAST_CALL, _A_FAILED_TURNS_LAST_CALL),
+        (None, None),
+        (_A_LAST_CALL_THAT_READ_NO_WINDOW, None),
+        ({"cost_usd": 0.01, "cost_missing_calls": 0}, None),
+    ],
+    ids=["measured_a_call", "measured_nothing", "last_call_reported_zeros", "no_window_reading"],
+)
+async def test_a_failed_turn_hands_its_measured_usage_to_its_error(measured, carried):
+    """Without it the context ring stays on the turn before while a resume reads
+    the failed turn's own record, so the two disagree until the next turn. A
+    usage that read no window is not sent: drawn, it would empty the ring."""
+    emitter = FakeEmitter()
+    scheduler, hub, turn_ids, teardown = build_rpc_spine(_MeasuresThenFails(usage=measured), emitter)
+    try:
+        handle = scheduler.submit(TurnRequest(origin=Origin.USER, source=_src(), text="hi", conversation="tui:c1"))
+        await handle.result()
+    finally:
+        await teardown()
+
+    assert emitter.types() == ["error"]
+    event = emitter.emitted[-1][1]
+    assert event["payload"].get("usage") == carried
+    ErrorEvent.model_validate(event)
+
+
+def _failure_sink(usages: dict, live: dict):
+    from raven.rpc.spine import RpcOutlet, _make_rpc_sink
+    from raven.spine.delivery import DeliveryHub
+
+    hub = DeliveryHub()
+    emitter = FakeEmitter()
+    outlet = RpcOutlet("tui", emitter, {})
+    hub.register(outlet)
+    return emitter, _make_rpc_sink(hub, outlet, "tui", {"tui:c1": "owner"}, usages, {}, None, live_usages=live)
+
+
+async def test_a_non_owning_turns_failure_does_not_report_the_owners_usage():
+    """The register is keyed by lane, and a queued turn shares the key with the
+    turn that owns it: its failure must not hand on the owner's reading."""
+    from raven.spine.events import TurnFailed
+
+    live = {"owner": dict(_A_FAILED_TURNS_LAST_CALL)}
+    emitter, sink = _failure_sink({"tui:c1": dict(_A_FAILED_TURNS_LAST_CALL)}, live)
+
+    await sink(TurnFailed(error="boom", cancelled=False, conversation_id="tui:c1", turn_id="queued-1"))
+
+    errors = [e for _k, e in emitter.emitted if e["type"] == "error"]
+    assert errors and "usage" not in errors[-1]["payload"]
+    assert live == {"owner": _A_FAILED_TURNS_LAST_CALL}
+
+
+@pytest.mark.parametrize(
+    "end",
+    ["completed", "failed", "cancelled"],
+)
+async def test_a_turns_end_lets_go_of_what_it_measured(end):
+    """Every way a turn ends takes its reading back, or the map grows by a turn
+    for every one a process runs."""
+    from raven.spine import TurnEnded, Usage
+    from raven.spine.events import TurnFailed
+
+    live = {"t-1": dict(_A_FAILED_TURNS_LAST_CALL)}
+    _emitter, sink = _failure_sink({}, live)
+    if end == "completed":
+        event = TurnEnded(
+            usage=Usage(0, 0, 0), latency_ms=1.0, explicit_reply=False, conversation_id="tui:c1", turn_id="t-1"
+        )
+    else:
+        event = TurnFailed(error="boom", cancelled=end == "cancelled", conversation_id="tui:c1", turn_id="t-1")
+
+    await sink(event)
+
+    assert live == {}

@@ -19,7 +19,7 @@ export interface UpgradeShade {
   /** A line with how far the install has got: 0..1, or null while it cannot
       be measured (the bar goes back to sliding). */
   measure(text: string, fraction: number | null): void
-  fail(text: string, detail?: string): void
+  fail(text: string, detail?: string, command?: string | null): void
   close(): void
 }
 
@@ -30,6 +30,10 @@ export interface Failure {
   readonly sub: string
   readonly copy: string
   readonly close: string
+  /** The command this failure's card offers, taken when the failure happened;
+      absent means the default `raven upgrade` is still the right one, null that
+      no command is -- the refusal already proved the default cannot work. */
+  readonly command?: string | null
 }
 
 export interface Card {
@@ -57,8 +61,8 @@ export function dismiss(id: number): void {
   if (card && card.id === id) set(null)
 }
 
-export function copyCommand(): void {
-  if (navigator.clipboard) navigator.clipboard.writeText(COMMAND)
+export function copyCommand(command?: string | null): void {
+  if (navigator.clipboard) navigator.clipboard.writeText(command ?? COMMAND)
 }
 
 export function open(): UpgradeShade {
@@ -66,7 +70,7 @@ export function open(): UpgradeShade {
   /* A card this module did not draw -- the page can be showing one from before
      a reload -- is taken down the same way the writer took every `.upshade`
      down before building its own. */
-  document.querySelectorAll('.upshade').forEach((node) => node.remove())
+  document.querySelectorAll('.upshade').forEach(node => node.remove())
   const id = ++seq
   set({ id, text: '' })
   const mine = (): boolean => get()?.id === id
@@ -79,21 +83,22 @@ export function open(): UpgradeShade {
       const { progress: _drop, ...rest } = get()!
       set(fraction === null ? { ...rest, text } : { ...rest, text, progress: Math.max(0, Math.min(1, fraction)) })
     },
-    fail(text: string, detail?: string): void {
+    fail(text: string, detail?: string, command?: string | null): void {
       if (!mine()) return
       set({
         ...get()!,
         text,
         failure: {
-          sub: detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
+          sub: command === null ? (detail ?? '') : detail ? `${detail}\n${t('gui.upg.manual')}` : t('gui.upg.manual'),
           copy: t('gui.dtl.copy'),
           close: t('gui.upg.close'),
-        },
+          command
+        }
       })
     },
     close(): void {
       dismiss(id)
-    },
+    }
   }
 }
 

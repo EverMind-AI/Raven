@@ -19,6 +19,8 @@ from raven.agent.loop._shared import (
     vision_verdict,
 )
 from raven.memory_engine import DrainOutcome
+from raven.observability.purpose import purpose as _llm_purpose
+from raven.session.refs import tool_result_view
 
 
 class OrganGlueMixin:
@@ -146,8 +148,8 @@ class OrganGlueMixin:
         """The candidate message view, asked of the Memory role that owns it."""
         return self.harness.memory.candidate_messages(session)
 
-    def _wire_output_ceiling(self, model: str | None = None) -> int:
-        """The output ceiling a request for ``model`` will actually carry.
+    def _wire_output_ceiling(self, model: str | None = None, *, pinned: int | None = None) -> int:
+        """The output ceiling a request for ``model`` will actually carry, asking for ``pinned`` if given.
 
         The turn path's reservations go through here so they read the id the
         request goes out under rather than the one it is configured with. The
@@ -165,6 +167,7 @@ class OrganGlueMixin:
         return send_max_tokens(
             getattr(self.provider, "generation", None),
             getattr(self.provider, "wire_model_id", lambda m: m)(model or self.model),
+            pinned=pinned,
             allow_fetch=False,
         )
 
@@ -240,6 +243,7 @@ class OrganGlueMixin:
                 chat_id=chat_id,
                 surface=surface,
                 selected_skills=selected_skills,
+                session_revision=session.revision if isinstance(session, Session) else None,
             ),
         )
         # Stash the engine's injected_skill_ids so the after-turn
@@ -325,8 +329,22 @@ class OrganGlueMixin:
 
         Synchronous by contract: the turn hands the slice over and returns.
         What happens to it after that is :class:`StorePipeline`'s.
+
+        Tool results go over as :func:`~raven.session.refs.tool_result_view`
+        copies: the session files them whole for ``context_retrieve``, but a
+        backend may drop a single message larger than it accepts (the cloud one
+        skips anything over 250,000 bytes and still reports success), so it
+        is handed what main always filed.
         """
-        self._store_pipeline.enqueue(session_key, messages_slice)
+        self._store_pipeline.enqueue(
+            session_key,
+            [
+                {**m, "content": tool_result_view(m["content"])}
+                if m.get("role") == "tool" and isinstance(m.get("content"), str)
+                else m
+                for m in messages_slice
+            ],
+        )
 
     async def drain_backend_stores(self, timeout: float = _STORE_DRAIN_BUDGET_S) -> DrainOutcome:
         """Let queued writes finish before the process goes away and return what
@@ -531,17 +549,18 @@ class OrganGlueMixin:
     # CancelledError is not an Exception and still propagates.
     _WATCH_JUDGEMENT_TIMEOUT_S: float = 60.0
 
-    async def _judge_watch_work(self, message: str, effort_kwargs: dict[str, str]) -> Any:
+    async def _judge_watch_work(self, message: str, effort_kwargs: dict[str, str | None]) -> Any:
         """The turn's watch-work verdict, a quiet no when the model does not answer."""
         import asyncio
 
         from raven.agent.subagent import watch_work
 
         try:
-            response = await asyncio.wait_for(
-                self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs),
-                timeout=self._WATCH_JUDGEMENT_TIMEOUT_S,
-            )
+            with _llm_purpose("watch_work"):
+                response = await asyncio.wait_for(
+                    self._llm_call_stream(watch_work.build_prompt(message), None, self.model, **effort_kwargs),
+                    timeout=self._WATCH_JUDGEMENT_TIMEOUT_S,
+                )
         except asyncio.TimeoutError:
             logger.warning(
                 "watch-work judgement did not answer in {:.0f}s; the turn goes on unjudged",
@@ -564,10 +583,11 @@ class OrganGlueMixin:
     ) -> str:
         """The steering line this look earned, or "". The CALLER places it.
 
-        ``reasoning_effort`` is the turn's pinned effort: the judgement this
+        ``reasoning_effort`` is the effort the turn runs at: the judgement this
         helper may pay for is a model call of the turn like any other, so it
-        asks for the session's effort too. ``None`` passes nothing and the
-        provider's configured default stands.
+        asks for the same one, sent the same way -- None included, which is
+        the provider's own default rather than the copy the provider took at
+        boot (``_run_agent_loop``'s ``gen_overrides`` says why).
 
         Returned separately rather than appended to ``result`` because of where
         the result goes next: every tool result is fenced as untrusted data
@@ -593,7 +613,7 @@ class OrganGlueMixin:
         reasoning, and ignored, while a fact arriving in a tool result was acted
         on.
         """
-        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        effort_kwargs: dict[str, str | None] = {"reasoning_effort": reasoning_effort}
         # Only a real hand-off answers the question this line asks for the rest
         # of the turn. The first cut treated every spawn as one and silenced the
         # nudges on refusal too -- at exactly the moment the model chose to run

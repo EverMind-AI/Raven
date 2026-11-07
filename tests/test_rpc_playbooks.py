@@ -388,6 +388,75 @@ async def test_get_keeps_a_blank_field_blank(library: PlaybookStore) -> None:
     METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
 
 
+def _branching_spec() -> PlaybookSpec:
+    spec = _spec()
+    spec.nodes += [
+        NodeSpec(
+            id="triage",
+            subagent="Raven",
+            node_summary="classify the issue",
+            prompt_template="classify",
+            routes={"bug": "the issue reports a defect", "docs": "the issue asks a question"},
+        ),
+        NodeSpec(
+            id="audit",
+            subagent="Raven",
+            node_summary="audit the fix",
+            prompt_template="audit",
+            depends_on=["triage"],
+            routes={"safe": "no risk found"},
+            select="many",
+            when="triage.bug",
+        ),
+        NodeSpec(
+            id="reply",
+            subagent="Raven",
+            node_summary="answer",
+            prompt_template="reply",
+            depends_on=["triage"],
+            when="triage.docs",
+        ),
+    ]
+    return spec
+
+
+async def test_get_carries_the_routes_and_the_guard_a_node_declares(library: PlaybookStore) -> None:
+    """A playbook has to keep the condition of every route: it is what re-running
+    the graph judges against, so the wire carries the whole map and not the names."""
+    library.save(_branching_spec(), overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    by_id = {n["id"]: n for n in got["nodes"]}
+    assert by_id["triage"]["routes"] == {"bug": "the issue reports a defect", "docs": "the issue asks a question"}
+    assert by_id["audit"]["routes"] == {"safe": "no risk found"}
+    assert by_id["audit"]["select"] == "many"
+    assert by_id["audit"]["when"] == "triage.bug"
+    assert by_id["reply"]["when"] == "triage.docs"
+    # `select` is reported as written: no `select` on the file means the default, "one".
+    assert "select" not in by_id["triage"]
+    assert "routes" not in by_id["reply"] and "select" not in by_id["reply"]
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+
+
+async def test_get_leaves_the_branch_keys_off_a_node_that_declares_none(library: PlaybookStore) -> None:
+    """Absent, the way an unwritten `skills` / `mcps` is, and not blank: a graph
+    that never branches reads back with exactly the keys it always had."""
+    spec = _spec()
+    spec.nodes.append(NodeSpec(id="angle", when="   "))
+    library.save(spec, overwrite=True)
+
+    got = (await mod.playbooks_get({"name": "competitor-scan"}))["playbook"]
+
+    for node in got["nodes"]:
+        assert not {"routes", "select", "when"} & set(node), node["id"]
+    market = [n for n in got["nodes"] if n["id"] == "market"][0]
+    assert set(market) == {"id", "subagent", "node_summary", "prompt_template", "depends_on", "instance", "inputs"}
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": got})
+    # The store refuses an empty map, but a hand-edited file may carry one: no routes, as the runner reads it.
+    assert "routes" not in mod._node_wire(NodeSpec(id="hand_edited", routes={}))
+
+
 async def test_get_refuses_an_unknown_name(library: PlaybookStore) -> None:
     with pytest.raises(RpcError):
         await mod.playbooks_get({"name": "nope"})
@@ -682,8 +751,8 @@ async def test_validate_answers_its_findings_rather_than_raising(
     look like a broken call, and carries one string where this carries the list."""
     library.save(_spec())
     monkeypatch.setattr(
-        "raven.playbook.validate.validate_structure",
-        lambda spec, known_agents=None: ["merge: depends on a node that does not exist"],
+        "raven.playbook.runtime.validate_structure",
+        lambda spec, known_agents=None, **kwargs: ["merge: depends on a node that does not exist"],
     )
 
     out = await mod.playbooks_validate({"name": "competitor-scan"})
@@ -701,7 +770,7 @@ async def test_validate_says_ok_with_an_empty_list_not_a_missing_one(
     """Paired with the case above so neither is satisfied by a handler that
     always answers the same shape."""
     library.save(_spec())
-    monkeypatch.setattr("raven.playbook.validate.validate_structure", lambda spec, known_agents=None: [])
+    monkeypatch.setattr("raven.playbook.runtime.validate_structure", lambda spec, known_agents=None, **kwargs: [])
 
     out = await mod.playbooks_validate({"name": "competitor-scan"})
 
@@ -1278,7 +1347,7 @@ class _Generator:
         self._raises = raises
         self._hangs = hangs
 
-    async def generate(self, workflow, skills=None):
+    async def generate(self, workflow, skills=None, *, dag_only=False):
         import asyncio
 
         self.calls.append((workflow, skills))
@@ -1459,6 +1528,167 @@ async def test_creating_with_no_runtime_refuses(library: PlaybookStore) -> None:
 
 def test_the_create_contract_is_mirrored_by_a_model_pair() -> None:
     assert "playbooks.create" in METHOD_MODELS
+
+
+@pytest.mark.asyncio
+async def test_frontend_rpc_exposes_unified_kind_workers_and_workflow(library: PlaybookStore) -> None:
+    """The old graph view stays populated while a new page can render Harness workers."""
+    from raven.agent.subagent.dag_graph import DagNodeSpec
+    from raven.playbook.agent_spec import AgentPlaybookSpec, DelegateEntry
+    from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec, WorkflowSpec
+
+    library.save(
+        UnifiedPlaybookSpec(
+            name="evidence-team",
+            description="Reusable evidence team and report process",
+            match=PlaybookMatch(summary="Build evidence report", keywords=["evidence report"]),
+            harness=AgentPlaybookSpec(
+                name="evidence-team",
+                description="Evidence workers",
+                delegate=[
+                    DelegateEntry(
+                        **{
+                            "as": "researcher",
+                            "name": "Raven",
+                            "brief": "Use primary sources",
+                        }
+                    )
+                ],
+            ),
+            workflow=WorkflowSpec(
+                summary="Build evidence report",
+                confirm=False,
+                nodes=[
+                    DagNodeSpec(
+                        id="research",
+                        subagent="researcher",
+                        nodeSummary="Collect evidence",
+                        promptTemplate="Research the subject",
+                    )
+                ],
+            ),
+        )
+    )
+
+    row = (await mod.playbooks_list({}))["playbooks"][0]
+    assert row["schema_version"] == 2
+    assert row["artifact_kind"] == "composite"
+    assert row["workers"] == [{"label": "researcher", "agent": "Raven"}]
+    assert row["nodes"] == [{"id": "research", "depends_on": []}]
+    METHOD_MODELS["playbooks.list"][1].model_validate({"playbooks": [row]})
+
+    detail = (await mod.playbooks_get({"name": "evidence-team"}))["playbook"]
+    assert detail["workers"] == [{"label": "researcher", "agent": "Raven", "brief": "Use primary sources"}]
+    assert detail["nodes"][0]["subagent"] == "researcher"
+    METHOD_MODELS["playbooks.get"][1].model_validate({"playbook": detail})
+
+
+# ---------------------------------------------------------------------------
+# The draft: a generated Persona before anyone decided to keep it
+# ---------------------------------------------------------------------------
+
+
+class _LoopWithDraft:
+    """The three verbs the draft handlers reach for, and nothing else."""
+
+    def __init__(self, artifact=None) -> None:
+        self.drafts = {"tui:one": artifact} if artifact is not None else {}
+        self.saved: list[tuple[str, str | None]] = []
+
+    def session_draft(self, session_key: str):
+        return self.drafts.get(session_key)
+
+    def save_session_draft(self, session_key: str, name: str | None = None) -> str:
+        if session_key not in self.drafts:
+            raise ValueError("this session has no generated Persona to save")
+        self.saved.append((session_key, name))
+        del self.drafts[session_key]
+        return name or "skeptical-fact-checker"
+
+    def discard_session_draft(self, session_key: str) -> bool:
+        return self.drafts.pop(session_key, None) is not None
+
+
+def _persona_artifact():
+    from raven.playbook.agent_spec import AgentPlaybookSpec, CoordinatorEntry
+    from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec
+
+    return UnifiedPlaybookSpec(
+        name="skeptical-fact-checker",
+        description="Finds a primary source for every claim",
+        match=PlaybookMatch(summary="fact checking", keywords=["fact"]),
+        harness=AgentPlaybookSpec(
+            name="skeptical-fact-checker",
+            description="Finds a primary source for every claim",
+            coordinator=CoordinatorEntry(brief="Own the claim-checking conversation"),
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_draft_answers_null_when_the_session_generated_none() -> None:
+    loop = _LoopWithDraft()
+    answer = await mod.playbooks_draft({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+    assert answer == {"draft": None}
+
+
+@pytest.mark.asyncio
+async def test_draft_answers_the_row_shape_the_library_answers() -> None:
+    loop = _LoopWithDraft(_persona_artifact())
+    answer = await mod.playbooks_draft({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+    draft = answer["draft"]
+    assert draft["name"] == "skeptical-fact-checker"
+    # `draft`, not `user`: nothing is on disk, so a page must not offer to
+    # delete a file that does not exist.
+    assert draft["origin"] == "draft"
+    assert draft["coordinator"] is True
+    assert draft["artifact_kind"] == "harness"
+    assert draft["nodes"] == []
+
+
+@pytest.mark.asyncio
+async def test_draft_is_refused_without_a_session() -> None:
+    loop = _LoopWithDraft(_persona_artifact())
+    with pytest.raises(RpcError):
+        await mod.playbooks_draft({}, agent_loop_factory=lambda: loop)
+
+
+@pytest.mark.asyncio
+async def test_a_build_with_no_loop_behind_it_answers_no_draft() -> None:
+    assert await mod.playbooks_draft({"session_key": "tui:one"}) == {"draft": None}
+
+
+@pytest.mark.asyncio
+async def test_saving_keeps_the_generated_name_when_none_is_offered() -> None:
+    loop = _LoopWithDraft(_persona_artifact())
+    answer = await mod.playbooks_draft_save({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+    assert answer == {"name": "skeptical-fact-checker"}
+    assert loop.saved == [("tui:one", None)]
+
+
+@pytest.mark.asyncio
+async def test_saving_takes_the_name_the_reader_chose() -> None:
+    loop = _LoopWithDraft(_persona_artifact())
+    answer = await mod.playbooks_draft_save(
+        {"session_key": "tui:one", "name": "my-checker"}, agent_loop_factory=lambda: loop
+    )
+    assert answer == {"name": "my-checker"}
+
+
+@pytest.mark.asyncio
+async def test_saving_nothing_is_refused_rather_than_silent() -> None:
+    loop = _LoopWithDraft()
+    with pytest.raises(RpcError):
+        await mod.playbooks_draft_save({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+
+
+@pytest.mark.asyncio
+async def test_discarding_says_whether_there_was_one() -> None:
+    loop = _LoopWithDraft(_persona_artifact())
+    first = await mod.playbooks_draft_discard({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+    second = await mod.playbooks_draft_discard({"session_key": "tui:one"}, agent_loop_factory=lambda: loop)
+    assert first == {"discarded": True}
+    assert second == {"discarded": False}
 
 
 class TestWhereThePageLooks:
@@ -1759,6 +1989,12 @@ class TestTheMethodSurface:
             "playbooks.credentials.get",
             "playbooks.credentials.set",
             "playbooks.delete",
+            # The draft half: a generated Harness is the session's until a
+            # reader saves it, so these three are what the library gains and
+            # loses by, and they belong on this list beside the rest.
+            "playbooks.draft",
+            "playbooks.draft_discard",
+            "playbooks.draft_save",
             "playbooks.get",
             "playbooks.list",
             "playbooks.oauth.authorize",

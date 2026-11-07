@@ -4,9 +4,8 @@ To inspect a failed task, export a reviewed report, or create a replay-based
 regression, start with [Trajectory debugging and replay](trajectory-debugging.md).
 This page is the instrumentation contract.
 
-The contract between **raven** (and any other adopter) and the in-tree
-`raven.tracing` implementation. `raven-tracing` is the planned standalone
-distribution, not a separate dependency of the current Raven package.
+The contract between **raven** (and any other adopter) and the
+`raven.tracing` implementation bundled with Raven.
 
 Principle: *tracing owns the standard, the app adopts it.* `raven.tracing` defines
 what a span is, which fields each span kind carries, and how it renders. An app
@@ -63,6 +62,7 @@ root of a turn is a `session.turn` span; everything else nests beneath it.
 | `_spans.address_items(items)` | content-address a list of messages under `audit-artifacts/_messages/`; returns `{"$msg": sha1}` references to embed in a payload. See `audit.artifact.v2` below. |
 | `s.event(name)` | append a timeline event `{time, name}` |
 | `s.error(exc)` | mark `status = ERROR` (done automatically if the block raises) |
+| `s.get(key, default=None)` | the attribute value merged so far, or `default` -- for a value written only once, such as `subagent.outcome` |
 
 Read-only: `s.trace_id`, `s.span_id`, `s.name`.
 
@@ -143,7 +143,7 @@ adds richer rendering.
 | `session.turn` | `session` | — | `turn.input_preview`, `turn.output_preview`, `turn.in_progress`, `turn.capabilities.{tools,plugins,skills}` |
 | `llm.call` | `model` | `llm.provider`, `llm.model` | `llm.provider_class`, `llm.finish_reason`, `llm.call_id`, `llm.invocation_source`, `llm.usage.{input,output,total,cache_read,cache_write}_tokens`, `llm.usage.cost_total`, `llm.request_{bytes,images,image_bytes}`, `llm.http_status`, `llm.served_by`, `llm.response_id`; artifacts `llm.input` (`audit.artifact.v2`: message references + tools, plus `request` = the messages+tools payload size and picture count, not the provider-final body, and `generation` = what the call asked the model for; see below), `llm.output` (plus `call` = the transport record) |
 | `tool.call` | `tool` | `tool.name` | `tool.call_id`, `tool.duration_ms`, `tool.error`; artifacts `tool.input` (params), `tool.output` (result) |
-| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status` |
+| `subagent.run` / `subagent.call` | `subagent` | — | `subagent.id`, `subagent.label`, `subagent.task`, `subagent.session_id`, `subagent.parent_trace_id`, `subagent.parent_span_id`, `subagent.trace_id`, `subagent.status`, `subagent.agent`, `subagent.instance`, `subagent.handle`, `subagent.dispatch` (`spawn` / `dag`), `subagent.in_progress` (checkpointed at open, like `turn.in_progress`), `subagent.outcome` (a spawned run: `completed` / `failed` / `aborted` / `cancelled` / `handed_off`; a DAG node attempt: `completed` / `failed` / `exception` / `continued` / `cancelled`), and on a DAG node attempt `subagent.dag_run_id`, `subagent.node_id`, `subagent.attempt` |
 | `skill.read` / `skill.inject` | `skill` | — | `skill.name`, `skill.id`, `skill.source`, `skill.path`, `skill.scripts_dir` (present => a runnable bundle was materialized, vs instructions-only), `skill.read.via_tool` (`use_skill`/`read_skill`/`read_file`), `skill.inject.{names,count,via}` |
 | `memory.recall` / `.store` / `.feedback` / `.extract` / `.consolidate` / `.profile_refresh` | `memory` | — | `memory.scope`, `memory.hits`, `memory.message_count`, `memory.kind`, `memory.deposit_summary`, `memory.deposit_status`, `memory.surface`, `memory.sections_rewritten`; artifacts per op |
 | `plugin.load` / `tracing.bootstrap` | `plugin` | — | `plugin.name`, `plugin.contribution`, `plugin.id` |
@@ -242,35 +242,18 @@ Keep instrumentation tests with the affected code when refactoring.
 
 ## 5. Versioning & governance
 
-The API versioning rules below are proposed for the standalone distribution;
-they do not describe an independently versioned package shipped by Raven today.
+The tracing API ships with Raven and follows the installed Raven version.
+Applications import the `raven.tracing` facade; Raven-specific attribute and
+artifact builders live in `raven.observability.semconv`.
 
-- The API + semantic conventions are versioned together as `standard-api.v1`,
-  independent of the app.
-- **Additive** changes (new optional attribute, new span name/kind) → minor bump,
-  backward compatible.
-- **Breaking** changes (rename/remove an attribute or the API signature) → major
-  bump + a migration note; adopters pin a supported range and warn (not silently
-  degrade) on mismatch.
-- A conformance snapshot test (frozen span names + required fields) should guard
-  the standalone contract in CI and require a version bump for contract changes.
-- On-disk record format is versioned separately as `audit.span.v1`
-  (defined in `raven/tracing/spans.py`); the two move independently.
+On-disk records carry the format version `audit.span.v1`, defined in
+`raven/tracing/spans.py`. Consumers should use that field to identify the record
+format when reading stored traces.
 
 ## Status
 
-In-tree, complete. Every span family (turn / llm / tool / memory / skill.inject /
-plugin.load / subagent) is instrumented with `@trace.instrument` on raven's own
-methods; there is no monkeypatch and no `instrument.install()` — the auto-probe
-module was removed. `raven.observability.semconv` already owns the Raven-specific
-attribute/artifact builders, separately from the tracing machinery.
-
-Remaining for the standalone-OSS phase (P4), none blocking in-tree use:
-- Make the import optional: raven core hard-imports `raven.tracing` at module load
-  (decorators applied at class-definition time), so it must ship with raven; a
-  no-op fallback shim is needed before tracing can be a truly optional extra.
-- Keep the Raven-specific extractors in `raven.observability.semconv`; package
-  only the generic API + schema + viewer in the standalone distribution.
-- Decouple Raven-specific defaults and path resolution (`FRAMEWORK`, `RAVEN_*`
-  env, `~/.raven` paths) from the standalone package.
-- Freeze `standard-api.v1`; publish `raven-tracing`; raven default-depends on it.
+Raven instruments the turn, llm, tool, memory, skill.inject, plugin.load, and
+subagent span families directly in its methods. The tracing module is bundled
+because these methods import its decorators at definition time. Setting
+`tracing.enabled` to `false` or `RAVEN_TRACING=0` disables trace emission while
+keeping the facade available to callers.

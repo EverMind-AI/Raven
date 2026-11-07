@@ -325,6 +325,9 @@ class MatrixChannel(ChannelBase):
 
         self._typing_tasks[room_id] = asyncio.create_task(keepalive())
 
+    async def end_turn(self, chat_id: str) -> None:
+        await self._stop_typing(chat_id, clear=True)
+
     async def _stop_typing(self, room_id: str, *, clear: bool) -> None:
         if task := self._typing_tasks.pop(room_id, None):
             task.cancel()

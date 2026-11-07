@@ -226,6 +226,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
     persist the disable rather than clobber it with a recomputed next run.
     """
     from raven.core.cron_stack import make_on_cron_job
+    from raven.spine import TurnOutcome, Usage
 
     store_path = tmp_path / "jobs.json"
     svc = CronService(store_path, allowed_channels={"tui"})
@@ -236,7 +237,7 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
 
     class _Handle:
         async def result(self):
-            return object()  # a completed turn resolves with its outcome; None means it was cut
+            return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True)
 
     svc.on_job = make_on_cron_job(submit=lambda req: _Handle(), cron_service=svc)
     await svc._process_due()
@@ -248,6 +249,41 @@ async def test_auto_disable_survives_process_due_writeback(tmp_path: Path) -> No
     assert stored["state"]["claimedByPid"] is None
     assert stored["state"]["silentFireCount"] == 1
     assert stored["state"]["claimedByPid"] is None
+
+
+async def test_a_silent_run_is_not_counted_toward_the_limit(tmp_path: Path) -> None:
+    """A run the model ended on a silence marker sent the user nothing to answer,
+    so a check that mostly stays quiet is not disabled at its limit; a run that
+    replied still counts."""
+    from raven.core.cron_stack import make_on_cron_job
+    from raven.spine import TurnOutcome, Usage
+
+    store_path = tmp_path / "jobs.json"
+    svc = CronService(store_path, allowed_channels={"tui"})
+    job_id = _add_every_job(svc, limit=1)
+    outcomes = iter(
+        [
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True),
+            TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=True),
+        ]
+    )
+
+    class _Handle:
+        async def result(self):
+            return next(outcomes)
+
+    svc.on_job = make_on_cron_job(submit=lambda req: _Handle(), cron_service=svc)
+
+    assert await svc.run_job(job_id, force=True) is True
+    stored = _stored(store_path, job_id)
+    assert stored["state"]["lastStatus"] == "ok"
+    assert stored["state"]["silentFireCount"] == 0
+    assert stored["enabled"] is True
+
+    assert await svc.run_job(job_id, force=True) is True
+    stored = _stored(store_path, job_id)
+    assert stored["state"]["silentFireCount"] == 1
+    assert stored["enabled"] is False
 
 
 async def test_writeback_does_not_resurrect_store_side_disable(tmp_path):

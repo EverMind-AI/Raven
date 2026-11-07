@@ -207,7 +207,33 @@ def test_skill_unblock_removes_from_config(tmp_config: Path) -> None:
     runner.invoke(app, ["skill", "block", "other"])
     r = runner.invoke(app, ["skill", "unblock", "Tag-Memory"])
     assert r.exit_code == 0
+    assert "skillForge" not in r.stdout
     assert _read_blocklist(tmp_config) == ["other"]
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+def test_skill_block_and_unblock_accept_a_null_section(tmp_config: Path, spelling: str) -> None:
+    import json
+
+    from raven.config.loader import load_config
+    from raven.config.raven import load_raven_config
+
+    tmp_config.write_text(json.dumps({spelling: None}), encoding="utf-8")
+    load_config(tmp_config)
+    empty = tmp_config.read_bytes()
+    assert runner.invoke(app, ["skill", "unblock", "absent"]).exit_code == 0
+    assert tmp_config.read_bytes() == empty
+    result = runner.invoke(app, ["skill", "block", "tag-memory"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(tmp_config.read_text(encoding="utf-8")) == {spelling: {"blocklist": ["tag-memory"]}}
+    assert load_raven_config(config_path=tmp_config).skill_forge.blocklist == ["tag-memory"]
+    before = tmp_config.read_bytes()
+    assert runner.invoke(app, ["skill", "block", "TAG-MEMORY"]).exit_code == 0
+    assert tmp_config.read_bytes() == before
+    result = runner.invoke(app, ["skill", "unblock", "TAG-MEMORY"])
+    assert result.exit_code == 0
+    assert "Unblocked" in result.stdout and "skillForge" not in result.stdout
+    assert json.loads(tmp_config.read_text(encoding="utf-8")) == {spelling: {"blocklist": []}}
 
 
 def test_skill_block_reports_the_block_it_wrote_on_a_snake_config(tmp_config: Path) -> None:

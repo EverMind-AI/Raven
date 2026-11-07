@@ -103,7 +103,10 @@ describe('the wait a settings section draws', () => {
 
   it('waits on the tool and plugin pages as their switch rows', async () => {
     await waiting('tools')
-    expect(count('.settings-xrow')).toBe(23)
+    /* The first four groups' worth: files, knowledge bases, execution and the
+       web. The wait draws the cards a reader sees before scrolling, so the
+       number moves when a group is added above them. */
+    expect(count('.settings-xrow')).toBe(21)
     cleanup()
     store._resetForTests()
     await waiting('plugins')

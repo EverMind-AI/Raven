@@ -92,6 +92,17 @@ describe('stripRows lingering', () => {
     // seeded from disk has none and no window it could still be inside.
     expect(stripRows([row({ status: 'completed' })], 4, 1_000_000, 30_000).visible).toEqual([])
   })
+
+  it('drops a not-executed node even while it lingers, the way the overlay does', () => {
+    // A DAG node a branch left out never called an agent, so the strip must not
+    // give it a line: `agentRows` is the overlay's rule, and the two lists have
+    // to agree on which rows stand for an agent. The store still holds the row.
+    const leftOut = row({ id: 'run-1/g', kind: 'dag-node', settledAtMs: 999_000, status: 'not_executed' })
+
+    expect(stripRows([leftOut, row({ id: 'live', seq: 2 })], 4, 1_000_000, 30_000).visible.map(r => r.id)).toEqual([
+      'live'
+    ])
+  })
 })
 
 const dagRun = (over: Partial<LiveDagRun> = {}): LiveDagRun => ({

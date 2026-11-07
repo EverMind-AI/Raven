@@ -29,7 +29,6 @@ import os
 import signal
 import socket
 import subprocess
-import sys
 import time
 import urllib.request
 import webbrowser
@@ -42,6 +41,18 @@ from rich.markup import escape
 from raven.tracing import config as tracing_config
 
 console = Console()
+
+#: zstd decoding landed in Node's zlib in 22.15 and 23.8, and the viewer reads
+#: payloads compressed by default. Its floor is therefore higher than the TUI's.
+_MIN_VIEWER_NODE_VERSION = (22, 15, 0)
+_FIRST_VIEWER_NODE_23_VERSION = (23, 8, 0)
+
+
+def _node_supports_zstd(version: tuple[int, ...]) -> bool:
+    """Whether this Node has zlib zstd: 22.15+, 23.8+, or any later major."""
+    if version[0] == 23:
+        return version >= _FIRST_VIEWER_NODE_23_VERSION
+    return version >= _MIN_VIEWER_NODE_VERSION
 
 
 def _viewer_dir() -> Path:
@@ -133,43 +144,43 @@ def _clear_pid_file() -> None:
     _pid_file().unlink(missing_ok=True)
 
 
-def _pid_is_viewer(pid: int) -> bool:
-    """True only when ``pid`` is alive and looks like our node viewer.
+def _pid_is_viewer(pid: int) -> bool | None:
+    """Identify the Node viewer, keeping an unreadable live process unknown.
 
     A pid from the pid file may have been recycled by the OS for an unrelated
-    process, so liveness alone is never enough to signal it. POSIX checks the
-    command line via ps (``node .../server.js``); native Windows has no
-    ps.exe (the FileNotFoundError would read as "not our viewer" and disable
-    stop / start-reuse entirely), so tasklist filters the pid and the image
-    name must be node — command lines are not visible there.
+    process, so liveness alone is never enough to signal it. The shared process
+    reader must identify both Node and the viewer script on every platform.
     """
-    if sys.platform == "win32":
-        try:
-            out = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}"],  # noqa: S607 -- system tool; PATH lookup intended
-                capture_output=True,
-                text=True,
-                check=False,
-            ).stdout
-        except OSError:
-            return False
-        return "node" in out.lower()
-    try:
-        out = subprocess.run(
-            # -ww: `server.js` sits at the end of the argv, and ps truncates to
-            # $COLUMNS (80 when unset), so without it a deep install reads as not
-            # ours and the viewer is never stopped.
-            ["ps", "-ww", "-p", str(pid), "-o", "command="],  # noqa: S607 -- ps location varies across POSIX; PATH lookup intended
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-    except OSError:
-        return False
+    import re
+
+    from raven.utils.pid import pid_alive
+    from raven.utils.processes import command_line
+
+    out = command_line(pid)
     if not out:
-        return False
-    argv0 = out.split()[0]
-    return "node" in Path(argv0).name and "server.js" in out
+        return None if pid_alive(pid) else False
+    node = r"node(?:js)?(?:-?v?\d+(?:\.\d+)*)?(?:\.exe)?"
+    quoted = re.match(r"""^"([^"]+)"|^'([^']+)'""", out)
+    if quoted is not None:
+        name = re.split(r"[/\\]", quoted.group(1) or quoted.group(2))[-1]
+        return re.fullmatch(node, name, re.IGNORECASE) is not None and "server.js" in out[quoted.end() :]
+    # ps leaves spaces unquoted; an argument starting with a new absolute path
+    # must not be consumed as part of the executable's directory.
+    prefix = r"(?:(?:[A-Za-z]:)?[/\\]+)?(?:[^\s/\\]+(?:[ \t]+[^\s/\\]+)*[/\\])*"
+    match = re.match(prefix + node + r"(?=\s|$)", out, re.IGNORECASE)
+    return match is not None and "server.js" in out[match.end() :]
+
+
+def _checked_viewer(pid: int) -> bool:
+    identity = _pid_is_viewer(pid)
+    if identity is None:
+        console.print(
+            f"[yellow]Cannot verify the tracing viewer (pid {pid}); its record is kept. "
+            "Restore process access, or after confirming the record is stale, "
+            f"remove {escape(str(_pid_file()))} and retry. Do not signal an unverified PID.[/yellow]"
+        )
+        raise typer.Exit(1)
+    return identity
 
 
 def _stop_viewer() -> None:
@@ -178,7 +189,7 @@ def _stop_viewer() -> None:
         console.print("Tracing viewer is not running.")
         return
     pid = entry["pid"]
-    if not _pid_is_viewer(pid):
+    if not _checked_viewer(pid):
         _clear_pid_file()
         console.print("Tracing viewer is not running (cleared a stale pid file).")
         return
@@ -191,15 +202,17 @@ def _stop_viewer() -> None:
 
 
 def _resolve_node() -> str:
-    from raven.cli.tui_commands import _MIN_NODE_VERSION, find_node
+    from raven.cli.tui_commands import find_node
 
-    node, version = find_node()
-    # find_node returns the best node it saw even below the minimum, so the
-    # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_NODE_VERSION:
+    # The viewer's floor is stricter than the TUI's, so the search has to use
+    # it: a PATH node the TUI accepts would otherwise hide a zstd-capable one
+    # later in the order. find_node still returns the best node it saw when
+    # none qualifies, so the version check stays the caller's.
+    node, version = find_node(_node_supports_zstd)
+    if not node or version is None or not _node_supports_zstd(version):
         console.print(
-            "[red]Node (>= 22) not found.[/red] The tracing dashboard needs the "
-            "same Node runtime as the TUI.\n"
+            "[red]Node with zstd support not found (22.15+, or 23.8+).[/red] The tracing dashboard reads "
+            "zstd-compressed payloads and needs a Node with zlib zstd support.\n"
             "Install: https://nodejs.org/  or  brew install node@22  or  nvm install 22"
         )
         raise typer.Exit(1)
@@ -217,7 +230,7 @@ def _server_js() -> Path:
 def _open_dashboard(port: int) -> None:
     entry = _read_pid_file()
     if entry is not None:
-        if _pid_is_viewer(entry["pid"]) and _viewer_health(entry["port"]):
+        if _checked_viewer(entry["pid"]) and _viewer_health(entry["port"]):
             url = f"http://127.0.0.1:{entry['port']}/"
             console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
             webbrowser.open(url)
@@ -307,6 +320,70 @@ def _run_compact(*, dry_run: bool) -> None:
         console.print(f"[yellow]... and {hidden} more[/yellow]")
 
 
+def _run_compress(*, dry_run: bool, logs: bool = False) -> None:
+    from raven.tracing.compress import compress, compress_logs
+    from raven.tracing.store import TraceStore
+
+    store = TraceStore(tracing_config.state_dir())
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    artifacts_dir = store.artifacts_dir
+    if artifacts_dir.is_dir():
+        result = compress(artifacts_dir, dry_run=dry_run)
+        console.print(
+            f"blobs {result.blobs}: compressed {result.compressed}, already {result.already}, relinked {result.relinked}"
+        )
+        console.print(f"messages {result.messages}: compressed {result.messages_compressed}")
+        console.print(
+            f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(result.errors)
+    else:
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+    if logs:
+        log_result = compress_logs(store.logs_dir, dry_run=dry_run)
+        console.print(
+            f"logs {log_result.files}: compressed {log_result.compressed}, already {log_result.already}, "
+            f"left for the next rotation {log_result.newest}"
+        )
+        console.print(
+            f"{log_result.bytes_before / (1024 * 1024):.1f} MB -> {log_result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {log_result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(log_result.errors)
+
+
+def _run_pack_messages(*, dry_run: bool) -> None:
+    from raven.tracing.message_pack import pack_messages
+    from raven.tracing.store import TraceStore
+
+    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    if not artifacts_dir.is_dir():
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+        return
+    result = pack_messages(artifacts_dir, dry_run=dry_run)
+    console.print(
+        f"messages {result.scanned}: packed {result.packed}, already {result.already}, "
+        f"packs {result.packs}, removed files {result.removed}"
+    )
+    console.print(
+        f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+        f"saved {result.saved / (1024 * 1024):.1f} MB"
+    )
+    _print_skipped(result.errors)
+
+
+def _print_skipped(errors: list[str]) -> None:
+    for message in errors[:10]:
+        console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
+    hidden = max(len(errors) - 10, 0)
+    if hidden:
+        console.print(f"[yellow]... and {hidden} more[/yellow]")
+
+
 def register(app: typer.Typer) -> None:
     """Attach the ``tracing`` command to ``app``.
 
@@ -321,7 +398,9 @@ def register(app: typer.Typer) -> None:
             None,
             help=(
                 "Optional action: 'stop' shuts down the background viewer; "
-                "'compact' folds duplicate artifacts (terminal only, not available from the TUI)."
+                "'compact' folds duplicate artifacts; 'compress' rewrites payloads as zstd "
+                "(--logs adds the rotated span and event logs); 'pack-messages' moves message blobs "
+                "into packs. All but 'stop' are terminal only, not available from the TUI."
             ),
         ),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
@@ -329,18 +408,30 @@ def register(app: typer.Typer) -> None:
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="With 'compact': report what would change without writing."
+            False,
+            "--dry-run",
+            help="With 'compact', 'compress' or 'pack-messages': report what would change without writing.",
         ),
+        logs: bool = typer.Option(False, "--logs", help="With 'compress': also compress rotated span and event logs."),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
         if action == "compact":
             _run_compact(dry_run=dry_run)
             return
+        if action == "compress":
+            _run_compress(dry_run=dry_run, logs=logs)
+            return
+        if action == "pack-messages":
+            _run_pack_messages(dry_run=dry_run)
+            return
         if action == "stop":
             _stop_viewer()
             return
         if action is not None:
-            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact")
+            console.print(
+                f"[red]Unknown action '{escape(action)}'.[/red] "
+                "Supported actions: stop, compact, compress, pack-messages"
+            )
             raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:

@@ -85,23 +85,21 @@ class AfterIterationHook(AgentHook):
 
     @staticmethod
     def _extract(ctx: AgentHookContext) -> tuple[str, str]:
-        """Pull ``user_goal`` (first user message in ctx.messages) and
-        ``final_response`` (last assistant content) from the context.
+        """Pull ``user_goal`` (the turn's question) and ``final_response``
+        (last assistant content) from the context.
+
+        The goal is ``ctx.turn_question``, which the loop reads once at entry
+        with the runtime context and the turn scratch taken off; the first user
+        message in ``ctx.messages`` is the oldest history entry, or on a first
+        turn the whole envelope with its recalled memory.
 
         Returns empty strings on structural mismatch so the hook quietly
         no-ops rather than blowing up — the chain isn't a place for
         loud error reporting.
         """
         messages = ctx.messages or []
-        user_goal = ""
+        user_goal = ctx.turn_question or ""
         final_response = ""
-        for m in messages:
-            if not isinstance(m, dict):
-                continue
-            if m.get("role") == "user" and not user_goal:
-                content = m.get("content")
-                if isinstance(content, str):
-                    user_goal = content
         # Walk the response chain from the latest non-tool assistant message.
         for m in reversed(messages):
             if not isinstance(m, dict):

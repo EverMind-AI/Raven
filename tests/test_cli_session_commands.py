@@ -8,6 +8,10 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+from raven.agent.task_board import files as board_files
+from raven.agent.task_board.board import Board, TaskGroup
+from raven.agent.task_board.store import BOARD_FILENAME, save_board
+from raven.cli import session_commands
 from raven.cli.commands import app
 from raven.cli.session_commands import (
     resolve_session_cross_channel,
@@ -302,6 +306,58 @@ def test_delete_by_full_key(two_sessions: list[str], patched_workspace: Path, ma
     assert not manager.exists(f"cli:{cid}")
 
 
+def test_delete_takes_the_conversations_task_board_along(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager
+) -> None:
+    """The CLI deletes from a process of its own, where no host's delete observer is
+    attached: it removes the board itself, or a chat that takes the key again inherits it."""
+    key = f"cli:{two_sessions[0]}"
+    save_board(manager.session_dir(key), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not (manager.session_dir(key) / BOARD_FILENAME).exists()
+
+
+def test_delete_takes_the_board_of_a_session_a_project_run_filed(workspace: Path, patched_workspace: Path) -> None:
+    """`raven agent`, `tui` and `serve` file their sessions under the launch directory's
+    project slug; this command's store has none and finds the transcript by searching every
+    group, so the board beside it has to be found while the transcript is still there."""
+    project = SessionManager(workspace, project_slug="proj")
+    key = "cli:work"
+    session = project.get_or_create(key)
+    session.add_message("user", "hello")
+    project.save(session)
+    save_board(project.session_dir(key), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+    board = project.session_dir(key) / BOARD_FILENAME
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not project.exists(key)
+    assert not board.exists()
+
+
+def test_delete_that_cannot_remove_the_board_still_deletes_and_says_where_it_stays(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager, monkeypatch
+) -> None:
+    """The session is gone by then; a board a reader still holds is no reason to report a failure."""
+    key = f"cli:{two_sessions[0]}"
+
+    def held(_session_dir: Path) -> None:
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(session_commands, "reset_board", held)
+
+    r = runner.invoke(session_app, ["delete", key])
+
+    assert r.exit_code == 0
+    assert not manager.exists(key)
+    said = " ".join(r.output.split())
+    assert "task board" in said and "Access is denied" in said, "Rich wraps the path at the console's width"
+
+
 def test_delete_unknown_id_nonzero(patched_workspace: Path) -> None:
     r = runner.invoke(session_app, ["delete", "00000000_000000_aaaaaa"])
     assert r.exit_code != 0
@@ -328,6 +384,42 @@ def test_fork_prints_child_id(two_sessions: list[str], patched_workspace: Path, 
     assert manager.exists(f"cli:{child_bare}")
     child = manager.get_or_create(f"cli:{child_bare}")
     assert child.metadata["parent_session_id"] == f"cli:{cid}"
+
+
+def test_fork_copies_the_conversations_task_board(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager
+) -> None:
+    """A fork carries its parent's turns, so it carries the board their steps name, as
+    ``session.branch`` does."""
+    cid = two_sessions[0]
+    save_board(manager.session_dir(f"cli:{cid}"), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    r = runner.invoke(session_app, ["fork", cid])
+
+    assert r.exit_code == 0, r.stdout
+    child = r.stdout.strip().splitlines()[0].strip()
+    assert (manager.session_dir(f"cli:{child}") / BOARD_FILENAME).read_bytes() == (
+        manager.session_dir(f"cli:{cid}") / BOARD_FILENAME
+    ).read_bytes()
+
+
+def test_fork_that_cannot_copy_the_board_still_gives_the_child(
+    two_sessions: list[str], patched_workspace: Path, manager: SessionManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cid = two_sessions[0]
+    save_board(manager.session_dir(f"cli:{cid}"), Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+
+    def refuse(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(board_files, "write_bytes", refuse)
+
+    r = runner.invoke(session_app, ["fork", cid])
+
+    assert r.exit_code == 0, r.stdout
+    child = r.stdout.strip().splitlines()[0].strip()
+    assert manager.exists(f"cli:{child}")
+    assert "task board" in r.stdout
 
 
 def test_fork_prefix_match(two_sessions: list[str], patched_workspace: Path) -> None:

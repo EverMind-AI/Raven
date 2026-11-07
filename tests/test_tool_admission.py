@@ -67,6 +67,7 @@ def test_a_well_formed_duck_is_admitted():
         (("parameters", "not-a-mapping"), "parameters"),
         (("execute", "not-callable"), "execute"),
         (("configured", False), "configured"),
+        (("agent_output", "yes"), "agent_output"),
     ],
 )
 def test_the_door_refuses_a_missing_or_misshapen_authored_member(breakage, message):
@@ -74,6 +75,14 @@ def test_the_door_refuses_a_missing_or_misshapen_authored_member(breakage, messa
     setattr(duck, breakage[0], breakage[1])
     with pytest.raises(ToolAdmissionError, match=message):
         admit_tool(duck)
+
+
+def test_agent_output_is_frozen_at_admission():
+    duck = _Duck()
+    duck.agent_output = True
+    spec = admit_tool(duck)
+    duck.agent_output = False
+    assert spec.agent_output is True
 
 
 def test_an_availability_declaration_is_dispensed_on_the_spec_or_absent():

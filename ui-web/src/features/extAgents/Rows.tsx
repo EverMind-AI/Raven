@@ -12,30 +12,22 @@
  * looks up.
  */
 
-import { AgentMark } from '../../components/AgentMark'
+import { AgentMark, MIRASIM_GROUP } from '../../components/AgentMark'
 import { Glyph } from '../../components/Ico'
 import { t } from '../../i18n/t'
+import { agentKindLabel } from '../../lib/agentKind'
+import { ago } from '../../lib/ago'
 import { ask as confirmAsk } from '../../state/confirm'
-import { catalogueSize, isOwnRow, shortOf } from './catalogue'
+import { catalogueCards, familyOf, isOwnRow, shortOf } from './catalogue'
 import { healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
 import { stageOf } from './source'
 import * as store from './store'
 
 import type { Health, Shown } from './health'
+import type { GridEntry } from './source'
 import type { ExtAgentsState, Failure } from './store'
 import type { ExtAgentRow, Remedy } from './types'
 import type { JSX, ReactNode } from 'react'
-
-const kindText = (kind: string): string =>
-  t(
-    kind === 'builtin'
-      ? 'gui.agent.kind_builtin'
-      : kind === 'openai'
-        ? 'gui.agent.kind_openai'
-        : kind === 'acp'
-          ? 'gui.agent.kind_acp'
-          : 'gui.agent.kind_cli',
-  )
 
 export function Spin(): JSX.Element {
   return <span className="extAgents-spin" aria-hidden="true" />
@@ -56,11 +48,35 @@ function Led({ health, shown }: { health: Health; shown: Shown }): JSX.Element |
 const tooltip = (health: Health, shown: Shown): string | undefined =>
   health.tone === 'none' || (health.from === 'test' && shown !== 'on') ? undefined : health.label
 
-export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
+const MACHINE = 'M4 5.5h16v9.5H4zM9.5 19h5M12 15.5V19'
+
+/* Where the row runs, when not here: the registered machine's id in a chip
+   after the name. The name is the user's -- `<preset>@<machine>` by default,
+   but renamed at will -- so the chip is the one place the machine is always
+   said. After the name on a row, which is wide; on a card, where the name
+   row is a quarter of the page, it leads the line under the name instead.
+   Nothing on a row that runs on this computer. */
+function MachineTag({ row }: { row: ExtAgentRow }): JSX.Element | null {
+  if (!row.machine) return null
+  return (
+    <span className="extAgents-mc" title={t('gui.agent.on_machine', { id: row.machine })}>
+      <Glyph d={MACHINE} />
+      {row.machine}
+    </span>
+  )
+}
+
+/* The plate a row wears. One of Mirasim's agents is that agent run through
+   Mirasim, so its mark is the route's with the agent's over it -- and the pair
+   is drawn from the two files the table already carries rather than a
+   per-agent composite asset. `plain` is the picker's own row, where the agent
+   is what the reader is choosing and the route is already the drawer's title. */
+export function Tile({ row, plain }: { row: ExtAgentRow; plain?: boolean }): JSX.Element {
   const own = isOwnRow(row)
+  const via = !plain && familyOf(row) ? { preset: MIRASIM_GROUP, badge: row.preset } : null
   return (
     <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
-      <AgentMark preset={row.preset} own={own} />
+      {via ? <AgentMark badge={via.badge} preset={via.preset} /> : <AgentMark preset={row.preset} own={own} />}
     </span>
   )
 }
@@ -69,11 +85,11 @@ export function Tile({ row }: { row: ExtAgentRow }): JSX.Element {
    for a row nobody catalogued -- the probe's own verdict when it has one, else
    how Raven reaches it. A refusal replaces it in red; a write in flight
    replaces it with the ring. */
-function oneLine(row: ExtAgentRow): string {
+export function oneLine(row: ExtAgentRow): string {
   const short = shortOf(row)
   const stale = stageOf(row) === 'stale' ? t('gui.agent.tag_stale') : ''
   const base =
-    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || kindText(row.kind)
+    short || ((row.probe_status === 'attention' || row.probe_status === 'missing') && row.probe_detail) || agentKindLabel(row.kind)
   return stale ? `${base} · ${stale}` : base
 }
 
@@ -104,17 +120,6 @@ const WHY: Record<Remedy['kind'], string> = {
 
 export function whyOf(remedy: Remedy): string {
   return t(WHY[kindOf(remedy)])
-}
-
-/* How long ago a verdict was measured, in the largest unit that is not zero. */
-export function ago(atMs: number | null, now = Date.now()): string {
-  if (!atMs) return ''
-  const m = Math.floor((now - atMs) / 60_000)
-  if (m < 1) return t('gui.time.ago_now')
-  if (m < 60) return t('gui.time.ago_m', { n: m })
-  const h = Math.floor(m / 60)
-  if (h < 24) return t('gui.time.ago_h', { n: h })
-  return t('gui.time.ago_d', { n: Math.floor(h / 24) })
 }
 
 /* What a card or row says about the last thing that went wrong, under the
@@ -268,13 +273,13 @@ export function connect(row: ExtAgentRow): void {
   if (stageOf(row) === 'stale') {
     confirmAsk(
       t('gui.agent.migrate_do'),
-      t('gui.agent.migrate_body', { name: row.name, to: kindText(row.upgrade_to || '') }),
+      t('gui.agent.migrate_body', { name: row.name, to: agentKindLabel(row.upgrade_to) }),
       t('gui.agent.migrate_do'),
       () => store.connectRow(row),
     )
     return
   }
-  store.connectRow(row)
+  void store.connectRow(row)
 }
 
 /* The one control a row carries. Exactly one, or none for the built-in loop,
@@ -296,8 +301,10 @@ function RowControl({ row, s, shown }: { row: ExtAgentRow; s: ExtAgentsState; sh
     )
   }
   if (shown === 'on') {
-    /* Raven's shipped specialists are part of Raven: never disconnected. */
-    if (row.builtin || row.vendored) return null
+    /* The built-in loop alone has no switch: an unnamed spawn and a dag node
+       with no sub-agent dispatch to it. Raven's shipped specialists switch off
+       like any other agent; coming with Raven does not keep one on the roster. */
+    if (row.builtin) return null
     return (
       <button className="mini" onClick={() => store.disconnectRow(row)}>
         {t('gui.agent.disconnect')}
@@ -351,6 +358,7 @@ function AgentRow({
         <div className="extAgents-nm" title={tooltip(health, shown)}>
           <Led health={health} shown={shown} />
           <span className="extAgents-t">{row.name}</span>
+          <MachineTag row={row} />
         </div>
         {shown === 'pending' ? (
           <div className="extAgents-one extAgents-one-work">
@@ -435,7 +443,10 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
           <CardControl row={row} shown={shown} verdict={verdict} />
         </div>
       </div>
-      <div className="extAgents-one">{oneLine(row)}</div>
+      <div className="extAgents-one">
+        <MachineTag row={row} />
+        {oneLine(row)}
+      </div>
       <div className="extAgents-foot-slot">
         <Foot v={verdict} />
       </div>
@@ -446,11 +457,13 @@ function AgentCard({ row, s }: { row: ExtAgentRow; s: ExtAgentsState }): JSX.Ele
 /* The grid before the first answer: one card of the fixed shape a real card
    has per catalogue entry, which is the roster on every machine, so it lands
    in place instead of after an empty message and a jump. Bars, not rows: a
-   card would be claiming a state the server has not confirmed. */
+   card would be claiming a state the server has not confirmed. Cards, not
+   keys: a family is one cell in the answer and so one cell here, or the grid
+   would jump by eight the moment the roster landed. */
 export function WaitGrid(): JSX.Element {
   return (
     <div className="extAgents-grid" aria-busy="true">
-      {Array.from({ length: catalogueSize() }, (_, i) => (
+      {Array.from({ length: catalogueCards() }, (_, i) => (
         <div className="extAgents-card extAgents-wcard" key={i}>
           <div className="extAgents-ctop">
             <span className="extAgents-wbar extAgents-wtile" />
@@ -466,13 +479,61 @@ export function WaitGrid(): JSX.Element {
   )
 }
 
-export function CardGrid({ rows, s, empty }: { rows: ExtAgentRow[]; s: ExtAgentsState; empty: string }): JSX.Element {
-  if (!rows.length) return <div className="extAgents-empty">{empty}</div>
+/* The card that stands in for a family of presets the reader has not opened.
+   Its job is one press: show the agents behind it. It reads like every other
+   card -- mark, name, a line, a filled foot -- because it IS one of the grid's
+   cells and a different shape would read as a different kind of thing. */
+function FamilyCard({ entry, s }: { entry: Extract<GridEntry, { kind: 'family' }>; s: ExtAgentsState }): JSX.Element {
+  const open = (): void => store.pickerOpen(entry.family)
+  return (
+    <div
+      className="extAgents-card"
+      role="button"
+      tabIndex={0}
+      aria-current={s.picking === entry.family ? 'true' : undefined}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          open()
+        }
+      }}
+    >
+      <div className="extAgents-ctop">
+        <span className="extAgents-tile">
+          <AgentMark preset={MIRASIM_GROUP} />
+        </span>
+        <div className="extAgents-nm">
+          <span className="extAgents-t">{t('gui.agent.fam_mirasim')}</span>
+        </div>
+        <div className="extAgents-ctl" onClick={(e) => e.stopPropagation()}>
+          <span className="extAgents-ctag">{t('gui.agent.fam_n', { n: entry.members.length })}</span>
+        </div>
+      </div>
+      <div className="extAgents-one">{t('gui.agent.fam_mirasim_about')}</div>
+      <div className="extAgents-foot-slot">
+        <Foot v={{ label: t('gui.agent.fam_pick'), why: '', raw: '', remedy: null, act: '', onAct: () => {}, quiet: true }} />
+      </div>
+    </div>
+  )
+}
+
+export function CardGrid({
+  entries, s, empty,
+}: { entries: GridEntry[]; s: ExtAgentsState; empty: string }): JSX.Element {
+  if (!entries.length) return <div className="extAgents-empty">{empty}</div>
   return (
     <div className="extAgents-grid">
-      {rows.map((row) => (
-        <AgentCard key={row.name} row={row} s={s} />
-      ))}
+      {entries.map((entry) =>
+        entry.kind === 'family' ? (
+          /* Family AND section: see GridEntry -- one key per population, or
+             React keeps the first of two cards and silently drops the other. */
+          <FamilyCard entry={entry} key={`${entry.family}:${entry.section}`} s={s} />
+        ) : (
+          <AgentCard key={entry.row.name} row={entry.row} s={s} />
+        ),
+      )}
     </div>
   )
 }

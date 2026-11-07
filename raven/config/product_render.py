@@ -7,11 +7,11 @@ launcher repeats is here -- reading a setting from the process environment
 with a ``.env`` fallback, merging declared secret slots, inheriting the
 host's LLM block when the product has no key of its own, pinning a state
 root under the host's home and an engine home OUTSIDE it (the home lives in
-the raven data directory, the work stays where the work is), seeding a
-workspace file once, assembling the
+the raven data directory, the work stays where the work is), regenerating a
+product-owned workspace file on every launch, assembling the
 ``acp.modes`` catalogue from overlay files, sweeping stale renders by pid
 liveness, and writing the rendered copy owner-only with the host's deny
-rules merged in.
+rules merged in, beside any file that belongs with it.
 
 What stays in each product is its tables and its judgement: which secrets go
 where, what its modes are called, how a mode's budget resolves, what must
@@ -30,15 +30,21 @@ requirement.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
+import stat
+import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
+from raven.utils.atomic_io import atomic_replace, write_transaction
 from raven.utils.paths import safe_path_segment
+from raven.utils.pid import pid_alive
 
 
 def env_value(name: str, *, env_file: Path | None = None) -> str | None:
@@ -348,12 +354,93 @@ def inherit_plugin_opt_outs(config: dict, host: dict, *, own: Iterable[str] = ()
     return carried
 
 
+#: Per distribution: the slice keys the host's value replaces, then the keys
+#: the host only fills in when the product carries none of its own. Identity is
+#: deliberately absent from both -- see :func:`inherit_memory_backend`.
+_MEMORY_SLICE_INHERITED: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "everos-memory": (("base_url",), ()),
+    "everos-cloud-memory": (("base_url",), ("api_key",)),
+}
+
+
+def inherit_memory_backend(config: dict, host: dict) -> str | None:
+    """Point the product's long-term memory where the host's points.
+
+    Which store memories live in is a property of the installation, not of the
+    product: the host reads a sub-agent's memories back through *its own*
+    backend (``SubagentManager._memory_backend``), so a product writing
+    anywhere else leaves that record empty with nothing reporting it. The
+    address is the same question one level down -- a product config used to
+    carry the stock EverOS port, and a host whose own server moved (every
+    second instance on one machine does) would be addressed at whatever
+    answered on the stock one.
+
+    What never travels is identity. ``memory.userId`` / ``agentId`` and the
+    local slice's ``user_id`` / ``agent_id`` are the product's own, and they
+    are what keeps five products' memories apart inside one store. A
+    credential the product holds itself is kept for the same reason the secret
+    slots keep one; an address is not a credential, so the host's wins.
+
+    ``owned`` is forced off whenever the local backend is the one in force,
+    recorded on the host or not: that EverOS process belongs to the host,
+    which starts and stops it with its own backend. A product infers ownership
+    from a slice naming no root -- the shape every product ships -- so without
+    this it answers a host that is merely not serving by starting a second
+    server against a root of its own, stranding everything written so far.
+
+    Returns the backend in force, or ``None`` when it is off or neither side
+    names one.
+    """
+    host_memory = host.get("memory") if isinstance(host.get("memory"), dict) else {}
+    if "backend" in host_memory:
+        # Present and null is the host's off switch, not an absent answer, and
+        # it travels like any other value: an operator who turned long-term
+        # memory off would otherwise find the products still writing, through
+        # a backend their own raven no longer builds.
+        named = host_memory["backend"]
+        backend = named if isinstance(named, str) and named else None
+        config.setdefault("memory", {})["backend"] = backend
+    else:
+        own_memory = config.get("memory") if isinstance(config.get("memory"), dict) else {}
+        backend = own_memory.get("backend")
+    if not isinstance(backend, str) or not backend:
+        return None
+    distribution = MEMORY_BACKEND_DISTRIBUTIONS.get(backend)
+    if distribution is None:
+        return backend
+    replaces, fills = _MEMORY_SLICE_INHERITED.get(distribution, ((), ()))
+    host_slice = _plugin_slice(host, distribution)
+    own_slice = _plugin_slice(config, distribution)
+    carried = {key: host_slice[key] for key in replaces if str(host_slice.get(key) or "").strip()}
+    carried.update(
+        {
+            key: host_slice[key]
+            for key in fills
+            if str(host_slice.get(key) or "").strip() and not str(own_slice.get(key) or "").strip()
+        }
+    )
+    if backend == SHIPPED_DEFAULT_BACKEND:
+        carried["owned"] = False
+    if carried:
+        config.setdefault("plugins", {}).setdefault("config", {}).setdefault(distribution, {}).update(carried)
+    return backend
+
+
+def _plugin_slice(data: dict, distribution: str) -> dict:
+    """``plugins.config[distribution]`` of a raw config, or an empty dict."""
+    plugins = data.get("plugins")
+    block = plugins.get("config") if isinstance(plugins, dict) else None
+    found = block.get(distribution) if isinstance(block, dict) else None
+    return found if isinstance(found, dict) else {}
+
+
 def inherit_media_image(config: dict, host: dict) -> dict:
     """Take the host raven's image-generation section, and keep following it.
 
     The section is resolved the way the host resolves it for its own
-    ``image_generate`` -- ``tools.media.image`` with the OpenRouter key borrowed
-    where it names none -- then written whole into the product config, and
+    ``image_generate`` -- ``tools.media.image`` with what it borrows, the named
+    provider's address and key or, for a keyless section calling OpenRouter, the
+    OpenRouter key -- then written whole into the agent's config, and
     ``selectionConfig`` is pointed at the host's config file so a model or
     quality changed in Settings later reaches the product's next generation
     without a re-render. A host with no image section leaves an empty section,
@@ -367,7 +454,7 @@ def inherit_media_image(config: dict, host: dict) -> dict:
 
     host_tools = host.get("tools") or {}
     host_image = (host_tools.get("media") or {}).get("image")
-    section = live_media_tool_config(host_image, (host.get("providers") or {}).get("openrouter"))
+    section = live_media_tool_config(host_image, host.get("providers"), "image")
     image = section.model_dump(by_alias=True, exclude_unset=True) if section is not None else {}
     image["selectionConfig"] = str(raven_home() / CONFIG_FILENAME)
     media = config.setdefault("tools", {}).setdefault("media", {})
@@ -543,16 +630,216 @@ def product_acp_home(product: str, *, override: str | None = None) -> Path:
 def seed_once(target: Path, render: Callable[[], str]) -> bool:
     """Write ``render()`` to ``target`` unless it already exists.
 
-    Once is the contract: the workspace copy is the live one afterwards, and
-    a product update must not silently overwrite what an operator tuned in
-    place. The render is not evaluated when the target exists. Returns
-    whether it wrote.
+    Once is the contract: the workspace copy is the live one afterwards. That
+    suits a file the operator owns from then on; text the product owns -- an
+    identity or a contract the product's gates enforce -- goes through
+    :func:`write_generated`, or a later release ships gates against a prompt
+    nobody refreshed. The render is not evaluated when the target exists.
+    Returns whether it wrote.
     """
     if target.exists():
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(render(), encoding="utf-8")
+    target.write_text(render(), encoding="utf-8", newline="")
     return True
+
+
+def local_addendum(target: Path) -> Path:
+    """``agent.local.md`` beside ``agent.md``: the operator's half of a generated file."""
+    return target.with_name(f"{target.stem}.local{target.suffix}")
+
+
+def _generated_receipt(target: Path) -> Path:
+    return target.with_name(f".{target.name}.generated.sha256")
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _read_receipt(receipt: Path) -> dict[str, set[str]]:
+    """Each writer named in ``receipt`` and the digests it recorded; empty when unreadable."""
+    try:
+        lines = receipt.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return {}
+    writers: dict[str, set[str]] = {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) == 2:
+            writers.setdefault(parts[0], set()).add(parts[1])
+    return writers
+
+
+def _receipt_text(owner: str, digests: Iterable[str]) -> str:
+    return "".join(f"{owner} {digest}\n" for digest in sorted(digests))
+
+
+# A new Windows file takes its folder's inherited ACL whatever mode os.open is
+# given, so a copy of a prompt kept private in a shared folder would be open
+# to every account the folder lets in.
+_BACK_UP_BY_LINK = os.name == "nt"
+
+
+def _back_up(target: Path, raw: bytes) -> Path:
+    """Keep ``target``'s bytes beside it under a name no earlier backup holds.
+
+    Never readable by more accounts than ``target``, since it holds the
+    operator's private text. On POSIX, a copy of ``raw`` created owner-only
+    and never wider than ``target``. On Windows, a hard link to ``target``
+    itself, so the backup is the same file with the same ACL and no bytes are
+    written; a volume that cannot link refuses the backup instead of copying.
+    """
+    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+    names = (target.with_name(f"{stem}-{attempt}" if attempt else stem) for attempt in itertools.count())
+    if _BACK_UP_BY_LINK:
+        for backup in names:
+            try:
+                os.link(target, backup)
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise OSError(
+                    f"cannot back it up: on Windows only a hard link keeps the file's access rights, "
+                    f"and this volume refused one ({exc})"
+                ) from exc
+            return backup
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode) & 0o600
+    except OSError:
+        mode = 0o600
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for backup in names:
+        try:
+            fd = os.open(backup, flags, mode)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return backup
+    raise AssertionError("unreachable: itertools.count does not end")
+
+
+def write_generated(
+    target: Path,
+    product_text: str | None,
+    *,
+    owner: str,
+    legacy_digests: Iterable[str] = (),
+    adopt: bool = True,
+    notify: Callable[[str], None] | None = None,
+) -> str:
+    """Write the product's current text over ``target``; the action taken.
+
+    For a workspace file the product owns -- an identity, a contract its gates
+    enforce, a tool guide. Regenerated on every launch, so a release or a
+    config change reaches the model at the next launch instead of never.
+    The operator's half lives beside it in :func:`local_addendum` and is
+    appended after the product text.
+
+    Whether the file on disk is the product's is read off a receipt beside it
+    naming ``owner`` and the digest of the last text it wrote, so a file
+    another binding's launch rewrote is still recognised, and one another
+    product wrote into the same home is not taken for this one's.
+    ``legacy_digests`` names texts written before receipts existed. A file
+    that is neither -- edited in place, another product's, or an older
+    release's copy no digest names -- is backed up to a ``.bak-*`` file first
+    (:func:`_back_up`) and ``notify`` names it, and the target is replaced
+    only once that backup is on disk. ``adopt=False`` is for a caller whose
+    directory may not be its own -- a plugin writes into whatever home it is
+    granted: a file this owner's receipt never named and no digest matches is
+    then left as it is.
+
+    ``product_text=None`` turns the file off: a file this product wrote is
+    removed; an edited one is kept, being the operator's now, and stops being
+    tracked; another product's file and receipt are left alone.
+
+    Returns ``"written"``, ``"unchanged"``, ``"removed"``, ``"kept"`` or
+    ``"absent"``. Raises ``OSError`` or ``UnicodeDecodeError`` when a file
+    cannot be read or written; an addendum that is not UTF-8 raises the
+    latter naming the addendum. An edit is never replaced before its backup
+    lands, and whatever text a failure leaves in the target, the receipt
+    still names it.
+    """
+    if not owner or any(char.isspace() for char in owner):
+        raise ValueError(f"owner must be one word, not {owner!r}")
+    say = notify or (lambda _message: None)
+    receipt = _generated_receipt(target)
+    local = local_addendum(target)
+    with write_transaction(target):
+        raw = target.read_bytes() if target.is_file() else None
+        # Line endings folded the way read_text folds them, so a copy written
+        # with CRLF before seeds pinned newline="" still matches its digest.
+        current = None if raw is None else raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
+        writers = _read_receipt(receipt)
+        recorded = writers.get(owner, set())
+        wanted = product_text
+        if wanted is not None and local.is_file():
+            try:
+                addendum = local.read_text(encoding="utf-8").strip("\n")
+            except UnicodeDecodeError as exc:
+                # Hand-written, often by an editor saving in a legacy code
+                # page: the error names this file, not the generated one.
+                exc.reason = f"{local} is not UTF-8 text; save it as UTF-8"
+                raise
+            if addendum.strip():
+                wanted = wanted.rstrip("\n") + "\n\n" + addendum + "\n"
+        ours = current is not None and (current == wanted or _text_digest(current) in recorded | set(legacy_digests))
+
+        if wanted is None:
+            if local.is_file():
+                say(f"{local} is not applied: {target.name} is turned off")
+            if current is None:
+                action = "absent"
+            elif ours:
+                target.unlink()
+                action = "removed"
+            else:
+                if recorded:
+                    say(f"kept {target}: it no longer holds the text this product wrote, and it is turned off")
+                action = "kept"
+            if recorded or action == "removed":
+                receipt.unlink(missing_ok=True)
+            return action
+
+        if current is not None and not ours:
+            if not adopt and not recorded:
+                say(
+                    f"left {target} as it is: nothing shows this product wrote it. If it is an edit of "
+                    f"this product's own prompt from before prompts were regenerated, move the lines you "
+                    f"still need into {local} and delete it; the next write puts the product text there"
+                )
+                return "kept"
+            backup = _back_up(target, raw or b"")
+            held = _text_digest(current)
+            writer = next((name for name, digests in writers.items() if held in digests), None)
+            # Not "edited" unless nothing else explains it: a copy an older
+            # release wrote before receipts existed lands here too, and so
+            # does another product's file, and nobody touched either.
+            cause = f"it holds what {writer} wrote" if writer else "it was edited in place, or left by an older release"
+            say(
+                f"{target} does not hold the text this product last wrote ({cause}); backed up "
+                f"to {backup}. It is regenerated on every launch: keep only the lines you still "
+                f"need in {local}"
+            )
+        digest = _text_digest(wanted)
+        if current == wanted:
+            if writers != {owner: {digest}}:
+                atomic_replace(receipt, _receipt_text(owner, {digest}), newline="")
+            return "unchanged"
+        # Two files cannot change in one step, so the receipt names both texts
+        # while the target changes: a failure between the steps leaves a
+        # target the next launch still recognises, whichever text it holds.
+        # The old text is safe to name even when it was an edit -- its
+        # backup is already on disk.
+        pending = {digest} if current is None else {digest, _text_digest(current)}
+        atomic_replace(receipt, _receipt_text(owner, pending), newline="")
+        atomic_replace(target, wanted, newline="")
+        if pending != {digest}:
+            atomic_replace(receipt, _receipt_text(owner, {digest}), newline="")
+        return "written"
 
 
 def mode_catalogue(
@@ -618,27 +905,30 @@ def mode_catalogue(
 
 
 def sweep_stale_renders(root: Path) -> None:
-    """Remove rendered configs whose server is gone, by pid liveness."""
+    """Remove rendered configs whose server is gone, and the files that belong with
+    them (:func:`rendered_part`), by pid liveness."""
     for stale in root.glob(".config.rendered.*.json"):
         try:
             pid = int(stale.name.split(".")[3])
-            os.kill(pid, 0)
-        except (IndexError, ValueError, ProcessLookupError):
+        except (IndexError, ValueError):
             stale.unlink(missing_ok=True)
-        except PermissionError:
             continue
+        if not pid_alive(pid):
+            stale.unlink(missing_ok=True)
 
 
 def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
-    """Write the rendered config under ``root``, owner-only, named by pid.
+    """Write the rendered config under ``root``, owner-only on POSIX, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
     config file's own parent, so wherever this file goes, sessions and cache
-    go too. Owner-only because the render is where the secrets landed; the
-    pid in the name is what :func:`sweep_stale_renders` reads back.
+    go too. POSIX permissions are owner-only because the render is where the
+    secrets landed; Windows uses the containing directory's inherited ACLs.
+    The pid in the name is what :func:`sweep_stale_renders` reads back.
 
-    The host's refusals (:func:`inherit_host_denials`) and plugin opt-outs
-    (:func:`inherit_plugin_opt_outs`) are merged in here rather than by each
+    The host's refusals (:func:`inherit_host_denials`), plugin opt-outs
+    (:func:`inherit_plugin_opt_outs`) and memory address
+    (:func:`inherit_memory_backend`) are merged in here rather than by each
     launcher: every product render ends in this call, so a launcher cannot
     write a config that forgot them. ``own_plugins`` is the product's engine,
     which the opt-outs leave alone; a launcher that names none inherits them
@@ -647,9 +937,28 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     host = host_config()
     inherit_host_denials(config, host)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
-    rendered = root / f".config.rendered.{os.getpid()}.json"
-    fd = os.open(rendered, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
+    inherit_memory_backend(config, host)
+    return _write_owner_only(config, root / f".config.rendered.{os.getpid()}.json")
+
+
+def rendered_part(root: Path, name: str) -> Path:
+    """Where a file that belongs with this process's render goes: beside it, under
+    its pid, so :func:`sweep_stale_renders` removes it with the render."""
+    return root / f".config.rendered.{os.getpid()}.{name}.json"
+
+
+def write_rendered_part(part: dict, root: Path, name: str) -> Path:
+    """Write a file that belongs with the render at :func:`rendered_part`, owner-only
+    on POSIX as the render is: it holds what the render would otherwise carry, keys
+    included. It is not a config the runtime loads, so nothing is merged in."""
+    root.mkdir(parents=True, exist_ok=True)
+    return _write_owner_only(part, rendered_part(root, name))
+
+
+def _write_owner_only(data: dict, path: Path) -> Path:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as stream:
-        json.dump(config, stream, indent=2, ensure_ascii=False)
-    return rendered
+        if hasattr(os, "fchmod"):
+            os.fchmod(stream.fileno(), 0o600)
+        json.dump(data, stream, indent=2, ensure_ascii=False)
+    return path

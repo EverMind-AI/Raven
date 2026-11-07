@@ -1,26 +1,21 @@
 # Evolver：使用与实验
 
 Evolver 是独立的、由基准驱动的 Agent harness 改进工具：诊断失败任务、设计候选
-修改、执行评估，并将有效修改保留为 Git 提交。它不是生产 Agent 在聊天中改写自身，
-也不是记忆召回、SkillForge 检索或 Playbook executor。
+修改、执行评估，并将有效修改保留为 Git 提交。它在 Agent 对话循环之外独立运行，
+在 harness 研发过程中以库的形式调用 Raven。
 
 本页负责入门和操作；[设计与实现](self-evolution-map.md)继续作为方法论到代码的
 详细参考。
 
-## 状态与适用人群 { #status-and-intended-audience }
+## 用途与评估范围 { #status-and-intended-audience }
 
-当前 `evolver/README.md` 标记该目录计划与 vendored fork 一起退役，等待确认。
-实现仍然存在；本页记录现有工具，不承诺长期支持。在新系统中依赖它之前，先确认
-维护周期。
-
-适用于维护目标 harness、有可重复基准任务和评分、能够在隔离环境中承担重复评估
+Evolver 从源码环境运行，适用于维护目标 harness、有可重复基准任务和评分、能够在隔离环境中承担重复评估
 成本的开发者。日常任务自动化使用[Playbooks](playbooks.md)，一次性组图使用
 [DAG 编排](orchestration.md)。
 
-统一 launcher 当前**只注册 AppWorld**。目录中存在其他评估模块，并不意味着它们
-已经成为可用启动目标。README 记录了单元测试、假基准端到端测试和真实 AppWorld
-smoke，但未记录完整规模的多轮运行或真实基准上的 sealed-test retention 验证。
-这是文档中的证据边界，不是生产就绪声明。
+统一 launcher 注册的基准是 **AppWorld**。接入其他基准时，按下文实现并注册适配器。
+已有验证记录覆盖单元测试、假基准端到端测试和真实 AppWorld smoke。
+完整规模的多轮结果与真实基准上的 sealed-test retention 需要各自的运行记录。
 
 ## 实验如何运行 { #how-an-experiment-works }
 
@@ -234,6 +229,5 @@ Evolver 晋升不等于合并或发布。
 `docs/specs/self-evolution-loop-sop.md`，设计说明位于
 `evolver/orchestrator/DESIGN.md`。
 
-[自进化映射](self-evolution-map.md)记录有意保留的缺口，包括未接入 borrowing、
-缺少 affinity 数据和可选 zero-hit preflight。它用于模块级变更参考，不代表所有
-SOP 能力都已启用。
+[自进化映射](self-evolution-map.md#6-implementation-choices)说明全训练集确认、
+锚点构成和可选零命中 preflight 等评估方案，供模块级变更参考。

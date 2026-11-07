@@ -8,15 +8,17 @@ import json
 import os
 import re
 import shlex
+import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 from aiohttp import web
@@ -36,6 +38,7 @@ from raven.agent.subagent.backends.env import login_shell_env, refresh_login_she
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.agent.subagent.manager import SPAWN_REFUSED_PREFIX, SubagentManager
 from raven.agent.subagent.mcp_grant import McpGrant
+from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS
 from raven.agent.subagent.presets import (
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
@@ -50,6 +53,9 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from raven.utils.commands import command_quote
+from raven.utils.pid import pid_alive
+from tests._windows_kill import PYTHON, windows_kill_path
 
 
 @pytest.fixture(autouse=True)
@@ -82,6 +88,10 @@ def _clear_login_env_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(env_mod, "_LOGIN_ENV", None)
     monkeypatch.setattr(env_mod, "_LOGIN_ENV_FAILED", False)
     monkeypatch.setenv("SHELL", "/bin/bash")
+    # These tests capture from a POSIX login shell. On a Windows host the
+    # capture is a registry read instead and their patched `bash -lic ...` would
+    # never run, so the platform is pinned too.
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: False)
 
 
 def test_login_shell_env_parses_nul_separated_output(
@@ -303,6 +313,103 @@ def test_a_reader_during_a_refresh_gets_the_old_capture_not_a_second_one(
     assert len(calls) == 2, "the reader in the middle started no capture of its own"
 
 
+def test_a_refresh_that_read_the_shell_first_cannot_land_after_a_later_one(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A key saved while another refresh is still reading the shell, as with a Connect in flight.
+
+    That refresh read ``~/.raven/env`` before the save, and landing after the
+    save's own refresh it put the key the save rotated out back in the memo.
+    """
+    mirror = {"TAVILY_API_KEY": "old"}
+    first_read, release, second_read = threading.Event(), threading.Event(), threading.Event()
+
+    def fake_run(argv, **kwargs):
+        value = mirror["TAVILY_API_KEY"]
+        if threading.current_thread().name == "first":
+            first_read.set()
+            release.wait(5)
+        else:
+            second_read.set()
+        return subprocess.CompletedProcess(argv, 0, f"TAVILY_API_KEY={value}\0".encode(), b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"TAVILY_API_KEY": "old"})
+    first = threading.Thread(target=refresh_login_shell_env, name="first")
+    first.start()
+    assert first_read.wait(5)
+    mirror["TAVILY_API_KEY"] = "new"
+    second = threading.Thread(target=refresh_login_shell_env, name="second")
+    second.start()
+    # Run side by side, the second reads the shell and lands here, before the first.
+    second_read.wait(0.5)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert login_shell_env()["TAVILY_API_KEY"] == "new"
+
+
+def test_readers_that_find_no_capture_share_the_one_in_flight(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """Once per process holds for readers that arrive together, too."""
+    started, release = threading.Event(), threading.Event()
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        started.set()
+        release.wait(5)
+        return subprocess.CompletedProcess(argv, 0, b"PATH=/usr/bin\0", b"")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    paths: list[str] = []
+    first = threading.Thread(target=lambda: paths.append(login_shell_env()["PATH"]))
+    first.start()
+    assert started.wait(5)
+    second = threading.Thread(target=lambda: paths.append(login_shell_env()["PATH"]))
+    second.start()
+    # Without waiting, the second reader starts a capture of its own here.
+    second.join(0.3)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert paths == ["/usr/bin", "/usr/bin"]
+    assert len(calls) == 1
+
+
+def test_readers_that_wait_on_a_capture_that_fails_do_not_run_the_shell_again(
+    monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """The failure is shared the way a capture is: each waiting reader falls back to raven's own environment."""
+    started, release = threading.Event(), threading.Event()
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        started.set()
+        release.wait(5)
+        raise OSError("profile timed out")
+
+    monkeypatch.setattr(env_mod.subprocess, "run", fake_run)
+    monkeypatch.setenv("RAVEN_ENV_PROBE", "inherited")
+    seen: list[str | None] = []
+    first = threading.Thread(target=lambda: seen.append(login_shell_env().get("RAVEN_ENV_PROBE")))
+    first.start()
+    assert started.wait(5)
+    second = threading.Thread(target=lambda: seen.append(login_shell_env().get("RAVEN_ENV_PROBE")))
+    second.start()
+    second.join(0.3)
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert seen == ["inherited", "inherited"]
+    assert len(calls) == 1
+
+
 def test_login_shell_env_capture_starts_from_a_minimal_base_not_ravens_env(
     monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
 ) -> None:
@@ -363,6 +470,140 @@ async def test_cli_backend_uses_login_env_and_per_agent_env_wins(
     )
     out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
     assert out == "yes/agent"
+
+
+async def test_cli_backend_starts_the_way_the_mirror_fallback_says(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _clear_login_env_cache: None
+) -> None:
+    """A CLI agent started through ``uvx`` or ``npx`` fetches itself first,
+    like an ACP agent. The launch asks with the argv it starts, the environment
+    the agent gets and the directory it starts in, and starts the argv it is
+    answered with."""
+    from raven.utils import mirrors
+
+    captured = f"PATH={os.environ['PATH']}\0SYSTEMROOT={os.environ.get('SYSTEMROOT', '')}\0".encode()
+    monkeypatch.setattr(
+        env_mod.subprocess, "run", lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, captured, b"")
+    )
+    asked: list[tuple[list[str], dict[str, str], str | None]] = []
+
+    def package_launch(
+        argv: list[str],
+        env: dict[str, str],
+        cwd: str | None = None,
+        *,
+        local: bool = True,
+        deadline: float | None = None,
+        cache_root: Path | None = None,
+    ) -> list[str]:
+        asked.append((list(argv), dict(env), cwd))
+        return [*argv, "--as-the-answer-says"]
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    script = tmp_path / "show_args.py"
+    script.write_text("import sys\nprint(' '.join(sys.argv[1:]), end='')\n", encoding="utf-8")
+    be = CliAgentBackend(
+        name="envcheck",
+        command=f"{command_quote(sys.executable)} {command_quote(str(script))}",
+        env={"FROM_ENTRY": "yes"},
+        registry=InstanceRegistry(path=tmp_path / "inst.json"),
+    )
+
+    out = await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert out == "--as-the-answer-says"
+    (argv, env, cwd), *_ = asked
+    assert argv[0] == sys.executable
+    assert env["FROM_ENTRY"] == "yes", "asked with the environment the agent gets"
+    assert cwd == str(tmp_path), "and where it starts"
+
+
+async def test_cli_backend_on_windows_starts_a_bare_program_from_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cli launch looks a bare name up on the child's PATH, as the acp launch does.
+
+    CreateProcess searches the gateway's own PATH and never the env block it is
+    handed, so an agent installed after raven started would be found by the probe
+    and still not start.
+    """
+    fresh_bin = tmp_path / "fresh-bin"
+    fresh_bin.mkdir()
+    (fresh_bin / "fresh-agent.exe").write_text("", encoding="utf-8")
+    (fresh_bin / "fresh-agent.exe").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(fresh_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="fresh", command="fresh-agent -p {prompt}", registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [(str(fresh_bin / "fresh-agent.exe"), "-p", "task")]
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+async def test_cli_backend_preserves_stored_windows_path_quotes(tmp_path, monkeypatch, legacy):
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr("raven.agent.subagent.backends.cli_agent.login_shell_env", lambda: dict(os.environ))
+    folder = tmp_path / "agent's saved files"
+    folder.mkdir()
+    script = folder / "echo argv.py"
+    script.write_text("import json, sys\nprint(json.dumps(sys.argv[1:]))\n", encoding="utf-8")
+    config = folder / "config.json"
+    quote = shlex.quote if legacy else commands.command_quote
+    command = f"{quote(sys.executable)} {quote(str(script))} --config {quote(str(config))} {{prompt}}"
+    backend = CliAgentBackend(
+        name="stored-command", command=command, registry=InstanceRegistry(path=tmp_path / "inst.json")
+    )
+    prompt = "a & O'Brien; keep these characters"
+
+    output = await backend.run(prompt, task_id="stored", workspace=tmp_path, executor=None)
+
+    assert json.loads(output) == ["--config", str(config), prompt]
+
+
+async def test_cli_backend_on_windows_never_starts_a_batch_file_for_a_bare_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cli agent's prompt is in its argv, and a ``.cmd`` hands its arguments to cmd.exe's parser.
+
+    So the bare name stays bare even with the batch file on the child's PATH; the
+    acp launch is the one that lets a batch file stand in.
+    """
+    npm_bin = tmp_path / "npm"
+    npm_bin.mkdir()
+    (npm_bin / "codex.cmd").write_text("", encoding="utf-8")
+    (npm_bin / "codex.cmd").chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(npm_bin)})
+    started: list[tuple[str, ...]] = []
+
+    async def refuse(*argv: str, **_: Any) -> NoReturn:
+        started.append(argv)
+        raise FileNotFoundError(2, "not started in a test")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", refuse)
+    be = CliAgentBackend(
+        name="codex", command="codex exec {prompt}", registry=InstanceRegistry(path=tmp_path / "i.json")
+    )
+
+    with pytest.raises(FileNotFoundError):
+        await be.run("a & b", task_id="t1", workspace=tmp_path, executor=None)
+
+    assert started == [("codex", "exec", "a & b")]
 
 
 async def test_cli_backend_exposes_parent_model_binding(
@@ -1001,6 +1242,10 @@ def test_the_registered_dag_tool_is_wired_to_the_subagent_lifecycle(
     assert tool._charge == mgr.charge_dag_run
     assert tool._adopt == mgr.adopt_background_run
     assert tool._announce == mgr.announce_dag_result
+    # The manager's own sandbox builder: a construction site that drops it
+    # returns its nodes' exec to the host silently -- the shape of the defect
+    # the builder seam was added for, and invisible to every behavior test.
+    assert tool._sandbox_for == mgr.sandbox_executor_for
     # A lambda reading through to the manager's flag, so this asserts the read
     # rather than the identity a comparison could not see.
     mgr.set_paused(True)
@@ -1081,14 +1326,25 @@ def test_spawn_tool_omits_the_delegation_preference_when_no_specialist_exists(tm
     assert "is not a specialist" not in desc
 
 
-def test_spawn_tool_states_the_preference_between_the_roster_and_the_dag_pointer(tmp_path: Path) -> None:
-    """Order is the whole point: a rule about which agent to name has to sit
-    with the roster it applies to, and ahead of the pointer that sends the
-    model to a different tool."""
+def test_spawn_tool_ends_with_the_roster_and_the_rule_that_picks_from_it(tmp_path: Path) -> None:
+    """Order is the whole point. The roster is the last thing spawn says, which
+    makes it the last thing the tool array says: spawn is listed after every other
+    tool and ``run_subagent_dag`` points here rather than repeating it. The rule
+    about which agent to name sits right before the roster it applies to, so the
+    DAG pointer and the record guidance come first, and nothing comes between."""
     cli = ThirdPartyCliSubagentConfig(name="Scribe", command="scribe {prompt}", description="builds decks")
-    desc = SpawnTool(manager=_mgr(tmp_path, [cli])).description
-    assert desc.index("choose deliberately from") < desc.index("Prefer delegation")
-    assert desc.index("Prefer delegation") < desc.index("run_subagent_dag")
+    mgr = _mgr(tmp_path, [cli])
+    desc = SpawnTool(manager=mgr).description
+    listing = format_agent_listing(mgr.list_agents())
+
+    assert desc.endswith(
+        "Pick the agent for the job with `subagent` -- there is no default, so choose deliberately from "
+        f"the roster, which `run_subagent_dag` nodes pick from as well: {listing}."
+    )
+    assert desc.count(listing) == 1
+    assert desc.index("use `run_subagent_dag` instead") < desc.index("The result names a `Record:` path")
+    assert desc.index("The result names a `Record:` path") < desc.index("Prefer delegation")
+    assert "only when no specialist covers the work. Pick the agent for the job" in desc
 
 
 async def test_spawn_tool_forwards_agent(tmp_path: Path) -> None:
@@ -1796,6 +2052,41 @@ async def test_registry_upsert_dag_node_roundtrip(tmp_path: Path) -> None:
     assert rows[0]["createdAtMs"] == created
 
 
+async def test_registry_dag_node_row_carries_a_branch_outcome_until_a_write_without_one(tmp_path: Path) -> None:
+    """Until the manifest is written, the row is the only record of what a branch
+    decided. Each key is there only when given -- an empty selection is given -- and
+    the row is rebuilt on every write, so it says what the latest write said."""
+    path = tmp_path / "inst.json"
+    reg = InstanceRegistry(path=path)
+    await reg.upsert_dag_node(
+        "web:s1", "run-1", "triage", "claude_code", "completed", selected_routes=["docs"], route_evidence="asks how"
+    )
+    await reg.upsert_dag_node("web:s1", "run-1", "scan", "claude_code", "completed", selected_routes=[])
+    await reg.upsert_dag_node("web:s1", "run-1", "fix", "claude_code", "not_executed", reason="when_false")
+
+    rows = {r["nodeId"]: r for r in InstanceRegistry(path=path).list_instances("web:s1")}
+    assert (rows["triage"]["selectedRoutes"], rows["triage"]["routeEvidence"]) == (["docs"], "asks how")
+    assert "reason" not in rows["triage"]
+    assert rows["scan"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert "routeEvidence" not in rows["scan"]
+    assert rows["fix"]["reason"] == "when_false"
+    assert not {"selectedRoutes", "routeEvidence"} & set(rows["fix"])
+
+    await reg.upsert_dag_node("web:s1", "run-1", "triage", "claude_code", "running")
+    row = next(r for r in reg.list_instances("web:s1") if r["nodeId"] == "triage")
+    assert set(row) == {
+        "kind",
+        "sessionKey",
+        "agent",
+        "handle",
+        "runId",
+        "nodeId",
+        "status",
+        "createdAtMs",
+        "updatedAtMs",
+    }, "a write without an outcome leaves none behind"
+
+
 async def test_registry_dag_node_persists_and_coexists_with_cli(tmp_path: Path) -> None:
     path = tmp_path / "inst.json"
     reg = InstanceRegistry(path=path)
@@ -2420,7 +2711,11 @@ def test_only_the_measured_non_isolating_preset_withholds_session_mcp() -> None:
     assert declared["OpenCode"] is False
     # And nothing else withholds. Asserted as "the only false" rather than by
     # listing every other preset, so adding one cannot quietly arrive as a false.
-    assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"}
+    # The Mirasim rows are a measured exception of another kind: the Mirasim host
+    # takes no MCP servers for one session, so withholding them is the honest
+    # declaration there.
+    mirasim = {row["name"] for row in MIRASIM_PRESETS.values()}
+    assert {name for name, isolates in declared.items() if not isolates} == {"OpenCode"} | mirasim
 
 
 def test_a_row_written_before_the_field_existed_still_gets_the_measured_answer() -> None:
@@ -2530,7 +2825,7 @@ def test_presets_are_valid_and_complete() -> None:
         "OpenClaw",
         "Hermes Agent",
         "OpenCode",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # One row per key: a name collision would silently drop a preset here.
     assert len(presets) == len(THIRD_PARTY_SUBAGENT_PRESETS)
     # Every preset validates against the schema (discriminated union), so "Add
@@ -2544,14 +2839,16 @@ def test_presets_are_valid_and_complete() -> None:
     # One preset per agent, each already carrying that agent's transport: there is
     # no second preset for the same tool over a different one, because connecting
     # must not have to try two transports (and the cli test dispatch spends the
-    # user's own quota to answer a question the repo already knows).
+    # user's own quota to answer a question the repo already knows). A Mirasim row
+    # is not that: it is the agent on Mirasim's accounts and routes, a different
+    # thing to delegate to, and it speaks acp like the rest.
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
         "Claude Code",
         "Codex",
         "OpenCode",
         "Hermes Agent",
         "OpenClaw",
-    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()}
+    } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     assert presets["MiroThinker"]["kind"] == "openai"
 
     for name, acp in ((n, p) for n, p in presets.items() if p["kind"] == "acp"):
@@ -2591,8 +2888,11 @@ def test_no_preset_downloads_the_agent_itself() -> None:
     It would also report the agent as installed when it is absent, because
     ``_probe_acp`` resolves ``argv[0]`` and ``npx`` always resolves; naming the
     local executable is what makes that probe tell the truth.
+
+    A shim raven ships is fetched by nobody: it is a raven module run on raven's
+    own interpreter, so its build is raven's and there is nothing to pin.
     """
-    from raven.agent.subagent.presets import SHIM_LAUNCHED_PRESETS
+    from raven.agent.subagent.presets import BUNDLED_SHIM_PRESETS, SHIM_LAUNCHED_PRESETS
 
     for preset in third_party_subagent_presets():
         if preset["kind"] != "acp":
@@ -2601,7 +2901,11 @@ def test_no_preset_downloads_the_agent_itself() -> None:
         argv = shlex.split(preset["command"])
         # Membership is keyed by provenance, not by the row's display name: the
         # set says what the package is, and a name is the user's to change.
-        if preset["preset"] in SHIM_LAUNCHED_PRESETS:
+        if preset["preset"] in BUNDLED_SHIM_PRESETS:
+            assert Path(argv[0]).is_absolute(), f"{name} runs {argv[0]!r}, not an interpreter"
+            assert argv[1:3] == ["-P", "-m"] and argv[3].startswith("raven."), f"{name} runs {argv[1:4]}"
+            assert not _VERSION_PIN.search(preset["command"]), name
+        elif preset["preset"] in SHIM_LAUNCHED_PRESETS:
             assert argv[0] in ("npx", "uvx"), f"{name} is shim-launched but runs {argv[0]!r}"
             package = _fetched_package(argv)
             assert _VERSION_PIN.search(package), f"{name} fetches {package!r} unpinned"
@@ -3158,6 +3462,126 @@ async def test_cli_backend_timeout_kills_reparented_child_after_launcher_already
             "grandchild survived: the launcher had already exited, so a "
             "returncode-gated killpg would silently no-op here"
         )
+
+
+#: A launcher that starts one worker, both Python, and notes both pids.
+#: The worker inherits the launcher's output pipes, the way a CLI's real worker
+#: does. Given ``wait`` the launcher stays; given ``leave`` it exits once noted.
+_LAUNCHER = """\
+import os, subprocess, sys, time
+worker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout, stderr=sys.stderr)
+with open(sys.argv[1] + ".tmp", "w") as noted:
+    noted.write(f"{os.getpid()} {worker.pid}")
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
+if sys.argv[2] == "wait":
+    time.sleep(30)
+"""
+
+_SLEEP = "import time; time.sleep(30)"
+
+
+def _python_command(*argv: str) -> str:
+    """A command line that runs ``PYTHON`` on ``argv``, quoted for this host's parser."""
+    return " ".join(command_quote(token) for token in (PYTHON, *argv))
+
+
+def _launcher(tmp_path: Path, then: str) -> tuple[str, Path]:
+    script = tmp_path / "launcher.py"
+    script.write_text(_LAUNCHER, encoding="utf-8")
+    pids = tmp_path / "pids"
+    return _python_command(str(script), str(pids), then), pids
+
+
+async def _noted(pids: Path) -> tuple[int, int]:
+    for _ in range(200):
+        if pids.exists():
+            launcher, worker = (int(pid) for pid in pids.read_text().split())
+            return launcher, worker
+        await asyncio.sleep(0.05)
+    raise AssertionError("the launcher never noted its pids")
+
+
+async def _gone(*pids: int) -> None:
+    for _ in range(100):
+        if not any(pid_alive(pid) for pid in pids):
+            return
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"still running: {[pid for pid in pids if pid_alive(pid)]}")
+
+
+def _end(*pids: int) -> None:
+    for pid in pids:
+        with suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+
+
+async def test_cli_backend_cancel_without_killpg_ends_the_tree_through_taskkill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows has no ``os.killpg``: calling it raised ``AttributeError`` in place of
+    the cancel, and the CLI and its worker kept running."""
+    calls = windows_kill_path(monkeypatch)
+    command, pids = _launcher(tmp_path, "wait")
+    be = CliAgentBackend(name="windows", command=command)
+    task = asyncio.create_task(be.run("x", task_id="t1", workspace=tmp_path, executor=None))
+    launcher, worker = await _noted(pids)
+    try:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 10)
+
+        assert calls == [["/T", "/F", "/PID", str(launcher)]]
+        await _gone(launcher, worker)
+    except BaseException:
+        _end(launcher, worker)
+        raise
+
+
+async def test_cli_backend_timeout_without_killpg_still_reports_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = windows_kill_path(monkeypatch)
+    be = CliAgentBackend(name="windows", command=_python_command("-c", _SLEEP), timeout=0.5)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
+
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    await _gone(int(calls[0][3]))
+
+
+async def test_cli_backend_timeout_without_killpg_ends_the_launcher_when_taskkill_does_not_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``taskkill`` that hangs past its timeout neither replaces the timeout nor leaves the launcher running."""
+    calls = windows_kill_path(monkeypatch, fails=subprocess.TimeoutExpired("taskkill", 5))
+    be = CliAgentBackend(name="windows", command=_python_command("-c", _SLEEP), timeout=0.5)
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await asyncio.wait_for(be.run("x", task_id="t1", workspace=tmp_path, executor=None), 10)
+
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    await _gone(int(calls[0][3]))
+
+
+async def test_cli_backend_without_killpg_kills_nothing_by_the_pid_of_an_exited_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once the launcher has exited, its pid may already name another process.
+
+    POSIX still reaches the worker it left holding the pipes, through the group;
+    Windows has no group to address, so that worker outlives the timeout there.
+    """
+    calls = windows_kill_path(monkeypatch)
+    command, pids = _launcher(tmp_path, "leave")
+    be = CliAgentBackend(name="reparented", command=command, timeout=1.0)
+    try:
+        with pytest.raises(RuntimeError, match="timed out"):
+            await be.run("x", task_id="t1", workspace=tmp_path, executor=None)
+        assert calls == []
+    finally:
+        if pids.exists():
+            _end(int(pids.read_text().split()[1]))
 
 
 # --- kind-aware stateful ---------------------------------------------------
@@ -4345,10 +4769,19 @@ def test_a_credential_refusal_is_named_as_one_with_its_command() -> None:
     assert said in known, "the agent's own words stay as the evidence"
 
     # A row whose sign-in command this repo does not know still gets the fact.
-    unknown = _refusal_detail(SimpleNamespace(preset="opencode"), said)
+    unknown = _refusal_detail(SimpleNamespace(preset="openclaw"), said)
     assert "no usable credential" in unknown
     assert "sign in to it" in unknown
     assert "`" not in unknown, "no command is better than a guessed one"
+
+    # One whose command is known gets it, and the command is the point: an
+    # agent that names its own way in (measured 2026-10-24, OpenCode 1.14.31's
+    # handshake advertises "Run `opencode auth login` in the terminal") is told
+    # to run it rather than left to find it.
+    named = _refusal_detail(SimpleNamespace(preset="opencode"), said)
+    assert "no usable credential" in named
+    assert "opencode auth login" in named
+    assert said in named, "the agent's own words stay as the evidence"
 
 
 def test_the_shim_row_that_reported_this_gets_its_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4786,7 +5219,8 @@ def test_each_agent_s_fix_is_named_as_data_from_the_one_decision(monkeypatch: py
         (SimpleNamespace(preset="hermes", kind="acp"), Remedy("setup", "hermes model")),
         (SimpleNamespace(preset="github_copilot", kind="acp"), Remedy("sign_in", "copilot login")),
         (SimpleNamespace(preset="grok", kind="acp"), Remedy("sign_in", "grok login")),
-        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in")),
+        (SimpleNamespace(preset="opencode", kind="acp"), Remedy("sign_in", "opencode auth login")),
+        (SimpleNamespace(preset="openclaw", kind="acp"), Remedy("sign_in")),
         (SimpleNamespace(preset="mirothinker", kind="openai"), Remedy("api_key")),
     ]
     for cfg, expected in cases:
@@ -4983,6 +5417,9 @@ def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyP
 
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="qwen_code")) == "npm i -g @qwen-code/qwen-code@latest"
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="claude_code")) is None, "no install hint, no upgrade"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="pi")) == (
+        "npm install -g @earendil-works/pi-coding-agent@latest"
+    ), "a shim's upgrade is the agent it drives"
     for hint, upgrade in (
         ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
         ("npm i -g @scope/agent@1.2.3", None),
@@ -5047,6 +5484,201 @@ def test_an_empty_turn_from_openclaw_names_the_command_that_prints_why() -> None
     assert probe_mod._ping_refusal(codex, empty)[1] is None
 
 
+def test_an_empty_turn_from_opencode_names_the_command_that_prints_why() -> None:
+    """Seen live: OpenCode's inference endpoint refused the call with a 426 ("OpenCode
+    1.18.0 or newer is required to use the free tier"), and its ACP session relayed that
+    as an empty turn with no content and an empty stderr, so the connect reported nothing
+    a reader could act on."""
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, remedy = probe_mod._ping_refusal(code, empty)
+    assert remedy == Remedy("silent", "opencode run hi")
+    assert "run `opencode run hi`" in text and "usually unrelated" in text
+    codex = SimpleNamespace(name="Codex", preset="codex", kind="acp", command="codex-acp")
+    assert probe_mod._ping_refusal(codex, empty)[1] is None
+
+
+def test_the_diagnose_command_runs_the_model_the_row_is_pinned_to() -> None:
+    """A command that runs the agent's default model answers a different question.
+
+    Measured 2026-10-24 on a live opencode: the default model answered 426 ("1.18.0
+    or newer is required to use the free tier") while the model the row was pinned to
+    answered "ProviderModelNotFound". A command that always runs the default answers
+    about a turn the row never made -- and on a machine where the default answers and
+    the pinned one does not, it hides the cause.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import diagnose_hint_for
+
+    pinned = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model="opencode/big-pickle")
+    assert shlex.split(diagnose_hint_for(pinned)) == [
+        "opencode",
+        "run",
+        "--model",
+        "opencode/big-pickle",
+        "hi",
+    ]
+    plain = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model=None)
+    assert diagnose_hint_for(plain) == "opencode run hi"
+    # A model id carrying a space stays one argument once the command is split.
+    spaced = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", model="provider/model preview")
+    assert shlex.split(diagnose_hint_for(spaced)) == [
+        "opencode",
+        "run",
+        "--model",
+        "provider/model preview",
+        "hi",
+    ]
+    # Another agent's command has no slot in it and is left as it was.
+    assert diagnose_hint_for(SimpleNamespace(name="Qwen Code", preset="qwen_code", model="x")) == "qwen hi"
+
+
+def test_a_row_under_a_version_floor_is_told_what_is_too_old() -> None:
+    """The build that answered the handshake is a fact, and the floor is a fact about it.
+
+    Measured 2026-10-24 on a live opencode 1.14.31: its inference endpoint answers 426
+    ("OpenCode 1.18.0 or newer is required to use the free tier") and the turn comes back
+    empty, so the reader is told which build they have and which one the free tier needs.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    empty.agent_version = "1.14.31"
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "1.14.31" in text
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
+
+    # A build at the floor is not a gap: the sentence is about what refused the turn.
+    empty.agent_version = "1.18.0"
+    at_floor, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode upgrade" not in at_floor
+    # And a version nobody can read is not a gap either.
+    empty.agent_version = ""
+    unreadable, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode upgrade" not in unreadable
+
+
+def test_a_version_nobody_can_read_is_not_a_gap() -> None:
+    """A build raven cannot read is not evidence of an old one.
+
+    The floor is a fact about a build, and an answer that is not a version
+    says nothing about which build it is -- so it names no gap.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent.presets import version_gap_for
+
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp")
+    assert version_gap_for(code, "not-a-version") is None
+    assert version_gap_for(code, "1.14.31") is not None
+
+
+def test_the_empty_turn_names_the_credential_check_beside_the_command_that_prints_why() -> None:
+    """The one class Raven cannot classify is the credential, and the agent knows it.
+
+    An agent that defers its credential to the first model call opens a session
+    happily and fails afterwards, so nothing on the wire says which it was. The
+    agent's own command settles it, so the refusal names it.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>"
+    )
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, empty)
+    assert "opencode auth list" in text
+    assert "shows whether it is signed in" in text
+
+
+def test_a_full_stderr_tail_does_not_cut_the_floor_note_and_the_command_out() -> None:
+    """The cap is the sentence's budget, and the sentence's tail is what a reader acts on.
+
+    A 1500-character stderr tail is the most an empty turn carries, and the
+    composed sentence ends past the cap: truncating the whole thing dropped the
+    floor note, the credential check and the run command together.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    empty = RuntimeError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: "
+        + "stderr line\n" * 125
+    )
+    empty.agent_version = "1.14.31"
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, remedy = probe_mod._ping_refusal(code, empty)
+    assert len(text) <= 2000
+    assert text.endswith("which prints the provider's answer")
+    assert "opencode auth list" in text
+    assert "opencode upgrade" in text
+    assert remedy == Remedy("silent", "opencode run hi")
+
+
+def test_a_full_prompt_timeout_tail_keeps_the_command_that_prints_the_reason() -> None:
+    """A timeout the agent kept retrying through says nothing; the command beside it is the whole remedy."""
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpTimeoutError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    timed_out = AcpTimeoutError("session/prompt timed out after 60s; " + "x" * 1900, method="session/prompt")
+    qwen = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")
+    text, remedy = probe_mod._ping_refusal(qwen, timed_out)
+    assert len(text) <= 2000
+    assert text.endswith("which prints the reason within a few minutes")
+    assert remedy == Remedy("silent", "qwen hi")
+
+
+def test_a_wrapped_empty_turn_still_names_the_build_under_the_floor() -> None:
+    """A wrapper's own text carries no version; the empty-turn error under it does.
+
+    The MCP-grant note re-raises the failure under ``McpDispatchError``, and the
+    version lives one level down, so a top-level read found nothing and the
+    floor note disappeared for exactly the rows that had an MCP server.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.acp_agent import AcpEmptyTurnError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.mcp_grant import McpDispatchError
+
+    inner = AcpEmptyTurnError(
+        "acp agent 'OpenCode' ended its turn with no content (stopReason='end_turn'); stderr tail: <empty>",
+        agent_version="1.14.31",
+    )
+    try:
+        raise inner
+    except AcpEmptyTurnError as exc:
+        try:
+            raise McpDispatchError(f"{exc}\n\n[raven] session MCP withheld.") from exc
+        except McpDispatchError as wrapped:
+            outer = wrapped
+    code = SimpleNamespace(name="OpenCode", preset="opencode", kind="acp", command="opencode acp")
+    text, _ = probe_mod._ping_refusal(code, outer)
+    assert "1.18.0" in text
+    assert "opencode upgrade" in text
+
+
 async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test fails on the handshake first, and that verdict named no fix for a launch that quit.
 
@@ -5064,7 +5696,14 @@ async def test_a_test_whose_launch_quit_names_it_the_way_the_connect_does(monkey
     )
 
     async def _refused(cfg: object) -> object:
-        return SimpleNamespace(usable=False, needs_auth=False, unfetched=False, detail=detail, available_models=[])
+        return SimpleNamespace(
+            usable=False,
+            needs_auth=False,
+            unfetched=False,
+            detail=detail,
+            available_models=[],
+            agent_version="",
+        )
 
     monkeypatch.setattr(probe_mod, "record_capabilities", _refused)
     cfg = SimpleNamespace(name="Qwen Code", preset="qwen_code", kind="acp", command="qwen --acp")

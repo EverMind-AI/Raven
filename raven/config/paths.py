@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from raven.config.loader import get_config_path, raven_home
+from raven.home import oauth_home
 from raven.utils.paths import ensure_dir
 
 
@@ -42,6 +43,39 @@ def get_deliverables_path() -> Path:
 def get_cache_dir() -> Path:
     """Return the disposable, refetchable on-disk cache directory."""
     return get_runtime_subdir("cache")
+
+
+def get_agent_plugins_ledger_path() -> Path:
+    """Return the Agent Plugin package ledger path.
+
+    The ledger records which portable Agent Plugins packages were imported
+    into the workspace, so that only those directories are ever removed.
+    """
+    return get_data_dir() / "agent-plugins.json"
+
+
+PACKAGE_DATA_MOUNT = "/plugin-data"
+"""Guest path the package data root is mounted at inside a sandboxed VM."""
+
+
+def package_data_root_path() -> Path:
+    """The per-package data root, named without creating anything.
+
+    A read-only surface -- ``raven agent-plugins inspect`` -- has to be able
+    to say where a package's data would live without leaving a directory
+    behind for a package nothing will run.
+    """
+    return get_data_dir() / "plugin-data"
+
+
+def get_package_data_root() -> Path:
+    """Return the root of the per-package persistent data directories.
+
+    Each portable Agent Plugin package gets one directory under it, kept
+    across package updates: it is where a package's server keeps whatever
+    it generates.
+    """
+    return ensure_dir(package_data_root_path())
 
 
 def get_sandbox_dir(backend: str) -> Path:
@@ -83,6 +117,23 @@ def get_bridge_install_dir() -> Path:
     return raven_home() / "bridge"
 
 
+def oauth_dir() -> Path:
+    """Where every OAuth provider's credentials live, without touching the disk.
+
+    The config shelf's name for :func:`raven.home.oauth_home`, which computes
+    the path; :func:`get_oauth_dir` adds the creating and tightening, and every
+    caller that only needs to *name* the directory -- a test building an
+    expected one -- asks for it here. The redaction pass asks ``raven.home``
+    for the same path rather than asking this shelf: it sits in a layer this
+    shelf already imports, so a definition asked of here would close that pair
+    into a cycle.
+
+    One definition under two names. Deriving it a second time is what sent a
+    token file to one directory and the reader to another.
+    """
+    return oauth_home()
+
+
 def get_oauth_dir() -> Path:
     """Return the directory every OAuth provider's credentials live in.
 
@@ -96,7 +147,7 @@ def get_oauth_dir() -> Path:
     tokens land world-readable -- and only some of the writers are ours to fix.
     The directory is what holds for the rest, including a writer added later.
     """
-    path = raven_home() / "oauth"
+    path = oauth_dir()
     path.mkdir(parents=True, exist_ok=True)
     if path.stat().st_mode & 0o077:
         path.chmod(0o700)

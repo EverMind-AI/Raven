@@ -121,16 +121,17 @@ def cancel_look(scheduler: "WakeScheduler | None", campaign: str) -> bool:
     return bool(scheduler.cancel_wake(campaign))
 
 
-def pending_look(scheduler: "WakeScheduler | None", campaign: str) -> Any | None:
+def pending_look(scheduler: "WakeScheduler | None", campaign: str, *, include_running: bool = True) -> Any | None:
     """The campaign's one pending wake, or None.
 
     ``pending_wakes`` narrows by prefix, so the id is re-checked for an exact
     key match ("c1" must not answer for "c10"). The footnote and the
-    one-pending invariant both read through here.
+    one-pending invariant both read through here. ``include_running=False``
+    leaves out the wake whose own run is the turn asking.
     """
     if scheduler is None:
         return None
-    for job in scheduler.pending_wakes(campaign):
+    for job in scheduler.pending_wakes(campaign, include_running=include_running):
         if job.id.endswith(f":{campaign}"):
             return job
     return None

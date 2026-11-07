@@ -68,9 +68,13 @@ export function AlternateScreen(t0: Props) {
       ink?.setAltScreenActive(true, mouseTracking)
 
       return () => {
-        ink?.setAltScreenActive(false)
         ink?.clearTextSelection()
-        writeRaw((mouseTracking ? DISABLE_MOUSE_TRACKING : '') + EXIT_ALT_SCREEN)
+
+        if (ink) {
+          ink.leaveAltScreen(writeRaw)
+        } else {
+          writeRaw((mouseTracking ? DISABLE_MOUSE_TRACKING : '') + EXIT_ALT_SCREEN)
+        }
       }
     }
 

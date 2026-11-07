@@ -222,7 +222,7 @@ class _Shared:
                 evidence_round_factory=evidence_round_factory,
                 saturation_factory=saturation_factory,
             )
-            if tool.api_key:
+            if tool.api_key or not tool.spec.needs_key:
                 self._web_search = tool
             else:
                 spec = SEARCH_PROVIDERS[self.search_provider]

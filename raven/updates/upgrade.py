@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import zlib
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from urllib.request import url2pathname
 
 import httpx
 
+from raven.security.tls import system_ca_in_use
 from raven.updates import install_guard as _install_guard
 
 LATEST_RELEASE_API = "https://api.github.com/repos/EverMind-AI/Raven/releases/latest"
@@ -50,6 +52,11 @@ class ReleaseLookupError(UpgradeError):
     caller must not advise reinstalling."""
 
 
+class EditableInstallError(UpgradeError):
+    """The install is a source checkout. No release upgrade applies to it, so
+    a caller names the checkout's own recovery rather than a generic refusal."""
+
+
 @dataclass(frozen=True)
 class ReleaseInfo:
     version: str
@@ -64,6 +71,7 @@ class ToolInstallTarget:
 
 _UPGRADE_HELPER_SOURCE = r"""import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -203,6 +211,202 @@ def serve_status(port, progress):
 # cannot import raven to ask; the path is handed over instead.
 MARKER_PATH = os.environ.get("RAVEN_UPGRADE_MARKER") or None
 
+# The spawning side verifies TLS against the operating system's store, and this
+# helper's downloads should succeed wherever its release lookup did. truststore
+# is handed over as a copy for the same reason as the marker path: the original
+# sits in the environment being rewritten, beside packages it would pull in.
+# Taken out of the environment, so the Raven relaunched below does not inherit
+# a path this helper deletes.
+TRUSTSTORE_COPY = os.environ.pop("RAVEN_UPGRADE_TRUSTSTORE", None) or None
+
+
+def use_system_ca():
+    if not TRUSTSTORE_COPY:
+        return
+    sys.path.insert(0, TRUSTSTORE_COPY)
+    try:
+        import truststore
+
+        truststore.inject_into_ssl()
+    except Exception as exc:
+        print(f"Warning: could not verify downloads against the system certificate store ({exc}).", file=sys.stderr)
+    finally:
+        sys.path.remove(TRUSTSTORE_COPY)
+        shutil.rmtree(TRUSTSTORE_COPY, ignore_errors=True)
+
+
+# Where uv fetches from when its default host cannot be reached at all: PyPI's
+# mirror for the packages, and a copy of the Python builds uv downloads when no
+# interpreter on the machine will do. raven.utils.mirrors names the same hosts;
+# this copy exists because the helper cannot import raven.
+PYPI_DEFAULT_INDEX = "https://pypi.org/simple/"
+PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+PYTHON_DEFAULT_DOWNLOADS = "https://releases.astral.sh/"
+PYTHON_MIRROR = "https://registry.npmmirror.com/-/binary/python-build-standalone"
+MIRROR_PROBE_TIMEOUT_S = 5
+MIRROR_ENV = None
+
+
+def answers(url):
+    # Any HTTP answer, an error included, proves the host is there. Only a
+    # connection that never completed does not (connection_failed): a fault of
+    # ours must not move an install off the host it belongs to.
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=MIRROR_PROBE_TIMEOUT_S):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception as exc:
+        return not connection_failed(exc)
+
+
+def connection_failed(exc):
+    # The rule raven.utils.mirrors.unreachable keeps, and a test runs both
+    # against the same hosts and proxies: no name, no route, a connection
+    # refused, reset or left unanswered, or a TLS that never got going. A
+    # certificate that fails verification is an answer, since whatever
+    # re-signs this host re-signs the mirror too. A proxy's answer to the
+    # request for a tunnel speaks for the host: a 5xx says it could not reach
+    # it, any other refusal is final, as the host's own error is. A refusal of
+    # the machine's own counts too, where it came from the network: the socket
+    # was never opened, and the mirror would be refused the same way.
+    import errno
+    import re
+    import socket
+    import ssl
+
+    no_route = {getattr(errno, name) for name in ("ENETUNREACH", "EHOSTUNREACH", "ENETDOWN", "EHOSTDOWN") if hasattr(errno, name)}
+    refused_locally = {getattr(errno, name) for name in ("EACCES", "EPERM") if hasattr(errno, name)}
+    network = (ConnectionError, TimeoutError, socket.gaierror, ssl.SSLError)
+    # exc and every error it was raised from or wraps, the nearest first.
+    chain = []
+    seen = set()
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        chain.append(current)
+        pending += [e for e in (current.__cause__, current.__context__, getattr(current, "reason", None)) if isinstance(e, BaseException)]
+    if any(isinstance(error, ssl.SSLCertVerificationError) for error in chain):
+        return False
+    for error in chain:
+        refused = re.match(r"Tunnel connection failed: (\d{3})\b", str(error)) if type(error) is OSError else None
+        if refused:
+            return int(refused.group(1)) >= 500
+        if isinstance(error, network) or (isinstance(error, OSError) and error.errno in no_route):
+            return True
+        if isinstance(error, OSError) and error.errno in refused_locally and from_the_network(chain, error):
+            return True
+    return False
+
+
+def from_the_network(chain, error):
+    # Whether the error is the reason of a URL the network was asked for.
+    # urllib reports a refused connect as a URLError whose reason is the
+    # socket's error; a refusal of a local file is the OSError itself.
+    import urllib.error
+
+    for other in chain:
+        if other is error:
+            continue
+        if isinstance(other, urllib.error.URLError) and other.reason is error:
+            return True
+    return False
+
+
+def uv_configs():
+    # Each uv.toml a user who named none has uv read -- theirs, then the
+    # machine's -- on its own: one file's list of indexes hides no other's.
+    # Read with a byte-order mark if it has one, as uv reads it: a reader
+    # that does not would call the file broken and take the user's index for
+    # none.
+    import tomllib
+
+    if os.environ.get("UV_CONFIG_FILE"):
+        paths = [os.environ["UV_CONFIG_FILE"]]
+    elif sys.platform == "win32":
+        paths = [os.path.join(root, "uv", "uv.toml") for root in (os.environ.get("APPDATA"), os.environ.get("PROGRAMDATA")) if root]
+    else:
+        user = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+        system = (os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(os.pathsep)
+        paths = [os.path.join(root, "uv", "uv.toml") for root in (user, *system, "/etc") if root]
+    configs = []
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8-sig") as handle:
+                configs.append(tomllib.loads(handle.read()))
+        except (OSError, ValueError):
+            continue
+    return configs
+
+
+def names_a_default_index(config):
+    indexes = config.get("index") if isinstance(config.get("index"), list) else []
+    return bool(config.get("index-url")) or any(isinstance(entry, dict) and entry.get("default") for entry in indexes)
+
+
+def mirror_environment():
+    # Decided once per upgrade, since uv may run twice. A host the user chose,
+    # by variable or in uv.toml, is never replaced.
+    global MIRROR_ENV
+    if MIRROR_ENV is not None:
+        return MIRROR_ENV
+    MIRROR_ENV = {}
+    if os.environ.get("RAVEN_NO_MIRROR", "").strip().lower() in ("1", "true", "yes", "on"):
+        return MIRROR_ENV
+    configs = uv_configs()
+    index_chosen = any(os.environ.get(name) for name in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_INDEX")) or any(
+        names_a_default_index(config) for config in configs
+    )
+    if not index_chosen and not answers(PYPI_DEFAULT_INDEX):
+        print(f"pypi.org could not be reached; installing from {PYPI_MIRROR} instead (RAVEN_NO_MIRROR=1 turns this off).")
+        MIRROR_ENV["UV_DEFAULT_INDEX"] = PYPI_MIRROR
+    # A Python source counts in each form uv reads: a mirror it is given
+    # outranks a copy of releases.astral.sh, and fails outright beside a list
+    # of downloads that live elsewhere.
+    python_chosen = any(
+        os.environ.get(name)
+        for name in ("UV_PYTHON_INSTALL_MIRROR", "UV_PYTHON_DOWNLOADS_JSON_URL", "UV_ASTRAL_MIRROR_URL")
+    ) or any(c.get("python-install-mirror") or c.get("python-downloads-json-url") for c in configs)
+    if not python_chosen and not answers(PYTHON_DEFAULT_DOWNLOADS):
+        print(
+            f"releases.astral.sh could not be reached; fetching any Python uv needs from {PYTHON_MIRROR} instead"
+            " (RAVEN_NO_MIRROR=1 turns this off)."
+        )
+        MIRROR_ENV["UV_PYTHON_INSTALL_MIRROR"] = PYTHON_MIRROR
+    return MIRROR_ENV
+
+
+def uv_environment(uv_path):
+    # uv keeps its own bundled roots unless told otherwise. It is told when the
+    # system store was handed over, and only uv is: the Raven relaunched after
+    # the install inherits this helper's own environment. A mirror reaches uv
+    # the same way, and only uv.
+    env = {**os.environ, **mirror_environment()}
+    if TRUSTSTORE_COPY:
+        env.setdefault("UV_SYSTEM_CERTS", "1")
+        # The name uv read before 0.11. Later releases still honour it but call
+        # it deprecated, from 0.11.9 to 0.12.15 even beside UV_SYSTEM_CERTS, so
+        # it goes only to a uv older than that, or one that does not say.
+        if uv_version(uv_path) < (0, 11):
+            env.setdefault("UV_NATIVE_TLS", "1")
+    return env
+
+
+def uv_version(uv_path):
+    # `uv 0.12.3 (...)` reads as (0, 12); one that cannot be read as (0,),
+    # older than every release.
+    try:
+        out = subprocess.run([uv_path, "--version"], capture_output=True, text=True, timeout=30, check=False)
+        return tuple(int(part) for part in out.stdout.split()[1].split(".")[:2])
+    except (OSError, subprocess.SubprocessError, IndexError, ValueError):
+        return (0,)
+
 
 def stamp_marker():
     # Claim the marker for this helper. The pid is the only thing that tells an
@@ -311,6 +515,8 @@ def wait_for_parent_windows(parent_pid):
 
 
 def main(argv=None):
+    # Before anything builds a TLS context, as the CLI's own entry settles it.
+    use_system_ca()
     # Claimed before the argument check, and released however this ends: a
     # helper that exits without clearing the marker leaves every later start
     # waiting on an install that is not running.
@@ -330,8 +536,17 @@ def stop_leftovers_of(env_dir):
     # install cannot proceed around it. Returns (stopped, survivors); survivors
     # is None when the question could not be asked.
     root = env_dir.rstrip("\\/") + "\\"
+    # A doubled quote is the only escape a single-quoted PowerShell string has,
+    # and PowerShell reads the four curly single quotes as one too: a profile
+    # folder spelled O’Neil would otherwise end the literal early and run the
+    # rest of the path as code.
+    # Stop turns a failed query into a terminating error, which is what the exit
+    # code the caller checks can report: under the default a non-terminating
+    # Get-CimInstance failure still exits 0. Stop-Process keeps its own
+    # SilentlyContinue, so a stop it is denied to make leaves a survivor list.
     select = (
-        "$root = '" + root.replace("'", "''") + "'; "
+        "$ErrorActionPreference = 'Stop'; "
+        "$root = '" + re.sub("(['‘’‚‛])", r"\1\1", root) + "'; "
         "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and "
         "$_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }"
     )
@@ -349,6 +564,11 @@ def stop_leftovers_of(env_dir):
                 check=False,
             )
         except (OSError, subprocess.SubprocessError):
+            return None
+        if out.returncode != 0:
+            # A query that failed is not a query that found nothing: its empty
+            # stdout would read as "no survivors" and let uv delete an
+            # environment something still runs from.
             return None
         return out.stdout.split()
 
@@ -412,7 +632,7 @@ def run(argv=None):
         if plugin_list:
             command += ["--with-requirements", plugin_list]
         command.append(requirement)
-        return subprocess.run(command, check=False).returncode
+        return subprocess.run(command, check=False, env=uv_environment(uv_path)).returncode
 
     def install(requirement, plugin_list):
         # Cheap shape first. `--force` tears the whole environment down and
@@ -657,23 +877,29 @@ def run(argv=None):
             return f"{name.strip()} @ {local[url.strip()]}" if sep and url.strip() in local else line
 
         plugin_lines = [relocate(line) for line in plugin_lines]
-    memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() == "everos-memory"]
+    memory = ("everos-memory", "everos-cloud-memory")
+    memory_lines = [line for line in plugin_lines if line.partition(" @ ")[0].strip() in memory]
 
     # Two independent things can fail: the channel extras, and the plugins
-    # (the engines' native builds first, the memory plugin after). A failed
+    # (the engines' native builds first, the memory plugins after). A failed
     # attempt does not say which, so the rungs walk both axes and stop at the
     # first that lands -- the largest install this machine can build -- and
     # report exactly what that rung lacks:
-    #   1 channels + all plugins      4 base + memory plugin
+    #   1 channels + all plugins      4 base + memory plugins
     #   2 base + all plugins          5 channels, no plugins
-    #   3 channels + memory plugin    6 base, no plugins
+    #   3 channels + memory plugins   6 base, no plugins
     lost_channels = "Channel dependencies failed to install; some channels stay unavailable (see: raven channels list)."
     lost_engines = "A product engine failed to install; Raven-Design and Raven-PPT stay disabled (raven doctor explains)."
     lost_plugins = (
         "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     )
+    lost_sandbox = (
+        "The sandbox runtime (boxlite) could not be reinstalled; a configured boxlite backend "
+        "will fail to start (raven doctor explains)."
+    )
     full = write_list(plugin_lines, "raven-plugins-") if plugin_lines else None
     memory = write_list(memory_lines, "raven-plugins-memory-") if memory_lines and memory_lines != plugin_lines else None
+    keep_sandbox = os.environ.get("RAVEN_UPGRADE_KEEP_SANDBOX") == "1"
     rungs = [(full, "raven[channels]", []), (full, "raven", [lost_channels])]
     if memory is not None:
         rungs.append((memory, "raven[channels]", [lost_engines]))
@@ -681,6 +907,21 @@ def run(argv=None):
     if full is not None:
         rungs.append((None, "raven[channels]", [lost_plugins]))
         rungs.append((None, "raven", [lost_plugins, lost_channels]))
+    # The rebuild syncs the tool environment to the requirement set it is given,
+    # so a boxlite the sandbox advice installed survives only when the rung
+    # that names it comes first. Per rung rather than once at the top, because
+    # the extras and the plugins fail on independent axes; the plain rung stays
+    # behind each sandbox variant as the fallback, and the platform gate on the
+    # extra makes this a no-op where boxlite never installs at all.
+    if keep_sandbox:
+        rungs = [
+            stepped
+            for plugin_list, spec, losses in rungs
+            for stepped in (
+                (plugin_list, f"{spec[:-1]},sandbox]" if spec.endswith("]") else f"{spec}[sandbox]", losses),
+                (plugin_list, spec, losses),
+            )
+        ]
 
     try:
         status = 0
@@ -706,6 +947,8 @@ def run(argv=None):
             if status == 0:
                 for loss in losses:
                     print(f"Warning: {loss}", file=sys.stderr)
+                if keep_sandbox and "sandbox" not in spec:
+                    print(f"Warning: {lost_sandbox}", file=sys.stderr)
                 break
         else:
             why = f"uv exited with status {status}."
@@ -1060,8 +1303,8 @@ def _is_editable_install() -> bool:
     return editable
 
 
-def editable_checkout_status() -> tuple[Path, int, int]:
-    """Read the installed checkout against its last fetched origin/main."""
+def editable_checkout() -> Path:
+    """The local directory an editable install was made from."""
     data = _direct_url_data()
     if data is None:
         raise UpgradeError("Editable source checkout metadata is unavailable")
@@ -1074,6 +1317,12 @@ def editable_checkout_status() -> tuple[Path, int, int]:
     checkout = Path(url2pathname(url.path))
     if not checkout.is_absolute():
         raise UpgradeError("Editable source checkout path must be absolute")
+    return checkout
+
+
+def editable_checkout_status() -> tuple[Path, int, int]:
+    """Read the installed checkout against its last fetched origin/main."""
+    checkout = editable_checkout()
     try:
         git = shutil.which("git")
         if git is None:
@@ -1092,6 +1341,59 @@ def editable_checkout_status() -> tuple[Path, int, int]:
             "and run git fetch origin main in the source checkout"
         ) from exc
     return checkout, ahead, behind
+
+
+def _on_windows() -> bool:
+    return os.name == "nt"
+
+
+def install_script(*, windows: bool | None = None) -> str:
+    """The installer a source checkout reruns to update itself.
+
+    install.sh refuses to run on Windows, so every surface that names the
+    checkout's update command -- the CLI's refusal and the page's -- picks the
+    script by platform from this one definition and cannot drift apart again.
+    """
+    if windows is None:
+        windows = _on_windows()
+    return ".\\install.ps1" if windows else "./install.sh"
+
+
+def install_command(*, windows: bool | None = None) -> str:
+    """The command that runs the checkout's installer, per platform.
+
+    cmd.exe cannot run a .ps1 by name, and Windows PowerShell 5.1 rejects `&&`,
+    so Windows names the PowerShell that ships with the OS and bypasses the
+    execution policy for that process only. The stock Windows client policy is
+    Restricted and refuses a bare script file, so the page and the CLI read the
+    whole invocation from here, not only the script name. POSIX runs install.sh
+    directly.
+    """
+    if windows is None:
+        windows = _on_windows()
+    script = install_script(windows=windows)
+    if windows:
+        return f'powershell -NoProfile -ExecutionPolicy Bypass -File "{script}"'
+    return script
+
+
+def checkout_update_commands(*, windows: bool | None = None) -> tuple[str, ...]:
+    """The commands a source checkout reruns to update itself, one per line.
+
+    Windows PowerShell 5.1 rejects `&&` as a statement separator, and cmd.exe
+    cannot run a .ps1 by name, so the Windows form is several commands and names
+    the PowerShell that ships with Windows. It stops the page first: `uv tool
+    install --force` replaces the environment Raven runs from, and Windows will
+    not delete a running `raven.exe`. POSIX keeps the one-line form every
+    release has printed -- install.sh stops and restarts the gateway itself
+    after replacing the executable in place. The CLI prints these; the page's
+    recovery embeds install_command() in its own PowerShell script instead.
+    """
+    if windows is None:
+        windows = _on_windows()
+    if windows:
+        return ("raven web --stop", "git pull", install_command(windows=True))
+    return (f"git pull && {install_command(windows=False)}",)
 
 
 def _uv_tool_target() -> ToolInstallTarget | None:
@@ -1152,6 +1454,52 @@ def _external_executable(value: object, *, label: str) -> Path:
     return executable
 
 
+def _boxlite_installed() -> bool:
+    """Whether this raven's environment holds a boxlite install the rebuild would drop.
+
+    Read here, in the parent, rather than in the helper: the helper runs under
+    ``-I`` with the base interpreter, so importlib.metadata there sees the base
+    environment, not the tool environment this answer is about.
+    """
+    try:
+        metadata.version("boxlite")
+    except metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+def _hand_over_system_ca(env: dict[str, str]) -> Path | None:
+    """Hand the helper the certificate store this process verifies against.
+
+    The helper runs on the base interpreter, which cannot import this
+    environment's truststore, so it gets a copy; it tells uv in turn. The copy
+    is the helper's to discard once loaded, and the caller's when no helper
+    starts. Since the helper deletes the directory it is handed, only one this
+    process just made is ever passed on. A process that never switched -- opted
+    out, or started some way other than `cli.entry` -- has nothing to hand over,
+    and is not asked to import truststore to find that out.
+    """
+    env.pop("RAVEN_UPGRADE_TRUSTSTORE", None)
+    if not system_ca_in_use():
+        return None
+
+    copy: Path | None = None
+    try:
+        copy = Path(tempfile.mkdtemp(prefix="raven-upgrade-truststore-"))
+        shutil.copytree(
+            Path(sys.modules["truststore"].__file__).parent,
+            copy / "truststore",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+    except OSError as exc:
+        if copy is not None:
+            shutil.rmtree(copy, ignore_errors=True)
+        print(f"Warning: the upgrade will not verify against the system certificate store ({exc}).", file=sys.stderr)
+        return None
+    env["RAVEN_UPGRADE_TRUSTSTORE"] = str(copy)
+    return copy
+
+
 def _handoff_upgrade(
     release: ReleaseInfo,
     current_version: str,
@@ -1167,6 +1515,8 @@ def _handoff_upgrade(
     env["UV_TOOL_DIR"] = str(target.tool_dir)
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
+    trust_copy = _hand_over_system_ca(env)
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
     argv = [
         str(base_python),
         "-I",
@@ -1188,6 +1538,8 @@ def _handoff_upgrade(
         os.execve(str(base_python), argv, env)
     except OSError as exc:
         _install_guard.clear_marker()
+        if trust_copy is not None:
+            shutil.rmtree(trust_copy, ignore_errors=True)
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc
     raise UpgradeError("The Raven upgrade helper returned unexpectedly")
 
@@ -1220,12 +1572,14 @@ def plan_upgrade() -> UpgradePlan:
     Network-bound (fetches the latest release), so callers on an event loop must
     run it in a thread.
     """
+    # Before the release lookup: a checkout tracks upstream `main`, so "already
+    # up to date" against a release says nothing true about it.
+    if _is_editable_install():
+        raise EditableInstallError("Editable Raven installations cannot be upgraded automatically")
     current_version = _current_version()
     release, version_key = fetch_latest_for_channel()
     if version_key(current_version) >= version_key(release.version):
         raise UpgradeError(f"Raven {current_version} is already up to date")
-    if _is_editable_install():
-        raise UpgradeError("Editable Raven installations cannot be upgraded automatically")
     target = _uv_tool_target()
     if target is None:
         raise UpgradeError("This Raven installation is not managed by uv")
@@ -1260,6 +1614,8 @@ def spawn_detached_upgrade(
     # opens the moment the caller lets go of the port, which is before the
     # helper has run its first instruction.
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version, port=status_port))
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
+    trust_copy = _hand_over_system_ca(env)
     if extra_env:
         env.update(extra_env)
 
@@ -1282,4 +1638,6 @@ def spawn_detached_upgrade(
         subprocess.Popen(argv, env=env, **kwargs)  # noqa: S603 - argv is built from resolved executables
     except OSError as exc:
         _install_guard.clear_marker()
+        if trust_copy is not None:
+            shutil.rmtree(trust_copy, ignore_errors=True)
         raise UpgradeError(f"Could not start the Raven upgrade helper: {exc}") from exc

@@ -84,6 +84,8 @@ async function harness(
       'src/state/session/conversation': {
         pitch: () => { state.fresh = '1'; calls.push(['pitch']) },
         unpitch: () => { state.fresh = null; calls.push(['unpitch']) },
+        readOnly: (on: boolean) => calls.push(['readOnly', on]),
+        noteRow: (label: string, _detail: string, opts?: { quiet?: boolean }) => calls.push(['noteRow', label, !!opts?.quiet]),
       },
       'src/features/rail/store': {
         markNew: () => {},
@@ -128,7 +130,8 @@ async function harness(
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
       'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
       'src/state/banner': { draw: () => {} },
-      'src/state/tier': { load: () => calls.push(['loadTier']) },
+      'src/state/tier': { load: (sid?: string | null, gen?: number) => calls.push(['loadTier', sid, gen]) },
+      'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', sid, gen]) },
       'src/state/perm': { setFromConfig: () => {} },
       'src/features/workspace/record': { wsOnHistory: () => {} },
       'src/features/transcript/source': {
@@ -147,6 +150,13 @@ async function harness(
         },
       }),
       'src/features/workspace/source': { wsSetRoot: (root: string) => calls.push(['wsSetRoot', root]) },
+      /* The picker's own store: what a reopened conversation hands it is the
+         whole of what is under test here. */
+      'src/state/mentions': {
+        adopt: (ids: readonly string[]) => calls.push(['adoptBases', [...ids].join(',')]),
+        clearStaged: () => calls.push(['clearStagedBases', '']),
+        staged: () => [],
+      },
       /* The streaming buffer the turn state resets through. */
       'src/features/transcript/mount': {
         nudge: () => {},
@@ -163,6 +173,8 @@ async function harness(
   })
   const registry = (await import('./registry')) as Registry
   api.switchTo = registry.switchTo
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway((method: string, params: Record<string, string> = {}) => {
     calls.push(['rpc', method, params || {}])
     if (method === 'session.resume') {
@@ -286,6 +298,27 @@ describe('the live session switch', () => {
     expect(h.title()).toBe('Alpha')
     expect(h.env.live.subId).toBe('sub:a')
     expect(h.calls).toContainEqual(['viewResume', 'a'])
+  })
+
+  it('takes up the bases a reopened conversation was pointed at', async () => {
+    /* Without this the picker draws a conversation with bases attached as
+       attached to none, and the reader's next tick writes that emptiness
+       back -- a selection lost by opening it. */
+    const h = await harness()
+    h.click({ id: 'a', title: 'A' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { knowledge_bases: ['kb-b', 'kb-a'] } })
+
+    expect(h.calls).toContainEqual(['adoptBases', 'kb-b,kb-a'])
+  })
+
+  it('takes up nothing for a conversation pointed at nothing', async () => {
+    const h = await harness()
+    h.click({ id: 'a', title: 'A' })
+    await h.settle('a', { session_id: 'a', messages: [], info: {} })
+
+    /* Said as emptiness rather than left unsaid: a conversation pointed at
+       nothing has to clear what the last one was pointed at. */
+    expect(h.calls).toContainEqual(['adoptBases', ''])
   })
 
   it('puts the stop button back on a conversation whose turn is still running', async () => {
@@ -654,7 +687,10 @@ describe('the live session switch', () => {
     await h.settle('a')
     h.startDraft()
 
-    expect(h.asked('model.options')).toEqual([{ session_id: 'a' }, {}])
+    expect(h.asked('model.options')).toEqual([
+      { session_id: 'a', include_providers: false }, { session_id: 'a' },
+      { include_providers: false }, {},
+    ])
   })
 
   it('drops a tier staged for a draft that was abandoned', async () => {
@@ -697,7 +733,71 @@ describe('the live session switch', () => {
     await h.settle('a')
     h.startDraft()
 
-    expect(h.calls.filter((c) => c[0] === 'loadTier')).toHaveLength(2)
+    const reads = h.calls.filter((c) => c[0] === 'loadTier')
+    expect(reads).toHaveLength(2)
+    /* Keyed to no conversation at all, under the switch to the draft: a draft
+       runs the catalogue default, which is what the handler answers for a key
+       it has never seen. */
+    expect(reads[1]![1]).toBeNull()
+    expect(typeof reads[1]![2]).toBe('number')
+  })
+
+  it('reads the tier of the conversation being opened, under its switch, before the current session moves over', async () => {
+    /* The tier source builds its request from the key it is given. A read of
+       "the current conversation" here would be of the one being LEFT -- the
+       current session is switched over only after these reads -- and its
+       reply painted the new view: open B from A and the picker's mode row
+       showed A's rung, and a pick of that very rung on B was taken as already
+       in force. */
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b')
+
+    const reads = h.calls.filter((c) => c[0] === 'loadTier')
+    expect(reads.map((c) => c[1])).toEqual(['a', 'b'])
+    expect(reads.every((c) => typeof c[2] === 'number')).toBe(true)
+    const marks = h.calls
+      .map((c) => (c[0] === 'loadTier' || c[0] === 'sessionSet' ? `${String(c[0])}:${String(c[1])}` : null))
+      .filter((m): m is string => m !== null)
+    expect(marks.indexOf('loadTier:b')).toBeLessThan(marks.indexOf('sessionSet:b'))
+  })
+
+  it('reads the effort of the conversation being opened, under its switch, before the current session moves over', async () => {
+    /* The effort source builds its request from the key it is given. A read of
+       "the current conversation" here would be of the one being LEFT -- the
+       current session is switched over only after these reads -- and its reply
+       painted the new view: open B from A and the picker's effort row showed
+       A's, and a pick of that very rung on B was taken as already in force. */
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b')
+
+    const reads = h.calls.filter((c) => c[0] === 'loadEffort')
+    expect(reads.map((c) => c[1])).toEqual(['a', 'b'])
+    expect(reads.every((c) => typeof c[2] === 'number')).toBe(true)
+    const marks = h.calls
+      .map((c) => (c[0] === 'loadEffort' || c[0] === 'sessionSet' ? `${String(c[0])}:${String(c[1])}` : null))
+      .filter((m): m is string => m !== null)
+    expect(marks.indexOf('loadEffort:b')).toBeLessThan(marks.indexOf('sessionSet:b'))
+  })
+
+  it('reads the default effort back when a conversation is left for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.startDraft()
+
+    const reads = h.calls.filter((c) => c[0] === 'loadEffort')
+    expect(reads).toHaveLength(2)
+    expect(reads[1]![1]).toBeNull()
+    expect(typeof reads[1]![2]).toBe('number')
   })
 
   it('holds a staged permission mode to the tier\'s rules: reset on both paths, re-read per open', async () => {
@@ -759,6 +859,51 @@ describe('the live session switch', () => {
     h.openLiveSession({ id: 'b', title: 'Beta' })
     await h.settle('b')
 
-    expect(h.asked('model.options').map((p) => (p as { session_id?: string }).session_id)).toEqual(['a', 'b'])
+    expect(h.asked('model.options')).toEqual([
+      { session_id: 'a', include_providers: false }, { session_id: 'a' },
+      { session_id: 'b', include_providers: false }, { session_id: 'b' },
+    ])
+  })
+})
+
+describe('an imported conversation', () => {
+  const KEY = 'imported:' + 'a'.repeat(32)
+
+  it('lays the column out read-only before it is asked for, and back for any other', async () => {
+    const h = await harness({ rows: [{ id: KEY }, { id: 'b' }] })
+    h.openLiveSession({ id: KEY, title: 'Imported' })
+    const resumeAt = h.calls.findIndex((c) => c[0] === 'rpc' && c[1] === 'session.resume')
+    const readOnlyAt = h.calls.findIndex((c) => c[0] === 'readOnly' && c[1] === true)
+    expect(readOnlyAt).toBeGreaterThanOrEqual(0)
+    expect(readOnlyAt).toBeLessThan(resumeAt)
+    await h.settle(KEY)
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    expect(h.calls.filter((c) => c[0] === 'readOnly').at(-1)).toEqual(['readOnly', false])
+    await h.settle('b')
+    h.startDraft()
+    expect(h.calls.filter((c) => c[0] === 'readOnly').at(-1)).toEqual(['readOnly', false])
+  })
+
+  it('says it carries no record instead of showing the empty state', async () => {
+    const h = await harness({ rows: [{ id: KEY }] })
+    h.openLiveSession({ id: KEY, title: 'Imported' })
+    const before = h.calls.length
+    await h.settle(KEY, { session_id: KEY, messages: [], info: { read_only: true } })
+    const after = h.calls.slice(before)
+    expect(after.filter((c) => c[0] === 'pitch')).toEqual([])
+    const notes = after.filter((c) => c[0] === 'noteRow')
+    expect(notes).toHaveLength(1)
+    expect(notes[0]![2]).toBe(true)
+    expect(h.state.fresh).toBeNull()
+  })
+
+  it('leaves an empty ordinary conversation in the empty state', async () => {
+    const h = await harness({ rows: [{ id: 'b' }] })
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    const before = h.calls.length
+    await h.settle('b', { session_id: 'b', messages: [], info: {} })
+    const after = h.calls.slice(before)
+    expect(after.filter((c) => c[0] === 'pitch')).toHaveLength(1)
+    expect(after.filter((c) => c[0] === 'noteRow')).toEqual([])
   })
 })
