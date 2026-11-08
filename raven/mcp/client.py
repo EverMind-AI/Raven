@@ -194,11 +194,19 @@ def _child_stderr() -> Any:
     a host that replaced ``sys.stderr`` before that -- pytest's capture, an
     embedded launcher, a plain ``StringIO`` redirect -- handed ``subprocess`` a
     stream with no ``fileno()``, and every stdio server it started failed with
-    ``io.UnsupportedOperation: fileno``. The interpreter's own stderr always
-    has a descriptor; a windowed process without one keeps the old behaviour.
+    ``io.UnsupportedOperation: fileno``. A host that redirected ``sys.stderr``
+    to a file keeps that file: its own log is what the child should write to.
+    Only when the redirect has no descriptor to inherit does the interpreter's
+    own stderr, which always has one, stand in; a windowed process without one
+    keeps the old behaviour.
     """
-    original = sys.__stderr__
-    return original if original is not None and not original.closed else sys.stderr
+    for stream in (sys.stderr, sys.__stderr__):
+        try:
+            if stream is not None and not stream.closed and stream.fileno() >= 0:
+                return stream
+        except (AttributeError, OSError, ValueError):
+            continue
+    return sys.stderr
 
 
 @asynccontextmanager

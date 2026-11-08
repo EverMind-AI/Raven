@@ -293,8 +293,11 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         payload = item.message.model_dump_json(by_alias=True, exclude_none=True)
                         await send_down(payload.encode() + b"\n")
                 finally:
-                    logger.debug("mcp endpoint: the upstream for {!r} ended", up.server)
                     writer.close()
+                # Said only when the upstream itself ended, never when this side
+                # was cancelled by the other pump ending first: the line exists
+                # to name which side ended, and a cancellation is not an end.
+                logger.debug("mcp endpoint: the upstream for {!r} ended", up.server)
 
             pumps = (asyncio.create_task(down_to_up()), asyncio.create_task(up_to_down()))
             try:
