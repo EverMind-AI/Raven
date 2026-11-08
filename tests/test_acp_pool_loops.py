@@ -339,3 +339,34 @@ async def test_a_session_delete_with_only_another_loops_connection_is_skipped(mo
         assert client.calls == []
     finally:
         foreign_loop.close()
+
+
+async def test_a_drop_starts_every_close_before_waiting_for_one() -> None:
+    """One slow close must not keep the others' from being started."""
+    pool = AcpConnectionPool()
+    loop = asyncio.get_running_loop()
+    started: list[str] = []
+    release = asyncio.Event()
+
+    class _Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            started.append(self.name)
+            await release.wait()
+
+    pool._connections["agent"] = {
+        ("a", "loop-1"): SimpleNamespace(loop=loop, client=_Client("a")),
+        ("b", "loop-1"): SimpleNamespace(loop=loop, client=_Client("b")),
+    }
+
+    dropping = asyncio.create_task(pool.drop("agent"))
+    for _ in range(100):
+        if len(started) == 2:
+            break
+        await asyncio.sleep(0.01)
+    assert started == ["a", "b"], "a drop waited for one close before starting the next"
+
+    release.set()
+    await dropping

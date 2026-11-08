@@ -787,8 +787,15 @@ class AcpConnectionPool:
         async with self._lock_for(name):
             with self._registry_lock:
                 connections = list((self._connections.pop(name, None) or {}).values())
-        for connection in connections:
-            await self._end(connection)
+        if not connections:
+            return
+        # Started together, not one after another: a close handed to another
+        # loop can use the whole timeout, and the connections behind it would
+        # never be started at all. `close_all` bounds the wait around this.
+        results = await asyncio.gather(*(self._end(connection) for connection in connections), return_exceptions=True)
+        for outcome in results:
+            if isinstance(outcome, Exception):
+                logger.warning("acp agent {!r}: a close in a drop did not finish: {}", name, outcome)
 
     @staticmethod
     async def _end(connection: _Connection) -> None:
@@ -1004,7 +1011,7 @@ class AcpConnectionPool:
             await asyncio.wait_for(self.drop(name), timeout=_CLOSE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning(
-                "acp agent {!r}: close did not finish within {}s; abandoning it (SIGKILL already sent)",
+                "acp agent {!r}: close did not finish within {}s; abandoning the wait",
                 name,
                 _CLOSE_TIMEOUT_S,
             )
