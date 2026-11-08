@@ -5671,7 +5671,7 @@ async def test_after_turn_memory_is_handed_the_markers_text_on_a_silent_turn(wor
 
 @pytest.fixture(autouse=True)
 def _fake_model_declares_every_level(monkeypatch):
-    """The turn clamps to the model's levels; the scripted model declares them all."""
+    """The turn bounds the pick by the model's levels; the scripted model declares them all."""
     from raven.agent.loop import wiring
 
     monkeypatch.setattr(

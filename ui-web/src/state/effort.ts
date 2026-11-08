@@ -29,7 +29,7 @@ import { show as toast } from './toast'
 
 export interface EffortReply {
   session_key?: string
-  /** The session's own pick, or null while it follows the default. */
+  /** The word the next turn runs at: the pick as this model takes it, or null while the default stands. */
   effort?: string | null
   /** What it runs at without a pick; null for the provider's own default. */
   default?: string | null
@@ -65,7 +65,7 @@ export interface EffortRow {
 export interface EffortState {
   /** Whether a reply has landed and offered words. */
   readonly loaded: boolean
-  /** The pick, or '' while the session follows the default. */
+  /** The word in force (the pick as this model takes it), or '' while the session follows the default. */
   readonly effort: string
   /** What the session runs at without a pick, or '' for the provider's own. */
   readonly fallback: string
@@ -157,8 +157,9 @@ export async function load(sid?: string | null, gen?: number, model?: string): P
 
 /* A rung's click. The one already in force asks for nothing -- except the
    default rung, which always sends the clear: a stored pick the current model
-   does not offer reads as "default" here but is still on the record, and this
-   click is the only way the row can drop it. '' is the default rung. */
+   does not offer reads here as the word the model declares below it, or
+   "default" when it declares nothing at or below, and is still on the record;
+   this click is the only way the row can drop it. '' is the default rung. */
 export function pick(id: string): void {
   if (!get().loaded || (id && id === get().effort)) return
   void choose(id)

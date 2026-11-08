@@ -176,7 +176,7 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
-   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   * The reasoning effort this session's own model calls run at: its own pick bounded by the model, else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands. A pick the model declares runs as named; a pick it does not declare runs at the highest word it declares below that pick.
    */
   reasoning_effort?: string | null;
   /**
@@ -3972,7 +3972,7 @@ export interface SessionSetEffortParams {
 export interface SessionSetEffortResult {
   session_key: string;
   /**
-   * The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default.
+   * The session's own pick as this model takes it: the word where the model declares it, else the highest word it declares below it, which is what the next turn runs at; null when the model declares nothing at or below the pick, and the turn runs at default.
    */
   effort?: string | null;
   /**

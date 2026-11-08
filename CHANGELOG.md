@@ -15,6 +15,16 @@ All notable changes to Raven are documented here.
   now defaults to the tokenizer files bundled in the LiteLLM wheel, so a cold
   offline estimator counts with cl100k without a download.
 
+- A conversation's reasoning-effort pick the current model does not declare
+  now runs at the highest level that model declares below it (`max` picked on
+  one model, then a switch to one that stops at `high`, runs at `high`), the
+  rule a fallback hop already runs the primary's word through, instead of
+  dropping to the conversation's mode word or the global setting; the pick is
+  dropped to those only when the model declares nothing at or below it, and
+  it stays saved as named for a model that declares it. The picker's effort
+  row wraps between rungs rather than inside a word when a model declares more
+  than one line holds.
+
 ### Fixed
 
 - The *Mode* row of the WebUI's model picker (the sub-agent tier) read the

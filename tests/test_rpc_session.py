@@ -4574,9 +4574,11 @@ async def test_a_model_that_declares_no_reasoning_offers_no_words(tmp_path, monk
     assert result["options"] == []
 
 
-async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, levels):
-    """A pick the model stopped declaring reads as no pick, and the default
-    the turn actually falls back to is reported as it stands."""
+async def test_the_reported_pick_is_bounded_by_the_model(tmp_path, monkeypatch, levels):
+    """A pick the model stopped declaring reads as the word the turn runs it
+    at -- the highest the model declares below it -- and as no pick only when
+    the model declares nothing at or below, with the default the turn then
+    falls back to reported as it stands."""
     _configured_effort(monkeypatch, "low")
     levels(["medium", "high", "xhigh"])
     loop = _EffortLoop(tmp_path)
@@ -4584,7 +4586,11 @@ async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, 
     await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["medium"])
     result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["effort"] == "medium" and result["options"] == ["medium"]
+    levels(["xhigh"])
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
     assert result["effort"] is None and result["default"] == "low"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
 
 
 async def test_the_default_is_not_narrowed_by_the_model(tmp_path, monkeypatch, levels):
@@ -4598,7 +4604,9 @@ async def test_the_default_is_not_narrowed_by_the_model(tmp_path, monkeypatch, l
     assert result["options"] == ["low", "medium"]
 
 
-async def test_the_bundle_reports_the_default_when_the_pick_is_clamped(tmp_path, monkeypatch, levels):
+async def test_the_bundle_reports_the_word_the_pick_runs_at(tmp_path, monkeypatch, levels):
+    """The status bar reads what the next turn sends: the pick bounded by the
+    model, and the default only when the model declares nothing at or below."""
     from unittest.mock import MagicMock
 
     _configured_effort(monkeypatch, "low")
@@ -4612,6 +4620,9 @@ async def test_the_bundle_reports_the_default_when_the_pick_is_clamped(tmp_path,
     await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
     levels(["low", "medium"])
     info = await session_module._default_session_info(loop, config, "tui:1")
+    assert info["reasoning_effort"] == "medium"
+    levels(["xhigh"])
+    info = await session_module._default_session_info(loop, config, "tui:1")
     assert info["reasoning_effort"] == "low"
 
 
@@ -4621,7 +4632,7 @@ async def test_a_pick_comes_back_when_a_later_model_declares_it(tmp_path, monkey
     loop = _EffortLoop(tmp_path)
     _filed(loop.sessions, "tui:1")
     await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
-    levels(["medium"])
+    levels(["xhigh"])
     dropped = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
     assert dropped["effort"] is None
     levels(["medium", "high"])

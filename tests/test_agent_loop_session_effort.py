@@ -429,7 +429,10 @@ def _fake_model_declares_every_level(monkeypatch):
     )
 
 
-async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatch):
+async def test_a_pick_the_model_does_not_declare_runs_at_the_highest_it_declares_below(tmp_path, monkeypatch):
+    """The pick is the person's ask for that much thinking; a model that stops
+    short of the word gives as much as it takes, the way a fallback hop runs the
+    primary's word. Only a model with nothing at or below the word drops it."""
     from raven.agent.loop import wiring
 
     monkeypatch.setattr(
@@ -438,8 +441,10 @@ async def test_a_pick_the_model_does_not_declare_is_dropped(tmp_path, monkeypatc
         lambda model, declared=(), *, provider=None, refresh=False: ("medium", "high"),
     )
     loop = _loop(tmp_path, _ScriptedProvider([_text("ok")]))
-    assert loop.session_reasoning_effort("cli:c", "minimal") is None
+    assert loop.session_reasoning_effort("cli:c", "max") == "high"
+    assert loop.session_reasoning_effort("cli:c", "xhigh") == "high"
     assert loop.session_reasoning_effort("cli:c", "high") == "high"
+    assert loop.session_reasoning_effort("cli:c", "minimal") is None
 
 
 def _live_with_effort(tmp_path, effort: str) -> LiveConfig:
@@ -476,11 +481,16 @@ async def test_an_undeclared_pick_falls_back_to_the_mode_or_configured_word(tmp_
     assert loop.session_reasoning_effort("cli:c", "minimal") == "medium"
     loop.set_session_policy("cli:c", reasoning_effort="high")
     assert loop.session_reasoning_effort("cli:c", "minimal") == "high"
+    # A pick the model stops short of still outranks both: it runs at the
+    # highest rung the model declares below it, not at the mode's word.
+    loop.set_session_policy("cli:c", reasoning_effort="medium")
+    assert loop.session_reasoning_effort("cli:c", "max") == "high"
 
 
 async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeypatch):
     """A router can hand the turn a model other than the session's binding; the
-    clamp must follow the model the calls actually name."""
+    bound must follow the model the calls actually name. The binding declares
+    the pick and the routed model stops at medium: the call carries medium."""
     from raven.agent.loop import wiring
 
     def levels(model, declared=(), *, provider=None, refresh=False):
@@ -495,7 +505,7 @@ async def test_a_routed_model_bounds_the_effort_the_turn_sends(tmp_path, monkeyp
 
     await loop._process_message(_req())
 
-    assert provider.calls[0]["reasoning_effort"] is None
+    assert provider.calls[0]["reasoning_effort"] == "medium"
 
 
 async def test_a_model_that_declares_no_reasoning_drops_the_pick(tmp_path, monkeypatch):

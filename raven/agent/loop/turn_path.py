@@ -1220,10 +1220,10 @@ class TurnPathMixin:
         # The effort this turn's own calls run at, short of a hook's rollback
         # override: the session's own pick over its mode's word over the
         # configured default as the file has it now -- ``session_effort.in_force``,
-        # the one rule ``session.info`` reports from too. The clamp is against
-        # ``model``, the id this loop will actually call: a router can hand the
-        # turn a model other than the session's binding, and that is the model
-        # whose declaration bounds the word.
+        # the one rule ``session.info`` reports from too. The pick is bounded
+        # against ``model``, the id this loop will actually call: a router can
+        # hand the turn a model other than the session's binding, and that is
+        # the model whose declaration bounds the word.
         turn_effort = self.session_reasoning_effort(session_key, session_effort, model)
         # The other bound on this turn, and the only one a product supplies rather
         # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here

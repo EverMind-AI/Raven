@@ -607,7 +607,7 @@ def _effort_in_force(
     """The effort this session's own calls run at: its pick, bounded by its model, over the default."""
     model_id = model_id or _session_model(agent_loop, config, session_key)
     picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
-    picked = session_effort.clamp(picked, _effort_levels(model_id, config))
+    picked = session_effort.downgrade(picked, _effort_levels(model_id, config))
     return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
@@ -1717,8 +1717,10 @@ async def session_set_effort(
     Every answer carries ``default`` -- what the session runs at without a
     pick of its own, the mode's word or the configured default, not narrowed
     by the model -- so a control can say what "default" means on this install.
-    ``effort`` is the pick only where the model declares it; when it does not,
-    ``effort`` is null and the turn runs at ``default``. ``options`` are the
+    ``effort`` is the pick as this model takes it: the word where the model
+    declares it, else the highest word it declares below it, the way the turn
+    runs it (``session_effort.downgrade``); null when the model declares
+    nothing at or below, and the turn runs at ``default``. ``options`` are the
     words this model declares, so a control need not spell them itself. A
     draft names its model, since it has no session record to read one from.
 
@@ -1748,7 +1750,7 @@ async def session_set_effort(
     def _reply(stored: str | None) -> dict:
         return {
             "session_key": session_key,
-            "effort": session_effort.clamp(stored, model_levels),
+            "effort": session_effort.downgrade(stored, model_levels),
             "default": _default_effort(loop, config, session_key or None),
             "options": list(model_levels) if model_levels is not None else list(REASONING_EFFORTS),
         }
