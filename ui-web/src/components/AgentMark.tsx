@@ -10,9 +10,10 @@ import type { JSX } from 'react'
 
    Filenames are upstream's, verbatim, so one `cmp` against
    @lobehub/icons-static-svg settles provenance for every file here on the
-   terms LICENSES/README.md already records for the provider marks. The one
-   exception is miromind.svg, which that package does not carry and which is
-   MiroMind's own favicon, also verbatim.
+   terms LICENSES/README.md already records for the provider marks. The
+   exceptions are miromind.svg, which that package does not carry and which is
+   MiroMind's own favicon, also verbatim, and minimax-code.svg, the product
+   icon's app artwork, resampled inside an SVG wrapper.
 
    `tone` says what the file is made of, which is a fact about the file rather
    than a preference -- tests/test_ui_agent_marks.py derives each one from the
@@ -43,6 +44,7 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   grok: { file: 'grok', tone: 'mono' },
   hermes: { file: 'hermesagent', tone: 'mono' },
   kimi_code: { file: 'kimi', tone: 'mono' },
+  minimax_code: { file: 'minimax-code' },
   mirasim_antigravity: { file: 'antigravity-color' },
   mirasim_claude: { file: 'claudecode-color' },
   mirasim_codex: { file: 'codex-color' },

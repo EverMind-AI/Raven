@@ -6071,6 +6071,10 @@
       "en": "Moonshot's coding agent",
       "zh": "月之暗面的编码智能体"
     },
+    "gui.agent.short_minimax_code": {
+      "en": "MiniMax's coding agent",
+      "zh": "MiniMax 的编码智能体"
+    },
     "gui.agent.short_pi": {
       "en": "Pi's coding agent",
       "zh": "Pi 的编码智能体"

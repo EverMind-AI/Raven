@@ -2821,6 +2821,7 @@ def test_presets_are_valid_and_complete() -> None:
     assert set(presets) == {
         "Claude Code",
         "Codex",
+        "MiniMax Code",
         "MiroThinker",
         "OpenClaw",
         "Hermes Agent",
@@ -2845,6 +2846,7 @@ def test_presets_are_valid_and_complete() -> None:
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
         "Claude Code",
         "Codex",
+        "MiniMax Code",
         "OpenCode",
         "Hermes Agent",
         "OpenClaw",
@@ -2966,6 +2968,31 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
     assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
     for key, hint in ACP_REGISTRY_INSTALL_HINTS.items():
         assert hint.strip() == hint and hint, key
+
+
+def test_every_core_install_hint_names_a_row_that_defers_to_a_local_install() -> None:
+    """The same invariant for the hints this repo writes for its own presets.
+
+    The registry table above cannot hold these: its provenance is the registry,
+    and a core preset added there would make that statement untrue.
+    """
+    from raven.agent.subagent.presets import INSTALL_HINTS, SHIM_LAUNCHED_PRESETS
+
+    unknown = set(INSTALL_HINTS) - set(THIRD_PARTY_SUBAGENT_PRESETS)
+    assert not unknown, f"install hints for presets that do not exist: {sorted(unknown)}"
+    fetched = set(INSTALL_HINTS) & SHIM_LAUNCHED_PRESETS
+    assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
+    for key, hint in INSTALL_HINTS.items():
+        assert hint.strip() == hint and hint, key
+
+
+def test_a_core_install_hint_reaches_its_row() -> None:
+    from raven.agent.subagent.presets import install_hint_for
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    cfg = ThirdPartyAcpSubagentConfig(name="MiniMax Code", preset="minimax_code", command="mcode acp")
+    assert install_hint_for(cfg) == "npm install -g @minimax-ai/code"
+    assert install_hint_for(ThirdPartyAcpSubagentConfig(name="mine", command="mcode acp")) is None
 
 
 def test_every_shim_requirement_names_a_shim_launched_row() -> None:

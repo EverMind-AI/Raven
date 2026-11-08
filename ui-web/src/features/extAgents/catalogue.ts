@@ -120,6 +120,12 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     site: 'kimi.com/code',
     cmd: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
   },
+  minimax_code: {
+    short: 'gui.agent.short_minimax_code',
+    brand: 'MiniMax',
+    site: 'minimax.io',
+    cmd: 'npm install -g @minimax-ai/code',
+  },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
   mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },
   mirasim_codex: { short: MIRASIM_SHORT, brand: 'OpenAI', site: MIRASIM_SITE },

@@ -12,7 +12,7 @@ So connecting is: verify the one path this table names. If it fails, say why
 fallback to another transport, because a silent fallback would hand the user an
 agent with different capabilities than the one they asked for.
 
-Measured on 2026-08-11, which is what fixed each transport below:
+Measured on the date each bullet names, which is what fixed each transport below:
 
 - ``Hermes Agent`` - ACP, native (``hermes acp``). resume + fork + load.
 - ``Claude Code`` - ACP through the ACP project's adapter. It reads the *local*
@@ -30,6 +30,13 @@ Measured on 2026-08-11, which is what fixed each transport below:
   the OpenClaw Gateway rather than a self-contained server: with no reachable
   gateway it never answers ``initialize``, so pass ``--url`` / ``--token`` when
   yours needs them.
+- ``MiniMax Code`` - ACP, native (``mcode acp``). Measured on 2026-11-08 with
+  0.6.12: resume + fork + load, four model variants (two thinking), ``default``
+  and ``plan`` modes. The ACP server reads the data dir named by
+  ``MINIMAX_DATA_DIR``; on a machine whose desktop app held the login under
+  ``~/.minimax``, launching it without that variable left the login unseen and
+  ``session/new`` answered "Authentication required". Pointed at the same
+  directory, the handshake was ready.
 - ``MiroThinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
 
@@ -269,6 +276,17 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # unreachable.
         "readyTimeoutMs": 45000,
     },
+    "minimax_code": {
+        "name": "MiniMax Code",
+        "preset": "minimax_code",
+        "kind": "acp",
+        "description": "MiniMax's terminal coding agent, reached over its native ACP server.",
+        "command": "mcode acp",
+        # The first handshake took 9.0s on 0.6.12 here: a Node bundle loading its
+        # runtime and SQLite before it answers `initialize`. The shared 30s leaves
+        # less room on a colder machine than the other local executables need.
+        "readyTimeoutMs": 60000,
+    },
     "mirothinker": {
         "name": "MiroThinker",
         "preset": "mirothinker",
@@ -361,6 +379,19 @@ def session_mcp_for(cfg: Any) -> bool:
     return bool(preset.get("sessionMcp", True))
 
 
+INSTALL_HINTS: dict[str, str] = {
+    # Published on npm; the row names the `mcode` it puts on PATH.
+    "minimax_code": "npm install -g @minimax-ai/code",
+}
+"""How to install the agent a core preset defers to, by preset key.
+
+The registry's own rows carry theirs beside the registry
+(``ACP_REGISTRY_INSTALL_HINTS``); these are the presets this repo names itself.
+Kept apart so the registry table stays a statement about that registry -- a core
+preset added there would make its provenance untrue.
+"""
+
+
 def install_hint_for(cfg: Any) -> str | None:
     """How to install the agent this row defers to, or ``None`` when unknown.
 
@@ -374,7 +405,9 @@ def install_hint_for(cfg: Any) -> str | None:
     executable name it already reports is what a person searches with.
     """
     preset = getattr(cfg, "preset", None)
-    return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
+    if not preset:
+        return None
+    return INSTALL_HINTS.get(preset) or ACP_REGISTRY_INSTALL_HINTS.get(preset)
 
 
 class SignIn(NamedTuple):
@@ -486,6 +519,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # credentials". `opencode auth list` is the check beside it: it prints the
     # credentials it holds ("0 credentials" on a machine that has none).
     "opencode": SignIn(exe="opencode", local="opencode auth login", check="opencode auth list"),
+    # `mcode login` is the sign-in the CLI documents; `mcode acp login --region
+    # <region>` is the same flow spelled for an ACP host. Measured 2026-11-08 on
+    # 0.6.12: a machine whose desktop app had signed in under ~/.minimax still
+    # reported "Authentication required" until MINIMAX_DATA_DIR named that
+    # directory, because the ACP server's default data dir did not carry that
+    # login. The command is the remedy when no login exists at all.
+    "minimax_code": SignIn(exe="mcode", local="mcode login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
