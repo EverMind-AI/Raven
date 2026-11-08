@@ -130,7 +130,7 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     short: 'gui.agent.short_minimax_code',
     brand: 'MiniMax',
     site: 'minimax.io',
-    cmd: 'npm install -g @minimax-ai/code',
+    cmd: 'npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3',
     note: 'gui.agent.minimax_cli_note',
     signInNote: 'gui.agent.minimax_data_dir_note',
   },

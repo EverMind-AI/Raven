@@ -2991,7 +2991,7 @@ def test_a_core_install_hint_reaches_its_row() -> None:
     from raven.config.schema import ThirdPartyAcpSubagentConfig
 
     cfg = ThirdPartyAcpSubagentConfig(name="MiniMax Code", preset="minimax_code", command="mcode acp")
-    assert install_hint_for(cfg) == "npm install -g @minimax-ai/code"
+    assert install_hint_for(cfg) == "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3"
     assert install_hint_for(ThirdPartyAcpSubagentConfig(name="mine", command="mcode acp")) is None
 
 

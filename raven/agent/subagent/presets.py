@@ -380,8 +380,11 @@ def session_mcp_for(cfg: Any) -> bool:
 
 
 INSTALL_HINTS: dict[str, str] = {
-    # Published on npm; the row names the `mcode` it puts on PATH.
-    "minimax_code": "npm install -g @minimax-ai/code",
+    # Published on npm; the row names the `mcode` it puts on PATH. The
+    # script-approval flag is the vendor's own: npm 12 blocks install-time
+    # scripts by default, and without it `better-sqlite3`'s native binding is
+    # never built, so the install reports success and `mcode` dies at startup.
+    "minimax_code": "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3",
 }
 """How to install the agent a core preset defers to, by preset key.
 
