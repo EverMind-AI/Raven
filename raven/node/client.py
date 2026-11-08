@@ -816,21 +816,26 @@ class NodePool:
             writer.close()
             with contextlib.suppress(ConnectionError, OSError):
                 await writer.wait_closed()
-            await self._refuse(node, stream_id, server, task, "the dispatch or link ended")
+            await self._refuse(node, stream_id, server, task, "the dispatch or link ended", expected=True)
             return
         stream = _HostStream(stream_id, str(lend), str(server), writer)
         node.streams[stream_id] = stream
         stream.pump = asyncio.create_task(self._pump_out(node, stream, reader), name=f"mcp-stream-{stream_id}")
 
-    async def _refuse(self, node: _Node, stream_id: int, server: Any, task: Any, reason: str) -> None:
+    async def _refuse(
+        self, node: _Node, stream_id: int, server: Any, task: Any, reason: str, *, expected: bool = False
+    ) -> None:
         """Close a stream this host will not carry, and say why here as well as down the pipe.
 
         The agent's side of a refused stream is a closed pipe: an MCP client
         reads that as the server having ended, and the reason never reaches
-        the person whose server it is.
+        the person whose server it is. ``expected`` marks the refusal that is a
+        normal race -- an unlend or a replaced link while the endpoint opens --
+        so it is said without a warning.
         """
-        logger.warning(
-            "raven node on machine {}: no stream for {!r} on task {!r}: {}",
+        log = logger.info if expected else logger.warning
+        log(
+            "raven node on machine {}: no stream for {!r} on task {!r}: {!r}",
             node.target.id,
             server,
             task,
