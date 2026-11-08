@@ -495,6 +495,35 @@ async def test_cancelling_a_switch_stops_the_backend_it_started() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_failed_start_stops_the_backend_it_partly_started() -> None:
+    """The contract asks stop() to be safe after a failed start, so partial init
+    can clean up. A switch whose start fails never installs the backend, so
+    nothing else owns it -- the rebind must stop it before it re-raises."""
+
+    class _BadStart(_Backend):
+        async def start(self) -> None:
+            self.starts += 1
+            raise RuntimeError("the local server did not come up")
+
+    old, new = _Backend(), _BadStart()
+    loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)
+    loop.backend = old
+
+    with pytest.raises(RuntimeError, match="did not come up"):
+        await loop.rebind_memory_backend(
+            new,
+            name="everos",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        )
+
+    assert loop.backend is old
+    assert new.starts == 1
+    assert new.stops == 1, "a started backend that was never installed is nobody else's to stop"
+
+
+@pytest.mark.asyncio
 async def test_teardown_force_stops_a_backend_whose_write_is_stuck() -> None:
     old, new = _StoreBackend(), _Backend()
     loop = _loop(builders=[MemorySegmentBuilder(None, old)], router=None)

@@ -895,10 +895,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     await backend.start()
                 while self._active_turns:
                     await self._turns_idle.wait()
-            except asyncio.CancelledError:
-                # The request went away before the swap -- a page reload is
-                # one way. The started backend was never installed, so
-                # nothing else owns its client.
+            except (asyncio.CancelledError, Exception):
+                # The start failed, or the request went away before the swap
+                # -- a page reload is one way. Either way the backend was
+                # never installed, so nothing else owns it: the contract asks
+                # stop() to be safe after a failed start, for the partial init
+                # to clean up.
                 if backend is not None and backend is not old:
                     await self._stop_backend(backend)
                 raise
