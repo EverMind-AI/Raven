@@ -201,6 +201,7 @@ your local installation has passed a live task.
 | `opencode` | `opencode acp` | Current preset withholds session MCP delivery via `sessionMcp: false` |
 | `hermes` | `hermes acp --accept-hooks` | Native authentication; the flag accepts previously unseen shell hooks |
 | `openclaw` | `openclaw acp` | Its gateway and authentication; startup has a longer handshake allowance |
+| `minimax_code` | `mcode acp` | Native ACP server; requires Node.js 22.19+ or 24-26. Install the CLI with `npm install -g @minimax-ai/code` and sign in with `mcode login`. If the desktop app already holds the login, set `MINIMAX_DATA_DIR` to its data directory (`~/.minimax`). |
 | `mirothinker` | OpenAI-compatible HTTP | Endpoint/model/key; preset opts out of stateful replay |
 | `mirasim_<agent>` | Raven's own ACP adapter over the Mirasim host's protocol | Mirasim installed on this computer and running, and the agent installed inside it. The rows are offered when Raven finds Mirasim: a host to reach (a port a Mirasim host wrote its token for, such as the desktop app's or `mirasim serve`'s, or the socket of a server Mirasim runs here over ssh, either one answering), else the launcher Mirasim writes under its home (`~/.mirasim/bin/mirasim`, which it puts on no PATH), `mirasim` on the login shell's PATH, or a server a Mirasim installed here over ssh (`~/.mirasim-remote`); a row whose Mirasim is installed but not running says to open the app or start `mirasim serve`, or to let the app on another computer reach this one again. Session MCP withheld via `sessionMcp: false` |
 

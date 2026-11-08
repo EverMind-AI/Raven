@@ -203,11 +203,13 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 ## ❯❯ Connect Third-Party Agents
 
-Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
+Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 14 **third-party agents** and nine **Mirasim-routed** presets to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents in Raven's Agent Hub">
 </p>
+
+The roster also includes **MiniMax Code** over its native ACP server (`mcode acp`), and nine **Mirasim-routed** presets such as `Claude Code-Mirasim`, which run the same agents on Mirasim's accounts and model routes.
 
 ## ❯❯ News
 
