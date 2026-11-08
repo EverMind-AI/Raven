@@ -234,15 +234,18 @@ function presetOf(agent: WaterfallAgent): string | null {
  *  name and nothing about the package behind it, so the name is the signal
  *  here -- the roster reads `builtin`/`vendored` instead, a fact this entry
  *  does not carry. A vendor's agent spells itself after the vendor. */
-function ownOf(agent: WaterfallAgent): boolean {
+function ownName(agent: WaterfallAgent): string {
   const meta = agent.door?.meta ?? {}
-  const raw = typeof meta.agent === 'string' ? meta.agent : typeof meta.instance === 'string' ? meta.instance : ''
-  return /^raven([^a-z0-9]|$)/i.test(raw.trim())
+  return typeof meta.agent === 'string' ? meta.agent : typeof meta.instance === 'string' ? meta.instance : ''
+}
+
+function ownOf(agent: WaterfallAgent): boolean {
+  return /^raven([^a-z0-9]|$)/i.test(ownName(agent).trim())
 }
 
 /** An agent's mark: Raven's own tile, its vendor's mark, or a plain glyph. */
 function agentMark(agent: WaterfallAgent): JSX.Element {
-  if (agent.scope === null || ownOf(agent)) return <AgentMark own />
+  if (agent.scope === null || ownOf(agent)) return <AgentMark own agent={ownName(agent)} />
   const preset = presetOf(agent)
   return preset === null ? <span className="trajectory-wf-glyph"><Icon icon={BotIcon} size={15} /></span> : <AgentMark preset={preset} />
 }

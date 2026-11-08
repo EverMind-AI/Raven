@@ -76,7 +76,7 @@ export function Tile({ row, plain }: { row: ExtAgentRow; plain?: boolean }): JSX
   const via = !plain && familyOf(row) ? { preset: MIRASIM_GROUP, badge: row.preset } : null
   return (
     <span className={'extAgents-tile' + (own ? ' extAgents-tile-own' : '')}>
-      {via ? <AgentMark badge={via.badge} preset={via.preset} /> : <AgentMark preset={row.preset} own={own} />}
+      {via ? <AgentMark badge={via.badge} preset={via.preset} /> : <AgentMark preset={row.preset} own={own} agent={row.name} />}
     </span>
   )
 }

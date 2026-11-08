@@ -54,7 +54,11 @@
    descendant selector here outranks the badge's rule and blows its image up to
    the slot's size, clipped at the plate's edge. */
 .extAgents-tile .agent-mark > img, .extAgents-tile .agent-mark > svg { width: 23px; height: 23px; }
-.extAgents-tile-own .agent-mark > img { width: 21px; height: 26px; }
+/* One square frame for the own tile: raven.svg is 34x43 while the four agent
+   marks are near-square, so a square box gives every one of them the same
+   drawn height -- the tall raven fills it by height, the others by width --
+   where the old 21x26 box made the four shorter than the raven. */
+.extAgents-tile-own .agent-mark > img { width: 26px; height: 26px; }
 
 .extAgents-who { flex: 1; min-width: 0; }
 .extAgents-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }

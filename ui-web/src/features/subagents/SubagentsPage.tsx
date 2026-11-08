@@ -204,7 +204,7 @@ export function InstanceRowView({ it, onOpen = store.openInstanceRow, compact = 
       }}>
       {/* Identity first, then state -- the order the roster head and every
           setup row already read in. */}
-      <AgentMark preset={preset} own={own} />
+      <AgentMark preset={preset} own={own} agent={it.agent} />
       <Mark status={instanceMark(it.status ?? undefined)} />
       <div className="bd">
         <div className="nm" title={it.title || it.handle}>{it.title || it.nodeId || it.handle}</div>
@@ -303,7 +303,7 @@ export function AgentList({ s, onOpen, compact = false }: {
                     <path d="m5.5 6.5 2.5 3 2.5-3" />
                   </svg>
                 </span>
-                <AgentMark preset={registered?.preset} own={isOwnAgent(registered)} />
+                <AgentMark preset={registered?.preset} own={isOwnAgent(registered)} agent={name} />
                 <b title={name}>{name}</b>
                 <span className="agent-kind">{agentKindLabel(registered?.kind || children[0]?.kind)}</span>
               </button>
