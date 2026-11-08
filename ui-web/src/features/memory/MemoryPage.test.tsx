@@ -570,6 +570,47 @@ describe('memory island', () => {
       expect(await screen.findByText('shipped the island')).toBeTruthy()
       expect(screen.queryByText('gui.mem.local_t')).toBeNull()
     })
+
+    /* The note is the one explanation of a selected backend whose plugin is
+       gone: a key panel asks for a key for a client that cannot exist, and a
+       Start button offers a process the install cannot run. memory.stats
+       reports cloud_key_set/local_running false there too, so the panels must
+       yield when available_backends says the backend is not importable. */
+    it('keeps the missing-plugin note over the cloud key panel', async () => {
+      const note = 'the everos-cloud-memory distribution is not installed'
+      install(
+        { list: async () => ({ items: [], total: 0, note }) },
+        {
+          ...both,
+          backend: 'everos-cloud',
+          available_backends: ['everos'],
+          cloud_key_set: false,
+          local_running: false,
+          note,
+        },
+      )
+      await mount()
+      expect(await screen.findByText(note)).toBeTruthy()
+      expect(screen.queryByText('gui.mem.cloud_t')).toBeNull()
+    })
+
+    it('keeps the missing-plugin note over the local start panel', async () => {
+      const note = 'the everos-memory distribution is not installed'
+      install(
+        { list: async () => ({ items: [], total: 0, note }) },
+        {
+          ...both,
+          backend: 'everos',
+          available_backends: ['everos-cloud'],
+          cloud_key_set: false,
+          local_running: false,
+          note,
+        },
+      )
+      await mount()
+      expect(await screen.findByText(note)).toBeTruthy()
+      expect(screen.queryByText('gui.mem.local_t')).toBeNull()
+    })
   })
 
   it('keeps its rendered shape', async () => {

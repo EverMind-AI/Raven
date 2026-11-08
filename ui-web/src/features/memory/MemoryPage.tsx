@@ -201,6 +201,10 @@ export function MemoryApp(): JSX.Element {
      This subscription is what carries the repaint -- the whole-page redraw no
      longer lists this island. */
   useSyncExternalStore(langSubscribe, langTag)
+  /* The names this install can read through. A selected backend missing here
+     has no plugin behind it, and its note is the one thing to say: the key and
+     Start panels would offer steps for a client that cannot exist. */
+  const available = s.stats?.available_backends ?? []
   if (s.phase === 'down') {
     return (
       <TwoPane>
@@ -210,10 +214,12 @@ export function MemoryApp(): JSX.Element {
   }
   /* The cloud backend with no key is not a service failure: every read would
      answer 401, and the error frame would ask the reader to retry something
-     only a key can fix. The panel takes the whole column instead. */
+     only a key can fix. The panel takes the whole column instead -- but only
+     when the cloud backend exists to take a key. */
   if (
     !s.switching
     && s.stats?.backend === 'everos-cloud'
+    && available.includes('everos-cloud')
     && (s.stats?.cloud_key_set === false || s.cloudRejected || s.cloudEditing)
   ) {
     return (
@@ -223,8 +229,14 @@ export function MemoryApp(): JSX.Element {
     )
   }
   /* The local backend with no server: the store would answer only zeros, so
-     the column is the one action that brings it back. */
-  if (!s.switching && s.stats?.backend === 'everos' && s.stats?.local_running === false) {
+     the column is the one action that brings it back -- when the plugin that
+     runs the server is actually installed. */
+  if (
+    !s.switching
+    && s.stats?.backend === 'everos'
+    && available.includes('everos')
+    && s.stats?.local_running === false
+  ) {
     return (
       <TwoPane side={canSwitch(s) ? <BackendSwitch s={s} /> : undefined}>
         <LocalStart s={s} />
