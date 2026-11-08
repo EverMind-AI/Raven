@@ -32,9 +32,12 @@ same in every turn whoever started it:
 State is one file beside the campaigns (``approvals.json``), so an approval
 survives a restart. A call is keyed by its tool, every argument and the
 directory it runs in (``action_key``): an approval covers that exact call,
-nothing broader, and only until the campaign it was asked under concludes.
-The owner is shown the whole call, where it runs first; a call too long to
-show whole is not filed at all.
+nothing broader, and only until the campaign whose work it is concludes. The
+owner is shown the whole call for the on-call's own tools that reach the
+machine -- ``exec`` its command, a declaration its readings, a submit its
+configs -- and one of those too long to show whole is not filed at all. Core
+tools keep the trunk's prompt, which shows what fits and names the rest by
+size.
 """
 
 from __future__ import annotations
@@ -66,6 +69,12 @@ LAYER_ONE: frozenset[str] = frozenset(
         "ops_finish",
     }
 )
+
+#: The on-call's own tools that reach the campaign machine. ``ops_declare`` has
+#: its own renderer below; these are shown to the owner in full by ``_full_call``,
+#: because the generic ``action_line`` folds the arguments that decide the work
+#: into ``+N more`` and elided scalars.
+_MACHINE_TOOLS: frozenset[str] = frozenset({"ops_submit", "ops_kill", "ops_edit_case_dict"})
 
 MODES = ("full", "smart", "ask")
 DEFAULT_REVIEW_TIMEOUT_S = 60.0
@@ -110,6 +119,39 @@ def _concluded(scope: str) -> bool:
     return bool(scope) and (Path(scope) / "concluded.json").exists()
 
 
+def _validate_store(data: dict[str, Any], path: Path) -> None:
+    """Refuse a file whose members this gate could not act on.
+
+    The root check alone is not enough: ``pending`` is iterated as a list of
+    objects, ``next`` is counted, and each item's ``n``/``digest``/``action``
+    are read by the gate and by ``ops_ask_owner``. A member of another shape
+    would raise (``AttributeError``/``ValueError``) out of the ask tool -- the
+    one door to the owner -- instead of the documented NOT RUN, and a read
+    inside ``_change`` would carry the bad shape through a write.
+    """
+    pending = data.get("pending")
+    if not isinstance(pending, list):
+        raise ApprovalStoreUnreadableError(f"{path} does not hold a list of pending calls")
+    for item in pending:
+        if not isinstance(item, dict):
+            raise ApprovalStoreUnreadableError(f"{path} holds a pending entry that is not an object")
+        n = item.get("n")
+        if not isinstance(n, int) or isinstance(n, bool):
+            raise ApprovalStoreUnreadableError(f"{path} holds a pending entry without an integer number")
+        if not isinstance(item.get("digest"), str) or not isinstance(item.get("action"), str):
+            raise ApprovalStoreUnreadableError(f"{path} holds a pending entry without a digest and action")
+        for field in ("scope", "campaign", "answer"):
+            value = item.get(field)
+            if value is not None and not isinstance(value, str):
+                raise ApprovalStoreUnreadableError(f"{path} holds a pending entry whose {field} is not text")
+        tried = item.get("answer_tried")
+        if tried is not None and (not isinstance(tried, (int, float)) or isinstance(tried, bool)):
+            raise ApprovalStoreUnreadableError(f"{path} holds a pending entry whose answer_tried is not a number")
+    next_number = data.get("next")
+    if not isinstance(next_number, int) or isinstance(next_number, bool):
+        raise ApprovalStoreUnreadableError(f"{path} holds a next number that is not an integer")
+
+
 class ApprovalStore:
     """``approvals.json`` under the ops home: pending, approved and refused calls.
 
@@ -137,6 +179,7 @@ class ApprovalStore:
             raise ApprovalStoreUnreadableError(f"{self._path} does not hold an object")
         data.setdefault("next", 1)
         data.setdefault("pending", [])
+        _validate_store(data, self._path)
         data["approved"] = _decisions(data.get("approved"))
         data["refused"] = _decisions(data.get("refused"))
         return data
@@ -155,7 +198,7 @@ class ApprovalStore:
     def verdict(self, key: str) -> tuple[str, str]:
         """``("approved"|"refused"|"pending"|"", reason)`` for one call.
 
-        A decision lasts as long as the campaign it was asked under: once that
+        A decision lasts as long as the campaign whose work it is: once that
         campaign is concluded the call reads as undecided and is asked again.
         """
         data = self._read()
@@ -168,8 +211,23 @@ class ApprovalStore:
                 return "pending", str(item.get("n"))
         return "", ""
 
-    def file(self, key: str, tool: str, action: str, why: str) -> int:
-        """File one call as pending; its number, the existing one if already filed."""
+    def file(
+        self,
+        key: str,
+        tool: str,
+        action: str,
+        why: str,
+        *,
+        campaign: str = "",
+        scope: str = "",
+    ) -> int:
+        """File one call as pending; its number, the existing one if already filed.
+
+        ``campaign``/``scope`` are the campaign the call itself names, when it
+        names one (see :func:`_campaign_scope`). They are kept so the item is
+        attributed to its own campaign and its approval expires there, not with
+        whichever campaign happens to put the owner's question.
+        """
 
         def edit(data: dict[str, Any]) -> int:
             for item in data["pending"]:
@@ -177,16 +235,19 @@ class ApprovalStore:
                     return int(item["n"])
             n = int(data["next"])
             data["next"] = n + 1
-            data["pending"].append(
-                {
-                    "n": n,
-                    "digest": key,
-                    "tool": tool,
-                    "action": action,
-                    "why": why[:200],
-                    "since": int(time.time()),
-                }
-            )
+            item = {
+                "n": n,
+                "digest": key,
+                "tool": tool,
+                "action": action,
+                "why": why[:200],
+                "since": int(time.time()),
+            }
+            if campaign:
+                item["campaign"] = campaign
+            if scope:
+                item["scope"] = scope
+            data["pending"].append(item)
             return n
 
         return self._change(edit)
@@ -194,14 +255,23 @@ class ApprovalStore:
     def pending(self) -> list[dict[str, Any]]:
         return list(self._read()["pending"])
 
-    def scope(self, numbers: list[int], cdir: str) -> None:
-        """Tie the items one question carried to the campaign it was asked under."""
+    def scope(self, numbers: list[int], cdir: str, campaign: str = "") -> None:
+        """Tie the items one question carried to the campaign it was asked under.
+
+        An item filed with its own campaign keeps the scope it was filed with:
+        the approval lasts as long as the campaign whose work it is, not as long
+        as whichever campaign put the question. Only items from a call that
+        names no campaign (``exec``) take the asking campaign's directory.
+        """
         wanted = set(numbers)
 
         def edit(data: dict[str, Any]) -> None:
             for item in data["pending"]:
                 if int(item.get("n", 0)) in wanted:
-                    item["scope"] = cdir
+                    if cdir and not item.get("scope"):
+                        item["scope"] = cdir
+                    if campaign and not item.get("campaign"):
+                        item["campaign"] = campaign
 
         self._change(edit)
 
@@ -290,17 +360,63 @@ def _where(params: Mapping[str, Any], session_workdir: Path | None) -> str:
     return os.path.normcase(os.path.normpath(raw)) if raw else ""
 
 
+def _campaign_scope(home: Path, params: Mapping[str, Any]) -> tuple[str, str]:
+    """The campaign a call names: its name, and the directory its approval expires with.
+
+    The gate has no campaign of its own -- ``adjudicate`` receives only the
+    call -- so it takes the one the params name, exactly as the tool will. A
+    ``ledger`` path is the campaign directory's own pointer; a ``campaign``
+    name is slugged to its directory the way every writer does. Both empty
+    when the call names neither (``exec``): that item is tied to whichever
+    campaign put the owner's question, as before.
+    """
+    ledger = str(params.get("ledger") or "").strip()
+    if ledger:
+        return "", str(Path(ledger).expanduser().parent)
+    name = str(params.get("campaign") or "").strip()
+    if not name:
+        return "", ""
+    from oncall_flow.instrument import campaign_slug
+
+    return name, str(Path(home) / campaign_slug(name))
+
+
 def describe(name: str, params: Mapping[str, Any], session_workdir: Path | None) -> str:
-    """The whole call as the owner reads it: where it runs first, then what it does."""
+    """The call as the owner reads it: where it runs first, then what it does.
+
+    An on-call machine tool is shown in full (``_declaration_lines`` for a
+    declaration, ``_full_call`` for the rest) because its arguments are the
+    work; every other tool keeps the trunk's prompt, whose summary is what a
+    human approving that tool everywhere else already reads.
+    """
     from raven.permissions.builtin import action_line
 
     machine = str(params.get("machine") or "").strip()
     raw_dir = str(params.get("working_dir") or session_workdir or "")
     place = ", ".join(p for p in (f"on {machine}" if machine else "", f"in {raw_dir}" if raw_dir else "") if p)
-    line = _declaration_lines(params) if name == "ops_declare" else action_line(name, dict(params))
+    if name == "ops_declare":
+        line = _declaration_lines(params)
+    elif name in _MACHINE_TOOLS:
+        line = _full_call(name, params)
+    else:
+        line = action_line(name, dict(params))
     if machine and line.endswith(f" (on {machine})"):
         line = line[: -len(f" (on {machine})")]
     return f"[{place}] {line}" if place else line
+
+
+def _full_call(name: str, params: Mapping[str, Any]) -> str:
+    """One machine-touching call with every argument shown in full.
+
+    The generic ``action_line`` is a summary: a list is folded into its first
+    members and ``+N more``, and a long scalar is cut from the middle. For a
+    round's ``configs``, an action's ``values`` or a case edit's new value, the
+    part it hides is the work being approved. JSON keeps every value;
+    ``MAX_ACTION_CHARS`` then refuses a call too long to show, as it does for a
+    declaration.
+    """
+    body = json.dumps(dict(params), indent=2, ensure_ascii=False, sort_keys=True, default=str)
+    return f"{name}\n{body}"
 
 
 def _declaration_lines(params: Mapping[str, Any]) -> str:
@@ -342,7 +458,15 @@ def pending_block(items: list[dict[str, Any]]) -> str:
     if not items:
         return ""
     lines = [f"{len(items)} action(s) are waiting for your approval:"]
-    lines += [f"  {item['n']}. {item['action']}" for item in items]
+    for item in items:
+        campaign = str(item.get("campaign") or "")
+        # The action text of an ops call already names its campaign (plain repr
+        # for a declaration, JSON for the full renderers); a core tool (exec)
+        # carries it only here, and the owner is deciding which campaign's work
+        # they are allowing.
+        named = f"campaign={campaign!r}" in item["action"] or f'"campaign": "{campaign}"' in item["action"]
+        label = f"[campaign: {campaign}] " if campaign and not named else ""
+        lines.append(f"  {item['n']}. {label}{item['action']}")
     lines.append(f'Choose "{APPROVE_ALL}" or "{REFUSE_ALL}", or say which numbers you approve and which you do not.')
     return "\n".join(lines)
 
@@ -520,7 +644,8 @@ class OncallApprovalGate:
                 "and an owner cannot approve what they cannot read. It was not filed. Split it "
                 "into shorter steps, or move the long part into a script file and run that."
             )
-        n = store.file(key, name, action, why)
+        campaign, scope = _campaign_scope(self._home, args)
+        n = store.file(key, name, action, why, campaign=campaign, scope=scope)
         logger.info("oncall approval: {} filed as pending #{} ({})", name, n, why)
         return (
             f"NOT RUN: this action needs the owner's approval ({why}). It is filed as pending "
@@ -555,12 +680,40 @@ class OncallApprovalGate:
         if self._provider is None:
             return None
         from raven.permissions.judge import review
+        from raven.permissions.turn import current_turn
+        from raven.tracing import trace
 
+        async def notify(phase: str) -> None:
+            """Tell a watching surface the reviewer is running; never load-bearing."""
+            hook = current_turn().on_review
+            if hook is None:
+                return
+            try:
+                await hook(phase, name)
+            except Exception:  # noqa: BLE001 -- a display failure must not change a decision
+                logger.debug("oncall approval: review notification failed", exc_info=True)
+
+        await notify("started")
         try:
-            return await review(self._provider, tool_name=name, params=params, timeout_s=self._timeout)
+            outcome = await review(self._provider, tool_name=name, params=params, timeout_s=self._timeout)
         except Exception:  # noqa: BLE001 -- an unreviewable call goes to the owner, never fails the turn
             logger.warning("oncall approval: the reviewer failed for {}", name, exc_info=True)
             return None
+        finally:
+            await notify("ended")
+        # The judge's contract is that every review is on the turn's span: a
+        # wrong allow is invisible at runtime, and this gate is where the
+        # on-call's own reviews would otherwise leave no record.
+        span = trace.current_span()
+        if span is not None:
+            span.set(
+                {
+                    "permission.judge.decision": "allow" if outcome.allow else "escalate",
+                    "permission.judge.reason": outcome.reason,
+                    "permission.judge.failed": outcome.failed,
+                }
+            )
+        return outcome
 
 
 def review_timeout(raw: Any) -> float:

@@ -195,6 +195,38 @@ async def test_an_already_pending_call_is_not_reviewed_again(tmp_path):
     assert provider.calls == 1
 
 
+@pytest.mark.asyncio
+async def test_a_smart_review_reaches_the_turn_and_the_span(tmp_path, monkeypatch):
+    """The judge's contract: every review is recorded, and the surface is told while it runs."""
+    from raven.permissions.turn import start_permission_turn
+    from raven.tracing import trace
+
+    phases: list[tuple[str, str]] = []
+
+    async def on_review(phase: str, tool: str) -> None:
+        phases.append((phase, tool))
+
+    start_permission_turn(None, conversation_id="conv", turn_id="turn", on_review=on_review)
+
+    class _Span:
+        def __init__(self) -> None:
+            self.attributes: dict[str, Any] = {}
+
+        def set(self, attributes: dict[str, Any]) -> None:
+            self.attributes.update(attributes)
+
+    span = _Span()
+    monkeypatch.setattr(trace, "current_span", lambda: span)
+    provider = _Provider("report_permission_review", {"decision": "allow", "reason": "ordinary"})
+    assert await _ask(_gate(tmp_path, "smart", provider), "ops_submit", SUBMIT) is None
+    assert phases == [("started", "ops_submit"), ("ended", "ops_submit")]
+    assert span.attributes == {
+        "permission.judge.decision": "allow",
+        "permission.judge.reason": "ordinary",
+        "permission.judge.failed": False,
+    }
+
+
 # --- the owner's answer --------------------------------------------------------
 
 
@@ -420,6 +452,50 @@ async def test_an_unreadable_file_is_never_overwritten_and_the_call_does_not_run
         ApprovalStore(tmp_path).pending()
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"pending": {"a": 1}},
+        {"pending": ["a"]},
+        {"pending": [{"n": "x", "digest": "d", "action": "a"}]},
+        {"pending": [{"n": 1, "digest": "d"}]},
+        {"next": "x"},
+        {"next": True},
+        {"pending": [{"n": 1, "digest": "d", "action": "a", "answer_tried": "soon"}]},
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_store_member_this_gate_cannot_read_answers_not_run(tmp_path, payload):
+    """A valid JSON file of the wrong shape is unreadable, not a crash in the gate or the ask tool."""
+    path = tmp_path / "approvals.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_text(encoding="utf-8")
+    out = await _ask(_gate(tmp_path, "ask"), "ops_submit", SUBMIT)
+    assert out is not None and out.startswith("NOT RUN") and "could not be read" in out
+    assert path.read_text(encoding="utf-8") == before
+    with pytest.raises(ApprovalStoreUnreadableError):
+        ApprovalStore(tmp_path).pending()
+
+
+@pytest.mark.asyncio
+async def test_the_ask_tool_keeps_working_when_the_store_cannot_be_read(tmp_path):
+    home = tmp_path / "ops"
+    home.mkdir()
+    tools_base.set_home(home)
+    (home / "approvals.json").write_text('{"pending": {"a": 1}}', encoding="utf-8")
+    owner = _Owner()
+    tool = OpsAskOwnerTool()
+    tool.bind_runtime(RuntimeHandles(direct_ask=owner))
+    tool.set_context("acp", "s1", session_key="acp:s1")
+    cdir = _campaign(tmp_path)
+    out = await tool.execute(
+        campaign="c", question="Which seed?", expected_loss_minutes=60, ledger=str(cdir / "ledger.json")
+    )
+    await _settle()
+    assert "put to the owner as a question" in out
+    assert "waiting for your approval" not in owner.asked[0]["prompt"]
+
+
 @pytest.mark.asyncio
 async def test_a_replace_the_platform_refuses_briefly_is_retried(tmp_path, monkeypatch):
     import raven.utils.atomic_io as atomic_io
@@ -464,16 +540,78 @@ async def test_a_call_too_long_to_show_whole_is_not_filed(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_a_submit_shows_every_config_it_would_run(tmp_path):
+    """The generic summary folds a second config into ``+N more``; a submit is shown whole."""
+    basis = (
+        "round 2 converged residual 3.1e-4 at step 1800, wall 41 min; endTime 10 left 12% of "
+        "the planned window unused and the last two checkpoints were identical, so this round "
+        "drops deltaT and extends endTime to see whether the transient settles"
+    )
+    submit = {
+        "campaign": "c",
+        "round": 3,
+        "eta_seconds": 1800,
+        "basis": basis,
+        "configs": [
+            {"deltaT": 1e-4, "endTime": 10},
+            {"deltaT": 5e-5, "endTime": 20, "writeInterval": 1},
+        ],
+    }
+    await _ask(_gate(tmp_path, "ask"), "ops_submit", submit)
+    shown = pending_block(ApprovalStore(tmp_path).pending())
+    assert "0.0001" in shown and "5e-05" in shown and "writeInterval" in shown
+    assert "more" not in shown
+
+
+@pytest.mark.asyncio
+async def test_a_case_edit_shows_the_whole_value(tmp_path):
+    value = "1" * 300
+    await _ask(
+        _gate(tmp_path, "ask"),
+        "ops_edit_case_dict",
+        {"campaign": "c", "path": "system/controlDict", "entry": "endTime", "value": value},
+    )
+    assert value in pending_block(ApprovalStore(tmp_path).pending())
+
+
+@pytest.mark.asyncio
+async def test_a_submit_too_long_to_show_whole_is_not_filed(tmp_path):
+    submit = {"campaign": "c", "eta_seconds": 60, "configs": [{"blob": "x" * MAX_ACTION_CHARS}]}
+    out = await _ask(_gate(tmp_path, "ask"), "ops_submit", submit)
+    assert out is not None and "too long to show them whole" in out
+    assert ApprovalStore(tmp_path).pending() == []
+
+
+@pytest.mark.asyncio
 async def test_an_approval_ends_with_the_campaign_it_was_asked_under(tmp_path):
+    """A call that names no campaign takes the one that put the question."""
     cdir = tmp_path / "campaign-a"
     cdir.mkdir()
     gate = _gate(tmp_path, "ask")
-    await _ask(gate, "ops_submit", SUBMIT)
-    ApprovalStore(tmp_path).scope([1], str(cdir))
+    await _ask(gate, "exec", REMOTE_WRITE)
+    ApprovalStore(tmp_path).scope([1], str(cdir), "campaign-a")
     await apply_answer(tmp_path, APPROVE_ALL, [1])
-    assert await _ask(gate, "ops_submit", SUBMIT) is None
+    assert await _ask(gate, "exec", REMOTE_WRITE) is None
     (cdir / "concluded.json").write_text("{}", encoding="utf-8")
-    assert (await _ask(gate, "ops_submit", SUBMIT) or "").startswith("NOT RUN")
+    assert (await _ask(gate, "exec", REMOTE_WRITE) or "").startswith("NOT RUN")
+
+
+@pytest.mark.asyncio
+async def test_a_call_is_scoped_to_the_campaign_it_names(tmp_path):
+    """A submit filed under campaign A expires with A, whatever campaign asked."""
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    gate = _gate(tmp_path, "ask")
+    await _ask(gate, "ops_submit", dict(SUBMIT, campaign="a"))
+    item = ApprovalStore(tmp_path).pending()[0]
+    assert item["campaign"] == "a" and item["scope"] == str(a)
+    ApprovalStore(tmp_path).scope([1], str(b), "b")
+    await apply_answer(tmp_path, APPROVE_ALL, [1])
+    (b / "concluded.json").write_text("{}", encoding="utf-8")
+    assert await _ask(gate, "ops_submit", dict(SUBMIT, campaign="a")) is None, "B's end does not expire A's approval"
+    (a / "concluded.json").write_text("{}", encoding="utf-8")
+    assert (await _ask(gate, "ops_submit", dict(SUBMIT, campaign="a")) or "").startswith("NOT RUN")
 
 
 @pytest.mark.asyncio
@@ -508,7 +646,7 @@ def test_a_misspelt_review_timeout_still_builds_the_gate(tmp_path):
 async def test_the_approval_choices_ride_alongside_the_models_own_options(tmp_path):
     home = tmp_path / "ops"
     tools_base.set_home(home)
-    await _ask(_gate(home, "ask"), "ops_submit", SUBMIT)
+    await _ask(_gate(home, "ask"), "exec", REMOTE_WRITE)
     owner = _Owner()
     tool = OpsAskOwnerTool()
     tool.bind_runtime(RuntimeHandles(direct_ask=owner))

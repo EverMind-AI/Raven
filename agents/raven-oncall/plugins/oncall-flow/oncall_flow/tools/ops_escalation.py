@@ -406,7 +406,7 @@ class OpsAskOwnerTool(_OpsScheduler):
             withdraw_question(cdir, "superseded by a new question")
             if waiting:
                 try:
-                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in waiting], str(cdir))
+                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in waiting], str(cdir), campaign)
                 except (approval.ApprovalStoreUnreadableError, OSError) as exc:
                     logger.warning("oncall-flow: pending approvals not tied to {}: {}", campaign, exc)
             task = asyncio.create_task(
