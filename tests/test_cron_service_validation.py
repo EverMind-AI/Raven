@@ -127,35 +127,61 @@ def test_non_cron_schedules_do_not_read_the_default(tmp_path, kind):
 
 
 @pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
-def test_cron_without_tz_follows_local_dst(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "now, expected",
+    [
+        (datetime(2027, 3, 13, 15, tzinfo=timezone.utc), datetime(2027, 3, 14, 13, tzinfo=timezone.utc)),
+        (datetime(2027, 11, 6, 14, tzinfo=timezone.utc), datetime(2027, 11, 7, 14, tzinfo=timezone.utc)),
+    ],
+)
+def test_cron_without_tz_follows_local_dst(monkeypatch, now, expected) -> None:
     """A 09:00 cron with no tz stays at 09:00 local time across a DST change."""
     from raven.proactive_engine.schedulers.cron.service import _compute_next_run
 
     monkeypatch.setenv("TZ", "America/New_York")
     time.tzset()
     try:
-        # 2027-03-13T15:00Z is 10:00 EST; DST starts the next morning.
-        now_ms = int(datetime(2027, 3, 13, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        now_ms = int(now.timestamp() * 1000)
         next_ms = _compute_next_run(CronSchedule(kind="cron", expr="0 9 * * *"), now_ms)
-        expected = int(datetime(2027, 3, 14, 13, 0, tzinfo=timezone.utc).timestamp() * 1000)  # 09:00 EDT
-        assert next_ms == expected
+        assert next_ms == int(expected.timestamp() * 1000)
     finally:
         monkeypatch.undo()
         time.tzset()
 
 
 @pytest.mark.skipif(not hasattr(time, "tzset"), reason="moving the process zone needs time.tzset")
-def test_cron_without_tz_is_never_scheduled_in_the_past_on_dst_fall_back(monkeypatch) -> None:
+@pytest.mark.parametrize("minute, second", [(5, 0), (15, 30)])
+@pytest.mark.parametrize("expr", ["30 1 * * *", "*/10 * * * *", "*/5 * * * *", "* * * * *", "* * * * * *"])
+def test_cron_without_tz_is_never_scheduled_in_the_past_on_dst_fall_back(monkeypatch, minute, second, expr) -> None:
     """In the repeated hour of a fall-back, the next run must be after `now`."""
     from raven.proactive_engine.schedulers.cron.service import _compute_next_run
 
     monkeypatch.setenv("TZ", "America/New_York")
     time.tzset()
     try:
-        # 2027-11-07T06:15Z is 01:15 EST, the second pass through 01:00-02:00.
-        now_ms = int(datetime(2027, 11, 7, 6, 15, tzinfo=timezone.utc).timestamp() * 1000)
-        next_ms = _compute_next_run(CronSchedule(kind="cron", expr="30 1 * * *"), now_ms)
-        assert next_ms is not None and next_ms > now_ms
+        now_ms = int(datetime(2027, 11, 7, 6, minute, second, tzinfo=timezone.utc).timestamp() * 1000)
+        next_ms = _compute_next_run(CronSchedule(kind="cron", expr=expr), now_ms)
+        expected = (
+            datetime(2027, 11, 8, 6, 30, tzinfo=timezone.utc)
+            if expr == "30 1 * * *"
+            else datetime(2027, 11, 7, 7, tzinfo=timezone.utc)
+        )
+        assert next_ms == int(expected.timestamp() * 1000)
     finally:
         monkeypatch.undo()
         time.tzset()
+
+
+def test_cron_stops_when_no_future_slot_is_found(monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    from raven.proactive_engine.schedulers.cron.service import _compute_next_run
+
+    past = datetime(2027, 11, 7, 5, tzinfo=timezone.utc)
+    iterator = Mock()
+    iterator.get_next.return_value = past
+    monkeypatch.setattr("croniter.croniter", Mock(return_value=iterator))
+    now_ms = int(datetime(2027, 11, 7, 6, tzinfo=timezone.utc).timestamp() * 1000)
+
+    assert _compute_next_run(CronSchedule(kind="cron", expr="* * * * * *"), now_ms) is None
+    assert iterator.get_next.call_count == 10_000

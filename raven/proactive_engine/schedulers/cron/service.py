@@ -72,17 +72,16 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
             else:
                 base_dt = datetime.fromtimestamp(base_time)
             cron = croniter(schedule.expr, base_dt)
-            next_dt = cron.get_next(datetime)
-            next_ms = int(next_dt.timestamp() * 1000)
-            # A naive wall time inside the repeated hour of a DST fall-back maps to
-            # its first occurrence, which can already be past: step to the next slot
-            # so the job fires once rather than being scheduled in the past.
-            for _ in range(3):
-                if next_ms > now_ms:
-                    break
+            # A naive wall time in a repeated DST hour can map to the past.
+            # Allow second-level schedules to leave that hour, but fail closed
+            # if the iterator cannot produce a future occurrence.
+            for _ in range(10_000):
                 next_dt = cron.get_next(datetime)
                 next_ms = int(next_dt.timestamp() * 1000)
-            return next_ms
+                if next_ms > now_ms:
+                    return next_ms
+            logger.warning("Cron expression {!r} exhausted the future-slot search", schedule.expr)
+            return None
         except Exception:
             return None
 
