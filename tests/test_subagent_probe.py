@@ -1123,7 +1123,7 @@ class TestAutomaticSnapshotVerification:
 
         An agent that answers the handshake and then refuses to open a session
         without a credential has told us something durable about itself, and the
-        agents page reads exactly that to say `Unauthorized` instead of offering
+        agents page reads exactly that to say `Sign-in needed` instead of offering
         a Connect that spends a launch to be refused again. Any other failure is
         recorded only over a row whose last record had already failed, replacing
         that verdict and keeping its capabilities. Over a row with no record, as
@@ -1235,7 +1235,7 @@ class TestAutomaticSnapshotVerification:
         assert verified == [] and asked == []
 
     async def test_a_preset_nobody_has_configured_is_verified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Or the page can never say `Unauthorized` before the first press.
+        """Or the page can never say `Sign-in needed` before the first press.
 
         The rows this backfill was written for come off the registry, which
         holds configured agents only -- so an agent the reader has not connected
@@ -1275,7 +1275,7 @@ class TestAutomaticSnapshotVerification:
         fresh failure is measured again, and a credential refusal is the failure
         that most needs it -- it is a state the user is expected to go and fix,
         and nothing about fixing it touches the launch config, so the snapshot
-        never goes stale and the row would keep saying "Unauthorized" across
+        never goes stale and the row would keep saying "Sign-in needed" across
         every restart after the sign-in that cured it.
         """
         from dataclasses import dataclass

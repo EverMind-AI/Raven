@@ -1313,7 +1313,7 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     """
     # A preset's snapshot is recorded too, and has to be: the page draws a
     # preset row's verdict from it -- a recorded credential refusal is what puts
-    # "Unauthorized" there -- so Test is that row's only way back. The store
+    # "Sign-in needed" there -- so Test is that row's only way back. The store
     # keys on a fingerprint of the launch fields, so a record under a preset's
     # name is returned only to a config that launches the same way. Recorded off
     # the handshake either way, and never off the ping: the ping answers one
@@ -1717,7 +1717,7 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # of raven's own that came back with an empty menu. Staleness asks
             # whether the launch config moved, and neither signing in nor
             # configuring a provider moves it -- so a recorded refusal never goes
-            # stale, and the row it came from would go on saying "Unauthorized"
+            # stale, and the row it came from would go on saying "Sign-in needed"
             # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
             menuless_own = _own_row_missing_its_menu(snapshot, name)
