@@ -28,6 +28,12 @@ interface CatalogueEntry {
   brand?: string
   site?: string
   cmd?: string
+  /* A message key shown in the missing-agent sheet beside the install command,
+     for a vendor whose product and CLI are separate installs. */
+  note?: string
+  /* A message key shown with a sign-in remedy, for an agent whose credential
+     needs more than the terminal command -- the desktop app's data dir. */
+  signInNote?: string
 }
 
 const OWN_BY = 'gui.agent.by_raven'
@@ -125,6 +131,8 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     brand: 'MiniMax',
     site: 'minimax.io',
     cmd: 'npm install -g @minimax-ai/code',
+    note: 'gui.agent.minimax_cli_note',
+    signInNote: 'gui.agent.minimax_data_dir_note',
   },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
   mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },
@@ -192,10 +200,17 @@ export function byOf(row: ExtAgentRow): string {
    preset launched through it needs Node.js, which brings npx, and the agent's
    own installer is then the wrong answer -- an `npm i -g` cannot run without
    Node.js, and an agent installed some other way still launches through npx. */
-export function installOf(row: ExtAgentRow): { site?: string; cmd?: string; node?: boolean } {
+export function installOf(row: ExtAgentRow): { site?: string; cmd?: string; node?: boolean; note?: string } {
   if (row.probe_missing === 'npx') return { site: NODE_SITE, node: true }
   const entry = entryOf(row)
-  return entry ? { site: entry.site, cmd: entry.cmd } : {}
+  return entry ? { site: entry.site, cmd: entry.cmd, note: entry.note } : {}
+}
+
+/* The extra line a sign-in remedy carries, or '' for an agent whose terminal
+   command is the whole fix. */
+export function signInNoteOf(row: ExtAgentRow): string {
+  const entry = entryOf(row)
+  return entry?.signInNote ? t(entry.signInNote) : ''
 }
 
 const NODE_SITE = 'nodejs.org'

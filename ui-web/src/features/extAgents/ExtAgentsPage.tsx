@@ -11,7 +11,7 @@ import { ago } from '../../lib/ago'
 import * as lang from '../../state/lang'
 import { defaultProviders as hostProviders, loadDefaultProviders } from '../model/source'
 import { offered, withCurrent } from '../model/types'
-import { byOf, familyOf, installOf, isOwnRow } from './catalogue'
+import { byOf, familyOf, installOf, isOwnRow, signInNoteOf } from './catalogue'
 import { badOf, healthOf, kindOf, ledClass, pendingLabel, refusedWrite, shownOf } from './health'
 import { MachineConnectSheet, MachineSheet, MachinesGrid, RegisterSheet, WhereField } from './MachineCards'
 import * as machines from './machines'
@@ -130,7 +130,7 @@ function CmdCopy({ cmd }: { cmd: string }): JSX.Element {
 /* The install block for an absent agent: the vendor's command with a copy
    button, and the vendor's site. */
 function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
-  const { site, cmd, node } = installOf(row)
+  const { site, cmd, node, note } = installOf(row)
   if (!site && !cmd) return null
   return (
     <div className="extAgents-inst">
@@ -140,6 +140,7 @@ function InstallBlock({ row }: { row: ExtAgentRow }): JSX.Element | null {
         </div>
       ) : null}
       <span className="extAgents-k">{t('gui.plug.install')}</span>
+      {note ? <div className="extAgents-about">{t(note)}</div> : null}
       {cmd ? <CmdCopy cmd={cmd} /> : null}
       {site ? (
         <a className="extAgents-site" href={`https://${site}`} rel="noreferrer" target="_blank">
@@ -455,6 +456,9 @@ interface NoteSpec {
   /* What to type once `command` runs, when the fix is a step inside the agent:
      the note then draws two numbered steps, each with its own copy button. */
   then?: string
+  /* A sentence the catalogue adds to a fix, for a credential whose setup needs
+     more than the terminal command -- the desktop app's data dir. */
+  note?: string
   /* The server's own sentence. Folded under the lead when the lead already
      explains it (a classified refusal); shown as it came when it is all there
      is to go on. */
@@ -515,12 +519,16 @@ function testPress(row: ExtAgentRow, shown: Shown): string {
    beside it. */
 function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string): NoteSpec | null {
   const agent = row.name
+  const signInNote = signInNoteOf(row)
+  const fixNote = (remedy: Remedy | null): string =>
+    remedy && (remedy.kind === 'sign_in' || remedy.kind === 'setup') ? signInNote : ''
   const failed = s.failed[row.name]
   if (failed) {
     const write = refusedWrite(failed)
     const key = write === 'connect' ? 'gui.agent.ask_connect' : 'gui.agent.ask_fix'
-    const spec = remedied(agent, failed.remedy || null, press, failed.detail)
-    if (spec) return { ...spec, ask: askFor(key, agent, spec, true) }
+    const remedy = failed.remedy || null
+    const spec = remedied(agent, remedy, press, failed.detail)
+    if (spec) return { ...spec, note: fixNote(remedy), ask: askFor(key, agent, spec, true) }
     const plain: NoteSpec = {
       title: write === 'save' ? t('gui.agent.bad_save') : t(write === 'disconnect' ? 'gui.agent.bad_disconnect' : 'gui.agent.bad_connect', { agent }),
       lead: write === 'save' ? t('gui.agent.said_save') : t(write === 'disconnect' ? 'gui.agent.said_disconnect' : 'gui.agent.said_connect', { button: press }),
@@ -533,8 +541,9 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
   if (row.last_test_ok === false) {
     if (!button) return null
     const when = ago(row.last_test_at_ms)
-    const spec = remedied(agent, row.last_test_remedy || null, button, row.last_test_detail || '')
-    if (spec) return { ...spec, when, ask: askFor('gui.agent.ask_test', agent, spec, true) }
+    const remedy = row.last_test_remedy || null
+    const spec = remedied(agent, remedy, button, row.last_test_detail || '')
+    if (spec) return { ...spec, when, note: fixNote(remedy), ask: askFor('gui.agent.ask_test', agent, spec, true) }
     const plain: NoteSpec = { title: t('gui.agent.st_test_bad'), when, lead: t('gui.agent.said_test', { button }), raw: row.last_test_detail || '', folded: false }
     return { ...plain, ask: askFor('gui.agent.ask_test', agent, plain, false) }
   }
@@ -551,6 +560,7 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
     lead: testLabel
       ? t(signIn ? 'gui.agent.fix_sign_in_bare' : 'gui.agent.warn_lead', { agent, button: testLabel })
       : t('gui.agent.warn_lead_bare'),
+    note: signIn ? signInNote : '',
     raw: row.probe_detail || '',
     folded: true,
     warn: true,
@@ -558,7 +568,7 @@ function noteOf(row: ExtAgentRow, s: ExtAgentsState, shown: Shown, press: string
   return { ...warn, ask: askFor('gui.agent.ask_check', agent, warn, signIn) }
 }
 
-function Note({ title, when, lead, command, then, raw, folded, warn, ask }: NoteSpec): JSX.Element {
+function Note({ title, when, lead, command, then, note, raw, folded, warn, ask }: NoteSpec): JSX.Element {
   return (
     <div className={warn ? 'extAgents-note extAgents-note-warn' : 'extAgents-note'}>
       <div className="extAgents-note-h">
@@ -587,6 +597,7 @@ function Note({ title, when, lead, command, then, raw, folded, warn, ask }: Note
       ) : command ? (
         <CmdCopy cmd={command} />
       ) : null}
+      {note ? <div className="extAgents-about">{note}</div> : null}
       {!raw ? null : folded ? (
         <details className="extAgents-note-raw">
           <summary>{t(warn ? 'gui.agent.probe_raw' : 'gui.agent.fix_raw')}</summary>

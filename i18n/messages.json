@@ -6075,6 +6075,14 @@
       "en": "MiniMax's coding agent",
       "zh": "MiniMax 的编码智能体"
     },
+    "gui.agent.minimax_cli_note": {
+      "en": "The MiniMax Code desktop app does not include the mcode CLI; install it separately with the command below.",
+      "zh": "MiniMax Code 桌面端不包含 mcode CLI，请用下面的命令单独安装。"
+    },
+    "gui.agent.minimax_data_dir_note": {
+      "en": "If the desktop app is already signed in, also set MINIMAX_DATA_DIR to ~/.minimax in this agent's environment.",
+      "zh": "如果桌面端已经登录，请同时把这个 agent 的环境变量 MINIMAX_DATA_DIR 设为 ~/.minimax。"
+    },
     "gui.agent.short_pi": {
       "en": "Pi's coding agent",
       "zh": "Pi 的编码智能体"
