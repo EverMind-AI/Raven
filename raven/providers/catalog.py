@@ -52,6 +52,19 @@ SOURCE_OVERLAY = "overlay"
 
 
 @dataclass(frozen=True)
+class VendorFacts:
+    """What the provider's own model list says about one model.
+
+    These fields ride with the vendor's catalogue response, so they describe the
+    deployment a request actually reaches -- stronger evidence than a bundled
+    snapshot that may predate it.
+    """
+
+    capabilities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ModelRow:
     """One model, as a person reads it.
 
@@ -82,16 +95,34 @@ class ModelRow:
         return bool(self.capabilities or self.input_modalities or self.output_modalities)
 
 
-def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None) -> ModelRow:
+def describe(
+    provider: str,
+    model: str,
+    *,
+    overlay: "ModelOverlay | None" = None,
+    vendor: "VendorFacts | None" = None,
+) -> ModelRow:
     """Everything known about this model for display purposes.
 
     Falls back to the id as its own label, so a caller can render the result
     unconditionally: a model the snapshot has never heard of -- one released
     since the last refresh, or served by a local deployment -- still comes back
     as a row rather than as nothing to show.
+
+    Evidence is layered in the order it deserves: the bundled catalogue, the
+    vendor's own model list over it, the user's overlay last. A model no source
+    gives outputs for still gets one more answer -- what the catalogue's family
+    of names agrees on (``registry_data.family_tags``).
     """
     from raven.providers.registry import canonical_provider_name
-    from raven.providers.registry_data import inferred_tags, row_by_name, row_for
+    from raven.providers.registry_data import (
+        CAPABILITIES,
+        MODALITIES,
+        clean_tags,
+        family_tags,
+        row_by_name,
+        row_for,
+    )
     from raven.providers.wire import split_model_id, stored_model_id
 
     provider = canonical_provider_name(provider)
@@ -113,30 +144,40 @@ def describe(provider: str, model: str, *, overlay: "ModelOverlay | None" = None
         # describes it either, so a rank-only row still lists.
         entry = row_by_name(vendor_id) or entry
 
-    if entry is not None:
-        row = ModelRow(
-            ref=ref,
-            provider=provider,
-            # A row without a name is still a row: the tags it carries are worth
-            # drawing, and the id is what the picker showed before either way.
-            label=entry.name or split_model_id(ref)[1] or ref,
-            source=SOURCE_SNAPSHOT if entry.name else SOURCE_ID_ONLY,
-            description=entry.description,
-            capabilities=_with_inferred(ref, entry.capabilities),
-            input_modalities=entry.input_modalities,
-            output_modalities=entry.output_modalities,
+    capabilities = entry.capabilities if entry is not None else ()
+    outputs = entry.output_modalities if entry is not None else ()
+    vendor_capabilities = clean_tags(vendor.capabilities, CAPABILITIES) if vendor is not None else ()
+    vendor_outputs = clean_tags(vendor.output_modalities, MODALITIES) if vendor is not None else ()
+    if vendor_outputs:
+        outputs = vendor_outputs
+
+    capabilities = _with_inferred(ref, capabilities)
+    if vendor_capabilities:
+        capabilities = _union_capabilities(capabilities, vendor_capabilities)
+    if not outputs and not _has_kind_tag(capabilities):
+        capabilities = _union_capabilities(capabilities, family_tags(ref))
+    if vendor_outputs:
+        # A declared output strips the kind tags inferred from the row, but not
+        # one the vendor proved at its own endpoint. Generation tags follow the
+        # outputs either way; the catalogue's own outputs never take this path,
+        # which is the exception the bundled embedder rows depend on.
+        proved = tuple(name for name in vendor_capabilities if name in _KIND_TAGS)
+        capabilities = _union_capabilities(
+            tuple(_strip_kind_tags(capabilities)), (*proved, *_generation_capabilities(vendor_outputs))
         )
-    else:
-        # A model no catalogue carries -- a live fetch from a gateway serving
-        # hundreds of them -- still has a name, and for one whole class of
-        # model the name is the only thing that says what it is.
-        row = ModelRow(
-            ref=ref,
-            provider=provider,
-            label=split_model_id(ref)[1] or ref,
-            source=SOURCE_ID_ONLY,
-            capabilities=inferred_tags(ref),
-        )
+
+    row = ModelRow(
+        ref=ref,
+        provider=provider,
+        # A row without a name is still a row: the tags it carries are worth
+        # drawing, and the id is what the picker showed before either way.
+        label=(entry.name if entry is not None else "") or split_model_id(ref)[1] or ref,
+        source=SOURCE_SNAPSHOT if entry is not None and entry.name else SOURCE_ID_ONLY,
+        description=entry.description if entry is not None else "",
+        capabilities=capabilities,
+        input_modalities=entry.input_modalities if entry is not None else (),
+        output_modalities=outputs,
+    )
 
     return _with_overlay(row, overlay)
 
@@ -158,6 +199,36 @@ def _with_inferred(ref: str, capabilities: tuple[str, ...]) -> tuple[str, ...]:
         return capabilities
     merged = set(capabilities) | set(extra)
     return tuple(name for name in CAPABILITIES if name in merged)
+
+
+def _union_capabilities(base: tuple[str, ...], extra: tuple[str, ...]) -> tuple[str, ...]:
+    from raven.providers.registry_data import CAPABILITIES
+
+    merged = set(base) | set(extra)
+    return tuple(name for name in CAPABILITIES if name in merged)
+
+
+def _generation_capabilities(outputs: tuple[str, ...]) -> set[str]:
+    """The capability tags the declared outputs imply."""
+    found = {"embedding"} if "vector" in outputs else set()
+    for name in ("image", "audio", "video"):
+        if name in outputs:
+            found.add(f"{name}-generation")
+    return found
+
+
+#: Tags that state a kind directly rather than derive it from outputs. A
+#: reranker's output is text, so a declared output cannot contradict these.
+_KIND_TAGS = frozenset({"embedding", "rerank"})
+
+
+def _has_kind_tag(capabilities: tuple[str, ...]) -> bool:
+    return bool(_KIND_TAGS & set(capabilities)) or any(name.endswith("-generation") for name in capabilities)
+
+
+def _strip_kind_tags(capabilities: tuple[str, ...]) -> set[str]:
+    """Capabilities without the tags a declared output has overridden."""
+    return {name for name in capabilities if not name.endswith("-generation") and name not in _KIND_TAGS}
 
 
 def model_cost(model: str) -> dict | None:
@@ -209,15 +280,29 @@ def _with_overlay(row: ModelRow, overlay: "ModelOverlay | None") -> ModelRow:
     from raven.providers.registry_data import CAPABILITIES, MODALITIES, clean_tags
 
     stated_efforts = tuple(word for word in overlay.reasoning_efforts if word in REASONING_EFFORT_LADDER)
+    # Stated tags replace the catalogue's rather than joining them: a person
+    # correcting a row that says "vision" is saying it does not, and a union
+    # would make that correction unsayable.
+    stated_capabilities = clean_tags(overlay.capabilities, CAPABILITIES)
+    stated_outputs = clean_tags(overlay.output_modalities, MODALITIES)
+    if stated_outputs:
+        # A kind tag the person stated is the answer: a reranker's own output is
+        # text, so that output cannot contradict it. A tag inferred from the row
+        # is exactly what a declared output overrides.
+        kept = (
+            tuple(name for name in stated_capabilities if not name.endswith("-generation"))
+            if stated_capabilities
+            else tuple(_strip_kind_tags(row.capabilities))
+        )
+        capabilities = _union_capabilities(kept, tuple(_generation_capabilities(stated_outputs)))
+    else:
+        capabilities = stated_capabilities or row.capabilities
     changed = {
         "label": overlay.label or row.label,
         "description": overlay.description or row.description,
-        # Stated tags replace the catalogue's rather than joining them: a person
-        # correcting a row that says "vision" is saying it does not, and a union
-        # would make that correction unsayable.
-        "capabilities": clean_tags(overlay.capabilities, CAPABILITIES) or row.capabilities,
+        "capabilities": capabilities,
         "input_modalities": clean_tags(overlay.input_modalities, MODALITIES) or row.input_modalities,
-        "output_modalities": clean_tags(overlay.output_modalities, MODALITIES) or row.output_modalities,
+        "output_modalities": stated_outputs or row.output_modalities,
         "reasoning_efforts": stated_efforts or row.reasoning_efforts,
     }
     described = row.described or bool(overlay.label or overlay.description)

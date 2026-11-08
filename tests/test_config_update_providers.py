@@ -2263,6 +2263,59 @@ def test_a_full_catalogue_asks_the_sibling_endpoints_a_probe_does_not(cfg_path: 
     }
 
 
+def test_a_models_payload_carries_each_model_s_own_output_modalities(cfg_path: Path) -> None:
+    """The per-model fields are what a kind is decided from.
+
+    Ids alone were all the probe kept, which left an uncatalogued model with
+    nothing to classify it by but its name. OpenRouter puts the outputs under
+    ``architecture``; a row that declares nothing is not listed at all.
+    """
+    _seed_key(cfg_path, "openrouter", "sk-or-test")
+    payload = {
+        "data": [
+            {"id": "openai/gpt-image-2.5", "architecture": {"output_modalities": ["image"]}},
+            {"id": "openai/gpt-6", "architecture": {"output_modalities": ["text"]}},
+            {"id": "openai/embed-4", "architecture": {"output_modalities": ["embeddings"]}},
+            {"id": "vendor/legacy", "object": "model"},
+        ]
+    }
+
+    probe = probe_provider(
+        "openrouter", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(200, json=payload))
+    )
+
+    assert probe["model_facts"] == {
+        "openai/gpt-image-2.5": {"capabilities": [], "output_modalities": ["image"]},
+        "openai/gpt-6": {"capabilities": [], "output_modalities": ["text"]},
+        # OpenRouter's spelling for an embedder's output, in the shared vocabulary.
+        "openai/embed-4": {"capabilities": [], "output_modalities": ["vector"]},
+    }
+
+
+def test_a_models_payload_carries_a_top_level_field_and_a_gateway_s_endpoint_type(cfg_path: Path) -> None:
+    """DeepSeek states the field at the top level; a new-api gateway names the
+    endpoint that serves the model instead. Both are per-model vendor facts."""
+    _seed_key(cfg_path, "deepseek", "sk-ds")
+    payload = {
+        "data": [
+            {"id": "deepseek-v4", "output_modalities": ["text"]},
+            {"id": "gpt-image-2.5", "supported_endpoint_types": ["image-generation"]},
+            {"id": "bge-m3", "supported_endpoint_types": ["embeddings"]},
+            {"id": "MiniMax-M3"},
+        ]
+    }
+
+    probe = probe_provider(
+        "deepseek", config_path=cfg_path, transport=_mock_transport(lambda _r: httpx.Response(200, json=payload))
+    )
+
+    assert probe["model_facts"] == {
+        "deepseek-v4": {"capabilities": [], "output_modalities": ["text"]},
+        "gpt-image-2.5": {"capabilities": ["image-generation"], "output_modalities": []},
+        "bge-m3": {"capabilities": ["embedding"], "output_modalities": []},
+    }
+
+
 def test_a_sibling_that_answers_200_with_the_wrong_shape_costs_only_itself(cfg_path: Path) -> None:
     """The 500 case above is the easy half. A sibling can also answer 200 with a
     body that is not a catalogue at all -- an error object, a bare list, an html

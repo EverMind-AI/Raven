@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { KIND_GLYPH, KIND_LABEL, guessKind, modelKind, sameModel } from './types'
+import { KIND_GLYPH, KIND_LABEL, guessKind, modelKind, sameModel, statedTags } from './types'
 import { KIND_ORDER } from './types'
 
 import type { Kind } from './types'
@@ -23,6 +23,17 @@ const TABLE: Array<[string, Kind]> = [
 describe('guessing a kind from an id alone', () => {
   it.each(TABLE)('files %s as %s, the way registry_data.inferred_tags does', (id, kind) => {
     expect(guessKind(id)).toBe(kind)
+  })
+})
+
+describe('the tags a stated kind sends', () => {
+  it('states Text as an output, so an outputs-first backend can honour it', () => {
+    expect(statedTags('text')).toEqual({ output_modalities: ['text'] })
+  })
+
+  it('states the capability and the outputs of every other kind', () => {
+    expect(statedTags('image')).toEqual({ capabilities: ['image-generation'], output_modalities: ['text', 'image'] })
+    expect(statedTags('embedding')).toEqual({ capabilities: ['embedding'], output_modalities: ['vector'] })
   })
 })
 

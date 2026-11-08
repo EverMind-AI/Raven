@@ -626,6 +626,137 @@ def test_what_the_user_states_about_a_model_beats_the_catalogue() -> None:
     assert partial.description
 
 
+def test_an_uncatalogued_model_takes_the_kind_its_family_agrees_on() -> None:
+    """A model newer than the snapshot is still its family's model.
+
+    The bundled catalogue describes gpt-image-1.5 and gpt-image-2; nothing
+    describes 2.5 yet, and a name alone is not a rule. The family is: every row
+    naming that family is an image model, so this one is too.
+    """
+    from raven.providers.catalog import describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "gpt-image-2.5")
+    assert row.capabilities == ("image-generation",)
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
+
+    # No family answer means no tag, rather than a guess.
+    assert describe("custom", "zzz-unknown-1").capabilities == ()
+
+
+def test_a_vendor_s_output_modalities_outrank_the_bundled_catalogue() -> None:
+    """The vendor describes the deployment a request actually reaches.
+
+    A catalogue row that says text for the same id is stale by comparison, and
+    the capability derived from it goes too: the icon may not contradict the
+    bucket.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("openai", "gpt-image-1.5", vendor=VendorFacts(output_modalities=("text",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "text"
+    assert "image-generation" not in row.capabilities
+
+
+def test_a_vendor_s_endpoint_type_speaks_for_an_uncatalogued_model() -> None:
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "our-image-model", vendor=VendorFacts(capabilities=("image-generation",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "image"
+
+
+def test_outputs_the_user_states_beat_both_vendor_and_catalogue() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe(
+        "openai",
+        "gpt-image-1.5",
+        vendor=VendorFacts(output_modalities=("image",)),
+        overlay=ModelOverlay(output_modalities=["text"]),
+    )
+    assert kind_of(row.capabilities, row.output_modalities) == "text"
+    assert "image-generation" not in row.capabilities
+
+
+def test_a_vendor_s_outputs_outrank_bundled_embedding_and_rerank_tags() -> None:
+    """A provider's own declaration is stronger evidence than a bundled tag.
+
+    The tags exist because the catalogue publishes no flag for these models; a
+    vendor that declares outputs is describing the deployment a request reaches,
+    and the stale tag may not outvote it. The catalogue-only exception below is
+    what keeps the bundled embedders in their bucket.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    for model in ("text-embedding-3-small", "bge-reranker-v2-m3"):
+        row = describe("custom", model, vendor=VendorFacts(output_modalities=("text",)))
+        assert kind_of(row.capabilities, row.output_modalities) == "text"
+        assert "embedding" not in row.capabilities
+        assert "rerank" not in row.capabilities
+
+    # The catalogue's own legacy outputs are not a vendor declaration: the tag
+    # still decides for a row nothing else describes.
+    catalogue = describe("custom", "text-embedding-3-small")
+    assert kind_of(catalogue.capabilities, catalogue.output_modalities) == "embedding"
+
+
+def test_a_vendor_s_vector_output_keeps_an_embedder_embedding() -> None:
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe("custom", "text-embedding-3-small", vendor=VendorFacts(output_modalities=("vector",)))
+    assert kind_of(row.capabilities, row.output_modalities) == "embedding"
+    assert "embedding" in row.capabilities
+
+
+def test_a_stated_reranker_keeps_its_kind_when_the_overlay_states_text() -> None:
+    """A reranker's output is text; the capability is the kind statement.
+
+    Every UI path states a reranker as rerank plus text outputs, so stripping
+    the tag the same overlay stated filed the explicit choice as Text. A stated
+    outputs-only overlay on an inferred embedder must still strip that tag.
+    """
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+    from raven.providers.registry_data import kind_of
+
+    stated = describe(
+        "hosted_vllm",
+        "our-finetune",
+        overlay=ModelOverlay(capabilities=["rerank"], output_modalities=["text"]),
+    )
+    assert stated.capabilities == ("rerank",)
+    assert kind_of(stated.capabilities, stated.output_modalities) == "reranker"
+
+    text_only = describe("custom", "text-embedding-3-small", overlay=ModelOverlay(output_modalities=["text"]))
+    assert text_only.capabilities == ()
+    assert kind_of(text_only.capabilities, text_only.output_modalities) == "text"
+
+
+def test_an_endpoint_proved_embedding_survives_the_vendor_s_text_outputs() -> None:
+    """The vendor's own endpoint proof is not a stale bundled tag.
+
+    A model served from `/embeddings/models` is proved an embedder by the same
+    vendor whose main list writes text outputs; the proof survives, so the
+    add-model row and the label agree.
+    """
+    from raven.providers.catalog import VendorFacts, describe
+    from raven.providers.registry_data import kind_of
+
+    row = describe(
+        "openrouter",
+        "voyageai/voyage-code-4",
+        vendor=VendorFacts(capabilities=("embedding",), output_modalities=("text",)),
+    )
+    assert row.capabilities == ("embedding",)
+    assert kind_of(row.capabilities, row.output_modalities) == "embedding"
+
+
 def test_an_overlay_written_bare_matches_the_qualified_id() -> None:
     """Overlays are matched by identity, so a pre-contract spelling still applies."""
     from raven.providers.wire import merge_key

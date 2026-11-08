@@ -1968,14 +1968,18 @@ def _probe_models_endpoint(
 
     models_count: int | None = None
     model_ids: list[str] | None = None
+    model_facts: dict[str, dict[str, list[str]]] = {}
     if resp.status_code == 200:
         try:
-            model_ids = _ids_from_payload(resp.json())
+            payload = resp.json()
+            model_ids = _ids_from_payload(payload)
             if model_ids is not None:
                 models_count = len(model_ids)
+                model_facts = _model_facts_from_payload(payload)
         except Exception:
             models_count = None
             model_ids = None
+            model_facts = {}
 
     implied: dict[str, str] = {}
     if extras and resp.status_code == 200 and model_ids is not None:
@@ -1994,6 +1998,7 @@ def _probe_models_endpoint(
 
     return {
         "implied_capabilities": implied,
+        "model_facts": model_facts,
         "ok": resp.status_code == 200,
         "status": status_keyword,
         "elapsed_ms": elapsed_ms,
@@ -2052,35 +2057,99 @@ def _sibling_ids(
     return _ids_from_payload(payload) or []
 
 
-def _ids_from_payload(payload: Any) -> list[str] | None:
-    """The model ids in a catalogue response, or None if it is not one.
+def _catalogue_rows(payload: Any) -> list[Any] | None:
+    """The per-model objects in a catalogue response, or None if it is not one.
 
     ``data`` is the OpenAI shape every compatible vendor answers with; ``models``
     is Google's and Ollama's. Reading only the first reported a 200 with no
     models at all for those two, which renders exactly like a vendor that serves
     nothing.
     """
-    data = None
     if isinstance(payload, dict):
         for key in ("data", "models"):
             if isinstance(payload.get(key), list):
-                data = payload[key]
-                break
-    if not isinstance(data, list):
-        return None
+                return payload[key]
+    return None
 
-    ids: list[str] = []
+
+def _model_id(item: dict[str, Any]) -> str:
+    mid = item.get("id") or item.get("name")
+    # Google returns "models/gemini-3-pro"; the id a request carries is the
+    # last segment.
+    if isinstance(mid, str) and mid.startswith("models/"):
+        mid = mid.split("/", 1)[1]
+    return mid if isinstance(mid, str) else ""
+
+
+def _ids_from_payload(payload: Any) -> list[str] | None:
+    """The model ids in a catalogue response, or None if it is not one."""
+    data = _catalogue_rows(payload)
+    if data is None:
+        return None
+    return [mid for item in data if isinstance(item, dict) and (mid := _model_id(item))]
+
+
+#: The endpoint types a model list may name, and the capability each proves.
+#: new-api and the gateways built on it publish these per model.
+_ENDPOINT_CAPABILITIES: dict[str, str] = {
+    "image-generation": "image-generation",
+    "embeddings": "embedding",
+    "jina-rerank": "rerank",
+    "openai-video": "video-generation",
+}
+
+
+#: Spellings a vendor uses for a modality the shared vocabulary calls something
+#: else. OpenRouter spells an embedder's output ``"embeddings"``; the vocabulary
+#: calls that ``"vector"``.
+_OUTPUT_ALIASES: dict[str, str] = {"embeddings": "vector"}
+
+
+def _output_modalities(item: dict[str, Any]) -> list[str]:
+    """What this model says it writes, under either spelling a catalogue uses.
+
+    OpenRouter files the field under ``architecture``; DeepSeek puts it at the
+    top level. Both are the vendor's own statement about the deployment.
+    """
+    architecture = item.get("architecture")
+    values = architecture.get("output_modalities") if isinstance(architecture, dict) else None
+    if values is None:
+        values = item.get("output_modalities")
+    if not isinstance(values, list):
+        return []
+    return [_OUTPUT_ALIASES.get(value, value) for value in values if isinstance(value, str) and value]
+
+
+def _endpoint_capabilities(item: dict[str, Any]) -> list[str]:
+    values = item.get("supported_endpoint_types")
+    if not isinstance(values, list):
+        return []
+    return [
+        _ENDPOINT_CAPABILITIES[value] for value in values if isinstance(value, str) and value in _ENDPOINT_CAPABILITIES
+    ]
+
+
+def _model_facts_from_payload(payload: Any) -> dict[str, dict[str, list[str]]]:
+    """What each row of a catalogue says about itself.
+
+    Only rows carrying at least one fact are listed: an id alone says nothing a
+    name does not already say.
+    """
+    data = _catalogue_rows(payload)
+    if data is None:
+        return {}
+    facts: dict[str, dict[str, list[str]]] = {}
     for item in data:
         if not isinstance(item, dict):
             continue
-        mid = item.get("id") or item.get("name")
-        # Google returns "models/gemini-3-pro"; the id a request carries is the
-        # last segment.
-        if isinstance(mid, str) and mid.startswith("models/"):
-            mid = mid.split("/", 1)[1]
-        if isinstance(mid, str) and mid:
-            ids.append(mid)
-    return ids
+        mid = _model_id(item)
+        if not mid:
+            continue
+        outputs = _output_modalities(item)
+        capabilities = _endpoint_capabilities(item)
+        if outputs or capabilities:
+            facts[mid] = {"capabilities": capabilities, "output_modalities": outputs}
+    return facts
 
 
 def _probe_copilot_seat(*, timeout_s: float, transport: httpx.BaseTransport | None) -> dict[str, Any]:

@@ -344,7 +344,10 @@ describe('model roles', () => {
     await act(async () => { fireEvent.change(box, { target: { value: 'claude-haiku-4-5' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"claude-haiku-4-5"}')) })
     expect(calls).toEqual([
-      ['provider', { op: 'add_model', slug: 'anthropic', model: 'claude-haiku-4-5' }],
+      ['provider', {
+        op: 'add_model', slug: 'anthropic', model: 'claude-haiku-4-5',
+        output_modalities: ['text'],
+      }],
       ['set', { key: 'skillForge.llmGateModel', value: 'claude-haiku-4-5' }],
       ['set', { key: 'skillForge.llmGateProvider', value: 'anthropic' }],
     ])

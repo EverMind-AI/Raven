@@ -256,7 +256,7 @@ describe('the model picker', () => {
     /* Added to the account the reader is already on, and the row says so. */
     expect(typedRow()!.querySelector('.ct')!.textContent).toBe('gui.model.pick_add_to {"name":"MiniMax (Global)"}')
     await act(async () => { fireEvent.click(typedRow()!) })
-    expect(h.added).toEqual([['m2', 'minimax', 'text']])
+    expect(h.added).toEqual([['m2', 'minimax', undefined]])
     expect(h.persisted).toEqual(['m2'])
   })
 
@@ -274,7 +274,7 @@ describe('the model picker', () => {
     type('brand-new')
     expect(typedRow()!.querySelector('.ct')!.textContent).toBe('gui.model.pick_add_to {"name":"OpenRouter"}')
     await act(async () => { fireEvent.click(typedRow()!) })
-    expect(h.added).toEqual([['brand-new', 'openrouter', 'text']])
+    expect(h.added).toEqual([['brand-new', 'openrouter', undefined]])
   })
 
   it('leaves the typed row out once the term is a model exactly', () => {
@@ -285,14 +285,16 @@ describe('the model picker', () => {
     expect(typedRow()).toBeNull()
   })
 
-  it('adds a typed id as the kind its name says', async () => {
+  it('adds a typed id with no kind statement when only the name guessed one', async () => {
     const h = install()
     mount()
     openIt()
     type('my-team/bge-reranker-x')
-    /* The name's own guess, the way registry_data.inferred_tags would read it. */
+    /* The name's guess is not the person's statement: the backend reads the
+       same name through inferred_tags and reaches the same kind without an
+       overlay that would outrank its catalogue. */
     await act(async () => { fireEvent.click(typedRow()!) })
-    expect(h.added).toEqual([['my-team/bge-reranker-x', 'minimax', 'reranker']])
+    expect(h.added).toEqual([['my-team/bge-reranker-x', 'minimax', undefined]])
   })
 
   it('a slot opening adds a typed id as the slot kind, not what the name says', async () => {
