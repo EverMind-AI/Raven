@@ -175,6 +175,25 @@ def _usable_by(connection: _Connection, loop: asyncio.AbstractEventLoop) -> bool
     return connection.loop is None or connection.loop is loop
 
 
+def _forget_session_state(connection: _Connection) -> None:
+    """Drop the records kept for a slot whose loop is gone.
+
+    Session records outlive an idle close on purpose: the same loop relaunches
+    into the same slot and reloads the sessions it held. A loop that has
+    closed never relaunches on its slot's name, so what it recorded can only
+    grow -- and no process on that slot can resume it either.
+    """
+    identity = getattr(connection.client, "session_identity", None)
+    if identity is None:
+        return
+    try:
+        from raven.acp_client.acp_agent import forget_session_state
+
+        forget_session_state(identity)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a reap
+        logger.debug("acp agent {!r}: no session records to forget: {}", connection.client.name, exc)
+
+
 class _SessionRouter:
     """Fans one connection's notifications out to the session that owns them.
 
@@ -518,6 +537,7 @@ class AcpConnectionPool:
         for name, connection in gone:
             logger.info("acp agent {!r}: the loop that owned it is gone, ending its process", name)
             connection.client.abort()
+            _forget_session_state(connection)
 
     async def acquire(
         self,
@@ -787,6 +807,7 @@ class AcpConnectionPool:
             return
         if owner.is_closed():
             connection.client.abort()
+            _forget_session_state(connection)
             return
         try:
             closing = asyncio.run_coroutine_threadsafe(connection.client.close(), owner)

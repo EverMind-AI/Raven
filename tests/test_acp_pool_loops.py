@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from raven.acp_client import acp_agent
 from raven.acp_client import pool as pool_mod
 from raven.acp_client.pool import AcpConnectionPool
 from raven.utils.commands import command_quote
@@ -174,6 +175,9 @@ async def test_a_connection_whose_loop_is_gone_is_ended_directly(tmp_path: Path)
         connection = await thread.run(
             pool.acquire(name="stub", command=command, cwd=str(tmp_path), env=env),
         )
+        # What a session opened on this connection records for the slot.
+        acp_agent._fresh_session_state(connection.client, "stub-session-1")
+        identity = connection.client.session_identity
     finally:
         thread.stop()
     assert connection.loop.is_closed()
@@ -181,6 +185,9 @@ async def test_a_connection_whose_loop_is_gone_is_ended_directly(tmp_path: Path)
     await pool.close_all()
     assert connection.client.closed, "the connection of a gone loop was not ended"
     assert pool.connections("stub") == []
+    # A dead loop never relaunches on its slot's name, so its records can only
+    # leak: nothing can resume a session of the agent process it owned.
+    assert identity not in acp_agent._SESSION_STATE, "a dead loop's session records were left behind"
 
 
 class _QuietClient:

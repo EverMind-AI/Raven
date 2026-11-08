@@ -1072,6 +1072,17 @@ def _forget_session(client: Any, session_id: str | None) -> None:
         _records_of(client).pop(session_id, None)
 
 
+def forget_session_state(identity: tuple[str, str, str]) -> None:
+    """Drop what this host recorded for a pool slot no connection can resume.
+
+    The pool calls this when the loop that owned the slot has gone: the
+    process it owned is gone with it, and a later loop holds its own slot and
+    its own session numbers. Kept separate from ``_forget_session`` because it
+    drops the slot itself, not one session in it.
+    """
+    _SESSION_STATE.pop(identity, None)
+
+
 class AcpAgentBackend:
     """Runs a task as one ``session/prompt`` against a pooled ACP connection."""
 
