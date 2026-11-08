@@ -188,6 +188,22 @@ class _SlowSource:
         return list(self._hits)
 
 
+class _GatedSource:
+    """A source whose search blocks until the test opens its gate."""
+
+    def __init__(self, name: str, weight: float, hits: list[RouterHit]):
+        self.name = name
+        self.weight = weight
+        self._hits = hits
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def search(self, query, history, k):
+        self.entered.set()
+        await self.gate.wait()
+        return list(self._hits)
+
+
 class TestSkillForgeRouterSelect:
     async def test_fans_out_to_all_sources(self) -> None:
         a = _StubSource("local", 1.0, [_hit("local/x", "x")])
@@ -281,3 +297,24 @@ class TestSkillForgeRouterSelect:
         router = SkillForgeRouter([a])
         out = await router.select("q", history=[], k=5)
         assert len(out) == 5
+
+    async def test_a_source_removed_mid_select_does_not_misalign_the_rest(self) -> None:
+        """The gather and the fusion read the same snapshot.
+
+        A live switch can remove the memory source while the fan-out is out.
+        Zipping a second read of the list would pair one source's hits with
+        another's name and weight -- and drop the source at the tail.
+        """
+        local = _StubSource("local", 1.0, [_hit("local/x", "x")])
+        everos = _GatedSource("everos", 0.9, [_hit("everos/y", "y")])
+        router = SkillForgeRouter([local, everos])
+
+        task = asyncio.create_task(router.select("q", history=[], k=5))
+        await everos.entered.wait()
+        router.remove_source(local)
+        everos.gate.set()
+        out = await task
+
+        by_name = {h.name: h.meta["contributing_sources"] for h in out}
+        assert by_name["x"] == ["local"]
+        assert by_name["y"] == ["everos"]

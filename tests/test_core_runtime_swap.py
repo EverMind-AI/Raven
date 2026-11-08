@@ -371,6 +371,7 @@ _GENERATION_DOORS = {
     "apply_agents",
     "apply_mcp_config",
     "set_default_binding",
+    "apply_memory_backend",
     "rebind_memory_backend",
     "mcp_manager",
     "mcp_manager_if_started",
@@ -386,9 +387,11 @@ _DOOR_OPERATORS = {
     "raven/rpc/methods/subagents.py": {"apply_agents"},
     "raven/rpc/methods/config.py": {"set_default_binding"},
     # The ruling this branch records: the memory backend may change identity
-    # mid-generation. The section's switch is its one entrance; the loop owns
-    # start/retire, and RavenRuntime.backend reads the current one through.
-    "raven/rpc/methods/memory.py": {"rebind_memory_backend"},
+    # mid-generation. The section's switch is its one entrance -- the spelling
+    # it really makes is ``apply_memory_backend`` (the queuing door above the
+    # swap); the loop owns start/retire, and RavenRuntime.backend reads the
+    # current one through.
+    "raven/rpc/methods/memory.py": {"apply_memory_backend"},
     "raven/agent/tools/plughub.py": {"mcp_manager"},
     # The console's read-only status peek; the private slot itself has no
     # operators at all, so any out-of-organ spelling of it is a stray.
@@ -399,35 +402,45 @@ _DOOR_OPERATORS = {
 _ORGAN_HOMES = ("raven/agent/loop/", "raven/mcp/", "raven/agent/subagent/")
 
 
-def _door_strays(root: Path) -> list[str]:
-    """Every spelling of a generation-door reach outside the organ homes and
-    the operator roster, as ``file:line -> door``. Attribute spellings and the
-    ``getattr``/``hasattr`` string forms count alike -- the string form is how
-    the degrade-gracefully callers probe, and a guard that missed it would
-    certify a hole.
+def _spelled_doors(path: Path) -> dict[str, int]:
+    """The generation doors one file spells, by ``name -> first line``.
+
+    Attribute spellings and the ``getattr``/``hasattr`` string forms count
+    alike -- the string form is how the degrade-gracefully callers probe, and
+    a guard that missed it would certify a hole.
     """
     import ast
 
+    spelled: dict[str, int] = {}
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        door = None
+        if isinstance(node, ast.Attribute) and node.attr in _GENERATION_DOORS:
+            door = node.attr
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("getattr", "hasattr")
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in _GENERATION_DOORS
+        ):
+            door = node.args[1].value
+        if door is not None:
+            spelled.setdefault(door, node.lineno)
+    return spelled
+
+
+def _door_strays(root: Path) -> list[str]:
+    """Every spelling of a generation-door reach outside the organ homes and
+    the operator roster, as ``file:line -> door``.
+    """
     strays: list[str] = []
     for p in sorted((root / "raven").rglob("*.py")):
         rel = p.relative_to(root).as_posix()
         if "__pycache__" in p.parts or rel.startswith(_ORGAN_HOMES):
             continue
         allowed = _DOOR_OPERATORS.get(rel, frozenset())
-        for node in ast.walk(ast.parse(p.read_text(encoding="utf-8"))):
-            doors: list[str] = []
-            if isinstance(node, ast.Attribute) and node.attr in _GENERATION_DOORS:
-                doors.append(node.attr)
-            elif (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in ("getattr", "hasattr")
-                and len(node.args) >= 2
-                and isinstance(node.args[1], ast.Constant)
-                and node.args[1].value in _GENERATION_DOORS
-            ):
-                doors.append(node.args[1].value)
-            strays.extend(f"{rel}:{node.lineno} -> {door}" for door in doors if door not in allowed)
+        strays.extend(f"{rel}:{line} -> {door}" for door, line in _spelled_doors(p).items() if door not in allowed)
     return strays
 
 
@@ -452,6 +465,21 @@ def test_the_door_roster_guard_bites(tmp_path):
     )
     strays = _door_strays(tmp_path)
     assert len(strays) == 2 and all("grab.py" in s for s in strays), strays
+
+
+def test_every_declared_operator_names_a_door_the_file_really_operates():
+    """A roster entry for a call the file no longer makes guards nothing.
+
+    The drift this catches: a door is renamed, or its entry point moves to a
+    wrapper above it, and the roster keeps the old spelling -- the guard stays
+    green while the reach the file really makes is unguarded.
+    """
+    unused = [
+        f"{rel} -> {door}"
+        for rel, allowed in _DOOR_OPERATORS.items()
+        for door in sorted(allowed - set(_spelled_doors(REPO / rel)))
+    ]
+    assert unused == [], unused
 
 
 @pytest.mark.asyncio
@@ -768,3 +796,67 @@ async def test_dispose_waits_for_the_cancelled_start_to_leave_before_stopping():
     await rt.dispose()
 
     assert order.index("start-exit") < order.index("stop"), order
+
+
+@pytest.mark.asyncio
+async def test_dispose_stops_the_backend_a_switch_installed_during_the_drain() -> None:
+    """A switch can land while the drain runs.
+
+    The handle captured before the drain is the one the pending-start cancel
+    must reach; the one stopped has to be read again after the retirements --
+    the order the gateway, the TUI and the served stack keep. Stopping the
+    pre-drain handle would stop the replaced backend a second time and leave
+    the newly installed one running past the generation that owns it.
+    """
+    from raven.core.runtime import RavenRuntime
+
+    class _CountingBackend:
+        def __init__(self) -> None:
+            self.stops = 0
+
+        async def stop(self) -> None:
+            self.stops += 1
+
+    early, late = _CountingBackend(), _CountingBackend()
+
+    class _Subagents:
+        async def cancel_all(self, *, reason: str = ""):
+            pass
+
+    class _Skills:
+        def stop_file_watcher(self) -> None:
+            pass
+
+    class _Context:
+        skills = _Skills()
+
+    class _Loop:
+        subagents = _Subagents()
+        context = _Context()
+        backend = early
+
+        async def stop_plugin_services(self):
+            pass
+
+        async def close_mcp(self):
+            pass
+
+        def stop(self):
+            pass
+
+        async def drain_backend_stores(self):
+            # A switch queued behind a turn lands during the drain.
+            self.backend = late
+
+        async def retire_pending_backends(self):
+            pass
+
+    await RavenRuntime(
+        loop=_Loop(),
+        plugin_registry=None,
+        strategies=None,
+        deliverables=None,
+    ).dispose()
+
+    assert late.stops == 1
+    assert early.stops == 0, "the switch's own retirement owns the replaced backend"

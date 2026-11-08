@@ -1307,6 +1307,39 @@ async def test_settings_set_memory_backend_without_a_running_loop_says_so(cfg, m
     assert _read(cfg)["memory"]["backend"] == "everos-cloud"
 
 
+async def test_settings_set_memory_backend_says_the_next_start_applies_it(cfg, monkeypatch):
+    """A generation that is already retiring cannot install a backend.
+
+    The write still lands (it is the durable truth), and the reply says the
+    next start honors it instead of claiming the running loop switched --
+    and the retiring loop is never asked to build or install one.
+    """
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    class _Loop:
+        memory_switch_closed = True
+
+        async def apply_memory_backend(self, *_args, **_kwargs):
+            raise AssertionError("a closed generation must not be reached")
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos-cloud", user_id="u", agent_id="a", memory_top_k=5)
+        ),
+    )
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"}, agent_loop_factory=_Loop)
+
+    assert r["applied"] is True
+    assert "next start" in r["warning"]
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+
 async def test_settings_set_memory_backend_refuses_a_name_no_plugin_contributes(cfg, monkeypatch):
     class _Registry:
         def memory_backend_names(self):

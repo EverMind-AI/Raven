@@ -524,11 +524,13 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
     """Point the running loop at the backend the config file names.
 
     ``{"ok": bool, "backend": str | None, "detail": str | None,
-    "state": "applied" | "queued"}``. ``"queued"`` means a turn was running:
-    the switch waits for it rather than swapping under it, and lands when
-    that turn ends. A write made from inside a turn cannot wait for that
-    turn to finish -- the turn is waiting for the write -- so this is the
-    only way a switch asked for mid-turn can happen at all.
+    "state": "applied" | "queued" | "closed"}``. ``"queued"`` means a turn was
+    running: the switch waits for it rather than swapping under it, and lands
+    when that turn ends. A write made from inside a turn cannot wait for that
+    turn to finish -- the turn is waiting for the write -- so this is the only
+    way a switch asked for mid-turn can happen at all. ``"closed"`` means the
+    generation is already retiring; the durable write stays and the next
+    start honors it.
     """
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
@@ -540,6 +542,16 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
         return {"ok": False, "backend": None, "detail": f"the running loop is not available: {e}", "state": "applied"}
     if loop is None:
         return {"ok": False, "backend": None, "detail": "no running agent loop answered", "state": "applied"}
+    if getattr(loop, "memory_switch_closed", False):
+        # The generation is retiring. Do not even build the new backend: it
+        # would be dropped without a stop (or installed with nothing to
+        # retire it). The file already names it, so the next start honors it.
+        return {
+            "ok": False,
+            "backend": None,
+            "detail": "the agent is shutting down; the switch applies at the next start",
+            "state": "closed",
+        }
 
     try:
         cfg = load_raven_config()
@@ -575,6 +587,16 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
             agent_id=cfg.memory.agent_id,
             memory_top_k=cfg.memory.memory_top_k,
         )
+        if state == "closed":
+            # The door closed between the check above and the call; the
+            # backend was built but never started or installed, so this one
+            # is dropped without a stop, like any other unstarted handle.
+            return {
+                "ok": False,
+                "backend": cfg.memory.backend,
+                "detail": "the agent is shutting down; the switch applies at the next start",
+                "state": state,
+            }
     except Exception as e:  # noqa: BLE001 - the section shows the detail
         return {"ok": False, "backend": None, "detail": str(e), "state": "applied"}
     return {"ok": True, "backend": cfg.memory.backend, "detail": None, "state": state}

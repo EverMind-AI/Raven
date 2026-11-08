@@ -911,7 +911,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # stop() to be safe after a failed start, for the partial init
                 # to clean up.
                 if backend is not None and backend is not old:
-                    await self._stop_backend(backend)
+                    try:
+                        await self._stop_backend(backend)
+                    except asyncio.CancelledError:
+                        # A second cancellation landed inside the cleanup.
+                        # Own the stop in a retirement task so the partial
+                        # init still goes and the generation's teardown can
+                        # bound it.
+                        self._schedule_retire_backend(backend)
+                        raise
                 raise
             self.backend = backend
             has = backend is not None
@@ -971,16 +979,22 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     ) -> str:
         """Point this running loop at a new memory backend, or queue the switch.
 
-        ``"applied"`` when the swap happened before this returned, and
-        ``"queued"`` when a turn was running. A write made from inside a turn
-        cannot wait for that turn to finish -- the turn is waiting for the
-        write -- so the switch waits for the turn instead, and lands when the
-        last turn ends. That is the promise the section's confirmation makes
-        the reader: the switch lands when the running turn finishes.
+        ``"applied"`` when the swap happened before this returned, ``"queued"``
+        when a turn was running, and ``"closed"`` when this generation has
+        already been retired. A write made from inside a turn cannot wait for
+        that turn to finish -- the turn is waiting for the write -- so the
+        switch waits for the turn instead, and lands when the last turn ends.
+        That is the promise the section's confirmation makes the reader: the
+        switch lands when the running turn finishes.
 
         :meth:`rebind_memory_backend` is the swap itself, and it waits for the
         turns; this is the door above it, which knows when waiting is safe.
         """
+        if self._memory_switch_closed:
+            # The generation is gone. Installing a backend now would leave it
+            # running with nothing to retire it; the durable write that asked
+            # for the switch stays, and the next generation honors it.
+            return "closed"
         if self._active_turns:
             self._queued_memory_switch = (backend, name, user_id, agent_id, memory_top_k)
             return "queued"
@@ -1022,11 +1036,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._queued_switch_task = task
 
     def _schedule_retire_backend(self, backend: "MemoryBackend") -> None:
-        """Retire a replaced backend without holding the switch on its writes.
+        """Retire a backend this loop still owns without holding a caller on it.
 
         Called synchronously inside the swap block, so a cancellation after
         the swap cannot strand the retirement: by the time the request may be
-        cancelled, the task that owns the stop exists.
+        cancelled, the task that owns the stop exists. Also the last resort
+        for a failed-start cleanup a second cancellation cut short.
         """
         task = asyncio.create_task(self._retire_backend(backend))
         self._backend_stop_tasks[task] = backend
@@ -1120,6 +1135,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     def active_turns(self) -> int:
         """Turns in flight on this loop; a live backend switch waits for zero."""
         return self._active_turns
+
+    @property
+    def memory_switch_closed(self) -> bool:
+        """Whether this generation's live-switch door is closed (it is retired)."""
+        return self._memory_switch_closed
 
     def _enter_turn(self) -> None:
         """Count a turn as in flight; ``_exit_turn`` is the other half.

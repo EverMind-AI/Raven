@@ -5224,9 +5224,10 @@ class MemoryStatsResult(_Strict):
     available_backends: list[str] = Field(
         default_factory=list,
         description=(
-            "The EverOS backends whose plugin is importable where raven runs, in a stable "
-            "order: 'everos' for the local server, 'everos-cloud' for the hosted one. The "
-            "section draws one segment per name, disabled for the names this list omits."
+            "The EverOS backends this install can select: the plugin is importable and not "
+            "in plugins.disabled, in a stable order -- 'everos' for the local server, "
+            "'everos-cloud' for the hosted one. The section draws one segment per name, "
+            "disabled for the names this list omits."
         ),
     )
     cloud_key_set: bool = Field(

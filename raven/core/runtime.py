@@ -134,6 +134,10 @@ class RavenRuntime:
         # parked in native code, and Py_FinalizeEx tears the interpreter down
         # under that call whenever the process later exits.
         self.loop.context.skills.stop_file_watcher()
+        # The handle the pending-start cancel must reach, taken before the
+        # drain. The one stopped below is read again after the retirements:
+        # a switch can land while the drain runs (a queued one lands when its
+        # turn ends), so the backend serving then is not necessarily this one.
         current = self.backend
         if current is not None:
             # Awaited, and before the drain: a start still polling for
@@ -150,6 +154,12 @@ class RavenRuntime:
         # must finish (or be force-stopped) before this generation goes, or
         # their clients outlive it.
         await self.loop.retire_pending_backends()
+        # Read live, after the retirements -- the same order the gateway, the
+        # TUI and the served stack keep. A switch that landed during the
+        # drain installed a backend this handle does not name; stopping the
+        # pre-drain one instead would stop the replaced backend a second time
+        # and leave the new one running past the generation that owns it.
+        current = self.backend
         if current is not None:
             try:
                 await current.stop()

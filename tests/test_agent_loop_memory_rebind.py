@@ -695,3 +695,87 @@ async def test_a_turn_ending_after_the_teardown_does_not_land_a_queued_switch() 
 
     assert loop.backend is old
     assert new.starts == 0
+
+
+@pytest.mark.asyncio
+async def test_a_switch_asked_for_after_the_generation_is_retired_is_refused() -> None:
+    """The teardown closes the door for the direct path too.
+
+    A settings write can reach the loop after the drain and the retirements
+    have run (the TUI's RPC server is cancelled last). Installing a backend
+    then would leave it running with nothing to retire it; the durable write
+    stays, and the next generation honors it.
+    """
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+
+    await loop.retire_pending_backends()
+
+    state = await loop.apply_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+
+    assert loop.memory_switch_closed is True
+    assert state == "closed"
+    assert loop.backend is old
+    assert new.starts == 0
+
+
+class _CleanupGateBackend(_Backend):
+    """A backend whose start fails and whose cleanup ``stop`` blocks once."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stop_entered = asyncio.Event()
+        self.stop_calls = 0
+
+    async def start(self) -> None:
+        self.starts += 1
+        raise RuntimeError("the backend could not start")
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+        if self.stop_calls == 1:
+            self.stop_entered.set()
+            await asyncio.Event().wait()
+        self.stops += 1
+
+
+@pytest.mark.asyncio
+async def test_a_second_cancellation_does_not_skip_the_failed_start_cleanup() -> None:
+    """A cancellation inside the cleanup still stops the partial init.
+
+    The first cancellation is the request going away; the second lands while
+    the cleanup's ``stop()`` is already running. The stop is then owned by a
+    retirement task, so a backend whose start failed is still stopped, and
+    the generation's teardown bounds it.
+    """
+    old = _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    backend = _CleanupGateBackend()
+
+    task = asyncio.create_task(
+        loop.rebind_memory_backend(
+            backend,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        )
+    )
+    await backend.stop_entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await loop.retire_pending_backends()
+
+    assert backend.stop_calls == 2, "the retirement task ran the cleanup again"
+    assert backend.stops == 1
+    assert loop.backend is old
