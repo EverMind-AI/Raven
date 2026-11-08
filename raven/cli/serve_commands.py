@@ -206,13 +206,15 @@ def adopt_stored_cookie(gateway: object) -> None:
         gateway.session_cookie = stored  # type: ignore[attr-defined]
 
 
-def _write_serve_state(port: int, token: str, cookie: str = "") -> Optional[Path]:
-    """Persist {port, token, cookie, pid} to ~/.raven/serve.json, 0600 from creation.
+def _write_serve_state(port: int, token: str, cookie: str = "", boot_id: str = "") -> Optional[Path]:
+    """Persist {port, token, cookie, pid, boot_id} to ~/.raven/serve.json, 0600 from creation.
 
     ``raven web`` reads it to mint a fresh auth nonce against the running serve
     (POST /auth/nonce with the token) instead of starting a second engine
     instance. ``cookie`` is what keeps an open tab signed in across a restart;
-    see :func:`adopt_stored_cookie`.
+    see :func:`adopt_stored_cookie`. ``boot_id`` is the same process's
+    ``WsGateway.boot_id``, the value its ``/health`` names: it is how the probe
+    tells the record's writer from an older process the OS handed its pid to.
 
     The mode is applied at the temp file's creation, not by a chmod afterwards:
     writing the token first and narrowing the mode second leaves it
@@ -230,6 +232,8 @@ def _write_serve_state(port: int, token: str, cookie: str = "") -> Optional[Path
         state: dict[str, object] = {"port": port, "token": token, "pid": os.getpid()}
         if cookie:
             state["cookie"] = cookie
+        if boot_id:
+            state["boot_id"] = boot_id
         atomic_replace(path, json.dumps(state), mode=0o600)
         return path
     except OSError:
@@ -488,7 +492,7 @@ async def _serve_main(port: int, open_browser: bool) -> None:
 
     base_url = f"http://127.0.0.1:{bound_port}"
     typer.echo(f"raven serve listening on {base_url} (rpc: {base_url}/rpc)")
-    state_path = _write_serve_state(bound_port, gateway.session_token, gateway.session_cookie)
+    state_path = _write_serve_state(bound_port, gateway.session_token, gateway.session_cookie, gateway.boot_id)
     if stack.build_error is not None:
         typer.echo(f"warning: agent loop failed to build ({stack.build_error.message}); chat turns will error")
     if open_browser:
@@ -599,28 +603,51 @@ def _run(port: int, open_browser: bool) -> None:
         typer.echo("raven serve stopped")
 
 
-def _read_serve_record() -> Optional[tuple[int, str, int]]:
-    """The port, token and pid this state file names, or None if it names nothing.
+_PID_MAX = 0x7FFFFFFF
+"""Largest pid both platforms can name: ``pid_t`` is signed 32-bit, ``DWORD`` unsigned."""
+
+
+def _recorded_pid(value: object) -> int:
+    """The pid a record names, or 0 when it names one this build cannot check.
+
+    A pid is optional -- older records carry none -- and a value that is not a
+    usable number is read the same way rather than discarding the record: the
+    port and token are still the file's, and refusing them would turn a corrupt
+    field into "no gateway running", which starts a second engine beside a live
+    one. Values outside the pid range become 0: ``os.kill`` and ``OpenProcess``
+    raise on them instead of answering, so there is nothing to check.
+    """
+    try:
+        pid = int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return pid if 0 < pid <= _PID_MAX else 0
+
+
+def _read_serve_record() -> Optional[tuple[int, str, int, str]]:
+    """The port, token, pid and boot id this state file names, or None if it names nothing.
 
     No claim is made about the pid: the caller decides what a live one is worth.
     The gateway lock proves liveness on its own (``_gateway_hosted_page``), and
-    the attach probe reads the same fact out of the pid itself.
+    the attach probe reads the same fact out of the pid itself. A pid the file
+    does not carry, or carries in a form this build cannot use, is 0: nothing to
+    check, exactly as records without one have always been read.
     """
     import json
 
     try:
         data = json.loads(_state_path().read_text(encoding="utf-8"))
         port, token = int(data["port"]), str(data["token"])
-        pid = int(data.get("pid") or 0)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, OverflowError, KeyError, TypeError):
         return None
     if port <= 0 or not token:
         return None
-    return port, token, pid
+    boot = data.get("boot_id")
+    return port, token, _recorded_pid(data.get("pid")), boot if isinstance(boot, str) else ""
 
 
-def _read_serve_state() -> Optional[tuple[int, str]]:
-    """The port and token of the gateway recorded as running, if any.
+def _read_serve_state() -> Optional[tuple[int, str, int, str]]:
+    """The port, token, pid and boot id of the gateway recorded as running, if any.
 
     The counterpart of ``_write_serve_state``, which has been writing this file
     for a relauncher to read since before there was one. Absent, unreadable or
@@ -636,17 +663,21 @@ def _read_serve_state() -> Optional[tuple[int, str]]:
     engine reported as refusing the recorded token, when the recorded token
     simply was not its own. The next generation writes its own record, and that
     one names a pid that is alive.
+
+    The pid is a filter, not an identity: a live one can be a number the OS has
+    since handed to somebody else, which is why the boot id travels with it to
+    ``_attach``.
     """
     record = _read_serve_record()
     if record is None:
         return None
-    port, token, pid = record
+    port, token, pid, boot = record
     if pid > 0 and not _pid_alive(pid):
         return None
-    return port, token
+    return port, token, pid, boot
 
 
-async def _attach(port: int, token: str) -> Optional[str]:
+async def _attach(port: int, token: str, boot_id: str = "") -> Optional[str]:
     """A one-time auth URL against the gateway on ``port``, or None if it is gone.
 
     Health first, and the answer has to name this service: a stale file can point
@@ -654,6 +685,12 @@ async def _attach(port: int, token: str) -> Optional[str]:
     is worse than starting a second gateway. The nonce is then minted by the
     running process, so the browser lands authenticated without the token ever
     reaching the page.
+
+    A recorded ``boot_id`` must match the answering process's own. That is the
+    part a later process cannot inherit when it is handed a dead gateway's pid:
+    the pid answers "is something there", the boot id answers "is it the process
+    that wrote this token". An answer without one -- an older raven, or a record
+    written before boot ids existed -- is read as before.
     """
     import aiohttp
 
@@ -662,7 +699,12 @@ async def _attach(port: int, token: str) -> Optional[str]:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(f"{base}/health") as health:
-                if health.status != 200 or (await health.json()).get("service") != "raven-serve":
+                if health.status != 200:
+                    return None
+                answered = await health.json()
+                if answered.get("service") != "raven-serve":
+                    return None
+                if boot_id and answered.get("boot_id") != boot_id:
                     return None
             async with session.post(f"{base}/auth/nonce", headers={"X-Raven-Token": token}) as minted:
                 if minted.status != 200:
@@ -681,10 +723,11 @@ def _attached_url() -> Optional[str]:
     Owns the loop for the probe so ``_web`` stays synchronous: starting a gateway
     runs a loop of its own, and the two must not nest.
     """
-    recorded = _read_serve_state()
-    if recorded is None:
+    target = _read_serve_state()
+    if target is None:
         return None
-    return asyncio.run(_attach(*recorded))
+    port, token, _pid, boot_id = target
+    return asyncio.run(_attach(port, token, boot_id))
 
 
 def _gateway_hosted_page() -> Optional[tuple[int, str]]:
@@ -709,11 +752,14 @@ def _gateway_hosted_page() -> Optional[tuple[int, str]]:
     record = _read_serve_record()
     # The lock is the liveness proof here: it is held by the process whose pid
     # it names, so a record naming that pid needs no separate `_pid_alive`
-    # check -- and must not get one, which would read as "not hosting" whenever
-    # the platform probe cannot open a live process.
-    if record is None or record[2] != status.pid:
+    # check -- the equality against the lock holder already answers what that
+    # check would ask.
+    if record is None:
         return None
-    return record[0], record[1]
+    port, token, pid, _boot = record
+    if pid != status.pid:
+        return None
+    return port, token
 
 
 # ---------------------------------------------------------------------------
@@ -1489,10 +1535,11 @@ def _await_attach(
     said_slow = False
     seen_supervisor = False
     while time.monotonic() < deadline:
-        recorded = _read_serve_state()
-        if recorded is not None:
+        target = _read_serve_state()
+        if target is not None:
+            port, token, _pid, boot_id = target
             try:
-                url = asyncio.run(_attach(*recorded))
+                url = asyncio.run(_attach(port, token, boot_id))
             except PermissionError:
                 raise
             if url is not None:

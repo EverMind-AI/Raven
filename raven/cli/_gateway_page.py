@@ -171,7 +171,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         await runner.cleanup()
         raise
 
-    state_path = _write_serve_state(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
+    state_path = _write_serve_state(bound_port, ws_gateway.session_token, ws_gateway.session_cookie, ws_gateway.boot_id)
     SERVE.arm_hosted(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
 
     try:

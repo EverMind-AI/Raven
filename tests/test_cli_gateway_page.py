@@ -71,11 +71,16 @@ async def test_the_mounted_page_answers_like_raven_serve(home: Path) -> None:
         state = json.loads((home / "serve.json").read_text(encoding="utf-8"))
         assert state["port"] == mount.port
         assert state["pid"] == os.getpid()
+        # The generation's own id, so a launch probe can tell this writer from a
+        # later process the OS handed the same pid to.
+        assert state["boot_id"]
 
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{mount.url}/health") as resp:
                 assert resp.status == 200
-                assert (await resp.json())["service"] == "raven-serve"
+                health = await resp.json()
+                assert health["service"] == "raven-serve"
+                assert health["boot_id"] == state["boot_id"]
             # The dialect-A socket, opened with the recorded token the way
             # local tooling does.
             async with session.ws_connect(f"{mount.url}/rpc", headers={"X-Raven-Token": state["token"]}) as ws:
@@ -148,6 +153,7 @@ async def test_a_stale_serve_json_does_not_block_the_mount(home: Path) -> None:
         state = json.loads((home / "serve.json").read_text(encoding="utf-8"))
         assert state["pid"] == os.getpid()
         assert state["port"] == mount.port
+        assert state["boot_id"]
     finally:
         await mount.teardown()
 
