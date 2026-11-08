@@ -571,6 +571,30 @@ describe('memory island', () => {
       expect(screen.queryByText('gui.mem.local_t')).toBeNull()
     })
 
+    /* Start fixes the server; it must also fix the loop, or a switch whose
+       applyRuntime failed leaves the section reading the new backend while
+       chat still answers from the old one. */
+    it('points the loop at the configured backend after the local server starts', async () => {
+      let running = false
+      const applied = vi.fn(async () => ({ ok: true }))
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos', local_running: running }),
+          startLocal: async () => {
+            running = true
+            return { ok: true, running: true, base_url: 'http://localhost:18791' }
+          },
+          applyRuntime: applied,
+        },
+        { ...both, backend: 'everos', local_running: false },
+      )
+      await mount()
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.local_start'))
+      })
+      await waitFor(() => expect(applied).toHaveBeenCalledTimes(1))
+    })
+
     /* The note is the one explanation of a selected backend whose plugin is
        gone: a key panel asks for a key for a client that cannot exist, and a
        Start button offers a process the install cannot run. memory.stats
@@ -689,5 +713,22 @@ describe('a switch while a conversation is in progress', () => {
     })
 
     await waitFor(() => expect(writes).toEqual(['everos-cloud']))
+  })
+
+  /* The notice is the only sign that the file and the running loop disagree;
+     entering the section again re-reads the file, so it must not erase it. */
+  it('keeps a failed switch notice across a re-entry of the section', async () => {
+    install({ applyRuntime: async () => ({ ok: false, detail: 'the loop is not available' }) }, both)
+    await mount()
+    await act(async () => {
+      ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
+    })
+    expect(await screen.findByText('the loop is not available')).toBeTruthy()
+
+    await act(async () => {
+      settingsDialog.enterSection('memory')
+      await Promise.resolve()
+    })
+    expect(store.get().backendNotice).toBe('the loop is not available')
   })
 })

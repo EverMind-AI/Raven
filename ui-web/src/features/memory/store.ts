@@ -233,6 +233,12 @@ export function startLocal(): void {
       const r = await source().startLocal()
       set({ localBusy: false, localErr: r.ok ? '' : (r.detail || t('gui.mem.local_failed')) })
       if (r.ok) {
+        /* The server being up is not the loop following: a switch whose
+           applyRuntime failed left chat on the old backend, and this button is
+           where the reader fixes it. Point the loop at the file again before
+           the reads, as the cloud key panel does after a key. */
+        const applied = await source().applyRuntime()
+        set({ backendNotice: applied.ok ? '' : (applied.detail || t('gui.mem.reload_wait')) })
         await refreshStats()
         await load()
       }
@@ -277,8 +283,10 @@ export function saveCloudKey(key: string): void {
       /* The models section caches its EverOS Cloud card; the key saved here is
          the value that card shows, and it may already be open behind this. */
       settingsDialog.requestRefresh()
-      set({ cloudBusy: false, cloudRejected: false, cloudEditing: false })
-      if (!applied.ok) set({ backendNotice: applied.detail || t('gui.mem.reload_wait') })
+      set({
+        cloudBusy: false, cloudRejected: false, cloudEditing: false,
+        backendNotice: applied.ok ? '' : (applied.detail || t('gui.mem.reload_wait')),
+      })
     } catch (e) {
       set({ cloudBusy: false, cloudErr: failure(e) })
     }
@@ -293,7 +301,10 @@ export function saveCloudKey(key: string): void {
    alternative is src/app/install.ts importing three island stores for three
    lines, which is three island graphs in the page's own wiring. */
 function enter(): void {
-  set({ backendNotice: '', backendErr: '', cloudEditing: false, localErr: '' })
+  /* backendNotice is deliberately kept: it says the file and the running loop
+     disagree, and re-entering the section changes neither. Only a successful
+     apply clears it -- the switch, the key save and Start all report one. */
+  set({ backendErr: '', cloudEditing: false, localErr: '' })
   /* The counters first: ``load`` reads the backend and the cloud key state off
      them to tell a refused key from an unreachable service. */
   void (async () => {
