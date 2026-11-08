@@ -15,7 +15,6 @@ process that ran outside the pool's bookkeeping was one no idle check and no
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 import threading
 from collections.abc import Coroutine
@@ -34,28 +33,6 @@ _STUB = Path(__file__).with_name("acp_stub_server.py")
 
 def _command() -> str:
     return f"{command_quote(sys.executable)} {command_quote(str(_STUB))}"
-
-
-def _running(pid: int) -> bool:
-    """Whether this pid still names a running process.
-
-    A child of this process that has exited but not been reaped is a zombie,
-    which is not running; ``os.kill`` would still find it, so ``/proc`` is
-    read where it is there.
-    """
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        pass
-    else:
-        return raw[raw.rindex(")") + 2] != "Z"
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
 
 
 class _LoopThread:
@@ -133,12 +110,17 @@ async def test_two_loops_acquire_one_agent_and_each_gets_a_connection_it_can_rea
         # process, and these two processes number their sessions apart.
         assert first.client.session_identity != second.client.session_identity
 
-        pids = [connection.client.endpoint.pid for connection, _ in ((first, first_session), (second, second_session))]
-        assert len(set(pids)) == 2, "the two loops were handed the same process"
-        assert all(pid is not None and _running(pid) for pid in pids)
+        processes = [
+            connection.client.endpoint.proc for connection, _ in ((first, first_session), (second, second_session))
+        ]
+        assert len({process.pid for process in processes}) == 2, "the two loops were handed the same process"
+        # A reaped child's return code is the cross-platform answer to "is it
+        # still running": Windows keeps a terminated process's handle open while
+        # this process holds the Process object, so a pid probe still finds it.
+        assert all(process.returncode is None for process in processes)
 
         await pool.close_all()
-        assert not any(_running(pid) for pid in pids if pid is not None), "a process outlived close_all"
+        assert all(process.returncode is not None for process in processes), "a process outlived close_all"
         assert pool.connections("stub") == []
     finally:
         for thread in threads:
