@@ -72,6 +72,7 @@ def _loop(*, builders: list, router: SkillForgeRouter | None) -> AgentLoop:
     loop._memory_rebind_lock = asyncio.Lock()
     loop._queued_memory_switch = None
     loop._queued_switch_task = None
+    loop._memory_switch_closed = False
     loop._backend_stop_tasks = {}
     loop._store_pipeline = StorePipeline(
         lambda: loop.backend,
@@ -661,6 +662,36 @@ async def test_a_queued_switch_does_not_land_after_the_generation_is_retired() -
     assert state == "queued"
 
     await loop.retire_pending_backends()
+
+    assert loop.backend is old
+    assert new.starts == 0
+
+
+@pytest.mark.asyncio
+async def test_a_turn_ending_after_the_teardown_does_not_land_a_queued_switch() -> None:
+    """The teardown closes the door, not only the queue.
+
+    A turn that ends after the teardown would land a switch that installs a
+    backend nothing retires -- the teardown that would have retired it has
+    already run.
+    """
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    loop._enter_turn()
+
+    state = await loop.apply_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    assert state == "queued"
+
+    await loop.retire_pending_backends()
+    loop._exit_turn()
+    await asyncio.sleep(0)
 
     assert loop.backend is old
     assert new.starts == 0

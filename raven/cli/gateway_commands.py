@@ -1365,11 +1365,15 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
                 # the loop serves now. The drain and the replacement
                 # retirements run even when that is None -- a switch to
                 # memory-off leaves them behind the None.
-                current = runtime.backend
                 try:
                     outcome = await agent.drain_backend_stores()
                     report_memory_write_outcome(outcome, console)
+                    # Retiring closes the door on a switch that was queued
+                    # behind a turn, so the backend read below is the last one
+                    # serving.
                     await agent.retire_pending_backends()
+                    # Read live: the boot handle is stale after a switch.
+                    current = runtime.backend
                     if current is not None:
                         await current.stop()
                 except Exception:

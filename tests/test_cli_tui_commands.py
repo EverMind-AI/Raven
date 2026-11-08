@@ -397,6 +397,8 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     # Awaited during teardown before backend.stop(); a bare MagicMock is not
     # awaitable and would swallow the stop it is supposed to precede.
     fake_agent_loop.drain_backend_stores = AsyncMock()
+    # The backends a live switch replaced are retired by the teardown too.
+    fake_agent_loop.retire_pending_backends = AsyncMock()
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
@@ -579,6 +581,54 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
+
+
+async def test_rpc_runner_retires_the_backends_a_live_switch_replaced(rpc_server_deps, monkeypatch) -> None:
+    """A backend a live switch replaced owns queued writes of its own, and the
+    teardown is what stops it. The TUI was the one host that left it running."""
+    ctx = rpc_server_deps
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert ctx["agent_loop"].retire_pending_backends.await_count == 1
+
+
+async def test_rpc_runner_drains_and_retires_even_when_the_loop_serves_no_backend(rpc_server_deps, monkeypatch) -> None:
+    """A switch to memory-off leaves the loop serving nothing while the backend
+    it replaced still owns queued writes. Gating the drain on a backend being
+    there would drop those writes without saying so."""
+    ctx = rpc_server_deps
+    ctx["agent_loop"].backend = None
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert ctx["agent_loop"].drain_backend_stores.await_count == 1
+    assert ctx["agent_loop"].retire_pending_backends.await_count == 1
+    assert ctx["stop_calls"] == [], "nothing is serving, so nothing is stopped"
+
+
+async def test_rpc_runner_stops_the_backend_the_loop_serves_now(rpc_server_deps, monkeypatch) -> None:
+    """The handle this process booted with is stale after a live switch; the
+    one that is serving is the one whose client has to close."""
+    ctx = rpc_server_deps
+
+    class _Switched:
+        def __init__(self) -> None:
+            self.stops = 0
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            self.stops += 1
+
+    switched = _Switched()
+    ctx["agent_loop"].backend = switched
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert switched.stops == 1
+    assert ctx["stop_calls"] == [], "the handle this process booted with is stale"
 
 
 async def test_rpc_runner_cancels_subagents_before_the_spine_seals(rpc_server_deps, monkeypatch) -> None:
@@ -1025,9 +1075,10 @@ def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
     cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
     pool = src.index("await close_pool()")
     drain = src.index("await agent_loop.drain_backend_stores()")
-    stop = src.index("await agent_loop.backend.stop()")
+    retire = src.index("await agent_loop.retire_pending_backends()")
+    stop = src.index("await current.stop()")
 
-    assert cancel < pool < drain < stop
+    assert cancel < pool < drain < retire < stop
 
 
 # ---------------------------------------------------------------------------

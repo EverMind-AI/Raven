@@ -695,6 +695,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # switch waits for the turn instead, and lands when it ends.
         self._queued_memory_switch: tuple | None = None
         self._queued_switch_task: asyncio.Task | None = None
+        # Set when the generation is retired: a switch queued behind a turn
+        # must not land after the teardown that would have retired it.
+        self._memory_switch_closed = False
         # Replaced backends, keyed by the task that drains and stops each. The
         # generation's teardown waits on these (or force-stops their backend);
         # the value is the backend because a cancelled task never stops it.
@@ -997,6 +1000,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         the wait was for -- and off the turn's own stack, which is what lets
         the turn finish first.
         """
+        if self._memory_switch_closed:
+            # The generation is gone; a switch landing now would install a
+            # backend nothing retires.
+            self._queued_memory_switch = None
+            return
         pending = self._queued_memory_switch
         if pending is None:
             return
@@ -1049,8 +1057,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         A switch queued behind a turn is dropped: landing it now would
         install a backend nothing here retires, because the teardown that
-        would have retired it has already run.
+        would have retired it has already run. The door is closed as well, so
+        a turn that ends after this cannot land one either.
         """
+        self._memory_switch_closed = True
         self._queued_memory_switch = None
         queued = self._queued_switch_task
         if queued is not None and not queued.done():

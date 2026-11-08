@@ -658,11 +658,21 @@ async def _run_rpc_server_until_done(
             except (asyncio.CancelledError, Exception):
                 pass
         # Release the embedded index lock so the next process can start.
-        if agent_loop is not None and agent_loop.backend is not None:
+        if agent_loop is not None:
             try:
                 outcome = await agent_loop.drain_backend_stores()
                 report_memory_write_outcome(outcome)
-                await agent_loop.backend.stop()
+                # The backends a live switch replaced own queued writes of
+                # their own, and a switch to memory-off leaves them behind a
+                # None; retiring them is what stops them. It also closes the
+                # door on a switch that was queued behind a turn, so the
+                # backend read below is the last one serving.
+                await agent_loop.retire_pending_backends()
+                # Read live, after the retirement: a live switch replaced the
+                # handle this process booted with.
+                current = agent_loop.backend
+                if current is not None:
+                    await current.stop()
             except Exception:
                 from loguru import logger as _logger
 

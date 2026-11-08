@@ -651,9 +651,12 @@ async def _retire_owned_backends(agent_loop: Any) -> None:
     the backend it replaced behind the ``None``. Stopping the live backend
     closes the HTTP client the queued writes still need, so it comes last.
     """
-    current = agent_loop.backend
     await agent_loop.drain_backend_stores()
+    # Retiring closes the door on a switch that was queued behind a turn, so
+    # the backend read below is the last one serving.
     await agent_loop.retire_pending_backends()
+    # Read live: the boot handle is stale after a switch.
+    current = agent_loop.backend
     if current is not None:
         await current.stop()
 
