@@ -447,7 +447,7 @@ class OpsAskOwnerTool(_OpsScheduler):
         waiting_note = (
             f"\n{len(waiting)} approval(s) are waiting and are not on this question: this turn "
             "cannot put the owner's answer back, so an approval could not be settled here. They "
-            "stay pending, and the next question that can ask carries them."
+            "stay pending, and the next question that can ask carries them.\n"
             if waiting
             else ""
         )
