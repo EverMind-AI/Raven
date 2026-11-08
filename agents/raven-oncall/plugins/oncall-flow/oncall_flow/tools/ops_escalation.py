@@ -49,7 +49,7 @@ from uuid import uuid4
 
 from loguru import logger
 
-from oncall_flow import wakes
+from oncall_flow import approval, wakes
 from oncall_flow.escalation import (
     anything_running as _anything_running,
 )
@@ -82,7 +82,7 @@ from oncall_flow.handoff import (
 )
 from oncall_flow.state_claims import check as check_state_claims
 from oncall_flow.state_claims import read_facts
-from oncall_flow.tools.base import _OpsScheduler
+from oncall_flow.tools.base import _OpsScheduler, ops_home
 
 DONE, FAILED, STOPPED = "done", "failed", "stopped"
 _OUTCOMES = frozenset({DONE, FAILED, STOPPED})
@@ -317,6 +317,27 @@ class OpsAskOwnerTool(_OpsScheduler):
 
         ask_id = uuid4().hex[:8]
         choices = [str(o).strip() for o in (options or []) if str(o).strip()]
+        try:
+            waiting = approval.ApprovalStore(ops_home()).pending()
+        except approval.ApprovalStoreUnreadableError as exc:
+            logger.warning("oncall-flow: pending approvals not attached: {}", exc)
+            waiting = []
+        # Only a question whose answer can land an approval carries one. The
+        # model-mediated delivery has no door for the answer back, so offering
+        # the approvals there would ask the owner for something nothing could
+        # record. And one question settles the campaign it was asked about: an
+        # item of another campaign is asked with its own campaign.
+        can_settle = self._direct_ask is not None and bool(self._session_key)
+        carried = [item for item in waiting if approval.covers_campaign(item, campaign)] if can_settle else []
+        if carried:
+            question = f"{question.strip()}\n\n{approval.pending_block(carried)}".strip()
+            choices = choices + [c for c in approval.CHOICES if c not in choices]
+        others = len(waiting) - len(carried)
+        if others and can_settle:
+            question = (
+                f"{question.strip()}\n\n{others} approval(s) from other campaigns are still waiting. "
+                "They are not part of this question: each is asked with its own campaign."
+            ).strip()
         log_event(
             cdir,
             "ask_owner",
@@ -396,8 +417,15 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
         if self._direct_ask is not None and self._session_key:
             withdraw_question(cdir, "superseded by a new question")
+            if carried:
+                try:
+                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in carried], str(cdir), campaign)
+                except (approval.ApprovalStoreUnreadableError, OSError) as exc:
+                    logger.warning("oncall-flow: pending approvals not tied to {}: {}", campaign, exc)
             task = asyncio.create_task(
-                self._await_answer(cdir, campaign, ask_id, prompt, choices, self._session_key),
+                self._await_answer(
+                    cdir, campaign, ask_id, prompt, choices, self._session_key, [int(i["n"]) for i in carried]
+                ),
                 name=f"oncall-ask:{campaign}:{ask_id}",
             )
             _ASKING[str(cdir)] = (ask_id, task)
@@ -416,8 +444,16 @@ class OpsAskOwnerTool(_OpsScheduler):
         # contract allowed the ask; whether it was then sent is the message
         # tool's record, not this one's to invent.
         log_event(cdir, "ask_owner_delivery", ask_id=ask_id, sent=False, detail="model-mediated (D4)")
+        waiting_note = (
+            f"\n{len(waiting)} approval(s) are waiting and are not on this question: this turn "
+            "cannot put the owner's answer back, so an approval could not be settled here. They "
+            "stay pending, and the next question that can ask carries them.\n"
+            if waiting
+            else ""
+        )
         return (
             (woke + "\n" if woke else "")
+            + waiting_note
             + f"ALLOWED by the campaign's contract{note}. Send exactly this to the owner with "
             f"the message tool now, and nothing else:\n"
             f"  {prompt}\n"
@@ -427,7 +463,14 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
 
     async def _await_answer(
-        self, cdir: Path, campaign: str, ask_id: str, prompt: str, choices: list[str], conversation_id: str
+        self,
+        cdir: Path,
+        campaign: str,
+        ask_id: str,
+        prompt: str,
+        choices: list[str],
+        conversation_id: str,
+        approvals: list[int] | None = None,
     ) -> None:
         """Wait out one question on its own task, and file what came back.
 
@@ -458,6 +501,12 @@ class OpsAskOwnerTool(_OpsScheduler):
             return
         still_open = (_open_question(cdir) or {}).get("ask_id") == ask_id
         _append_note(cdir, answer.strip()[:2000], source="owner", ask_id=ask_id)
+        if approvals:
+            try:
+                approved, refused = await approval.apply_answer(ops_home(), answer, approvals)
+                log_event(cdir, "owner_approvals", ask_id=ask_id, approved=approved, refused=refused)
+            except Exception:  # noqa: BLE001 -- the note above already holds the answer
+                logger.warning("oncall-flow: settling approvals failed for {}", campaign, exc_info=True)
         if not still_open:
             log_event(cdir, "owner_answered_late", ask_id=ask_id)
             return

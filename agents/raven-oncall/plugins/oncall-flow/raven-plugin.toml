@@ -103,3 +103,10 @@ factory = "oncall_flow.tools:make_ops_ask_owner"
 [[plugin.contributes.tools]]
 name = "ops_finish"
 factory = "oncall_flow.tools:make_ops_finish"
+
+# The on-call's approval policy (see oncall_flow.approval): the launcher renders
+# the trunk gate at full and this gate applies the owner's mode per call. It
+# declines when the rendered slice carries no approval block.
+[[plugin.contributes.tool_gates]]
+name = "oncall_approval"
+factory = "oncall_flow.approval:make_approval_gate"

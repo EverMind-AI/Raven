@@ -168,6 +168,118 @@ def _guide_text() -> str:
     return base.rstrip("\n") + "\n\n" + GUIDE_SECTION.read_text(encoding="utf-8")
 
 
+APPROVAL_MODES = ("full", "smart", "ask")
+
+
+def _plugin_path() -> str:
+    """The plugin package on this launcher's path, so its own code can be asked."""
+    path = str(PLUGINS_DIR / FLOW_PLUGIN_ID)
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    return path
+
+
+def _flow_enabled(flow_slice: dict) -> bool:
+    """Whether the on-call flow this product's policy belongs to is on."""
+    try:
+        _plugin_path()
+        from oncall_flow.config import FlowConfig
+
+        return bool(FlowConfig.from_slice(flow_slice).enabled)
+    except Exception as exc:  # noqa: BLE001 -- an unreadable slice is a flow that is not on
+        log(f"[run] approval: the oncall-flow slice could not be read ({exc})")
+        return False
+
+
+def _gate_ready(config: dict, flow_slice: dict, workspace: Path) -> bool:
+    """Whether the plugin gate that carries this product's policy can be built.
+
+    The launcher renders the trunk gate at ``full`` and hands the policy to
+    ``oncall_flow.approval``. A gate that does not build -- an older plugin
+    dir, a factory that raises -- would leave every call unreviewed, with one
+    log line as the only trace, so the product asks before it runs instead.
+    """
+    if not _flow_enabled(flow_slice):
+        return False
+    try:
+        _plugin_path()
+        from oncall_flow.approval import make_approval_gate
+
+        from raven.contracts.plugin_surface import ServiceLocator
+        from raven.plugins.context import PluginContext
+    except Exception as exc:  # noqa: BLE001 -- no gate is a gate that is not ready
+        log(f"[run] approval: the oncall_approval gate is not available ({exc})")
+        return False
+    memory = config.get("memory") or {}
+    try:
+        services = ServiceLocator(
+            workspace=workspace,
+            user_id=str(memory.get("userId") or "raven-oncall"),
+            agent_id=str(memory.get("agentId") or "raven-oncall"),
+        )
+        gate = make_approval_gate(PluginContext(config=flow_slice, services=services))
+    except Exception as exc:  # noqa: BLE001 -- a factory that raises is a gate that is not ready
+        log(f"[run] approval: the oncall_approval gate did not build ({exc})")
+        return False
+    if gate is None:
+        log("[run] approval: the oncall_approval gate declined")
+        return False
+    return True
+
+
+def apply_approval_policy(config: dict, flow_slice: dict, host: dict, workspace: Path | None = None) -> str:
+    """Hand the approval decision to the plugin's gate, at the owner's mode.
+
+    Most of this product's turns are wakes it scheduled itself, where the trunk
+    gate has no one to ask and refuses -- which once refused the call that
+    schedules the next wake. So the trunk gate is rendered at ``full``, where
+    only builtin denials and the host's deny rules (carried by
+    ``inherit_host_denials``) refuse, and ``oncall_flow.approval`` applies the
+    mode per call. The mode is the first one set of: this slice's own
+    ``approval.mode``, this product config's ``permissions.mode``, the host's
+    ``permissions.mode``, then the trunk default ``smart``. It is read once,
+    here: a later change on the host reaches the on-call when it next starts.
+
+    The trunk is at ``full`` only while the plugin gate that carries the
+    policy is there to carry it. A flow that is on and a gate that does not
+    build would run every call unreviewed, so the on-call does not start; a
+    flow that is off has no policy to delegate to, and the trunk keeps the
+    owner's mode -- asking, which is the safe side.
+    """
+    approval = flow_slice.setdefault("approval", {})
+    timeout = approval.get("reviewTimeoutSeconds")
+    if timeout is not None:
+        try:
+            valid = float(timeout) > 0
+        except (TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise SystemExit(
+                f"error: oncall-flow approval.reviewTimeoutSeconds must be a positive number of "
+                f"seconds, got {timeout!r}; the on-call does not start with its approval gate unsure"
+            )
+    own = (config.get("permissions") or {}).get("mode")
+    host_mode = (host.get("permissions") or {}).get("mode")
+    mode = next(
+        (m for m in (approval.get("mode"), own, host_mode) if m in APPROVAL_MODES),
+        "smart",
+    )
+    approval["mode"] = mode
+    gate = workspace is not None and _gate_ready(config, flow_slice, workspace)
+    if gate:
+        config.setdefault("permissions", {})["mode"] = "full"
+    else:
+        config.setdefault("permissions", {})["mode"] = next(
+            (m for m in (own, host_mode) if m in APPROVAL_MODES), "smart"
+        )
+    if _flow_enabled(flow_slice) and not gate:
+        raise SystemExit(
+            "error: the oncall_approval gate did not build, so the on-call would run with no "
+            "approval policy; it does not start"
+        )
+    return mode
+
+
 def render_config(source: Path) -> Path:
     """Write a copy of ``source`` with the secrets merged in, under the state root."""
     config = json.loads(source.read_text(encoding="utf-8"))
@@ -218,6 +330,9 @@ def render_config(source: Path) -> Path:
     plugins["dirs"] = [str(PLUGINS_DIR)]
     flow_slice = plugins.setdefault("config", {}).setdefault(FLOW_PLUGIN_ID, {})
     flow_slice.setdefault("stateRoot", str(root / "oncall_flow"))
+    mode = apply_approval_policy(config, flow_slice, host, workspace)
+    trunk_mode = (config.get("permissions") or {}).get("mode")
+    log(f"[run] approval: {mode} (trunk gate {trunk_mode}; the oncall_approval gate applies it)")
 
     catalogue = render.mode_catalogue(
         MODES_DIR,

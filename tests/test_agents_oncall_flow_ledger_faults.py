@@ -106,3 +106,35 @@ def test_a_record_missing_its_fields_refuses_to_open_rather_than_start_empty(tmp
 
     with pytest.raises(LedgerCorruptError):
         Ledger(path)
+
+
+def test_a_ledger_that_is_not_an_object_refuses_to_open(tmp_path: Path):
+    """A sibling directory's ``ledger.json`` written by something else entirely
+    (a JSON list) must read as corrupt, which the duplicate-trial scan skips,
+    rather than raise an AttributeError that fails the submit scanning it."""
+    path = tmp_path / "ledger.json"
+    path.write_text(json.dumps([{"name": "a-package"}]), encoding="utf-8")
+
+    with pytest.raises(LedgerCorruptError):
+        Ledger(path)
+
+
+def test_the_duplicate_scan_skips_a_sibling_whose_ledger_is_not_an_object(tmp_path: Path):
+    from oncall_flow.occupancy import duplicate_refusal
+
+    other = tmp_path / "not-a-campaign"
+    other.mkdir()
+    (other / "ledger.json").write_text("[]", encoding="utf-8")
+    mine = tmp_path / "mine"
+    mine.mkdir()
+
+    assert not duplicate_refusal(tmp_path, mine, "key-1")
+
+
+@pytest.mark.parametrize("payload", [{"records": []}, {"records": {"k": "nope"}}])
+def test_a_ledger_whose_records_are_not_objects_refuses_to_open(tmp_path: Path, payload):
+    path = tmp_path / "ledger.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(LedgerCorruptError):
+        Ledger(path)
