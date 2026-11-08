@@ -9787,8 +9787,21 @@ def _legacy_launch_digest(cfg: Any) -> str:
 
 
 def _installed(path: Path, body: str = "#!/bin/sh\n") -> Path:
+    """Leave ``path`` where the launch this digest reads would find it.
+
+    A bare command is looked up on PATH, and Windows' lookup tries only the
+    ``PATHEXT`` names, never an extensionless one, so a fixture that writes
+    ``opencode`` alone is invisible to ``shutil.which`` there. Beside that file
+    write the ``.cmd`` shim an npm install leaves, so a bare name resolves as
+    it does on a real install. A launcher that names a path (``./agent-acp``)
+    still stats the extensionless file itself, which is why both forms are
+    written rather than one standing in for the other. POSIX exec runs the
+    extensionless file and needs no shim.
+    """
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
+    if os.name == "nt" and not path.suffix:
+        path.with_name(path.name + ".cmd").write_text("@echo off\r\n", encoding="utf-8")
     return path
 
 
