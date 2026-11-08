@@ -20,8 +20,12 @@ import sys
 import threading
 from collections.abc import Coroutine
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from raven.acp_client import pool as pool_mod
 from raven.acp_client.pool import AcpConnectionPool
 from raven.utils.commands import command_quote
 
@@ -195,3 +199,79 @@ async def test_a_connection_whose_loop_is_gone_is_ended_directly(tmp_path: Path)
     await pool.close_all()
     assert connection.client.closed, "the connection of a gone loop was not ended"
     assert pool.connections("stub") == []
+
+
+class _QuietClient:
+    """A client whose launch and handshake the test can hold open."""
+
+    def __init__(self, started: threading.Event, resume: threading.Event) -> None:
+        self.name = "stub"
+        self.session_identity: tuple[str, str, str] | None = None
+        self.closed = False
+        self._started = started
+        self._resume = resume
+
+    @property
+    def alive(self) -> bool:
+        return not self.closed
+
+    async def request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Any:
+        if method == "initialize":
+            self._started.set()
+            while not self._resume.is_set():
+                await asyncio.sleep(0.005)
+        return {}
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_an_acquire_finishing_under_an_idle_close_stays_in_the_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An idle close must not orphan a launch that is already in flight.
+
+    ``acquire`` reads the name's entry before a handshake that can take
+    seconds, and registers its connection after it. Another loop's idle check
+    can empty and drop that entry in between; the registration has to make the
+    entry again, or the connection runs outside the pool's bookkeeping -- the
+    state #1152 is about, where no idle check and no ``close_all`` could end
+    its process.
+    """
+    pool = AcpConnectionPool()
+    loop = asyncio.get_running_loop()
+
+    class _DeadClient:
+        name = "stub"
+
+        async def close(self) -> None: ...
+
+    pool._connections["stub"] = {
+        ("host-binding", "loop-host"): SimpleNamespace(loop=loop, alive=False, client=_DeadClient())
+    }
+
+    started = threading.Event()
+    resume = threading.Event()
+    client = _QuietClient(started, resume)
+
+    async def _launcher() -> object:
+        return object()
+
+    monkeypatch.setattr(pool_mod.AcpClient, "over", staticmethod(lambda endpoint, **kwargs: client))
+    monkeypatch.setattr(pool_mod, "open_journal", lambda name: None)
+
+    thread = _LoopThread()
+    thread.start()
+    try:
+        acquiring = asyncio.create_task(
+            thread.run(pool.acquire(name="stub", command="stub", cwd=None, env=None, launcher=_launcher))
+        )
+        assert await asyncio.to_thread(started.wait, 10), "the launch never reached its handshake"
+        # The other loop's idle check empties the name and drops its entry.
+        assert await pool.close_idle(0) == ["stub"]
+        assert pool._connections == {}
+        resume.set()
+        connection = await acquiring
+        assert pool.connections("stub") == [connection], "the finished launch was left outside the pool"
+    finally:
+        resume.set()
+        await pool.close_all()
+        thread.stop()
