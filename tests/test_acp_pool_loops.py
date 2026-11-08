@@ -264,3 +264,78 @@ async def test_an_acquire_finishing_under_an_idle_close_stays_in_the_pool(monkey
         resume.set()
         await pool.close_all()
         thread.stop()
+
+
+async def test_a_session_delete_prefers_the_connection_of_the_asking_loop(monkeypatch) -> None:
+    """A session/delete must not be sent over another loop's connection."""
+    pool = AcpConnectionPool()
+    loop = asyncio.get_running_loop()
+    foreign_loop = asyncio.new_event_loop()
+    try:
+
+        class _Client:
+            def __init__(self, name: str) -> None:
+                self.name = name
+                self.calls: list[str] = []
+
+            async def request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Any:
+                self.calls.append(method)
+                return {}
+
+        foreign_client = _Client("foreign")
+        here_client = _Client("here")
+        foreign = SimpleNamespace(
+            loop=foreign_loop,
+            alive=True,
+            client=foreign_client,
+            router=SimpleNamespace(seen={"s1"}),
+            initialize={},
+        )
+        here = SimpleNamespace(
+            loop=loop,
+            alive=True,
+            client=here_client,
+            router=SimpleNamespace(seen=set()),
+            initialize={},
+        )
+        pool._connections["agent"] = {("b", "loop-1"): foreign, ("b", "loop-2"): here}
+        monkeypatch.setattr(pool_mod, "handshake_of", lambda initialize: SimpleNamespace(can_delete=True))
+
+        assert await pool.delete_session("agent", "s1") is True
+
+        assert foreign_client.calls == [], "the delete was sent over another loop's connection"
+        assert here_client.calls == ["session/delete"]
+    finally:
+        foreign_loop.close()
+
+
+async def test_a_session_delete_with_only_another_loops_connection_is_skipped(monkeypatch) -> None:
+    """That connection cannot answer here, so the best effort is to send nothing."""
+    pool = AcpConnectionPool()
+    foreign_loop = asyncio.new_event_loop()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.name = "foreign"
+            self.calls: list[str] = []
+
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float | None = None) -> Any:
+            self.calls.append(method)
+            return {}
+
+    client = _Client()
+    pool._connections["agent"] = {
+        ("b", "loop-1"): SimpleNamespace(
+            loop=foreign_loop,
+            alive=True,
+            client=client,
+            router=SimpleNamespace(seen={"s1"}),
+            initialize={},
+        )
+    }
+    monkeypatch.setattr(pool_mod, "handshake_of", lambda initialize: SimpleNamespace(can_delete=True))
+    try:
+        assert await pool.delete_session("agent", "s1") is False
+        assert client.calls == []
+    finally:
+        foreign_loop.close()

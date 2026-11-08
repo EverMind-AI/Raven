@@ -1015,9 +1015,16 @@ class AcpConnectionPool:
         with self._registry_lock:
             return [name for name, held in self._connections.items() if any(conn.alive for conn in held.values())]
 
-    def _holder_of(self, name: str, session_id: str) -> _Connection | None:
-        """The live connection that has routed ``session_id``, else the only live one."""
-        live = [conn for conn in self._connections.get(name, {}).values() if conn.alive]
+    def _holder_of(self, name: str, session_id: str, loop: asyncio.AbstractEventLoop) -> _Connection | None:
+        """The live connection of ``loop`` that has routed ``session_id``, else its only live one.
+
+        A connection is answered on the loop that made it, so a connection of
+        another loop is not a holder: sending its ``session/delete`` from here
+        would wait on a future that loop's reader settles, and a router that
+        records the session for a process this loop cannot read is not a
+        route to that session either.
+        """
+        live = [conn for conn in self.connections(name) if conn.alive and (conn.loop is None or conn.loop is loop)]
         for connection in live:
             if session_id in connection.router.seen:
                 return connection
@@ -1036,7 +1043,7 @@ class AcpConnectionPool:
         channel to deliver the delete on, and starting one just to delete a
         session would be worse than the leak.
         """
-        connection = self._holder_of(name, session_id)
+        connection = self._holder_of(name, session_id, asyncio.get_running_loop())
         if connection is None:
             return False
         if not handshake_of(connection.initialize).can_delete:
