@@ -222,7 +222,7 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
-   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   * The reasoning effort this session's own model calls run at: its own pick bounded by the model, else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands. A pick the model declares runs as named; a pick it does not declare runs at the highest word it declares below that pick.
    */
   reasoning_effort?: string | null;
   /**

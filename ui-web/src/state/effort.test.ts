@@ -166,8 +166,8 @@ describe('the reasoning effort', () => {
     await effort.load()
     effort.pick('')
     await Promise.resolve()
-    /* A stored pick the model no longer offers reads as "" here; the clear is
-       what drops it from the record. */
+    /* A stored pick the model declares nothing at or below reads as "" here;
+       the clear is what drops it from the record. */
     expect(asked).toEqual([undefined, null])
   })
 })
