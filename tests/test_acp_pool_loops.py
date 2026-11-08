@@ -370,3 +370,132 @@ async def test_a_drop_starts_every_close_before_waiting_for_one() -> None:
 
     release.set()
     await dropping
+
+
+async def test_a_gone_loops_connection_is_aborted_with_its_session_records() -> None:
+    """The reap ends the process a closed loop left behind and drops its slot."""
+    pool = AcpConnectionPool()
+    gone = asyncio.new_event_loop()
+    gone.close()
+    identity = ("stub", "{}", "loop-gone")
+    aborted: list[str] = []
+    client = SimpleNamespace(name="stub", session_identity=identity, abort=lambda: aborted.append("abort"))
+    pool._connections["stub"] = {("{}", "loop-gone"): SimpleNamespace(loop=gone, client=client)}
+    acp_agent._SESSION_STATE[identity] = {}
+
+    pool._reap_gone_loops()
+
+    assert aborted == ["abort"]
+    assert pool.connections("stub") == []
+    assert identity not in acp_agent._SESSION_STATE
+
+
+async def test_a_cross_loop_close_that_cannot_finish_falls_back_to_an_abort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A close handed to another loop and then waited out ends the process directly."""
+    pool = AcpConnectionPool()
+    release = threading.Event()
+    aborted: list[str] = []
+
+    class _Client:
+        name = "stub"
+
+        async def close(self) -> None:
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+
+        def abort(self) -> None:
+            aborted.append("abort")
+
+    thread = _LoopThread()
+    thread.start()
+    try:
+        connection = SimpleNamespace(loop=thread.loop, client=_Client())
+        monkeypatch.setattr(pool_mod, "_CLOSE_TIMEOUT_S", 0.05)
+        await pool._end(connection)
+        assert aborted == ["abort"]
+    finally:
+        release.set()
+        thread.stop()
+
+
+async def test_a_reap_survives_session_records_it_cannot_forget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing or failing record hook is bookkeeping, not a failed reap."""
+    pool = AcpConnectionPool()
+    gone = asyncio.new_event_loop()
+    gone.close()
+    identity = ("stub", "{}", "loop-gone")
+    client = SimpleNamespace(name="stub", session_identity=identity, abort=lambda: None)
+
+    def place() -> None:
+        pool._connections["stub"] = {("{}", "loop-gone"): SimpleNamespace(loop=gone, client=client)}
+
+    monkeypatch.setattr(pool_mod, "_session_state_forget", None)
+    place()
+    pool._reap_gone_loops()
+
+    def boom(record: tuple[str, str, str]) -> None:
+        raise RuntimeError("records are gone")
+
+    monkeypatch.setattr(pool_mod, "_session_state_forget", boom)
+    place()
+    pool._reap_gone_loops()
+
+    assert pool.connections("stub") == []
+
+
+async def test_a_drop_survives_a_close_that_raises() -> None:
+    """One failing close must not take the drop, or the rest of the name, down."""
+    pool = AcpConnectionPool()
+
+    class _Client:
+        name = "stub"
+
+        async def close(self) -> None:
+            raise RuntimeError("the agent refused to end")
+
+    pool._connections["stub"] = {("{}", "loop-1"): SimpleNamespace(loop=asyncio.get_running_loop(), client=_Client())}
+
+    await pool.drop("stub")
+
+    assert pool.connections("stub") == []
+
+
+async def test_an_idle_close_leaves_a_slot_replaced_while_it_asked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slot another thread already dropped is not this check's to close."""
+    pool = AcpConnectionPool()
+    loop = asyncio.get_running_loop()
+
+    class _Client:
+        name = "stub"
+
+        async def close(self) -> None: ...
+
+    slot = ("{}", "loop-1")
+    connection = SimpleNamespace(loop=loop, alive=True, client=_Client())
+    pool._connections["stub"] = {slot: connection}
+    monkeypatch.setattr(AcpConnectionPool, "_closable", staticmethod(lambda *args: True))
+
+    async def replaced(target: Any) -> bool:
+        pool._connections["stub"].pop(slot, None)
+        return False
+
+    monkeypatch.setattr(AcpConnectionPool, "_holds_resident_work", staticmethod(replaced))
+
+    assert await pool.close_idle(0) == []
+
+
+async def test_the_idle_watch_prunes_a_closed_loops_task() -> None:
+    """Two loops pruning the same dead loop's task is not an error."""
+    pool = AcpConnectionPool()
+    gone = asyncio.new_event_loop()
+    gone.close()
+    pool._idle_tasks[gone] = None  # type: ignore[assignment]
+
+    pool._watch_idle()
+
+    assert gone not in pool._idle_tasks
+    await pool.close_all()
