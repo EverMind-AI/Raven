@@ -206,7 +206,7 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 14 **third-party agents** and nine **Mirasim-routed** presets to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents in Raven's Agent Hub">
+  <img src="https://github.com/user-attachments/assets/5d7457fc-82d6-4afe-a2c6-8d8a1a7bc1fd" width="80%" alt="Third-party agents in Raven's Agent Hub">
 </p>
 
 The roster also includes **MiniMax Code** over its native ACP server (`mcode acp`), and nine **Mirasim-routed** presets such as `Claude Code-Mirasim`, which run the same agents on Mirasim's accounts and model routes.
@@ -322,13 +322,13 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/572c6cfb-6659-44f9-98fd-5670e61623b8"><img src="https://github.com/user-attachments/assets/572c6cfb-6659-44f9-98fd-5670e61623b8" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/976c26fd-ce85-4a28-9ca6-eb3765650f18"><img src="https://github.com/user-attachments/assets/976c26fd-ce85-4a28-9ca6-eb3765650f18" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/a7be5dca-b65a-4dea-9d88-2a4cb55f74b3"><img src="https://github.com/user-attachments/assets/a7be5dca-b65a-4dea-9d88-2a4cb55f74b3" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/6a0c61bc-e4f5-4a77-b783-71f48f26b1bc"><img src="https://github.com/user-attachments/assets/6a0c61bc-e4f5-4a77-b783-71f48f26b1bc" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
