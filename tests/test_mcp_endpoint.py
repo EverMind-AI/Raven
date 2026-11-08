@@ -124,6 +124,29 @@ async def test_an_open_endpoint_relays_to_the_held_upstream(tmp_path):
         await open_endpoint(str(path))
 
 
+@pytest.mark.asyncio
+async def test_the_relay_names_the_side_that_ended_and_not_the_side_it_stopped():
+    """The agent hangs up first: the upstream is stopped by the teardown, not ended, and must not be reported as ended."""
+    cfg = MCPServerConfig(command=sys.executable, args=["-c", _ECHO_SERVER])
+    endpoints = McpEndpoints()
+    said: list[str] = []
+    sink = logger.add(lambda message: said.append(message.record["message"]), level="DEBUG")
+    try:
+        path = await endpoints.open("node-1", "echo", cfg)
+        reader, writer = await open_endpoint(str(path))
+        writer.close()
+        assert await asyncio.wait_for(reader.read(), timeout=20) == b""
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not any("the agent's side of 'echo' ended" in line for line in said):
+            await asyncio.sleep(0.02)
+    finally:
+        logger.remove(sink)
+        await endpoints.aclose()
+
+    assert any("the agent's side of 'echo' ended" in line for line in said), said
+    assert not [line for line in said if "the upstream for 'echo' ended" in line], said
+
+
 async def test_the_relay_stamps_only_its_own_connections_initialize_result(monkeypatch):
     import anyio
     from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER

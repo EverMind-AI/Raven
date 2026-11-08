@@ -1741,6 +1741,28 @@ async def test_a_stream_the_host_refuses_is_named_in_the_log_not_only_told_down_
         logger.remove(sink)
 
 
+async def test_a_stream_refused_because_its_endpoint_is_gone_is_named_in_the_log(tmp_path):
+    """The reason sent down the pipe is also said where the host's own log can see it."""
+    pool = NodePool()
+    client = _live(pool, tmp_path)
+    path, _, endpoint = await _endpoint()
+    try:
+        pool.lend("box", "d1", {"pg": path.rsplit("/", 1)[0] + "/" + "0" * 64}, task="agent")
+        said: list[str] = []
+        sink = logger.add(lambda message: said.append(message.record["message"]), level="WARNING")
+        try:
+            await pool._on_stream(
+                "box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"}
+            )
+        finally:
+            logger.remove(sink)
+    finally:
+        endpoint.close()
+    assert _told(client, protocol.MCP_CLOSE)[0]["reason"].startswith("the host's endpoint for 'pg' is gone: ")
+    (line,) = [entry for entry in said if "the host's endpoint for 'pg' is gone" in entry]
+    assert "on task 'agent'" in line, said
+
+
 async def test_the_bridge_argv_is_the_node_s_own_and_a_node_without_a_daemon_names_none(tmp_path):
     pool = NodePool()
     _live(pool, tmp_path)
@@ -1789,39 +1811,50 @@ async def test_an_mcp_stream_without_a_task_is_refused_before_connecting(tmp_pat
 
 @pytest.mark.parametrize("change", ["unlend", "replace", "link"])
 async def test_an_mcp_connection_opening_after_its_authorization_ended_is_discarded(tmp_path, monkeypatch, change):
-    pool = NodePool()
-    client = _live(pool, tmp_path)
-    node = pool._nodes["box"]
-    pool.lend("box", "d1", {"pg": "/endpoint"}, task="agent")
-    entered, resume = asyncio.Event(), asyncio.Event()
-    closed = []
-
-    async def waited():
-        pass
-
-    writer = SimpleNamespace(close=lambda: closed.append(True), wait_closed=waited)
-
-    async def opening(path):
-        assert path == "/endpoint"
-        entered.set()
-        await resume.wait()
-        return asyncio.StreamReader(), writer
-
-    monkeypatch.setattr(node_client, "open_endpoint", opening)
-    waiting = asyncio.create_task(
-        pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+    said: list[tuple[str, str]] = []
+    sink = logger.add(
+        lambda message: said.append((message.record["level"].name, message.record["message"])), level="DEBUG"
     )
-    await asyncio.wait_for(entered.wait(), 2)
-    if change == "unlend":
-        await pool.unlend("box", "d1")
-    elif change == "replace":
-        pool.lend("box", "d1", {"pg": "/other"}, task="other-agent")
-    else:
-        _live(pool, tmp_path)
-    resume.set()
-    await waiting
-    assert closed and node.streams == {}
-    assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
+    try:
+        pool = NodePool()
+        client = _live(pool, tmp_path)
+        node = pool._nodes["box"]
+        pool.lend("box", "d1", {"pg": "/endpoint"}, task="agent")
+        entered, resume = asyncio.Event(), asyncio.Event()
+        closed = []
+
+        async def waited():
+            pass
+
+        writer = SimpleNamespace(close=lambda: closed.append(True), wait_closed=waited)
+
+        async def opening(path):
+            assert path == "/endpoint"
+            entered.set()
+            await resume.wait()
+            return asyncio.StreamReader(), writer
+
+        monkeypatch.setattr(node_client, "open_endpoint", opening)
+        waiting = asyncio.create_task(
+            pool._on_stream("box", protocol.MCP_OPEN, {"stream": 1, "task": "agent", "lend": "d1", "server": "pg"})
+        )
+        await asyncio.wait_for(entered.wait(), 2)
+        if change == "unlend":
+            await pool.unlend("box", "d1")
+        elif change == "replace":
+            pool.lend("box", "d1", {"pg": "/other"}, task="other-agent")
+        else:
+            _live(pool, tmp_path)
+        resume.set()
+        await waiting
+        assert closed and node.streams == {}
+        assert _told(client, protocol.MCP_CLOSE)[-1]["reason"] == "the dispatch or link ended"
+    finally:
+        logger.remove(sink)
+    # A normal race, not a fault: the refusal is said, but not at warning level.
+    refusals = [(level, text) for level, text in said if "no stream for 'pg'" in text]
+    assert refusals, said
+    assert all(level == "INFO" for level, _ in refusals), said
 
 
 async def test_a_host_without_unix_sockets_lends_a_real_mcp_endpoint(tmp_path, monkeypatch):
