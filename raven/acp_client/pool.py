@@ -825,6 +825,13 @@ class AcpConnectionPool:
         loop that owns the connection. A connection whose loop has gone has
         nothing left to wait on: its process is ended directly, so the agent
         does not outlive the loop that was speaking to it.
+
+        A wait this call does not get to finish -- timed out, or cancelled
+        from outside -- also ends the process directly. The close handed to the
+        other loop is still running at that point, and nothing after this would
+        end it: ``close_all`` bounds a drop with the same budget this wait
+        gives the close, so its timer expires first and this is the last
+        moment the process can be ended.
         """
         owner = connection.loop
         if owner is None or owner is asyncio.get_running_loop():
@@ -837,6 +844,9 @@ class AcpConnectionPool:
         try:
             closing = asyncio.run_coroutine_threadsafe(connection.client.close(), owner)
             await asyncio.wait_for(asyncio.wrap_future(closing), timeout=_CLOSE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            connection.client.abort()
+            raise
         except Exception as exc:  # noqa: BLE001 - a close that cannot be handed over must not skip the rest
             logger.warning(
                 "acp agent {!r}: closing its connection on another loop failed: {}",

@@ -499,3 +499,37 @@ async def test_the_idle_watch_prunes_a_closed_loops_task() -> None:
 
     assert gone not in pool._idle_tasks
     await pool.close_all()
+
+
+async def test_a_bounded_drop_still_ends_a_close_that_hangs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shutdown budget must not cancel the abort fallback away.
+
+    ``close_all`` bounds each name with the same budget a cross-loop close is
+    given, so the outer wait expires first and cancels the drop. The close
+    handed to the other loop is still running at that moment: the cancellation
+    has to end the process directly, or a hung close leaves the agent behind.
+    """
+    pool = AcpConnectionPool()
+    release = threading.Event()
+    aborted: list[str] = []
+
+    class _Client:
+        name = "stub"
+
+        async def close(self) -> None:
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+
+        def abort(self) -> None:
+            aborted.append("abort")
+
+    thread = _LoopThread()
+    thread.start()
+    try:
+        pool._connections["stub"] = {("{}", "loop-1"): SimpleNamespace(loop=thread.loop, client=_Client())}
+        monkeypatch.setattr(pool_mod, "_CLOSE_TIMEOUT_S", 0.05)
+        await pool._drop_bounded("stub")
+        assert aborted == ["abort"], "the bounded close abandoned the agent without ending it"
+    finally:
+        release.set()
+        thread.stop()
