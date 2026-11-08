@@ -416,11 +416,12 @@ class CapabilitySnapshot:
 def _executable_identity(cfg: Any) -> list[Any] | None:
     """The launcher file an in-place upgrade replaces, when the command names one.
 
-    An ``npx`` command names the version it runs, so its digest already moves
-    with that version. A command that runs a binary off PATH keeps the same
-    command line across an upgrade while the menu it advertises can move with
-    the build -- the path names the same file either way, so the digest has to
-    read the file itself.
+    A pinned ``npx`` command names the version it runs, so its digest moves
+    with that version; an unpinned one names a range, and what that range
+    resolves to can change under a command line that stays. A command that
+    runs a binary off PATH keeps the same command line across an upgrade
+    while the menu it advertises can move with the build -- the path names
+    the same file either way, so the digest has to read the file itself.
 
     The PATH is the one the launch gets, from the same record the config loader
     reads for the same question: the row's own ``env`` PATH, else the login
@@ -428,26 +429,38 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     a launch does not use it, so resolving a different file of the same name
     here would tie this row's staleness to the wrong binary.
 
-    A launcher that names a path is read the way the launch reads it.
-    ``AcpClient.launch`` passes ``cwd=cfg.cwd`` to ``create_subprocess_exec``,
-    so a relative one (``./agent-acp``, ``bin/agent``) is that directory's
-    file -- or this process's directory when the row sets no cwd. An absolute
-    path is its own file, and a bare name is looked up on the PATH alone;
-    neither depends on the launch directory.
+    A launcher that names a path is read the way the launch reads it, and the
+    two platforms read it differently. POSIX starts the child in the row's cwd
+    and execs it there, so a relative launcher (``./agent-acp``, ``bin/agent``)
+    is that directory's file. Windows' ``CreateProcess`` resolves a relative
+    program in the *parent's* context -- it looks in this process's own
+    directory, not in the child's -- so a row that sets a cwd and names a
+    relative launcher does not name the file the spawn runs, and this digest
+    reads nothing there: that row keeps the digest it had. A row that sets no
+    cwd names this process's own directory on either platform, which is where
+    the spawn looks either way. An absolute path is its own file, and a bare
+    name is looked up on the PATH -- where, on Windows, this process's own
+    directory comes first, as it does for the launch's own lookup
+    (``resolve_program`` reads a PATH the same way).
 
     ``None`` for an ``npx`` launcher, for a row on another machine (that install
     is not this one's to read), for a command this process cannot resolve, for
-    a relative launcher missing from the launch directory, and for a bare
-    command while no launch PATH has been captured yet: each leaves the digest
-    exactly as it was, which keeps every snapshot measured before this function
-    existed valid.
+    a relative launcher missing from the launch directory, for a relative
+    launcher in a row that sets a cwd on Windows, and for a bare command while
+    no launch PATH has been captured yet: each leaves the digest exactly as it
+    was, which keeps every snapshot measured before this function existed
+    valid.
 
-    A Windows ``.cmd``/``.bat``/``.ps1`` shim is read as the file PATH resolves,
-    not as the package entry it points at. npm can rewrite a package without
+    A Windows ``.cmd``/``.bat`` shim is read as the file PATH resolves, not as
+    the package entry it points at. npm can rewrite a package without
     touching that shim, so an in-place upgrade behind one can leave this digest
     unmoved -- an under-report that keeps a snapshot rather than discarding a
     good one. Following the shim would mean parsing generated shell text, and
     there is no portable way to do that.
+
+    Only ``argv[0]`` is read: a command that names an interpreter and a script
+    digests the interpreter, and a package runner digests the runner, so what
+    those bring in is not covered here.
     """
     if (getattr(cfg, "machine", None) or "").strip():
         return None
@@ -473,14 +486,21 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     if os.path.isabs(program):
         resolved: str | None = program
     elif os.path.dirname(program):
-        # The subprocess starts in the row's cwd, so its relative launcher is
-        # that directory's file; an unset cwd means this process's directory.
         base = getattr(cfg, "cwd", None)
         if not base:
+            # No cwd: the spawn starts in this process's own directory, on
+            # either platform, and a relative launcher is that directory's file.
             try:
                 base = os.getcwd()
             except OSError:  # a service can outlive the directory it started in
                 return None
+        elif os.name == "nt":
+            # Windows resolves a relative program in the parent's own context:
+            # CreateProcess looks for it in this process's directory, not in the
+            # child's, so the row's cwd does not name the file the spawn runs.
+            # This digest does not read this process's directory for a row that
+            # names one, so the launcher is a row this digest cannot read.
+            return None
         resolved = os.path.normpath(os.path.join(base, program))
     else:
         # A bare name cannot be resolved at all until a capture has recorded

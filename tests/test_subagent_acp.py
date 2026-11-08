@@ -9956,6 +9956,7 @@ def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
     assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
 def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path) -> None:
     """The launch starts the agent in the row's cwd, so a relative launcher is
     that directory's file; reading raven's own directory would fingerprint a
@@ -9971,6 +9972,27 @@ def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path)
     assert identity[0] == str(tmp_path / "agent-acp")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_a_relative_launcher_in_a_row_with_a_cwd_is_unreadable_on_windows(tmp_path: Path) -> None:
+    """Windows' CreateProcess resolves a relative program in the parent's own
+    context -- it looks in this process's directory, not in the child's -- so
+    the row's cwd does not name the file the spawn runs. The digest reads
+    nothing there and leaves the row's digest as it was."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+
+    assert _executable_identity(cfg) is None
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
 def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
     """The same rule for a launcher that names a directory of its own: the
     directory part is relative to where the subprocess starts, not to raven."""
@@ -9987,6 +10009,7 @@ def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(t
     assert identity[0] == str(launch_dir / "bin" / "agent-acp")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
 def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) -> None:
     """The blocking case: an agent installed beside its configured cwd is
     upgraded where it stands, exactly as for an absolute command."""
@@ -10033,6 +10056,54 @@ def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkey
 
     assert snapshot_fingerprint(cfg) == before
     assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_windows_does_not_look_in_the_row_cwd_for_a_relative_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule the digest follows on Windows, measured: CreateProcess resolves
+    a relative program in the parent's own context, so a file that exists only
+    in the row's cwd is a file the spawn cannot start at all, and a file in
+    this process's own directory is the one it starts."""
+    import shutil
+
+    async def spawn() -> tuple[int | None, BaseException | None]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "./agent-acp.exe",
+                cwd=str(row_cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            return None, exc
+        await proc.communicate()
+        return proc.returncode, None
+
+    row_cwd = tmp_path / "row-cwd"
+    row_cwd.mkdir()
+    (row_cwd / "agent-acp.exe").write_text("", encoding="utf-8")
+    process_dir = tmp_path / "process-dir"
+    process_dir.mkdir()
+    monkeypatch.chdir(process_dir)
+
+    _, failure = asyncio.run(spawn())
+
+    assert isinstance(failure, FileNotFoundError), f"the spawn did not fail to find the launcher: {failure!r}"
+
+    # The other half of the claim: what the spawn does find is this process's
+    # own directory. whoami.exe stands in for the agent -- it runs wherever it
+    # is copied, and exits 0.
+    system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "whoami.exe"
+    if not system.is_file():
+        pytest.skip("this Windows image has no whoami.exe to copy")
+    shutil.copy(system, process_dir / "agent-acp.exe")
+
+    code, failure = asyncio.run(spawn())
+
+    assert failure is None, f"the spawn failed on this process's own copy: {failure!r}"
+    assert code == 0
 
 
 def test_a_relative_launcher_missing_from_the_configured_cwd_keeps_the_old_digest(
