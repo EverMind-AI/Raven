@@ -593,13 +593,9 @@ async def build_rpc_stack(
                 agent_loop.context.skills.stop_file_watcher()
             except Exception:
                 logger.exception("serve: skill watcher stop failed; continuing shutdown")
-        if agent_loop is not None and agent_loop.backend is not None:
+        if agent_loop is not None:
             try:
-                # Drain before stop, the same order the CLI hosts follow:
-                # stopping the backend closes the HTTP client the queued
-                # writes still need, and this stack owns turns too.
-                await agent_loop.drain_backend_stores()
-                await agent_loop.backend.stop()
+                await _retire_owned_backends(agent_loop)
             except Exception:
                 logger.exception("serve: memory backend stop failed; continuing shutdown")
         # Last of the engine's own resources, and after the sub-agents that run
@@ -644,6 +640,22 @@ async def build_rpc_stack(
         deliverables=getattr(agent_loop, "_deliverables", None),
         turn_scheduler=turn_scheduler,
     )
+
+
+async def _retire_owned_backends(agent_loop: Any) -> None:
+    """Drain, retire what a live switch replaced, then stop the backend serving.
+
+    One story for every loop-owning host. The backend is read live: the boot
+    handle is stale after a Settings switch. The drain and the retirements run
+    even when the loop serves no backend now -- a switch to memory-off leaves
+    the backend it replaced behind the ``None``. Stopping the live backend
+    closes the HTTP client the queued writes still need, so it comes last.
+    """
+    current = agent_loop.backend
+    await agent_loop.drain_backend_stores()
+    await agent_loop.retire_pending_backends()
+    if current is not None:
+        await current.stop()
 
 
 __all__ = ["RpcStack", "SendFrame", "build_rpc_stack"]
