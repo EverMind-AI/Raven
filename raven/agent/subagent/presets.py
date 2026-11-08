@@ -283,6 +283,10 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "kind": "acp",
         "description": "MiniMax's terminal coding agent, reached over its native ACP server.",
         "command": "mcode acp",
+        # Its package declares `node >=22.19 <23 || >=24 <27` and its launcher is
+        # `#!/usr/bin/env node`, so a machine on an older Node.js dies at import
+        # rather than at the handshake; `NODE_RUNTIME_PRESETS` below is what turns
+        # that into a named remedy instead of a bare crash.
         # The first handshake took 9.0s on 0.6.12 here: a Node bundle loading its
         # runtime and SQLite before it answers `initialize`. The shared 30s leaves
         # less room on a colder machine than the other local executables need.
@@ -785,14 +789,24 @@ NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
         # Node 18.20.8 exits at import ("does not provide an export named
         # 'openAsBlob'") while 20.20.2 and 22 run; the package asks for >=22.
         "qwen_code",
+        # The same shape: `#!/usr/bin/env node` (cli.js) and a floor the package
+        # declares for itself (`>=22.19 <23 || >=24 <27`), with `node:sqlite`
+        # behind it -- a module that does not exist before Node 22.5, so an
+        # older Node dies at import with nothing that names Node.js. Not
+        # measured on an old Node here (only 25.9.0 was on this machine); the
+        # floor is the package's own word, which is what the check reads. It
+        # reads the lower bound of that range, so a Node 23 the package does
+        # not list passes the check.
+        "minimax_code",
     }
 )
 """Presets whose agent is a Node.js script, so a launch that quits may be the
 wrong Node.js rather than the agent (`node_runtime.node_too_old`).
 
-Only for an agent measured to die that way: the check runs ``node --version``
-on a failure, and naming Node.js for an agent that does not care about it would
-send its reader after the wrong fix."""
+Only for an agent that runs on Node.js and declares a floor for it: the check
+runs ``node --version`` on a failure and compares it with the floor the agent's
+own package declares, so naming Node.js for an agent that does not care about
+it would send its reader after the wrong fix."""
 
 
 def runs_on_node(cfg: Any) -> bool:

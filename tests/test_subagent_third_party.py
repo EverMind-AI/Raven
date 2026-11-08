@@ -2995,6 +2995,23 @@ def test_a_core_install_hint_reaches_its_row() -> None:
     assert install_hint_for(ThirdPartyAcpSubagentConfig(name="mine", command="mcode acp")) is None
 
 
+def test_the_minimax_row_runs_on_node_and_says_so() -> None:
+    """MiniMax Code is a Node.js script with a floor its own package declares.
+
+    ``cli.js`` starts with ``#!/usr/bin/env node`` and ``@minimax-ai/code``
+    asks for ``>=22.19 <23 || >=24 <27``, so a Node.js that cannot run it dies
+    at import -- before the handshake, with nothing that names Node.js. The row
+    therefore gets the check ``qwen_code`` gets, and the floor it is compared
+    against is the package's own word.
+    """
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, runs_on_node
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    assert "minimax_code" in NODE_RUNTIME_PRESETS
+    cfg = ThirdPartyAcpSubagentConfig(name="MiniMax Code", preset="minimax_code", command="mcode acp")
+    assert runs_on_node(cfg)
+
+
 def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes() -> None:
     """The two facts the sign-in command alone does not carry.
 
