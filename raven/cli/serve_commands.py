@@ -677,7 +677,7 @@ def _read_serve_state() -> Optional[tuple[int, str, int, str]]:
     return port, token, pid, boot
 
 
-async def _attach(port: int, token: str, boot_id: str = "") -> Optional[str]:
+async def _attach(port: int, token: str, boot_id: str = "", *, _retry: bool = True) -> Optional[str]:
     """A one-time auth URL against the gateway on ``port``, or None if it is gone.
 
     Health first, and the answer has to name this service: a stale file can point
@@ -689,8 +689,15 @@ async def _attach(port: int, token: str, boot_id: str = "") -> Optional[str]:
     A recorded ``boot_id`` must match the answering process's own. That is the
     part a later process cannot inherit when it is handed a dead gateway's pid:
     the pid answers "is something there", the boot id answers "is it the process
-    that wrote this token". An answer without one -- an older raven, or a record
-    written before boot ids existed -- is read as before.
+    that wrote this token". A record without one -- written before boot ids
+    existed -- is read as before; a record that has one requires the answer to
+    name it.
+
+    The generation can also change between the two requests. The record is read
+    again after a refused nonce, and one more attach is tried if it now names a
+    different port or token. A refusal from the recorded generation itself is
+    still reported rather than worked around: without a changed record there is
+    no evidence that starting a second engine would not leave two.
     """
     import aiohttp
 
@@ -702,12 +709,17 @@ async def _attach(port: int, token: str, boot_id: str = "") -> Optional[str]:
                 if health.status != 200:
                     return None
                 answered = await health.json()
-                if answered.get("service") != "raven-serve":
+                if not isinstance(answered, dict) or answered.get("service") != "raven-serve":
                     return None
                 if boot_id and answered.get("boot_id") != boot_id:
                     return None
             async with session.post(f"{base}/auth/nonce", headers={"X-Raven-Token": token}) as minted:
                 if minted.status != 200:
+                    fresh = _read_serve_state()
+                    if _retry and fresh is not None:
+                        fresh_port, fresh_token, _fresh_pid, fresh_boot = fresh
+                        if (fresh_port, fresh_token) != (port, token):
+                            return await _attach(fresh_port, fresh_token, fresh_boot, _retry=False)
                     # A live gateway of ours that will not mint: the recorded
                     # token is not its token. Starting a second engine would
                     # leave two, so this is reported rather than worked around.

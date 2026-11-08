@@ -329,6 +329,31 @@ class TestAttaching:
         finally:
             await stranger.close()
 
+    async def test_a_health_answer_that_is_not_an_object_is_not_attached_to(self, home: Path) -> None:
+        """A 200 carrying a JSON array names no service at all. Reading a field
+        off it is a traceback, not an answer, and the port is a stranger's."""
+        import os
+
+        from aiohttp import web as aiohttp_web
+        from aiohttp.test_utils import TestServer
+
+        app = aiohttp_web.Application()
+
+        async def _not_an_object(_request):
+            return aiohttp_web.json_response(["raven-serve"])
+
+        app.router.add_get("/health", _not_an_object)
+        stranger = TestServer(app)
+        await stranger.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": stranger.port, "token": "t", "pid": os.getpid()}), encoding="utf-8"
+        )
+        try:
+            assert await _attach_recorded() is None
+        finally:
+            await stranger.close()
+
     async def test_a_gateway_of_ours_that_refuses_the_token_is_raised_not_ignored(self, home: Path) -> None:
         """Returning None here would start a second engine beside a live one."""
         server = await _live_gateway(home, token="not-its-token")
@@ -577,6 +602,80 @@ class TestAReusedPid:
             assert await serve_commands._attach(*target[:2]) is not None
         finally:
             await server.close()
+
+    async def test_a_record_with_a_boot_id_requires_the_answer_to_name_it(self, home: Path) -> None:
+        """An answer that names no generation cannot prove it is the record's
+        writer, so the token is not posted to it. The record's own generation
+        still attaches -- this narrows the path, it does not disable it."""
+        import os
+
+        from aiohttp import web as aiohttp_web
+        from aiohttp.test_utils import TestServer
+
+        app = aiohttp_web.Application()
+
+        async def _no_boot_id(_request):
+            return aiohttp_web.json_response({"ok": True, "service": "raven-serve"})
+
+        app.router.add_get("/health", _no_boot_id)
+        server = TestServer(app)
+        await server.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": server.port, "token": "t", "pid": os.getpid(), "boot_id": "record-boot"}),
+            encoding="utf-8",
+        )
+        try:
+            assert await _attach_recorded() is None
+        finally:
+            await server.close()
+
+    async def test_a_refusal_with_no_record_to_recheck_is_still_reported(self, home: Path, monkeypatch) -> None:
+        """A 403 with no live record behind it cannot be explained as a
+        generation switch. Reporting it is what keeps a second engine from
+        being started beside the one that answered."""
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        gateway = WsGateway()
+        server = TestServer(build_app(gateway, None))
+        await server.start_server()
+        monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
+        try:
+            with pytest.raises(PermissionError):
+                await serve_commands._attach(server.port, "not-its-token", gateway.boot_id)
+        finally:
+            await server.close()
+
+    async def test_a_record_that_changed_under_the_attach_is_retried_once(self, home: Path, monkeypatch) -> None:
+        """The generation can be replaced between the health check and the
+        nonce. The record names the new one; attaching to it once is cheaper
+        than reporting its token as refused."""
+        import os
+
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        old = WsGateway()
+        old_server = TestServer(build_app(old, None))
+        await old_server.start_server()
+        new = WsGateway()
+        new_server = TestServer(build_app(new, None))
+        await new_server.start_server()
+        monkeypatch.setattr(
+            serve_commands,
+            "_read_serve_state",
+            lambda: (new_server.port, new.session_token, os.getpid(), new.boot_id),
+        )
+        try:
+            url = await serve_commands._attach(old_server.port, "old-token", old.boot_id)
+            assert url is not None and url.startswith(f"http://127.0.0.1:{new_server.port}/auth#")
+            assert old._nonces == {}, "the old generation was asked to mint after it stopped answering health"
+        finally:
+            await old_server.close()
+            await new_server.close()
 
 
 @pytest.fixture
