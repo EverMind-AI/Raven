@@ -323,6 +323,23 @@ async def test_an_abort_asks_its_endpoint_to_end_without_the_loop() -> None:
     assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
 
 
+class _FailingEndpoint(_AbortableEndpoint):
+    """An endpoint whose group check itself fails, as a /proc read can."""
+
+    def end_now(self) -> bool:
+        self.ended += 1
+        raise OSError("cannot read /proc")
+
+
+async def test_an_abort_whose_group_check_fails_still_releases_the_connection() -> None:
+    endpoint = _FailingEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
+
+
 async def test_a_forked_agent_names_the_group_it_leads() -> None:
     """``abort`` reaches a forked child by the same group ``end`` kills."""
     from raven.acp_client.fork_template import ForkedEndpoint

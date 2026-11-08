@@ -760,14 +760,17 @@ class AcpClient:
         asking its node over the link, which belongs to a loop of its own.
         """
         endpoint = self._endpoint
-        end_now = getattr(endpoint, "end_now", None)
-        if callable(end_now):
-            end_now()
-        else:
-            pgid = getattr(endpoint, "_pgid", None)
-            if pgid is not None:
-                leftovers.end_group(pgid)
         self._closed = True
+        try:
+            end_now = getattr(endpoint, "end_now", None)
+            if callable(end_now):
+                end_now()
+            else:
+                pgid = getattr(endpoint, "_pgid", None)
+                if pgid is not None:
+                    leftovers.end_group(pgid)
+        except Exception as exc:  # noqa: BLE001 - a check this connection cannot make must not escape
+            logger.debug("acp agent {!r}: ending its process failed: {}", self.name, exc)
         try:
             self._let_go()
         except Exception as exc:  # noqa: BLE001 - a teardown that cannot finish must not raise here
