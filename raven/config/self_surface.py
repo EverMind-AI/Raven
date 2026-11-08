@@ -525,7 +525,19 @@ SECTIONS: tuple[Section, ...] = (
                 low=1,
                 high=50,
             ),
-            Setting("memory.backend", "Memory backend plugin", "str", _E.RELOAD, nullable=True),
+            Setting(
+                "memory.backend",
+                "Memory backend plugin",
+                "str",
+                _E.IMMEDIATE,
+                writer="settings",
+                nullable=True,
+                note=(
+                    "the running loop is pointed at the new backend in place, so nothing needs a "
+                    "reload; a switch asked for while a turn is running waits for that turn, and "
+                    "the write says so"
+                ),
+            ),
             Setting(
                 "embedding",
                 "Embedding model for memory and the knowledge base",

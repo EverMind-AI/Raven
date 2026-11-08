@@ -692,3 +692,20 @@ def test_a_provider_segment_still_folds_its_spellings(tmp_path, monkeypatch):
     assert surface.write_value("providers.Jina.apiKey", "k") is None
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["providers"] == {"jina": {"apiBase": "https://b", "apiKey": "k"}}
+
+
+def test_the_memory_backend_entry_says_the_switch_lands_without_a_reload():
+    """The settings writer applies the switch, so the entry says that.
+
+    The writer is the one the page uses, so the agent and the page change
+    this setting through one path with one set of checks -- and the effect
+    is the one that path really has: the running loop is pointed at the new
+    backend in place. The note carries the one exception there is, a turn
+    that is running when the switch is asked for.
+    """
+    setting = surface.find("memory.backend")[0]
+
+    assert setting.effect is surface.Effect.IMMEDIATE
+    assert setting.writer == "settings"
+    assert setting.effect not in surface.PENDING_EFFECTS
+    assert "turn" in setting.note
