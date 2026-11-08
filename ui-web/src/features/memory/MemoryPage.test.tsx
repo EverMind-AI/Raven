@@ -244,7 +244,7 @@ describe('memory island', () => {
       expect((screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).disabled).toBe(false)
     })
 
-    it('writes the other backend, rereads the store and rebuilds the runtime', async () => {
+    it('writes the other backend, rereads the store and points the loop at it', async () => {
       const writes: string[] = []
       const settingsRefresh = vi.spyOn(settingsDialog, 'requestRefresh').mockImplementation(() => {})
       const runtime = vi.fn(async () => ({ ok: true }))
@@ -267,9 +267,10 @@ describe('memory island', () => {
       /* The settings dialog owes the reader the Cloud card after this switch;
          `selected` is part of the snapshot it cached at open. */
       expect(settingsRefresh).toHaveBeenCalled()
-      /* The chat loop does not read the file per call; the switch rebuilds it
-         instead of telling the reader to reload. */
-      expect(runtime).toHaveBeenCalled()
+      /* The write is the apply: the settings writer points the running loop at
+         the file, so the section does not apply it a second time -- and no
+         generation reload happens, so the socket stays up. */
+      expect(runtime).not.toHaveBeenCalled()
       expect(screen.queryByText('gui.mem.reload_wait')).toBeNull()
       expect(screen.getByText('gui.mem.src_cloud').getAttribute('aria-pressed')).toBe('true')
     })
@@ -310,14 +311,14 @@ describe('memory island', () => {
 
     it('says the switch waits when the gateway has a turn in flight', async () => {
       const writes: string[] = []
+      const queued = 'Saved. A turn is running; the memory backend switches when that turn finishes.'
       install(
         {
           stats: async () => ({ ...both, backend: writes.length ? 'everos-cloud' : 'everos' }),
           setBackend: async (name: string) => {
             writes.push(name)
-            return { applied: true }
+            return { applied: true, warning: queued }
           },
-          applyRuntime: async () => ({ ok: false, reason: 'busy' }),
         },
         both,
       )
@@ -325,7 +326,7 @@ describe('memory island', () => {
       await act(async () => {
         ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()
       })
-      expect(await screen.findByText('gui.mem.reload_wait')).toBeTruthy()
+      expect(await screen.findByText(queued)).toBeTruthy()
     })
 
     it('puts the switch back when the write is refused, and keeps the rows readable', async () => {
@@ -718,7 +719,7 @@ describe('a switch while a conversation is in progress', () => {
   /* The notice is the only sign that the file and the running loop disagree;
      entering the section again re-reads the file, so it must not erase it. */
   it('keeps a failed switch notice across a re-entry of the section', async () => {
-    install({ applyRuntime: async () => ({ ok: false, detail: 'the loop is not available' }) }, both)
+    install({ setBackend: async () => ({ applied: true, warning: 'the loop is not available' }) }, both)
     await mount()
     await act(async () => {
       ;(screen.getByText('gui.mem.src_cloud') as HTMLButtonElement).click()

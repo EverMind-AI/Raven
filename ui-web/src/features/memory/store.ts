@@ -190,18 +190,18 @@ function performSwitch(backend: string): void {
   })
   void (async () => {
     try {
-      await source().setBackend(backend)
+      /* The write applies the switch in place: the settings writer points the
+         running loop at the file, so there is no second apply to do here and
+         no generation reload -- the document's socket stays connected. What the
+         write cannot promise is the moment: a switch asked for while a turn is
+         running waits for that turn, and the reply carries that sentence. */
+      const reply = await source().setBackend(backend)
       /* The settings dialog's models section drew its EverOS Cloud card from the
          snapshot it read when it opened, and `selected` just changed. Without
          this the reader who goes to enter the key finds no card. The island
          registers what re-reads it; state/ does not import an island. */
       settingsDialog.requestRefresh()
-      /* Point the running loop at the new backend before the section reads it: a
-         local server that is down starts here, so the reads below see it
-         rather than drawing the start panel. This is a live reference swap --
-         no generation reload, so the document's socket stays connected. */
-      const applied = await source().applyRuntime()
-      if (!applied.ok) set({ backendNotice: applied.detail || t('gui.mem.reload_wait') })
+      set({ backendNotice: reply.warning || '' })
       await refreshStats()
       await load()
       set({ switching: false, backendBusy: false })
