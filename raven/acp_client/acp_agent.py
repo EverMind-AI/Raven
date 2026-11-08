@@ -51,7 +51,7 @@ from raven.acp_client.capabilities import (
 )
 from raven.acp_client.elicitor import Elicitor
 from raven.acp_client.permissions import PERMISSION_METHOD
-from raven.acp_client.pool import get_pool
+from raven.acp_client.pool import get_pool, set_session_state_forget
 from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
@@ -1081,6 +1081,11 @@ def forget_session_state(identity: tuple[str, str, str]) -> None:
     drops the slot itself, not one session in it.
     """
     _SESSION_STATE.pop(identity, None)
+
+
+# The pool may not import this module back (the import-cycle budget counts a
+# function-local import), so it takes this function instead.
+set_session_state_forget(forget_session_state)
 
 
 class AcpAgentBackend:

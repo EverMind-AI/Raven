@@ -175,6 +175,25 @@ def _usable_by(connection: _Connection, loop: asyncio.AbstractEventLoop) -> bool
     return connection.loop is None or connection.loop is loop
 
 
+SessionStateForget = Callable[[tuple[str, str, str]], None]
+"""Drops what an agent recorded for a pool slot whose loop has gone."""
+
+_session_state_forget: SessionStateForget | None = None
+
+
+def set_session_state_forget(forget: SessionStateForget) -> None:
+    """Take the module that can drop a slot's session records.
+
+    The records live in :mod:`raven.acp_client.acp_agent`, which already
+    imports this module. Importing it back would close one more pair in the
+    tree's import-cycle budget, and that budget counts a function-local import
+    the same as a top-level one, so the dependency points this way instead:
+    the module that owns the records registers the one function needed here.
+    """
+    global _session_state_forget
+    _session_state_forget = forget
+
+
 def _forget_session_state(connection: _Connection) -> None:
     """Drop the records kept for a slot whose loop is gone.
 
@@ -184,12 +203,11 @@ def _forget_session_state(connection: _Connection) -> None:
     grow -- and no process on that slot can resume it either.
     """
     identity = getattr(connection.client, "session_identity", None)
-    if identity is None:
+    forget = _session_state_forget
+    if identity is None or forget is None:
         return
     try:
-        from raven.acp_client.acp_agent import forget_session_state
-
-        forget_session_state(identity)
+        forget(identity)
     except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a reap
         logger.debug("acp agent {!r}: no session records to forget: {}", connection.client.name, exc)
 
