@@ -20,6 +20,7 @@ from raven.rpc.methods import model as model_module
 from raven.rpc.methods.model import (
     model_add_endpoint,
     model_add_model,
+    model_check_key,
     model_disconnect,
     model_endpoints,
     model_fetch_models,
@@ -369,6 +370,141 @@ async def test_save_key_missing_params_rejected(fake_home: Path) -> None:
 
 
 # ----------------------------------------------------------------------------
+# model.check_key
+# ----------------------------------------------------------------------------
+
+
+def _probe_answering(answer: dict, seen: dict) -> object:
+    def fake_probe(name: str, **kwargs: object) -> dict:
+        seen.update(name=name, **kwargs)
+        return {"elapsed_ms": 3, "models_count": None, "model_ids": None, "error": None, "http_status": None, **answer}
+
+    return fake_probe
+
+
+async def test_check_key_asks_the_vendor_about_the_unsaved_key_and_writes_nothing(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering({"ok": False, "status": "invalid_key", "http_status": 401, "error": "HTTP 401"}, seen),
+    )
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-never-issued"})
+
+    assert result == {
+        "ok": False,
+        "status": "invalid_key",
+        "http_status": 401,
+        "models_count": None,
+        "error": "HTTP 401",
+        "refused": True,
+    }
+    # The same probe the saved key gets, on the key the form holds.
+    assert seen["name"] == "openrouter"
+    assert seen["check_credential"] is True
+    assert seen["section_override"] == {"api_key": "sk-or-never-issued"}
+    config = fake_home / ".raven" / "config.json"
+    assert not config.exists() or "sk-or-never-issued" not in config.read_text()
+    # And nothing remembered: a refused key listed nothing.
+    from raven.providers.served_models import recall
+
+    assert recall("openrouter") == {}
+
+
+@pytest.mark.parametrize(
+    ("answer", "status"),
+    [
+        ({"ok": True, "status": "valid", "http_status": 200, "models_count": 12}, "valid"),
+        ({"ok": False, "status": "key_unchecked", "error": "answers without checking the key"}, "key_unchecked"),
+        ({"ok": False, "status": "network_error", "error": "connection refused"}, "network_error"),
+        # Forbidden is not the vendor's word for a wrong key alone.
+        ({"ok": False, "status": "invalid_key", "http_status": 403, "error": "HTTP 403"}, "invalid_key"),
+    ],
+)
+async def test_check_key_reports_what_is_not_the_keys_fault_without_refusing(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, answer: dict, status: str
+) -> None:
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe_answering(answer, {}))
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-1"})
+
+    assert result["status"] == status
+    assert result["refused"] is False
+    assert result["models_count"] == answer.get("models_count")
+    # An answer that carries no list remembers none, whatever its status.
+    from raven.providers.served_models import recall
+
+    assert recall("openrouter") == {}
+
+
+async def test_check_key_remembers_what_a_valid_key_serves(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The connect's check is the one ask a connect makes, so it is what writes
+    the served-models cache (`raven/providers/served_models.py`): without it a
+    valid connect left every picker on the bundled catalogue until an
+    add-model sheet was opened, and `model.options` recalled nothing."""
+    from raven.providers.served_models import recall
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering(
+            {"ok": True, "status": "valid", "http_status": 200, "models_count": 1, "model_ids": ["zz-live-only-model"]},
+            seen,
+        ),
+    )
+
+    result = await model_check_key({"slug": "openrouter", "api_key": "sk-or-good"})
+
+    assert result["status"] == "valid" and result["refused"] is False
+    # The whole catalogue, as the verified read asks for it, not a count.
+    assert seen["full_catalogue"] is True
+    assert [m for m in recall("openrouter") if "zz-live-only-model" in m]
+    # Still a read of the config: the key is the form's until save_key.
+    config = fake_home / ".raven" / "config.json"
+    assert not config.exists() or "sk-or-good" not in config.read_text()
+
+
+async def test_check_key_sends_only_the_fields_the_form_holds(fake_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local deployment is reached by address: no key is laid over the section."""
+    seen: dict = {}
+    monkeypatch.setattr(
+        "raven.config.update_providers.test_provider",
+        _probe_answering({"ok": True, "status": "valid", "http_status": 200, "models_count": 3}, seen),
+    )
+
+    result = await model_check_key({"slug": "ollama", "api_base": "http://localhost:11434"})
+
+    assert result["refused"] is False
+    assert seen["section_override"] == {"api_base": "http://localhost:11434"}
+
+
+@pytest.mark.parametrize(
+    ("answer", "status", "refused"),
+    [
+        ({"ok": False, "status": "invalid_key", "http_status": 401, "error": "HTTP 401"}, "invalid_key", True),
+        # A 403 is `invalid_key` to the status table and not a refusal: a region,
+        # a plan or a proxy answers it as well.
+        ({"ok": False, "status": "invalid_key", "http_status": 403, "error": "HTTP 403"}, "invalid_key", False),
+        ({"ok": False, "status": "network_error", "error": "refused"}, "network_error", False),
+        ({"ok": True, "status": "valid", "http_status": 200, "model_ids": ["m1"]}, "ok", False),
+    ],
+)
+async def test_fetch_models_says_whether_the_vendor_itself_refused_the_key(
+    fake_home: Path, monkeypatch: pytest.MonkeyPatch, answer: dict, status: str, refused: bool
+) -> None:
+    """The verdict a row may call "rejected", kept apart from the broader status."""
+    _write_config(fake_home, {"providers": {"openrouter": {"apiKey": "sk-or"}}})
+    monkeypatch.setattr("raven.config.update_providers.test_provider", _probe_answering(answer, {}))
+
+    out = await model_fetch_models({"slug": "openrouter", "verify": True})
+
+    assert out["status"] == status
+    assert out["refused"] is refused
+
+
+# ----------------------------------------------------------------------------
 # model.disconnect
 # ----------------------------------------------------------------------------
 
@@ -698,7 +834,9 @@ async def test_options_openrouter_seeds_common_models(fake_home: Path) -> None:
     entry = _entry(await model_options({}), "openrouter")
     curated = common_models_for("openrouter")
     assert entry["models"][: len(curated)] == curated
-    assert entry["total_models"] > len(curated), "the catalogue tier added nothing"
+    # LiteLLM 1.108 dropped its openrouter rows, so there is no static
+    # catalogue tier left; the live catalogue is the source for the extra ids.
+    assert entry["total_models"] == len(curated)
 
 
 async def test_options_config_models_rank_before_common_and_dedup(fake_home: Path) -> None:
@@ -1681,7 +1819,7 @@ async def test_the_context_window_a_picker_shows_is_the_one_a_request_is_sized_w
 
 
 async def test_options_read_cached_windows_without_asking_the_ollama_daemon(fake_home, monkeypatch):
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
 
     from raven.providers.litellm_setup import import_litellm
 
@@ -1698,11 +1836,11 @@ async def test_options_read_cached_windows_without_asking_the_ollama_daemon(fake
     monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, cached: {"max_input_tokens": 16384}})
     asked = []
 
-    def info(self, model, api_base=None):
+    def info(self, model, api_base=None, api_key=None):
         asked.append(model)
         return {}
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", info)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", info)
 
     result = await model_options({})
 
@@ -2243,3 +2381,172 @@ async def test_add_model_preserves_metadata_under_a_bare_id(fake_home: Path) -> 
     assert row["label"] == "Team model"
     assert row["description"] == "Keep this description"
     assert row["capabilities"] == ["reasoning"]
+
+
+async def test_add_model_stores_declared_effort_levels(fake_home: Path) -> None:
+    await model_add_model(
+        {
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["low", "high", "xhigh"],
+        }
+    )
+    raw = json.loads((fake_home / ".raven" / "config.json").read_text())
+    overlay = raw["providers"]["anthropic"]["modelOverlay"]["anthropic/mine"]
+    assert overlay["reasoningEfforts"] == ["low", "high", "xhigh"]
+
+
+async def test_add_model_refuses_an_unknown_effort(fake_home: Path) -> None:
+    with pytest.raises(ConfigValidationError):
+        await model_add_model(
+            {
+                "slug": "anthropic",
+                "model": "mine",
+                "reasoning_efforts": ["turbo"],
+            }
+        )
+
+
+async def test_add_model_with_an_empty_list_clears_the_declaration(fake_home: Path) -> None:
+    await model_add_model(
+        {
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["high"],
+        }
+    )
+    await model_add_model({"slug": "anthropic", "model": "mine", "reasoning_efforts": []})
+    raw = json.loads((fake_home / ".raven" / "config.json").read_text())
+    assert "anthropic/mine" not in (raw["providers"]["anthropic"].get("modelOverlay") or {})
+
+
+async def test_model_options_label_carries_declared_efforts(fake_home: Path) -> None:
+    await model_add_model(
+        {
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["low", "high"],
+        }
+    )
+    result = await model_options({"include_providers": True})
+    provider = next(p for p in result["providers"] if p["slug"] == "anthropic")
+    assert provider["model_labels"]["anthropic/mine"]["reasoning_efforts"] == ["low", "high"]
+
+
+async def test_a_stored_overlay_reaches_the_effort_read(fake_home: Path) -> None:
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    await model_add_model(
+        {
+            "slug": "anthropic",
+            "model": "mine",
+            "reasoning_efforts": ["low", "high"],
+        }
+    )
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "", "model": "anthropic/mine"},
+        agent_loop_factory=lambda: _Loop(fake_home),
+    )
+    assert result["options"] == ["low", "high"]
+
+
+async def test_a_codex_model_gets_its_options_from_the_account_catalogue(fake_home: Path, monkeypatch) -> None:
+    from raven.providers import codex_catalog
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("low", "medium", "high", "xhigh", "max")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "", "model": "openai-codex/gpt-5.6-sol"},
+        agent_loop_factory=lambda: _Loop(fake_home),
+    )
+    assert result["options"] == ["low", "medium", "high", "xhigh", "max"]
+    assert calls == [("gpt-5.6-sol", False)]
+
+
+async def test_the_bundle_reads_the_codex_catalogue_without_refreshing(tmp_path, monkeypatch) -> None:
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from raven.providers import codex_catalog
+    from raven.rpc.methods import session as session_module
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("high",)
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+    loop = MagicMock()
+    loop.model = "openai-codex/gpt-5.6-sol"
+    loop.session_model = lambda key: "openai-codex/gpt-5.6-sol"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = lambda key: SimpleNamespace(reasoning_effort=None)
+    held = loop.sessions.get_or_create("tui:1")
+    held.metadata["reasoning_effort"] = "high"
+    loop.sessions.save(held)
+    info = await session_module._default_session_info(loop, session_module.load_config(), "tui:1")
+    assert info["reasoning_effort"] == "high"
+    assert calls == [("gpt-5.6-sol", False)]
+
+
+async def test_an_effort_set_refreshes_the_codex_catalogue(tmp_path, monkeypatch) -> None:
+    from raven.providers import codex_catalog
+    from raven.rpc.methods.session import session_set_effort
+    from raven.session.manager import SessionManager
+
+    calls = []
+
+    def efforts(slug, *, refresh=False):
+        calls.append((slug, refresh))
+        return ("low", "medium", "high", "xhigh", "max")
+
+    monkeypatch.setattr(codex_catalog, "account_efforts", efforts)
+
+    class _Loop:
+        def __init__(self, path: Path) -> None:
+            self.sessions = SessionManager(path)
+
+        def session_model(self, key):
+            return "openai-codex/gpt-5.6-sol"
+
+        def session_policy(self, key):
+            from raven.agent.loop._shared import SessionPolicy
+
+            return SessionPolicy()
+
+    result = await session_set_effort(
+        {"session_key": "tui:1", "effort": "high"},
+        agent_loop_factory=lambda: _Loop(tmp_path),
+    )
+    assert result["effort"] == "high"
+    assert calls == [("gpt-5.6-sol", True)]

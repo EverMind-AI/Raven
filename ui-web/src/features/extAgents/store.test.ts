@@ -9,13 +9,19 @@ import { setTranslator } from '../../i18n/t'
 import { resetSources, setSources } from '../../state/sources'
 import * as store from './store'
 
-import type { ExtAgentActArgs, ExtAgentRow, ExtAgentsSource } from './types'
+import type { ExtAgentActArgs, ExtAgentMenuRefresh, ExtAgentRow, ExtAgentsSource } from './types'
 
 /* The two source verbs the machine sheet's form uses; nothing here opens that form. */
 const offMachine = {
   presets: async () => [],
   connectOnMachine: async () => ({ refused: 'no machine form in this test' }),
   cancelRun: async () => false,
+  refreshMenus: async (r: ExtAgentRow) => ({
+    ok: true,
+    detail: '',
+    models: r.model_choices || [],
+    effortChoices: r.effort_choices || [],
+  }),
 }
 
 const toastWriter = vi.hoisted(() => ({ items: [] as string[] }))
@@ -149,6 +155,36 @@ describe('connectRow', () => {
     expect(acts[0]).toEqual(['connect', 'claude_code', { description: 'Writes the release notes' }])
   })
 
+  it('carries the picked model into the add and drops the pick once it lands', async () => {
+    const r = row({
+      name: 'OpenCode',
+      preset: 'opencode',
+      model_source: 'agent',
+      model_choices: [{ value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' }],
+    })
+    const { acts } = install([r])
+    store.pickModel(r, 'v/sonnet')
+    store.connectRow(r)
+    await vi.waitFor(() => expect(acts.length).toBe(1))
+    expect(acts[0]).toEqual(['connect', 'OpenCode', { model: 'v/sonnet' }])
+    expect(store.get().picked.OpenCode).toBeUndefined()
+  })
+
+  it('does not send a pick the row menu has since dropped', async () => {
+    const r = row({
+      name: 'OpenCode',
+      preset: 'opencode',
+      model_source: 'agent',
+      model_choices: [{ value: 'v/sonnet', name: 'Sonnet', group: 'Anthropic' }],
+    })
+    const { acts } = install([r])
+    store.pickModel(r, 'v/gone')
+    store.connectRow(r)
+    await vi.waitFor(() => expect(acts.length).toBe(1))
+    expect(acts[0]).toEqual(['connect', 'OpenCode', {}])
+    expect(store.get().picked.OpenCode).toBeUndefined()
+  })
+
   it('switches a configured row back on and a stale one over to its new transport', async () => {
     const off = row({ name: 'off_one', configured: true, enabled: false, probe_status: 'ready' })
     const stale = row({ name: 'stale_one', configured: true, enabled: false, probe_status: 'ready', upgrade_to: 'acp' })
@@ -240,6 +276,19 @@ describe('the model verbs', () => {
       ['model', 'claude_code', { model: 'anthropic/claude-x', provider: 'openrouter' }],
       ['model', 'claude_code', { model: 'v/m' }],
       ['model', 'claude_code', { clear_model: true }],
+    ])
+  })
+
+  it('sends a reasoning effort as its own write, and a clear with no value', async () => {
+    const r = row()
+    const { acts } = install([r])
+
+    await store.setEffort(r, 'high')
+    await store.clearEffort(r)
+
+    expect(acts).toEqual([
+      ['effort', 'claude_code', { effort: 'high' }],
+      ['effort', 'claude_code', { clear_effort: true }],
     ])
   })
 
@@ -359,6 +408,311 @@ describe('the model verbs', () => {
       args: { model: 'openrouter/anthropic/claude-opus-5', provider: 'openrouter' },
       detail: 'it offers 55',
     })
+  })
+})
+
+describe('the model menu re-read', () => {
+  /* A source whose one read answers from a gate, so a test can watch the row
+     while the handshake is still running. */
+  function readeable(answer: () => Promise<ExtAgentMenuRefresh>) {
+    const calls: Array<[string, boolean]> = []
+    const rows = [row(), row({ name: 'codex' })]
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => rows,
+        act: async () => rows,
+        refreshMenus: async (r, force) => {
+          calls.push([r.name, !!force])
+          return answer()
+        },
+      },
+    })
+    return { calls, rows }
+  }
+
+  it('patches the one row in place, and does not remount the sheet waiting on it', async () => {
+    const fresh = { value: 'profile:x', name: 'own key', group: 'Own key' }
+    const freshEffort = { value: 'high', name: 'High' }
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const { calls, rows } = readeable(async () => {
+      await gate
+      return { ok: true, detail: '', models: [fresh], effortChoices: [freshEffort] }
+    })
+    const target = row({
+      model_choices: [{ value: 'old', name: 'old', group: 'Mirasim' }],
+      effort_choices: [{ value: 'low', name: 'Low' }],
+    })
+    rows[0] = target
+    store.set({ rows, epoch: 7 })
+
+    const running = store.refreshMenus(target)
+    expect(store.get().menusBusy).toEqual(['claude_code'])
+    expect(store.get().rows[0]!.model_choices).toEqual([{ value: 'old', name: 'old', group: 'Mirasim' }])
+    expect(store.get().rows[0]!.effort_choices).toEqual([{ value: 'low', name: 'Low' }])
+    expect(store.get().epoch).toBe(7)
+
+    release()
+    await running
+
+    expect(calls).toEqual([['claude_code', false]])
+    expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+    expect(store.get().rows[0]!.effort_choices).toEqual([freshEffort])
+    expect(store.get().rows[1]).toBe(rows[1])
+    expect(store.get().epoch).toBe(7)
+    expect(store.get().menusBusy).toEqual([])
+    expect(store.get().menusFailed).toEqual({})
+  })
+
+  it('keeps the menu a failed read kept, and why', async () => {
+    const old = [{ value: 'old', name: 'old', group: 'Mirasim' }]
+    const { rows } = readeable(async () => ({
+      ok: false,
+      detail: 'the host is down',
+      models: old,
+      effortChoices: [{ value: 'low', name: 'Low' }],
+    }))
+    const target = row({ model_choices: old })
+    rows[0] = target
+    store.set({ rows })
+
+    await store.refreshMenus(target, { force: true })
+
+    expect(store.get().rows[0]!.model_choices).toEqual(old)
+    expect(store.get().menusFailed.claude_code).toBe('the host is down')
+    expect(store.get().menusBusy).toEqual([])
+  })
+
+  it('a refused call is a state on the row, not a toast', async () => {
+    const old = [{ value: 'old', name: 'old', group: 'Mirasim' }]
+    const { rows } = readeable(async () => {
+      throw { data: { detail: 'it never answered' } }
+    })
+    const target = row({ model_choices: old })
+    rows[0] = target
+    store.set({ rows })
+
+    await store.refreshMenus(target)
+
+    expect(store.get().rows[0]!.model_choices).toEqual(old)
+    expect(store.get().menusFailed.claude_code).toBe('it never answered')
+    expect(toastWriter.items).toEqual([])
+  })
+
+  it('drops a second press while the first read is in flight', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const { calls, rows } = readeable(async () => {
+      await gate
+      return { ok: true, detail: '', models: [], effortChoices: [] }
+    })
+    const target = row()
+    rows[0] = target
+    store.set({ rows })
+
+    const first = store.refreshMenus(target)
+    const second = store.refreshMenus(target, { force: true })
+    release()
+    await Promise.all([first, second])
+
+    expect(calls).toEqual([['claude_code', false]])
+  })
+
+  /* The refresh control means the menu itself moved, so that press has to reach
+     the source even though a read of the same row finished moments ago. */
+  it('forwards a press of the refresh control', async () => {
+    const { calls, rows } = readeable(async () => ({ ok: true, detail: '', models: [], effortChoices: [] }))
+    const target = row()
+    rows[0] = target
+    store.set({ rows })
+
+    await store.refreshMenus(target)
+    await store.refreshMenus(target, { force: true })
+
+    expect(calls).toEqual([
+      ['claude_code', false],
+      ['claude_code', true],
+    ])
+  })
+
+  /* A listing that started before the handshake answered carries the menu as it
+     stood then. Painting it over the row drops the menu the reader's picker is
+     open on, with no note and nothing to re-apply it. */
+  it('keeps the menu it just read when a listing that started earlier lands', async () => {
+    const fresh = { value: 'profile:x', name: 'own key', group: 'Own key' }
+    const stale = { value: 'old', name: 'old', group: 'Mirasim' }
+    let releaseLoad: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { releaseLoad = resolve })
+    const rows = [row({ model_choices: [stale] }), row({ name: 'codex' })]
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          await gate
+          return rows
+        },
+        act: async () => rows,
+        refreshMenus: async () => ({ ok: true, detail: '', models: [fresh], effortChoices: [] }),
+      },
+    })
+    store.set({ rows: [rows[0]!] })
+
+    const opening = store.load(true)
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+
+    releaseLoad()
+    await opening
+
+    expect(store.get().rows[0]!.model_choices).toEqual([fresh])
+    expect(store.get().rows.map((r) => r.name)).toEqual(['claude_code', 'codex'])
+  })
+})
+
+describe('a write that supersedes a roster read', () => {
+  /* The write takes the read's sequence, so the read returns through the stale
+     guard without clearing `loading` -- and it is the read that owns that flag.
+     With rows already on screen the page is interactive while the opening probe
+     is still out, so a write pressed there would leave it saying "Checking". */
+  it('clears the checking state the read it replaced left behind', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let listed = 0
+    const rows = [row(), row({ name: 'codex' })]
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          listed += 1
+          if (listed === 1) await gate
+          return rows
+        },
+        act: async () => rows,
+      },
+    })
+    store.set({ rows })
+
+    const opening = store.load(true)
+    expect(store.get().loading).toBe(true)
+
+    await store.runTest(rows[0]!)
+
+    expect(store.get().loading).toBe(false)
+
+    release()
+    await opening
+    expect(store.get().loading).toBe(false)
+  })
+})
+
+describe('a menu read that failed', () => {
+  it('drops its note once the row is measured again', async () => {
+    const rows = [row(), row({ name: 'codex' })]
+    let listed = 0
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          listed += 1
+          return rows
+        },
+        act: async () => rows,
+        refreshMenus: async () => ({ ok: false, detail: 'the host is down', models: [], effortChoices: [] }),
+      },
+    })
+    store.set({ rows })
+
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().menusFailed.claude_code).toBe('the host is down')
+
+    /* The sheet's re-check re-lists with a probe, which measures the row again. */
+    await store.load(true)
+    expect(store.get().menusFailed).toEqual({})
+    expect(listed).toBe(1)
+
+    /* And a Test does, through the write path. */
+    await store.refreshMenus(rows[0]!)
+    expect(store.get().menusFailed.claude_code).toBe('the host is down')
+    await store.runTest(rows[0]!)
+    expect(store.get().menusFailed).toEqual({})
+  })
+})
+
+describe('the warm read', () => {
+  /* The hub is opened long before the reader goes there, so the first frame can
+     draw its rows instead of a scanning placeholder. The probe is deliberately
+     left to the page's own open: a boot that probed would launch an agent
+     process per row while the reader is still on the composer. */
+  it('reads the roster without a probe, so the rows are there before the page opens', async () => {
+    const rows = [row({ name: 'claude_code' })]
+    const probes: boolean[] = []
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async (probe) => {
+          probes.push(!!probe)
+          return rows
+        },
+        act: async () => rows,
+      },
+    })
+
+    await store.warm()
+
+    expect(probes).toEqual([false])
+    expect(store.get().rows).toBe(rows)
+    expect(store.get().loading).toBe(false)
+    expect(store.get().epoch).toBe(1)
+  })
+
+  it('lets a newer probe read own the table when the warm lands after it', async () => {
+    const warmRows = [row({ name: 'warm', probe_status: 'unknown' })]
+    const freshRows = [row({ name: 'fresh', probe_status: 'ready' })]
+    let releaseWarm: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      releaseWarm = resolve
+    })
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async (probe) => {
+          if (!probe) {
+            await gate
+            return warmRows
+          }
+          return freshRows
+        },
+        act: async () => freshRows,
+      },
+    })
+
+    const warm = store.warm()
+    const fresh = store.load(true)
+    await fresh
+    expect(store.get().rows).toBe(freshRows)
+
+    releaseWarm()
+    await warm
+    expect(store.get().rows).toBe(freshRows)
+    expect(store.get().loading).toBe(false)
+  })
+
+  it('keeps a failed warm quiet, where the page is not there to read it', async () => {
+    setSources({
+      extAgents: {
+        ...offMachine,
+        load: async () => {
+          throw new Error('offline')
+        },
+        act: async () => [],
+      },
+    })
+
+    await store.warm()
+
+    expect(store.get().loading).toBe(false)
+    expect(toastWriter.items).toEqual([])
   })
 })
 

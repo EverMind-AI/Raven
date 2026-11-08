@@ -51,7 +51,7 @@ export function pendingLabel(row: ExtAgentRow, s: ExtAgentsState): string {
    the card keeps it until that key is pressed. */
 export function refusedWrite(failed: Failure): 'connect' | 'disconnect' | 'save' {
   if (store.disconnects(failed)) return 'disconnect'
-  return failed.op === 'model' || failed.op === 'update' ? 'save' : 'connect'
+  return failed.op === 'model' || failed.op === 'effort' || failed.op === 'update' ? 'save' : 'connect'
 }
 
 /* What a named fix is about, as a title: the sheet heads its note with it for

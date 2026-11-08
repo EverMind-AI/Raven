@@ -42,6 +42,18 @@ from raven.tracing import config as tracing_config
 
 console = Console()
 
+#: zstd decoding landed in Node's zlib in 22.15 and 23.8, and the viewer reads
+#: payloads compressed by default. Its floor is therefore higher than the TUI's.
+_MIN_VIEWER_NODE_VERSION = (22, 15, 0)
+_FIRST_VIEWER_NODE_23_VERSION = (23, 8, 0)
+
+
+def _node_supports_zstd(version: tuple[int, ...]) -> bool:
+    """Whether this Node has zlib zstd: 22.15+, 23.8+, or any later major."""
+    if version[0] == 23:
+        return version >= _FIRST_VIEWER_NODE_23_VERSION
+    return version >= _MIN_VIEWER_NODE_VERSION
+
 
 def _viewer_dir() -> Path:
     return Path(__file__).resolve().parent / "tracing_viewer"
@@ -190,15 +202,17 @@ def _stop_viewer() -> None:
 
 
 def _resolve_node() -> str:
-    from raven.cli.tui_commands import _MIN_NODE_VERSION, find_node
+    from raven.cli.tui_commands import find_node
 
-    node, version = find_node()
-    # find_node returns the best node it saw even below the minimum, so the
-    # version check is the caller's -- the TUI's own launch does the same.
-    if not node or version is None or version < _MIN_NODE_VERSION:
+    # The viewer's floor is stricter than the TUI's, so the search has to use
+    # it: a PATH node the TUI accepts would otherwise hide a zstd-capable one
+    # later in the order. find_node still returns the best node it saw when
+    # none qualifies, so the version check stays the caller's.
+    node, version = find_node(_node_supports_zstd)
+    if not node or version is None or not _node_supports_zstd(version):
         console.print(
-            "[red]Node (>= 22) not found.[/red] The tracing dashboard needs the "
-            "same Node runtime as the TUI.\n"
+            "[red]Node with zstd support not found (22.15+, or 23.8+).[/red] The tracing dashboard reads "
+            "zstd-compressed payloads and needs a Node with zlib zstd support.\n"
             "Install: https://nodejs.org/  or  brew install node@22  or  nvm install 22"
         )
         raise typer.Exit(1)
@@ -306,6 +320,70 @@ def _run_compact(*, dry_run: bool) -> None:
         console.print(f"[yellow]... and {hidden} more[/yellow]")
 
 
+def _run_compress(*, dry_run: bool, logs: bool = False) -> None:
+    from raven.tracing.compress import compress, compress_logs
+    from raven.tracing.store import TraceStore
+
+    store = TraceStore(tracing_config.state_dir())
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    artifacts_dir = store.artifacts_dir
+    if artifacts_dir.is_dir():
+        result = compress(artifacts_dir, dry_run=dry_run)
+        console.print(
+            f"blobs {result.blobs}: compressed {result.compressed}, already {result.already}, relinked {result.relinked}"
+        )
+        console.print(f"messages {result.messages}: compressed {result.messages_compressed}")
+        console.print(
+            f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(result.errors)
+    else:
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+    if logs:
+        log_result = compress_logs(store.logs_dir, dry_run=dry_run)
+        console.print(
+            f"logs {log_result.files}: compressed {log_result.compressed}, already {log_result.already}, "
+            f"left for the next rotation {log_result.newest}"
+        )
+        console.print(
+            f"{log_result.bytes_before / (1024 * 1024):.1f} MB -> {log_result.bytes_after / (1024 * 1024):.1f} MB, "
+            f"saved {log_result.saved / (1024 * 1024):.1f} MB"
+        )
+        _print_skipped(log_result.errors)
+
+
+def _run_pack_messages(*, dry_run: bool) -> None:
+    from raven.tracing.message_pack import pack_messages
+    from raven.tracing.store import TraceStore
+
+    artifacts_dir = TraceStore(tracing_config.state_dir()).artifacts_dir
+    if dry_run:
+        console.print("[dim]dry run - nothing is written[/dim]")
+    if not artifacts_dir.is_dir():
+        console.print(f"[yellow]No artifacts at {escape(str(artifacts_dir))}.[/yellow]")
+        return
+    result = pack_messages(artifacts_dir, dry_run=dry_run)
+    console.print(
+        f"messages {result.scanned}: packed {result.packed}, already {result.already}, "
+        f"packs {result.packs}, removed files {result.removed}"
+    )
+    console.print(
+        f"{result.bytes_before / (1024 * 1024):.1f} MB -> {result.bytes_after / (1024 * 1024):.1f} MB, "
+        f"saved {result.saved / (1024 * 1024):.1f} MB"
+    )
+    _print_skipped(result.errors)
+
+
+def _print_skipped(errors: list[str]) -> None:
+    for message in errors[:10]:
+        console.print(f"[yellow]skipped:[/yellow] {escape(message)}")
+    hidden = max(len(errors) - 10, 0)
+    if hidden:
+        console.print(f"[yellow]... and {hidden} more[/yellow]")
+
+
 def register(app: typer.Typer) -> None:
     """Attach the ``tracing`` command to ``app``.
 
@@ -320,7 +398,9 @@ def register(app: typer.Typer) -> None:
             None,
             help=(
                 "Optional action: 'stop' shuts down the background viewer; "
-                "'compact' folds duplicate artifacts (terminal only, not available from the TUI)."
+                "'compact' folds duplicate artifacts; 'compress' rewrites payloads as zstd "
+                "(--logs adds the rotated span and event logs); 'pack-messages' moves message blobs "
+                "into packs. All but 'stop' are terminal only, not available from the TUI."
             ),
         ),
         port: int = typer.Option(None, "--port", "-p", help="Port to bind (default: config or 4318)."),
@@ -328,18 +408,30 @@ def register(app: typer.Typer) -> None:
             False, "--foreground", "-f", help="Run the viewer in the foreground (blocks; Ctrl-C to stop)."
         ),
         dry_run: bool = typer.Option(
-            False, "--dry-run", help="With 'compact': report what would change without writing."
+            False,
+            "--dry-run",
+            help="With 'compact', 'compress' or 'pack-messages': report what would change without writing.",
         ),
+        logs: bool = typer.Option(False, "--logs", help="With 'compress': also compress rotated span and event logs."),
     ) -> None:
         """Open the tracing dashboard (captured LLM/tool/memory spans)."""
         if action == "compact":
             _run_compact(dry_run=dry_run)
             return
+        if action == "compress":
+            _run_compress(dry_run=dry_run, logs=logs)
+            return
+        if action == "pack-messages":
+            _run_pack_messages(dry_run=dry_run)
+            return
         if action == "stop":
             _stop_viewer()
             return
         if action is not None:
-            console.print(f"[red]Unknown action '{escape(action)}'.[/red] Supported actions: stop, compact")
+            console.print(
+                f"[red]Unknown action '{escape(action)}'.[/red] "
+                "Supported actions: stop, compact, compress, pack-messages"
+            )
             raise typer.Exit(2)
         bind_port = port if port is not None else tracing_config.port()
         if foreground:

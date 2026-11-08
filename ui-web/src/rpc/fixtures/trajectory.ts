@@ -4,7 +4,7 @@
  * The first turn is eight entries of the main session alone -- the user's
  * input, a model call expanded into input / thinking / output, a tool call
  * that failed, a second tool call that succeeded, and the agent's reply --
- * with the timing the duration bar reads: inputs charged zero, the model
+ * with the timing the page reads: inputs charged zero, the model
  * output carrying its call, the failed tool carrying the failure mark. The
  * second turn dispatches three sub-agent runs, whose steps the index puts
  * among the turn's own rows: one that finished, one still running, and an

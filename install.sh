@@ -526,9 +526,10 @@ build_web_assets() {
   need_tui=0
   need_page=0
   if is_stale "$src/ui-tui/dist/entry.js" "$src/ui-tui"; then need_tui=1; fi
-  # The page inlines the shared catalogue (ui-web/build.py reads i18n/messages.json),
-  # so a catalogue-only change is a page change.
-  if is_stale "$src/ui-web/dist/index.html" "$src/ui-web" "$src/i18n"; then need_page=1; fi
+  # The page inlines the shared catalogues -- the bundle reads
+  # i18n/messages.json and ui-shared/*.json -- so a catalogue-only change is
+  # a page change.
+  if is_stale "$src/ui-web/dist/index.html" "$src/ui-web" "$src/i18n" "$src/ui-shared"; then need_page=1; fi
   [ "$need_tui" = 1 ] || [ "$need_page" = 1 ] || return 0
 
   # One probe for both builds.

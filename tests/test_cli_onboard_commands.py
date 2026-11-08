@@ -27,7 +27,7 @@ import typer
 from typer.testing import CliRunner
 
 from raven import i18n
-from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_web
+from raven.cli import _onboard_shared, _tty_guard, onboard_channels, onboard_commands, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.i18n import t
@@ -558,6 +558,25 @@ def test_onboard_non_tty_no_flag_fails(tmp_env: Path) -> None:
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 2
     assert "Non-interactive terminal detected" in r.stdout
+
+
+def test_check_tty_or_die_rejects_redirected_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A piped stdin is as fatal as a piped stdout: the wizard prompts read stdin."""
+
+    class _Stream:
+        def __init__(self, tty: bool) -> None:
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    fake_sys = SimpleNamespace(stdin=_Stream(False), stdout=_Stream(True))
+    # raising=False: the module only re-exports ``sys`` on the unfixed code path.
+    monkeypatch.setattr(onboard_commands, "sys", fake_sys, raising=False)
+    monkeypatch.setattr(_tty_guard, "sys", fake_sys)
+    with pytest.raises(typer.Exit) as excinfo:
+        onboard_commands._check_tty_or_die(False)
+    assert excinfo.value.exit_code == 2
 
 
 # --------------------------------------------------------------------------- existing-config handling
@@ -3009,6 +3028,28 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
     assert data["channels"]["whatsapp"]["enabled"] is True
 
 
+def test_scancode_login_says_the_whatsapp_wait_is_bounded(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shared line must not promise an unbounded wait: WhatsApp gives up
+    after five minutes, and the wizard says so before the scan starts."""
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda _channel: False)
+    monkeypatch.setattr(
+        "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
+        _async_return(True),
+    )
+
+    onboard_channels._scancode_login("whatsapp")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "five minutes" in out
+
+
+def test_the_whatsapp_wait_note_is_translated() -> None:
+    note = " WhatsApp stops waiting after five minutes."
+    assert zh_catalog.MESSAGES[note] != note
+
+
 # --------------------------------------------------------------------------- multi-provider add/remove
 
 
@@ -3423,24 +3464,28 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_stays_sparse(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bootstrap records nothing the user did not set: a default that lands on
-    disk stops following its declaration, so the extension blocks are not
-    materialized -- their readers answer from the declared defaults."""
+def test_fresh_bootstrap_seeds_only_the_skill_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap records nothing the user did not set, with one exception: the
+    Skill Hub endpoint has no schema default (programmatic loads stay
+    Hub-off), so onboarding is where a fresh install opts in."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
-    for block in ("memory", "plugins", "skillForge"):
-        assert block not in data, f"fresh config must not seed {block}"
+    assert "memory" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.backend == "everos"  # from the declaration, not the file
+    assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
 
 
 def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config that predates the extension blocks is not backfilled: what the
     user set stays byte-for-byte, and the keys they never set answer from the
-    declarations instead of being materialized."""
+    declarations instead of being materialized. The Skill Hub endpoint is the
+    one documented exception -- onboarding is the opt-in for a schema default
+    that has to stay ``None``."""
     tmp_env.write_text(
         json.dumps(
             {
@@ -3458,11 +3503,75 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert data["memory"]["backend"] == "everos"
     assert data["memory"]["memoryTopK"] == 20
     assert "userId" not in data["memory"]  # not backfilled
-    assert "plugins" not in data and "skillForge" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.memory_top_k == 20  # the user's value
+
+
+def test_bootstrap_keeps_a_configured_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_env.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}})
+    )
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"endpoint": "https://hub.internal.test", "apiKey": "k"}
+
+
+def test_bootstrap_honours_an_explicit_null_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null endpoint is the way a user keeps the Hub off across a repeat
+    onboard; seeding must not read it as "unset" and turn it back on."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]["endpoint"] is None
+
+
+def test_bootstrap_does_not_re_enable_a_switched_off_hub(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The seed is an endpoint write, not consent: a config that switched the
+    source off stays off after a repeat onboard."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"enabled": False, "endpoint": "https://skillhub.evermind.ai"}
+    from raven.config.raven import load_raven_config
+
+    assert load_raven_config().skill_forge.router.hub.enabled is False
+
+
+def test_bootstrap_says_what_turning_skill_hub_search_on_sends(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Onboarding is the opt-in, so it is where the reader hears what the
+    opt-in sends, where to, and how to stop it."""
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Skill Hub search is on" in out
+    assert "sends text from your conversation to https://skillhub.evermind.ai" in out
+    assert "skillForge.router.hub.enabled" in out
+
+
+@pytest.mark.parametrize(
+    "hub",
+    [{"enabled": False}, {"endpoint": None}, {"endpoint": "https://hub.internal.test"}],
+    ids=["switched off", "explicit null", "already configured"],
+)
+def test_bootstrap_says_nothing_about_skill_hub_when_it_turned_nothing_on(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], hub: dict
+) -> None:
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert "Skill Hub" not in capsys.readouterr().out
 
 
 def _onboard_once() -> Any:
@@ -4529,7 +4638,7 @@ def test_a_certificate_the_machine_does_not_trust_points_at_the_certificate_stor
     monkeypatch.setattr(
         update_providers,
         "test_provider",
-        lambda provider: {
+        lambda provider, **_: {
             "ok": False,
             "status": "certificate_untrusted",
             "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
@@ -4557,7 +4666,7 @@ def test_a_refused_certificate_names_the_refusals_a_ca_does_not_fix(monkeypatch,
     monkeypatch.setattr(
         update_providers,
         "test_provider",
-        lambda provider: {
+        lambda provider, **_: {
             "ok": False,
             "status": "certificate_untrusted",
             "error": '"api.deepseek.com" certificate is not standards compliant',
@@ -8572,3 +8681,78 @@ def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: py
     monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
 
     assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+
+
+def test_the_wizard_reads_a_borrowed_web_key(tmp_path: Path) -> None:
+    """A DeepSeek key under providers.* pays for the web tools too, so the
+    wizard must not ask for a second one -- or probe with an empty string."""
+    import json
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-llm"}}}), encoding="utf-8")
+    set_config_path(cfg)
+    try:
+        assert onboard_web._stored_key("deepseek") == "sk-llm"
+        assert onboard_web._stored_key("tavily") == ""
+    finally:
+        set_config_path(None)
+
+
+def test_the_onboarding_web_explanation_reaches_the_zh_catalog() -> None:
+    """The step-5 text is its own gettext key; a rewrite that leaves the zh entry
+    behind silently falls the whole screen back to English."""
+    assert onboard_web.WEB_STEPS_INTRO in zh_catalog.MESSAGES
+
+
+# ---------------------------------------------------------------------------
+# Step 1: the key itself is confirmed, not only the model list
+# ---------------------------------------------------------------------------
+
+
+def test_verify_provider_confirms_the_key_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenRouter's list answers anyone; the probe is asked to check the key too."""
+    seen: dict[str, Any] = {}
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"ok": True, "status": "valid", "models_count": 2, "model_ids": ["a", "b"], "elapsed_ms": 1}
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("openrouter") == (True, "valid", ["a", "b"])
+    assert seen["check_credential"] is True
+
+
+def test_verify_provider_says_an_unconfirmed_key_is_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A catalogue that checks no keys, on a vendor with no path that would.
+
+    Not a failure -- the list is real and the wizard goes on with it -- and not
+    "Connected!" either: the test message is the check that remains, and the
+    line says so. With ``--skip-test`` there is no such message, and the line
+    says that instead.
+    """
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status": "key_unchecked",
+            "models_count": 2,
+            "model_ids": ["a", "b"],
+            "error": "this vendor's models endpoint answers without checking the key",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("custom") == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "without checking the key" in out
+    assert "test message" in out
+
+    assert onboard_commands._verify_provider("custom", skip_test=True) == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "--skip-test" in out

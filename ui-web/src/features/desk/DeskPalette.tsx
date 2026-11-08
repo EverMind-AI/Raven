@@ -1,10 +1,12 @@
 /** Draggable floating navigation palette for workspace content. */
 
+import { Download04Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
-import { TasksApp } from '../tasks/TasksPage'
+import { TasksPanel } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
@@ -147,27 +149,47 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
   const mine = row.scope === deliveries.SESSION
   const when = here || !mine || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
   const meta = [row.name, size, when].filter(Boolean).join(' \u00b7 ')
-  return (
-    <button
-      className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
-      title={row.description || row.path}
-      /* Through the workspace's own opener, not straight at the desk: that is
-         the door the transcript's delivery card uses, and it is what keeps a
-         source that cannot read files (the demo shell) answering with its own
-         note instead of a viewer that has nothing to show.
-         Left clickable on purpose when the file is gone: the viewer says so in
-         words, which is more than a dead row does. */
-      onClick={() => workspace.openDelivery(row.path)}
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine -- the
+     same control the transcript's delivery card and the viewer's header carry.
+     A sibling of the button, not a child of it: a link inside a button is not
+     a link, it is a button that navigates. A delivery that is gone offers
+     none: its token is gone with it, and the row says so already. */
+  const link = row.downloadPath && !row.missing ? (
+    <a
+      className="desk-dl"
+      href={row.downloadPath}
+      download={row.name}
+      data-tip={t('gui.arts.download')}
+      aria-label={t('gui.arts.download')}
     >
-      <span className="dlv-kind" data-kind={fileKind(row.name)}>
-        {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
-      </span>
-      <span className="desk-name">
-        <b>{row.title}</b>
-        <s>{meta}</s>
-      </span>
-      {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
-    </button>
+      <Icon icon={Download04Icon} size={14} />
+    </a>
+  ) : null
+  return (
+    <span className="desk-dlv">
+      <button
+        className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
+        title={row.description || row.path}
+        /* Through the workspace's own opener, not straight at the desk: that is
+           the door the transcript's delivery card uses, and it is what keeps a
+           source that cannot read files (the demo shell) answering with its own
+           note instead of a viewer that has nothing to show.
+           Left clickable on purpose when the file is gone: the viewer says so in
+           words, which is more than a dead row does. */
+        onClick={() => workspace.openDelivery(row.path)}
+      >
+        <span className="dlv-kind" data-kind={fileKind(row.name)}>
+          {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
+        </span>
+        <span className="desk-name">
+          <b>{row.title}</b>
+          <s>{meta}</s>
+        </span>
+        {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
+      </button>
+      {link}
+    </span>
   )
 }
 
@@ -216,13 +238,17 @@ function DeliverablesNav(): JSX.Element {
    direct chat still live there. */
 function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  useEffect(() => { void tasksStore.refresh() }, [])
+  useEffect(() => { void tasksStore.refresh(); void tasksStore.refreshBoard() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
-     look like the other two, and TasksApp's own note belongs to the panel. */
-  if (!state.rows.length) {
+     look like the other two, and TasksPanel's own note belongs to the panel.
+     Nothing is no Task and no group: a conversation that delegated nothing
+     still has the matters its board keeps, and the Task Board page opens them
+     here. An unread board is not an empty one -- a reconnect resets it with
+     this tab mounted, and the panel reads it back. */
+  if (!state.rows.length && state.boardLoaded && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
-  return <TasksApp />
+  return <TasksPanel />
 }
 
 /* Long enough to read as a movement, short enough that a reader who wanted the
@@ -513,6 +539,9 @@ export function DeskPalette(): JSX.Element | null {
       role="dialog"
       aria-label={t('gui.workspace')}
       data-anchored={!geom.detached}
+      /* The tab whose ground the frame takes: the Tasks board paints on
+         `--surface`, so the chrome above and below it has to as well. */
+      data-tab={state.tab}
       /* Which way it is moving, for the stylesheet -- and genuinely inert
          while it leaves. A tab clicked on the way out would act on a desk the
          reader has already dismissed, a screen reader has no reason to be told

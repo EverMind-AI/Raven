@@ -65,6 +65,10 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
       .filter((c) => c && c.value)
       .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
     model_source: r.model_source,
+    effort: r.effort ?? null,
+    effort_choices: (r.effort_choices || [])
+      .filter((c) => c && c.value)
+      .map((c) => ({ value: c.value, name: c.name || '' })),
     machine: r.machine || null,
   }
 }
@@ -347,6 +351,14 @@ export const extAgentsSource: ExtAgentsSource = {
         'subagents.update',
         a.clear_model ? { name: row.name, clear_model: true } : { name: row.name, model: a.model, provider: a.provider || undefined },
       )
+    } else if (op === 'effort') {
+      /* The row's reasoning effort, set or cleared. Like the model, the value
+         is the agent's own from its thought_level menu; the server judges it
+         against the recorded menu. */
+      await gateway().call(
+        'subagents.update',
+        a.clear_effort ? { name: row.name, clear_effort: true } : { name: row.name, effort: a.effort },
+      )
     } else if (op === 'toggle') {
       /* One switch for every kind of row. A discovered folder has no config
          entry, so the server writes one from the folder's own manifest and puts
@@ -436,6 +448,28 @@ export const extAgentsSource: ExtAgentsSource = {
   cancelRun: async (name) => {
     const got = await gateway().call('subagents.test_cancel', { name })
     return !!got.cancelled
+  },
+  /* The agent's own handshake, with no prompt in it: the server opens a
+     throwaway session, records the menu it advertised, and answers with it.
+     A failed read keeps the recorded menu, which is why the answer's `models`
+     is drawable beside `ok: false`. The source is the row's provenance, the
+     same one a test sends. */
+  refreshMenus: async (row, force = false) => {
+    const got = await gateway().call('subagents.refresh_models', {
+      name: row.name,
+      source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset',
+      force,
+    })
+    return {
+      ok: !!got.ok,
+      detail: got.detail || '',
+      models: (got.models || [])
+        .filter((c) => c && c.value)
+        .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
+      effortChoices: (got.effort_choices || [])
+        .filter((c) => c && c.value)
+        .map((c) => ({ value: c.value, name: c.name || '' })),
+    }
   },
 }
 

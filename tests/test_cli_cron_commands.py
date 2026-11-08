@@ -1013,3 +1013,124 @@ def test_list_all_view_shows_no_auto_disabled_hint(runner, fake_cron_dir):
     r_all = runner.invoke(cron_app, ["list", "--all"])
     assert r_all.exit_code == 0
     assert "auto-disabled after repeated" not in r_all.stdout
+
+
+def test_add_duplicate_message_does_not_claim_a_creation(runner, fake_cron_dir, feishu_enabled):
+    """An add whose message matches a job with a fire ahead reuses that job
+    unchanged (issue #1060); the output names the kept job and does not say
+    "Created", or the user believes the new schedule was stored."""
+    first = runner.invoke(
+        cron_app,
+        [
+            "add",
+            "--name",
+            "morning",
+            "--cron",
+            "0 9 * * *",
+            "--message",
+            "wake up",
+            "--channel",
+            "feishu",
+            "--to",
+            "ou_xxx",
+        ],
+    )
+    assert first.exit_code == 0
+    second = runner.invoke(
+        cron_app,
+        [
+            "add",
+            "--name",
+            "later",
+            "--cron",
+            "0 15 * * *",
+            "--message",
+            "wake up",
+            "--channel",
+            "feishu",
+            "--to",
+            "ou_xxx",
+        ],
+    )
+    assert second.exit_code == 0
+    assert "No new job created" in second.stdout
+    assert "Created job" not in second.stdout
+    jobs = CronService(fake_cron_dir / "jobs.json").list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].schedule.expr == "0 9 * * *", "the requested schedule was not applied"
+
+
+def test_add_same_slot_after_the_fire_reports_updated(runner, fake_cron_dir, feishu_enabled):
+    first = runner.invoke(
+        cron_app,
+        [
+            "add",
+            "--name",
+            "morning",
+            "--cron",
+            "0 9 * * *",
+            "--message",
+            "wake up",
+            "--channel",
+            "feishu",
+            "--to",
+            "ou_xxx",
+        ],
+    )
+    assert first.exit_code == 0
+    store = fake_cron_dir / "jobs.json"
+    data = json.loads(store.read_text())
+    data["jobs"][0]["state"]["nextRunAtMs"] = None
+    store.write_text(json.dumps(data))
+    second = runner.invoke(
+        cron_app,
+        [
+            "add",
+            "--name",
+            "morning",
+            "--cron",
+            "0 9 * * *",
+            "--message",
+            "wake up",
+            "--channel",
+            "feishu",
+            "--to",
+            "ou_xxx",
+        ],
+    )
+    assert second.exit_code == 0
+    assert "Updated job" in second.stdout
+    assert "kept its schedule" in second.stdout
+    assert "Created job" not in second.stdout
+
+
+def test_add_identical_message_and_schedule_does_not_claim_the_schedule_was_dropped(
+    runner, fake_cron_dir, feishu_enabled
+):
+    """The message-equal layer matches on the message alone, so a re-add of the
+    same message on the *same* schedule also skips. Nothing needs applying
+    there: the stored schedule is the requested one, so the reply must not say
+    it was dropped (#1060)."""
+    args = [
+        "add",
+        "--name",
+        "morning",
+        "--cron",
+        "0 9 * * *",
+        "--message",
+        "wake up",
+        "--channel",
+        "feishu",
+        "--to",
+        "ou_xxx",
+    ]
+    first = runner.invoke(cron_app, args)
+    assert first.exit_code == 0
+    second = runner.invoke(cron_app, args)
+    assert second.exit_code == 0
+    flat = " ".join(second.stdout.split())
+    assert "Already scheduled" in flat
+    assert "not applied" not in flat
+    assert "Created job" not in flat
+    jobs = CronService(fake_cron_dir / "jobs.json").list_jobs()
+    assert [(j.schedule.expr, j.payload.message) for j in jobs] == [("0 9 * * *", "wake up")]

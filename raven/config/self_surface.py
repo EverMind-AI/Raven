@@ -32,7 +32,7 @@ import copy
 import json
 import re
 import string
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import lru_cache
@@ -45,6 +45,7 @@ from pydantic.alias_generators import to_camel, to_snake
 from raven.config.agent_names import GENERIC_AGENT
 from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
+from raven.config.schema import REASONING_EFFORTS
 from raven.providers.registry import PROVIDERS
 from raven.utils.atomic_io import atomic_update
 
@@ -113,6 +114,10 @@ class Setting:
     #: confirmation card words in the reader's language.
     unset_means: str = ""
     unset_to: str = ""
+    #: For a setting that acts only together with other keys (a switch that
+    #: also needs an address), what the runtime runs on, read from the whole
+    #: file: a read shows it beside the stored value, which alone misleads.
+    in_effect: "Callable[[dict[str, Any]], Any] | None" = None
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -148,12 +153,41 @@ class Section:
     settings: tuple[Setting, ...] = field(default_factory=tuple)
 
 
-_REASONING = ("minimal", "low", "medium", "high")
-_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
-_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable")
-_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply", "keenable")
+_WEB_SEARCH = (
+    "serper",
+    "anysearch",
+    "serpapi",
+    "tavily",
+    "exa",
+    "brave",
+    "firecrawl",
+    "serply",
+    "keenable",
+    "deepseek",
+)
+_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable", "deepseek")
+_WEB_VENDORS = (
+    "serper",
+    "anysearch",
+    "serpapi",
+    "jina",
+    "tavily",
+    "exa",
+    "brave",
+    "firecrawl",
+    "serply",
+    "keenable",
+    "deepseek",
+)
 
 _E = Effect
+
+
+def _skill_hub_in_effect(raw: dict[str, Any]) -> bool:
+    from raven.config.live import skill_hub_on
+
+    return skill_hub_on(raw)
+
 
 SECTIONS: tuple[Section, ...] = (
     Section(
@@ -178,13 +212,17 @@ SECTIONS: tuple[Section, ...] = (
                 note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
                 "conversation's next turn",
             ),
+            # The words are ``REASONING_EFFORTS``, the one list the console's
+            # checker and the session's pick read too; null hands the choice
+            # back to the provider's own default, as the settings page offers.
             Setting(
                 "agents.defaults.reasoningEffort",
-                "Reasoning effort sent with each model call",
+                "Reasoning effort sent with each model call; null is the provider's own default",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
-                choices=_REASONING,
+                choices=REASONING_EFFORTS,
+                nullable=True,
             ),
             Setting(
                 "agents.defaults.maxToolIterations",
@@ -304,7 +342,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor; web_search runs only once this vendor's key is set (keenable needs none)",
+                "Web search vendor; web_search runs once this vendor's key, or the model-provider key it borrows, is set (keenable needs none)",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -546,6 +584,19 @@ SECTIONS: tuple[Section, ...] = (
                 note="the list replaces the stored one; read it first",
             ),
             Setting("skillForge.enabled", "Mount the extra local skill directories", "bool", _E.RELOAD),
+            Setting(
+                "skillForge.router.hub.enabled",
+                "Search the shared Skill Hub during conversations",
+                "bool",
+                _E.IMMEDIATE,
+                writer="settings",
+                sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
+                note=(
+                    "on only while skillForge.router.hub.endpoint is set, which a read shows as in_effect; "
+                    "switching it off applies at once; turning it on may wait for a reload, and the write says so"
+                ),
+                in_effect=_skill_hub_in_effect,
+            ),
             Setting(
                 "skillForge.autoInstall",
                 "Installing a Skill Hub skill the router picked",
@@ -1258,6 +1309,7 @@ _VENDOR_NAMES = {
     "firecrawl": "Firecrawl",
     "serply": "Serply",
     "keenable": "Keenable",
+    "deepseek": "DeepSeek",
 }
 
 

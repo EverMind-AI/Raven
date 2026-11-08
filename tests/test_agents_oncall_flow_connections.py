@@ -447,3 +447,69 @@ async def test_the_status_of_a_password_machine_campaign_leaves_the_loop_free_wh
 
     assert "t1" in out
     assert ticks >= 5, f"the loop ran {ticks} ticks of 50 ms while ssh -G took a second"
+
+
+# Four machines on one address, told apart only by port: what "run it on
+# 113.27" has to be settled against.
+SHARED_ADDRESS = [
+    {
+        "id": "conn_cpu_32c",
+        "display_name": "my CPU dev box",
+        "kind": "cpu",
+        "cores": 32,
+        "host": "203.0.113.27",
+        "port": 64106,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_cpu_kaggri",
+        "display_name": "match runner",
+        "kind": "cpu",
+        "cores": 128,
+        "host": "203.0.113.27",
+        "port": 58717,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_gpu_a800",
+        "display_name": "GPU A800x2",
+        "kind": "gpu",
+        "host": "203.0.113.27",
+        "port": 7104,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+    {
+        "id": "conn_lab",
+        "display_name": "lab box",
+        "kind": "cpu",
+        "aliases": ["the old one"],
+        "host": "10.0.0.127",
+        "port": 22,
+        "user": "root",
+        "key": "~/.ssh/id_rsa",
+    },
+]
+
+
+def test_the_oncall_listing_says_what_a_port_means(store):
+    store(SHARED_ADDRESS)
+    text = connections.describe("64106")
+    assert text.startswith("'64106' is my CPU dev box (id conn_cpu_32c), matched by port 64106.")
+    assert "203.0.113.27" not in text
+
+
+def test_the_oncall_listing_says_how_to_settle_a_shared_address(store):
+    store(SHARED_ADDRESS)
+    text = connections.describe("113.27")
+    assert "could be any of 3 machines" in text
+    assert "look on each candidate" in text.lower()
+    assert "Ask the owner only if" in text
+    assert "203.0.113.27" not in text
+
+
+def test_the_oncall_listing_without_a_hint_is_unchanged(store):
+    store(SHARED_ADDRESS)
+    assert connections.describe().startswith("4 connection(s) this instance can run on:")

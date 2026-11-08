@@ -15,7 +15,10 @@
 
 import { load as paneLoad } from '../chrome/behaviour/panes'
 import { goPaint } from '../features/composer/mount'
+import { warm as warmConnections } from '../features/connections/store'
 import { warm as warmCron } from '../features/cron/store'
+import * as machinesStore from '../features/extAgents/machines'
+import { warm as warmAgents } from '../features/extAgents/store'
 import { refresh as refreshImportSync } from '../features/importSync/store'
 import { loadExt } from '../features/installed/source'
 import { loadSelection, setupState } from '../features/model/source'
@@ -30,12 +33,13 @@ import { setCurrent as sessionSet } from '../lib/session'
 import { hasUpdateFlag } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { draw as drawCtx } from '../state/ctxChip'
+import { load as loadEffort } from '../state/effort'
 import { setRuntime } from '../state/envChip'
 import { bootError } from '../state/failureBar'
 import { load as loadLang } from '../state/lang/pick'
 import { load as lookLoad } from '../state/look'
 import { draw as drawPerm } from '../state/perm'
-import { set as setRail } from '../state/rail'
+import { set as setRail, stands as railStands } from '../state/rail'
 import { replayPendingApprovals, replayPendingCredentials } from '../state/session/pipeline'
 import { switchTo, switchToDraft } from '../state/session/registry'
 import { landing, watch as watchSessionNote } from '../state/session/resume'
@@ -122,6 +126,15 @@ async function sequence(): Promise<void> {
       .catch(() => {})
     await loadSessions()
     releaseRail()
+    /* The connections hub's three modules, fetched while the reader is still on
+       the first screen: opening it later draws its cards at once and refreshes
+       behind them. The agents read carries no probe -- the page's own open is
+       what re-measures availability -- so this starts no agent process. None is
+       awaited: nothing on this screen reads any of it, and a failed warm is the
+       module's own read to report when the reader goes there. */
+    void warmConnections()
+    void warmAgents()
+    void machinesStore.load()
     /* Whether the trajectory view is on for this gateway; the poller keeps
        asking from here on (features/trajectory/poll.ts). */
     void refreshTrajectoryState()
@@ -170,11 +183,14 @@ async function sequence(): Promise<void> {
        the chip must reflect the server mode on cold boot, not the localStorage
        cache -- the gate enforces the server's answer either way. */
     loadSettingsWithProviders().then(pushPermMode).catch(() => {})
-    /* The tier chip's first read. `session.onChange` covers every switch after
-       this, but not the state the page boots into: a page with no conversation
-       restored never changes session, so the chip would stay hidden on the one
-       screen where the reader is about to start a conversation. */
+    /* The tier chip's first read. The switch (state/session/registry.ts) reads
+       it again for every conversation opened after this, keyed to that
+       conversation, but not for the state the page boots into: a page with no
+       conversation restored never switches, so the chip would stay hidden on
+       the one screen where the reader is about to start a conversation. */
     loadTier()
+    /* The effort row's first read, for the same reason. */
+    loadEffort()
     /* The import row's first read. Here rather than with the seam installers:
        those run before the socket opens, and a read there is refused as "not
        connected" -- which left a run the gateway lost to a restart, still in
@@ -207,13 +223,17 @@ export function bootPage(): void {
   ;([
     ['lookLoad', (): void => lookLoad()],
     ['paneLoad', (): void => paneLoad()],
-    ['setRail', (): void => setRail(true)],
+    /* Standing, unless the window is too narrow to hold it beside the content
+       (state/rail.ts, `stands`): a page opened on a phone starts with the
+       conversation, and the rail is one press away. */
+    ['setRail', (): void => setRail(railStands())],
     ['sessionDraw', (): void => sessionDraw()],
     /* A live boot deliberately starts with an empty source and chooses a draft
        after the real list lands; an offline page has a fixture row to open. */
     ['sessionOpen', (): void => { const first = sessionRows()[0]; if (first) void sessionOpen(first) }],
     ['drawPerm', (): void => drawPerm()],
     ['loadTier', (): void => { void loadTier() }],
+    ['loadEffort', (): void => { void loadEffort() }],
     ['drawCtx', (): void => drawCtx()],
     ['bumpWs', (): void => bumpWs()],
     ['drawSettings', (): void => redrawSettings()],

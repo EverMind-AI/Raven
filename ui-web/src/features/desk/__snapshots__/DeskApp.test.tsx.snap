@@ -1,7 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`asking for the instance list > keeps its rendered shape 1`] = `
-"div.desk-palette[data-anchored=true][data-phase=in]
+"div.desk-palette[data-anchored=true][data-phase=in][data-tab=tasks]
   div.desk-drag
     div.desk-tabs
       button

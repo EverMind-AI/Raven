@@ -99,6 +99,28 @@ describe('model roles', () => {
     ])
   })
 
+  it('reads a keyed role from whichever spelling the config file carries', async () => {
+    const camel = snap()
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateModel = 'claude-haiku-4-5'
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateProvider = 'anthropic'
+    expect(roleValue(role('gate'), camel)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    /* settings.get returns the file as written, so the harness's camel block
+       has to go or it answers for the snake one. */
+    const snake = snap()
+    delete snake.raw.skillForge
+    snake.raw.skill_forge = { llmGateModel: 'claude-haiku-4-5', llmGateProvider: 'anthropic' }
+    expect(roleValue(role('gate'), snake)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    const titled = snap()
+    titled.raw.session_title = { model: 'claude-sonnet-4-5', provider: 'anthropic' }
+    expect(roleValue(role('title'), titled)).toEqual({ model: 'claude-sonnet-4-5', provider: 'anthropic' })
+
+    install(snake)
+    await mount('model')
+    expect(pill('gui.settings.roles.gate').textContent).toContain('claude-haiku-4-5')
+  })
+
   it('the chat role writes through pickModel and reloads', async () => {
     const { calls } = install()
     await mount('model')
@@ -453,6 +475,27 @@ describe('model roles', () => {
     await act(async () => { fireEvent.click(screen.getByLabelText('gui.settings.more')) })
     expect(second.calls).toEqual([])
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.max {"n":200}')
+  })
+
+  it('an unset effort reads as the provider default, and that rung clears the key rather than writing a word', async () => {
+    /* The harness holds `low`; this is the install that never touched the key,
+       which the page used to draw as Low -- a setting the file does not hold. */
+    const unset = snap()
+    delete (unset.raw.agents as { defaults: Record<string, unknown> }).defaults.reasoningEffort
+    const { calls } = install(unset)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')][0]!.textContent)
+      .toBe('gui.settings.roles.sum_effortgui.settings.roles.effort_default')
+    await act(async () => { fireEvent.click(disc) })
+    expect(screen.getByText('gui.settings.roles.effort_default').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_medium')) })
+    /* Re-queried: a write bumps the epoch and the card is rebuilt under it. */
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_default')) })
+    expect(sets(calls)).toEqual([
+      { key: 'agents.defaults.reasoningEffort', value: 'medium' },
+      { key: 'agents.defaults.reasoningEffort', value: null },
+    ])
   })
 
   it('a fixed context window below 1024 is refused; above the model window it saves and warns', async () => {

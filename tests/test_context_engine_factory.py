@@ -226,6 +226,24 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
         assert HubSkillSource in types
 
+    def test_hub_source_built_while_switched_off(self, tmp_path: Path, monkeypatch) -> None:
+        """The source exists while the switch is off -- so turning it back on
+        needs no loop rebuild -- and the live reader is what gates the call."""
+        _point_live_config(
+            tmp_path,
+            monkeypatch,
+            {"skillForge": {"router": {"hub": {"endpoint": "http://hub.test", "enabled": False}}}},
+        )
+
+        types, sources = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test")
+        )
+
+        assert HubSkillSource in types
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._enabled_reader is not None
+        assert hub._enabled_reader() is False
+
     def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))

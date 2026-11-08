@@ -197,6 +197,10 @@ export interface AskData {
   /* When it was said, in epoch ms: what the date line between two questions
      far apart is measured from. 0 when the entry carried no usable stamp. */
   at: number
+  /* The turn it opened, by the id that turn's `message.start` named: set on a
+     bubble drawn on this page, absent on one read back from history, whose
+     stored entry carries no id. */
+  turnId?: string
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -245,6 +249,13 @@ export interface DeliveredData {
   v: number
   id: number
   kind: 'sdlv'
+  /* When the result re-entered, in epoch ms: the stored entry's stamp, or this
+     page's clock for one drawn live. The turn it opens is found by it -- a
+     task board step keyed by that turn names it the way it names a question's. */
+  at: number
+  /* The turn it opened, by the id its `turn.started` named; absent on a row
+     read back from history, as on a question. */
+  turnId?: string
   label: string
   isDag: boolean
   status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'
@@ -282,9 +293,10 @@ export interface FoldData {
   kind: 'fold'
   time: string | null
   open: boolean
-  /* Open because the runtime opened it, and so still the runtime's to close.
-     A fold the reader has touched is theirs from then on: `toggleFold` clears
-     this, and nothing shuts it afterwards. */
+  /* The runtime still owns this fold's open state, so it may open or shut it
+     as the turn's content changes (see `shutAutoFolds` and `collapse`). A fold
+     the reader has touched is theirs from then on: `toggleFold` clears this,
+     and nothing moves it afterwards. */
   auto: boolean
   steps: StepData[]
 }
@@ -354,12 +366,12 @@ export interface StepHandle {
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void
-  /* Take back the reply the step's latest model call streamed -- the prose
-     after the step's last tool call, or all of it in a step that made none:
-     the model ended the turn on its silence marker, so that reply is not an
-     answer. Narration an earlier call said before its tools stays, as a reload
-     draws it. A step left with nothing else on it is removed. */
-  dropReply(): void
+  /* Take back `shown`, what the server says the reply it read as the silence
+     marker had already streamed (a think block it inlined ahead of the marker):
+     that reply is not an answer. Only that suffix of the step's prose goes, so
+     narration before it stays, as a reload draws it. A step left with nothing
+     else on it is removed. */
+  dropReply(shown: string): void
   tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle
   seal(): void
 }

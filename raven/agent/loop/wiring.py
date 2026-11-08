@@ -44,6 +44,7 @@ from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
+from raven.providers import effort_levels
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -512,12 +513,78 @@ class WiringMixin:
         it only at a restart. Sent as an explicit argument instead, which is
         the path a session's pinned effort already takes.
 
-        None passes nothing, which leaves the provider's own default standing
-        -- an explicit None would switch it off instead.
+        None is an answer, not an absence: the turn sends it as an explicit
+        None, which the provider takes as its own default (nothing on the
+        wire). Leaving the key out instead let the provider fill it from that
+        frozen copy, so a key cleared on a running gateway kept every call at
+        the word it booted with (``session_effort.in_force`` says the rule).
         """
         from raven.config.live import held, reasoning_effort
 
         return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
+
+    def session_reasoning_effort(
+        self,
+        session_key: str | None,
+        pick: str | None = None,
+        model: str | None = None,
+    ) -> str | None:
+        """The reasoning effort this session's own calls run at, short of a hook's override.
+
+        ``session_effort.in_force`` over this loop's inputs: the pick the caller
+        read off the session's record, the session's mode's word, and the
+        configured default as the file has it now. ``model`` is the id the loop
+        was handed for this turn -- the router's pick when it made one, else the
+        session's own -- and bounds the **pick** (``session_effort.clamp``): a
+        level it does not declare, by LiteLLM's table or its provider overlay,
+        is dropped rather than sent. The mode's word and the configured default
+        are not narrowed here; they are not this conversation's pick and were
+        sent as they stand before the pick existed. Beside ``session_tier`` for
+        the reason it gives -- the turn and the RPC need the one rule, and the
+        policy it reads lives here -- and reached on ``self`` by the turn, so
+        nothing imports anything new.
+        """
+        from raven.agent import session_effort
+        from raven.providers.overlay import declared_for
+        from raven.providers.registry import find_by_model, split_model_id
+
+        if model:
+            model_id = model
+            serving = getattr(self.provider, "provider_name", "") or ""
+        elif session_key and self.has_session_binding(session_key):
+            binding = self.binding_for_session(session_key)
+            model_id = binding.model
+            serving = getattr(binding.provider, "provider_name", "") or ""
+        else:
+            model_id = self.model
+            serving = getattr(self.provider, "provider_name", "") or ""
+        provider, _rest = split_model_id(model_id)
+        if not provider:
+            spec = find_by_model(model_id)
+            provider = getattr(spec, "name", "") if spec else ""
+        # The section the loop's binding actually sends through answers for
+        # both the overlay and the ladder; the id's own vendor is the fallback
+        # for a provider that cannot name a single section (a multi-vendor
+        # resolver, or a routed endpoint built with no section of its own).
+        provider = serving or provider
+        levels = effort_levels.levels_for(
+            model_id,
+            declared_for(self._live_config.get("providers") or {}, provider, model_id),
+            provider=provider,
+        )
+        valid_pick = session_effort.clamp(pick, levels)
+        if pick is not None and valid_pick is None:
+            logger.debug(
+                "session {}: reasoning effort {} is not declared by {}; using the session default",
+                session_key,
+                pick,
+                model_id,
+            )
+        return session_effort.in_force(
+            valid_pick,
+            self.session_policy(session_key or "").reasoning_effort,
+            self.default_reasoning_effort,
+        )
 
     @property
     def personalization_enabled(self) -> bool:
@@ -1119,14 +1186,19 @@ class WiringMixin:
         from raven.playbook.run_record import RunRecordStore
 
         try:
-            harness = resolution.spec
             capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
             if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
                 from raven.playbook.workflow_compiler import WorkflowCompiler
 
+                evidence = capture.dags[-1]
+                # The evidence's own Harness, when the run extended it with a
+                # derived role, is what the compiled graph names. Falling back to
+                # the resolution's keeps a run that moved nothing compiled against
+                # exactly the Harness the turn was given.
+                harness = evidence.harness if evidence.harness is not None else resolution.spec
                 artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
                     query=capture.query,
-                    dag=capture.dags[-1].spec,
+                    dag=evidence.spec,
                     run_id=capture.run_id,
                     harness=harness,
                     name_hint=resolution.artifact_name,
@@ -1136,8 +1208,13 @@ class WiringMixin:
                 if resolution.persisted:
                     # The compiler parameterizes a proven graph; it does not own
                     # artifact identity. Keep the numeric suffix chosen by the
-                    # atomic Harness save even when the model ignores nameHint.
-                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": harness})
+                    # atomic Harness save even when the model ignores nameHint,
+                    # and stamp it on the Harness too: a run's frozen table was
+                    # built before a save collision could rename the artifact.
+                    stored_harness = (
+                        harness.model_copy(update={"name": resolution.artifact_name}) if harness is not None else None
+                    )
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": stored_harness})
                     path = store.save(artifact, overwrite=True)
                 else:
                     artifact, path = self._save_generated_artifact(artifact)
@@ -1420,6 +1497,7 @@ class WiringMixin:
         )
         if skill_registry is not None or self._skill_hub_client is not None:
             from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
+            from raven.config.live import skill_hub_enabled
 
             self.tools.register(
                 ReadSkillTool(
@@ -1428,6 +1506,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                 ),
             )
             # Pull-mode discovery: search on the model's own terms through the
@@ -1436,6 +1515,7 @@ class WiringMixin:
                 FindSkillTool(
                     lambda: getattr(self.context_engine, "skills_router", None),
                     hub_wired=self._skill_hub_client is not None,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
@@ -1448,6 +1528,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
@@ -1536,6 +1617,7 @@ class WiringMixin:
                 memory_for=self.subagents.memory_scope,
                 mode_for=self.subagents.resolve_mode,
                 model_for=self.subagents.session_model_for,
+                effort_for=self.subagents.session_effort_for,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
@@ -1554,6 +1636,15 @@ class WiringMixin:
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The host's own record of the conversation's matters. Host-only for the
+        # same reason as everything above: a subagent's turns are its caller's
+        # business, and a board kept there would record the caller's matters twice.
+        if self._task_board_config.enabled:
+            from raven.agent.task_board.service import TaskBoardService
+            from raven.agent.task_board.tool import TaskBoardTool
+
+            self.task_board = TaskBoardService(self.sessions)
+            self.tools.register(TaskBoardTool(self.task_board, loop=self))
         # The two close the array, in this order, so the roster spawn's
         # description ends with is the last thing the array says and the graph
         # tool's pointer to it lands on the tool read right after.
@@ -1702,6 +1793,11 @@ class WiringMixin:
     _plugin_services_started = False
     _started_services: tuple = ()
 
+    @property
+    def running_plugin_services(self) -> tuple:
+        """The contributed services started and not yet stopped: work this host runs with nobody asking."""
+        return self._started_services
+
     async def start_plugin_services(self) -> None:
         """Start every contributed background service, once.
 
@@ -1712,7 +1808,8 @@ class WiringMixin:
 
         The contributed session observers ride this same lifecycle: attached
         to the session store here, detached in :meth:`stop_plugin_services`
-        (paper: contracts/session_events.py).
+        (paper: contracts/session_events.py). The host's own task board joins
+        them, so a deleted conversation's board goes with it.
         """
         if self._plugin_services_started:
             return
@@ -1731,7 +1828,8 @@ class WiringMixin:
                 continue
             started.append(service)
         self._started_services = tuple(started)
-        self.sessions.set_delete_observers(self.session_observers)
+        board = (self.task_board,) if self.task_board is not None else ()
+        self.sessions.set_delete_observers((*self.session_observers, *board))
 
     async def stop_plugin_services(self) -> None:
         """Stop started services, newest first; idempotent, loud on error.
@@ -1819,6 +1917,7 @@ class WiringMixin:
             state_for=self.subagents.instance_state,
             mode_for=self.subagents.resolve_mode,
             model_for=self.subagents.session_model_for,
+            effort_for=self.subagents.session_effort_for,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,
@@ -2017,9 +2116,14 @@ class WiringMixin:
         workspace: Path,
         skill_forge_router_config: "SkillForgeRouterConfig | None",
     ) -> "SkillHubClient | None":
-        """Construct the shared Skill Hub client, or ``None`` when no Hub is
-        configured. Downloads land under ``<workspace>/skills/hub`` so a
-        use_skill'd bundle is discoverable by the on-disk skill registry."""
+        """Construct the shared Skill Hub client, or ``None`` when no Hub
+        endpoint is configured. Downloads land under ``<workspace>/skills/hub``
+        so a use_skill'd bundle is discoverable by the on-disk skill registry.
+
+        Built while the switch is off too: the tools ask the live config
+        before each Hub call, so turning the source back on does not need the
+        loop rebuilt. Only the endpoint is fixed at construction.
+        """
         hub_cfg = getattr(skill_forge_router_config, "hub", None)
         if hub_cfg is None or not getattr(hub_cfg, "endpoint", None):
             return None
@@ -2089,9 +2193,18 @@ class WiringMixin:
         )
 
     def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        surface: str | None = None,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update context for all tools that need routing info.
+
+        ``surface`` goes to the tools that start runs, whose results come back as
+        turns of their own: the front end the turn declared is where those are read.
+        """
         # Before the per-tool contexts because the schema is assembled from this
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
@@ -2106,20 +2219,22 @@ class WiringMixin:
             "cancel_dag",
             "resolve_dag_node",
             "context_retrieve",
+            "task_board",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
+                elif name in ("spawn", "run_subagent_dag"):
+                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}", surface=surface)
                 elif name in (
-                    "spawn",
-                    "run_subagent_dag",
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
                     "context_retrieve",
+                    "task_board",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
@@ -2131,7 +2246,7 @@ class WiringMixin:
         # to that turn's own address rather than the last human conversation's.
         if self._playbooks is not None:
             self._playbooks.set_context(
-                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
+                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}", surface=surface
             )
 
     def dag_tools(self) -> list[Any]:

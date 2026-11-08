@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_gate_pin
+from raven.config.live import LiveConfig, curator_pin, skill_gate_pin, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -85,6 +85,7 @@ def build_context_engine(
     get_tool_definitions: Callable[[], list[dict]],
     list_subagents: "Callable[[], list[AgentMeta]] | None" = None,
     get_tool_notices: Callable[[], list[str]] | None = None,
+    get_session_notices: Callable[[str], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
@@ -93,6 +94,7 @@ def build_context_engine(
     skill_hub_client: "SkillHubClient | None" = None,
     provider_pool: "ProviderPool | None" = None,
     blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+    task_board: bool = False,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -117,17 +119,19 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
+    # One reader for the pins and the Hub switch: the file is re-parsed only
+    # when its bytes change, so the subsystems asking per call cost one read
+    # between them.
+    live = LiveConfig()
+
     router = _build_router(
         builder=builder,
         backend=backend,
         memory_config=memory_config,
         skill_forge_router_config=skill_forge_router_config,
         skill_hub_client=skill_hub_client,
+        hub_enabled_reader=lambda: skill_hub_enabled(live),
     )
-
-    # One reader for both pins: the file is re-parsed only when its bytes
-    # change, so two subsystems asking per call cost one read between them.
-    live = LiveConfig()
 
     discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
     if discovery == "push":
@@ -152,6 +156,7 @@ def build_context_engine(
             list_subagents=list_subagents,
             get_tool_definitions=get_tool_definitions,
             has_memory_backend=backend is not None,
+            task_board=task_board,
         ),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
@@ -241,6 +246,7 @@ def build_context_engine(
         get_tool_definitions,
         now_fn=now_fn,
         get_tool_notices=get_tool_notices,
+        get_session_notices=get_session_notices,
         scent=scent,
         owns_compaction=strategy.owns_compaction,
         mints_source_refs=strategy.mints_source_refs and not history_dropped,
@@ -259,6 +265,7 @@ def _build_router(
     memory_config: "MemoryConfig",
     skill_forge_router_config: "SkillForgeRouterConfig",
     skill_hub_client: "SkillHubClient | None" = None,
+    hub_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
     from raven.memory_engine import (
@@ -294,6 +301,9 @@ def _build_router(
         sources.append(backend_source)
 
     # ── Source 3: Hub (conditional on remote endpoint) ──────────────
+    # Added while the switch is off too: the source is asked per search and
+    # gates itself on the live config, so turning the switch back on does not
+    # need the loop rebuilt. The endpoint is what cannot be added live.
     hub_cfg = skill_forge_router_config.hub
     if hub_cfg.endpoint:
         from raven.skill_hub import SkillHubClient
@@ -311,6 +321,7 @@ def _build_router(
             client,
             weight=float(weights.get("hub", 0.85)),
             min_safety=hub_cfg.min_safety,
+            enabled_reader=hub_enabled_reader,
         )
         sources.append(hub_source)
 

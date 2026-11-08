@@ -86,7 +86,15 @@ export type TurnEvent =
   | CronMissedEvent
   | MediaEvent
   | SessionTitledEvent
-  | SessionNamingEndedEvent;
+  | SessionNamingEndedEvent
+  | TasksBoardUpdatedEvent;
+/**
+ * Where a Task Group stands. needs_you: the reply asks the user to answer, confirm or decide about it, an error only the user can resolve included, even while a run it started still works. running: a run it started is still working. idle: nothing is in flight and nothing is asked. completed: finished, or dropped by the user -- nothing further moves it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroupStatus".
+ */
+export type TaskGroupStatus = 'needs_you' | 'running' | 'idle' | 'completed';
 /**
  * Which delegation path made a task: a spawn call, or a run_subagent_dag run (a playbook run is one).
  *
@@ -214,6 +222,10 @@ export interface SessionInitInfo {
    */
   running?: boolean;
   /**
+   * The reasoning effort this session's own model calls run at: its own pick (session.set_effort), else its mode's, else agents.defaults.reasoningEffort; null when the provider's own default stands.
+   */
+  reasoning_effort?: string | null;
+  /**
    * True for an Imported Conversation, which nothing can change; absent on every other session.
    */
   read_only?: boolean;
@@ -304,7 +316,7 @@ export interface TranscriptMessage {
    */
   silent?: boolean;
   /**
-   * Set on one assistant entry of a turn whose reply the message tool sent to the turn's own chat: the live turn's verdict, so a send that failed or went to another chat does not set it. The entry is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last reply had no text, the last entry that made a tool call, which need not be the call that sent the message. Such a turn answered whatever it ends on, and is not a Silent Turn.
+   * Set on one assistant entry of a turn whose reader got its reply from a tool: a message-tool send that went out (the tool hands every send to the turn's own reader, whatever chat the call names) or a file delivery. A send that failed does not set it. The entry is the turn's last assistant entry with text or tool calls, not counting a notice the runtime files after the turn: the `silent` marker's entry when the turn ends on one, and otherwise, when its last reply had no text, the last entry that made a tool call, which need not be the call that sent the message. Such a turn answered whatever it ends on, and is not a Silent Turn.
    */
   replied_via_tool?: boolean;
 }
@@ -1035,9 +1047,17 @@ export interface SubagentCall {
    */
   agent?: string;
   /**
-   * The handle sharing one stateful agent session, if any.
+   * The handle sharing one stateful agent session. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
    */
-  instance?: string;
+  instance?: string | null;
+  /**
+   * dag rows only: whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned.
+   */
+  instance_auto?: boolean;
+  /**
+   * dag rows only: the agent of each attempt of the node, in order. Present only after a reassignment.
+   */
+  attempt_agents?: string[];
   /**
    * ISO 8601; the record stores epoch millis.
    */
@@ -1180,6 +1200,23 @@ export interface SubagentRow {
    * What subagents.update accepts for model on this row, by rule rather than by kind, and not ownership, which is own: raven for the built-in row and for one of raven's own acp rows whose handshake advertised no menu -- both pick from raven's own provider catalogue; agent for an acp row picking from the choices its handshake advertised (model_choices); fixed for an openai row, whose model is a plain config value, and for a cli row, which has no menu at all. The menu, not the whole vocabulary: one of raven's own acp rows also accepts a host-qualified id under either rule, since it runs on raven's providers whatever it advertised.
    */
   model_source?: 'raven' | 'agent' | 'fixed';
+  /**
+   * The reasoning effort this row sends, or null to use the agent's own. A value from effort_choices; set through the agent's thought_level config option, separately from model, or as a session mode on an agent whose modes are its effort menu.
+   */
+  effort?: string | null;
+  /**
+   * The reasoning efforts this row's agent offers on the row's own model: its thought_level option, or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that packs effort into model ids instead has no such menu.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1283,6 +1320,10 @@ export interface ModelLabel {
    */
   output_modalities?: string[];
   /**
+   * The reasoning-effort words a provider's model overlay declares for this model; empty where none was stated.
+   */
+  reasoning_efforts?: string[];
+  /**
    * The bucket a model list files this model under, from what it writes (registry_data.kind_of): a model that reads images is still text. A model with no label entry is text.
    */
   kind: 'text' | 'image' | 'audio' | 'video' | 'embedding' | 'reranker';
@@ -1383,6 +1424,18 @@ export interface InstanceRow {
    * What the graph this instance belongs to was dispatched for. Absent, not empty, for an instance that came from no orchestration, so its presence is what says the row has a source.
    */
   runTitle?: string;
+  /**
+   * The agent of each attempt of this DAG node, in order. Present only on the row of a node that was reassigned, so its presence is what marks one; a run without a move carries no key.
+   */
+  attemptAgents?: string[];
+  /**
+   * The handle of the node's last attempt -- null when that attempt kept no session. Rides beside attemptAgents because the row's own handle is the node's name, not a conversation.
+   */
+  nodeInstance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present with attemptAgents; absent on every row of a run that never reassigned a node.
+   */
+  nodeInstanceAuto?: boolean;
   /**
    * When the turn this instance is answering right now began. Absent when it is answering none, so presence is what says the instance is working and the number is what says for how long. Not updatedAtMs, which every registry write stamps: a binding commit and a graph-origin write move it too, so it dates the row and not the turn.
    */
@@ -1695,7 +1748,7 @@ export interface NoticeEvent {
      */
     kind: string;
     /**
-     * What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. Empty for `silent_turn`.
+     * What `kind` says it is: the blocking tool's own first line, the failed call's error category (or `empty_reply` / `thinking_only` for the wait before an empty-reply resend or a reasoning step-down), or the organ that dropped out. For `silent_turn`, what the reply read as the marker had streamed before it was: a think block the model inlined ahead of it, which goes out as it comes, counted over the step it was drawn in (its call and a cut answer's continuations, or the wrap-up alone). A client that drew it takes back exactly that suffix of the step's text, and nothing it drew before. Empty when the reply showed nothing.
      */
     detail?: string;
     /**
@@ -1859,8 +1912,22 @@ export interface ErrorEvent {
      * The failure's long account beside the bounded detail, for a reader who expands the row: the runner's own text, credentials scrubbed, capped at 8000 characters. Absent when the bounded text already is the whole account.
      */
     full_detail?: string;
+    usage?: TurnUsage1;
     target?: DirectTarget;
   };
+}
+/**
+ * What a failed or stopped turn measured, in message.complete's shape: its last reported call, so a client's context gauge moves on with the turn's stored record. Absent when that call read no window.
+ */
+export interface TurnUsage1 {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd?: number | null;
+  context_used?: number;
+  context_max?: number;
+  context_percent?: number;
+  cost_missing_calls?: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -1993,7 +2060,18 @@ export interface DagSnapshotNode {
   node: string;
   subagent?: string;
   depends_on?: string[];
-  instance?: string;
+  /**
+   * The stateful handle of the node's last attempt. Null for an agent that keeps no session, which is also how a stateless current attempt of a reassigned node reports itself.
+   */
+  instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   started_at?: number;
   ended_at?: number;
@@ -2188,6 +2266,22 @@ export interface DagNodeUpdatedEvent {
      * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
      */
     route_evidence?: string;
+    /**
+     * The agent running the node now. Sent with every frame of a reassigned node from its new attempt's running update on, so a client that missed the reassignment still learns who has it.
+     */
+    subagent?: string;
+    /**
+     * The handle that attempt runs on, or null for an agent that keeps no session. A present null clears the handle a client was showing; an absent key means this frame does not speak for it.
+     */
+    instance?: string | null;
+    /**
+     * Whether that handle was minted for the node rather than named by the graph.
+     */
+    instance_auto?: boolean;
+    /**
+     * The agent of each attempt of this node, in order, sent on every frame of a reassigned node. A client uses the length to place a delayed frame in the attempt it belongs to.
+     */
+    attempt_agents?: string[];
   };
 }
 /**
@@ -2273,6 +2367,22 @@ export interface DagRunCompletedEvent {
        * The judge's supporting quote for the selection, at most 500 characters. Absent when it gave none.
        */
       route_evidence?: string;
+      /**
+       * The agent the node's last attempt ran on. Sent only for a node that was reassigned: every other node's frame already named it, and an unchanged one would only repeat that.
+       */
+      subagent?: string;
+      /**
+       * The handle that attempt ran on, or null when it kept no session. Sent with subagent.
+       */
+      instance?: string | null;
+      /**
+       * Whether that handle was minted for the node rather than named by the graph. Sent with subagent.
+       */
+      instance_auto?: boolean;
+      /**
+       * The agent of each attempt of this node, in order. Present only on a node that was reassigned.
+       */
+      attempt_agents?: string[];
     }[];
   };
 }
@@ -2308,6 +2418,94 @@ export interface MediaEvent {
      */
     items: MediaItem[];
   };
+}
+/**
+ * A conversation's Task Board after a write -- the post-turn update or the reader's own action. Not replayed: a client that reconnects reads tasks.board.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedEvent".
+ */
+export interface TasksBoardUpdatedEvent {
+  type: 'tasks.board_updated';
+  payload: TasksBoardUpdatedPayload;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardUpdatedPayload".
+ */
+export interface TasksBoardUpdatedPayload {
+  session_key: string;
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * One host conversation's Task Board: its Task Groups and any dispatch still waiting for a place.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskBoard".
+ */
+export interface TaskBoard {
+  version: number;
+  groups: TaskGroup[];
+  unassigned: PendingDispatch[];
+}
+/**
+ * One matter a conversation is pushing, spanning any number of turns, with its Progress Steps in time order. summary says where the matter stands; any turn may rewrite it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskGroup".
+ */
+export interface TaskGroup {
+  id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  steps: ProgressStep[];
+}
+/**
+ * One turn's advance on one Task Group: a title, and a summary of what moved and what is next or awaited -- on a step that left its group needs_you, opening with what the user is asked. questions: each question that step's reply asked the user about the matter, empty on every other step. turn_at is the timestamp the session log stores on the message that opened the turn.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ProgressStep".
+ */
+export interface ProgressStep {
+  id: string;
+  turn_at: string;
+  turn_id?: string | null;
+  title: string;
+  summary: string;
+  questions: string[];
+  tasks: TaskLinkRef[];
+}
+/**
+ * A Task a Progress Step started, in the address tasks.list rows use (spawn: node id, dag: run id), with the summary the dispatching call gave.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskLinkRef".
+ */
+export interface TaskLinkRef {
+  kind: TaskKind;
+  id: string;
+  summary: string;
+}
+/**
+ * A dispatch whose turn's board update never landed; the next update has to place it.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "PendingDispatch".
+ */
+export interface PendingDispatch {
+  handle: string;
+  summary: string;
+  turn_at: string;
+  turn_id?: string | null;
 }
 /**
  * One base as the list view needs it.
@@ -2871,6 +3069,14 @@ export interface TaskNode {
    * The stateful handle, named or minted. Null for a node of an agent that keeps no session.
    */
   instance?: string | null;
+  /**
+   * Whether the node's current handle was minted for it rather than named by the graph. Present only for a node that was reassigned, whose handle may have changed under it.
+   */
+  instance_auto?: boolean;
+  /**
+   * The agent of each attempt of this node, in order. Present only for a node that was reassigned; an empty list on every node would claim a move that never happened.
+   */
+  attempt_agents?: string[];
   status: DagSnapshotNodeStatus;
   /**
    * May name a node outside this task: node ids are the session's, and a later graph may depend on an earlier run's completed node.
@@ -3193,7 +3399,7 @@ export interface TrajectoryEntry {
   operation_end?: string | null;
   duration_ms?: number | null;
   /**
-   * What the duration bar charges this entry; null means unknown, never zero.
+   * The time charged to this entry, so a span is counted once however many entries it has; null means unknown, never zero.
    */
   charged_ms?: number | null;
   /**
@@ -3364,6 +3570,26 @@ export interface MachineRow {
    * The agent entries on the machine that are switched off, by name: they still hold the machine for the add, so the card says so instead of counting them nowhere.
    */
   agents_off_here: string[];
+}
+/**
+ * One Task Group on the Task Board page: where it came from, what it is, and what it needs. running_since_ms is the earliest start among its runs still running, on a card of any category; null when none runs or none that runs reports a start.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TaskBoardCard".
+ */
+export interface TaskBoardCard {
+  session_key: string;
+  session_title: string;
+  group_id: string;
+  title: string;
+  summary: string;
+  status: TaskGroupStatus;
+  created_at: number;
+  updated_at: number;
+  category: 'needs_you' | 'running' | 'idle' | 'completed';
+  running_since_ms?: number | null;
+  events: number;
+  sub_agents: number;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3705,6 +3931,7 @@ export interface TurnSendParams {
   media?: string[];
   target?: DirectTarget;
   busy?: 'inject';
+  move_on?: string;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3941,6 +4168,42 @@ export interface ModelRevealKeyResult {
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelCheckKeyParams".
+ */
+export interface ModelCheckKeyParams {
+  slug: string;
+  api_key?: string;
+  api_base?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "ModelCheckKeyResult".
+ */
+export interface ModelCheckKeyResult {
+  ok: boolean;
+  /**
+   * The probe's word: `valid`, `invalid_key`, `key_unchecked`, `no_credits`, `rate_limited`, `network_error`, `proxy_unreachable`, `certificate_untrusted`, `no_probe_endpoint`, `not_configured`, `unknown_provider`, `oauth_token_missing`, `http_NNN`; `unknown` when the probe gave no word.
+   */
+  status: string;
+  /**
+   * The HTTP status the probe met, when it met one.
+   */
+  http_status?: number | null;
+  /**
+   * How many models the vendor listed, when it listed any.
+   */
+  models_count?: number | null;
+  /**
+   * What went wrong, when something did.
+   */
+  error?: string | null;
+  /**
+   * The vendor itself refused this key -- answered it with 401, or named it invalid -- so storing it would store a key that cannot work. Every other answer leaves the key worth storing.
+   */
+  refused: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "ModelFetchModelsParams".
  */
 export interface ModelFetchModelsParams {
@@ -3958,6 +4221,10 @@ export interface ModelFetchModelsResult {
    */
   status: string;
   error?: string;
+  /**
+   * With `verify`: the vendor itself refused the stored key -- answered it with 401, or named it invalid. `invalid_key` alone is broader (a 403 maps to it too, and a 403 can mean a region, a plan or a proxy), so a surface that says a key was rejected reads this, not the status.
+   */
+  refused?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -3974,6 +4241,10 @@ export interface ModelAddModelParams {
   capabilities?: string[];
   input_modalities?: string[];
   output_modalities?: string[];
+  /**
+   * The reasoning-effort words this model accepts, least first. Omit to leave a stored declaration alone; [] clears it.
+   */
+  reasoning_efforts?: string[];
   session_id?: string;
 }
 /**
@@ -4135,7 +4406,7 @@ export interface ConfigSetParams {
   value: JsonValue;
   session_id?: string;
   provider?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4145,7 +4416,7 @@ export interface ConfigSetResult {
   applied: boolean;
   previous: JsonValue | null;
   value?: string;
-  scope?: 'session' | 'default';
+  scope?: 'session' | 'default' | 'both';
   session_id?: string;
   applies_to_session?: boolean;
   /**
@@ -4308,6 +4579,9 @@ export interface SubagentsUpdateParams {
   mcps?: string[];
   allow_mcp_secrets?: boolean;
   lend_keys?: string[];
+  /**
+   * A model from the row's model_choices. On an acp row the move re-measures the effort menu on the new model, and a stored effort that menu does not offer is dropped; it is kept when the read fails.
+   */
   model?: string;
   /**
    * The provider whose credential serves model, for the built-in row: the id is stored naming it, the way config.set model stores the host's. Ignored for an acp row, whose values are the agent's own.
@@ -4317,6 +4591,14 @@ export interface SubagentsUpdateParams {
    * Drop the row's own model, reverting to the agent's default. Wins over model when both are sent.
    */
   clear_model?: boolean;
+  /**
+   * A reasoning effort from the row's effort_choices, sent on every turn through the agent's thought_level option, or as a session mode on an agent whose modes are its effort menu, where an instance's own mode override takes its place. Refused when the row's menu does not offer it. Sent with a model move, it is judged on the new model's menu, and refused when that menu could not be read.
+   */
+  effort?: string;
+  /**
+   * Drop the row's own effort, reverting to the agent's default. Wins over effort when both are sent.
+   */
+  clear_effort?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4421,6 +4703,59 @@ export interface SubagentsTestCancelParams {
  */
 export interface SubagentsTestCancelResult {
   cancelled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRefreshModelsParams".
+ */
+export interface SubagentsRefreshModelsParams {
+  name: string;
+  source?: 'config' | 'preset' | 'vendored';
+  force?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SubagentsRefreshModelsResult".
+ */
+export interface SubagentsRefreshModelsResult {
+  /**
+   * Whether the handshake answered and reported the menu. False leaves the recorded menu in place.
+   */
+  ok: boolean;
+  /**
+   * Why the menu could not be read, when it could not.
+   */
+  detail?: string;
+  /**
+   * The menu now recorded for the agent, which is the previous one when this read failed.
+   */
+  models: {
+    /**
+     * The id the agent takes back.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually far shorter than the value.
+     */
+    name?: string;
+    /**
+     * The agent's own bucketing, a provider typically. Empty when it offered none.
+     */
+    group?: string;
+  }[];
+  /**
+   * The effort menu recorded by the same read, in subagents.list's shape.
+   */
+  effort_choices?: {
+    /**
+     * The value the agent takes back, e.g. low, high or max.
+     */
+    value: string;
+    /**
+     * What the agent asked to be shown, usually the same word.
+     */
+    name?: string;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -4756,6 +5091,44 @@ export interface SessionSetModeResult {
     name?: string;
     description?: string;
   }[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortParams".
+ */
+export interface SessionSetEffortParams {
+  session_key: string;
+  /**
+   * One of the words in options. Omit it to report without changing.
+   */
+  effort?: string;
+  /**
+   * Drop the session's own pick and follow the default again. Wins over effort when both are given.
+   */
+  clear?: boolean;
+  /**
+   * The model to answer for when the caller has no session yet (a draft). Omit for a session's own model.
+   */
+  model?: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "SessionSetEffortResult".
+ */
+export interface SessionSetEffortResult {
+  session_key: string;
+  /**
+   * The session's own pick where the model declares it, else null: a stored pick the model does not offer reads as null, and the turn runs at default.
+   */
+  effort?: string | null;
+  /**
+   * What the session runs at with no pick of its own: its mode's effort where the catalogue sets one, else agents.defaults.reasoningEffort, else null for the provider's own default. Not narrowed by the model.
+   */
+  default?: string | null;
+  /**
+   * The words this model accepts, least first.
+   */
+  options?: string[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5433,6 +5806,10 @@ export interface CronSaveParams {
  */
 export interface CronSaveResult {
   job: CronJobInfo;
+  /**
+   * How the request landed: 'created' stored a new job, 'updated' edited the returned existing job in place, 'skipped' wrote nothing and returned the matching existing job (identical message, fire still ahead); the returned job's stored schedule stays in effect.
+   */
+  outcome: 'created' | 'updated' | 'skipped';
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5516,6 +5893,14 @@ export interface SettingsGetResult {
   };
   config_path: string;
   raven_version: string;
+  /**
+   * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: an endpoint is required, and enabled=false turns it off.
+   */
+  skill_hub_on: boolean;
+  /**
+   * skill_hub_on, while the agent loop serving now was built without a Hub client: retrieval starts after a reload.
+   */
+  skill_hub_awaiting_reload: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -7953,6 +8338,93 @@ export interface TasksListParams {
  */
 export interface TasksListResult {
   tasks: TaskRow[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardParams".
+ */
+export interface TasksBoardParams {
+  /**
+   * Whose board to read.
+   */
+  session_key: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardResult".
+ */
+export interface TasksBoardResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardsParams".
+ */
+export interface TasksBoardsParams {
+  /**
+   * Also return the completed cards. The counts are returned either way.
+   */
+  include_completed?: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksBoardsResult".
+ */
+export interface TasksBoardsResult {
+  cards: TaskBoardCard[];
+  completed_count: number;
+  needs_you_count: number;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusParams".
+ */
+export interface TasksSetGroupStatusParams {
+  session_key: string;
+  group_id: string;
+  status: 'completed' | 'idle';
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksSetGroupStatusResult".
+ */
+export interface TasksSetGroupStatusResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksIgnoreQuestionParams".
+ */
+export interface TasksIgnoreQuestionParams {
+  session_key: string;
+  group_id: string;
+  step_id: string;
+  question: string;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "TasksIgnoreQuestionResult".
+ */
+export interface TasksIgnoreQuestionResult {
+  board: TaskBoard;
+  /**
+   * Each run that continued a placed run without a tool call of its own (a replan's successor, a later stint round), mapped to the placed run it descends from.
+   */
+  lineage: {
+    [k: string]: string;
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

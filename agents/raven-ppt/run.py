@@ -188,19 +188,31 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     Per vendor, a key this product already holds wins: one its config states in
     the vendor slot, or the own-key env var of a vendor with a pre-vendor leaf
     (that key sits in the leaf, which trunk reads only after an empty vendor
-    slot, so inheriting the host's slot would silently outrank it). The search
-    and fetch vendor choices follow the host where this config names none, so
-    a host that searches through another vendor hands over the key and the
-    choice together. Returns the vendors whose key was carried.
+    slot, so inheriting the host's slot would silently outrank it). A vendor
+    with no slot of its own on the host borrows the LLM provider key it shares
+    an account with (DeepSeek's web endpoints run on its chat account), so the
+    product carries that key like any other. The search and fetch vendor
+    choices follow the host where this config names none, so a host that
+    searches through another vendor hands over the key and the choice together.
+    Returns the vendors whose key was carried.
     """
     carried = []
+    # This file can outlive its raven, so a name this PR introduced is looked up
+    # at call time: a stamped launcher must load (and borrow nothing) on a raven
+    # that predates the helper.
+    from raven.config import schema
+
+    borrow = getattr(schema, "borrowed_web_key", None)
     for vendor in WEB_VENDOR_ENV_VARS:
         slot = ("tools", "web", "providers", vendor, "apiKey")
         own = OWN_WEB_KEYS.get(vendor)
         if render.dig(config, slot) or (own and env_value(own)):
             continue
-        if key := render.dig(host, slot):
-            render.put(config, slot, key)
+        candidate = render.dig(host, slot)
+        if not candidate and borrow is not None:
+            candidate = borrow(vendor, host.get("providers") or {})
+        if candidate:
+            render.put(config, slot, candidate)
             carried.append(vendor)
     for slot in WEB_SELECTION_SLOTS:
         if not render.dig(config, slot) and (chosen := render.dig(host, slot)):

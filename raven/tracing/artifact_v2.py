@@ -6,8 +6,10 @@ drift - a cross-language round-trip test compares this module's output against
 the viewer's. The canonical serialization, the envelope key, the reference
 validation and the per-field resolution rules all live here and nowhere else.
 
-Stdlib only, like :mod:`raven.tracing.store`, so the tracing package stays
-installable on its own.
+The wire shape itself is stdlib; the default reader decodes the store's zstd
+frames through :mod:`raven.tracing.codec`, and falls back to a packed slice
+through :mod:`raven.tracing.message_pack`, both imported lazily so this module
+stays cheap to import.
 """
 
 from __future__ import annotations
@@ -17,6 +19,8 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Callable
+
+from .codec import MAX_PLAINTEXT_BYTES, read_plaintext
 
 ARTIFACT_FORMAT = "audit.artifact.v2"
 MESSAGES_DIR_NAME = "_messages"
@@ -108,12 +112,38 @@ def placeholder(sha1: str) -> dict[str, str]:
     return {"role": "unknown", "content": f"[message blob missing: {sha1}]"}
 
 
+def _read_stored_text(path: Path, limit: int = MAX_PLAINTEXT_BYTES) -> str:
+    """A blob's plaintext, whichever encoding it was stored under."""
+    plain = read_plaintext(path.read_bytes(), limit)
+    if plain is None:
+        raise ValueError("corrupt or oversized compressed message blob")
+    return plain.decode("utf-8")
+
+
+def _packed_text(artifacts_dir: Path | str, sha1: str, limit: int = MAX_PLAINTEXT_BYTES) -> str | None:
+    """A packed message's text, or None when it is missing or cut mid-character.
+
+    ``limit`` can end the slice inside a multi-byte character; that is not a
+    message this reader can hand back, so it degrades like a missing one.
+    """
+    from . import message_pack
+
+    packed = message_pack.read_message(artifacts_dir, sha1, limit)
+    if packed is None:
+        return None
+    try:
+        return packed.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 def resolve_payload(
     payload: Any,
     artifacts_dir: Path | str,
     *,
     on_missing: Callable[[str], Any] | None = None,
     read: Callable[[Path], str | None] | None = None,
+    max_total_bytes: int = MAX_PLAINTEXT_BYTES,
 ) -> Any:
     """A v2 shell as its v1 equivalent; any other payload returned unchanged.
 
@@ -123,20 +153,41 @@ def resolve_payload(
     position, so omitting one shifts every later message and turns a locatable
     gap into a spurious full divergence. ``read`` replaces how a blob's text is
     read (None means it cannot be), for a caller that must bound what it reads.
+
+    ``max_total_bytes`` bounds the plaintext one shell may pull in. A shell can
+    name any number of addresses, and an imported one is untrusted input, so
+    the addresses past the budget resolve to the missing-blob stand-in instead
+    of being read.
     """
     if not is_v2(payload):
         return payload
     missing = placeholder if on_missing is None else on_missing
     cache: dict[str, Any] = {}
+    used = 0
 
     def load(sha1: str) -> Any:
+        nonlocal used
         if sha1 not in cache:
+            text: str | None = None
+            remaining = max_total_bytes - used
+            if remaining > 0:
+                try:
+                    path = message_path(artifacts_dir, sha1)
+                    text = _read_stored_text(path, remaining) if read is None else read(path)
+                except (OSError, ValueError):
+                    text = None
+                if text is not None and len(text.encode("utf-8")) > remaining:
+                    text = None
+                if text is None and read is None:
+                    # A packed address has no file; the other encoding of the
+                    # same store is a pack slice. A caller-supplied read owns
+                    # its own fallback, because it may bound or confine it.
+                    text = _packed_text(artifacts_dir, sha1, remaining)
             try:
-                path = message_path(artifacts_dir, sha1)
-                text = path.read_text(encoding="utf-8") if read is None else read(path)
                 if text is None:
                     raise OSError(f"blob {sha1} could not be read")
                 cache[sha1] = json.loads(text)
+                used += len(text.encode("utf-8"))
             except (OSError, ValueError):
                 cache[sha1] = missing(sha1)
         return cache[sha1]

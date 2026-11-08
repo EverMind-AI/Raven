@@ -27,6 +27,7 @@ export const PARAMS = {
   'session.compress': { session_id: 'b' },
   'session.branch': { session_id: 'b' },
   'session.set_mode': { session_key: 'b', mode: 'max' },
+  'session.set_effort': { session_key: 'b', effort: 'high' },
   'turn.subscribe': { session_key: 'a' },
   'turn.unsubscribe': { subscription_id: 'sub-1' },
   'turn.send': { session_key: 'a', content: 'look at the market' },
@@ -86,6 +87,8 @@ export const PARAMS = {
   'model.save_key': { slug: 'openai', api_key: 'sk-x' },
   'model.disconnect': { slug: 'openai' },
   'model.reveal_key': { slug: 'anthropic' },
+  /* A key the library refuses, so the refusal's fields are drawn once. */
+  'model.check_key': { slug: 'openrouter', api_key: 'bad' },
   'model.add_model': { slug: 'openai', model: 'gpt-5.2' },
   'model.remove_model': { slug: 'openai', model: 'gpt-5.1' },
   'model.fetch_models': { slug: 'openai' },

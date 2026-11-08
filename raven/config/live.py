@@ -30,16 +30,20 @@ visible at the call site.
 
 from __future__ import annotations
 
+import copy
 import json
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from loguru import logger
 from pydantic.alias_generators import to_camel
+
+if TYPE_CHECKING:
+    from raven.config.schema import SubagentRuntimeConfig
 
 __all__ = [
     "LiveConfig",
@@ -64,6 +68,7 @@ __all__ = [
     "permissions_config",
     "routing_profile",
     "skill_gate_pin",
+    "subagent_runtime",
     "web_provider_keys",
     "web_search_key",
 ]
@@ -364,10 +369,14 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     Resolved in the order ``WebToolsConfig.vendor_key`` uses: the canonical
     ``tools.web.providers.<vendor>.apiKey`` slot, then the pre-vendor leaf that
     is Serper's (``tools.web.search.apiKey``) or Jina's (``tools.web.jinaApiKey``),
-    then ``boot``. A vendor the file names with an empty key is revoked, not
-    missed. The boot value serves only when the file says nothing about the
-    vendor at all -- no slot of its own and no leaf -- which is the lane a
-    harness passes a key through with no file behind it; a ``providers``
+    then the LLM provider key a borrowing vendor shares an account with, then
+    ``boot``. A vendor the file names with an empty key is revoked, not
+    missed -- except a borrowing vendor, whose own slot is optional and whose
+    source is the provider section; a rejected edit to that section keeps the
+    last admitted key, and a section resolving to another host lends nothing.
+    The boot value serves only when the file says nothing about the vendor at
+    all -- no slot of its own, no leaf, and no provider section -- which is the
+    lane a harness passes a key through with no file behind it; a ``providers``
     subtree that names other vendors says nothing about this one. A tool that
     reads its key through this on every call sees a key the user sets or
     rotates in the file without a restart -- which is what an error message
@@ -379,6 +388,17 @@ def live_vendor_key(live: LiveConfig, vendor: str, *, boot: str | None) -> str:
     leaf = web_search_key(live) if vendor == "serper" else web_jina_key(live) if vendor == "jina" else None
     if leaf is not None:
         return leaf
+    from raven.config.schema import live_borrowed_web_answer
+
+    named, borrowed = live_borrowed_web_answer(vendor, live.get("providers"))
+    if named:
+        # A borrowing vendor's web slot is optional, so an empty one is the
+        # ordinary state rather than the revocation it is for every other vendor.
+        # A rejected provider edit keeps the last admitted key, as every other
+        # reader here does; the answer itself may still be "" (a section that
+        # resolves to another host lends nothing).
+        admitted = _admit(live, f"web_borrowed_key:{vendor}", present=True, value=borrowed)
+        return "" if admitted is None else str(admitted)
     if slot == "" and _names_vendor(live, vendor):
         return ""
     return boot or ""
@@ -566,6 +586,31 @@ def memory_top_k(live: LiveConfig) -> int | None:
     return None
 
 
+def subagent_runtime(live: LiveConfig) -> SubagentRuntimeConfig:
+    """``subagents.runtime`` validated, keeping the last valid answer; the defaults without one.
+
+    Read by the host when it launches an agent and on each idle check, so the
+    next launch and the next check follow an edit. A rejected edit keeps the
+    last admitted answer rather than falling back to the defaults, which would
+    switch sharing on or off behind the operator's back.
+    """
+    from raven.config.schema import SubagentRuntimeConfig
+
+    parent = live.raw().get("subagents")
+    # Only a section that left the file, or a null (the schema's own "unset"),
+    # brings the defaults back. Anything else in its place -- ``false``, a
+    # string, a non-mapping ``subagents`` -- is an edit that failed.
+    section = parent.get("runtime") if isinstance(parent, dict) else parent
+    present = section is not None
+    value = None
+    if isinstance(section, dict):
+        try:
+            value = SubagentRuntimeConfig.model_validate(section)
+        except ValueError:
+            value = None
+    return _admit(live, "subagent_runtime", present=present, value=value) or SubagentRuntimeConfig()
+
+
 def exec_timeout(live: LiveConfig) -> int | None:
     """``tools.exec.timeout`` as the file has it, or None for "no answer"."""
     # One spelling: ``exec`` and ``timeout`` are the same word either way.
@@ -670,6 +715,79 @@ def skill_blocklist(live: LiveConfig) -> frozenset[str]:
         if isinstance(value, list):
             names.extend(str(x) for x in value if isinstance(x, str))
     return normalize_blocklist(names)
+
+
+def hub_source_on(hub: Any) -> bool:
+    """Whether a raw ``hub`` block leaves the conversational source on.
+
+    Validated through the schema, so a hand-written ``0`` / ``"false"`` reads
+    the way the loader reads it instead of by Python truthiness, and an
+    endpoint is required -- ``enabled`` alone cannot turn the source on. A
+    block the loader would refuse answers off, which is the safe direction for
+    a switch that stops text leaving the machine.
+    """
+    from raven.config.raven import HubSourceConfig
+
+    if not isinstance(hub, dict):
+        return False
+    try:
+        cfg = HubSourceConfig.model_validate(hub)
+    except Exception:  # noqa: BLE001 - a block the loader refuses is not consent
+        return False
+    return bool(cfg.endpoint) and cfg.enabled
+
+
+def skill_hub_on(raw: Any) -> bool:
+    """Whether a config, as the file writes it, leaves the conversational Skill Hub source on.
+
+    The loader's migrations run first, on a copy. Some of them are never written
+    back to the file -- a legacy top-level ``skillRouter`` nested under
+    ``skillForge``, the retired ``hub.prefetchBodies`` dropped -- so a file keeps
+    those shapes for good, and reading it without them turns off a Hub the
+    runtime built from the same bytes.
+
+    Both top-level spellings are accepted, the way the writer resolves them; a
+    file carrying both non-null spellings is refused by the loader, so it is off
+    here too.
+    """
+    from raven.config.loader import _migrate_config
+
+    if not isinstance(raw, dict):
+        return False
+    try:
+        data = _migrate_config(copy.deepcopy(raw), pop_extension_keys=False)
+    except Exception:  # noqa: BLE001 - a file the loader cannot walk is not consent
+        return False
+    camel = data.get("skillForge")
+    snake = data.get("skill_forge")
+    if camel is not None and snake is not None:
+        return False
+    block = camel if camel is not None else snake
+    if not isinstance(block, dict):
+        return False
+    router = block.get("router")
+    hub = router.get("hub") if isinstance(router, dict) else None
+    return hub_source_on(hub)
+
+
+_HUB_ANSWERS: "weakref.WeakKeyDictionary[LiveConfig, tuple[dict[str, Any], bool]]" = weakref.WeakKeyDictionary()
+
+
+def skill_hub_enabled(live: LiveConfig) -> bool:
+    """Whether the conversational Skill Hub source may run, read on every ask.
+
+    Read live rather than captured at loop start so switching the source off
+    stops the next query, not the next process. The answer is kept per parsed
+    file, so the migration in :func:`skill_hub_on` runs once per change of the
+    bytes rather than once per search.
+    """
+    raw = live.raw()
+    kept = _HUB_ANSWERS.get(live)
+    if kept is not None and kept[0] is raw:
+        return kept[1]
+    answer = skill_hub_on(raw)
+    _HUB_ANSWERS[live] = (raw, answer)
+    return answer
 
 
 _LAST_VALID_PERMISSIONS: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()

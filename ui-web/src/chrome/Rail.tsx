@@ -37,14 +37,15 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
-import { FileImportIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
-import { useSyncExternalStore } from 'react'
+import { FileImportIcon, KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
+import { useEffect, useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
 import * as imported from '../features/imported/store'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
+import * as boards from '../features/tasks/boards'
 import { t } from '../i18n/t'
 import * as find from '../state/find'
 import * as hub from '../state/hub'
@@ -97,16 +98,18 @@ function RailTop(): JSX.Element {
    that same table (features/rail/store.ts's markNew), which is the pair a page
    used to be able to miss in silence.
 
-   Two destinations, not five. Schedules and memory are set up once and then
+   Three destinations, not six. Schedules and memory are set up once and then
    left alone, so they are sections of the settings dialog, which the foot
    opens; a playbook is not a place a reader goes at all. What is left are the
-   two you go TO: what Raven connects to, agents and channels, one row that
-   goes back to whichever of the two the reader was last on, and knowledge. */
+   three you go TO: what Raven connects to, agents and channels, one row that
+   goes back to whichever of the two the reader was last on; knowledge; and
+   the task board, whose row carries how many Task Groups wait on the owner. */
 const NAV_ROWS: ReadonlyArray<{
   readonly button: NavButton
   readonly key: string
   readonly open: () => void
   readonly icon: JSX.Element
+  readonly badge?: JSX.Element
 }> = [
   {
     button: 'agentsBtn',
@@ -120,7 +123,28 @@ const NAV_ROWS: ReadonlyArray<{
     open: () => openKnowledge(),
     icon: <CubeGlyph />,
   },
+  {
+    button: 'boardsBtn',
+    key: 'gui.nav.tasks_board',
+    open: () => boards.openBoards(),
+    icon: <Icon icon={KanbanIcon} />,
+    badge: <BoardsBadge />,
+  },
 ]
+
+/* The Task Groups waiting on the owner, across every conversation; nothing at
+   zero. Its count comes from the board's own poll, which this starts the first
+   time the rail mounts and which idles while the page polls instead. */
+function BoardsBadge(): JSX.Element | null {
+  const { needsYouCount } = useSyncExternalStore(boards.subscribe, boards.get)
+  useEffect(() => boards.startBadge(), [])
+  if (needsYouCount === 0) return null
+  return (
+    <span className="chrome-nav-badge" aria-label={t('gui.tasks.page.badge', { n: needsYouCount })}>
+      {needsYouCount}
+    </span>
+  )
+}
 
 /* Importing a conversation: not a page you go to, so not one of NAV_ROWS (each
    of which is a page, and state/pages.ts holds that table to them). Its own
@@ -155,6 +179,7 @@ function RailNav(): JSX.Element {
         <button className="navi" id={row.button} key={row.button} onClick={row.open}>
           {row.icon}
           <span>{t(row.key)}</span>
+          {row.badge}
         </button>
       ))}
       <ImportButton />
@@ -226,13 +251,47 @@ function RailFoot(): JSX.Element {
   )
 }
 
+/* On a window under the fold the rail lies over the page (styles/page.css,
+   state/rail.ts `FOLDS`), so a press that goes somewhere -- a module, a
+   session, the draft row, the import, the settings -- folds it, the way a drawer
+   closes on the choice made in it. The rail's own controls keep it open: its
+   toggle, the search and its box, a group's head, the grip; so does a session
+   row's rename box, where a press places the caret and Enter commits the name.
+   A native listener on the aside rather than React handlers on each row,
+   because the session rows are the rail island's, a root of its own under
+   #list. In the bubble phase, which runs it after a session row's handler
+   (that root is inside the aside) but before the module and settings buttons'
+   (App is a portal, so React hears those above the aside). A row picked by
+   keyboard folds it too: a session row is a div with the button role, opened on
+   Enter or Space by its own handler with no click after it (features/rail/
+   RailPage.tsx), where the module buttons, being buttons, click on those keys
+   themselves and need no second listener. chrome/Rail.test.tsx presses both
+   kinds under the fold. */
+const PICKS = '.navi, .sess, .me'
+const KEEPS = 'input, textarea, [contenteditable]'
+
+function picked(e: Event): boolean {
+  const target = e.target as Element | null
+  return !!target?.closest(PICKS) && !target.closest(KEEPS)
+}
+
+function foldOnPick(aside: HTMLElement | null): void {
+  aside?.addEventListener('click', (e) => {
+    if (!rail.stands() && picked(e)) rail.set(false)
+  })
+  aside?.addEventListener('keydown', (e) => {
+    if (rail.stands() || (e.key !== 'Enter' && e.key !== ' ')) return
+    if (picked(e) && !(e.target as Element | null)?.closest('button, a')) rail.set(false)
+  })
+}
+
 /* The column and its six children, in the order page.html had them. #list is
    handed over empty: the rail island roots itself in it (src/main.tsx), so
    React must not own that child list. */
 export function Rail(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
-    <aside className="rail">
+    <aside className="rail" ref={foldOnPick}>
       <RailTop />
       <RailNav />
       <FindRow />

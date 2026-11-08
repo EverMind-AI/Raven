@@ -12,6 +12,7 @@ reaping is left to integration/manual checks — Popen is monkeypatched here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -393,12 +394,128 @@ def test_tracing_rejects_an_unknown_action_with_bracketed_markup(tmp_path, monke
 
 def test_a_below_minimum_node_is_refused(monkeypatch):
     """find_node deliberately returns the best node it saw even below the
-    minimum; the viewer used to discard the version and run on it anyway."""
+    minimum; the viewer reads zstd-compressed payloads, whose decoder landed
+    in Node's zlib in 22.15."""
     import pytest
     import typer
 
     import raven.cli.tracing_commands as tc
 
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 14, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 15, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
+
+
+def test_node_23_before_23_8_is_refused(monkeypatch):
+    """zstd landed in Node 22.15 and 23.8, so a 23.x below 23.8 cannot decode."""
+    import pytest
+    import typer
+
+    import raven.cli.tracing_commands as tc
+
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 0, 0)))
+    with pytest.raises(typer.Exit):
+        tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 8, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
+
+
+def test_a_zstd_node_behind_an_older_node_on_path_is_chosen(tmp_path, monkeypatch):
+    """find_node stops at the first node the TUI accepts (22.0); a PATH node
+    without zstd must not hide the installer's newer private runtime."""
+    import subprocess
+
+    from raven.cli import tui_commands
+
+    exe = "node.exe" if tui_commands._is_windows() else "node"
+    on_path = tmp_path / "bin" / exe
+    runtime_dir = tmp_path / "home" / "runtime" / "node-v22.20.0"
+    managed = runtime_dir / exe if tui_commands._is_windows() else runtime_dir / "bin" / exe
+    for binary in (on_path, managed):
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text("")
+    versions = {str(on_path): "v22.12.0", str(managed): "v22.20.0"}
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{versions[argv[0]]}\n", stderr="")
+
+    monkeypatch.setattr(tui_commands.subprocess, "run", fake_run)
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    assert tc._resolve_node() == str(managed)
+
+
+def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:
+    sha1 = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    blob = state_dir / "logs" / "audit-artifacts" / "_blobs" / sha1[:2] / f"{sha1}.json"
+    blob.parent.mkdir(parents=True)
+    blob.write_text(text, encoding="utf-8")
+    artifact = _aged_artifact(state_dir, "a.json", text)
+    artifact.unlink()
+    os.link(blob, artifact)
+    stamp = time.time() - 3600
+    os.utime(blob, (stamp, stamp))
+    os.utime(artifact, (stamp, stamp))
+    return artifact, blob
+
+
+def test_tracing_compress_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, _ = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "compressed 1" in r.output
+    assert "saved" in r.output
+    assert artifact.read_bytes() == text.encode("utf-8")
+
+
+def test_tracing_compress_rewrites_the_blob_and_keeps_the_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, blob = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress"])
+
+    assert r.exit_code == 0
+    assert artifact.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
+    assert artifact.stat().st_ino == blob.stat().st_ino
+
+
+def test_tracing_compress_logs_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    archive = tmp_path / "logs" / "archive" / "2026-01-01" / "audit-spans-2026-01-01-1.log"
+    archive.parent.mkdir(parents=True)
+    archive.write_text('{"spanId": "s"}\n', encoding="utf-8")
+    os.utime(archive, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    archive.with_name("audit-spans-2026-01-01-2.log").write_text('{"spanId": "t"}\n', encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "compress", "--logs", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "logs 2: compressed 1, already 0, left for the next rotation 1" in r.output
+    assert archive.read_text(encoding="utf-8") == '{"spanId": "s"}\n'
+
+
+def test_tracing_pack_messages_packs_the_message_store(tmp_path, monkeypatch):
+    from raven.tracing import artifact_v2
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    message = {"role": "user", "content": "hi"}
+    sha1 = artifact_v2.message_sha1(message)
+    path = artifact_v2.message_path(tmp_path / "logs" / "audit-artifacts", sha1)
+    path.parent.mkdir(parents=True)
+    path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "pack-messages"])
+
+    assert r.exit_code == 0
+    assert "packed 1" in r.output
+    assert not path.exists()

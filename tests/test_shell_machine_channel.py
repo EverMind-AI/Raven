@@ -413,6 +413,105 @@ async def test_typed_ssh_to_a_registered_machine_is_refused(registry, tmp_path):
     assert not marker.exists()
 
 
+def _resolving(monkeypatch, aliases: dict[str, tuple[str, str]]):
+    """ssh -G as the owner's ssh config would answer it: alias -> (HostName, Port)."""
+    from raven.ops import transport
+
+    asked: list[list[str]] = []
+
+    def resolve(argv):
+        asked.append(argv)
+        if argv[-1] in aliases:
+            host, port = aliases[argv[-1]]
+            return transport.SshResolution({"hostname": (host,), "port": (port,)}, "")
+        return transport.SshResolution({}, "ssh -G exited 255")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", resolve)
+    return asked
+
+
+@pytest.mark.asyncio
+async def test_ssh_through_an_ssh_config_alias_of_a_registered_machine_is_refused(registry, monkeypatch, tmp_path):
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "58717")})
+    tool = ExecTool(working_dir=str(tmp_path))
+    marker = tmp_path / "ran"
+
+    out = await tool.execute(command=f'ssh gpu-box "ls /data"; touch {marker}')
+
+    assert "Error:" in out and "conn_gpu" in out
+    assert not marker.exists()
+
+
+def test_an_explicit_port_wins_over_the_alias_port(registry, monkeypatch):
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "22")})
+
+    assert machine_exec.raw_ssh_target("ssh -p 58717 gpu-box ls")["id"] == "conn_gpu"
+    assert machine_exec.raw_ssh_target("ssh gpu-box ls") is None
+
+
+def test_an_alias_to_an_unregistered_machine_and_a_literal_address_are_read_as_before(registry, monkeypatch):
+    asked = _resolving(monkeypatch, {"elsewhere": ("198.51.100.9", "22")})
+
+    assert machine_exec.raw_ssh_target("ssh elsewhere ls") is None
+    asked.clear()
+    assert machine_exec.raw_ssh_target("ssh -p 58717 root@203.0.113.7 ls")["id"] == "conn_gpu"
+    assert asked == []
+
+
+def test_a_written_port_22_wins_over_the_alias_port(monkeypatch):
+    on_22 = dict(ROW, port=22)
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(on_22)])
+    _resolving(monkeypatch, {"gpu-box": ("203.0.113.7", "58717")})
+
+    assert machine_exec.raw_ssh_target("ssh -p 22 gpu-box ls")["id"] == "conn_gpu"
+    assert machine_exec.raw_ssh_target("ssh gpu-box ls") is None
+
+
+@pytest.mark.asyncio
+async def test_resolving_an_alias_leaves_the_event_loop_free(registry, monkeypatch, tmp_path):
+    import asyncio
+
+    from raven.ops import transport
+
+    def slow(argv):
+        time.sleep(0.4)
+        return transport.SshResolution({}, "ssh -G exited 255")
+
+    monkeypatch.setattr(transport, "resolve_with_ssh", slow)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.02)
+            ticks += 1
+
+    beat = asyncio.create_task(ticker())
+    try:
+        await ExecTool(working_dir=str(tmp_path)).execute(command="echo ssh somewhere-else would be typed here")
+    finally:
+        beat.cancel()
+    assert ticks >= 5
+
+
+def test_an_alias_ssh_cannot_resolve_or_with_no_numeric_port_is_left_alone(registry, monkeypatch):
+    _resolving(monkeypatch, {"odd-port": ("203.0.113.7", "not-a-port")})
+
+    assert machine_exec.raw_ssh_target("ssh unknown-alias ls") is None
+    assert machine_exec.raw_ssh_target("ssh odd-port ls") is None
+    assert machine_exec.raw_ssh_target("ssh -p 58717 odd-port ls")["id"] == "conn_gpu"
+
+
+@pytest.mark.asyncio
+async def test_ssh_typed_through_the_local_connection_is_refused(monkeypatch):
+    here = {"id": "this-mac", "display_name": "This Mac", "transport": "local", "kind": "cpu"}
+    monkeypatch.setattr("raven.ops.connections.load", lambda: [dict(here), dict(ROW)])
+
+    out = await machine_exec.run_on_machine("ssh -p 58717 root@203.0.113.7 ls", connection="this-mac")
+
+    assert out.startswith("Error:") and "machine='conn_gpu'" in out and "Nothing was run" in out
+
+
 @pytest.mark.asyncio
 async def test_ssh_to_an_unregistered_host_still_runs(registry, tmp_path):
     tool = ExecTool(working_dir=str(tmp_path))

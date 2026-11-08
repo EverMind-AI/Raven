@@ -179,6 +179,16 @@ class CompactionConfig(Base):
     preserve_recent_tokens: int | None = None
 
 
+class TaskBoardConfig(Base):
+    """The host's Task Board: one extra call, after each turn that answered or dispatched work, keeps it.
+
+    The switch is all there is to set: the call runs at the model and effort the
+    turn's own last call ran at, so the main model's settings govern it.
+    """
+
+    enabled: bool = True
+
+
 class AgentDefaults(Base):
     """Default agent configuration."""
 
@@ -204,6 +214,7 @@ class AgentDefaults(Base):
     context_window_tokens: int | None = None
     # In-turn transcript compaction knobs; factory-off (see CompactionConfig).
     compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    task_board: TaskBoardConfig = Field(default_factory=TaskBoardConfig)
     temperature: float = 0.1
     # Per-call wall-clock cap (seconds) for every LLM request (main loop and
     # sub-agents). Bounds a stalled backend that trickles bytes without ever
@@ -353,6 +364,12 @@ class ModelOverlay(Base):
     request may actually carry is still decided by `capabilities.supports_vision`
     and `ProviderSpec`, which is why a wrong tag here costs a wrong picture of a
     model and never a wrong call.
+
+    ``reasoning_efforts`` is the exception to the display-only rule: it states
+    the words this model accepts for a per-conversation pick, and
+    ``providers/effort_levels.py`` prefers it over the LiteLLM table. A word
+    outside the effort ladder is refused at the RPC door; an empty list means
+    nothing was stated and falls back to the table.
     """
 
     label: str = ""
@@ -360,6 +377,7 @@ class ModelOverlay(Base):
     capabilities: list[str] = Field(default_factory=list)
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class ProviderEndpoint(Base):
@@ -797,6 +815,16 @@ TIER_LADDER: tuple[str, ...] = ("medium", "high", "max")
 """The built-in tiers, cheapest first. The order is what makes a clamp possible,
 so it is a constant here rather than something read back off the catalogue."""
 
+REASONING_EFFORTS: tuple[str, ...] = ("minimal", "low", "medium", "high")
+"""The words ``agents.defaults.reasoningEffort`` accepts, least first: the
+install-wide default. A session's own pick is checked against the levels its
+model declares (``providers/effort_levels.py``), which may also carry
+``xhigh``/``max``; this list is that picker's fallback only when the LiteLLM
+table cannot be read. Each provider maps a word to its own wire -- the adaptive
+efforts and thinking budgets in
+``providers/anthropic_messages_provider.py``, ``reasoning_effort`` on the
+OpenAI-shaped ones -- and a model with no thinking to move ignores it."""
+
 ROUTE_REQUIREMENTS: tuple[str, ...] = ("image_generation", "image_search")
 """What a route may declare its target's own pipeline spends.
 
@@ -1018,9 +1046,9 @@ class GatewayConfig(Base):
 
 
 WebSearchProvider = Literal[
-    "serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable"
+    "serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply", "keenable", "deepseek"
 ]
-WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl", "keenable"]
+WebFetchProvider = Literal["jina", "anysearch", "tavily", "exa", "firecrawl", "keenable", "deepseek"]
 
 #: The bare environment variable each web vendor's tool falls back to when the
 #: config slot is empty, and the name ``~/.raven/env`` mirrors the slot out as.
@@ -1035,6 +1063,7 @@ WEB_VENDOR_ENV_VARS: dict[str, str] = {
     "firecrawl": "FIRECRAWL_API_KEY",
     "serply": "SERPLY_API_KEY",
     "keenable": "KEENABLE_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
 }
 
 
@@ -1068,6 +1097,7 @@ class WebProvidersConfig(Base):
     firecrawl: WebProviderKey = Field(default_factory=WebProviderKey)
     serply: WebProviderKey = Field(default_factory=WebProviderKey)
     keenable: WebProviderKey = Field(default_factory=WebProviderKey)
+    deepseek: WebProviderKey = Field(default_factory=WebProviderKey)
 
     def key_for(self, vendor: str) -> str:
         """One vendor's configured key, or an empty string for an unknown vendor."""
@@ -1133,6 +1163,103 @@ class WebToolsConfig(Base):
         return out
 
 
+#: Web vendors whose API runs on the same account as an LLM provider, so the
+#: key already configured for chat pays for search and fetch too. The web slot
+#: stays optional: a key written there wins over the borrowed one, and an empty
+#: slot is the ordinary state rather than a revocation.
+WEB_VENDOR_BORROWED_KEYS: dict[str, str] = {"deepseek": "deepseek"}
+
+
+def web_vendor_llm_source(vendor: str) -> str:
+    """The LLM provider a web vendor borrows its key from, or ``""``."""
+    return WEB_VENDOR_BORROWED_KEYS.get(vendor, "")
+
+
+#: The first-party web host each borrowing vendor's endpoints live on. A key
+#: borrowed from the model provider is issued for this host; a section pointed
+#: anywhere else (a relay, a corporate gateway) lends nothing to the web tool,
+#: whose endpoints are literals.
+WEB_VENDOR_WEB_HOSTS: dict[str, str] = {"deepseek": "api.deepseek.com"}
+
+
+def is_web_vendor_address(vendor: str, api_base: str) -> bool:
+    """Whether ``api_base`` is ``vendor``'s own web host."""
+    host = WEB_VENDOR_WEB_HOSTS.get(vendor)
+    if not host:
+        return False
+    try:
+        return urlparse(api_base).hostname == host
+    except ValueError:
+        return False
+
+
+def _borrowed_key_for_section(vendor: str, section: Any) -> str:
+    """The key a model-provider section lends to ``vendor``'s web tools, or ``""``.
+
+    Resolved through ``provider_connection`` so the key, address and headers are
+    one group: an endpoint's key travels only with that endpoint's address, and
+    a section aimed at another host lends nothing to a tool whose endpoint is a
+    literal.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source or section is None:
+        return ""
+    from raven.config.update_providers import provider_connection
+
+    try:
+        api_base, api_key, _headers = provider_connection(source, section)
+    except Exception:  # noqa: BLE001 - a section the resolver cannot read lends nothing
+        return ""
+    return str(api_key or "") if is_web_vendor_address(vendor, api_base) else ""
+
+
+def borrowed_web_key(vendor: str, providers: Any) -> str:
+    """The LLM credential a web vendor may borrow, or ``""``.
+
+    ``providers`` is either the validated ``ProvidersConfig`` or the raw
+    ``providers`` subtree from the config file; both answer the same key, and a
+    vendor this deployment does not configure answers an empty one. A section
+    that resolves to another host answers an empty one too: its key was issued
+    for that host, not for the web endpoints this tool calls.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source:
+        return ""
+    if isinstance(providers, dict):
+        try:
+            section = _provider_section(providers, source)
+        except Exception:  # noqa: BLE001 - a malformed section is validated by the loader
+            return ""
+        return _borrowed_key_for_section(vendor, section)
+    try:
+        section = providers.get(source)
+    except Exception:  # noqa: BLE001 - an undeclared section is validated only when read
+        return ""
+    return _borrowed_key_for_section(vendor, section)
+
+
+def live_borrowed_web_answer(vendor: str, providers_section: Any) -> tuple[bool, str | None]:
+    """The file's answer for a borrowing vendor: ``(named, key)``.
+
+    ``named`` False means the file says nothing about the provider, so the boot
+    value stays in charge. ``named`` True with ``key`` None means the file names
+    it with a section the schema rejects -- the live reader admits that state
+    through its last-good memory rather than rolling the credential back.
+    ``named`` True with a string is the answer this edit grants, possibly ``""``
+    when the section resolves to another host.
+    """
+    source = web_vendor_llm_source(vendor)
+    if not source or not isinstance(providers_section, dict):
+        return False, None
+    try:
+        section = _provider_section(providers_section, source)
+    except Exception:  # noqa: BLE001 - a bad edit keeps the last admitted key
+        return True, None
+    if section is None:
+        return False, None
+    return True, _borrowed_key_for_section(vendor, section)
+
+
 class ExecToolConfig(Base):
     """Shell exec tool configuration."""
 
@@ -1181,7 +1308,10 @@ class MediaToolConfig(Base):
     Empty fields fall back at call time: ``api_key`` → ``providers.openrouter``
     / ``OPENROUTER_API_KEY``, borrowed only while the tool calls OpenRouter's own
     address; ``api_base`` → OpenRouter; ``model`` → the tool's default
-    (gpt-image-2.5-sunburst for images). Empty quality uses the provider default.
+    (gpt-image-2.5-sunburst for images). An empty ``quality`` names no quality:
+    the request's own value applies for the gpt-image family; with nothing on
+    the request either, the exact ``gpt-image-2`` id sends ``medium`` and other
+    models send none.
     """
 
     api_key: str = ""
@@ -2190,6 +2320,15 @@ class ThirdPartyAcpSubagentConfig(Base):
     reads nothing from this field."""
     model: str | None = None
     """The ``model`` sent with every ``session/new``, or ``None`` to let the agent pick its own default."""
+    effort: str | None = None
+    """The reasoning effort sent with every session, or ``None`` for the agent's own.
+
+    The value is one the agent advertised in its ``thought_level`` config option
+    (``low``, ``high``, ``max``, ``default`` on OpenCode 1.19.4), not one of
+    Raven's run-intensity tiers: it is set through ``session/set_config_option``
+    with the option's own id, separately from ``model``. An agent that packs
+    effort into model ids instead (OpenCode 1.14.31's ``.../low``) advertises no
+    such option and this field stays unset."""
 
     @model_validator(mode="before")
     @classmethod
@@ -2456,6 +2595,38 @@ class PlaybookConfig(Base):
     that send no mode needs those clients to send one."""
 
 
+class SubagentRuntimeConfig(Base):
+    """How the agent processes this host launches share its memory.
+
+    Read live by the host that launches them, so a change reaches the next
+    launch (and the next idle check) without a restart. None of it changes what
+    an agent does; it changes how many processes are kept around and what each
+    one has to load.
+    """
+
+    idle_close_s: float | None = 600.0
+    """Seconds a pooled ACP agent may sit with no request in flight and no frame
+    either way before its process is closed. ``None`` or ``0`` keeps every agent
+    until the host exits. Only an agent that can reopen its sessions
+    (``loadSession``) is closed, so a later turn resumes the conversation in a
+    fresh process. An agent that holds work nobody is asking for yet -- an armed
+    cron job of its own, a running plugin service -- says so when asked
+    (``_raven/residentWork``) and is kept."""
+
+    llm_relay: bool = True
+    """Serve a Raven agent's LiteLLM calls from this process instead of loading
+    LiteLLM in each agent. The agent builds the request, retries and records
+    usage itself; only the call to the model, and the catalogue questions that
+    need LiteLLM's tables, cross to the host. An agent that cannot reach the host
+    loads LiteLLM as before."""
+
+    fork_template: bool = True
+    """On Linux, start Raven agents by forking a process that has already loaded
+    their code, so the loaded modules are shared between them instead of loaded
+    once per agent. Any agent the template cannot start is launched the ordinary
+    way. Has no effect on other systems."""
+
+
 class SubagentsConfig(Base):
     """The one table of agents raven can dispatch to.
 
@@ -2473,6 +2644,7 @@ class SubagentsConfig(Base):
         default_factory=list,
         validation_alias=AliasChoices("agents", "thirdParty", "third_party"),
     )
+    runtime: SubagentRuntimeConfig = Field(default_factory=SubagentRuntimeConfig)
 
     @model_validator(mode="after")
     def _dedupe_names(self) -> "SubagentsConfig":
@@ -2568,6 +2740,24 @@ class Config(BaseSettings):
             if isinstance(configured, str) and configured.strip():
                 found[name] = configured.strip()
         return found
+
+    def effective_web_vendor_key(self, vendor: str) -> str:
+        """One web vendor's key: its own slot, else the LLM provider it borrows from.
+
+        DeepSeek serves its search and fetch endpoints on the account its chat
+        API already uses, so a deployment that configured the model does not
+        have to paste the key a second time under ``tools.web``. A key written
+        to the vendor slot still wins; a deployment with neither answers ``""``.
+        """
+        return self.tools.web.vendor_key(vendor) or borrowed_web_key(vendor, self.providers)
+
+    def effective_web_vendor_keys(self) -> dict[str, str]:
+        """Every web vendor with a resolved credential, the borrowed ones included."""
+        return {
+            vendor: key
+            for vendor in type(self.tools.web.providers).model_fields
+            if (key := self.effective_web_vendor_key(vendor))
+        }
 
     def effective_media_config(self) -> MediaGenConfig:
         """Media config resolved for registration and auth.

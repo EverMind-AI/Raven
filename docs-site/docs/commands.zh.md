@@ -35,6 +35,8 @@
 | `raven sandbox` | 列出沙箱虚拟机、执行命令或打开 Shell；需要设置 `tools.sandbox.debug.enabled=true` |
 | `raven tracing` | 打开本地追踪面板 |
 | `raven tracing compact` | 合并重复的追踪产物，回收磁盘空间 |
+| `raven tracing compress [--logs]` | 以 zstd 重写追踪载荷（加 `--logs` 时还包括轮转后的日志），回收磁盘空间 |
+| `raven tracing pack-messages` | 将内容寻址的消息载荷打包成少量消息包（Message Pack），回收磁盘空间 |
 | `raven trajectory` | 保存、回放、脱敏、标注和保留执行轨迹，用于调试；也运行问题报告接收器 |
 
 运行 `raven --help` 查看命令列表，或运行 `raven <command> --help` 查看指定命令的详细说明。
@@ -45,6 +47,7 @@
 | 任务 | 阅读 |
 | --- | --- |
 | 选择对话或单次工作流 | [使用 Raven](using-raven.md) |
+| 设置模型的思考深度（全局或单个对话） | [使用 Raven](using-raven.md#set-the-reasoning-effort) |
 | 配置随 Raven 发布或外部 Agent | [Agent 集成](agent-integrations.md) |
 | 继续或引导专用任务 | [与子 Agent 协作](agent-collaboration.md) |
 | 与 Agent 共享浏览器工作 | [浏览器协作](browser-collaboration.md) |

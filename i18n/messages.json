@@ -241,6 +241,16 @@
         "help": "查看或设置推理强度（对运行中的 agent 生效）"
       }
     },
+    "effort": {
+      "en": {
+        "name": "effort",
+        "help": "show or set how much the model thinks for this conversation [word] - the words are the ones the model declares"
+      },
+      "zh": {
+        "name": "思考深度",
+        "help": "查看或设置本会话的思考深度 [word] - 可选词由当前模型声明"
+      }
+    },
     "fast": {
       "zh": {
         "name": "快速模式",
@@ -1866,6 +1876,10 @@
     "gui.cron.saved": {
       "en": "Saved",
       "zh": "已保存"
+    },
+    "gui.cron.existing_kept": {
+      "en": "No new job created - an existing one already carries this message; its schedule was kept",
+      "zh": "未新建任务——已有相同内容的任务，保留了原定时间"
     },
     "gui.cron.triggered_x": {
       "en": "\"{name}\" triggered - you will be told when it finishes",
@@ -4459,6 +4473,22 @@
       "en": "just now",
       "zh": "刚刚"
     },
+    "gui.time.for_d": {
+      "en": "{n}d",
+      "zh": "{n} 天"
+    },
+    "gui.time.for_h": {
+      "en": "{n}h",
+      "zh": "{n} 小时"
+    },
+    "gui.time.for_m": {
+      "en": "{n}m",
+      "zh": "{n} 分钟"
+    },
+    "gui.time.for_now": {
+      "en": "<1m",
+      "zh": "不到 1 分钟"
+    },
     "gui.time.dbyest": {
       "en": "2 days ago",
       "zh": "前天"
@@ -4528,8 +4558,8 @@
       "zh": "页面构建落后于源码"
     },
     "gui.update.behind_body": {
-      "en": "ui-web/src or i18n/messages.json changed after dist/index.html was built, so this page is older than the code it runs on. In the repository root run make build-ui, then reload this page.",
-      "zh": "ui-web/src 或 i18n/messages.json 在 dist/index.html 构建之后有改动，这个页面比它背后的代码旧。在仓库根目录运行 make build-ui，然后刷新本页。"
+      "en": "ui-web/src, i18n/messages.json or ui-shared changed after dist/index.html was built, so this page is older than the code it runs on. In the repository root run make build-ui, then reload this page.",
+      "zh": "ui-web/src、i18n/messages.json 或 ui-shared 在 dist/index.html 构建之后有改动，这个页面比它背后的代码旧。在仓库根目录运行 make build-ui，然后刷新本页。"
     },
     "gui.update.behind_how": {
       "en": "How to rebuild",
@@ -5949,6 +5979,22 @@
       "en": "Back to the default model",
       "zh": "清除，回到默认模型"
     },
+    "gui.agent.model_refresh": {
+      "en": "Refresh the model list",
+      "zh": "刷新模型列表"
+    },
+    "gui.agent.model_refresh_failed": {
+      "en": "Couldn't refresh the model list: {detail}",
+      "zh": "刷新模型列表失败：{detail}"
+    },
+    "gui.agent.effort_label": {
+      "en": "Effort",
+      "zh": "思考强度"
+    },
+    "gui.agent.effort_default": {
+      "en": "The agent's default",
+      "zh": "用它自己的默认"
+    },
     "gui.agent.model_no_provider": {
       "en": "Connect a provider first",
       "zh": "先接入一个模型供应商"
@@ -6166,8 +6212,8 @@
       "zh": "模式"
     },
     "gui.tier.scope": {
-      "en": "Reasoning depth, sub-agent mode and the rest follow this setting. This conversation only.",
-      "zh": "模型思考深度、子智能体运行强度等都跟着这一档走。只作用于本会话。"
+      "en": "The tier the sub-agents this conversation dispatches run at. This conversation only.",
+      "zh": "派出的子智能体按这一档运行。只作用于本会话。"
     },
     "gui.tier.failed": {
       "en": "Could not switch to {name}",
@@ -6180,6 +6226,58 @@
     "gui.tier.mode_scope": {
       "en": "This is a deployment's own mode, not a built-in tier, so it is not passed on to sub-agents.",
       "zh": "这是部署自带的模式，不是内置档位，因此不会下发给子智能体。"
+    },
+    "gui.effort.title": {
+      "en": "Reasoning effort",
+      "zh": "思考深度"
+    },
+    "gui.effort.default": {
+      "en": "Default",
+      "zh": "默认"
+    },
+    "gui.effort.minimal": {
+      "en": "Minimal",
+      "zh": "最少"
+    },
+    "gui.effort.low": {
+      "en": "Low",
+      "zh": "低"
+    },
+    "gui.effort.medium": {
+      "en": "Medium",
+      "zh": "中"
+    },
+    "gui.effort.high": {
+      "en": "High",
+      "zh": "高"
+    },
+    "gui.effort.xhigh": {
+      "en": "Extra high",
+      "zh": "极高"
+    },
+    "gui.effort.max": {
+      "en": "Max",
+      "zh": "最高"
+    },
+    "gui.effort.scope": {
+      "en": "How much the model thinks before each answer, for this conversation only. Sub-agents are not affected.",
+      "zh": "模型每次回答前思考多少，只作用于本会话，不影响子智能体。"
+    },
+    "gui.effort.now": {
+      "en": "Default follows the global setting, which is {name} right now.",
+      "zh": "「默认」跟随设置页里的全局值，当前是「{name}」。"
+    },
+    "gui.effort.kept": {
+      "en": "A pick the current model does not offer is kept, and the provider's own default runs until a model offers it.",
+      "zh": "当前模型不提供已保存的档位时会保留该档位，在模型提供之前使用厂商默认。"
+    },
+    "gui.effort.provider": {
+      "en": "the provider's own default",
+      "zh": "厂商默认"
+    },
+    "gui.effort.failed": {
+      "en": "Could not set the reasoning effort to {name}",
+      "zh": "思考深度切到「{name}」没有成功"
     },
     "gui.imodel.title": {
       "en": "Model",
@@ -6772,6 +6870,10 @@
     "gui.confirm.cfg.why.skillForge.blocklist": {
       "en": "taking a skill off the list lets it be offered and installed again",
       "zh": "把技能移出清单后，它可以再次被推荐和安装"
+    },
+    "gui.confirm.cfg.why.skillForge.router.hub.enabled": {
+      "en": "turning it back on resumes sending the turn's message text to the Skill Hub",
+      "zh": "重新打开会把当轮对话内容发送到 Skill Hub"
     },
     "gui.confirm.cfg.why.subagents.*.description": {
       "en": "the dispatching model reads it every turn, so it can steer what is sent where",
@@ -7667,11 +7769,71 @@
     },
     "gui.tasks.running": {
       "en": "Running",
-      "zh": "进行中"
+      "zh": "运行中"
     },
     "gui.tasks.settled": {
       "en": "Finished",
       "zh": "已结束"
+    },
+    "gui.tasks.board.completed": {
+      "en": "Completed · {n}",
+      "zh": "已完成 · {n}"
+    },
+    "gui.tasks.board.unassigned": {
+      "en": "Unassigned",
+      "zh": "未归类"
+    },
+    "gui.tasks.board.mark_completed": {
+      "en": "Mark completed",
+      "zh": "标为已完成"
+    },
+    "gui.tasks.board.reopen": {
+      "en": "Reopen",
+      "zh": "重新打开"
+    },
+    "gui.tasks.board.questions": {
+      "en": "Questions for you",
+      "zh": "需要你回答的问题"
+    },
+    "gui.tasks.board.answer": {
+      "en": "Answer",
+      "zh": "回答"
+    },
+    "gui.tasks.board.ignore": {
+      "en": "Ignore",
+      "zh": "忽略"
+    },
+    "gui.tasks.board.ignore_question": {
+      "en": "Ignore question {n}",
+      "zh": "忽略问题 {n}"
+    },
+    "gui.tasks.board.move_on": {
+      "en": "Move on",
+      "zh": "推进"
+    },
+    "gui.tasks.board.move_on_bar": {
+      "en": "The task your next message moves on",
+      "zh": "下一条消息要推进的任务"
+    },
+    "gui.tasks.board.move_on_clear": {
+      "en": "Don't move this task on",
+      "zh": "不推进这个任务"
+    },
+    "gui.tasks.board.answer_head": {
+      "en": "On \"{title}\":",
+      "zh": "关于「{title}」："
+    },
+    "gui.tasks.board.answer_slot": {
+      "en": "Answer: ",
+      "zh": "答："
+    },
+    "gui.tasks.board.running": {
+      "en": "{n} subagents running",
+      "zh": "{n} 个子智能体在跑"
+    },
+    "gui.tasks.board.dag": {
+      "en": "DAG {done}/{total}",
+      "zh": "DAG {done}/{total}"
     },
     "gui.tasks.files_n": {
       "en": "{n} files changed",
@@ -8213,6 +8375,14 @@
       "en": "This doesn't look like an API key: it has characters a key never contains. Check what was pasted",
       "zh": "这不像是 API key：里面有 Key 不会包含的字符，请检查粘贴的内容"
     },
+    "gui.settings.providers.key_refused": {
+      "en": "{vendor} rejected this key, so it was not saved: check that it is complete and is this vendor's key, then submit it again",
+      "zh": "{vendor} 不认这个 Key，没有保存：检查有没有复制全、是不是这家的 Key，改好再提交一次"
+    },
+    "gui.settings.providers.key_rejected": {
+      "en": "Key rejected",
+      "zh": "Key 被拒"
+    },
     "gui.settings.providers.base": {
       "en": "Service address",
       "zh": "服务地址"
@@ -8433,6 +8603,10 @@
       "en": "Shown as",
       "zh": "显示成什么"
     },
+    "gui.settings.providers.effort_ph": {
+      "en": "Effort levels (comma-separated)",
+      "zh": "思考深度档位（逗号分隔）"
+    },
     "gui.settings.providers.description_ph": {
       "en": "Description (optional)",
       "zh": "说明（可留空）"
@@ -8589,6 +8763,10 @@
       "en": "Reasoning effort",
       "zh": "思考深度"
     },
+    "gui.settings.roles.effort_default": {
+      "en": "Provider default",
+      "zh": "厂商默认"
+    },
     "gui.settings.roles.effort_minimal": {
       "en": "Minimal",
       "zh": "最少"
@@ -8681,6 +8859,22 @@
       "en": "Help me find a skill on Skill Hub and install it. My requirements are as follows:",
       "zh": "帮我在 Skill Hub 找一个技能并安装，我的要求如下："
     },
+    "gui.settings.skills.hub_card": {
+      "en": "Skill Hub",
+      "zh": "Skill Hub"
+    },
+    "gui.settings.skills.hub_title": {
+      "en": "Use 110k+ skills from EverMind Skill Hub",
+      "zh": "使用 EverMind Skill Hub 的 11 万+ 技能"
+    },
+    "gui.settings.skills.hub_sub": {
+      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill.",
+      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。"
+    },
+    "gui.settings.skills.hub_sub_reload": {
+      "en": "While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill. Search starts after Raven reloads.",
+      "zh": "开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。Raven 重新加载后才会开始搜索。"
+    },
     "gui.settings.skills.builtin": {
       "en": "Built-in",
       "zh": "内置"
@@ -8740,6 +8934,10 @@
     "gui.settings.tools.setup": {
       "en": "Needs setup",
       "zh": "待配置"
+    },
+    "gui.settings.tools.borrowed_key": {
+      "en": "{name} API key is already set.",
+      "zh": "{name} API key 已设置。"
     },
     "gui.settings.tools.builtin_locked": {
       "en": "This tool is built in and cannot be switched here.",
@@ -9057,6 +9255,10 @@
       "en": "Route evidence",
       "zh": "选路依据"
     },
+    "gui.tasks.node_attempts": {
+      "en": "Attempts",
+      "zh": "尝试过的智能体"
+    },
     "gui.tasks.node_sel_none": {
       "en": "(none)",
       "zh": "（无）"
@@ -9264,6 +9466,10 @@
     "gui.composer.ph_busy": {
       "en": "Continue the conversation; Raven will receive your new instruction directly",
       "zh": "继续对话，Raven 将直接收到你的新指令"
+    },
+    "gui.composer.resize": {
+      "en": "Drag to resize the composer",
+      "zh": "拖动调整输入框高度"
     },
     "gui.at.point": {
       "en": "What this is about",
@@ -11241,6 +11447,10 @@
       "en": "Knowledge",
       "zh": "知识库"
     },
+    "gui.nav.tasks_board": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
     "gui.nav.import": {
       "en": "Import conversation",
       "zh": "导入会话"
@@ -11252,6 +11462,94 @@
     "gui.page.knowledge": {
       "en": "Knowledge",
       "zh": "知识库"
+    },
+    "gui.page.tasks_board": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
+    "gui.tasks.page.badge": {
+      "en": "{n} need you",
+      "zh": "{n} 个需要你回答"
+    },
+    "gui.tasks.page.col_needs_you": {
+      "en": "Needs you",
+      "zh": "需要你回答"
+    },
+    "gui.tasks.page.col_running": {
+      "en": "Running",
+      "zh": "运行中"
+    },
+    "gui.tasks.page.col_idle": {
+      "en": "Idle",
+      "zh": "闲置"
+    },
+    "gui.tasks.page.col_completed": {
+      "en": "Completed",
+      "zh": "已完成"
+    },
+    "gui.tasks.page.foot_needs_you": {
+      "en": "Needs you · {t}",
+      "zh": "需要你回答 · {t}"
+    },
+    "gui.tasks.page.foot_running": {
+      "en": "Running · {t}",
+      "zh": "运行中 · {t}"
+    },
+    "gui.tasks.page.foot_idle": {
+      "en": "Idle · {t}",
+      "zh": "闲置 · {t}"
+    },
+    "gui.tasks.page.foot_completed": {
+      "en": "Completed · took {t}",
+      "zh": "已完成 · 用时 {t}"
+    },
+    "gui.tasks.page.events": {
+      "en": "events {n}",
+      "zh": "事件 {n}"
+    },
+    "gui.tasks.page.sub_agents": {
+      "en": "subagents {n}",
+      "zh": "子智能体 {n}"
+    },
+    "gui.tasks.page.empty_col": {
+      "en": "Nothing here",
+      "zh": "暂无"
+    },
+    "gui.tasks.page.all": {
+      "en": "All",
+      "zh": "全部"
+    },
+    "gui.tasks.page.title": {
+      "en": "Task board",
+      "zh": "任务看板"
+    },
+    "gui.tasks.page.all_conversations": {
+      "en": "All conversations",
+      "zh": "全部会话"
+    },
+    "gui.tasks.page.conversation": {
+      "en": "Conversation",
+      "zh": "会话"
+    },
+    "gui.tasks.page.show_completed": {
+      "en": "Show completed {n}",
+      "zh": "显示已完成 {n}"
+    },
+    "gui.tasks.page.view_board": {
+      "en": "Board",
+      "zh": "看板"
+    },
+    "gui.tasks.page.view_list": {
+      "en": "List",
+      "zh": "列表"
+    },
+    "gui.tasks.page.error": {
+      "en": "Could not refresh; showing the last answer",
+      "zh": "刷新失败，显示的是上一次的结果"
+    },
+    "gui.tasks.page.card_label": {
+      "en": "{title}, {cat}, {conv}",
+      "zh": "{title}，{cat}，{conv}"
     },
     "gui.knowledge.tab_all": {
       "en": "All",
@@ -11721,10 +12019,6 @@
       "en": "Conversation",
       "zh": "会话"
     },
-    "gui.trajectory.empty": {
-      "en": "No trajectory entries yet",
-      "zh": "还没有轨迹条目"
-    },
     "gui.trajectory.scanning": {
       "en": "Scanning {done} / {total} MiB",
       "zh": "正在扫描 {done} / {total} MiB"
@@ -11744,18 +12038,6 @@
     "gui.trajectory.not_recording": {
       "en": "Tracing is off; the list will not grow",
       "zh": "采集已关闭，列表不会增长"
-    },
-    "gui.trajectory.no_preview": {
-      "en": "(no preview)",
-      "zh": "（无预览）"
-    },
-    "gui.trajectory.failed": {
-      "en": "Failed",
-      "zh": "失败"
-    },
-    "gui.trajectory.list_label": {
-      "en": "Trajectory entries",
-      "zh": "轨迹条目"
     },
     "gui.trajectory.kind.user_input": {
       "en": "User input",
@@ -11903,7 +12185,19 @@
     },
     "gui.trajectory.details.resize": {
       "en": "Resize details",
-      "zh": "调整详情宽度"
+      "zh": "调整详情大小"
+    },
+    "gui.trajectory.details.resize_keys": {
+      "en": "The arrow keys resize it.",
+      "zh": "方向键可调整大小。"
+    },
+    "gui.trajectory.details.size": {
+      "en": "Width {width} px, height {height} px",
+      "zh": "宽 {width} 像素，高 {height} 像素"
+    },
+    "gui.trajectory.details.size_full": {
+      "en": "Width {width} px, full height",
+      "zh": "宽 {width} 像素，占满高度"
     },
     "gui.trajectory.details.region": {
       "en": "Entry details",
@@ -11957,6 +12251,10 @@
       "en": "Request",
       "zh": "请求"
     },
+    "gui.trajectory.block.reasoning": {
+      "en": "Reasoning",
+      "zh": "推理"
+    },
     "gui.trajectory.block.thinking": {
       "en": "Thinking",
       "zh": "思考内容"
@@ -11991,7 +12289,7 @@
     },
     "gui.trajectory.block.schema": {
       "en": "Schema",
-      "zh": "Schema"
+      "zh": "定义"
     },
     "gui.trajectory.block.result": {
       "en": "Result",
@@ -12073,6 +12371,10 @@
       "en": "Transcript",
       "zh": "转录"
     },
+    "gui.trajectory.block.replay": {
+      "en": "Replay",
+      "zh": "回放"
+    },
     "gui.trajectory.block.frames": {
       "en": "Frame references",
       "zh": "帧记录引用"
@@ -12131,7 +12433,11 @@
     },
     "gui.trajectory.reason.schema_unproven": {
       "en": "No confirmable historical schema was recorded",
-      "zh": "未记录可确认的历史 Schema"
+      "zh": "未记录可确认的历史定义"
+    },
+    "gui.trajectory.reason.reasoning_withheld": {
+      "en": "The provider counted reasoning tokens but returned no reasoning text; the count is on the Usage tab",
+      "zh": "服务商计了推理 token，但没有返回推理内容，数量见“用量”标签"
     },
     "gui.trajectory.reason.preview_dropped": {
       "en": "Preview omitted to keep the overview small",
@@ -12289,70 +12595,6 @@
       "en": "Waiting for the list to catch up",
       "zh": "等待列表同步"
     },
-    "gui.trajectory.bar.zoom_in": {
-      "en": "Zoom in",
-      "zh": "放大"
-    },
-    "gui.trajectory.bar.zoom_out": {
-      "en": "Zoom out",
-      "zh": "缩小"
-    },
-    "gui.trajectory.bar.reset": {
-      "en": "Fit the whole conversation",
-      "zh": "复位到整条会话"
-    },
-    "gui.trajectory.bar.sum_known": {
-      "en": "{dur} charged",
-      "zh": "计入 {dur}"
-    },
-    "gui.trajectory.bar.sum_unknown": {
-      "en": "{n} entries of unknown duration",
-      "zh": "另有 {n} 条耗时未知"
-    },
-    "gui.trajectory.bar.sum_overlap": {
-      "en": "Nested calls overlap",
-      "zh": "含父子调用重叠"
-    },
-    "gui.trajectory.bar.event_at": {
-      "en": "At {t}",
-      "zh": "时刻 {t}"
-    },
-    "gui.trajectory.bar.span": {
-      "en": "{from} to {to}",
-      "zh": "{from} 至 {to}"
-    },
-    "gui.trajectory.bar.span_unknown": {
-      "en": "Start and end unknown",
-      "zh": "起止未知"
-    },
-    "gui.trajectory.bar.thinking_range": {
-      "en": "Within the call above; its own time was not recorded",
-      "zh": "所属调用范围内，独立时间未记录"
-    },
-    "gui.trajectory.bar.dense": {
-      "en": "{n} entries, {dur} known, {unknown} unknown",
-      "zh": "{n} 条，已知累计 {dur}，未知 {unknown} 条"
-    },
-    "gui.trajectory.bar.dense_hint": {
-      "en": "Dense view: zoom in or spread this out to see each entry",
-      "zh": "密集视图：放大或展开此段查看各条目"
-    },
-    "gui.trajectory.bar.expand": {
-      "en": "Spread this out",
-      "zh": "展开此段"
-    },
-    "gui.trajectory.bar.pick_one": {
-      "en": "Pick an entry",
-      "zh": "选择条目"
-    },
-    "gui.trajectory.bar.canvas_label": {
-      "en": "Duration bar: {n} entries, {known} charged",
-      "zh": "耗时构成条：{n} 条，计入 {known}"
-    },
-    "gui.trajectory.bar.failed": {
-      "en": "Failed",
-      "zh": "失败"
-    },
     "gui.trajectory.kind.skill_read": {
       "en": "Skill read",
       "zh": "读技能"
@@ -12448,22 +12690,6 @@
     "gui.trajectory.kind.plugin_load": {
       "en": "Plugin load",
       "zh": "插件加载"
-    },
-    "gui.trajectory.missing_record": {
-      "en": "Recorded data missing",
-      "zh": "记录数据缺失"
-    },
-    "gui.trajectory.turn_total": {
-      "en": "Turn {n}: {dur} in all",
-      "zh": "回合 {n}：总耗时 {dur}"
-    },
-    "gui.trajectory.revealed_row": {
-      "en": "A hidden entry, shown because something pointed at it",
-      "zh": "已隐藏的条目，因被引用而临时显示"
-    },
-    "gui.trajectory.bar.turn_total": {
-      "en": "Turn {n}: {dur} in all",
-      "zh": "回合 {n} · 总耗时 {dur}"
     },
     "gui.trajectory.details.tabs_earlier": {
       "en": "Earlier tabs",
@@ -12577,22 +12803,6 @@
       "en": "Turn end",
       "zh": "回合结束"
     },
-    "gui.trajectory.bar.show_hidden": {
-      "en": "Show hidden entries ({n})",
-      "zh": "显示已隐藏的条目（{n} 条）"
-    },
-    "gui.trajectory.bar.threshold": {
-      "en": "Hide entries under {ms}",
-      "zh": "隐藏短于 {ms} 的条目"
-    },
-    "gui.trajectory.bar.threshold_off": {
-      "en": "No duration filter",
-      "zh": "不按时长过滤"
-    },
-    "gui.trajectory.bar.threshold_label": {
-      "en": "Duration filter",
-      "zh": "时长过滤"
-    },
     "gui.trajectory.details.files_listed_part": {
       "en": "Too many files to list: the first {n} of {total} are shown",
       "zh": "目录过长，只列出前 {n} 项（共 {total} 项）"
@@ -12617,21 +12827,277 @@
       "en": "Released to stay within memory; click to read it again",
       "zh": "内容已释放（内存上限），点击重新读取"
     },
-    "gui.trajectory.scope.strip": {
-      "en": "Trajectory tabs",
-      "zh": "轨迹页签"
-    },
     "gui.trajectory.scope.main": {
       "en": "Main",
       "zh": "主会话"
     },
+    "gui.trajectory.agents": {
+      "en": "Agents",
+      "zh": "智能体"
+    },
+    "gui.trajectory.crash": {
+      "en": "The trace could not be drawn: {detail}",
+      "zh": "轨迹渲染出错：{detail}"
+    },
+    "gui.trajectory.crash_retry": {
+      "en": "Try again",
+      "zh": "重试"
+    },
+    "gui.trajectory.stat.duration": {
+      "en": "DURATION",
+      "zh": "时长"
+    },
+    "gui.trajectory.stat.agents": {
+      "en": "AGENTS",
+      "zh": "智能体"
+    },
+    "gui.trajectory.stat.turns": {
+      "en": "TURNS",
+      "zh": "轮次"
+    },
+    "gui.trajectory.stat.llm": {
+      "en": "LLM CALLS",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.stat.tool": {
+      "en": "TOOL CALLS",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.stat.errors": {
+      "en": "ERRORS",
+      "zh": "错误"
+    },
+    "gui.trajectory.stat.span": {
+      "en": "{from} → {to}",
+      "zh": "{from} → {to}"
+    },
+    "gui.trajectory.stat.main": {
+      "en": "{n} main",
+      "zh": "主会话 {n}"
+    },
+    "gui.trajectory.stat.sub_one": {
+      "en": "1 sub-agent",
+      "zh": "子智能体 1"
+    },
+    "gui.trajectory.stat.sub_n": {
+      "en": "{n} sub-agents",
+      "zh": "子智能体 {n}"
+    },
+    "gui.trajectory.stat.median": {
+      "en": "median {duration}",
+      "zh": "中位 {duration}"
+    },
+    "gui.trajectory.stat.model_share": {
+      "en": "{percent}% of busy time",
+      "zh": "占忙碌时间 {percent}%"
+    },
+    "gui.trajectory.stat.tool_share": {
+      "en": "{name} {percent}%",
+      "zh": "{name} {percent}%"
+    },
+    "gui.trajectory.stat.jump": {
+      "en": "Jump to first ›",
+      "zh": "跳到第一个 ›"
+    },
+    "gui.trajectory.slowest": {
+      "en": "slowest",
+      "zh": "最慢"
+    },
+    "gui.trajectory.next": {
+      "en": "next at {time} ›",
+      "zh": "下次 {time} ›"
+    },
+    "gui.trajectory.last": {
+      "en": "‹ last at {time}",
+      "zh": "‹ 上次 {time}"
+    },
+    "gui.trajectory.fold.earlier_one": {
+      "en": "1 agent finished earlier · last at {time}",
+      "zh": "1 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.earlier_n": {
+      "en": "{n} agents finished earlier · last at {time}",
+      "zh": "{n} 个智能体更早结束 · 最后在 {time}"
+    },
+    "gui.trajectory.fold.later_one": {
+      "en": "1 more agent later · from {time}",
+      "zh": "之后还有 1 个智能体 · 从 {time} 开始"
+    },
+    "gui.trajectory.fold.later_n": {
+      "en": "{n} more agents later · from {time}",
+      "zh": "之后还有 {n} 个智能体 · 从 {time} 开始"
+    },
+    "gui.trajectory.agent.from_turn": {
+      "en": "from Turn {n}",
+      "zh": "来自第 {n} 轮"
+    },
+    "gui.trajectory.agent.turns_one": {
+      "en": "1 turn",
+      "zh": "1 轮"
+    },
+    "gui.trajectory.agent.turns_n": {
+      "en": "{n} turns",
+      "zh": "{n} 轮"
+    },
+    "gui.trajectory.tip.head": {
+      "en": "{turn} · {from} – {to} · {length}",
+      "zh": "{turn} · {from} – {to} · {length}"
+    },
+    "gui.trajectory.tip.model": {
+      "en": "LLM {calls} · {time} · {percent}%",
+      "zh": "模型 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.tool": {
+      "en": "Tools {calls} · {time} · {percent}%",
+      "zh": "工具 {calls} · {time} · {percent}%"
+    },
+    "gui.trajectory.tip.subagent": {
+      "en": "Sub-agents {time} · {percent}%",
+      "zh": "子智能体 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.failure": {
+      "en": "Failed {time} · {percent}%",
+      "zh": "失败 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.waiting": {
+      "en": "Waiting {time} · {percent}%",
+      "zh": "等待 {time} · {percent}%"
+    },
+    "gui.trajectory.tip.calls_one": {
+      "en": "1 call",
+      "zh": "1 次"
+    },
+    "gui.trajectory.tip.calls_n": {
+      "en": "{n} calls",
+      "zh": "{n} 次"
+    },
+    "gui.trajectory.activity.title": {
+      "en": "ACTIVITY",
+      "zh": "活动"
+    },
+    "gui.trajectory.activity.per": {
+      "en": "calls per {length} · idle time folded",
+      "zh": "每 {length} 调用数 · 空闲已折叠"
+    },
+    "gui.trajectory.activity.llm": {
+      "en": "LLM call",
+      "zh": "模型调用"
+    },
+    "gui.trajectory.activity.tool": {
+      "en": "Tool call",
+      "zh": "工具调用"
+    },
+    "gui.trajectory.activity.error": {
+      "en": "Error",
+      "zh": "错误"
+    },
+    "gui.trajectory.tool.read": {
+      "en": "Read",
+      "zh": "读取"
+    },
+    "gui.trajectory.tool.edit": {
+      "en": "Edit",
+      "zh": "编辑"
+    },
+    "gui.trajectory.tool.delete": {
+      "en": "Delete",
+      "zh": "删除"
+    },
+    "gui.trajectory.tool.move": {
+      "en": "Move",
+      "zh": "移动"
+    },
+    "gui.trajectory.tool.search": {
+      "en": "Search",
+      "zh": "搜索"
+    },
+    "gui.trajectory.tool.execute": {
+      "en": "Run",
+      "zh": "执行"
+    },
+    "gui.trajectory.tool.think": {
+      "en": "Think",
+      "zh": "思考"
+    },
+    "gui.trajectory.tool.fetch": {
+      "en": "Fetch",
+      "zh": "抓取"
+    },
+    "gui.trajectory.tool.switch_mode": {
+      "en": "Switch mode",
+      "zh": "切换模式"
+    },
+    "gui.trajectory.tool.other": {
+      "en": "Other",
+      "zh": "其他"
+    },
+    "gui.trajectory.busy": {
+      "en": "BUSY",
+      "zh": "忙碌"
+    },
+    "gui.trajectory.zoom.label": {
+      "en": "Window",
+      "zh": "时间窗口"
+    },
+    "gui.trajectory.zoom.fit": {
+      "en": "Fit",
+      "zh": "全部"
+    },
+    "gui.trajectory.zoom.3h": {
+      "en": "3h",
+      "zh": "3 小时"
+    },
+    "gui.trajectory.zoom.1h": {
+      "en": "1h",
+      "zh": "1 小时"
+    },
+    "gui.trajectory.zoom.15m": {
+      "en": "15m",
+      "zh": "15 分钟"
+    },
+    "gui.trajectory.fold_all": {
+      "en": "Collapse",
+      "zh": "折叠"
+    },
+    "gui.trajectory.replay.start": {
+      "en": "Replay",
+      "zh": "重放"
+    },
+    "gui.trajectory.replay.stop": {
+      "en": "Stop",
+      "zh": "停止"
+    },
+    "gui.trajectory.replay.hint": {
+      "en": "Replay the session from its first step, in at most {seconds} seconds",
+      "zh": "从第一步开始重放整段会话，最长 {seconds} 秒"
+    },
+    "gui.trajectory.replay.catching_up": {
+      "en": "Catching up to the present at {rate} speed",
+      "zh": "正在以 {rate} 速度追到当前进度"
+    },
+    "gui.trajectory.window.whole": {
+      "en": "{from} – {to} · whole session",
+      "zh": "{from} – {to} · 整段会话"
+    },
+    "gui.trajectory.window.zoomed": {
+      "en": "{from} – {to} · {length} window",
+      "zh": "{from} – {to} · {length} 窗口"
+    },
+    "gui.trajectory.axis.idle": {
+      "en": "{duration} idle",
+      "zh": "空闲 {duration}"
+    },
+    "gui.trajectory.turn.ordinal": {
+      "en": "Turn {n}",
+      "zh": "第 {n} 轮"
+    },
+    "gui.trajectory.turn.from_report": {
+      "en": "From {name}",
+      "zh": "来自 {name}"
+    },
     "gui.trajectory.scope.untitled": {
       "en": "Sub-agent",
       "zh": "子智能体"
-    },
-    "gui.trajectory.scope.close_named": {
-      "en": "Close {title}",
-      "zh": "关闭 {title}"
     },
     "gui.trajectory.scope.open": {
       "en": "Open trajectory",
@@ -12644,38 +13110,6 @@
     "gui.trajectory.scope.from": {
       "en": "From sub-agent: {title}",
       "zh": "来自子智能体：{title}"
-    },
-    "gui.trajectory.scope.locate": {
-      "en": "Show in main",
-      "zh": "在主会话中定位"
-    },
-    "gui.trajectory.scope.dispatched_in": {
-      "en": "Dispatched in turn {n}",
-      "zh": "第 {n} 回合派出"
-    },
-    "gui.trajectory.scope.agent": {
-      "en": "Agent: {name}",
-      "zh": "智能体：{name}"
-    },
-    "gui.trajectory.scope.instance": {
-      "en": "Instance: {name}",
-      "zh": "实例：{name}"
-    },
-    "gui.trajectory.scope.reported": {
-      "en": "Started by a sub-agent's report",
-      "zh": "由子智能体回报触发"
-    },
-    "gui.trajectory.scope.empty_running": {
-      "en": "No steps recorded yet",
-      "zh": "还没有记录到步骤"
-    },
-    "gui.trajectory.scope.empty_done": {
-      "en": "No steps were recorded",
-      "zh": "没有记录到步骤"
-    },
-    "gui.trajectory.scope.gone": {
-      "en": "This sub-agent's records are no longer available",
-      "zh": "记录已不可用"
     },
     "gui.settings.cloud.title": {
       "en": "Long-term memory: EverOS Cloud",

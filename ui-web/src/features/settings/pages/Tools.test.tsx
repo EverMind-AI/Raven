@@ -100,6 +100,52 @@ describe('tools page', () => {
     expect(screen.getByText('gui.settings.tools.vendor_key {"name":"Serper"}')).toBeTruthy()
   })
 
+  it('a key borrowed from the model providers satisfies a web tool, for a borrowing vendor only', () => {
+    expect(
+      blocker('web_search', {
+        providers: { deepseek: { apiKey: 'sk-test' } },
+        tools: { web: { search: { provider: 'deepseek' }, fetch: { provider: 'deepseek' } } },
+      }),
+    ).toBe('')
+    expect(
+      blocker('web_fetch', {
+        providers: { deepseek: { apiKey: 'sk-test' } },
+        tools: { web: { fetch: { provider: 'deepseek' } } },
+      }),
+    ).toBe('')
+    // A vendor that does not share an account still needs its own key.
+    expect(
+      blocker('web_search', {
+        providers: { deepseek: { apiKey: 'sk-test' } },
+        tools: { web: { search: { provider: 'tavily' } } },
+      }),
+    ).toBe('key')
+    // An empty model-provider key leaves nothing to borrow.
+    expect(
+      blocker('web_search', {
+        providers: { deepseek: { apiKey: '' } },
+        tools: { web: { search: { provider: 'deepseek' } } },
+      }),
+    ).toBe('key')
+  })
+
+  it('a borrowed key is claimed only when the section resolves to the vendor host', () => {
+    const raw = (providers: Record<string, unknown>) => ({
+      providers: { deepseek: providers },
+      tools: { web: { search: { provider: 'deepseek' } } },
+    })
+    expect(blocker('web_search', raw({ apiKey: 'sk' }))).toBe('')
+    expect(blocker('web_search', raw({ apiKey: 'sk', apiBase: 'https://api.deepseek.com/v1' }))).toBe('')
+    expect(blocker('web_search', raw({ apiKey: 'sk', apiBase: 'https://llm-gw.corp.example/v1' }))).toBe('key')
+    expect(blocker('web_search', raw({ apiKey: 'sk-old', endpoints: [{ label: 'a', apiKey: 'sk-new' }] }))).toBe('')
+    expect(
+      blocker(
+        'web_search',
+        raw({ endpoints: [{ label: 'a', apiKey: 'sk-new', apiBase: 'https://llm-gw.corp.example/v1' }] }),
+      ),
+    ).toBe('key')
+  })
+
   it('a switch writes the whole disabled list; turning on a blocked tool also opens its panel', async () => {
     const { calls } = install()
     await mount('tools')

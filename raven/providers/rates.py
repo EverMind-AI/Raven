@@ -30,6 +30,8 @@ import httpx
 from loguru import logger
 
 from raven.providers import model_catalog_cache
+from raven.providers.relay import active as relay_active
+from raven.providers.relay import relayed
 
 #: One home for the window ladder's documented fallback: an unknown model gets
 #: this many tokens of headroom rather than a number invented at the call site.
@@ -212,6 +214,7 @@ def _litellm_price_table() -> dict:
         return {}
 
 
+@relayed()
 def _table_entry(model: str) -> dict | None:
     """The table row keyed exactly by this model id, or None.
 
@@ -222,18 +225,39 @@ def _table_entry(model: str) -> dict | None:
     MiniMax models with the direct figure where LiteLLM had reported OpenRouter's.
     The table is read here to skip the ask where the ask cannot be made; it does
     not replace it.
+
+    A local endpoint's id is matched without case, as LiteLLM matches it: a
+    cache-only lookup for ``ollama/Llama3`` must read the ``ollama/llama3`` row
+    rather than dial a daemon it was told not to ask. Only endpoint vendors get
+    this fallback; other providers' ids are filed in the spelling they are sent
+    under, and a case difference there is a different id.
     """
-    entry = _litellm_price_table().get(model)
-    return entry if isinstance(entry, dict) else None
+    table = _litellm_price_table()
+    entry = table.get(model)
+    if isinstance(entry, dict):
+        return entry
+    if not _names_endpoint_vendor(model):
+        return None
+    lowered = model.lower()
+    for key, value in table.items():
+        if key.lower() == lowered and isinstance(value, dict):
+            return value
+    return None
 
 
 @lru_cache(maxsize=1)
 def _drivers_dir() -> pathlib.Path | None:
-    """Where the installed LiteLLM keeps its per-provider drivers."""
-    try:
-        from raven.providers.litellm_setup import import_litellm
+    """Where the installed LiteLLM keeps its per-provider drivers.
 
-        return pathlib.Path(import_litellm().__file__).parent / "llms"
+    Located, not imported: the package's directory is all this needs, and a
+    process whose model calls go through its host's relay never loads LiteLLM.
+    """
+    try:
+        import importlib.util
+
+        spec = importlib.util.find_spec("litellm")
+        locations = list(spec.submodule_search_locations or []) if spec is not None else []
+        return pathlib.Path(locations[0]) / "llms" if locations else None
     except Exception:
         return None
 
@@ -280,7 +304,7 @@ def may_fetch(model: str) -> bool:
     They buy nothing, and this is LiteLLM's bug rather than a bad id on our
     side. `_get_model_info_helper` computes `split_model` -- the bare repo id --
     and then passes the caller's original string to
-    `_get_max_position_embeddings` (utils.py:5817 on main, :5678 in 1.85.0), so
+    `_get_max_position_embeddings`, so
     the address asked for is `huggingface.co/huggingface/<repo>`, which is not
     a repo and answers 404. Measured both ways: with the routing prefix, 404
     and an empty answer after 533ms; without it, `get_llm_provider` raises for
@@ -325,6 +349,7 @@ def _endpoint_metadata_model(model: str) -> str:
     return model
 
 
+@relayed()
 def _may_query_endpoint(model: str) -> bool:
     """Would ``get_model_info`` ask this model's own server rather than a table?
 
@@ -334,8 +359,8 @@ def _may_query_endpoint(model: str) -> bool:
     what a cache-only lookup still needs.
 
     Ollama's driver is asked only when the id routes to Ollama and no name
-    LiteLLM derives from it is in the table, compared without case
-    (``_get_model_info_helper``, utils.py:5698 in 1.85.0). So ``ollama/Llama3``
+    LiteLLM derives from it is in the table, compared without case (LiteLLM's
+    own potential-names check). So ``ollama/Llama3``
     reads the ``ollama/llama3`` row, and ``litellm_proxy/ollama/llama3`` never
     reaches the driver at all. The check is LiteLLM's own, put to it rather
     than copied. A release that does not ship it gets the cautious answer for
@@ -395,6 +420,7 @@ def _candidates(model: str) -> list[str]:
     return metadata_candidates(model)
 
 
+@relayed(shape=lambda value: tuple(value) if isinstance(value, list) else value)
 def _try_litellm_rates(model: str, input_tokens: int, output_tokens: int) -> tuple[float, float] | None:
     """Ask LiteLLM for per-token rates. Returns (prompt_rate, completion_rate) or None."""
     try:
@@ -894,12 +920,16 @@ def _litellm_ready() -> bool:
     import machinery reads to tell a live import from a finished one; a module
     carrying no spec is one no import is still running.
     """
+    if relay_active():
+        # The tables are the host's, already loaded there; asking costs a local round trip.
+        return True
     module = sys.modules.get("litellm")
     if module is None:
         return False
     return not getattr(getattr(module, "__spec__", None), "_initializing", False)
 
 
+@relayed()
 def _try_litellm_max_output(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """The model's own output ceiling, from the same metadata as the window.
 
@@ -1055,6 +1085,7 @@ def resolve_max_output_tokens(model: str | None, *, window: int | None = None, a
     return max(1, min(ceiling, room, MAX_OUTPUT_TOKENS_PER_ITERATION))
 
 
+@relayed()
 def _try_litellm_context_window(model: str, *, allow_import: bool = True, allow_fetch: bool = True) -> int | None:
     """LiteLLM's model metadata, covering most mapped providers.
 

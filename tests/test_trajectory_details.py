@@ -12,6 +12,7 @@ import pytest
 from raven.tracing import artifact_v2
 from raven.trajectory import conversation as tconv
 from raven.trajectory import details as tdet
+from raven.trajectory import frames_replay
 from raven.trajectory import index as tidx
 from raven.trajectory import store as tstore
 
@@ -435,7 +436,7 @@ def test_every_kind_in_the_gui_table_yields_ordered_blocks(state):
         ("turn", "turn.output"): ["content"],
         ("llm", "llm.input"): ["messages", "model", "tools", "outline"],
         ("llm", "llm.thinking"): ["thinking", "thinkingBlocks"],
-        ("llm", "llm.output"): ["content", "toolCalls", "finish", "usage", "response"],
+        ("llm", "llm.output"): ["content", "reasoning", "toolCalls", "finish", "usage", "response"],
         ("tool", "tool.input"): ["params", "schema"],
         ("tool", "tool.output"): ["result", "params", "schema"],
         ("read", "skill.read"): ["skill", "params", "content", "origin"],
@@ -1924,3 +1925,178 @@ def test_the_files_directory_pages_by_cursor_and_a_span_without_files_has_none(s
     assert "files" not in _ids(_describe(index, state, bare)) and "file" not in _ids(_describe(index, state, bare))
     with pytest.raises(tdet.UnknownBlockError):
         _block(index, state, bare, "file")
+
+
+# ── replaying an external run from its journal ────────────────────────
+
+
+def _frames(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frames = [
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-09-01T10:00:01+00:00",
+            "dir": "out",
+            "frame": {
+                "method": "session/prompt",
+                "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "do it"}]},
+            },
+        },
+        {
+            "_type": "acp_frame",
+            "timestamp": "2026-09-01T10:00:02+00:00",
+            "dir": "in",
+            "frame": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "s",
+                    "update": {"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "on it"}]},
+                },
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(frame) for frame in frames) + "\n", encoding="utf-8")
+    return path
+
+
+def _external_run(state: Path, journal: Path, *, handshake_end: int | None = None) -> tidx.SessionIndex:
+    attrs = {
+        "subagent.external.agent": "claude-code",
+        "subagent.external.frames.path": str(journal),
+        "subagent.external.frames.session_id": "s",
+        "subagent.external.frames.start": 0,
+        "subagent.external.frames.end": journal.stat().st_size,
+    }
+    if handshake_end is not None:
+        attrs["subagent.external.frames.handshake_end"] = handshake_end
+    _append(
+        state,
+        [
+            _turn(state, "t", "turn", start=0, end=30),
+            _span("t", "ext", "subagent.external", parent="turn", start=1, end=5, attrs=attrs),
+        ],
+    )
+    return _ready(state)
+
+
+def _resumed_codex_frames(path: Path) -> tuple[Path, int]:
+    """A codex connection's journal: the handshake, a resumed session's load and
+    the history it replays, then this run's prompt and one command that failed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def line(direction: str, frame: dict) -> str:
+        record = {"_type": "acp_frame", "timestamp": "2026-09-01T10:00:01+00:00", "dir": direction, "frame": frame}
+        return json.dumps(record) + "\n"
+
+    def update(body: dict) -> dict:
+        return {"method": "session/update", "params": {"sessionId": "s", "update": body}}
+
+    text = line("out", {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}})
+    text += line("in", {"jsonrpc": "2.0", "id": 0, "result": {"agentInfo": {"name": "codex-acp"}}})
+    handshake_end = len(text.encode("utf-8"))
+    text += line("out", {"jsonrpc": "2.0", "id": 1, "method": "session/load", "params": {"sessionId": "s"}})
+    text += line(
+        "in", update({"sessionUpdate": "agent_message_chunk", "content": [{"type": "text", "text": "earlier turn"}]})
+    )
+    text += line("in", {"jsonrpc": "2.0", "id": 1, "result": {}})
+    text += line(
+        "out",
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {"sessionId": "s", "prompt": [{"type": "text", "text": "run the i18n gate"}]},
+        },
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": "c1",
+                "title": "lint",
+                "kind": "execute",
+                "status": "in_progress",
+                "rawInput": {"command": ["pnpm", "lint:i18n"]},
+            }
+        ),
+    )
+    text += line(
+        "in",
+        update(
+            {
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "c1",
+                "status": "completed",
+                "rawOutput": {"formatted_output": "2 missing keys", "exit_code": 1},
+            }
+        ),
+    )
+    path.write_text(text, encoding="utf-8")
+    return path, handshake_end
+
+
+def _replay(index: tidx.SessionIndex, state: Path):
+    entry = next(e for e in index.entries() if e.span_id == "ext")
+    return _block(index, state, entry, "replay")
+
+
+def test_the_replay_block_parses_a_runs_journal_once(state, monkeypatch):
+    journal = _frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-1.jsonl")
+    index = _external_run(state, journal)
+    calls: list[int] = []
+    real = frames_replay.replay
+
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(frames_replay, "replay", counted)
+    tdet._replay_items.cache_clear()
+    _replay(index, state)
+    _replay(index, state)
+    assert len(calls) == 1
+
+
+def test_replay_reads_the_runs_journal_from_this_stores_own_journals(state):
+    journal = _frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-1.jsonl")
+    body = _replay(_external_run(state, journal), state)
+    assert body.availability == tdet.AVAILABLE
+    assert body.data["items"][0] == {"key": "llm.input", "value": "do it", "source": "replay"}
+
+
+def test_replay_leaves_out_the_history_a_resumed_session_replayed_before_the_prompt(state):
+    journal, handshake_end = _resumed_codex_frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-2.jsonl")
+    body = _replay(_external_run(state, journal, handshake_end=handshake_end), state)
+    values = [row["value"] for row in body.data["items"]]
+    assert values[0] == "run the i18n gate"
+    assert not any("earlier turn" in value for value in values)
+
+
+def test_replay_reads_a_command_with_the_dialect_the_connections_handshake_chose(state):
+    journal, handshake_end = _resumed_codex_frames(state / "logs" / "acp-frames" / "2026-09-01" / "agent-2.jsonl")
+    body = _replay(_external_run(state, journal, handshake_end=handshake_end), state)
+    assert {"key": "tool.output", "value": "[failed] 2 missing keys", "source": "replay"} in body.data["items"]
+
+
+def test_replay_will_not_open_a_journal_the_record_names_outside_this_store(state, tmp_path):
+    # An imported conversation's records name paths on the machine that wrote
+    # them; one that resolves outside this store is not this store's journal.
+    elsewhere = _frames(tmp_path / "elsewhere" / "agent-1.jsonl")
+    body = _replay(_external_run(state, elsewhere), state)
+    assert body.availability == tdet.NOT_RECORDED
+    assert not (body.data or {}).get("items")
+
+
+def test_replay_will_not_follow_a_link_out_of_this_stores_journals(state, tmp_path):
+    elsewhere = _frames(tmp_path / "elsewhere" / "agent-1.jsonl")
+    link = state / "logs" / "acp-frames" / "2026-09-01" / "agent-1.jsonl"
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(elsewhere)
+    except OSError as exc:
+        # A Windows account without SeCreateSymbolicLinkPrivilege cannot make
+        # the link this test is about; say so rather than fail on the setup.
+        pytest.skip(f"this account cannot create a symbolic link: {exc}")
+    body = _replay(_external_run(state, link), state)
+    assert body.availability == tdet.NOT_RECORDED

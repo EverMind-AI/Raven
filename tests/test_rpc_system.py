@@ -357,7 +357,7 @@ class TestUpgradingFromAGatewayHostedPage:
             SERVE.disarm()
 
         assert excinfo.value.data["reason"] == "editable", excinfo.value.data
-        assert "git pull" in excinfo.value.data["command"].splitlines()
+        assert "git pull" in excinfo.value.data["command"]
 
     async def _probe_answers(self, monkeypatch, distribution, reason, detail=None):
         """Drive system_upgrade with the real editable probe: only the metadata
@@ -538,11 +538,13 @@ async def test_upgrade_refuses_when_the_install_cannot_self_upgrade(monkeypatch:
 @pytest.mark.parametrize(
     ("windows", "checkout", "command"),
     [
-        (False, "/srv/raven dev", "cd '/srv/raven dev'\ngit pull\n./install.sh"),
+        (False, "/srv/raven dev", "cd '/srv/raven dev'\ngit pull && ./install.sh"),
         (
             True,
             "C:\\Users\\o'neil\\Raven",
-            "raven web --stop\nSet-Location -LiteralPath 'C:\\Users\\o''neil\\Raven'\ngit pull\n.\\install.ps1",
+            "raven web --stop\nSet-Location -LiteralPath 'C:\\Users\\o''neil\\Raven'\n"
+            "git pull\nif ($LASTEXITCODE -eq 0) { "
+            'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1" }',
         ),
     ],
     ids=["posix", "windows"],
@@ -583,22 +585,44 @@ def test_a_windows_checkout_recovery_stops_raven_before_it_reinstalls():
     """Windows cannot delete a running executable, and `uv tool install --force`
     replaces the environment this Raven runs from. The installer's own `--stop`
     runs in `Start-Web`, after that install, so the recovery has to stop it
-    before the installer starts."""
+    before the installer starts. The install itself runs only when the pull
+    succeeded, so a checkout that did not move is not reinstalled."""
     from raven.rpc.methods.system import _checkout_recovery
 
     lines = _checkout_recovery("C:\\Raven", True).splitlines()
 
     assert lines[0] == "raven web --stop"
-    assert lines.index("raven web --stop") < lines.index(".\\install.ps1")
+    assert lines[-1] == (
+        'if ($LASTEXITCODE -eq 0) { powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1" }'
+    )
+
+
+def test_a_windows_checkout_recovery_runs_the_cli_s_policy_safe_installer():
+    """`.\\install.ps1` is a script file, and the stock Windows client policy is
+    Restricted, so the page has to launch PowerShell the way the CLI's guidance
+    does. Reading the installer from checkout_update_commands keeps the page and
+    the CLI on one invocation as well as one script name."""
+    from raven.rpc.methods.system import _checkout_recovery
+    from raven.updates import upgrade as upgrade_commands
+
+    command = _checkout_recovery("C:\\Raven", True)
+    installer = upgrade_commands.checkout_update_commands(windows=True)[-1]
+
+    assert installer in command
+    assert f"if ($LASTEXITCODE -eq 0) {{ {installer} }}" in command
 
 
 def test_a_posix_checkout_recovery_leaves_the_running_page_alone():
     """POSIX replaces a running executable in place, and `install.sh` stops and
     restarts the gateway itself once the new install is in: stopping first
-    would only take the page down for the whole build."""
+    would only take the page down for the whole build. The pull and install
+    stay one guarded line, as the CLI and the release notes print them."""
     from raven.rpc.methods.system import _checkout_recovery
 
-    assert "raven web --stop" not in _checkout_recovery("/srv/raven", False)
+    command = _checkout_recovery("/srv/raven", False)
+
+    assert "raven web --stop" not in command
+    assert command.splitlines()[-1] == "git pull && ./install.sh"
 
 
 async def test_a_checkout_whose_path_cannot_be_read_gets_no_command(monkeypatch: pytest.MonkeyPatch):

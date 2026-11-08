@@ -1572,3 +1572,95 @@ async def test_with_no_question_waiting_a_typed_message_is_still_an_inject() -> 
         question_broker=QuestionBroker(send_frame),
     )
     assert len(scheduler.submitted) == 1 and scheduler.submitted[0].text == "how far along?"
+
+
+def _board_loop(tmp_path: Path):
+    """A loop holding only what a Move on needs: a board service with one group."""
+    from types import SimpleNamespace
+
+    from raven.agent.task_board.board import Board, TaskGroup
+    from raven.agent.task_board.service import TaskBoardService
+    from raven.agent.task_board.store import save_board
+    from raven.session.manager import SessionManager
+
+    sessions = SessionManager(tmp_path)
+    group = TaskGroup("g_a", "Fix bug A", "Cause found", "needs_you", 1, 1, [])
+    save_board(sessions.session_dir("tui:default"), Board([group], []))
+    return SimpleNamespace(task_board=TaskBoardService(sessions), sessions=sessions)
+
+
+class _NotesAtSubmit(FakeScheduler):
+    """Records what the board would tell each submitted turn, as it is submitted."""
+
+    def __init__(self, service) -> None:
+        super().__init__()
+        self.service = service
+        self.notes: list[list[str]] = []
+
+    def submit(self, req):
+        self.notes.append(self.service.turn_notes(req.conversation))
+        return super().submit(req)
+
+
+@pytest.fixture
+def _unnamed(monkeypatch):
+    """Naming reads the real config; these sends are about the board only."""
+    monkeypatch.setattr("raven.rpc.methods.turn._name_session", lambda *_a, **_k: False)
+
+
+async def test_a_message_that_moves_a_group_on_is_noted_before_its_turn_is_submitted(tmp_path, _unnamed) -> None:
+    """The note travels with the message, so neither can go without the other: the
+    turn the message opens is the one told which group it is about."""
+    loop = _board_loop(tmp_path)
+    scheduler = _NotesAtSubmit(loop.task_board)
+
+    result = await turn_send(
+        {"session_key": "tui:default", "content": "Use the first fix", "move_on": "g_a"},
+        scheduler=scheduler,
+        turn_ids={},
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert result["accepted"] is True
+    assert scheduler.notes == [
+        ['Task board: the user\'s message moves on "Fix bug A" (g_a); where it stands: Cause found']
+    ]
+
+
+async def test_a_move_on_the_board_cannot_take_costs_the_note_never_the_message(tmp_path, _unnamed) -> None:
+    """A group gone from the board, or a runtime keeping none: the message still goes."""
+    loop = _board_loop(tmp_path)
+    scheduler = _NotesAtSubmit(loop.task_board)
+
+    gone = await turn_send(
+        {"session_key": "tui:default", "content": "Use the first fix", "move_on": "g_nope"},
+        scheduler=scheduler,
+        turn_ids={},
+        agent_loop_factory=lambda: loop,
+    )
+    plain = FakeScheduler()
+    unkept = await turn_send(
+        {"session_key": "tui:other", "content": "Use the first fix", "move_on": "g_a"}, scheduler=plain, turn_ids={}
+    )
+
+    assert gone["accepted"] is True and scheduler.notes == [[]]
+    assert unkept["accepted"] is True and len(plain.submitted) == 1
+
+
+async def test_a_message_merged_into_the_running_turn_moves_nothing_on(tmp_path, _unnamed) -> None:
+    """The running turn was told about something else; a Move on belongs to a turn the
+    message opens, which is why the page holds such a message until the lane is free."""
+    from raven.rpc.methods import turn as turn_mod
+
+    loop = _board_loop(tmp_path)
+    scheduler = _NotesAtSubmit(loop.task_board)
+    turn_mod._active_turns["tui:default"] = FakeHandle()
+
+    await turn_send(
+        {"session_key": "tui:default", "content": "and this", "busy": "inject", "move_on": "g_a"},
+        scheduler=scheduler,
+        turn_ids={"tui:default": "running-1"},
+        agent_loop_factory=lambda: loop,
+    )
+
+    assert loop.task_board.turn_notes("tui:default") == []

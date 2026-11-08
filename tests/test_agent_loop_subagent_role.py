@@ -342,6 +342,22 @@ def test_the_reply_rules_close_every_reply_with_the_decisions_still_open(workspa
     assert "One the user dropped or put off for later is no longer open." in section
 
 
+def test_on_the_page_the_reply_rules_leave_open_decisions_to_the_board(workspace) -> None:
+    """Where the Task Board is drawn beside the conversation it lists every question still
+    open, so the reply rules stop closing each reply with them and ask only what the turn
+    newly needs; the per-task sections stay."""
+    section = (
+        render.identity_text(workspace, board_shown=True)
+        .split("## How you reply", 1)[1]
+        .split("\n\nReply directly", 1)[0]
+    )
+
+    assert "close every reply" not in section
+    assert "The open decisions that close the reply" not in section
+    assert "on the user's task board" in section
+    assert "When a reply covers more than one task" in section
+
+
 def test_a_turn_without_the_role_still_reads_a_passed_over_offer_as_declined(
     workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -447,3 +463,30 @@ def test_a2a_send_is_registered_only_with_a_peer_configured(workspace) -> None:
 
     with_peer = A2aConfig(peers=[A2aPeerConfig(origin="https://peer.example.com")])
     assert _loop(workspace, a2a_config=with_peer).tools.has("a2a_send")
+
+
+def test_every_wired_graph_tool_can_take_a_reassign(workspace) -> None:
+    """Both graph tool instances carry the move surface, with separate run bookkeeping.
+
+    A playbook's private tool dispatches its own runs; a move decided for one of
+    them has to be admitted against that instance's desk, outbox and frozen
+    admission data. Wiring the two from one class is what makes that possible,
+    and the separate dicts are what keep one run's move out of the other's state.
+    """
+    loop = _loop(workspace, playbook_config=PlaybookConfig(enabled=True))
+    registered = loop.tools.get("run_subagent_dag")
+    private = loop._playbooks.dag_tool
+
+    assert registered is not None, "baseline: the model's graph tool must be registered"
+    assert private is not None, "baseline: a playbook-enabled loop must build its own graph tool"
+    assert registered is not private
+
+    for tool in (registered, private):
+        assert callable(tool.prepare_reassign)
+        assert callable(tool.commit_reassign)
+        assert tool._run_contexts == {}
+        assert tool._desks == {}
+
+    assert registered._run_contexts is not private._run_contexts
+    assert registered._desks is not private._desks
+    assert registered._outboxes is not private._outboxes

@@ -7,6 +7,7 @@
  * id share no namespace and can theoretically collide.
  */
 
+import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
 import { sources } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -14,7 +15,10 @@ import { hunksForFile } from './diffs'
 import * as live from './live'
 
 import type { WsChange } from '../workspace/types'
-import type { TaskFile, TaskKind, TaskNode, TaskRow, TasksSource } from './types'
+import type {
+  ProgressStep, TaskBoard, TaskFile, TaskGroup, TaskKind, TaskLinkRef, TaskNode, TaskRow,
+  TasksBoardResult, TasksBoardUpdatedPayload, TasksSource,
+} from './types'
 
 export interface TasksState {
   rows: TaskRow[]
@@ -46,10 +50,27 @@ export interface TasksState {
      node id). A fold absent here has not been touched: the caller's own
      default still applies until the reader picks one. */
   folds: Record<string, Record<string, boolean>>
+  /* The host's Task Board for the conversation on screen, read whole and
+     replaced whole -- a board is small, and the post-turn update rewrites it in
+     one go. `lineage` maps each run that continued a placed run (a replan's
+     successor, a later stint round) to the run it continues. */
+  board: TaskBoard | null
+  lineage: Record<string, string>
+  boardLoaded: boolean
+  /* A Task Group the Task Board page asked the sidebar to open, in the
+     conversation it belongs to: held until that conversation's board is
+     drawn, then spent once (BoardList). */
+  focus: { sessionKey: string; groupId: string } | null
+  /* The group the reader's next message moves on, in the conversation it was
+     picked in: drawn above the composer (MoveOnBar) until that message goes. */
+  moveOn: MoveOn | null
 }
+
+export interface MoveOn { sessionKey: string; groupId: string; title: string; summary: string }
 
 const initial: TasksState = {
   rows: [], loaded: false, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+  board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
 }
 
 const store = makeStore<TasksState>(initial)
@@ -63,14 +84,217 @@ export const source = (): TasksSource | null => sources.tasks ?? null
 /* A different conversation is a different set of tasks. Carrying them across
    would attribute one conversation's background work to another. */
 export function reset(): void {
-  store.set(initial)
+  rechecked.clear()
+  checking.clear()
+  boardFailed = false
+  /* A board read still out was asked for the conversation being left, and the
+     switch resets this store before it moves the pointer: by the session guard
+     alone, that answer would still be taken for this one's. Raised before the
+     store says it was reset: a subscriber that reads the board back on hearing
+     it asks above the floor, not under it. */
+  boardShown = ++boardAsked
   /* The stamps go with the rows they were about. Left behind they would only
      waste room -- the tick is monotonic, so an entry from the conversation
      just left can never out-rank a read taken in the one arrived at. */
   liveAt.clear()
+  /* The focus request and the move-on survive: opening a card switches
+     conversation, and the switch is what resets this store, before the board it
+     asked for exists. Each names its own conversation. */
+  store.set({ ...initial, focus: store.get().focus, moveOn: store.get().moveOn })
 }
 
 export const rows = (): TaskRow[] => store.get().rows
+
+export function requestFocus(sessionKey: string, groupId: string): void {
+  patch({ focus: { sessionKey, groupId } })
+}
+
+/** The group waiting to be opened in this conversation's board, if any. */
+export function focusFor(sessionKey: string): string | null {
+  const { focus } = store.get()
+  return focus && focus.sessionKey === sessionKey ? focus.groupId : null
+}
+
+export function clearFocus(): void {
+  if (store.get().focus) patch({ focus: null })
+}
+
+/* ── the task board ─────────────────────────────────────────────────────── */
+
+/* Every board read is numbered as it is asked for, and the board on screen keeps
+   the number it came with; the event every write sends is numbered as it lands.
+   A read that answers below the board on screen describes the board before it,
+   and is dropped: a board is replaced whole, so unlike the rows there is nothing
+   to merge. */
+let boardAsked = 0
+let boardShown = 0
+/* The last read failed: the next change to the Tasks asks again (`noticeUnplaced`),
+   since the panel's own effect runs once per load. */
+let boardFailed = false
+
+function showBoard(n: number, board: TaskBoard | null, lineage: Record<string, string> | undefined): void {
+  boardShown = n
+  boardFailed = false
+  patch({ board, lineage: lineage || {}, boardLoaded: true })
+}
+
+/* Asked for one conversation, answered into whichever is open now: the same
+   guard `refresh` keeps, for the same reason. False when the read failed. */
+export async function refreshBoard(): Promise<boolean> {
+  const src = source()
+  const key = sessionCurrent()
+  const n = ++boardAsked
+  if (!src?.board || !key) { showBoard(n, null, {}); return true }
+  let got: TasksBoardResult
+  try {
+    got = await src.board(key)
+  } catch {
+    if (key === sessionCurrent() && n > boardShown) boardFailed = true
+    return false
+  }
+  if (key === sessionCurrent() && n > boardShown) showBoard(n, got.board, got.lineage)
+  return true
+}
+
+export function onBoardUpdated(p: TasksBoardUpdatedPayload): void {
+  if (p.session_key !== sessionCurrent()) return
+  showBoard(++boardAsked, p.board, p.lineage)
+}
+
+/* What Answer puts in the composer for a group that needs the reader: the
+   group named, then each question its latest event asked with a slot under
+   it, and where the cursor goes -- the end of the first slot. A group whose
+   latest event named none gets the heading alone. */
+export function answerDraft(group: TaskGroup): { text: string; caret: number } {
+  const head = t('gui.tasks.board.answer_head', { title: group.title })
+  const questions = group.steps[group.steps.length - 1]?.questions ?? []
+  if (!questions.length) return { text: `${head}\n`, caret: head.length + 1 }
+  const slot = t('gui.tasks.board.answer_slot')
+  const text = [head, ...questions.flatMap((q, i) => [`${i + 1}. ${q}`, slot])].join('\n')
+  return { text, caret: head.length + 1 + `1. ${questions[0]}`.length + 1 + slot.length }
+}
+
+/* The composer's verb, lent at boot (src/app/install.ts) rather than imported
+   from a sibling domain; unlent, Answer does nothing. */
+type Answer = (draft: string, caret: number) => void
+let answerVerb: Answer | null = null
+
+export function lendAnswer(fn: Answer | null): void {
+  answerVerb = fn
+}
+
+/* The answer is a message about this group, so it is held as the move-on too:
+   the server is told as it goes, and its turn is kept to the group. */
+export function answer(sessionKey: string | null, group: TaskGroup): void {
+  if (!answerVerb) return
+  if (sessionKey) hold(sessionKey, group)
+  const draft = answerDraft(group)
+  answerVerb(draft.text, draft.caret)
+}
+
+/* The composer's focus, lent at boot like Answer's verb; unlent, nothing moves. */
+let focusVerb: (() => void) | null = null
+
+export function lendFocus(fn: (() => void) | null): void {
+  focusVerb = fn
+}
+
+/* Move on: the next message in that conversation is about this group. The
+   reader is put in the composer to write it; the server hears which group
+   with the message itself (`takeMoveOn`), not before, so a bar put away tells
+   it nothing. */
+export function moveOn(sessionKey: string, group: Pick<TaskGroup, 'id' | 'title' | 'summary'>): void {
+  hold(sessionKey, group)
+  focusVerb?.()
+}
+
+function hold(sessionKey: string, group: Pick<TaskGroup, 'id' | 'title' | 'summary'>): void {
+  patch({ moveOn: { sessionKey, groupId: group.id, title: group.title, summary: group.summary } })
+}
+
+export function moveOnFor(sessionKey: string | null): MoveOn | null {
+  const { moveOn: held } = store.get()
+  return held && held.sessionKey === sessionKey ? held : null
+}
+
+export const moveOnPending = (sessionKey: string | null): boolean => moveOnFor(sessionKey) !== null
+
+export function clearMoveOn(): void {
+  if (store.get().moveOn) patch({ moveOn: null })
+}
+
+/* Lent to the send (src/app/install.ts): the message about the group is going
+   and carries it, so the bar is put away. The server notes it as the turn the
+   message opens is submitted; one that cannot costs the note, never the message. */
+export function takeMoveOn(sessionKey: string | null): string | null {
+  const held = moveOnFor(sessionKey)
+  if (!held) return null
+  clearMoveOn()
+  return held.groupId
+}
+
+const newestFirst = (a: TaskGroup, b: TaskGroup): number => b.created_at - a.created_at
+
+export const openGroups = (board: TaskBoard): TaskGroup[] =>
+  board.groups.filter((g) => g.status !== 'completed').sort(newestFirst)
+
+export const completedGroups = (board: TaskBoard): TaskGroup[] =>
+  board.groups.filter((g) => g.status === 'completed').sort(newestFirst)
+
+export interface LinkedRow { link: TaskLinkRef; row: TaskRow | null }
+
+/* A step's Tasks, each followed by the runs that continued it. A link whose row
+   `tasks.list` no longer holds -- a branched conversation, a removed run -- is
+   kept, with no row, so the step still names what it started. */
+export function linkedRows(step: ProgressStep, list: TaskRow[], lineage: Record<string, string>): LinkedRow[] {
+  const find = (kind: TaskKind, id: string): TaskRow | null => list.find((r) => r.kind === kind && r.id === id) || null
+  const out: LinkedRow[] = []
+  for (const link of step.tasks) {
+    out.push({ link, row: find(link.kind, link.id) })
+    if (link.kind !== 'dag') continue
+    for (const [child, parent] of Object.entries(lineage)) {
+      if (parent === link.id) out.push({ link: { kind: 'dag', id: child, summary: link.summary }, row: find('dag', child) })
+    }
+  }
+  return out
+}
+
+/* The rows no step places, directly or as a run continuing a placed one. With
+   no board, that is every row. */
+export function unplacedRows(list: TaskRow[], board: TaskBoard | null, lineage: Record<string, string>): TaskRow[] {
+  if (!board) return list
+  const placed = new Set<string>(Object.keys(lineage).map((id) => `dag:${id}`))
+  for (const g of board.groups) for (const s of g.steps) for (const t of s.tasks) placed.add(`${t.kind}:${t.id}`)
+  return list.filter((r) => !placed.has(rowKey(r)))
+}
+
+/* A dag row nothing places may be a stint round or a replan's successor the
+   board's lineage was read without: the board is re-read once per such row, once
+   a read has answered for it -- one that failed leaves the row to ask about again.
+   A row whose read is still out is not asked about twice. */
+const rechecked = new Set<string>()
+const checking = new Set<string>()
+
+export async function noticeUnplaced(): Promise<void> {
+  const s = store.get()
+  const key = sessionCurrent()
+  if (!key) return
+  if (!s.boardLoaded) {
+    if (boardFailed) { boardFailed = false; await refreshBoard() }
+    return
+  }
+  const fresh = unplacedRows(s.rows, s.board, s.lineage)
+    .filter((r) => r.kind === 'dag')
+    .map((r) => `${key}|${rowKey(r)}`)
+    .filter((k) => !rechecked.has(k) && !checking.has(k))
+  if (!fresh.length) return
+  for (const k of fresh) checking.add(k)
+  const read = await refreshBoard()
+  for (const k of fresh) {
+    checking.delete(k)
+    if (read) rechecked.add(k)
+  }
+}
 
 export const rowKey = (row: TaskRow): string => `${row.kind}:${row.id}`
 

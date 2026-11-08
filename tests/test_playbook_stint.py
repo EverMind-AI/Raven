@@ -631,6 +631,639 @@ class TestRunning:
         assert "nothing left to take up" in await driver.resume(record.stint_id, "web:stint")
         assert tool.submitted == []
 
+    @staticmethod
+    def _approved_once_spec() -> PlaybookSpec:
+        return _spec(
+            confirm=True,
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan"},
+                {"as": "builder", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+        )
+
+    @staticmethod
+    def _awaiting_approval(tool: "_FakeTool") -> asyncio.Event:
+        """Make the fake's first-round approval a real question that nobody answers.
+
+        Asked through the real broker, so a cancellation reaches the driver the
+        way a stopped turn's does; the event is set once the question is out.
+        """
+        from raven.rpc.question_broker import QuestionBroker
+
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+        real = tool.run_round
+
+        async def run_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                await broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+            return await real(nodes, **kwargs)
+
+        tool.run_round = run_round  # type: ignore[method-assign]
+        return asked
+
+    async def test_a_first_round_stopped_while_its_approval_waits_closes_the_stint(self, tmp_path: Path) -> None:
+        """A stopped turn no longer reads its open question as "not answered":
+        the cancellation leaves the approval wait. Left `running` with round one
+        on it, the record refused the next request for the same playbook, and
+        once stale was taken up through `resume`, which asks nobody -- a round
+        nobody approved then ran."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert record.stop_reason == "the first round was stopped before it was approved"
+        assert tool.submitted == []
+        assert "nothing left to take up" in await driver.resume(record.stint_id, "web:stint")
+        assert tool.submitted == []
+
+    async def test_a_first_round_whose_approval_outlives_a_tool_ceiling_closes_the_stint(self, tmp_path: Path) -> None:
+        """`load_playbook` runs under the registry's `wait_for` ceiling, which
+        cancels the same task when it runs out; the record is closed as it is
+        for a stop, and asking again starts afresh rather than taking it up."""
+        tool = _FakeTool(tmp_path / "stints")
+        self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(driver.start(spec), timeout=0.2)
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert tool.submitted == []
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+        assert receipt.startswith("DAG run run-1 started")
+        assert "taken up" not in receipt
+
+    async def test_extending_a_first_round_that_never_opened_refuses_rather_than_running_it(
+        self, tmp_path: Path
+    ) -> None:
+        """`extend` is for a stint that ran its budget out, not for one whose
+        first round never got its approval. Opening that round without asking
+        would run exactly what the Stop just kept from running."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        answer = await driver.extend(record.stint_id, 1, "web:stint")
+
+        assert answer.startswith("Error"), answer
+        assert "never ran its first round" in answer
+        assert tool.submitted == []
+        [after] = StintStore(tool.stints_root("web:stint")).list()
+        assert after.status == "stopped"
+
+    async def test_a_first_round_that_could_not_start_is_closed_with_its_own_reason(self, tmp_path: Path) -> None:
+        """The handler catches every way out of `_submit`, not only a stop. A
+        compile error in a `confirm: false` playbook never saw an approval, so
+        calling it "stopped before it was approved" hides what happened."""
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "do {{round.nope}}"}])
+
+        with pytest.raises(Exception, match="round slot"):
+            await driver.start(spec)
+
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "stopped"
+        assert "could not start" in record.stop_reason
+        assert "approved" not in record.stop_reason
+
+    async def test_a_dispatched_round_is_not_closed_when_its_record_cannot_be_written(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The round is dispatched before its run id is persisted. A write that
+        fails between the two leaves a round running, and closing the record as
+        a start that never happened makes it `stopped` -- which is not
+        unfinished, so a second start may open another stint on one project."""
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        original = StintStore.write
+        calls = {"n": 0}
+
+        def write(self: Any, record: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("the record could not be written")
+            return original(self, record)
+
+        monkeypatch.setattr(StintStore, "write", write)
+
+        with pytest.raises(OSError, match="the record could not be written"):
+            await driver.start(spec)
+
+        [after] = store.list()
+        assert tool.submitted, "the round was dispatched"
+        assert after.status == "running", "a dispatched round is not a start that never happened"
+        assert driver.holding() is True, "the dispatched round lost its beat"
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
+    async def test_a_pause_landing_while_the_approval_waits_survives_the_stop(self, tmp_path: Path) -> None:
+        """The record was built before the question went up. Writing that
+        snapshot back on the way out undoes whatever another process changed
+        while the person looked at the question."""
+        from raven.stint.record import PAUSED
+
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        record.status = PAUSED
+        record.stop_reason = "a person paused the stint"
+        store.write(record)
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [after] = store.list()
+        assert (after.status, after.stop_reason) == (PAUSED, "a person paused the stint")
+
+    async def test_a_close_does_not_stop_a_record_another_process_has_claimed(self, tmp_path: Path) -> None:
+        """The helper re-reads because time passed; that read can also show a
+        newer holder. Its claim wins over the snapshot the cancelled start is
+        closing."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        record.holder_pid = 999_999
+        store.write(record)
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [after] = store.list()
+        assert after.status == "running"
+
+    async def test_a_failed_cleanup_write_does_not_replace_the_stop(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """A close that cannot be written is logged; the cancellation that
+        caused it still propagates. Letting the write error replace
+        `CancelledError` turns a Stop into an ordinary tool failure the turn
+        reads and continues from."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        original = StintStore.write
+        calls = {"n": 0}
+
+        def write(self: Any, record: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise OSError("the record could not be written")
+            return original(self, record)
+
+        monkeypatch.setattr(StintStore, "write", write)
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        starting.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+        [after] = store.list()
+        assert after.status == "running", "the close did not land, and nothing pretended it did"
+
+    async def test_an_approval_record_is_kept_alive_while_the_question_stands(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The approval waits up to the broker's budget, longer than the stamp's
+        five minutes, and no round is open to beat for yet. A second request
+        must not read the old stamp as "nothing is advancing it" while the
+        process that holds it is still asking."""
+        import json
+        import time
+
+        import raven.playbook.stint as stint_module
+
+        monkeypatch.setattr(stint_module, "HEARTBEAT_EVERY_SEC", 0.01)
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        path = store.path_for(record.stint_id)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["touched_at_ms"] = int((time.time() - 301) * 1000)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+        await asyncio.sleep(0.05)  # several beats: the stamp is moved back to now
+        second = await driver.start(spec)
+
+        assert second.startswith("Error") and "already" in second, second
+        assert tool.submitted == []
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+    async def test_taking_up_a_first_round_that_never_opened_asks_again(self, tmp_path: Path) -> None:
+        """`resume` asks nobody because the stint was approved. A first round
+        that never opened was never approved, so taking it up has to ask."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=True)
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("DAG run"), receipt
+        assert tool.handed[0]["confirm"] is True
+
+    async def test_stopping_a_taken_up_first_round_closes_it(self, tmp_path: Path) -> None:
+        """A resume that now waits on the approval needs the same exit `start`
+        has: stopped while the question is on screen must not leave the record
+        running for the next request to pick up unasked."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=True)
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        starting = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [after] = store.list()
+        assert after.status == "stopped"
+
+    async def test_a_pause_that_lands_while_the_first_round_is_closing_survives(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The close re-reads before writing, but the read and the write were two
+        lock acquisitions: a pause from another writer that landed between them
+        was overwritten by the stop. The write transaction makes them one, so
+        the pause lands either before the read or after the write, never inside.
+        """
+        import threading
+        import time
+
+        from raven.stint.record import PAUSED
+
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        original_read = StintStore.read
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        stint_id = record.stint_id
+        pause_done = threading.Event()
+        fired = {"done": False}
+
+        def pause() -> None:
+            # A person's `stints pause`: a fresh read, then a whole-record
+            # write, as the CLI does it.
+            fresh = original_read(store, stint_id)
+            fresh.status = PAUSED
+            fresh.stop_reason = "a person paused the stint"
+            store.write(fresh)
+            pause_done.set()
+
+        def read_with_a_pause(self: StintStore, sid: str) -> Any:
+            current = original_read(self, sid)
+            if sid == stint_id and not fired["done"]:
+                fired["done"] = True
+                threading.Thread(target=pause, daemon=True).start()
+                # The old shape released the store's lock before this read, so
+                # half a second is a wide margin for the pause write above to
+                # land between the read and the close's write. The fixed shape
+                # holds the lock across the sleep, and the pause then lands
+                # after the close -- where it still wins.
+                time.sleep(0.5)
+            return current
+
+        monkeypatch.setattr(StintStore, "read", read_with_a_pause)
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        assert pause_done.wait(2.0), "the pause never landed"
+        [after] = store.list()
+        assert (after.status, after.stop_reason) == (PAUSED, "a person paused the stint")
+
+    async def test_an_unreadable_record_does_not_replace_the_stop(self, tmp_path: Path) -> None:
+        """The close re-reads the record to leave another process's update alone.
+        A record that cannot be decoded used to raise out of that read, replacing
+        the CancelledError the turn was stopping with an ordinary tool error the
+        turn would read and carry on from."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        store.path_for(record.stint_id).write_bytes(b'{"stint_id": "\xff\xfe"}')
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+    async def test_a_close_does_not_stop_a_record_another_host_has_claimed(self, tmp_path: Path) -> None:
+        """The pid alone cannot tell two hosts apart. A record claimed by the
+        same pid on another machine belongs to that machine, and its claim is
+        newer than ours; the close must leave it alone."""
+        tool = _FakeTool(tmp_path / "stints")
+        asked = self._awaiting_approval(tool)
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+        [record] = store.list()
+        record.holder_host = "another-host"
+        store.write(record)
+
+        starting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await starting
+
+        [after] = store.list()
+        assert after.status == "running"
+
+    async def test_a_first_round_paused_for_budget_does_not_hold_the_terminal(self, tmp_path: Path) -> None:
+        """The pre-approval beat has no round to hand over to. After the dispatch
+        budget pauses the first round, nothing is advancing the stint, but the
+        beat still kept `holding()` true until its next tick -- the CLI's
+        "Holding this terminal" wait for up to HEARTBEAT_EVERY_SEC."""
+        from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+
+        async def spent(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            raise RoundBudgetSpentError("the hourly sub-agent dispatch budget is spent")
+
+        tool.run_round = spent  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("Paused"), receipt
+        [record] = StintStore(tool.stints_root("web:stint")).list()
+        assert record.status == "paused"
+        assert driver.holding() is False, "nothing is advancing the stint after the pause"
+
+    async def test_a_close_that_leaves_the_round_alone_leaves_its_beat_alone(self, tmp_path: Path) -> None:
+        """A close can lose the race to a round another caller already opened.
+        It then writes nothing -- and must stop nothing either: that round's
+        beat is what keeps a second host from taking the same checkout up."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="running",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-1")
+        record.claim()
+        store.write(record)
+        driver._start_beat(record, store)
+        live = driver._beats[record.stint_id]
+        # This caller's own beat was replaced when the other caller's round
+        # opened; only that own beat is a close's to stop.
+        replaced = asyncio.create_task(asyncio.sleep(3600))
+
+        # The caller's own snapshot was read before that round opened.
+        stale = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="running",
+            origin=tool.turn_origin(),
+        )
+        stale.claim()
+        driver._close_first_round(stale, store, reason="not ours to close", beat=replaced)
+        await asyncio.sleep(0)
+
+        assert driver._beats.get(record.stint_id) is live
+        assert not live.done(), "a close that wrote nothing stopped the live round's beat"
+        assert driver.holding() is True
+        assert store.read("stint-x").status == "running"
+        driver._stop_beat(record.stint_id)
+        replaced.cancel()
+        await asyncio.sleep(0)
+
+    @pytest.mark.parametrize("status", ["paused", "stopped"])
+    async def test_an_out_of_band_stop_or_pause_survives_the_first_round_opening(
+        self, tmp_path: Path, status: str
+    ) -> None:
+        """The approval question stands for the broker's whole budget, and a
+        `stop` or `pause` from another window can land while it is up. The round
+        is already dispatched, so it is recorded either way -- but the status the
+        person set has to survive: `advance` ends or parks a stint whose round
+        finished after an out-of-band stop, and writing the pre-question
+        snapshot back revives what they just ended."""
+        from raven.rpc.question_broker import QuestionBroker
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        store = StintStore(tool.stints_root("web:stint"))
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict[str, Any]) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+        real = tool.run_round
+
+        async def run_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                waiting = asyncio.create_task(
+                    broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+                )
+                await asyncio.wait_for(asked.wait(), 1.0)
+                broker.reply("web:stint", "Run it")
+                await waiting
+            return await real(nodes, **kwargs)
+
+        tool.run_round = run_round  # type: ignore[method-assign]
+        starting = asyncio.create_task(driver.start(spec))
+        await asyncio.wait_for(asked.wait(), 1.0)
+
+        [record] = store.list()
+        record.status = status
+        record.stop_reason = f"a person {status} the stint"
+        store.write(record)
+
+        receipt = await asyncio.wait_for(starting, 5.0)
+
+        assert receipt.startswith("DAG run"), receipt
+        [after] = store.list()
+        assert (after.status, after.stop_reason) == (status, f"a person {status} the stint")
+        entry = after.round(1)
+        assert entry is not None and entry.run_id == "run-1", "the dispatched round was not recorded"
+        assert tool.submitted
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
+    async def test_an_unreadable_record_does_not_lose_a_dispatched_round(
+        self, tmp_path: Path, monkeypatch: Any
+    ) -> None:
+        """The open-round write re-reads the record to keep a concurrent stop or
+        pause. A record that cannot be decoded must be replaced, not turn a
+        round that is already running into an error the turn reads."""
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        original = StintStore.write
+        calls = {"n": 0}
+
+        def write(self: Any, record: Any) -> Any:
+            calls["n"] += 1
+            path = original(self, record)
+            if calls["n"] == 1:
+                path.write_bytes(b'{"stint_id": "\xff\xfe"}')
+            return path
+
+        monkeypatch.setattr(StintStore, "write", write)
+
+        receipt = await driver.start(spec)
+
+        assert receipt.startswith("DAG run"), receipt
+        [after] = store.list()
+        entry = after.round(1)
+        assert entry is not None and entry.run_id == "run-1", "the dispatched round was lost with the unreadable file"
+        assert after.status == "running"
+        driver._stop_beat(after.stint_id)
+        await asyncio.sleep(0)
+
+    async def test_a_first_round_approved_before_the_budget_pause_is_not_asked_again(self, tmp_path: Path) -> None:
+        """The charge runs after the confirmation, so the first round the budget
+        turned away was approved. Its run id was never written, which is what
+        `_first_round_opened` reads; asking again on resume spends a second
+        approval on a round the person already said yes to."""
+        from raven.agent.subagent.prompt_errors import RoundBudgetSpentError
+        from raven.rpc.question_broker import QuestionBroker
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = StintDriver(tool, stints_root=tool.stints_root, workspace_for=lambda _k: tmp_path)
+        spec = self._approved_once_spec()
+        asked = asyncio.Event()
+
+        async def send_frame(frame: dict[str, Any]) -> None:
+            asked.set()
+
+        broker = QuestionBroker(send_frame)
+
+        async def approving(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            if kwargs.get("confirm"):
+                waiting = asyncio.create_task(
+                    broker.await_question("web:stint", prompt="Run it?", choices=["Run it", "Not now"])
+                )
+                await asyncio.wait_for(asked.wait(), 1.0)
+                broker.reply("web:stint", "Run it")
+                await waiting
+            raise RoundBudgetSpentError("the hourly sub-agent dispatch budget is spent")
+
+        tool.run_round = approving  # type: ignore[method-assign]
+        receipt = await driver.start(spec)
+        assert receipt.startswith("Paused"), receipt
+        [paused] = StintStore(tool.stints_root("web:stint")).list()
+
+        async def record_round(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            tool.handed.append(kwargs)
+            return "DAG run run-1 started in the background (2 nodes)."
+
+        tool.run_round = record_round  # type: ignore[method-assign]
+        second = await driver.resume(paused.stint_id, "web:stint")
+
+        assert second.startswith("DAG run"), second
+        assert tool.handed[0]["confirm"] is False, "the approved round was asked a second time"
+
     async def test_a_round_no_role_finished_pauses_the_stint_instead_of_costing_a_round(self, tmp_path: Path) -> None:
         """Every node failed, so the round left nothing to build on, and the
         next would hit the same fault. Counted, a stint ran three rounds in two
@@ -2385,6 +3018,209 @@ class TestResume:
         assert await self._driver(tmp_path, tool).sweep("web:stint") == []
         assert tool.submitted == []
 
+    async def test_a_refused_first_round_taken_up_is_closed(self, tmp_path: Path) -> None:
+        """`resume` asked because the first round never opened; a refusal has
+        to close the record the same way `start` does, or the next request
+        takes it up and asks again from a record that says it is running."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        tool.deny = True
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=True)
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error") and "did not approve" in receipt
+        [after] = store.list()
+        assert after.status == "stopped"
+        assert after.stop_reason == "the first round was not approved"
+
+    async def test_resuming_a_round_that_cannot_start_leaves_it_interrupted(self, tmp_path: Path) -> None:
+        """A round that already opened is not asked about again; when its new
+        dispatch is refused, the record goes back to interrupted rather than
+        staying running with nothing advancing it."""
+        tool = _FakeTool(tmp_path / "stints")
+        tool.refuse = "Error: invalid DAG -- node id 'x' is already used by run 'r'."
+        store = self._interrupted(tmp_path, tool)
+        driver = self._driver(tmp_path, tool)
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error")
+        [after] = store.list()
+        assert after.status == "interrupted"
+
+    async def test_a_resume_that_cannot_start_before_asking_stays_interrupted(self, tmp_path: Path) -> None:
+        """An approval is not the only thing that can stop a first round before
+        it opens. A delegation pause or a validation refusal is not the person
+        saying no; closing the record as `refused` takes away the retry."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(
+            confirm=True,
+            roles=[
+                {"as": "planner", "name": "echo", "promptTemplate": "plan"},
+                {"as": "builder", "name": "echo", "dependsOn": ["planner"], "promptTemplate": "build"},
+            ],
+        )
+        store = StintStore(tool.stints_root("web:stint"))
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook=spec.name,
+                spec=spec.model_dump(by_alias=True, exclude_none=True),
+                workdir=str(tmp_path),
+                project=str(tmp_path),
+                round_index=1,
+                status="interrupted",
+                origin=tool.turn_origin(),
+            )
+        )
+        tool.refuse = "Error: delegation is paused. The user paused sub-agent spawning."
+
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("Error"), receipt
+        [after] = store.list()
+        assert after.status == "interrupted", "a transient refusal is not the person saying no"
+        assert driver.holding() is False, "the pre-approval beat outlived the resume"
+
+    async def test_a_resume_that_asks_nobody_does_not_claim_the_stint(self, tmp_path: Path) -> None:
+        """Only the approval wait needs a live claim. A resume that opens an
+        already-approved round has nothing to keep alive while it preflights;
+        claiming here makes a cancelled resume look like a live holder and
+        refuses the next one for five minutes although nothing advances it."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="interrupted",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-old")
+        record.holder_pid, record.holder_host = 4242, "the-old-host"
+        store.write(record)
+
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        after = store.read("stint-x")
+        assert (after.holder_pid, after.holder_host) == (4242, "the-old-host"), (
+            "a resume that asks nobody claimed the stint"
+        )
+        assert driver.holding() is False
+
+    async def test_a_stopped_resume_that_asked_nobody_leaves_the_stint_retryable(self, tmp_path: Path) -> None:
+        """The pre-write `running` keeps a second caller off the preflight, but
+        it must not outlive a stop. Left running with a fresh stamp under a
+        holder another host cannot disprove, the next resume is refused for the
+        whole stale window although nothing advances the stint."""
+        from raven.stint.record import StintRecord
+
+        tool = _FakeTool(tmp_path / "stints")
+        driver = self._driver(tmp_path, tool)
+        spec = _spec(confirm=False, roles=[{"as": "planner", "name": "echo", "promptTemplate": "plan"}])
+        store = StintStore(tool.stints_root("web:stint"))
+        record = StintRecord(
+            stint_id="stint-x",
+            playbook=spec.name,
+            spec=spec.model_dump(by_alias=True, exclude_none=True),
+            workdir=str(tmp_path),
+            project=str(tmp_path),
+            round_index=1,
+            status="interrupted",
+            origin=tool.turn_origin(),
+        )
+        record.open_round(1, "run-old")
+        record.holder_pid, record.holder_host = 4242, "the-old-host"
+        store.write(record)
+
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        assert store.read("stint-x").status == "interrupted", "a stopped preflight left the record running"
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("DAG run"), receipt
+        assert tool.submitted, "the retry was refused although nothing advanced the stint"
+
+    async def test_a_stopped_resume_of_an_abandoned_stint_does_not_leave_it_looking_held(self, tmp_path: Path) -> None:
+        """A resume of a stale `running` record writes `running` again with a
+        fresh stamp before it preflights. Stopped there, the restored record has
+        to be retryable -- putting the old status back would make it look held
+        by a live process, which is exactly the signal the stamp exists for."""
+        tool = _FakeTool(tmp_path / "stints")
+        store = self._interrupted(tmp_path, tool)
+        driver = self._driver(tmp_path, tool)
+        started = asyncio.Event()
+
+        async def blocking(nodes: list[dict[str, Any]], **kwargs: Any) -> str:
+            started.set()
+            await asyncio.sleep(3600)
+
+        tool.run_round = blocking  # type: ignore[method-assign]
+        running = asyncio.create_task(driver.resume("stint-x", "web:stint"))
+        await asyncio.wait_for(started.wait(), 1.0)
+        running.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await running
+
+        after = store.read("stint-x")
+        assert after.status == "interrupted", "a stopped resume left an abandoned record looking held"
+        assert driver.holding() is False
+
+        tool.run_round = type(tool).run_round.__get__(tool)  # type: ignore[method-assign]
+        receipt = await driver.resume("stint-x", "web:stint")
+
+        assert receipt.startswith("DAG run"), receipt
+
 
 class TestTheWordThatEndsItEarly:
     """`stop.until` was read by the machine and said to nobody."""
@@ -3006,9 +3842,12 @@ class TestMoreRounds:
         assert tool.submitted == []
         assert store.read("stint-x").status == "finished"
 
-    async def test_a_plan_whose_first_round_was_refused_opens_that_round(self, tmp_path: Path) -> None:
-        """Not the one after it: round one never ran, so there is nothing to
-        follow and skipping it would leave the stint with no first round."""
+    async def test_a_plan_whose_first_round_was_refused_is_not_extended(self, tmp_path: Path) -> None:
+        """There is no round count to change and no approval to change it
+        under: extending a first round that never opened would run exactly what
+        the missing approval kept from running. Starting the playbook again runs
+        that round under whatever question the playbook itself asks -- for this
+        one, none."""
         from raven.stint.record import StintRecord, StintStore
 
         tool = _FakeTool(tmp_path / "stints")
@@ -3018,7 +3857,7 @@ class TestMoreRounds:
             StintRecord(
                 stint_id="stint-x",
                 playbook="game-dev",
-                spec=_spec().model_dump(by_alias=True),
+                spec=_spec(confirm=False).model_dump(by_alias=True),
                 workdir=str(tmp_path / "tree"),
                 round_index=1,
                 status="stopped",
@@ -3027,10 +3866,42 @@ class TestMoreRounds:
             )
         )
 
-        await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
+        answer = await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
 
-        [nodes] = tool.submitted
-        assert [node["id"] for node in nodes] == ["game-dev-r01-planner", "game-dev-r01-builder"]
+        assert answer.startswith("Error") and "never ran its first round" in answer
+        assert "asks for approval" not in answer
+        assert "without asking" in answer
+        assert tool.submitted == []
+        assert store.read("stint-x").status == "stopped"
+
+    async def test_extending_a_refused_first_round_still_names_a_confirmed_playbook_s_approval(
+        self, tmp_path: Path
+    ) -> None:
+        """The refusal is the same for a playbook that asks before its first
+        round; restarting that one does ask, and the message has to say so."""
+        from raven.stint.record import StintRecord, StintStore
+
+        tool = _FakeTool(tmp_path / "stints")
+        (tmp_path / "tree").mkdir()
+        store = StintStore(tool.stints_root())
+        store.write(
+            StintRecord(
+                stint_id="stint-x",
+                playbook="game-dev",
+                spec=_spec(confirm=True).model_dump(by_alias=True),
+                workdir=str(tmp_path / "tree"),
+                round_index=1,
+                status="stopped",
+                stop_reason="the first round was refused",
+                origin=tool.turn_origin(),
+            )
+        )
+
+        answer = await self._driver(tmp_path, tool).extend("stint-x", 1, "web:stint")
+
+        assert answer.startswith("Error") and "never ran its first round" in answer
+        assert "asks for approval" in answer
+        assert tool.submitted == []
 
     async def test_no_more_rounds_is_not_more_rounds(self, tmp_path: Path) -> None:
         tool = _FakeTool(tmp_path / "stints")

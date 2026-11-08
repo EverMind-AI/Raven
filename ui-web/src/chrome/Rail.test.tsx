@@ -15,8 +15,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as imported from '../features/imported/store'
 import * as settings from '../features/settings/store'
+import * as boards from '../features/tasks/boards'
+import { t } from '../i18n/t'
 import * as hub from '../state/hub'
 import * as lang from '../state/lang'
+import * as page from '../state/page'
+import * as railState from '../state/rail'
+import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -118,7 +123,7 @@ describe('the rail', () => {
     const pick = vi.spyOn(imported, 'pick').mockImplementation(() => {})
     render()
     const nav = document.querySelector('nav.rail-nav') as HTMLElement
-    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'importedBtn'])
+    expect(Array.from(nav.children).map((b) => b.id)).toEqual(['newBtn', 'agentsBtn', 'knowledgeBtn', 'boardsBtn', 'importedBtn'])
     const button = el('importedBtn') as HTMLButtonElement
     const idle = button.textContent
     expect(idle).not.toBe('')
@@ -188,6 +193,112 @@ describe('the rail', () => {
   })
 })
 
+/* The window's width, as `matchMedia` answers it (happy-dom does no layout):
+   an EventTarget carrying `matches`, which is all state/rail.ts reads of it. */
+describe('the rail on a window under the fold', () => {
+  const real = window.matchMedia
+  let narrow = true
+  const click = async (id: string): Promise<void> => {
+    await act(async () => {
+      el(id).click()
+    })
+  }
+
+  beforeEach(() => {
+    narrow = true
+    window.matchMedia = ((q: string) =>
+      Object.assign(new EventTarget(), { matches: narrow, media: q }) as MediaQueryList) as typeof window.matchMedia
+  })
+
+  afterEach(() => {
+    window.matchMedia = real
+    railState.set(true)
+  })
+
+  /* The rail lies over the page there (styles/page.css), so a press that goes
+     somewhere folds it, the way a drawer closes on the choice made in it. */
+  it('folds when a row in it is pressed, and stays for its own controls', async () => {
+    render()
+    railState.set(true)
+    await click('findBtn')
+    expect(railState.get()).toBe(true)
+    await click('agentsBtn')
+    expect(opened.list).toEqual(['hub'])
+    expect(railState.get()).toBe(false)
+    expect(el('railShow').hidden).toBe(false)
+    railState.set(true)
+    await click('meBtn')
+    expect(opened.list).toEqual(['hub', 'settings'])
+    expect(railState.get()).toBe(false)
+  })
+
+  /* The session rows are the rail island's, rendered into #list by a root of
+     its own, so a row is stood in by hand: the press reaches the aside's
+     listener the way the island's would. */
+  it('folds when a session row in the list is pressed', async () => {
+    render()
+    railState.set(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    const name = document.createElement('span')
+    row.append(name)
+    el('list').append(row)
+    await act(async () => {
+      name.click()
+    })
+    expect(railState.get()).toBe(false)
+  })
+
+  /* A session row is a div with the button role that opens on Enter or Space
+     in its own handler, and no click follows a key there; its rename box is
+     inside the row, and a press or an Enter in it is the name's, not a pick. */
+  it('folds when a session row is picked by keyboard, and not from its rename box', async () => {
+    render()
+    railState.set(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    row.setAttribute('role', 'button')
+    const box = document.createElement('input')
+    box.className = 'ren'
+    row.append(box)
+    el('list').append(row)
+    const key = async (target: Element, key: string): Promise<void> => {
+      await act(async () => {
+        target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+      })
+    }
+    await act(async () => {
+      box.click()
+    })
+    await key(box, 'Enter')
+    expect(railState.get()).toBe(true)
+    await key(row, ' ')
+    expect(railState.get()).toBe(false)
+    railState.set(true)
+    await key(row, 'Enter')
+    expect(railState.get()).toBe(false)
+    railState.set(true)
+    await key(row, 'a')
+    expect(railState.get()).toBe(true)
+  })
+
+  it('keeps standing beside the page on a window that holds both', async () => {
+    narrow = false
+    render()
+    railState.set(true)
+    await click('agentsBtn')
+    expect(opened.list).toEqual(['hub'])
+    expect(railState.get()).toBe(true)
+    const row = document.createElement('div')
+    row.className = 'sess'
+    el('list').append(row)
+    await act(async () => {
+      row.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })
+    expect(railState.get()).toBe(true)
+  })
+})
+
 /* Last in the file on purpose: applying a language is module state for
    everything after it. Same claim as the two dialogs': every word here is the
    catalogue's, read at render time, so the rail cannot come back in the
@@ -214,5 +325,76 @@ describe('the rail once a language is applied', () => {
     render()
     expect(words()).toEqual(applied)
     expect(hint()).toBe(appliedHint)
+  })
+})
+
+describe('the task board button', () => {
+  let calls = 0
+  let needsYou = 3
+
+  beforeEach(() => {
+    calls = 0
+    needsYou = 3
+    boards._resetForTests()
+    setSources({
+      tasks: {
+        list: async () => [],
+        one: async () => null,
+        stop: async () => true,
+        node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+        roster: async () => [],
+        boards: async () => {
+          calls += 1
+          return { cards: [], completed_count: 0, needs_you_count: needsYou }
+        },
+      },
+    })
+  })
+
+  afterEach(() => {
+    boards._resetForTests()
+    page.show(null)
+    resetSources()
+  })
+
+  it('sits after Knowledge and before importing a conversation', () => {
+    render()
+    const ids = Array.from(rail().querySelectorAll('nav button')).map((b) => b.id)
+    expect(ids.indexOf('boardsBtn')).toBe(ids.indexOf('knowledgeBtn') + 1)
+    expect(ids.indexOf('importedBtn')).toBe(ids.indexOf('boardsBtn') + 1)
+  })
+
+  it('asks for the count once the rail mounts, before the page is ever opened', async () => {
+    render()
+    await act(async () => {})
+    expect(calls).toBe(1)
+    expect(el('boardsBtn').querySelector('.chrome-nav-badge')?.textContent).toBe('3')
+  })
+
+  it('carries the needs-you count as a badge and hides it at zero', async () => {
+    render()
+    await act(async () => {
+      await boards.refresh()
+    })
+    const badge = el('boardsBtn').querySelector('.chrome-nav-badge')
+    expect(badge?.textContent).toBe('3')
+    expect(badge?.getAttribute('aria-label')).toBe(t('gui.tasks.page.badge', { n: 3 }))
+
+    needsYou = 0
+    await act(async () => {
+      await boards.refresh()
+    })
+    expect(el('boardsBtn').querySelector('.chrome-nav-badge')).toBeNull()
+  })
+
+  it('opens the task board page and starts its poll', async () => {
+    render()
+    await act(async () => {})
+    const before = calls
+    await act(async () => {
+      el('boardsBtn').click()
+    })
+    expect(page.get()).toBe('tasksBoardPage')
+    expect(calls).toBe(before + 1)
   })
 })

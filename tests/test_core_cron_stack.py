@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from raven.agent.context.silence import SILENCE_INSTRUCTION
+from raven.agent.context.silence import SILENCE_INSTRUCTION, is_silence, teaches_silence
 from raven.core.cron_stack import make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
@@ -136,6 +136,7 @@ async def test_the_reminder_teaches_the_silence_marker(spine):
     text = spine.captured[0].text
     assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
     assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text), "so the turn reads the loose rule the lesson asks for"
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -625,8 +626,25 @@ async def test_the_instance_gets_the_wake_message_not_the_reminder_wrapper(spine
 
     await handler(job)
 
-    assert spine.captured[0].text == job.payload.message
-    assert "[Scheduled Task]" not in spine.captured[0].text
+    text = spine.captured[0].text
+    assert text.startswith(job.payload.message)
+    assert "[Scheduled Task]" not in text
+
+
+async def test_an_instance_wake_teaches_the_silence_marker(spine):
+    """A wake turn is CRON-origin but its prompt is the task's own words, not the reminder wrapper.
+    Without the lesson it reads the strict rule, so a scheduled instruction saying "reply NO_REPLY
+    when nothing changed" would deliver that sentence to the instance's pane. The lesson at the end
+    keeps the wake as quiet as the loose rule made it before the match was narrowed."""
+    handler = make_on_cron_job(submit=spine.submit, readback_texts=spine.readback, default_channel="tui")
+
+    await handler(_instance_job(name="d4"))
+
+    text = spine.captured[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text)
+    assert is_silence("No reply.", Origin.CRON, taught=teaches_silence(text))
 
 
 async def test_an_ordinary_reminder_is_untouched_by_the_instance_branch(spine):
@@ -784,8 +802,26 @@ async def test_a_session_wake_runs_on_the_conversation_that_armed_it():
     assert req.conversation == "acp:20260904_111956_61f0b5"
     assert req.origin is Origin.CRON
     assert (req.source.channel, req.source.chat_id, req.source.sender_id) == ("acp", "20260904_111956_61f0b5", "cron")
-    assert req.text == "reminder body source", "the wake's own words, unwrapped: the agent is the addressee"
+    assert req.text.startswith("reminder body source"), "the wake's own words, unwrapped: the agent is the addressee"
+    assert "[Scheduled Task]" not in req.text
     assert getattr(on_job, "runs_on_session", False) is True
+
+
+@pytest.mark.asyncio
+async def test_a_session_wake_teaches_the_silence_marker():
+    """This wake is CRON-origin too, and its prompt is the job's message rather than the reminder
+    wrapper that carries the lesson. Appending the lesson keeps a "no news, reply NO_REPLY"
+    instruction from being delivered as the turn's reply after the loose rule was narrowed."""
+    from raven.core.cron_stack import make_on_session_wake
+
+    submit, seen = _capturing_submit()
+    await make_on_session_wake(submit=submit, channel="acp")(_make_job(channel="acp", to="s1", name="wake-teach"))
+
+    text = seen[0].text
+    assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert text.count(SILENCE_INSTRUCTION) == 1
+    assert teaches_silence(text)
+    assert is_silence("No reply.", Origin.CRON, taught=teaches_silence(text))
 
 
 @pytest.mark.asyncio

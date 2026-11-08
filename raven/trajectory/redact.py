@@ -601,7 +601,10 @@ def redact_bundle(
             text = _apply_patterns(text, report.patterns)
             target = dest_dir / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(text, encoding="utf-8")
+            # Bytes, as it was read: the text keeps the file's own line endings,
+            # and a text write would translate them again (CRLF to CR CR LF on
+            # Windows, a blank line between every JSONL record).
+            target.write_bytes(text.encode("utf-8"))
 
         report.findings = scan_residuals(dest_dir)
         (dest_dir / REDACTION_METADATA_FILE).write_text(

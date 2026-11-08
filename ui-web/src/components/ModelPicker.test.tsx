@@ -240,6 +240,26 @@ describe('the picker floats against the row that opened it', () => {
     expect(closes).toEqual([1])
   })
 
+  it('stays open when the scroll comes from inside the panel, though the row shifts with it', () => {
+    sized()
+    windowed()
+    let top = 200
+    const row = anchored(top)
+    row.getBoundingClientRect = () => ({ top, bottom: top + 30, left: 700, right: 900, width: 200, height: 30, x: 700, y: top, toJSON: () => ({}) }) as DOMRect
+    const { closes } = draw({ anchor: row })
+    /* The panel's own model list is a scroller, and the listener is on the
+       document in capture phase, so sliding it reaches the listener -- and the
+       enclosing dialog re-centring under the panel moves the row's top. The
+       shift alone cannot tell that scroll from the row leaving; the target can. */
+    top = 160
+    fireEvent.scroll(document.querySelector('.model-picker-right')!)
+    expect(closes, 'the panel\'s own list scrolled, not the list under it').toEqual([])
+    /* A scroll the panel did not originate still closes it. */
+    top = 120
+    document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    expect(closes).toEqual([1])
+  })
+
   it('re-places rather than closes when a resize slides the row sideways', () => {
     sized()
     windowed()

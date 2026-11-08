@@ -7,6 +7,7 @@ import { t } from '../../../i18n/t'
 import { openPicker } from '../../model/source'
 import { statedTags } from '../../model/types'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
+import { dig } from '../source'
 import * as store from '../store'
 
 import type { Kind, Offer } from '../../model/types'
@@ -72,9 +73,6 @@ export const roleName = (r: Role): string => t(NAME[r.id])
 const MEDIA_PROVIDER = 'openrouter'
 const CTX_MIN = 1024
 const ITER_RANGE: [number, number] = [1, 200]
-
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
 
 export const disabledTools = (raw: Record<string, unknown>): string[] => (dig(raw, 'tools.disabledTools') as string[] | undefined) || []
 
@@ -400,20 +398,25 @@ const modelWindow = (snap: SettingsSnapshot): number | null => {
   return typeof win === 'number' && win > 0 ? win : null
 }
 
+/* The first rung is the key unset: the provider's own default, which is what
+   an install that never touched the setting runs at. Drawn as a rung of its
+   own rather than read as Low, which is what this did before and what made
+   the page claim a setting the file does not hold. */
 const EFFORTS: Array<[string, string]> = [
+  ['', 'gui.settings.roles.effort_default'],
   ['minimal', 'gui.settings.roles.effort_minimal'], ['low', 'gui.settings.roles.effort_low'],
   ['medium', 'gui.settings.roles.effort_medium'], ['high', 'gui.settings.roles.effort_high'],
 ]
 
 const effortWord = (v: string): string =>
-  t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_low')
+  t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_default')
 
 /* The three values the parameters drawer edits. Read out here rather than
    inside it, because the closed trigger says what they are. */
 function chatParams(raw: Record<string, unknown>): { effort: string; iters: number; pin: number | null } {
   const pinned = dig(raw, 'agents.defaults.contextWindowTokens')
   return {
-    effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || 'low',
+    effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || '',
     iters: Number(dig(raw, 'agents.defaults.maxToolIterations')) || 40,
     pin: typeof pinned === 'number' && pinned > 0 ? pinned : null,
   }
@@ -472,7 +475,8 @@ function ChatParams(): JSX.Element {
         <Seg
           opts={EFFORTS.map(([v, key]): [string, string] => [v, t(key)])}
           value={effort}
-          onPick={(v) => void store.write('agents.defaults.reasoningEffort', v)}
+          /* The default rung clears the key: null hands the choice back to the provider. */
+          onPick={(v) => void store.write('agents.defaults.reasoningEffort', v || null)}
         />
       </Row>
       <Row label={t('gui.settings.roles.iterations')}>

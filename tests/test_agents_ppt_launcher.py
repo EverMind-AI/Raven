@@ -202,6 +202,9 @@ TRUNK_ONLY_DEFAULTS = {
     # own thresholds but for the trigger ratio; the deck-specific part is the
     # plugin's ledger under the summary, not a different threshold.
     "compaction": {"enabled": True, "triggerRatio": 0.85},
+    # The deck engine is a product agent, and only the Raven host keeps a task
+    # board: switched off here so a standalone run makes no extra call per turn.
+    "taskBoard": {"enabled": False},
 }
 
 #: agents.defaults rows both sides carry with different values, as (fork, trunk).
@@ -708,6 +711,43 @@ def test_optional_keys_fall_back_per_slot_to_the_host_config(grounded, tmp_path)
     (home / "config.json").write_text(json.dumps({"tools": {"web": {"search": {"apiKey": "host-serper"}}}}))
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert data["tools"]["web"]["search"]["apiKey"] == "host-serper"
+
+
+def test_a_borrowed_web_key_falls_back_to_the_hosts_llm_provider(grounded, tmp_path):
+    """DeepSeek's web key lives on its chat account. A deck running on its own
+    LLM key never inherits the host's ``providers`` block, so the launcher has
+    to carry the borrowed key into the vendor slot itself -- the runtime reads
+    the slot, not the host's provider section, once the product has its own."""
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+                "tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}},
+            }
+        )
+    )
+
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["deepseek"]["apiKey"] == "sk-deepseek"
+    assert data["tools"]["web"]["search"]["provider"] == "deepseek"
+    assert data["tools"]["web"]["fetch"]["provider"] == "deepseek"
+
+
+def test_the_launcher_borrows_nothing_under_a_raven_without_the_helper(grounded, monkeypatch):
+    """A stamped launcher can load on a raven that predates the web-key borrow;
+    the missing name must read as "borrow nothing" rather than ImportError."""
+    from raven.config import schema
+
+    monkeypatch.delattr(schema, "borrowed_web_key")
+    config = {"tools": {"web": {}}}
+
+    carried = grounded.inherit_web_vendors(config, {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}})
+
+    assert carried == []
+    assert "providers" not in config["tools"]["web"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")

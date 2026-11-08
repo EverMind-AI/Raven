@@ -297,6 +297,13 @@ _URL_SCHEME_RE = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*)://")
 _HOST_LIKE_RE = re.compile(r"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/")
 
 
+def _elsewhere(path: str) -> str:
+    """The registered machines, for an absolute path this computer does not have."""
+    from raven.agent.tools.machine_exec import missing_here_note
+
+    return missing_here_note([path.strip()])
+
+
 def _missing(path: str) -> str:
     """The refusal for a path that is not there, naming the tool that can reach it.
 
@@ -439,7 +446,7 @@ class ReadFileTool(_FsTool):
         try:
             fp = self._resolve(path)
             if not fp.exists():
-                return _missing(path)
+                return _missing(path) + _elsewhere(path)
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 
@@ -917,7 +924,7 @@ class ListDirTool(_FsTool):
         try:
             dp = self._resolve(path)
             if not dp.exists():
-                return f"Error: Directory not found: {path}"
+                return f"Error: Directory not found: {path}" + _elsewhere(path)
             if not dp.is_dir():
                 return f"Error: Not a directory: {path}"
 

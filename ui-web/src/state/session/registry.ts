@@ -31,13 +31,14 @@ import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
-import { set as setCtx } from '../ctxChip'
+import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir } from '../workdir'
 import { reset as wsReset, setOpen as setWs } from '../ws'
 import { noteRow, pitch, readOnly, unpitch } from './conversation'
+import { applyUsage } from './ctxReport'
 import { dropAll as dropHeldHosts } from './hosts'
 import { park, resume as resumeInPlace } from './residency'
 import { refreshDag, resume as resumeConversation } from './resume'
@@ -272,7 +273,8 @@ export function switchToDraft(): void {
   // conversation just left. A null session omits the field, which is the
   // default's own answer. The tier and the permission mode are the same.
   void loadProviders(null, gen)
-  void loadTier()
+  void loadTier(null, gen)
+  void loadEffort(null, gen)
   void loadPermMode(null, gen)
   $('#title')!.textContent = t('gui.new_task')
   pitch(); sessionDraw(); $('#ta')!.focus()
@@ -300,15 +302,24 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   // until below (and not at all on the parked-turn path). The gen lets the
   // refresh drop itself if a later open overtakes it, since model.options
   // answers off-thread and can land out of order.
-  rt.staged.model = null; rt.staged.tier = null; rt.staged.perm = null
+  rt.staged.model = null; rt.staged.tier = null; rt.staged.perm = null; rt.staged.effort = null
   void loadProviders(s.id, gen)
   /* Read here rather than from `session.onChange`, which is what the tier used
      and what left it stale: `setCurrent` returns early when the id is unchanged,
      and the reconnect path reopens the SAME id. The loop holds session policies
      in memory (`_session_policies`, no persistence), so a gateway restart puts
      every session back on the catalogue default -- and the chip went on naming
-     the tier from before the gap. */
-  void loadTier()
+     the tier from before the gap. Keyed to s.id and the switch, as the effort
+     and the permission mode are: the current session is not switched over
+     until below, so a read of "the current one" here was a read of the
+     conversation being left, and its rung was painted on the one opened. */
+  void loadTier(s.id, gen)
+  /* The effort is kept on the session's record, so a reopen reads what it
+     was left at -- including after a gateway restart, unlike the tier. Keyed
+     to s.id and the switch, as the permission mode is: the current session
+     is not switched over until below, so a read of "the current one" here
+     would be a read of the conversation being left. */
+  void loadEffort(s.id, gen)
   void loadPermMode(s.id, gen)
   // Opening it IS reading it. ``s`` can be a bare {id, title} from the
   // reconnect path, so clear the flag on the row in sessionRows(), not on the arg.
@@ -372,7 +383,7 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
        See state/ctxChip.ts. */
-    setCtx(u.context_used, u.context_max)
+    applyUsage(u)
     /* The turn this conversation is in the middle of, which nothing else on a
        page that has just loaded can know: its frames went to a socket this page
        did not have. Put the machine back into the state `message.start` would

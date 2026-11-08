@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,57 @@ async def test_get_reports_values_defaults_and_hides_secrets(config_file):
 
 
 @pytest.mark.asyncio
+async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
+    """``enabled`` defaults to true, but the source runs only with an endpoint:
+    the flag alone tells the model the Hub is searched when it is not."""
+    tool = RavenConfigTool()
+    path = "skillForge.router.hub.enabled"
+
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": True}}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"value": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": True}}
+    assert f"  {path} = true (default), in effect: true [bool," in await _run(tool, action="describe")
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": True}}}}))
+    assert f"  {path} = true, in effect: false [bool," in await _run(tool, action="describe")
+
+
+@pytest.mark.asyncio
+async def test_the_skill_hub_switch_is_not_reported_as_waiting_for_a_reload(config_file):
+    """Switching the source off stops the next search and switching it on is
+    live too while the endpoint is present, so the write does not owe a reload;
+    only a first enable that had to add the endpoint can wait, and the settings
+    service says so in that write's own answer."""
+    calls = Calls({"settings.set": {"applied": True, "previous": True}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="false")
+
+    assert "at once" in reply
+    assert "Pending" not in reply
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_settings_write_that_waits_for_a_reload_reaches_the_model(config_file):
+    """The switch-on that had to seed the endpoint cannot be searched with
+    until a reload. That cost arrives as the settings service's ``warning``; a
+    tool that drops it tells the model a change is already serving."""
+    warning = "Saved. Skill Hub search starts after Raven reloads."
+    calls = Calls({"settings.set": {"applied": True, "previous": False, "warning": warning}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="true")
+
+    assert warning in reply
+
+
+@pytest.mark.asyncio
 async def test_a_section_or_instance_read_expands_to_what_is_configured(config_file):
     """A wildcard entry is read once per configured instance; an empty answer reads as "none configured"."""
     tool = RavenConfigTool()
@@ -164,6 +216,39 @@ async def test_a_settings_page_setting_goes_through_the_lent_caller(config_file)
     reply = await _run(tool, action="set", path="tools.exec.timeout", value="120")
     assert calls.calls == [("settings.set", {"key": "tools.exec.timeout", "value": 120})]
     assert "60 -> 120" in reply and "next turn" in reply
+
+
+@pytest.mark.asyncio
+async def test_the_reasoning_effort_may_be_cleared_through_the_lent_caller(config_file):
+    """``null`` hands the choice back to the provider's own default, as the
+    settings page's *Provider default* rung does; the door used to refuse it
+    while the page accepted it."""
+    calls = Calls({"settings.set": {"applied": True, "previous": "high"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert calls.calls == [("settings.set", {"key": "agents.defaults.reasoningEffort", "value": None})]
+    assert "next turn" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_reasoning_effort_lands_as_null_in_the_file(config_file):
+    """Through the settings service itself: the key is written as null, which
+    is what the live reader takes as the provider's own default."""
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["agents"] = {"defaults": {"reasoningEffort": "high"}}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert json.loads(config_file.read_text())["agents"]["defaults"]["reasoningEffort"] is None
 
 
 @pytest.mark.asyncio
@@ -1128,6 +1213,65 @@ async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_d
         and "Never read, copy or test a key yourself" in reply
         and "three have not told you why" in reply
     )
+
+
+def _run_command(lines: list[str]) -> list[str]:
+    """The command in a "Run `...`" guidance line, split as the reader's host splits it.
+
+    The hint is built with ``command_quote``, which leaves a safe id bare on
+    POSIX and wraps it in double quotes on Windows; asserting the argv is the
+    only form both spellings satisfy.
+    """
+    line = next(line for line in lines if line.startswith("- Run `"))
+    return shlex.split(line.split("`")[1])
+
+
+def test_the_next_step_for_an_opencode_row_runs_the_model_its_row_names() -> None:
+    """``DIAGNOSE_HINTS`` is a template, and raven_config read it as a finished command.
+
+    The settings page expands the table through ``diagnose_hint_for``; this
+    reader took the raw string, so an OpenCode row that ended its turn empty
+    was told to run ``opencode run{model} hi`` -- no command at all.
+    """
+    from raven.agent.tools.raven_config import _what_it_needs
+
+    pinned = _what_it_needs(
+        "opencode",
+        {"model": "opencode/big-pickle"},
+        remedy=None,
+        detail="acp agent 'OpenCode' ended its turn with no content",
+        model="add again",
+    )
+    joined = "\n".join(pinned)
+    assert "{" not in joined
+    assert _run_command(pinned) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
+
+    plain = _what_it_needs("opencode", {}, remedy=None, detail="ended its turn with no content", model="add again")
+    assert _run_command(plain) == ["opencode", "run", "hi"]
+
+
+@pytest.mark.asyncio
+async def test_adding_an_opencode_row_with_a_model_names_that_model_in_the_next_step(config_file):
+    """The row is not in the roster yet, so the model exists only in add's params.
+
+    Dropping it told the model to run the agent's default turn -- a different
+    question from the one the failed add asked, and one whose answer can hide
+    the cause.
+    """
+    refusal = RuntimeError(
+        "sub-agent 'OpenCode' did not answer a test message, so it was not added: acp agent 'OpenCode' ended "
+        "its turn with no content; stderr tail: <empty>"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "opencode", "model": "opencode/big-pickle"}',
+    )
+    assert "opencode run{model} hi" not in reply
+    assert _run_command(reply.splitlines()) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
 
 
 class _Refused(RuntimeError):

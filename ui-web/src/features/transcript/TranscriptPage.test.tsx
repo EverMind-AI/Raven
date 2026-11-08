@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { act } from '@testing-library/react'
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
@@ -861,6 +863,89 @@ describe('transcript island, history', () => {
     expect($('.answer .prose')?.textContent).toBe('the config was wrong')
   })
 
+  it('keeps a turn open when its agent message runs to two rendered lines', () => {
+    /* Importance is read off the message's length, not off the rendered rows:
+       the threshold is the one constant `collapse` applies. */
+    const t0 = Date.now() - 60000
+    const long = 'x'.repeat(store.FOLD_KEEP_OPEN_CHARS)
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'check the login timeout', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: long,
+          tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{"path":"/tmp/a.log"}' }],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'read_file', text: 'line1\nline2' },
+        { role: 'assistant', text: 'the config was wrong', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    const fold = $('.tfold')
+    expect(fold).toBeTruthy()
+    expect(fold?.classList.contains('open')).toBe(true)
+    expect(fold?.textContent).toContain(long)
+  })
+
+  it('shows a delegating step\'s call rows by default, without locking them open', () => {
+    const t0 = Date.now() - 60000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'fan it out', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '',
+          tool_calls: [
+            { id: 'c1', name: 'spawn', arguments: '{"agent":"Coder","task":"look"}' },
+            { id: 'c2', name: 'read_file', arguments: '{"path":"/tmp/a"}' },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'c1', name: 'spawn', text: 'started' },
+        { role: 'tool', tool_call_id: 'c2', name: 'read_file', text: 'x' },
+        { role: 'assistant', text: 'done', timestamp: iso(t0 + 3000) },
+      ])
+    })
+    /* The turn's own fold is open by the same rule, and the step's work list is
+       not shut over the spawn row: the call has to be visible without a click. */
+    expect($('.tfold')?.classList.contains('open')).toBe(true)
+    expect($('.wkin')?.hasAttribute('hidden')).toBe(false)
+    expect($$('.wkin .wrow .vb')).toHaveLength(2)
+  })
+
+  it('lets the reader shut a delegating step, and keeps it shut', () => {
+    /* `keepCalls` used to make the body visible regardless of `wkOpen`, so the
+       summary stayed clickable while the click could never hide anything. The
+       default and the reader's decision are two different things: the first is
+       `paintWork`'s, the second is `wkPinned`'s. */
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      mount.ask('fan it out')
+      st = mount.step()
+      st.tool('spawn', { task: 'look' }, null, 'c1')
+      st.tool('read_file', { path: '/tmp/a' }, null, 'c2').done(true, 'x', 5)
+    })
+    const sum = (): HTMLElement => $('.wrow.sum') as HTMLElement
+    const body = (): HTMLElement => $('.wkin') as HTMLElement
+
+    /* Untouched: open, and the summary's own marker agrees with the body. */
+    expect(sum().classList.contains('open')).toBe(true)
+    expect(body().hidden).toBe(false)
+
+    /* The reader shuts it. Style and body are asserted together, because a
+       summary still reading "open" over a shut body is the same defect one
+       layer up. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* A call landing afterwards is a default, not an instruction to reopen. */
+    act(() => { st.tool('read_file', { path: '/tmp/b' }, null, 'c3').done(true, 'y', 5) })
+    expect(body().hidden).toBe(true)
+    expect(sum().classList.contains('open')).toBe(false)
+
+    /* And the reader can open it again, style and body still agreeing. */
+    act(() => sum().click())
+    expect(body().hidden).toBe(false)
+    expect(sum().classList.contains('open')).toBe(true)
+  })
+
   it('keeps a redirection whole: an ACP shell title stays one row, one command', () => {
     act(() => {
       mount.history([
@@ -1501,14 +1586,16 @@ describe('a thought box while the model is still thinking', () => {
   })
 })
 
-/** A fold shuts over a sub-agent that is still working, like any other.
+/** A fold holding a delegated run opens, so the delegation stays in sight.
  *
- * The run goes on for minutes after the turn that dispatched it has answered;
- * it is followed on the task rows, not by holding the turn's fold open. What
- * is asserted here is that a spawn in flight buys the fold nothing: not at the
- * turn's end, and not when the next turn shuts the folds before it.
+ * The run itself goes on for minutes after the turn that dispatched it has
+ * answered, and its status is followed on the task rows -- a run still working
+ * is not what holds the fold open. The call kind is: a spawn or dag row inside
+ * the fold is the only place the delegation is named, so that turn's fold
+ * arrives open at its end and on replay, and a later turn does not shut it.
+ * It stays a default -- the reader's own toggle takes it over.
  */
-describe('a fold holding a run that has not finished', () => {
+describe('a fold holding a delegated run', () => {
   const RUNNING = {
     agent: 'Raven', instance: 'raven-9bc249', label: 'draw the poster',
     status: 'running', tool_call_id: 'call_7', call_id: 'rec-1',
@@ -1534,7 +1621,7 @@ describe('a fold holding a run that has not finished', () => {
     return st
   }
 
-  /* An ordinary turn after it -- the one that used to shut the first. */
+  /* An ordinary turn after it. */
   function askAgain(): void {
     let st!: ReturnType<typeof mount.step>
     act(() => {
@@ -1547,20 +1634,21 @@ describe('a fold holding a run that has not finished', () => {
     act(() => { mount.finishTurn(st, [st], '2s') })
   }
 
-  it('shuts at the end of its own turn', () => {
+  it('opens at the end of its own turn, so the delegation stays in sight', () => {
     dispatched('running')
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
   })
 
-  it('finds no reason to stay open when the next turn arrives', () => {
+  it('stays open when the next turn arrives, which folds itself', () => {
     dispatched('running')
     askAgain()
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 
-  it('arrives shut on replay too, with the run still going under it', () => {
-    /* A reopened conversation opens no fold, the last turn's included, and a
-       run still in flight under it buys it nothing there either. */
+  it('arrives open on replay too, with the run still going under it', () => {
+    /* A reopened conversation used to open no fold, the last turn's included.
+       A spawn or dag call is the exception: its row is the only place the
+       delegation is visible. */
     wire({
       spawnList: async () => [{
         id: '20260827T095926366482Z-78da7ea7', kind: 'spawn', agent: 'Raven',
@@ -1579,11 +1667,11 @@ describe('a fold holding a run that has not finished', () => {
         { role: 'assistant', text: 'dispatching it now', timestamp: iso(t0 + 3000) },
       ])
     })
-    expect(openFlags()).toEqual([false])
+    expect(openFlags()).toEqual([true])
 
     askAgain()
 
-    expect(openFlags()).toEqual([false, false])
+    expect(openFlags()).toEqual([true, false])
   })
 })
 
@@ -2327,15 +2415,47 @@ describe("the turn's delivered files", () => {
     /* A page opens in a browser tab and in the panel; a document the panel
        reads opens there; a binary is fetched. */
     expect(acts).toEqual([
-      ['en:gui.arts.browser', 'en:gui.arts.open {"f":"page.html"}'],
-      ['en:gui.arts.open {"f":"notes.md"}'],
+      ['en:gui.arts.browser', 'en:gui.arts.download', 'en:gui.arts.open {"f":"page.html"}'],
+      ['en:gui.arts.download', 'en:gui.arts.open {"f":"notes.md"}'],
       ['en:gui.arts.download'],
     ])
     const [page, , deck] = $$('.atile')
     expect(page!.querySelector('a.transcript-act')?.getAttribute('target')).toBe('_blank')
     expect(deck!.querySelector('a.transcript-act')?.getAttribute('download')).toBe('cv.pptx')
+    expect($$('.atile')[1]!.querySelector('a.transcript-act')?.getAttribute('href')).toBe('/files/download?token=notes.md')
     act(() => { ($$('.atile')[1]!.querySelector('button.transcript-act') as HTMLElement).click() })
     expect(opened).toEqual(['/w/notes.md'])
+  })
+
+  /* The token link is the only attachment the page can hand over. A manifest
+     written before the field -- or the offline canvas's -- carries none, and
+     an anchor with an empty href would save the page itself under the file's
+     name instead of the file. */
+  it('offers no download when the delivery carries no link', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'make them', timestamp: iso(Date.now() - 9000) },
+        { role: 'tool', name: 'deliver_files', text: 'ok', metadata: {
+          raven_delivery: {
+            files: [
+              { path: '/w/notes.md', name: 'notes.md', title: 'notes.md', size: 12000, media_type: 'text/markdown' },
+              { path: '/w/cv.pptx', name: 'cv.pptx', title: 'cv.pptx', size: 12000,
+                media_type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+            invalid: [],
+          },
+        } },
+        { role: 'assistant', text: 'done', timestamp: iso(Date.now()) },
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    expect($$('.atile a[download]')).toHaveLength(0)
+    /* The document still opens in the panel; the binary has nothing to offer,
+       so it does not draw an empty control strip either. */
+    expect($$('.atile')[0]!.querySelectorAll('.transcript-act')).toHaveLength(1)
+    expect($$('.atile')[1]!.querySelectorAll('.transcript-act')).toHaveLength(0)
+    expect($$('.atile')[1]!.querySelector('.transcript-acts')).toBeNull()
   })
 
   it('shows a delivered deck by its first page, rendered by the gateway', async () => {
@@ -2904,12 +3024,13 @@ describe('transcript island, a turn the model chose not to answer', () => {
   const labels = (): Array<string | null | undefined> => quiet().map((n) => n.querySelector('.tx')?.textContent)
 
   /* What the stage does on the notice, in its order: the open step is sealed
-     and its reply taken back, then the quiet row is drawn; the turn lands
-     flagged silent after. The notice has let go of the open step by then, so
-     finishTurn is handed none -- only the list of steps the turn ran. */
-  const hush = (open: ReturnType<typeof mount.step> | null): void => {
+     and what the notice says the reply showed is taken back, then the quiet row
+     is drawn; the turn lands flagged silent after. The notice has let go of the
+     open step by then, so finishTurn is handed none -- only the list of steps
+     the turn ran. */
+  const hush = (open: ReturnType<typeof mount.step> | null, shown = ''): void => {
     act(() => {
-      if (open) { open.seal(); open.dropReply() }
+      if (open) { open.seal(); open.dropReply(shown) }
       mount.note(LABEL, '', { quiet: true })
     })
   }
@@ -2959,13 +3080,68 @@ describe('transcript island, a turn the model chose not to answer', () => {
     act(() => { rafQ.forEach((cb) => cb(0)) })
     expect($('.say')?.textContent).toContain('abc')
 
-    hush(st)
+    hush(st, 'abc')
     act(() => { mount.finishTurn(null, [st], '3s', true) })
     openFolds()
 
     expect(document.body.textContent).not.toContain('abc')
     expect($$('.answer')).toHaveLength(0)
     expect(labels()).toEqual([LABEL])
+  })
+
+  /* An exhausted turn's wrap-up streams into the last call's step, after that
+     call's narration, and a call whose only tool was a message that went
+     nowhere drew no tool row to mark where the narration ends. Only what the
+     notice names is the wrap-up's. */
+  it('takes back only what the closing reply showed, and keeps the narration before it', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Let me check the queue.')
+      st.sayDelta('<think>still nothing</think>')
+    })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Let me check the queue.')
+  })
+
+  it('keeps everything a step said when the closing reply showed nothing', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => {
+      st = mount.step()
+      st.sayDelta('Checking the logs.')
+      st.tool('read_file', { path: '/tmp/a.log' }, null).done(true, 'quiet', 9)
+      st.sayDelta('Sent the summary.')
+    })
+
+    hush(st)
+
+    expect(st.seg.say).toBe('Checking the logs.Sent the summary.')
+  })
+
+  /* A page that joined the turn part-way holds only the end of what the reply
+     showed: all of what it holds is the reply's, so all of it goes. */
+  it('takes back a reply it saw only the end of', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('nothing</think>') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('')
+  })
+
+  it('leaves a step alone when what it holds does not end on what the reply showed', () => {
+    act(() => { mount.ask('anything new?') })
+    let st!: ReturnType<typeof mount.step>
+    act(() => { st = mount.step(); st.sayDelta('Checking the logs.') })
+
+    hush(st, '<think>still nothing</think>')
+
+    expect(st.seg.say).toBe('Checking the logs.')
   })
 
   it('keeps what the turn said on the way as narration, never as its answer', () => {
@@ -3061,7 +3237,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -3120,7 +3296,7 @@ describe('transcript island, the delegation verbs', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     await act(async () => { await Promise.resolve() })
@@ -3166,7 +3342,7 @@ describe('transcript island, tool episodes', () => {
 
   it('opens a settled row into its detail card and closes it again', () => {
     twoCalls()
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     expect(row.classList.contains('tog')).toBe(true)
     /* Shut is not built at all, so the row stands with no card behind it. */
@@ -3195,7 +3371,7 @@ describe('transcript island, tool episodes', () => {
       st.tool('raven_config', { action: 'describe' }).done(true, '{}', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     const dtl = row.nextElementSibling as HTMLElement
@@ -3220,7 +3396,7 @@ describe('transcript island, tool episodes', () => {
         st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
         st.seal()
       })
-      act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+      openWork()
       const row = $$('.wkin .wrow')[0] as HTMLElement
       act(() => { row.click() })
       return (row.nextElementSibling as HTMLElement).querySelector<HTMLElement>('.bd pre .pth')!
@@ -3249,20 +3425,54 @@ describe('transcript island, tool episodes', () => {
     })
   })
 
-  it('shows a failure on the row, on the summary chip, and opens the fold unasked', () => {
+  it('shows a failure on the row and the summary chip without opening the fold', () => {
     twoCalls(true)
     const sum = $('.wk > .wrow.sum') as HTMLElement
-    /* A failure is the one thing worth opening unasked. */
-    expect(($('.wkin') as HTMLElement).hidden).toBe(false)
+    /* A failed call is ordinary work: the word says so, but it does not pop
+       the fold the reader did not ask for. */
+    expect(($('.wkin') as HTMLElement).hidden).toBe(true)
     expect(sum.querySelector('.chip.bad')?.textContent).toBe('en:gui.n_failed {"n":1}')
+    act(() => { sum.click() })
     const bad = $$('.wkin .wrow')[1] as HTMLElement
     expect(bad.classList.contains('bad')).toBe(true)
+    expect(bad.querySelector('.chip.bad')?.textContent).toBe('en:gui.fail')
     expect(bad.querySelector('.err')?.textContent).toBe('error: nope')
     /* The design's alert glyph (Figma: Raven / Thinking), not the kind's own. */
     expect(bad.querySelector('svg.transcript-ic circle')).toBeTruthy()
     expect(bad.querySelector('svg.transcript-ic')?.outerHTML).not.toBe(
       ($$('.wkin .wrow')[0] as HTMLElement).querySelector('svg.transcript-ic')?.outerHTML,
     )
+  })
+
+  it('keeps a failed row out of the danger colour', () => {
+    /* The row keeps its `bad` class for the state and for tests; what it must
+       not keep is the danger ink those rules used to paint. The stylesheet is
+       the only place that can answer this, so read it. */
+    const css = readFileSync('src/styles/page.css', 'utf8')
+    expect(css).not.toMatch(/\.wrow\.bad[^{]*\{[^}]*--chat-danger/)
+    expect(css).not.toMatch(/\.wrow \.err[^{]*\{[^}]*--chat-danger/)
+    expect(css).not.toMatch(/\.chip\.bad[^{]*\{[^}]*(?:--clay|--chat-danger)/)
+
+    /* The same rule for the detail behind a delegation, a sub-agent's
+       delivered row and a tool call's exit code: a step that failed is read
+       as the word and its own error line, not as a red alarm. One extraction
+       per selector, so a new rule cannot reintroduce the colour unseen. */
+    const rule = (head: string): string => {
+      const at = css.indexOf(head)
+      expect(at, head).toBeGreaterThanOrEqual(0)
+      return css.slice(at, css.indexOf('}', at) + 1)
+    }
+    for (const sel of [
+      '.dlg .dgr .v.err {', '.dlg .dot.bad {', '.sdlv.bad .st {', '.sdlv.bad .st .dot {',
+      '.dtl .exit.bad {', '.sarow.task[data-st="error"] .dot {', '.sarow.task .st.fail {',
+      '.tkerr {', '.tkfail {', '.tkstop {',
+    ]) {
+      expect(rule(sel), sel).not.toMatch(/--(?:clay|chat-danger)/)
+    }
+    /* Not a blanket removal: the page-wide status dot and diff deletions are
+       not task outcomes, so their warning colour stays. */
+    expect(rule('.dot.err, .dot.bad {')).toContain('--clay')
+    expect(rule('.diff .del {')).toContain('--clay')
   })
 
   it('merges consecutive silent steps into one stretch under one summary', () => {
@@ -4309,7 +4519,7 @@ describe('transcript island, delegated calls', () => {
         { run_id: 'r-1', tool_call_id: 'call-1', node: 'alpha', status: 'failed' })
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
     const calls = store._dagCallsForTests()
 
@@ -4347,7 +4557,7 @@ describe('transcript island, delegated calls', () => {
       st.tool('run_subagent_dag', { nodes: [{ id: 'beta' }, { id: 'beta2' }] }, null, 'call-2')
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const cards = $$('.wkin .wrow').map((row) => row.nextElementSibling as HTMLElement)
 
     expect(cards.map((c) => dagField(c, 'gui.dag.run_id'))).toEqual(['r-1', 'r-2'])
@@ -4835,7 +5045,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     const row = $$('.wkin .wrow')[0] as HTMLElement
     act(() => { row.click() })
     return row.nextElementSibling as HTMLElement
@@ -4893,7 +5103,7 @@ describe('transcript island, an imported conversation', () => {
       st.tool('run', { cmd: 'ls' }).done(true, 'ok', 5)
       st.seal()
     })
-    act(() => { ($('.wk > .wrow.sum') as HTMLElement).click() })
+    openWork()
     act(() => { ($$('.wkin .wrow')[0] as HTMLElement).click() })
     await act(async () => { await Promise.resolve() })
     expect(asked).toEqual([])

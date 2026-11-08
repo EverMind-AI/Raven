@@ -642,6 +642,28 @@ class TestSessionCost:
 
         assert session.cost_known is False
 
+    @pytest.mark.parametrize("reported", [float("inf"), float("nan"), -1.0, True, "1.5"])
+    async def test_a_spend_that_is_no_amount_is_as_unreadable_as_a_failed_read(self, rig, reported):
+        """``session.usage`` answered, but not with an amount ``reported_cost`` accepts.
+
+        An infinite baseline used to be adopted, and every later total was then
+        an infinity the update drops, so the session sent no cost again while
+        still claiming to know it; a nan or a negative was skipped, and the total
+        counted from zero understated what the session had spent.
+        """
+        rig.stack.usage_result = {"cost_usd": reported}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, False)
+
+    async def test_a_session_that_priced_nothing_yet_counts_from_here(self, rig):
+        rig.stack.usage_result = {"cost_usd": None}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, True)
+
     async def test_a_new_session_has_spent_nothing_and_asks_nobody(self, rig):
         await rig.handshake()
         response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
@@ -793,6 +815,24 @@ class TestSessionDelete:
 
         assert response["result"] == {}
         assert rig.engine.sessions.exists("acp:gone") is False
+
+    async def test_it_takes_the_board_along_where_no_board_service_heard(self, rig):
+        """No board service hears this delete -- this engine keeps none -- and a key a client
+        deleted may come back: the board a host wrote for it goes with the conversation."""
+        from raven.agent.task_board.board import Board, TaskGroup
+        from raven.agent.task_board.store import BOARD_FILENAME, save_board
+
+        session = rig.engine.sessions.get_or_create("acp:gone")
+        session.add_message("user", "hi")
+        rig.engine.sessions.save(session)
+        board_dir = rig.engine.sessions.session_dir("acp:gone")
+        save_board(board_dir, Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:gone"})
+
+        assert response["result"] == {}
+        assert not (board_dir / BOARD_FILENAME).exists()
 
     async def test_it_drops_a_held_session_from_the_connection(self, rig):
         await rig.handshake()
@@ -2301,6 +2341,47 @@ class TestHeldTurn:
 
         response = await asyncio.wait_for(task, 2)
         assert response["result"]["stopReason"] == "refusal", "only a turn that ended normally can be a wait"
+
+
+class TestResidentWork:
+    """``_raven/residentWork``: what the agent holds that runs with nobody asking.
+
+    A raven client asks it right before closing the agent for idleness: an armed
+    cron job of this agent's partition fires only from this process, and a
+    plugin service lives only as long as the process does.
+    """
+
+    async def test_it_is_advertised(self, rig):
+        response = await rig.handshake()
+        validate_def("InitializeResponse", response["result"])
+        assert response["result"]["agentCapabilities"]["_meta"]["raven.residentWork"] is True
+
+    async def test_an_armed_job_of_its_partition_or_a_running_service_is_resident(self, rig, tmp_path):
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        async def answer() -> dict:
+            response = await rig.call("_raven/residentWork", {})
+            assert "result" in response, response
+            return response["result"]
+
+        await rig.handshake()
+        assert await answer() == {"resident": False, "cronJobs": 0, "services": 0}
+
+        cron = CronService(tmp_path / "jobs.json", allowed_channels={"acp"})
+        rig.engine.cron_service = cron
+        cron.add_job("elsewhere", CronSchedule(kind="every", every_ms=60_000), "for feishu", channel="feishu")
+        await cron.start()
+        try:
+            assert (await answer())["resident"] is False, "another partition's job is not this process's to fire"
+            cron.add_job("mine", CronSchedule(kind="every", every_ms=60_000), "remind me", channel="acp")
+            assert await answer() == {"resident": True, "cronJobs": 1, "services": 0}
+        finally:
+            cron.stop()
+        assert (await answer())["resident"] is False, "a stopped scheduler fires nothing"
+
+        rig.engine.running_plugin_services = (object(),)
+        assert await answer() == {"resident": True, "cronJobs": 0, "services": 1}
 
 
 class TestSteer:

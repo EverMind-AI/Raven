@@ -220,3 +220,177 @@ def test_a_report_does_not_leave_its_failure_behind(monkeypatch: pytest.MonkeyPa
     _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
 
     assert codex_catalog.account_models() == ("gpt-5.6-sol",), "the picker inherited a report's failure"
+
+
+def test_account_efforts_returns_the_supported_levels_least_first(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    """The account catalogue lists the levels each model takes; `ultra` is not a
+    word this build's ladder carries, so it is dropped."""
+    _serve(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [
+                        {"effort": effort} for effort in ("low", "medium", "high", "xhigh", "max", "ultra")
+                    ],
+                }
+            ]
+        },
+    )
+
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+
+
+def test_account_efforts_is_empty_until_the_catalogue_is_read(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    assert codex_catalog.account_efforts("gpt-5.6-sol") == ()
+
+
+def test_account_efforts_is_empty_for_a_model_it_does_not_list(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_efforts("gpt-5.4", refresh=True) == ()
+
+
+def test_account_efforts_uses_the_cached_catalogue_without_a_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    seen = _serve(
+        monkeypatch,
+        {"models": [{"slug": "gpt-5.6-sol", "visibility": "list", "supported_reasoning_levels": [{"effort": "high"}]}]},
+    )
+
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ("high",)
+    assert codex_catalog.account_efforts("gpt-5.6-sol") == ("high",)
+
+    assert len(seen) == 1
+
+
+def test_account_efforts_is_empty_when_the_catalogue_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    _serve(monkeypatch, {"models": []}, status=500)
+
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ()
+
+
+def test_a_hidden_model_has_no_levels(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    _serve(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "slug": "codex-auto-review",
+                    "visibility": "hide",
+                    "supported_reasoning_levels": [{"effort": "high"}],
+                }
+            ]
+        },
+    )
+
+    assert codex_catalog.account_efforts("codex-auto-review", refresh=True) == ()
+
+
+def test_a_visible_model_without_levels_declares_none(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    _serve(monkeypatch, {"models": [{"slug": "gpt-5.6-sol", "visibility": "list"}]})
+
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ()
+
+
+def test_an_expired_answer_still_serves_the_cache_only_read(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    seen = _serve(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [{"effort": effort} for effort in ("low", "medium", "high")],
+                }
+            ]
+        },
+    )
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ("low", "medium", "high")
+    real = codex_catalog.time.monotonic
+    monkeypatch.setattr(codex_catalog.time, "monotonic", lambda: real() + 301)
+    assert codex_catalog.account_efforts("gpt-5.6-sol") == ("low", "medium", "high")
+    assert len(seen) == 1
+
+
+def test_a_failed_refresh_keeps_the_last_good_levels(
+    monkeypatch: pytest.MonkeyPatch,
+    signed_in,
+) -> None:
+    _serve(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [{"effort": "high"}],
+                }
+            ]
+        },
+    )
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ("high",)
+    real = codex_catalog.time.monotonic
+    monkeypatch.setattr(codex_catalog.time, "monotonic", lambda: real() + 301)
+
+    def offline(*, timeout):
+        raise RuntimeError("offline")
+
+    monkeypatch.setattr(codex_catalog, "_fetch", offline)
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == ("high",)
+
+
+def test_an_expired_answer_clamps_a_stale_pick(monkeypatch: pytest.MonkeyPatch, signed_in) -> None:
+    from raven.agent import session_effort
+
+    _serve(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "slug": "gpt-5.6-sol",
+                    "visibility": "list",
+                    "supported_reasoning_levels": [
+                        {"effort": effort} for effort in ("low", "medium", "high", "xhigh", "max")
+                    ],
+                }
+            ]
+        },
+    )
+    assert codex_catalog.account_efforts("gpt-5.6-sol", refresh=True) == (
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    )
+    real = codex_catalog.time.monotonic
+    monkeypatch.setattr(codex_catalog.time, "monotonic", lambda: real() + 301)
+    levels = codex_catalog.account_efforts("gpt-5.6-sol")
+    assert levels == ("low", "medium", "high", "xhigh", "max")
+    assert session_effort.clamp("minimal", levels) is None

@@ -10,6 +10,7 @@ import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as deliveries from './deliveries'
+import { wsSetRoot } from './source'
 import * as store from './store'
 import { WorkspaceApp } from './WorkspacePage';
 
@@ -100,6 +101,7 @@ afterEach(() => {
   act(() => {
     store.reset()
   })
+  wsSetRoot('')
   localStorage.clear()
   store._resetForTests()
   cleanup()
@@ -428,19 +430,74 @@ describe('workspace island', () => {
     expect(screen.queryByLabelText('gui.ws.open_with_pick')).toBeNull()
   })
 
-  /* A viewer shows a file; it does not hand out copies of it. No kind carries
-     a download, delivered or not -- the file stays where the agent wrote it,
-     one reveal away. */
+  /* A delivered file carries the gateway's attachment link; a file that is not
+     a deliverable has none to offer. */
   it.each(['/repo/out/shot.png', '/repo/out/paper.pdf', '/repo/report.html', '/repo/notes.md', '/repo/deck.pptx', '/repo/blob.bin'])(
-    'offers no download on %s', async (path) => {
+    'offers the attachment link on a delivered %s', async (path) => {
       install(emptyWs({ file: store.makeFile(path) }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
       deliveries.seed([{ path, name: path.split('/').pop()!, title: 'T', download_path: '/files/download?token=x', size: 9 }])
       await mount()
-      expect(document.querySelector('.fwrap a[download]')).toBeNull()
-      expect(document.querySelector('.fwrap [href*="/files/download"]')).toBeNull()
-      expect(screen.queryByLabelText('gui.ws.download')).toBeNull()
-      expect(screen.queryByText('gui.ws.save_copy')).toBeNull()
+      const a = document.querySelector('.fwrap .fbar a[download]')
+      expect(a?.getAttribute('href')).toBe('/files/download?token=x')
+      expect(a?.getAttribute('download')).toBe(path.split('/').pop())
     })
+
+  it('offers no download on a file that was not delivered', async () => {
+    install(emptyWs({ file: store.makeFile('/repo/notes.md') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    await mount()
+    expect(document.querySelector('.fwrap .fbar')).toBeTruthy()
+    expect(document.querySelector('.fwrap a[download]')).toBeNull()
+  })
+
+  it('offers no download on a delivered file that is gone', async () => {
+    install(emptyWs({ file: store.makeFile('/repo/notes.md') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/notes.md', name: 'notes.md', title: 'T', download_path: '/files/download?token=x', size: 9, missing: true }])
+    await mount()
+    expect(document.querySelector('.fwrap .fbar')).toBeTruthy()
+    expect(document.querySelector('.fwrap a[download]')).toBeNull()
+  })
+
+  /* The registry keys the gateway's resolved absolute path; the panel opens a
+     file by the path the model typed, which is relative to the session's
+     working directory. The header's link has to find the row either way. */
+  it('offers the attachment link when the file is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: store.makeFile('out/shot.png') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    await mount()
+    expect(document.querySelector('.fwrap .fbar a[download]')?.getAttribute('href')).toBe('/files/download?token=x')
+  })
+
+  /* The registry keys the gateway's resolved path; the panel holds the path
+     the model typed. A file that is gone has to be marked under the registry's
+     spelling -- otherwise the row stays lit and the download link on it keeps
+     pointing at a token that is gone. */
+  it('marks the delivery missing when the file is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: store.makeFile('out/notes.md') }), { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/notes.md', name: 'notes.md', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    vi.stubGlobal('fetch', () => Promise.resolve({
+      ok: false, status: 404, statusText: 'Not Found', text: async () => '404: /repo/out/notes.md',
+    }))
+    await mount()
+    await waitFor(() => { expect(deliveries.byPath('/repo/out/notes.md')?.missing).toBe(true) })
+    /* And the link on it went with it: the token is gone too. */
+    expect(document.querySelector('.fwrap .fbar a[download]')).toBeNull()
+  })
+
+  /* The same, for the kind that never reads text: the picture's own failure
+     asks the status, and the answer marks the row the same way. */
+  it('marks the delivery missing when a picture is opened by its workspace-relative path', async () => {
+    wsSetRoot('/repo')
+    install(emptyWs({ file: { path: 'out/shot.png', kind: 'img', raw: false, text: null, err: null, size: null, loading: false } }),
+      { canBrowse: true }, { tab: 'file', open: true, picked: true })
+    deliveries.seed([{ path: '/repo/out/shot.png', name: 'shot.png', title: 'T', download_path: '/files/download?token=x', size: 9 }])
+    vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, status: 404 }))
+    await mount()
+    const img = document.querySelector('.fview .shot img') as HTMLImageElement
+    await act(async () => { img.dispatchEvent(new Event('error')) })
+    await waitFor(() => { expect(deliveries.byPath('/repo/out/shot.png')?.missing).toBe(true) })
+  })
 
   /* Where the bar offers a new tab, that button joins the reveal in one group,
      so the squares touch. happy-dom applies no stylesheet, so this pins the

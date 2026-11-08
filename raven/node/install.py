@@ -65,8 +65,8 @@ from raven.ops.transport import TIMED_OUT_RC
 from raven.utils import mirrors
 
 #: Roughly what a node takes, for the free-space check: Raven's code with
-#: pillow, loguru and ripgrep-bin (measured 2026-10-10), a Python 3.12 when
-#: the machine has none of its own, and uv when the machine has none.
+#: pillow, loguru, zstandard and ripgrep-bin, a Python 3.12 when the machine
+#: has none of its own, and uv when the machine has none.
 _NODE_KB = 60 * 1024
 _PYTHON_KB = 80 * 1024
 _UV_KB = 25 * 1024

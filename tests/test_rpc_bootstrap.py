@@ -66,6 +66,16 @@ class _FakeAskUser:
         self.broker = broker
 
 
+class _FakeBoard:
+    """The host's task board service: only its event sink is wired by the stack."""
+
+    def __init__(self) -> None:
+        self.sink = None
+
+    def set_sink(self, fn) -> None:
+        self.sink = fn
+
+
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
@@ -73,6 +83,7 @@ class _FakeLoop:
         self.tools: dict = {"ask_user": _FakeAskUser()}
         self.order: list[str] = []
         self.subagents = _FakeSubagents(self.order)
+        self.task_board = _FakeBoard()
         self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
@@ -171,6 +182,37 @@ async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> No
         await stack.teardown()
 
 
+async def test_the_spine_and_turn_cancel_share_one_map_of_what_running_turns_measured(monkeypatch) -> None:
+    """A stopped turn's cancel reports what the turn measured, read from the map
+    the spine's runner fills: two maps would leave every stop with nothing to
+    report."""
+    loop = _FakeLoop(_FakeCron())
+    import raven.rpc.methods as methods_module
+    import raven.rpc.spine as spine_module
+
+    seen: dict = {}
+    real_spine = spine_module.build_rpc_spine
+    real_register = methods_module.register_turn_methods
+
+    def spy_spine(*args, **kwargs):
+        seen["spine"] = kwargs.get("live_usages")
+        return real_spine(*args, **kwargs)
+
+    def spy_register(*args, **kwargs):
+        seen["cancel"] = kwargs.get("live_usages")
+        return real_register(*args, **kwargs)
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", spy_spine)
+    # The name the aligned registration calls, so the map is followed through it.
+    monkeypatch.setattr(methods_module, "register_turn_methods", spy_register)
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    try:
+        assert isinstance(seen["spine"], dict)
+        assert seen["cancel"] is seen["spine"]
+    finally:
+        await stack.teardown()
+
+
 def test_the_turn_pools_come_from_the_gateway_section_and_zero_is_allowed(tmp_path, monkeypatch) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
@@ -209,6 +251,7 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None
+        assert loop.task_board.sink is not None
         # The engine is the host's and the host's ``run()`` already connected
         # it; a second prewarm here would re-walk every server it attached.
         assert loop.prewarms == 0

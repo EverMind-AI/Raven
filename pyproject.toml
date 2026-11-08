@@ -1,6 +1,6 @@
 [project]
 name = "raven"
-version = "0.2.6"
+version = "0.2.7"
 description = "Raven — AI-native command line agent with memory, proactivity, context control, and skill evolution"
 requires-python = ">=3.12"
 license =  "Apache-2.0"
@@ -41,7 +41,7 @@ dependencies = [
     # a dependency that only arrives by accident is one an upgrade can remove.
     "idna>=3.4,<4.0.0",
     "portalocker>=3.2.0",
-    "mcp>=1.27.0",
+    "mcp>=2.3.0,<3.0.0",
     "orjson>=3.11.6,<4.0",
     # knn model router (routing/knn_router.py) embedding KNN. Currently also a
     # transitive dep (via lancedb) -- pinning it directly so routing keeps
@@ -122,6 +122,10 @@ dependencies = [
     # `AsyncOpenAI`, the only client LiteLLM's OpenAI-SDK route adopts. It
     # already arrives with litellm, and the range is litellm's own.
     "openai>=2.20.0,<3.0.0",
+    "zstandard>=0.25.0",
+    # mcp 2.x builds its HTTP transports around httpx2 and rejects an httpx
+    # client; the MCP client and endpoint import it directly.
+    "httpx2>=2.10.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
@@ -765,7 +769,7 @@ type = "forbidden"
 source_modules = [
     "raven.agent.tools", "raven.agent.subagent", "raven.acp_client",
     "raven.agent.context", "raven.agent.hook", "raven.agent.personalizer",
-    "raven.agent.workdir", "raven.agent.harness", "raven.agent.window",
+    "raven.agent.workdir", "raven.agent.harness", "raven.agent.window", "raven.agent.task_board",
 ]
 forbidden_modules = ["raven.agent.loop"]
 

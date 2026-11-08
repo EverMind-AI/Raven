@@ -249,7 +249,10 @@ An id here resolves an already saved bundle; alternatively pass its directory.
 Replay supplies recorded model replies and recorded tool results to the live
 harness in a temporary workspace. It does not dispatch real tool code or
 re-evaluate the task with a fresh model. Replaying a recorded deployment does
-not deploy again through its recorded tool calls.
+not deploy again through its recorded tool calls. A sub-agent backed by an
+external agent (Claude Code, Codex and the like) does not run again either:
+the tool that started it gets its recorded result, and the steps the agent
+took inside its own run stay out of the feed.
 
 | Mode/result | Meaning |
 | --- | --- |

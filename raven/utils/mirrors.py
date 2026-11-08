@@ -379,6 +379,19 @@ def _npm_registry_chosen(env: Mapping[str, str]) -> bool:
     return re.search(r"^\s*registry\s*=\s*\S", text, re.MULTILINE) is not None
 
 
+def npm_registry_chosen(env: Mapping[str, str], cwd: str | None = None) -> bool:
+    """Whether the environment, the user's npmrc or a project's names a registry.
+
+    An operator who named one has settled which registry serves the package, so
+    a launch is not moved to a mirror and a fetch that failed against it is not
+    retried from one. npx reads a project's npmrc; an install made elsewhere
+    would not. A scoped ``@corp:registry`` is not a default.
+    """
+    if _npm_registry_chosen(env):
+        return True
+    return _project_npmrc_names_a_registry(Path(cwd) if cwd else Path.cwd(), env)
+
+
 #: How long npm gets to say which registry it reads; starting npm is most of it.
 _NPM_TIMEOUT = 15.0
 
@@ -1122,6 +1135,7 @@ __all__ = [
     "PYTHON_DEFAULT_DOWNLOADS",
     "PYTHON_DOWNLOADS",
     "enabled",
+    "npm_registry_chosen",
     "npm_registry_env",
     "opt_out",
     "package_launch",

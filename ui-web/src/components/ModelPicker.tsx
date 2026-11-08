@@ -105,7 +105,11 @@ export function ModelPicker({ title, providers, current, onPick, onClose, emptyN
   useEffect(() => {
     if (!anchor) return
     let was = anchor.getBoundingClientRect().top
-    const off = (): void => {
+    const off = (e: Event): void => {
+      /* A scroll inside the panel is the reader choosing, not the row leaving:
+         the model list here is its own scroller, and sliding it can shift the
+         dialog's geometry without anything underneath moving. */
+      if (box.current && e.target instanceof Node && box.current.contains(e.target)) return
       if (Math.abs(anchor.getBoundingClientRect().top - was) > 1) onClose()
     }
     /* The baseline moves with the panel. A height resize re-centres the dialog,

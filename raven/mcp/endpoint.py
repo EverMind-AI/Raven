@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 from loguru import logger
 from pydantic import ValidationError
 
@@ -53,6 +53,19 @@ Same shape ``MCPConnectionManager`` takes, and for the same reason: it is
 awaited only when an upstream is actually dialled, so an endpoint nobody
 connects to never spins the sandbox up.
 """
+
+_jsonrpc_adapter_cache: Any = None
+
+
+def _jsonrpc_adapter() -> Any:
+    """The validator for mcp 2.x's ``JSONRPCMessage``, which is a union type."""
+    global _jsonrpc_adapter_cache
+    if _jsonrpc_adapter_cache is None:
+        from mcp.types import JSONRPCMessage
+        from pydantic import TypeAdapter
+
+        _jsonrpc_adapter_cache = TypeAdapter(JSONRPCMessage)
+    return _jsonrpc_adapter_cache
 
 
 def socket_dir() -> Path:
@@ -124,9 +137,9 @@ class _DenyPolicy:
 
     def refuse(self, message: Any) -> bytes | None:
         """The error frame this request is owed, or ``None`` to forward it as-is."""
-        from mcp.types import INVALID_PARAMS, ErrorData, JSONRPCError, JSONRPCMessage, JSONRPCRequest
+        from mcp.types import INVALID_PARAMS, ErrorData, JSONRPCError, JSONRPCRequest
 
-        root = message.root
+        root = message
         if not self._disabled or not isinstance(root, JSONRPCRequest):
             return None
         if root.method == "tools/list":
@@ -138,12 +151,10 @@ class _DenyPolicy:
         if not isinstance(name, str) or not self.denies(name):
             return None
         logger.warning("mcp endpoint: refused disabled tool {!r} on server {!r}", name, self._server)
-        reply = JSONRPCMessage(
-            JSONRPCError(
-                jsonrpc="2.0",
-                id=root.id,
-                error=ErrorData(code=INVALID_PARAMS, message=f"tool {name!r} is disabled by the host"),
-            )
+        reply = JSONRPCError(
+            jsonrpc="2.0",
+            id=root.id,
+            error=ErrorData(code=INVALID_PARAMS, message=f"tool {name!r} is disabled by the host"),
         )
         return reply.model_dump_json(by_alias=True, exclude_none=True).encode() + b"\n"
 
@@ -153,7 +164,7 @@ class _DenyPolicy:
 
         if not self._listing:
             return
-        root = message.root
+        root = message
         if isinstance(root, JSONRPCError) and root.id in self._listing:
             self._listing.discard(root.id)
             return
@@ -177,7 +188,7 @@ class _Upstream:
     server: str
     cfg: Any = field(repr=False)
     transport: str
-    http_auth: httpx.Auth | None = None
+    http_auth: httpx2.Auth | None = None
     resolve_executor: ExecutorProvider | None = None
     disabled_tools: frozenset[str] = frozenset()
 
@@ -215,10 +226,13 @@ async def _upstream_executor(up: _Upstream) -> Any:
 
 
 async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    from mcp.shared.message import SessionMessage
-    from mcp.types import JSONRPCMessage
+    from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+    from mcp.shared.message import ClientMessageMetadata, SessionMessage
+    from mcp.types import JSONRPCRequest, JSONRPCResponse
 
     policy = _DenyPolicy(up.server, up.disabled_tools)
+    initialize_id: str | int | None = None
+    protocol_version: str | None = None
     # One writer, two producers: ``up_to_down`` forwards results and
     # ``down_to_up`` answers a refused call itself. Concurrent ``drain`` on one
     # StreamWriter trips an assertion in the flow-control mixin.
@@ -234,9 +248,10 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
         async with open_mcp_transport(up.cfg, up.transport, executor, http_auth=up.http_auth) as (up_read, up_write):
 
             async def down_to_up() -> None:
+                nonlocal initialize_id, protocol_version
                 async for frame in iter_raw_frames(reader):
                     try:
-                        message = JSONRPCMessage.model_validate_json(frame)
+                        message = _jsonrpc_adapter().validate_json(frame)
                     except ValidationError as exc:
                         # One malformed frame must not take the connection with
                         # it: the SDK's own stdio reader wraps a decode failure
@@ -246,9 +261,18 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                     if (refusal := policy.refuse(message)) is not None:
                         await send_down(refusal)
                         continue
-                    await up_write.send(SessionMessage(message))
+                    if isinstance(message, JSONRPCRequest) and message.method == "initialize":
+                        initialize_id = message.id
+                        protocol_version = None
+                    metadata = (
+                        ClientMessageMetadata(headers={MCP_PROTOCOL_VERSION_HEADER: protocol_version})
+                        if protocol_version is not None
+                        else None
+                    )
+                    await up_write.send(SessionMessage(message, metadata=metadata))
 
             async def up_to_down() -> None:
+                nonlocal initialize_id, protocol_version
                 # The close belongs here rather than after teardown: an upstream
                 # that dies mid-request leaves the sub-agent waiting on a reply
                 # that will never come, and only an EOF on its side turns that
@@ -258,6 +282,12 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         if isinstance(item, Exception):
                             logger.debug("mcp endpoint: upstream stream error: {}", item)
                             continue
+                        message = item.message
+                        if isinstance(message, JSONRPCResponse) and message.id == initialize_id:
+                            version = message.result.get("protocolVersion")
+                            if isinstance(version, str) and version:
+                                protocol_version = version
+                            initialize_id = None
                         policy.redact(item.message)
                         payload = item.message.model_dump_json(by_alias=True, exclude_none=True)
                         await send_down(payload.encode() + b"\n")
@@ -387,7 +417,7 @@ class McpEndpoints:
                 self._executor_memo.append(await provider())
             return self._executor_memo[0] if self._executor_memo else None
 
-    async def open(self, node_id: str, server: str, cfg, http_auth: httpx.Auth | None = None) -> Path | str:
+    async def open(self, node_id: str, server: str, cfg, http_auth: httpx2.Auth | None = None) -> Path | str:
         # No None guard: resolve_transport returns None only for a config naming
         # neither a command nor a url, and resolve_grant already recorded that
         # one as invalid_transport rather than granting it.

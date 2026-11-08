@@ -146,6 +146,8 @@ describe('the dock', () => {
     expect(el('permChip').getAttribute('aria-haspopup')).toBe('true')
     expect(el('permChip').getAttribute('aria-expanded')).toBe('false')
     expect(el('modelChip').getAttribute('aria-haspopup')).toBe('true')
+    expect(el('composerGrip').getAttribute('role')).toBe('separator')
+    expect(el('composerGrip').getAttribute('aria-orientation')).toBe('horizontal')
     expect(ta().getAttribute('rows')).toBe('1')
     expect(ta().placeholder).not.toBe('')
     /* Four things the page is served hidden or disabled: the "+" waits for the
@@ -311,7 +313,7 @@ describe('the dock', () => {
     const box = el('atts')
     expect(box.hidden).toBe(true)
     expect(Array.from(document.querySelector('.dock-in')!.children).map((c) => c.id || c.className)).toEqual([
-      'queued', 'atts', 'field', 'under', 'slashPop',
+      'composerGrip', 'queued', 'atts', 'field', 'under', 'slashPop',
     ])
   })
 })

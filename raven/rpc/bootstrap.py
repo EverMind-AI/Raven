@@ -386,6 +386,10 @@ async def build_rpc_stack(
         # emitter, same routing; without it the announce's reply arrives as an
         # assistant turn nobody visibly asked.
         agent_loop.subagents.set_delivery_sink(emitter.emit)
+        # The host's task board announces each write on the same emitter, so the
+        # page's tasks tab follows the post-turn update without polling.
+        if (task_board := getattr(agent_loop, "task_board", None)) is not None:
+            task_board.set_sink(emitter.emit)
 
         # Backfill the acp capability snapshots at startup: an acp row's
         # statefulness comes from its snapshot, and before this the only writers
@@ -437,6 +441,9 @@ async def build_rpc_stack(
     # turn.send binds a turn's addressee into it and the spine's outlet/sink read
     # it back to tag that turn's events (see build_rpc_spine).
     direct_targets: dict[str, dict[str, str]] = {}
+    # Owned here for the same reason: the spine keeps what each running turn has
+    # measured in it, and turn.cancel reads a stopped turn's reading back.
+    live_usages: dict[str, dict[str, Any]] = {}
     turn_teardown = None
     if agent_loop is not None:
         from raven.core.cron_stack import make_on_cron_job, make_on_session_wake
@@ -459,6 +466,7 @@ async def build_rpc_stack(
             # is not necessarily removing that method.
             approval_responder=approval_responder or approval_broker,
             credential_asker=credential_broker if credential_cards else None,
+            live_usages=live_usages,
         )
         if owns_loop:
             agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -507,6 +515,7 @@ async def build_rpc_stack(
         send_frame=send_frame,
         default_channel=channel,
         ensure_stack=ensure_stack,
+        live_usages=live_usages,
     )
     if agent_loop is not None:
         _lend_settings_writers(agent_loop, dispatcher)

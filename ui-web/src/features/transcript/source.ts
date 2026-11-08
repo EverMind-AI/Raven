@@ -19,11 +19,12 @@ import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
-import { history as drawHistory } from './mount'
+import { history as drawHistory, shownLane } from './mount'
 import { actLabel as storeActLabel } from './store'
+import { bringUp, goTo as goToTurn } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
-import type { HistoryMessage } from './types'
+import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg } from './types'
 
 /* Every delegation verb here is addressed to the conversation on screen, and
    the card that offers it only exists inside one. */
@@ -156,4 +157,60 @@ export function branch(): void {
       toast(t('gui.sess.branched_n', { n: r.message_count || 0 }))
     })
     .catch((e) => toast(t('gui.op.branch_failed', { detail: (e as Error).message || e })))
+}
+
+/* How far a task board step's time may sit from a turn's opening and still
+   name it, for an opening that carries no turn id. One read back from history
+   carries the timestamp the step was keyed by, so it matches exactly; one drawn
+   here without its turn's id carries the browser's clock, which is near only
+   when the browser and the server share a time zone. */
+const TURN_NEAR_MS = 5 * 60 * 1000
+
+/* Where a turn begins: a question someone asked, or a delegated result
+   re-entering, which opens one with no question typed. A message merged into
+   the running turn opens nothing. */
+type Opening = AskData | DeliveredData
+const opens = (seg: Seg): seg is Opening => (seg.kind === 'ask' && !seg.midTurn) || seg.kind === 'sdlv'
+
+/* The answer a turn ended on: the last one between its opening and the next. */
+function replyOf(segs: readonly Seg[], opening: Opening): AnswerData | null {
+  let reply: AnswerData | null = null
+  for (const seg of segs.slice(segs.indexOf(opening) + 1)) {
+    if (opens(seg)) break
+    if (seg.kind === 'answer') reply = seg
+  }
+  return reply
+}
+
+const rowOf = (attr: string, id: number): HTMLElement | null =>
+  document.querySelector<HTMLElement>(`#stage [data-${attr}="${id}"]`)
+
+/* The opening nearest a step's time. When the step names its turn, an opening
+   filed under another turn's id is not it, however near. */
+function nearest(segs: readonly Seg[], turnAt: string, turnId: string | null | undefined): Opening | null {
+  const target = new Date(turnAt).getTime()
+  if (Number.isNaN(target)) return null
+  let best = null as Opening | null
+  for (const seg of segs) {
+    if (!opens(seg) || !seg.at || (turnId && seg.turnId)) continue
+    if (!best || Math.abs(seg.at - target) < Math.abs(best.at - target)) best = seg
+  }
+  return best && Math.abs(best.at - target) <= TURN_NEAR_MS ? best : null
+}
+
+/** Scroll the transcript to what Raven said in the turn a task board step names
+ *  -- by the turn's id where the opening drawn here carries it, else by the
+ *  opening message's timestamp -- to the reply the turn ended on, or where the
+ *  turn begins while it has none; whether that turn was on the stage. */
+export function revealTurnAt(turnAt: string, turnId?: string | null): boolean {
+  const lane = shownLane()
+  if (!lane) return false
+  const best = (turnId ? lane.segs.find((seg): seg is Opening => opens(seg) && seg.turnId === turnId) : undefined)
+    ?? nearest(lane.segs, turnAt, turnId)
+  if (!best) return false
+  const reply = replyOf(lane.segs, best)
+  const row = reply ? rowOf('answer', reply.id) : best.kind === 'sdlv' ? rowOf('delivered', best.id) : null
+  if (row) bringUp(row)
+  else if (best.kind === 'ask') goToTurn(best)
+  return true
 }

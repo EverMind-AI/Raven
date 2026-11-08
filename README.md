@@ -6,7 +6,7 @@
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://arxiv.org/abs/2609.33439"><img src="https://img.shields.io/badge/arXiv-2609.33439-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
   <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-%231%20Paper%20of%20the%20Day-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face #1 Paper of the Day"></a>
-  <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/QHQ2YYp7cH"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FQHQ2YYp7cH%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
@@ -15,6 +15,14 @@
 </div>
 
 <br>
+
+## ❯❯ What's New
+
+### ❯ Multi-Agent Trajectory Observability
+
+**Every agent, every turn, every step — on one timeline.** Raven's new trajectory view renders a running multi-agent session as a live waterfall, from the whole run down to a single step.
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
 
 # What is Raven
 
@@ -203,7 +211,11 @@ Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible A
 
 ## ❯❯ News
 
-- 📣 **2026-09-30** — Raven's technical report is [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439) on Hugging Face.
+- 📣 **2026-09-30** — Raven's technical report reached [**#1 on Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) — daily (2026-09-30), weekly (2026-10-04) and monthly (2026-10-10).
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b"><img src="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b" alt="Three Crowns on Hugging Face: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
 
 ## ❯❯ Quick Start
 

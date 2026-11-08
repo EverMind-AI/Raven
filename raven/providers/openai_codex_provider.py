@@ -1,15 +1,16 @@
 """OpenAI Codex Responses Provider.
 
-LiteLLM owns the credential raven signs in with, but not the request. On the
-pinned 1.85.0 its bridge to this backend raises: the account streams a
-``response.completed`` whose ``output`` is empty, which 1.95.0 rebuilds from the
-``output_item.done`` events and 1.85.0 reports as an unknown response.
+LiteLLM owns the credential raven signs in with, but not the request. The
+provider was written against LiteLLM 1.85.0, whose bridge to this backend raised:
+the account streams a ``response.completed`` whose ``output`` is empty, which
+1.95.0 rebuilds from the ``output_item.done`` events and 1.85.0 reports as an
+unknown response. Whether the pin's 1.108 bridge can carry this traffic is
+untested here; the request path stays ours until it is.
 
-Routing through it also needs the model spelled ``responses/<slug>`` (nothing an
-account offers is in LiteLLM's table, and without a table entry there is no
-bridge), and costs ``prompt_cache_key``, which its allow-list filters out. That
-last one is what ``test_openai_codex_provider`` guards; the rest is a version
-bump away.
+Routing through that bridge also needs the model spelled ``responses/<slug>``
+(nothing an account offers is in LiteLLM's table, and without a table entry
+there is no bridge), and costs ``prompt_cache_key``, which its allow-list
+filters out. That last one is what ``test_openai_codex_provider`` guards.
 """
 
 from __future__ import annotations

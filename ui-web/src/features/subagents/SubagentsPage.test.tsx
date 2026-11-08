@@ -1559,6 +1559,80 @@ describe('subagents island, an instance detail', () => {
     expect(box.value).toBe('第一句,还有第二句')
   })
 
+  /* The stop the direct chat was missing: a turn the reader started from this
+     composer was unstoppable -- the surface had no cancel, and the page's own
+     stop cannot reach a lane it does not name. */
+  it('offers a stop while the instance is answering, addressed to its lane', async () => {
+    const cancelled: Array<[string, string]> = []
+    await openInstance(inst({ handle: 'slow', status: 'completed', resumable: true }), {
+      instanceSend: () => new Promise<void>(() => {}),
+      instanceCancel: async (agent, handle) => { cancelled.push([agent, handle]) },
+    })
+    /* Nothing is running yet, so there is nothing to stop. */
+    expect(document.querySelector('.sasend .go[data-state=stop]')).toBeNull()
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    box.value = 'take your time'
+    await act(async () => {
+      ;(document.querySelector('.sasend .mini') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    const stop = document.querySelector('.sasend .go[data-state=stop]') as HTMLButtonElement
+    expect(stop).toBeTruthy()
+    await act(async () => {
+      stop.click()
+    })
+    /* The (agent, handle) pair is the point: the direct lane is registered
+       under it, and a cancel without the target misses every direct turn. */
+    expect(cancelled).toEqual([['hermes', 'slow']])
+    /* The stopped turn's own error frame settles the chat and takes the stop
+       with it -- the same path a completed turn clears by. */
+    await act(async () => {
+      store.directEvent({ agent: 'hermes', handle: 'slow' }, 'error')
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(document.querySelector('.sasend .go[data-state=stop]')).toBeNull()
+  })
+
+  it('draws no stop on a page whose source cannot cancel', async () => {
+    await openInstance(inst({ handle: 'slow', status: 'completed', resumable: true }), {
+      instanceSend: () => new Promise<void>(() => {}),
+    })
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    box.value = 'take your time'
+    await act(async () => {
+      ;(document.querySelector('.sasend .mini') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    expect(store.directChat('hermes', 'slow').busy).toBe(true)
+    expect(document.querySelector('.sasend .go[data-state=stop]')).toBeNull()
+  })
+
+  it('says why a stop could not be sent', async () => {
+    await openInstance(inst({ handle: 'slow', status: 'completed', resumable: true }), {
+      instanceSend: () => new Promise<void>(() => {}),
+      instanceCancel: async () => {
+        throw new Error('socket dropped')
+      },
+    })
+    const box = document.querySelector('.sasend textarea') as HTMLTextAreaElement
+    box.value = 'take your time'
+    await act(async () => {
+      ;(document.querySelector('.sasend .mini') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      ;(document.querySelector('.sasend .go[data-state=stop]') as HTMLButtonElement).click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(why()).toBe('socket dropped')
+  })
+
   /* One piece of work, two ways in. The conversation's graph card opens a node
      through `openDagNode`; this panel opens its own row. They used to land on
      different screens -- and only one of them had the composer, which is how a

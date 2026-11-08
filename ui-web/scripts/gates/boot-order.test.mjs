@@ -26,7 +26,7 @@ const installText = moduleText('app/install.ts')
    rest of the draw shells. */
 const STEPS = [
   'lookLoad', 'paneLoad', 'setRail', 'sessionDraw', 'sessionOpen',
-  'drawPerm', 'loadTier', 'drawCtx', 'bumpWs', 'drawSettings',
+  'drawPerm', 'loadTier', 'loadEffort', 'drawCtx', 'bumpWs', 'drawSettings',
   'setRuntime', 'goState',
 ]
 
@@ -51,11 +51,14 @@ async function harness(rows = [], { connected = false, selectionOnly = true } = 
       'src/chrome/behaviour/panes': { load: step('paneLoad') },
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/tier': { load: step('loadTier') },
+      'src/state/effort': { load: step('loadEffort') },
       'src/state/ctxChip': { draw: step('drawCtx') },
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },
-      'src/state/rail': { set: step('setRail') },
+      /* `stands` answers the width the step asks about; the harness has no
+         window worth measuring, so the rail stands as it does on a desktop. */
+      'src/state/rail': { set: step('setRail'), stands: () => true },
       'src/state/envChip': { setRuntime: step('setRuntime') },
       'src/state/session/rows': { open: step('sessionOpen'), rows: () => rows },
       'src/state/ws': { bump: step('bumpWs') },
@@ -151,6 +154,20 @@ describe('the page boot order', () => {
 
     expect(calls.map(([name]) => name))
       .toEqual(['holdRail', 'watchNote', 'installPage', 'connect', ...STEPS.filter((n) => n !== 'sessionOpen')])
+  })
+
+  /* The connections hub is warmed at boot, not when its module is opened. All
+     three reads are fire-and-forget: nothing on the first screen reads them,
+     and the agents one carries no probe. */
+  it('warms the connections hub after releasing the rail, without awaiting it', () => {
+    const at = bootText.indexOf('releaseRail()')
+    expect(at).toBeGreaterThan(-1)
+    const after = bootText.slice(at)
+
+    expect(after).toContain('void warmConnections()')
+    expect(after).toContain('void warmAgents()')
+    expect(after).toContain('void machinesStore.load()')
+    expect(after).not.toMatch(/await\s+(warmConnections|warmAgents|machinesStore\.load)\(/)
   })
 
   /* And the queue is written in one place. Two modules could each queue a

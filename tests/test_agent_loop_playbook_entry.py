@@ -146,7 +146,25 @@ async def test_every_origin_records_the_playbook_address(tmp_path):
     )
     await loop._process_message(cron_req, origin=Origin.CRON)
 
-    assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1"} in stub.contexts
+    assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1", "surface": None} in stub.contexts
+
+
+async def test_a_terminal_turn_addresses_its_playbook_runs_to_the_terminal(tmp_path):
+    """The terminal and the page share the ``tui`` channel; a run's result turn is
+    read under the rules of the surface its turn declared."""
+    loop = AgentLoop(provider=_Provider(), workspace=tmp_path, model="fake/default")
+    _stub_edges(loop)
+    stub = _StubPlaybooks()
+    loop._playbooks = stub
+    terminal = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c1", sender_id="u", chat_type=ChatType.DM, surface="tui"),
+        text="run the weekly briefing playbook",
+    )
+
+    await loop._process_message(terminal)
+
+    assert stub.contexts and [c["surface"] for c in stub.contexts] == ["tui"] * len(stub.contexts)
 
 
 def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path) -> None:

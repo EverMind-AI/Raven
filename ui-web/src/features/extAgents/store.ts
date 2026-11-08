@@ -82,6 +82,13 @@ export interface ExtAgentsState {
      a toast that is gone before the reader looks up. Cleared by the next
      write on the same row, whichever way that one goes. */
   failed: Record<string, Failure>
+  /* The model-menu re-reads in flight, by row name, and the last that failed
+     with the server's reason. A read, not a write the reader asked for: it
+     patches the one row's menu in place instead of replacing the roster from a
+     listing, because the picker waiting on it is open inside a sheet a fresh
+     `epoch` would remount and close. */
+  menusBusy: string[]
+  menusFailed: Record<string, string>
   /* What the reader typed into a preset's description before connecting it.
      A preset has no row to write until `subagents.add`, so the text waits
      here and travels with the add. */
@@ -168,6 +175,8 @@ const store = makeStore<ExtAgentsState>({
   loading: false,
   joining: {},
   failed: {},
+  menusBusy: [],
+  menusFailed: {},
   drafts: {},
   stillMissing: [],
   msheet: null,
@@ -209,6 +218,8 @@ export function _resetForTests(waits: { ceilingMs?: number; graceMs?: number } =
   store._resetForTests()
   connectCeilingMs = waits.ceilingMs ?? CONNECT_CEILING_MS
   stopGraceMs = waits.graceMs ?? STOP_GRACE_MS
+  freshMenus.clear()
+  reads = 0
 }
 
 /** A patch, merged into the page's state. */
@@ -257,13 +268,66 @@ const cancelledFrom = (e: unknown): boolean => !!(e as { data?: { cancelled?: un
    the sheet's re-check button is another, and the wizard's agents step a third,
    on its own schedule rather than through page navigation. `rescan` is the
    re-check's alone: see `ExtAgentsSource.load`. */
-export async function load(probe: boolean, rescan = false): Promise<void> {
+export function load(probe: boolean, rescan = false): Promise<void> {
+  return read(probe, rescan, false)
+}
+
+/* The page's rows before the reader opens it: the probe-less list is config and
+   the last recorded verdicts, so it starts no agent process. The page's own
+   open still re-measures behind this; `read`'s sequence is what keeps a slow
+   preload from painting over that fresher answer. A failure here is silent --
+   there is no page to explain it on, and the open will report the same read. */
+export function warm(): Promise<void> {
+  return read(false, false, true)
+}
+
+let reads = 0
+
+/* Menus this page read itself, which a listing already in flight must not paint
+   over: one row's handshake can answer before the roster read that started
+   earlier, and that read carries the menu as it stood before. Kept with the
+   read mark it was taken under, applied to a listing that started no later than
+   the patch, and dropped once a listing that started after it lands -- that one
+   was fetched afterwards, so its menu is the server's record of the same read. */
+type FreshMenu = { atRead: number; models: ExtAgentRow['model_choices']; efforts: ExtAgentRow['effort_choices'] }
+
+const freshMenus = new Map<string, FreshMenu>()
+
+function keepingFreshMenus(rows: ExtAgentRow[], read: number): ExtAgentRow[] {
+  let patched = false
+  const kept = rows.map((row) => {
+    const fresh = freshMenus.get(row.name)
+    if (!fresh || fresh.atRead < read) return row
+    patched = true
+    return { ...row, model_choices: fresh.models, effort_choices: fresh.efforts }
+  })
+  for (const [name, fresh] of freshMenus) if (fresh.atRead < read) freshMenus.delete(name)
+  /* Untouched rows are the very objects the listing answered with: the page
+     compares them by identity to decide what to redraw. */
+  return patched ? kept : rows
+}
+
+async function read(probe: boolean, rescan: boolean, quiet: boolean): Promise<void> {
+  const seq = ++reads
   set({ loading: true })
   try {
     const rows = await source().load(probe, rescan)
-    set({ rows, epoch: get().epoch + 1, loading: false })
+    /* A read that started earlier and landed after a newer one is stale: its
+       rows are the roster as it stood before that newer answer. The newer read
+       owns the table, and it is the one that clears `loading`. */
+    if (seq !== reads) return
+    /* A probe re-measures every row, so a menu note left by an earlier read is
+       news about a measurement this listing has just replaced. */
+    set({
+      rows: keepingFreshMenus(rows, seq),
+      epoch: get().epoch + 1,
+      loading: false,
+      ...(probe ? { menusFailed: {} } : {}),
+    })
   } catch (e) {
+    if (seq !== reads) return
     set({ loading: false })
+    if (quiet) return
     /* Through `failure` like every other rejection here: the rpc client rejects
        with the error frame verbatim, and `String()` on that object is
        "[object Object]" -- not a hard-to-read reason but no reason at all. */
@@ -321,6 +385,12 @@ export async function run(
   opts: { quiet?: boolean } = {},
 ): Promise<Refused | null> {
   let rows = get().rows
+  /* This write's listing is newer than anything a read started before it can
+     answer with, and it is a probe, so those reads are stale the moment it
+     lands. The same mark orders the menus this page read itself (see
+     `freshMenus`): a handshake that answered before this started is not fresher
+     than the listing fetched after it. */
+  const seq = ++reads
   let failedWith: Refused | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
@@ -351,8 +421,23 @@ export async function run(
     rows = await source().load(true).catch(() => get().rows)
   }
   landed = gen
-  const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
+  const next: Partial<ExtAgentsState> = { rows: keepingFreshMenus(rows, seq), epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) next.sheet = renamed
+  /* The row now holds the model, so the waiting pick has done its job. Left
+     behind, it came back when the member was disconnected and folded into the
+     card again, long after the row had moved off that model. */
+  if (!failedWith && op === 'connect' && row && get().picked[row.name]) next.picked = without(get().picked, row.name)
+  /* Every write ends on a probe listing, and a Test is that measurement: the
+     menu note from an earlier failed read is about a row this has just
+     re-measured, so it goes with it. Only on success -- a refused write says
+     nothing about the menu. */
+  if (failedWith === null && row) next.menusFailed = without(get().menusFailed, row.name)
+  /* This write took the sequence above, so a roster read already in flight
+     returns through `read`'s stale guard without clearing `loading` -- it is
+     the read that owns that flag. Nothing else would: the write's own rows are
+     here, so the page is not waiting for anything any more. A read that started
+     after this one is the newer owner and keeps the flag it set. */
+  if (seq === reads) next.loading = false
   set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
@@ -413,7 +498,11 @@ export function connectRow(row: ExtAgentRow): Promise<void> {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
-    const model = get().picked[row.name]
+    const held = get().picked[row.name]
+    /* A pick outlives a menu that has since dropped it -- the handshake is
+       re-measured behind the page -- and the add refuses a model the agent no
+       longer offers. The agent's own default is the better answer. */
+    const model = held && (row.model_choices || []).some(choice => choice.value === held) ? held : ''
     return act(row, 'connect', { ...(description ? { description } : {}), ...(model ? { model } : {}), ...whereArgs(row.name) })
   }
   if (stage === 'stale') return act(row, 'migrate')
@@ -475,6 +564,47 @@ export function setModel(row: ExtAgentRow, model: string, provider?: string): Pr
 
 export function clearModel(row: ExtAgentRow): Promise<void> {
   return act(row, 'model', { clear_model: true })
+}
+
+/* The row's reasoning effort, from the agent's own thought_level menu. Held on
+   the row like the model: a refused pick stays visible with the value to retry. */
+export function setEffort(row: ExtAgentRow, effort: string): Promise<void> {
+  return act(row, 'effort', { effort })
+}
+
+export function clearEffort(row: ExtAgentRow): Promise<void> {
+  return act(row, 'effort', { clear_effort: true })
+}
+
+/* Re-read one row's model menu from its agent's own handshake. The server opens
+   an acp session and never prompts it, so this spends no quota -- which is what
+   lets a picker opening carry it, where a Test must wait for a press.
+
+   The answer patches this one row, and only its menu. It does not go through
+   `run`: that replaces the roster from a listing and bumps `epoch`, which
+   remounts the sheet and closes the picker the reader has open. A failed read
+   leaves the recorded menu in place and is kept on the row, so the picker can
+   say why the list it shows is the old one. */
+export async function refreshMenus(row: ExtAgentRow, opts: { force?: boolean } = {}): Promise<void> {
+  const name = row.name
+  if (get().menusBusy.includes(name)) return
+  set({ menusBusy: [...get().menusBusy, name], menusFailed: without(get().menusFailed, name) })
+  try {
+    const got = await source().refreshMenus(row, !!opts.force)
+    /* The patch below stands until a listing that started after it lands; one
+       already in flight carries the menu as it stood before this answered. */
+    freshMenus.set(name, { atRead: reads, models: got.models, efforts: got.effortChoices })
+    set({
+      rows: get().rows.map((r) =>
+        r.name === name ? { ...r, model_choices: got.models, effort_choices: got.effortChoices } : r,
+      ),
+    })
+    if (!got.ok) set({ menusFailed: { ...get().menusFailed, [name]: got.detail } })
+  } catch (e) {
+    set({ menusFailed: { ...get().menusFailed, [name]: failure(e) } })
+  } finally {
+    set({ menusBusy: get().menusBusy.filter((n) => n !== name) })
+  }
 }
 
 /* What the reader typed for a preset, or nothing. */

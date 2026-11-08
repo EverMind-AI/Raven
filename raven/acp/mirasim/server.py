@@ -30,8 +30,8 @@ cancel is one frame:
 ``session/close``                the session, dropped from this connection
 ``session/delete``               the record, and ``deleteSession`` for the
                                  Mirasim conversation behind it
-``session/set_config_option``    the model the next turn asks for
-``session/set_mode``             the effort the next turn asks for
+``session/set_config_option``    the model, or the reasoning effort, the next turn asks for
+``session/set_mode``             deprecated: the same effort, for a client that read the old menu
 ``_raven/session/steer``         the text queued as a ``prompt``, then
                                  ``steer``-ed into the running turn
 ===============================  ==============================================
@@ -90,6 +90,7 @@ from loguru import logger
 
 from raven.acp.capabilities import ClientCapabilities
 from raven.acp.mirasim.catalog import (
+    EFFORT_OPTION,
     IMAGE_AGENTS,
     MODEL_OPTION,
     STEER_AGENTS,
@@ -99,7 +100,7 @@ from raven.acp.mirasim.catalog import (
     installed_ids,
     read_catalog,
 )
-from raven.acp.mirasim.host import HostAddress, HostConnection, HostUnavailableError, locate_host
+from raven.acp.mirasim.host import HostConnection, HostUnavailableError, Located, locate_hosts
 from raven.acp.mirasim.interactions import (
     PERMISSION,
     Reply,
@@ -261,8 +262,13 @@ class Session:
     mirasim_key: str | None = None
     model: str | None = None
     """The model the client put this session on, or ``None`` for Mirasim's default."""
-    mode: str | None = None
-    """The effort rung the client put this session on, or ``None`` for Mirasim's default."""
+    effort: str | None = None
+    """The effort rung the client put this session on, or ``None`` for Mirasim's default.
+
+    Set through the ``thought_level`` config option, not a session mode: the two
+    were one channel while effort was advertised as modes, and a client could
+    not tell a mode from a reasoning level.
+    """
     mcp_names: tuple[str, ...] = ()
     mcp_noted: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -306,7 +312,7 @@ class MirasimAgent:
         agent: str,
         store: BindingStore,
         emit: Callable[[dict[str, Any]], None],
-        locate: Callable[[], HostAddress | None] = locate_host,
+        locate: Callable[[], Located] = locate_hosts,
     ) -> None:
         self.agent = agent
         self.store = store
@@ -585,7 +591,7 @@ class MirasimAgent:
                 )
             session.cwd = cwd
         session.model = None
-        session.mode = None
+        session.effort = None
         session.mcp_names = _mcp_names(params)
         session.replaying = replaying
         self._remember(session)
@@ -687,37 +693,56 @@ class MirasimAgent:
         return [update for page in reversed(pages) for turn in page for update in replay(turn)]
 
     async def set_config_option(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The model, or the reasoning effort, as the two config options this adapter serves."""
         session = self._session(params)
-        if params.get("configId") != MODEL_OPTION:
-            raise RefusalError(
-                INVALID_PARAMS, f"unknown config option {params.get('configId')!r}; only {MODEL_OPTION!r}"
-            )
+        config_id = params.get("configId")
         value = params.get("value")
         if not isinstance(value, str) or not value:
-            raise RefusalError(INVALID_PARAMS, "the model is a non-empty string")
+            raise RefusalError(INVALID_PARAMS, f"{config_id!r} is a non-empty string")
         catalog = await self.catalog(allow_stale=True)
-        if not _offers(catalog, value):
-            # Read again before refusing: a model added in Mirasim after these
-            # menus were read is one a fresh probe has already offered Raven.
-            catalog = await self.catalog(refresh=True)
-        if not _offers(catalog, value):
-            offered = [entry.id for entry in catalog.models]
-            raise RefusalError(INVALID_PARAMS, f"Mirasim's {catalog.label} has no model {value!r}; it offers {offered}")
-        session.model = value
-        return {"configOptions": catalog.config_options(session.model)}
+        if config_id == MODEL_OPTION:
+            if not _offers(catalog, value):
+                # Read again before refusing: a model added in Mirasim after these
+                # menus were read is one a fresh probe has already offered Raven.
+                catalog = await self.catalog(refresh=True)
+            if not _offers(catalog, value):
+                offered = [entry.id for entry in catalog.models]
+                raise RefusalError(
+                    INVALID_PARAMS, f"Mirasim's {catalog.label} has no model {value!r}; it offers {offered}"
+                )
+            session.model = value
+        elif config_id == EFFORT_OPTION:
+            if not catalog.offers_effort(value):
+                # Read again before refusing, as for a model: menus left unread by
+                # a cold start would refuse every rung until the copy expired.
+                catalog = await self.catalog(refresh=True)
+            if not catalog.offers_effort(value):
+                raise RefusalError(INVALID_PARAMS, f"{value!r} is not one of {[rung for rung, _ in catalog.efforts]}")
+            session.effort = value
+        else:
+            raise RefusalError(
+                INVALID_PARAMS,
+                f"unknown config option {config_id!r}; this adapter serves {MODEL_OPTION!r} and {EFFORT_OPTION!r}",
+            )
+        return {"configOptions": catalog.config_options(session.model, session.effort)}
 
     async def set_mode(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Deprecated alias: an effort rung sent as a session mode.
+
+        Effort is advertised as a ``thought_level`` config option now, and this
+        adapter advertises no modes. A client that read the old menu, or a
+        capability snapshot recorded before the migration, still sends the rung
+        here; accepting it keeps that client working while the menu it reads
+        moves to the option.
+        """
         session = self._session(params)
         mode = _required_text(params, "modeId")
         catalog = await self.catalog(allow_stale=True)
         if not catalog.offers_effort(mode):
-            # Read again before refusing, as for a model: menus left unread by a
-            # cold start would refuse every rung until the copy expired, and the
-            # turns would run on Mirasim's default effort meanwhile.
             catalog = await self.catalog(refresh=True)
         if not catalog.offers_effort(mode):
             raise RefusalError(INVALID_PARAMS, f"{mode!r} is not one of {[rung for rung, _ in catalog.efforts]}")
-        session.mode = mode
+        session.effort = mode
         return {}
 
     async def close_session(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -1313,14 +1338,17 @@ class MirasimAgent:
         apply is left off here and said once, rather than sent and silently ignored.
         """
         rungs = catalog.rungs_for(model)
-        if not session.mode:
+        if not session.effort:
             return catalog.default_effort if catalog.default_effort in rungs else None
-        if session.mode in rungs:
-            return session.mode
-        if (model, session.mode) not in self._effort_skipped:
-            self._effort_skipped.add((model, session.mode))
+        if session.effort in rungs:
+            return session.effort
+        if (model, session.effort) not in self._effort_skipped:
+            self._effort_skipped.add((model, session.effort))
             logger.warning(
-                "Mirasim adapter: {} model {} takes no effort {!r}; it runs on its own", self.agent, model, session.mode
+                "Mirasim adapter: {} model {} takes no effort {!r}; it runs on its own",
+                self.agent,
+                model,
+                session.effort,
             )
         return None
 
@@ -1350,10 +1378,8 @@ class MirasimAgent:
 
     def _state(self, session: Session, catalog: AgentCatalog) -> dict[str, Any]:
         state: dict[str, Any] = {}
-        if options := catalog.config_options(session.model):
+        if options := catalog.config_options(session.model, session.effort):
             state["configOptions"] = options
-        if modes := catalog.modes(session.mode):
-            state["modes"] = modes
         # A menu that is empty because the read failed goes out marked as such,
         # so a prober does not record it as a measurement of no models. Raven's
         # own key under `_meta`, the way every extension here travels: a
@@ -1564,12 +1590,14 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
     if not isinstance(blocks, list) or not blocks:
         raise RefusalError(INVALID_PARAMS, "prompt is a non-empty list of content blocks")
     texts: list[str] = []
+    kinds: list[str] = []
     attachments: list[str] = []
     paths: list[str] = []
     for block in blocks:
         kind = block.get("type") if isinstance(block, dict) else None
         if kind == "text":
             texts.append(_raw(block.get("text")))
+            kinds.append("text")
         elif kind == "image":
             if not images:
                 raise RefusalError(
@@ -1587,6 +1615,7 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
             path = _local_file(uri)
             if path is None:
                 texts.append(f"\n[{_raw(block.get('name')) or 'link'}]({uri})\n")
+                kinds.append("link")
             elif images and (inline := _inline_image(path, _raw(block.get("mimeType")))) is not None:
                 attachments.append(inline)
             else:
@@ -1594,15 +1623,30 @@ def read_prompt(blocks: Any, *, images: bool) -> PromptInput:
         elif kind == "resource" and isinstance(block.get("resource"), dict) and "text" in block["resource"]:
             resource = block["resource"]
             texts.append(f"\n[{_raw(resource.get('uri')) or 'resource'}]\n{_raw(resource.get('text'))}\n")
+            kinds.append("resource")
         else:
             raise RefusalError(
                 INVALID_PARAMS, f"content block {kind!r} is not supported; send text, an image or a resource_link"
             )
-    text = "".join(texts).strip()
+    pieces = [(kind, part) for kind, part in zip(kinds, texts) if part.strip()]
+    joined: list[str] = []
+    for index, (kind, part) in enumerate(pieces):
+        if index and kind == "text" and pieces[index - 1][0] == "text":
+            joined.append("\n\n")
+        joined.append(part)
+    text = "".join(joined).strip()
     if not text and (attachments or paths):
         text = "See the attached files."
-    if not text:
+    if not text.strip():
         raise RefusalError(INVALID_PARAMS, "the prompt carries no text")
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        raise RefusalError(
+            INVALID_PARAMS, "the prompt carries an unpaired surrogate, which cannot be sent to the host"
+        ) from None
+    if "\x00" in text:
+        raise RefusalError(INVALID_PARAMS, "the prompt carries a NUL byte")
     return PromptInput(text=text, attachments=tuple(attachments), paths=tuple(paths))
 
 
@@ -1657,7 +1701,7 @@ async def serve(
     *,
     agent: str,
     store: BindingStore,
-    locate: Callable[[], HostAddress | None] = locate_host,
+    locate: Callable[[], Located] = locate_hosts,
 ) -> None:
     """Serve ACP on one reader/writer pair until the client closes stdin."""
 
@@ -1696,7 +1740,7 @@ The caller (``INSTALLED_NO_HOST_EXIT`` in ``raven.agent.subagent.mirasim_presets
 installed: every handshake would fail on the same missing host."""
 
 
-async def _print_installed(locate: Callable[[], HostAddress | None] = locate_host) -> int:
+async def _print_installed(locate: Callable[[], Located] = locate_hosts) -> int:
     """``--installed``: the agents the running host has installed, for a caller deciding which are worth a handshake."""
     host = HostConnection(on_frame=lambda frame: None, locate=locate)
     try:

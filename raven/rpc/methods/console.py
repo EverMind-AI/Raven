@@ -25,7 +25,7 @@ from pydantic.alias_generators import to_snake
 
 from raven.config.env_file import MIRRORED_KEYS, refresh_env_file
 from raven.config.keys import key_as_written as _as_written
-from raven.config.schema import WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
+from raven.config.schema import REASONING_EFFORTS, WEB_VENDOR_ENV_VARS, WebFetchProvider, WebSearchProvider
 from raven.rpc import LOCAL_CHANNEL
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.files import UPLOAD_DIR as _UPLOAD_DIR
@@ -485,7 +485,7 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
     old_id = str(params.get("id") or "")
     previous = next((j for j in svc.list_jobs(include_disabled=True) if j.id == old_id), None) if old_id else None
     try:
-        job = svc.add_job(
+        res = svc.add_job_with_outcome(
             name=name,
             schedule=schedule,
             message=message,
@@ -500,7 +500,7 @@ async def cron_save(params: dict, *, agent_loop_factory=None) -> dict:
         )
     except ValueError as e:
         raise ConfigValidationError(str(e)) from None
-    return {"job": _job_info(job)}
+    return {"job": _job_info(res.job), "outcome": res.outcome}
 
 
 async def cron_delete(params: dict, *, agent_loop_factory=None) -> dict:
@@ -615,6 +615,54 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
+_SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
+# Finishing the web wizard turns the source on, and no screen on the way says
+# what that sends; the page shows the answer as a toast.
+_SKILL_HUB_ON_NOTICE = (
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation "
+    "to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+_SKILL_HUB_ON_RELOAD_NOTICE = (
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends "
+    "text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+
+
+def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
+    """Whether the source reads on while the loop serving now cannot search.
+
+    A loop builds its Hub client from the endpoint it started with, and only
+    the endpoint is fixed there: ``enabled`` is read live. So the wait is a
+    property of that loop, not of the write that ended it -- a later switch-on
+    finds the endpoint already written and the loop still without a client.
+    No loop at all is no wait, because the first one is built from this file.
+    """
+    if not on or agent_loop_factory is None:
+        return False
+    try:
+        loop = agent_loop_factory()
+    except Exception:  # noqa: BLE001 - the stack raises its build error: nothing is serving
+        return False
+    return loop is not None and getattr(loop, "_skill_hub_client", None) is None
+
+
+def _skill_hub_reply(previous: Any, agent_loop_factory: Any, *, seeded: bool = False) -> dict[str, Any]:
+    """A Skill Hub write's answer: what a seed that left the source on sends,
+    and whether the serving loop cannot search yet."""
+    from raven.config.live import skill_hub_on
+    from raven.config.loader import get_config_path, read_raw_or_raise
+    from raven.i18n import t
+
+    on = skill_hub_on(read_raw_or_raise(get_config_path()))
+    waits = _skill_hub_awaits_reload(on, agent_loop_factory)
+    reply: dict[str, Any] = {"applied": True, "previous": previous}
+    if seeded and on:
+        reply["warning"] = t(_SKILL_HUB_ON_RELOAD_NOTICE if waits else _SKILL_HUB_ON_NOTICE)
+    elif waits:
+        reply["warning"] = t(_SKILL_HUB_RELOAD_WARNING)
+    return reply
+
+
 def _mask_secrets(node: Any, key_hint: str = "") -> Any:
     if isinstance(node, dict):
         return {k: _mask_secrets(v, k) for k, v in node.items()}
@@ -628,6 +676,7 @@ def _mask_secrets(node: Any, key_hint: str = "") -> Any:
 async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     from importlib.metadata import version as pkg_version
 
+    from raven.config.live import skill_hub_on
     from raven.config.loader import get_config_path, read_raw_or_raise
 
     path = get_config_path()
@@ -639,7 +688,17 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         ver = pkg_version("raven")
     except Exception:
         ver = "unknown"
-    return {"settings": _mask_secrets(raw), "config_path": str(path), "raven_version": ver}
+    # Answered here rather than left to the page: the runtime reads the file
+    # through the loader's migrations and its boolean rules, and a copy of
+    # either in the page drifts from it.
+    hub_on = skill_hub_on(raw)
+    return {
+        "settings": _mask_secrets(raw),
+        "config_path": str(path),
+        "raven_version": ver,
+        "skill_hub_on": hub_on,
+        "skill_hub_awaiting_reload": _skill_hub_awaits_reload(hub_on, agent_loop_factory),
+    }
 
 
 async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
@@ -701,6 +760,31 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         else:
             disable_channel(name)
         return {"applied": True, "previous": not value}
+
+    if key == "skillForge.router.hub.enabled":
+        if not isinstance(value, bool):
+            raise ConfigValidationError("enabled must be a boolean")
+        from raven.config.update import set_skill_hub_enabled
+
+        try:
+            change = set_skill_hub_enabled(value)
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        return _skill_hub_reply(change.previous, agent_loop_factory)
+
+    if key == "skillForge.router.hub.init":
+        # The web wizard's finish. It seeds the endpoint the way the CLI
+        # onboarding does -- never re-enabling a config that turned the source
+        # off -- because the wizard is the page's only opt-in moment.
+        if value is not True:
+            raise ConfigValidationError("init takes true")
+        from raven.config.update import initialize_skill_hub_endpoint
+
+        try:
+            seeded = initialize_skill_hub_endpoint()
+        except ValueError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        return _skill_hub_reply(None, agent_loop_factory, seeded=seeded is not None)
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
@@ -1053,6 +1137,16 @@ def _chk_int_or_null(key: str, lo: int, hi: int):
     return chk
 
 
+def _chk_enum_or_null(key: str, *allowed: Any):
+    """An enum a surface may also clear: null takes the key back to its default."""
+    inner = _chk_enum(key, *allowed)
+
+    def chk(v: Any) -> Any:
+        return None if v is None else inner(v)
+
+    return chk
+
+
 _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.exec.timeout": _chk_int("tools.exec.timeout", 5, 3600),
     "tools.web.search.apiKey": _chk_str("tools.web.search.apiKey", 200),
@@ -1094,7 +1188,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "embedding": _chk_pin_pair("embedding", "model", "provider"),
     "vision": _chk_pin_pair("vision", "model", "provider"),
     "agents.defaults.enablePersonalization": _chk_bool("agents.defaults.enablePersonalization"),
-    "agents.defaults.reasoningEffort": _chk_enum("agents.defaults.reasoningEffort", "minimal", "low", "medium", "high"),
+    # Clearable: null hands the choice back to the provider's own default,
+    # which is what an unset key means and what the settings page offers.
+    "agents.defaults.reasoningEffort": _chk_enum_or_null("agents.defaults.reasoningEffort", *REASONING_EFFORTS),
     "permissions.mode": _chk_enum("permissions.mode", "ask", "smart", "full"),
     "agents.defaults.maxToolIterations": _chk_int("agents.defaults.maxToolIterations", 1, 200),
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),

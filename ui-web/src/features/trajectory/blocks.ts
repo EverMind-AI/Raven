@@ -24,6 +24,7 @@ const BLOCK_TITLES: Record<string, string> = {
   tools: 'gui.trajectory.block.tools',
   request: 'gui.trajectory.block.request',
   thinking: 'gui.trajectory.block.thinking',
+  reasoning: 'gui.trajectory.block.reasoning',
   thinkingBlocks: 'gui.trajectory.block.thinkingBlocks',
   toolCalls: 'gui.trajectory.block.toolCalls',
   finish: 'gui.trajectory.block.finish',
@@ -53,6 +54,7 @@ const BLOCK_TITLES: Record<string, string> = {
   contribution: 'gui.trajectory.block.contribution',
   transcript: 'gui.trajectory.block.transcript',
   frames: 'gui.trajectory.block.frames',
+  replay: 'gui.trajectory.block.replay',
   attributes: 'gui.trajectory.block.attributes',
   error: 'gui.trajectory.block.error',
   timing: 'gui.trajectory.block.timing',
@@ -119,6 +121,7 @@ const REASON: Record<string, string> = {
   artifact_unreadable: 'gui.trajectory.reason.artifact_unreadable',
   artifact_outside_store: 'gui.trajectory.reason.artifact_outside_store',
   artifact_truncated: 'gui.trajectory.reason.artifact_truncated',
+  reasoning_withheld: 'gui.trajectory.reason.reasoning_withheld',
 }
 
 export const reasonKey = (code: string): string | null => REASON[code] ?? null
@@ -164,8 +167,7 @@ const EVIDENCE: Record<string, string> = {
 
 export const evidenceKey = (code: string): string | null => EVIDENCE[code] ?? null
 
-/* What the timing tab says about the charge: one sentence per basis, the
-   same three the duration bar's hover will read. */
+/* What the timing tab says about the charge: one sentence per basis. */
 const BASIS: Record<string, string> = {
   zero: 'gui.trajectory.basis.zero',
   span_full: 'gui.trajectory.basis.span_full',

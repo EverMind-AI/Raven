@@ -32,6 +32,7 @@ import difflib
 import json
 import re
 from collections.abc import Awaitable, Callable
+from types import SimpleNamespace
 from typing import Any
 
 from loguru import logger
@@ -258,7 +259,7 @@ def _what_it_needs(
     machine's id -- but a sign-in or an install is the user's, in a terminal of
     their own on it.
     """
-    from raven.agent.subagent.presets import DIAGNOSE_HINTS
+    from raven.agent.subagent.presets import diagnose_hint_for
 
     if machine:
         lines = [
@@ -293,7 +294,7 @@ def _what_it_needs(
             "one; the user confirms. Then retry."
         ]
     else:
-        run = DIAGNOSE_HINTS.get(preset)
+        run = diagnose_hint_for(SimpleNamespace(preset=preset, model=row.get("model")))
         lines = [
             f"- Run `{run}` with exec; it prints the answer its model provider gave."
             if run
@@ -639,7 +640,7 @@ class RavenConfigTool(Tool):
     def _setting_line(
         self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None, *, detail: bool
     ) -> str:
-        value = self._value_view(raw, setting, path, roles)
+        value = self._stored_view(raw, setting, path, roles)
         if isinstance(value, dict) and set(value) == {"default"}:
             default = value["default"]
             if default in (None, "", [], {}) and setting.unset_means:
@@ -650,6 +651,8 @@ class RavenConfigTool(Tool):
                 shown = f"{_compact(default)} (default)"
         else:
             shown = _compact(value)
+        if setting.in_effect is not None:
+            shown += f", in effect: {_compact(setting.in_effect(raw))}"
         line = f"  {path} = {shown} [{self._meta(setting)}] {setting.summary}"
         if shown.startswith("not set") and (missing := _media_needs(raw, path)):
             line += f"; {missing}"
@@ -882,6 +885,13 @@ class RavenConfigTool(Tool):
         return _dump({path: self._value_view(raw, found[0], path, roles)})
 
     def _value_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None = None) -> Any:
+        view = self._stored_view(raw, setting, path, roles)
+        if setting.in_effect is None:
+            return view
+        stored = view if isinstance(view, dict) and set(view) == {"default"} else {"value": view}
+        return stored | {"in_effect": setting.in_effect(raw)}
+
+    def _stored_view(self, raw: dict[str, Any], setting: Setting, path: str, roles: dict[str, Any] | None) -> Any:
         if setting.session:
             now = self._conversation_model()
             return now if now is not None else "unknown outside a conversation"
@@ -965,8 +975,8 @@ class RavenConfigTool(Tool):
             present, _ = surface.lookup(await asyncio.to_thread(surface.read_raw), instance)
             if not present:
                 raise LookupError(f"{instance} is not configured; describe {setting.path.split('.*')[0]} first")
-        previous = await self._write(setting, path, bound, value)
-        return self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value)
+        previous, warning = await self._write(setting, path, bound, value)
+        return self._report(path, setting.effect, previous, value, warning=warning) + self._unknown_tools(path, value)
 
     async def _set_many(self, changes: dict[str, Any]) -> str:
         """Several settings under the one confirmation the user already gave.
@@ -1017,8 +1027,11 @@ class RavenConfigTool(Tool):
                 if setting.secret:
                     lines.append(await self._secret_outcome(path, setting, value))
                     continue
-                previous = await self._write(setting, path, bound, value)
-                lines.append(self._report(path, setting.effect, previous, value) + self._unknown_tools(path, value))
+                previous, warning = await self._write(setting, path, bound, value)
+                lines.append(
+                    self._report(path, setting.effect, previous, value, warning=warning)
+                    + self._unknown_tools(path, value)
+                )
             for name, fields in channels.items():
                 lines.append(await self._set_channel_fields(name, fields))
             for path, value in agents:
@@ -1064,13 +1077,21 @@ class RavenConfigTool(Tool):
         model, own = self._session_model(conversation)
         return model if own else f"{model} (the default)"
 
-    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> Any:
+    async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> tuple[Any, str]:
+        """Write through the setting's owner: ``(previous, warning)``.
+
+        The warning is the owner's own sentence for a write that costs more than
+        the value -- a reload the serving process still owes -- and is empty
+        when it has nothing to add.
+        """
         writer = setting.writer
         if writer == "raw":
-            return await asyncio.to_thread(surface.write_value, path, value)
+            return await asyncio.to_thread(surface.write_value, path, value), ""
         if writer == "settings":
             result = await self._rpc("settings.set", {"key": path, "value": value})
-            return result.get("previous") if isinstance(result, dict) else None
+            previous = result.get("previous") if isinstance(result, dict) else None
+            warning = result.get("warning") if isinstance(result, dict) else None
+            return previous, str(warning) if warning else ""
         if writer == "config.model":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1082,7 +1103,7 @@ class RavenConfigTool(Tool):
                     raise ValueError("session.model needs a conversation; this call is not part of one")
                 params |= {"scope": "session", "session_id": conversation}
             result = await self._rpc("config.set", params)
-            return result.get("previous") if isinstance(result, dict) else None
+            return (result.get("previous") if isinstance(result, dict) else None), ""
         if writer == "everos":
             model, provider = self._model_ref(value)
             if not provider:
@@ -1091,11 +1112,11 @@ class RavenConfigTool(Tool):
             await self._rpc(
                 "settings.everos_set", {"section": path.rsplit(".", 1)[1], "model": model, "provider": provider}
             )
-            return previous
+            return previous, ""
         if writer == "model.fields":
             result = await self._rpc("model.set_fields", {"slug": bound[0], "fields": {"api_base": value}})
             previous = result.get("previous") if isinstance(result, dict) else None
-            return previous.get("api_base") if isinstance(previous, dict) else previous
+            return (previous.get("api_base") if isinstance(previous, dict) else previous), ""
         raise ValueError(f"{path} has no writer in this process")
 
     async def _unset(self, path: str) -> str:
@@ -1282,7 +1303,7 @@ class RavenConfigTool(Tool):
                     row = row | {"model_choices": [{"value": m} for m in refusal["models"]]}
                 needs = _what_it_needs(
                     str(params.get("preset") or ""),
-                    row,
+                    row | {"model": params.get("model") or row.get("model")},
                     remedy=remedy if isinstance(remedy, dict) else None,
                     detail=text,
                     model=f"add with {json.dumps(again, ensure_ascii=False)}",
@@ -1368,7 +1389,7 @@ class RavenConfigTool(Tool):
 
     # -- helpers ---------------------------------------------------------------
 
-    def _report(self, path: str, effect: Effect, previous: Any, value: Any) -> str:
+    def _report(self, path: str, effect: Effect, previous: Any, value: Any, *, warning: str = "") -> str:
         line = (
             f"Set {path}: {json.dumps(previous, ensure_ascii=False, default=str)} -> "
             f"{json.dumps(value, ensure_ascii=False, default=str)}. It {EFFECT_TEXT[effect]}."
@@ -1379,6 +1400,8 @@ class RavenConfigTool(Tool):
                 f" Pending until {'a restart' if effect is Effect.RESTART else 'a reload'}: "
                 f"{sorted(self._pending)}. Batch further changes first, then call restart once."
             )
+        if warning:
+            line += f" {warning}"
         return line
 
     def _unknown_tools(self, path: str, value: Any) -> str:

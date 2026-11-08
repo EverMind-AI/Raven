@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../../i18n/t'
-import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindLabels, kindSlug } from './palette'
+import { KNOWN_KINDS, NAMED_KINDS, kindClass, kindKey, kindLabel, kindSlug, toolLabel } from './palette'
 
 const catalogue = (): Record<string, { en: string; zh: string }> =>
   (JSON.parse(readFileSync('../i18n/messages.json', 'utf8') as string) as { ui: Record<string, { en: string; zh: string }> }).ui
@@ -65,13 +65,6 @@ describe('the kind palette', () => {
     }
   })
 
-  it('marks a sub-agent row with the bullet character, not a backslash and its code', () => {
-    const sheet = readFileSync('src/features/trajectory/styles.css', 'utf8') as string
-    const rule = sheet.split('\n').find((line) => line.startsWith('.trajectory-turn-sub::after'))
-    expect(rule).toContain("content: '\\2022'")
-    expect(rule).not.toContain("content: '\\\\2022'")
-  })
-
   it('labels through the translator, naming the raw kind only where it has no word', () => {
     setTranslator((key) => `<${key}>`)
     try {
@@ -80,10 +73,21 @@ describe('the kind palette', () => {
       expect(kindLabel('subagent.external.usage')).toBe('<gui.trajectory.kind.subagent_external>')
       expect(kindLabel('weird.thing.summary')).toBe('<gui.trajectory.kind.summary>')
       expect(kindLabel('artifact:custom')).toBe('artifact:custom')
-      expect(new Set(kindLabels()).size).toBe(kindLabels().length)
-      expect(kindLabels()).toContain('<gui.trajectory.kind.summary>')
     } finally {
       resetTranslator()
     }
   })
+})
+
+it('names a tool kind an external agent reports in the page’s language, and leaves a tool’s own name as it is', () => {
+  /* ACP reports a call's kind from a closed set; a tool's own name (exec,
+     read_file) is an identifier the model called, and stays one. */
+  setTranslator((key) => `<${key}>`)
+  try {
+    const kinds = ['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode', 'other']
+    expect(kinds.map(toolLabel)).toEqual(kinds.map((kind) => `<gui.trajectory.tool.${kind}>`))
+    expect([toolLabel('exec'), toolLabel('read_file'), toolLabel('bash')]).toEqual(['exec', 'read_file', 'bash'])
+  } finally {
+    resetTranslator()
+  }
 })

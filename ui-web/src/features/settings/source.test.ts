@@ -33,7 +33,7 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) }, SESS_CHANNELS: ['tui', 'cron'] },
       'src/state/banner': { draw: () => {} },
       'src/state/perm': { setFromConfig: (v: string) => { permWrites.push(v) } },
-      'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick }) },
+      'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick, effort: null }) },
       'src/lib/session': { current: () => sessionId },
       'src/features/model/source': { showModel: (m: string) => { chipWrites.push(m) } },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
@@ -73,6 +73,14 @@ describe('settings source', () => {
       ['model.fetch_models', { slug: 'openrouter', verify: true }],
       ['model.fetch_models', { slug: 'openrouter' }],
     ])
+  })
+
+  it('asks check_key about a key before it is stored, with the fields the form sent', async () => {
+    const mod = await load({ 'model.check_key': { ok: false, status: 'invalid_key', http_status: 401, refused: true } })
+    const verdict = await mod.settingsSource.checkKey('openrouter', { api_key: 'sk-or-never-issued' })
+    expect(verdict.refused).toBe(true)
+    expect(seen).toEqual([['model.check_key', { slug: 'openrouter', api_key: 'sk-or-never-issued' }]])
+    expect(toasts).toEqual([])
   })
 
   it('reads one provider\'s saved key back on request, and null when it keeps none', async () => {
@@ -136,6 +144,29 @@ describe('settings source', () => {
     await mod.loadSettings()
     expect(mod.settingsSnapshot().model).toBe('deepseek/pro')
     expect(chipWrites).toEqual([])
+  })
+
+  it('the Skill Hub state is the server answer, not a reading of the raw file', async () => {
+    /* The raw file names no Hub here, yet the loader nests a legacy top-level
+       router under skillForge, so the runtime searches it: only the server can
+       say so, and the snapshot carries its word. */
+    const settings = { skillRouter: { hub: { endpoint: 'https://hub.internal.test' } } }
+    const on = await load({
+      'settings.get': { settings, config_path: '/c.json', skill_hub_on: true, skill_hub_awaiting_reload: true },
+    })
+    await on.loadSettings()
+    expect(on.settingsSnapshot().skillHub).toEqual({ on: true, awaitingReload: true })
+
+    const off = await load({
+      'settings.get': {
+        settings: { skillForge: { router: { hub: { endpoint: 'https://h.test' } } } },
+        config_path: '/c.json',
+        skill_hub_on: false,
+        skill_hub_awaiting_reload: false,
+      },
+    })
+    await off.loadSettings()
+    expect(off.settingsSnapshot().skillHub).toEqual({ on: false, awaitingReload: false })
   })
 
   it('a draft that picked a mode keeps it when the chip is re-read', async () => {

@@ -202,6 +202,7 @@ def _concrete_provider_subclasses() -> set[type]:
     import raven.providers.minimax_oauth_provider  # noqa: F401
     import raven.providers.openai_codex_provider  # noqa: F401
     import raven.providers.per_model_provider  # noqa: F401
+    import raven.providers.relay_provider  # noqa: F401
 
     seen: set[type] = set()
     stack = list(LLMProvider.__subclasses__())
@@ -220,7 +221,7 @@ def _concrete_provider_subclasses() -> set[type]:
     return seen
 
 
-def test_exactly_seven_concrete_backend_classes() -> None:
+def test_exactly_these_concrete_backend_classes() -> None:
     # This asserts class existence only, not the dispatch wiring.
     from raven.providers.anthropic_messages_provider import AnthropicMessagesProvider
     from raven.providers.azure_openai_provider import AzureOpenAIProvider
@@ -230,6 +231,7 @@ def test_exactly_seven_concrete_backend_classes() -> None:
     from raven.providers.openai_codex_provider import OpenAICodexProvider
     from raven.providers.openai_responses_provider import OpenAIResponsesProvider
     from raven.providers.per_model_provider import PerModelProvider
+    from raven.providers.relay_provider import RelayProvider
     from raven.providers.resolving_provider import ResolvingProvider
 
     expected = {
@@ -247,6 +249,9 @@ def test_exactly_seven_concrete_backend_classes() -> None:
         # the LiteLLM chat path (providers.<slug>.protocol / modelProtocols).
         OpenAIResponsesProvider,
         AnthropicMessagesProvider,
+        # The LiteLLM chat path when the host that launched this agent makes its
+        # calls (the LLM relay): built in LiteLLMProvider's place by the factory.
+        RelayProvider,
     }
     assert _concrete_provider_subclasses() == expected
     for cls in expected:
@@ -764,3 +769,23 @@ def test_the_qwen_vendor_is_shelved_under_the_cloud_that_runs_it() -> None:
     from raven.providers.registry import find_by_model
 
     assert find_by_model("dashscope/qwen-plus") is spec
+
+
+def test_describe_carries_the_overlay_effort_levels() -> None:
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    row = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["low", "high"]))
+    assert row.reasoning_efforts == ("low", "high")
+
+
+def test_describe_drops_an_overlay_word_outside_the_ladder() -> None:
+    """The config file accepts any string; the label must state only words the
+    build can send, or the picker and the model table disagree."""
+    from raven.config.schema import ModelOverlay
+    from raven.providers.catalog import describe
+
+    mixed = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["high", "Turbo"]))
+    assert mixed.reasoning_efforts == ("high",)
+    invalid = describe("hosted_vllm", "mine", overlay=ModelOverlay(reasoning_efforts=["High"]))
+    assert invalid.reasoning_efforts == ()

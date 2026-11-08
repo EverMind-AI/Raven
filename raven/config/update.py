@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,15 +20,16 @@ from loguru import logger
 from pydantic.alias_generators import to_camel
 
 from raven.config.keys import key_as_written
+from raven.config.live import skill_hub_on
 from raven.config.loader import get_config_path, read_raw_or_raise
 from raven.config.schema import CronConfig
 from raven.utils.atomic_io import atomic_update
 
-# Shared Skill Hub endpoint seeded into a fresh config's skillForge.router.hub.
-# Kept here (not as the HubSourceConfig schema default) so non-onboard /
-# programmatic loads stay Hub-disabled until a config opts in, while an
-# onboarded config shows the live endpoint. apiKey is NOT seeded — the user
-# supplies their own Bearer token.
+# Shared Skill Hub endpoint seeded into an onboarded config's
+# skillForge.router.hub. Kept here (not as the HubSourceConfig schema default)
+# so non-onboard / programmatic loads stay Hub-disabled until a config opts in,
+# while an onboarded config shows the live endpoint. apiKey is NOT seeded — the
+# user supplies their own Bearer token.
 _DEFAULT_SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
 
 
@@ -271,6 +273,120 @@ def set_skill_blocked(
             name,
         )
     return current
+
+
+def _skill_hub_block(data: dict[str, Any]) -> dict[str, Any]:
+    """The ``hub`` table the loader reads the Skill Hub from, creating missing levels.
+
+    Every skill-hub writer goes through this so they agree on the two edge
+    cases: a null top-level block means "unset" (the loader drops it), while a
+    null ``router`` or ``hub`` is a schema violation and is refused rather
+    than repaired. A file spelling the block ``skill_forge`` is updated in
+    place rather than gaining a second camelCase block beside it.
+
+    A legacy top-level ``skillRouter`` is the router while the ``skillForge``
+    block has none of its own: the loader nests it there in memory and never
+    writes the move back, so creating ``skillForge.router`` instead would hide
+    it -- endpoint and key included -- from the next load.
+    """
+    sf_key = key_as_written(data, "skillForge", top_level=True)
+    section = data.get(sf_key)
+    if section is not None and not isinstance(section, dict):
+        raise ValueError(f"{sf_key} must be an object or null")
+    legacy_key = key_as_written(data, "skillRouter", top_level=True)
+    if data.get(legacy_key) is not None and (section is None or "router" not in section):
+        router, where = data[legacy_key], legacy_key
+    else:
+        if section is None:
+            section = data[sf_key] = {}
+        if "router" not in section:
+            section["router"] = {}
+        router, where = section["router"], f"{sf_key}.router"
+    if not isinstance(router, dict):
+        raise ValueError(f"{where} must be an object")
+    if "hub" not in router:
+        router["hub"] = {}
+    hub = router["hub"]
+    if not isinstance(hub, dict):
+        raise ValueError(f"{where}.hub must be an object")
+    return hub
+
+
+def initialize_skill_hub_endpoint(*, config_path: Path | None = None) -> str | None:
+    """Seed ``skillForge.router.hub.endpoint`` into an onboarded config.
+
+    Returns the endpoint it wrote, or ``None`` when the config already names
+    one (an explicit null included — that is how a user keeps the Hub off
+    across a repeat onboard).
+
+    The schema default is ``None`` on purpose, so a programmatic or
+    non-onboarded load stays Hub-disabled until a config opts in. Both
+    onboarding wizards (the CLI bootstrap and the web wizard's finish) are that
+    opt-in; the settings switch (:func:`set_skill_hub_enabled`) is the other
+    writer. ``apiKey`` is left absent for the user's own Bearer token.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str | None, str | None]:
+        data = read_raw_or_raise(path)
+        hub = _skill_hub_block(data)
+        if "endpoint" in hub:
+            return None, None
+        hub["endpoint"] = _DEFAULT_SKILL_HUB_ENDPOINT
+        return json.dumps(data, indent=2, ensure_ascii=False), _DEFAULT_SKILL_HUB_ENDPOINT
+
+    endpoint = atomic_update(path, _apply)
+    if endpoint is not None:
+        logger.info("config/update: seeded skillForge.router.hub.endpoint = {!r}", endpoint)
+    return endpoint
+
+
+@dataclass(frozen=True)
+class SkillHubSwitch:
+    """What a switch write changed.
+
+    ``previous`` is the effective state before the write, as the runtime reads
+    it. ``seeded_endpoint`` says whether turning it on had to add the shared
+    URL; whether a running loop can search with it is that loop's question.
+    """
+
+    previous: bool
+    seeded_endpoint: bool
+
+
+def set_skill_hub_enabled(enabled: bool, *, config_path: Path | None = None) -> SkillHubSwitch:
+    """Turn the conversational Skill Hub source on or off.
+
+    On writes the shared endpoint when the block has none — an existing URL,
+    custom ones included, is kept, so the switch never discards an operator's
+    endpoint. Off records ``enabled: false`` and leaves the URL in place, so
+    turning it back on restores the same one.
+
+    Both directions are read live by a running loop that started with an
+    endpoint; a loop that started without one has no Hub client until a
+    reload, and the RPC says so.
+    """
+    path = config_path or get_config_path()
+
+    def _apply(_text: str | None) -> tuple[str, SkillHubSwitch]:
+        data = read_raw_or_raise(path)
+        previous = skill_hub_on(data)
+        hub = _skill_hub_block(data)
+        endpoint = hub.get("endpoint")
+        seeded = enabled and not (isinstance(endpoint, str) and endpoint)
+        hub["enabled"] = enabled
+        if seeded:
+            hub["endpoint"] = _DEFAULT_SKILL_HUB_ENDPOINT
+        return json.dumps(data, indent=2, ensure_ascii=False), SkillHubSwitch(previous, seeded)
+
+    change = atomic_update(path, _apply)
+    logger.info(
+        "config/update: skill hub source switched {} (was {}){}",
+        "on" if enabled else "off",
+        change.previous,
+        " and seeded the endpoint" if change.seeded_endpoint else "",
+    )
+    return change
 
 
 def set_language(
@@ -874,6 +990,9 @@ __all__ = [
     "set_memory_backend",
     "set_skill_blocked",
     "set_playbook_disabled",
+    "initialize_skill_hub_endpoint",
+    "SkillHubSwitch",
+    "set_skill_hub_enabled",
     "initialize_a2a_server",
     "set_a2a_server_enabled",
 ]

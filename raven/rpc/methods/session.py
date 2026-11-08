@@ -29,15 +29,22 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from contextlib import suppress
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent import session_effort
+from raven.agent.task_board.board import board_to_dict, drop_turns
+from raven.agent.task_board.dispatches import dag_run_id_of, spawn_task_id_of
+from raven.agent.task_board.service import remove_unheard, reset_for
+from raven.agent.task_board.store import copy_board, load_board, save_board
 from raven.config.loader import drain_migration_notices, load_config, raven_home
 from raven.config.raven import load_raven_config
+from raven.config.schema import REASONING_EFFORTS
+from raven.providers import effort_levels
+from raven.providers.overlay import declared_for
 from raven.providers.rates import resolve_context_window
 from raven.providers.usage import reported_cost, token_count
 from raven.rpc.errors import (
@@ -73,6 +80,11 @@ AgentLoopFactory = Callable[[], "AgentLoop | None"]
 # walks site-packages dist-info on every call. system._raven_version()
 # already guards PackageNotFoundError for source-checkout environments.
 _RAVEN_VERSION = _raven_version()
+
+
+def _task_board(agent_loop: Any) -> Any:
+    """The host's task board service, when the loop up is one that keeps a board."""
+    return getattr(agent_loop, "task_board", None) if agent_loop is not None else None
 
 
 def _safe_invoke_factory(
@@ -274,6 +286,9 @@ async def _default_session_info(
         # through turn.send's bookkeeping, and it is as much in flight as a
         # typed one.
         "running": bool(session_key) and turn_module.is_session_answering(session_key),
+        # What this session's own calls think at, for the status bar beside the
+        # model: its own pick, else what it would run at without one.
+        "reasoning_effort": _effort_in_force(agent_loop, config, session_key, model_id),
     }
 
     # Nudge the status bar to run `raven upgrade` when the cached latest release
@@ -293,21 +308,6 @@ async def _default_session_info(
         info["config_notices"] = migrated
 
     return info
-
-
-# Matches both shapes run_subagent_dag's result text can start with:
-# "DAG run <id> finished: ..." once it completes in the foreground, or
-# "DAG run <id> started in the background ..." when it hands back early.
-# Derived here rather than stored, so every session already on disk gains the
-# link, and read here rather than in the client, which would be parsing a
-# sentence it does not author.
-_DAG_RUN_ID_RE = re.compile(r"\bDAG run (\d{8}T\d+Z-[0-9a-f]+)")
-
-# The spawn counterpart: "Subagent [...] started (id: <task_id>)." names the run
-# the call dispatched. Same authorship argument as the DAG id above -- the
-# manager writes this sentence, so the server parses it; the task id is the
-# suffix of the run's record directory, which subagent.list reports.
-_SPAWN_TASK_ID_RE = re.compile(r"\bstarted \(id: ([0-9a-f]{8})\)")
 
 
 def _delivered_file(item: dict[str, Any], on_disk: bool) -> dict[str, Any]:
@@ -437,15 +437,17 @@ def _map_to_wire(
                     },
                 }
         if m.get("name") == "run_subagent_dag" and isinstance(content, str):
-            if match := _DAG_RUN_ID_RE.search(content):
-                entry["dag_run_id"] = match.group(1)
+            # Derived here rather than stored, so every session already on disk gains
+            # the link; the receipt reader is shared with the task board.
+            if run_id := dag_run_id_of(content):
+                entry["dag_run_id"] = run_id
         if m.get("name") == "spawn" and isinstance(content, str):
             # The label between the brackets is model-authored text and can
             # itself contain a "started (id: ...)" shape; the manager's own
             # suffix is the last one in the sentence it wrote, so the last
             # match is the task id.
-            if matches := _SPAWN_TASK_ID_RE.findall(content):
-                entry["spawn_task_id"] = matches[-1]
+            if task_id := spawn_task_id_of(content):
+                entry["spawn_task_id"] = task_id
         reasoning = m.get("reasoning_content")
         if isinstance(reasoning, str) and reasoning.strip():
             entry["reasoning_content"] = reasoning
@@ -542,6 +544,71 @@ async def session_create(
         "session_id": session_id,
         "info": info,
     }
+
+
+def _mode_effort(agent_loop: object, session_key: str | None) -> str | None:
+    """The session's mode's own effort, where the catalogue sets one (``raven-code`` does)."""
+    policy = getattr(agent_loop, "session_policy", None)
+    held = policy(session_key or "") if callable(policy) and session_key else None
+    mode_effort = getattr(held, "reasoning_effort", None)
+    return mode_effort if isinstance(mode_effort, str) and mode_effort else None
+
+
+def _configured_effort(config: Any) -> str | None:
+    """``agents.defaults.reasoningEffort`` as the file has it now, or None for an unset key.
+
+    Read fresh rather than off the loop, the way ``default_reasoning_effort``
+    reads the file, so a settings edit shows here without a restart.
+    """
+    configured = getattr(getattr(getattr(config, "agents", None), "defaults", None), "reasoning_effort", None)
+    return configured if isinstance(configured, str) and configured else None
+
+
+def _default_effort(agent_loop: object, config: Any, session_key: str | None) -> str | None:
+    """What a session runs at with no pick of its own: the one rule, with no pick.
+
+    ``session_effort.in_force`` ranks it, the same rule the turn runs at, so
+    what this reports and what the next turn sends cannot drift apart: None is
+    the provider's own default on both sides. The model does not narrow this
+    answer -- the mode's word and the configured default are sent as they
+    stand, unlike a pick.
+    """
+    return session_effort.in_force(None, _mode_effort(agent_loop, session_key), _configured_effort(config))
+
+
+def _effort_levels(model_id: str, config: Any, *, refresh: bool = False) -> tuple[str, ...] | None:
+    """What this model declares, with the provider that serves it as the authority.
+
+    The provider is the section the config routes ``model_id`` through, not the
+    id's own prefix: a forced gateway serves a bare vendor id, and the ladder
+    and the overlay have to follow the API that receives the word. The id
+    answers only when the config cannot name one (no usable section, or a
+    caller with no routing of its own).
+    """
+    from raven.providers.registry import find_by_model, split_model_id
+
+    get_provider_name = getattr(config, "get_provider_name", None)
+    provider = get_provider_name(model_id) if callable(get_provider_name) else None
+    if not provider:
+        provider, _rest = split_model_id(model_id)
+        if not provider:
+            spec = find_by_model(model_id)
+            provider = getattr(spec, "name", "") if spec else ""
+    declared = declared_for(getattr(config, "providers", None), provider, model_id)
+    return effort_levels.levels_for(model_id, declared, provider=provider, refresh=refresh)
+
+
+def _effort_in_force(
+    agent_loop: object,
+    config: Any,
+    session_key: str | None,
+    model_id: str | None = None,
+) -> str | None:
+    """The effort this session's own calls run at: its pick, bounded by its model, over the default."""
+    model_id = model_id or _session_model(agent_loop, config, session_key)
+    picked = session_effort.read(manager_for(agent_loop, config), session_key) if session_key else None
+    picked = session_effort.clamp(picked, _effort_levels(model_id, config))
+    return session_effort.in_force(picked, _mode_effort(agent_loop, session_key), _configured_effort(config))
 
 
 def _read_knowledge(agent_loop: object, config: object, session_key: str | None) -> tuple[str, ...]:
@@ -684,7 +751,7 @@ async def session_resume(
 def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     """How full the context window is, into a caller's usage mapping.
 
-    Read off the newest stored reply that carries the window its call measured
+    Read off the newest stored row that carries the window a call measured
     (``context_used``): that is the number the meter showed when the turn ended.
     The stored log cannot stand in for it. The context engine compacts on its
     own and leaves the log whole, so ``last_consolidated`` never moves and the
@@ -692,8 +759,8 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     times the window its last call measured, and a short one at a few tokens,
     the system prompt and the tool list being no part of it.
 
-    A session with no reading -- written before replies carried one, or never
-    answered -- falls back to a tiktoken estimate of
+    A session with no reading -- written before rows carried one, or whose
+    calls never reported their usage -- falls back to a tiktoken estimate of
     ``get_history(max_messages=0)``, marked ``context_estimated``. Failures
     leave the zero baseline alone rather than guessing -- a wrong denominator is
     worse than an unknown one.
@@ -707,12 +774,13 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
         usage["context_estimated"] = False
         return
     try:
-        # max_messages=0 is "all of it", which is what both places that build or
-        # measure the real prompt pass (loop/main.py and the consolidator's own
-        # estimator). The default caps at the last 500, and the tail is bounded
-        # in tokens rather than in messages -- consolidation fires on the window
-        # -- so a chatty session on a large-window model sits well past 500 and
-        # the meter would go quiet exactly as it started to matter.
+        # The estimate counts what an engine that leaves compaction to the
+        # consolidator would be handed: max_messages=0 is "all of it", the slice
+        # ``DefaultMemory.candidate_messages`` and the consolidator's own
+        # estimator both take. The default caps at the last 500, and that tail is
+        # bounded in tokens rather than in messages -- consolidation fires on the
+        # window -- so a chatty session on a large-window model sits well past
+        # 500 and the meter would go quiet exactly as it started to matter.
         messages = session.get_history(max_messages=0)
     except Exception:
         logger.exception("session.*: could not read the session history")
@@ -729,11 +797,17 @@ def _fill_resumed_context(usage: dict[str, Any], session: Any) -> None:
     usage["context_estimated"] = True
 
 
+# No context window holds a billion tokens, so a stored reading past this was
+# not written by a call; one past float range would also raise on the way to a
+# percentage. Either is read as no reading.
+_READING_CEILING = 1_000_000_000
+
+
 def _last_window_reading(messages: list[Any]) -> int:
-    """The window the newest reading-carrying reply measured, or 0 for none."""
+    """The window the newest reading-carrying row records, or 0 for none."""
     for message in reversed(messages):
         used = message.get("context_used") if isinstance(message, dict) else None
-        if isinstance(used, int) and not isinstance(used, bool) and used > 0:
+        if isinstance(used, int) and not isinstance(used, bool) and 0 < used <= _READING_CEILING:
             return used
     return 0
 
@@ -999,6 +1073,9 @@ async def session_delete(
         agent_loop = _safe_invoke_factory(agent_loop_factory)
         config = load_config()
         mgr = manager_for(agent_loop, config)
+        # Found while the transcript is there to find it by, as the store finds it for
+        # its observers.
+        board_dir = mgr.session_dir(session_key)
         removed = mgr.delete(session_key)
         # ``delete`` answers False both for a session that had no file -- an
         # unknown key, or one created and never saved -- and for a removal the
@@ -1006,6 +1083,9 @@ async def session_delete(
         # first is the caller's own goal, the second leaves a session that is
         # still there to list. Asking the store again is what separates them.
         still_on_disk = not removed and mgr.exists(session_key)
+        # A channel's key comes back with the chat's next message, so where no board service
+        # heard the delete the board goes here, on the terms its observer keeps.
+        remove_unheard(_task_board(agent_loop), session_key, board_dir, transcript_kept=still_on_disk)
         if agent_loop is not None:
             # Not gated on ``removed``: a session that switched model before its
             # first save has a binding in memory and no file on disk, and
@@ -1193,6 +1273,7 @@ async def session_clear(
             mgr.save(session)
         except Exception:
             logger.warning("session.clear: failed to persist cleared {}", session_key)
+    await reset_for(_task_board(agent_loop), session_key, mgr.session_dir(session_key))
     return {"session_id": session_key, "cleared": True}
 
 
@@ -1220,12 +1301,36 @@ async def session_undo(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     session = mgr.get_or_create(session_key)
+    before = list(session.messages)
     removed = session.undo_last_turn(n)
     if removed and mgr.exists(session_key):
         try:
             mgr.save(session)
         except Exception:
             logger.warning("session.undo: failed to persist undo for {}", session_key)
+    if removed:
+        # A step is keyed by its turn's question, stamped when the turn arrived.
+        # Named from the messages this undo cut off the tail, not from what the
+        # log no longer holds: consolidation has moved older turns out, and a
+        # coarse clock can give a kept answer the undone question's stamp.
+        undone = {
+            str(m["timestamp"])
+            for m in before[len(session.messages) :]
+            if m.get("role") == "user" and m.get("timestamp")
+        }
+        try:
+            if (board := _task_board(agent_loop)) is not None:
+                await board.drop_turns(session_key, undone)
+            else:
+                directory = mgr.session_dir(session_key)
+                current = load_board(directory)
+                kept = drop_turns(current, undone)
+                if board_to_dict(kept, revisions=True) != board_to_dict(current, revisions=True):
+                    save_board(directory, kept)
+        except OSError as exc:
+            # The turn is gone from the transcript either way; reporting an error
+            # would invite a retry that removes another.
+            logger.warning("session.undo: failed to update the task board for {}: {}", session_key, exc)
     return {"removed": removed}
 
 
@@ -1472,6 +1577,11 @@ async def session_branch(
     config = load_config()
     mgr = manager_for(agent_loop, config)
     child = mgr.fork(session_key, title=(name or None))
+    if child is not None:
+        try:
+            copy_board(mgr.session_dir(session_key), mgr.session_dir(child.key))
+        except OSError as exc:
+            logger.warning("session.branch: failed to copy the task board of {} to {}: {}", session_key, child.key, exc)
     if child is not None and agent_loop is not None:
         # A fork continues its parent's conversation, so it continues on the
         # parent's model; without this it would silently drop to the default.
@@ -1587,6 +1697,85 @@ async def session_set_mode(
     return {"mode": tier, "availableModes": menu}
 
 
+async def session_set_effort(
+    params: dict,
+    *,
+    agent_loop_factory: "AgentLoopFactory | None" = None,
+) -> dict:
+    """``session.set_effort`` -- report, set or clear this session's reasoning effort.
+
+    The effort this session's own model calls run at, as a person picked it
+    for this conversation: the shape ``session.set_mode`` has -- three calls
+    told apart by which fields are present -- over a different knob. A tier
+    moves what raven asks of its sub-agents; this moves how much raven's own
+    model thinks before each answer, and reaches no sub-agent.
+
+    Kept on the session's record (``raven.agent.session_effort``) rather than
+    on the loop's in-memory policy, so it outlives the gateway and a resumed
+    conversation runs at what it was left at. A set lands on the next turn.
+
+    Every answer carries ``default`` -- what the session runs at without a
+    pick of its own, the mode's word or the configured default, not narrowed
+    by the model -- so a control can say what "default" means on this install.
+    ``effort`` is the pick only where the model declares it; when it does not,
+    ``effort`` is null and the turn runs at ``default``. ``options`` are the
+    words this model declares, so a control need not spell them itself. A
+    draft names its model, since it has no session record to read one from.
+
+    A report reads the account catalogue's cache; only an explicit set
+    refreshes it -- a clear needs no word to validate -- and that refresh runs
+    off the event loop, so a UI read never blocks on the network.
+    """
+    session_key = str(params.get("session_key") or "")
+    raw = params.get("effort")
+    wanted = str(raw) if isinstance(raw, str) and raw else None
+    requested_model = params.get("model")
+    loop = _safe_invoke_factory(agent_loop_factory)
+    config = load_config()
+    mgr = manager_for(loop, config)
+    model_id = (
+        str(requested_model)
+        if not session_key and isinstance(requested_model, str) and requested_model
+        else _session_model(loop, config, session_key)
+    )
+    refresh_catalogue = wanted is not None
+    model_levels = (
+        await asyncio.to_thread(_effort_levels, model_id, config, refresh=True)
+        if refresh_catalogue
+        else _effort_levels(model_id, config)
+    )
+
+    def _reply(stored: str | None) -> dict:
+        return {
+            "session_key": session_key,
+            "effort": session_effort.clamp(stored, model_levels),
+            "default": _default_effort(loop, config, session_key or None),
+            "options": list(model_levels) if model_levels is not None else list(REASONING_EFFORTS),
+        }
+
+    if wanted is None and not params.get("clear"):
+        # A draft asks too, with no key: the model, the default and the words
+        # are what its first turn will run at, and the row is drawn before it
+        # is sent.
+        return _reply(session_effort.read(mgr, session_key) if session_key else None)
+    if not session_key:
+        raise ConfigValidationError("session_key is required to set or clear a reasoning effort")
+    effort = None if params.get("clear") else wanted
+    if effort is not None:
+        allowed = model_levels if model_levels is not None else REASONING_EFFORTS
+        if not allowed:
+            raise ConfigValidationError(f"{model_id} declares no reasoning effort")
+        if effort not in allowed:
+            raise ConfigValidationError(
+                f"no reasoning effort {effort!r} for {model_id}; the words are {', '.join(allowed)}"
+            )
+    previous = session_effort.read(mgr, session_key)
+    session_effort.write(mgr, session_key, effort)
+    if previous != effort:
+        logger.info("session {} reasoning effort {} -> {}", session_key, previous or "<default>", effort or "<default>")
+    return _reply(effort)
+
+
 async def session_set_harness(
     params: dict,
     *,
@@ -1684,6 +1873,9 @@ def register_session_methods(
     async def _set_harness(params: dict) -> dict:
         return await session_set_harness(params, agent_loop_factory=agent_loop_factory)
 
+    async def _set_effort(params: dict) -> dict:
+        return await session_set_effort(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("session.create", _create)
     dispatcher.register("session.close", _close)
     dispatcher.register("session.resume", _resume)
@@ -1700,6 +1892,7 @@ def register_session_methods(
     dispatcher.register("session.branch", _branch)
     dispatcher.register("session.export", _export)
     dispatcher.register("session.set_mode", _set_mode)
+    dispatcher.register("session.set_effort", _set_effort)
     dispatcher.register("session.set_harness", _set_harness)
 
     async def _set_knowledge(params: dict) -> dict:

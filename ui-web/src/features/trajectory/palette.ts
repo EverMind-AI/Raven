@@ -1,11 +1,11 @@
-/* One colour and one word per kind of entry, for the list's type tag today
- * and the duration bar later: both read the same table so a tool call is the
- * same purple in the row and in the bar.
+/* One colour and one word per kind of entry, for the tag the details pane and
+ * the overview put on an entry; the waterfall's bars read the same `-fg`
+ * colours, so a tool call is the same purple in its tag and in its bar.
  *
  * The kinds the index names are an open set (a span's own io slots, an
  * artifact's name, an evidence slot), so only the seven the conversation is
  * made of get a colour of their own; everything else is one stable grey and
- * keeps its own name on the row, which is more honest than a colour the reader
+ * keeps its own name on its tag, which is more honest than a colour the reader
  * cannot look up.
  */
 
@@ -76,8 +76,8 @@ export const NAMED_KINDS: readonly string[] = [...Object.keys(KNOWN), ...Object.
 export const isKnownKind = (kind: string): boolean => kind in KNOWN
 
 /* The class suffix is the kind with its dot folded, so `styles.css` can name
-   `.trajectory-k-llm-input` and the duration bar can read the same variable
-   name back (`--trajectory-c-llm-input-fg`). */
+   `.trajectory-k-llm-input` after the variables it reads
+   (`--trajectory-c-llm-input-fg`). */
 export const kindSlug = (kind: string): string => (isKnownKind(kind) ? kind.replace(/\./g, '-') : 'other')
 
 export const kindClass = (kind: string): string => `trajectory-k-${kindSlug(kind)}`
@@ -88,8 +88,22 @@ export function kindLabel(kind: string): string {
   return key === null ? kind : t(key)
 }
 
-/** Every word the tag column may need to fit, in the current language. */
-export const kindLabels = (): string[] => {
-  const keys = new Set<string>([...Object.values(KNOWN), ...Object.values(NAMED), ...PREFIXED.map((p) => p[2]), 'gui.trajectory.kind.summary'])
-  return [...keys].map((key) => t(key))
-}
+/* The kinds of call an external agent reports (ACP's tool kind, a closed set),
+   each with its word; literal keys, so the i18n gate holds each one to the
+   catalogue. A tool's own name -- exec, read_file -- is the identifier the
+   model called, and is shown as it is. */
+const TOOL_KINDS = new Map<string, () => string>([
+  ['read', () => t('gui.trajectory.tool.read')],
+  ['edit', () => t('gui.trajectory.tool.edit')],
+  ['delete', () => t('gui.trajectory.tool.delete')],
+  ['move', () => t('gui.trajectory.tool.move')],
+  ['search', () => t('gui.trajectory.tool.search')],
+  ['execute', () => t('gui.trajectory.tool.execute')],
+  ['think', () => t('gui.trajectory.tool.think')],
+  ['fetch', () => t('gui.trajectory.tool.fetch')],
+  ['switch_mode', () => t('gui.trajectory.tool.switch_mode')],
+  ['other', () => t('gui.trajectory.tool.other')],
+])
+
+/** A tool call's name for the page: an external agent's tool kind in the page's language, any other name as it is. */
+export const toolLabel = (name: string): string => TOOL_KINDS.get(name)?.() ?? name

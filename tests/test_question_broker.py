@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from raven.rpc.methods.question import question_respond, register_question_methods
 from raven.rpc.question_broker import QuestionBroker, QuestionUndeliverableError, RoutingQuestionBroker
 
@@ -199,13 +201,67 @@ async def test_an_answer_from_elsewhere_closes_the_surface_that_asked() -> None:
 async def test_a_cancelled_question_closes_the_surface() -> None:
     # An interrupted turn is the other way a question dies unanswered, and it is
     # why `resetFlowOverlays` used to drop the sheet. It no longer does, so the
-    # close has to survive the cancellation that caused it.
+    # close has to survive the cancellation that caused it. And the turn must
+    # not go on: answered with the default, the cancellation ended inside the
+    # broker and the model carried on after the person pressed stop.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    after: list[str] = []
+
+    async def turn() -> None:
+        await broker.await_question(CID, prompt="A or B?", default="")
+        after.append("went on")
+
+    task = asyncio.create_task(turn())
+    await _wait_for_frame(frames)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert after == []
+    await _wait_for_method(frames, "clarify.closed")
+    assert broker.pending_req(CID) is None
+
+
+async def test_a_question_whose_wait_is_cancelled_from_outside_still_answers_the_default() -> None:
+    # Only the caller's own cancellation propagates: the pending future being
+    # cancelled by someone else is a question that went unanswered.
     frames, send_frame = _frame_collector()
     broker = QuestionBroker(send_frame)
 
     task = asyncio.create_task(broker.await_question(CID, prompt="?", default="d"))
     await _wait_for_frame(frames)
+    broker._pending[CID].future.cancel()
+
+    assert await task == "d"
+    await _wait_for_method(frames, "clarify.closed")
+
+
+async def test_an_externally_cancelled_wait_after_a_swallowed_cancel_still_answers_the_default() -> None:
+    # `Task.cancelling()` is cumulative: a task that swallowed an earlier
+    # cancellation carries the count for the rest of its life. A pending future
+    # cancelled by someone else must still answer the default, not be mistaken
+    # for a new cancellation of the calling task.
+    frames, send_frame = _frame_collector()
+    broker = QuestionBroker(send_frame)
+    entered = asyncio.Event()
+
+    async def turn() -> str:
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            pass
+        task = asyncio.current_task()
+        assert task is not None and task.cancelling() > 0
+        entered.set()
+        return await broker.await_question(CID, prompt="?", default="d")
+
+    task = asyncio.create_task(turn())
+    await asyncio.sleep(0)  # let the task reach its first suspension
     task.cancel()
+    await asyncio.wait_for(entered.wait(), 1.0)
+    await _wait_for_frame(frames)
+    broker._pending[CID].future.cancel()
 
     assert await task == "d"
     await _wait_for_method(frames, "clarify.closed")

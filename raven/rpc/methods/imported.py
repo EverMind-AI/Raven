@@ -52,6 +52,7 @@ ALLOWED = frozenset(
         "deliverables.list",
         "turn.subscribe",
         "tasks.list",
+        "tasks.board",
         "subagents.instances",
         "dag.get",
         "dag.node",

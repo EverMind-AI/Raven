@@ -45,6 +45,16 @@ function IcoPlus(): JSX.Element {
   )
 }
 
+/* The stop square, in the size and rounding the page composer's stop button
+   holds (composer/store.ts ICON_STOP): one glyph, learned once. */
+function StopGlyph(): JSX.Element {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
+      <rect width="10" height="10" rx="2" />
+    </svg>
+  )
+}
+
 interface OrderedAgentGroup {
   name: string
   registered?: SubagentRow
@@ -585,6 +595,18 @@ function InstanceComposer(
             </>
           ) : null}
           {fail || hold ? <span className="why">{fail || hold}</span> : <span />}
+          {/* Stop while this instance is answering: the turn a send started is
+              one the reader can end, on the surface that started it. The send
+              button keeps its own job beside it -- while the turn runs, a send
+              queues rather than replaces. The disc is the send button's own
+              shared class, with the stop state as an attribute, the way the
+              page composer's go button names its own. */}
+          {chat.busy && store.canCancel() && (
+            <button className="go" data-state="stop" title={t('gui.stop')} aria-label={t('gui.stop')}
+              onClick={() => store.cancelInstanceTurn(open.agent, open.handle)}>
+              <StopGlyph />
+            </button>
+          )}
           <button className="go" disabled={!text.trim() && !atts.length} onClick={send} aria-label={t('gui.ws.instance_say')}>
             <SendGlyph />
           </button>

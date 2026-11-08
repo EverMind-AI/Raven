@@ -26,7 +26,7 @@ import type { Theme } from '../theme.js'
 
 import { $dagNodeTraces } from '../app/dagNodeStore.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
-import { dagNodeHandle, dagNodeSummary, dagTraceBoxRows, dagTraceRows } from '../lib/dagStatus.js'
+import { dagNodeHandle, dagNodeSummary, dagTraceBoxRows, dagTraceRows, formatAttemptAgents } from '../lib/dagStatus.js'
 import { fitTraceTail } from '../lib/dagStream.js'
 import { MessageLine } from './messageLine.js'
 
@@ -97,9 +97,12 @@ const TraceBox = ({
       {/* The handle rather than the bare agent when the node has one: this box is
           the expanded block `dagNodeHandle` is written for, and since the rows
           carry only a short tag of a *shared* handle, it is the only place the
-          full `agent@instance` a reader needs for `/dag` exists. */}
+          full `agent@instance` a reader needs for `/dag` exists. The attempt
+          history rides the same line, on the nodes that have one: the block's
+          height is fixed, so a second line would take a row from the trace. */}
       <Text color={t.color.muted} dim wrap="truncate-end">
         {node.id} · {dagNodeHandle(node) || node.subagent}
+        {node.attemptAgents?.length ? ` · attempts: ${formatAttemptAgents(node.attemptAgents)}` : ''}
         {fit.shown.length > 0 ? ` · ${messages?.length ?? 0} msgs` : ''}
         {node.outputFile ? ` → ${node.outputFile}` : ''}
       </Text>

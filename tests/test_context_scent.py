@@ -238,6 +238,18 @@ def test_find_skill_description_matches_what_is_wired():
     assert "locally installed" in local_only.description
 
 
+def test_find_skill_description_follows_the_hub_switch():
+    """The client is built while the switch is off, so being wired is not
+    being searched: the library sentence follows the switch, per render."""
+    state = {"on": False}
+    tool = FindSkillTool(lambda: None, hub_wired=True, enabled_reader=lambda: state["on"])
+
+    assert "110k" not in tool.to_schema()["function"]["description"]
+    assert "locally installed" in tool.description
+    state["on"] = True
+    assert "110k" in tool.to_schema()["function"]["description"]
+
+
 async def test_find_skill_enforces_blocklist_and_safety_bar():
     hits = [_Hit("hub/blocked-one", "x"), _Hit("hub/low-safety", "y"), _Hit("hub/clean", "z")]
     hits[1].meta["score_safety"] = 0.1

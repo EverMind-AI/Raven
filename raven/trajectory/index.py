@@ -13,7 +13,9 @@ Protocol facts the readers rely on:
 
 - Files are identified by ``(st_dev, st_ino)``, so the rotation rename keeps
   the same cursor; whether a file has more to read is decided by its current
-  size against the consumed offset, never by a past EOF.
+  size against the consumed offset, never by a past EOF. Compressing a closed
+  log replaces its inode; the scanner recognises it by its plaintext head and
+  carries the cursor over instead of reading it again.
 - Trace membership is three-valued. A span whose ``session.key`` matches
   makes its trace a member; a root span's ``trace.dispatched_in_trace_id``
   links a sub-agent trace to its parent, and the decision propagates down
@@ -47,6 +49,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from raven.tracing import codec as trace_codec
 from raven.tracing import config as tracing_config
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
@@ -260,6 +263,22 @@ class SpanLogScanner:
         self.cursors: dict[FileKey, FileCursor] = {}
         self.active_key: FileKey | None = None
         self._active_path = state_dir / "logs" / "audit-spans.log"
+        # key -> (mtime_ns, raw size, plaintext size), so a catalog pass over
+        # an unchanged archive never reopens it just to learn its encoding.
+        self._sizes: dict[FileKey, tuple[int, int, int]] = {}
+        # old key -> new key of a log re-encoded under a new inode, so a
+        # recovery task holding the old key still finds where it was.
+        self._moved: dict[FileKey, FileKey] = {}
+
+    def _plaintext_size(self, path: Path, key: FileKey, stat_result: Any) -> int | None:
+        cached = self._sizes.get(key)
+        if cached is not None and cached[0] == stat_result.st_mtime_ns and cached[1] == stat_result.st_size:
+            return cached[2]
+        size = trace_codec.plaintext_size(path)
+        if size is None:
+            return None
+        self._sizes[key] = (stat_result.st_mtime_ns, stat_result.st_size, size)
+        return size
 
     def _catalog(self) -> list[tuple[Path, FileKey, int, int]]:
         archive: list[tuple[Path, FileKey, int, int]] = []
@@ -269,7 +288,11 @@ class SpanLogScanner:
                 stat_result = path.stat()
             except OSError:
                 continue
-            item = (path, _file_key(stat_result), stat_result.st_size, stat_result.st_mtime_ns)
+            key = _file_key(stat_result)
+            size = self._plaintext_size(path, key, stat_result)
+            if size is None:
+                continue
+            item = (path, key, size, stat_result.st_mtime_ns)
             (active if path == self._active_path else archive).append(item)
         return archive + active
 
@@ -284,6 +307,50 @@ class SpanLogScanner:
             return None
         return hashlib.sha1(head).hexdigest()
 
+    @staticmethod
+    def _head_fingerprint(path: Path) -> str | None:
+        """sha1 of a file's first FINGERPRINT_BYTES of plaintext, or None when it is shorter."""
+        head = trace_codec.read_head(path, FINGERPRINT_BYTES)
+        if head is None or len(head) < FINGERPRINT_BYTES:
+            return None
+        return hashlib.sha1(head).hexdigest()
+
+    def _adopt_reencoded(self, catalog: Sequence[tuple[Path, FileKey, int, int]]) -> None:
+        """Carry a cursor over to its log re-encoded under a new inode.
+
+        Compressing a closed log writes a new file and renames it over the old
+        name, so the same plaintext comes back under a new key. Read as a new
+        file it would be replayed from offset 0: every position-keyed record
+        listed twice, and an index reset when the old cursor was mid-read.
+
+        The old key is either gone or, since a file system hands a freed inode
+        to the next file created, held by a file shorter than what the cursor
+        consumed. Such a cursor whose plaintext head matches a file this
+        scanner has no cursor for, holding at least what was consumed, moves
+        to that file; the key's new holder is then read as a new file.
+        """
+        sizes = {key: size for _, key, size, _ in catalog}
+        unknown = [(path, key, size) for path, key, size, _ in catalog if key not in self.cursors]
+        if not unknown:
+            return
+        vanished = [c for key, c in self.cursors.items() if c.fingerprint is not None and sizes.get(key, -1) < c.offset]
+        for path, key, size in unknown:
+            if not vanished:
+                return
+            fingerprint = self._head_fingerprint(path)
+            cursor = next((c for c in vanished if c.fingerprint == fingerprint and c.offset <= size), None)
+            if cursor is None:
+                continue
+            vanished.remove(cursor)
+            del self.cursors[cursor.key]
+            self._sizes.pop(cursor.key, None)
+            self._moved.pop(key, None)
+            self._moved[cursor.key] = key
+            if self.active_key == cursor.key:
+                self.active_key = key
+            cursor.key, cursor.path, cursor.mtime_seen = key, path, -1
+            self.cursors[key] = cursor
+
     def _generation_changed(self, catalog: Sequence[tuple[Path, FileKey, int, int]]) -> bool:
         present = {key: size for _, key, size, _ in catalog}
         for key, cursor in list(self.cursors.items()):
@@ -291,6 +358,7 @@ class SpanLogScanner:
                 if cursor.offset < cursor.size_seen or cursor.partial:
                     return True
                 del self.cursors[key]
+                self._sizes.pop(key, None)
                 continue
             if present[key] < cursor.offset:
                 return True
@@ -304,6 +372,7 @@ class SpanLogScanner:
         batch = ScanBatch()
         catalog = self._catalog()
         batch.total_bytes = sum(size for _, _, size, _ in catalog)
+        self._adopt_reencoded(catalog)
         if self._generation_changed(catalog):
             batch.generation_changed = True
             return batch
@@ -334,16 +403,31 @@ class SpanLogScanner:
         batch.scanned_bytes = sum(c.offset for c in self.cursors.values())
         return batch
 
+    @staticmethod
+    def _stream_stat(handle: Any, path: Path) -> tuple[Any, int]:
+        """The stat describing the opened stream, and its plaintext length.
+
+        A real descriptor is stat-ed through the handle, so identity and size
+        come from the file actually read. A decompressed buffer has no
+        descriptor; its length is the frame's plaintext size and the path is
+        stat-ed for identity, with the fingerprint check beside it catching a
+        rotation in between.
+        """
+        if hasattr(handle, "getbuffer"):
+            return path.stat(), len(handle.getbuffer())
+        stat_result = os.fstat(handle.fileno())
+        return stat_result, stat_result.st_size
+
     def _verify(self, cursor: FileCursor) -> str:
         """Re-check an unchanged-size file's identity and first bytes; "ok", "retry" or "generation"."""
         try:
-            with cursor.path.open("rb") as handle:
-                stat_result = os.fstat(handle.fileno())
+            with trace_codec.open_plaintext(cursor.path) as handle:
+                stat_result, size = self._stream_stat(handle, cursor.path)
                 if _file_key(stat_result) != cursor.key:
                     return "retry"
-                if stat_result.st_size < cursor.offset:
+                if size < cursor.offset:
                     return "generation"
-                if stat_result.st_size >= FINGERPRINT_BYTES:
+                if size >= FINGERPRINT_BYTES:
                     fingerprint = self._fingerprint(handle)
                     if fingerprint is not None:
                         if cursor.fingerprint is None:
@@ -367,11 +451,10 @@ class SpanLogScanner:
         """
         assembler = _LineAssembler(cursor, self.max_line_bytes)
         try:
-            with cursor.path.open("rb") as handle:
-                stat_result = os.fstat(handle.fileno())
+            with trace_codec.open_plaintext(cursor.path) as handle:
+                stat_result, size = self._stream_stat(handle, cursor.path)
                 if _file_key(stat_result) != cursor.key:
                     return "retry"
-                size = stat_result.st_size
                 if size < cursor.offset:
                     return "generation"
                 cursor.size_seen = size
@@ -410,6 +493,10 @@ class SpanLogScanner:
         keys = [key for _, key, _, _ in catalog]
         if not keys:
             return [], True
+        for _ in range(len(self._moved)):
+            if task.key not in self._moved:
+                break
+            task.key = self._moved[task.key]
         if task.key not in keys:
             # Removed out of band: what that file held of the trace is lost,
             # and the rest is read again from the oldest file still there.
@@ -425,11 +512,10 @@ class SpanLogScanner:
                 task.discarding = False
             assembler = _LineAssembler(task, self.max_line_bytes)
             try:
-                with path.open("rb") as handle:
-                    stat_result = os.fstat(handle.fileno())
+                with trace_codec.open_plaintext(path) as handle:
+                    stat_result, size = self._stream_stat(handle, path)
                     if _file_key(stat_result) != key:
                         return records, False
-                    size = stat_result.st_size
                     handle.seek(task.offset)
                     while task.offset < size:
                         want = min(SCAN_CHUNK, size - task.offset, budget.remaining())

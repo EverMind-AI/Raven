@@ -39,6 +39,7 @@ from typing import Any, Iterable, Iterator, Sequence
 
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import ZSTD_MAGIC, read_plaintext, read_plaintext_file
 from raven.trajectory import entries as _entries
 from raven.trajectory import store as tstore
 
@@ -133,10 +134,10 @@ def _records(
     themselves only.
     """
     for path in tstore.span_log_paths(state_dir):
-        try:
-            raw_lines = path.read_bytes().splitlines()
-        except OSError:
+        data = read_plaintext_file(path)
+        if data is None:
             continue
+        raw_lines = data.splitlines()
         for raw_line in raw_lines:
             if needles and not any(needle in raw_line for needle in needles):
                 continue
@@ -348,23 +349,47 @@ def read_store_file(path: Path, root: Path) -> tuple[bytes, float] | None:
     """
     try:
         target = Path(path).resolve()
-        if not target.is_relative_to(root):
-            return None
-        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     except (OSError, ValueError):
         return None
+    if not target.is_relative_to(root):
+        return None
+    try:
+        fd = os.open(target, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return _read_packed_store_file(target, root)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             return None
         with os.fdopen(fd, "rb") as handle:
             fd = -1
-            return handle.read(), info.st_mtime
+            data = handle.read()
+        from raven.tracing.codec import read_plaintext
+
+        plain = read_plaintext(data)
+        return (plain, info.st_mtime) if plain is not None else None
     except OSError:
         return None
     finally:
         if fd != -1:
             os.close(fd)
+
+
+def _read_packed_store_file(target: Path, root: Path) -> tuple[bytes, float] | None:
+    """A message whose file moved into a pack, confined to the same root."""
+    from raven.tracing import message_pack
+
+    artifacts_dir = target.parent.parent.parent
+    try:
+        if not message_pack.packs_dir(artifacts_dir).resolve().is_relative_to(Path(root).resolve()):
+            return None
+    except (OSError, ValueError):
+        return None
+    data = message_pack.read_path(target)
+    mtime = message_pack.path_mtime(target)
+    if data is None or mtime is None:
+        return None
+    return data, mtime
 
 
 def _read_session(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]] | None:
@@ -436,11 +461,23 @@ def _turn_input(turn: TurnSummary, state_dir: Path) -> str | None:
         return None
     try:
         with target.open("rb") as handle:
-            data = handle.read(_INPUT_READ_LIMIT + 1)
-        if len(data) > _INPUT_READ_LIMIT:
-            return None
-        payload = json.loads(data.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
+            head = handle.read(4)
+            handle.seek(0)
+            if head == ZSTD_MAGIC:
+                # A turn input written after compression is a zstd frame; the
+                # bounded decoder is the same one every other artifact reader
+                # uses. A plain file keeps the bounded read it always had.
+                plain = read_plaintext(handle.read(), _INPUT_READ_LIMIT)
+            else:
+                data = handle.read(_INPUT_READ_LIMIT + 1)
+                plain = data if len(data) <= _INPUT_READ_LIMIT else None
+    except OSError:
+        return None
+    if plain is None:
+        return None
+    try:
+        payload = json.loads(plain.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
         return None
     payload = artifact_v2.resolve_payload(payload, state_dir / "logs" / "audit-artifacts")
     return _text_of(payload.get("content")) if isinstance(payload, dict) else None

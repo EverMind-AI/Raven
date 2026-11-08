@@ -211,7 +211,8 @@ raven trajectory replay ATTEMPT_ID --warn --json --out /tmp/raven-replay-report.
 
 这里的 ID 定位已经保存的 bundle，也可直接传目录。Replay 在临时 workspace 中，
 将录制的模型回复和工具结果交给当前 harness，不执行真实工具代码，也不让新模型重新评估任务。
-回放一次部署记录，不会通过其中录制的工具调用再次部署。
+回放一次部署记录，不会通过其中录制的工具调用再次部署。由外部代理（Claude Code、Codex 等）承担的子代理同样不会重新运行：
+启动它的工具直接拿到录制的结果，该代理在自己运行中走过的步骤不进入回放。
 
 | 模式/结果 | 含义 |
 | --- | --- |

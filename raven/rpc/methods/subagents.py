@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends import acp_menus, acp_snapshot_for, agent_meta
 from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
     BUNDLED_SHIM_PRESETS,
@@ -384,6 +384,8 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
                 "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
+                "effort": getattr(cfg, "effort", None),
+                "effort_choices": [{"value": c.value, "name": c.name} for c in meta.effort_choices],
                 # The row's editing rule, not ownership: what `subagents.update`
                 # accepts for `model` on this row. `own` is the ownership mark.
                 "model_source": _model_rule(cfg, snapshot, meta),
@@ -716,6 +718,15 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
+def _no_such_effort(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
+    """The refusal of an effort the agent's thought_level option does not hold."""
+    offered = f"; it offers {', '.join(choices)}" if choices else "; it offers none"
+    return ConfigValidationError(
+        f"{name!r} has no reasoning effort {proposed!r}{offered}",
+        data={"field": "effort", "name": name},
+    )
+
+
 def _no_such_model(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
     """The refusal of a pick the agent's own menu does not hold, for add and update alike."""
     # Mirrors ``SubagentManager.set_instance_model``'s own message: the values are
@@ -798,6 +809,135 @@ def _host_pair(model: str) -> str | None:
     return stored_model_id(listing, model)
 
 
+@dataclass(frozen=True)
+class _MenuMove:
+    """One handshake taken for a row's model move, and what undoing it needs.
+
+    ``key`` is the name the measurement was stored under and ``stamp`` its
+    ``measured_at_ms``; ``previous`` is the record a refusal restores under that
+    key, ``None`` when there was none to restore. ``destination`` is the
+    measurement when it reached the new model's menu, ``None`` when it did not,
+    with ``detail`` saying why.
+    """
+
+    key: str
+    previous: Any
+    stamp: int
+    destination: Any
+    detail: str
+
+
+async def _measure_the_move(name: str, row_before: dict, target: dict) -> _MenuMove:
+    """Measure ``target`` on the model the row moves to.
+
+    ``record_capabilities`` does not raise for a handshake that failed: it answers
+    an unusable snapshot, and the record it writes keeps the previous model's
+    menus under that verdict. So the measurement only speaks for the new model
+    when it is usable and read the menu -- the test ``subagents.refresh_models``
+    applies -- and otherwise the move is unmeasured.
+    """
+    before = acp_snapshot_for(_as_configs([row_before])[0])
+    cfg = _as_configs([target])[0]
+    try:
+        measured = await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - a move nothing measured is judged as one
+        logger.warning("subagents: {!r} effort menu not re-measured after a model move: {}", name, exc)
+        return _MenuMove(key=cfg.name, previous=None, stamp=0, destination=None, detail=str(exc) or type(exc).__name__)
+    key = str(getattr(measured, "agent", "") or cfg.name)
+    reached = bool(getattr(measured, "usable", False) and getattr(measured, "model_menu_measured", False))
+    return _MenuMove(
+        key=key,
+        previous=before if before is not None and getattr(before, "agent", None) == key else None,
+        stamp=int(getattr(measured, "measured_at_ms", 0) or 0),
+        destination=measured if reached else None,
+        detail="" if reached else str(getattr(measured, "detail", "") or getattr(measured, "status", "")),
+    )
+
+
+def _put_the_rows_menu_back(name: str, move: _MenuMove) -> None:
+    """Undo a capability measurement taken for a model a refused write never adopted.
+
+    The row keeps the model it had, so the store has to describe that model again
+    rather than the one the refused call would have written; with nothing
+    recorded under the measurement's key before, the record this call wrote is
+    dropped instead.
+
+    By the key the measurement wrote, not by the name the request used: a
+    built-in row answers to every name it has had, and a rename measures under
+    the new name. Stamped, so a measurement a Test or a refresh recorded in the
+    meantime is left to stand.
+    """
+    from raven.acp_client.capabilities import SnapshotStore
+
+    try:
+        SnapshotStore().restore(move.key, move.previous, only_if_stamp=move.stamp)
+    except Exception as exc:  # noqa: BLE001 - the refusal is the answer; a cache undo is not
+        logger.warning("subagents: {!r} capability menu not put back after a refused model move: {}", name, exc)
+
+
+async def _apply_the_effort(params: dict, target: dict, name: str, move: _MenuMove | None) -> None:
+    """Write this call's ``effort`` or ``clear_effort`` onto ``target``, or refuse it.
+
+    A pick is judged against the menu of the model the row ends this call on:
+    ``move``'s measurement when the call moves the row, else the stored record.
+    """
+    if target.get("kind") != "acp":
+        raise ConfigFieldReadonlyError(
+            f"effort is not editable for kind {target.get('kind')!r}: only an acp agent advertises a thought_level menu",
+            data={"field": "effort", "name": name},
+        )
+    if params.get("clear_effort"):
+        target["effort"] = None
+        return
+    cfg = _as_configs([target])[0]
+    if move is not None:
+        if move.destination is None:
+            raise _effort_menu_unread(name, target.get("model"), move.detail)
+        snapshot = move.destination
+    else:
+        snapshot = acp_snapshot_for(cfg)
+        if snapshot is None:
+            # A menu never measured is not "offers none": the thought_level
+            # option rides the same session response as the model menu, which
+            # the free handshake already takes.
+            try:
+                snapshot = await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
+                logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
+    choices = [c.value for c in agent_meta(cfg, snapshot=snapshot).effort_choices]
+    proposed = str(params["effort"])
+    if proposed not in choices:
+        raise _no_such_effort(name, proposed, choices)
+    target["effort"] = proposed
+
+
+def _drop_an_effort_the_move_lacks(target: dict, move: _MenuMove) -> None:
+    """Clear ``target``'s stored effort when the model it moved to does not offer it.
+
+    Judged like a pick, against the menu just measured: a rung the new model
+    lacks is refused by the agent on every turn, and with no menu the page hides
+    the picker, so the value could be neither seen nor cleared. Left alone when
+    the read failed -- there is nothing to judge it by.
+    """
+    effort = target.get("effort")
+    if move.destination is None or not effort:
+        return
+    offered = agent_meta(_as_configs([target])[0], snapshot=move.destination).effort_choices
+    if effort not in [c.value for c in offered]:
+        target["effort"] = None
+
+
+def _effort_menu_unread(name: str, model: Any, detail: str) -> ConfigValidationError:
+    """The refusal of an effort picked with a model move whose menu could not be read."""
+    on = f"on {model!r}" if model else "on its own model"
+    why = f" ({detail})" if detail else ""
+    return ConfigValidationError(
+        f"could not read {name!r}'s reasoning effort menu {on}{why}, so the effort was not checked "
+        "and nothing was changed; test the agent, then pick again",
+        data={"field": "effort", "name": name},
+    )
+
+
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Change editable presentation, credential, MCP policy and model fields."""
     name = params.get("name")
@@ -872,6 +1012,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
+        if new_name != name_before:
+            # Refused now rather than at the write: the capability store keys a
+            # record by agent name, so a handshake below taken under a name another
+            # row holds would write over that row's record.
+            try:
+                validate_agents(entries, config_path=get_config_path())
+            except (ValueError, ValidationError) as exc:
+                _raise_config_error(exc)
     if "description" in params:
         description = params["description"]
         # Blank, whitespace-only or explicit ``null`` all revert to the factory
@@ -899,7 +1047,8 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
             )
         target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
-    if params.get("clear_model") or params.get("model") is not None:
+    model_moved = params.get("clear_model") or params.get("model") is not None
+    if model_moved:
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
         if snapshot is None and cfg_for_meta.kind == "acp" and params.get("model") is not None:
@@ -963,39 +1112,95 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
-    # A form saves every field it shows, so an edit can leave a folder's entry as
-    # it found it, and a stored copy would then outlive the manifest it was taken
-    # from. What is stored -- the switch, or nothing -- stands.
-    if materialized_discovered and shipped is not None and _is_switch_row(target, shipped):
-        return {"updated": True, "name": target["name"]}
-    # A credential or a model swapped under a row that is already on is a
-    # connect nobody gated: the row goes on serving dispatches with something
-    # nothing has tried, and the first real task is what discovers the typo. So
-    # it is asked here, the same question the switch asks, and only when one of
-    # the two actually moved -- the sheet posts whatever is in its field, so an
-    # unchanged form would otherwise spend a call on every save. A row that is
-    # off is left alone: nothing is serving, and the switch that turns it on is
-    # already gated, so asking here would buy the same answer twice.
-    if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
-        await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
-        entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
+    # A row moved to another model is on that model's effort menu, and nothing
+    # else marks the record stale: the model is not a launch field, so no read
+    # re-measures it. So the move is measured on the model it moves to, and the
+    # menu an effort in this same call is judged against, the stored effort the
+    # row keeps or drops, and the menu the picker draws next are all that model's.
+    #
+    # When depends on what the call carries. An effort is judged before the
+    # connect gate below spends a prompt on the agent. A move without one is
+    # measured after the gate, so an agent that does not start is waited out once,
+    # by the gate, rather than by a handshake and then by the gate again.
+    #
+    # The measurement describes a model this call may still refuse to write, so
+    # every step that can refuse runs inside one guard: a refusal puts the
+    # previous record back rather than leaving the store describing a model the
+    # row never moved to.
+    moved_the_row = bool(model_moved and target.get("kind") == "acp" and target.get("model") != model_before)
+    picks_effort = params.get("effort") is not None and not params.get("clear_effort")
+    move: _MenuMove | None = None
+    committed = False
     try:
-        reject_unsupported_openai_fields([target])
-        reject_unsupported_acp_fields([target])
-        set_agents(entries, config_path=get_config_path())
-    except (ValueError, ValidationError) as exc:
-        _raise_config_error(exc)
+        if moved_the_row and picks_effort:
+            move = await _measure_the_move(name, row_before, target)
+        if params.get("clear_effort") or params.get("effort") is not None:
+            await _apply_the_effort(params, target, name, move)
+        # A form saves every field it shows, so an edit can leave a folder's entry as
+        # it found it, and a stored copy would then outlive the manifest it was taken
+        # from. What is stored -- the switch, or nothing -- stands.
+        if materialized_discovered and shipped is not None and _is_switch_row(target, shipped):
+            committed = True
+            return {"updated": True, "name": target["name"]}
+        # A credential or a model swapped under a row that is already on is a
+        # connect nobody gated: the row goes on serving dispatches with something
+        # nothing has tried, and the first real task is what discovers the typo. So
+        # it is asked here, the same question the switch asks, and only when one of
+        # the two actually moved -- the sheet posts whatever is in its field, so an
+        # unchanged form would otherwise spend a call on every save. A row that is
+        # off is left alone: nothing is serving, and the switch that turns it on is
+        # already gated, so asking here would buy the same answer twice.
+        if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
+            await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
+        if moved_the_row and move is None:
+            move = await _measure_the_move(name, row_before, target)
+        # Read again after the last await, whichever ran: the gate's prompt and a
+        # move's handshake each give other `subagents.*` writes time to land.
+        entries, target = _merged_over_the_awaits(
+            target,
+            row_before,
+            name_before,
+            materialized=materialized_discovered,
+            shipped=shipped,
+            switch_row=switch is not None,
+        )
+        if move is not None:
+            _drop_an_effort_the_move_lacks(target, move)
+        try:
+            reject_unsupported_openai_fields([target])
+            reject_unsupported_acp_fields([target])
+            set_agents(entries, config_path=get_config_path())
+        except (ValueError, ValidationError) as exc:
+            _raise_config_error(exc)
+        committed = True
+    finally:
+        # Not `except Exception`: a cancelled call can leave the same row behind
+        # as a refused one, and CancelledError is not an Exception. `committed`
+        # separates the two outcomes -- a discarded write restores the record,
+        # a landed one keeps the measurement that describes it.
+        if not committed and move is not None and move.stamp:
+            _put_the_rows_menu_back(name, move)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
 
 
-def _merged_over_the_ping(
-    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+def _merged_over_the_awaits(
+    target: dict,
+    before: dict,
+    stored_name: str | None,
+    *,
+    materialized: bool,
+    shipped: dict | None = None,
+    switch_row: bool = False,
 ) -> tuple[list[dict], dict]:
-    """Re-read the agent list across the gate's await, keeping both authors.
+    """Re-read the agent list across the call's awaits, keeping both authors.
 
-    The list read before a ping of up to a minute is stale in two ways, and
-    they want different answers.
+    The list read before the gate's ping of up to a minute, or a model move's
+    handshake bounded only by the agent's readiness timeout, is stale in two
+    ways, and they want different answers. It is read once, after the last of
+    them: this call's own fields are worked out against ``before`` every time,
+    and a second merge over a list the first had already merged into ``target``
+    would replay fields another writer set there.
 
     Rows this call never touched are simply whatever disk says now, so the list
     is read again -- writing back the one read before the ping would revert
@@ -1015,18 +1220,33 @@ def _merged_over_the_ping(
     removed meanwhile, and there is nothing left to merge onto: the change is
     refused rather than resurrecting a row somebody deleted. The exception is a
     row this call materialized itself -- a discovered folder or a built-in
-    getting its first stored entry -- which was never on disk to be found.
+    getting its first stored entry -- which was never on disk to be found. Under
+    a folder's name disk may hold the switch's stub instead, which carries the
+    flag and nothing to merge onto: the folder's entry this call built replaces
+    it whole, as the write would have without the await.
+
+    The flag is the one field that is never carried from the pre-await copy,
+    because it is the one a concurrent `subagents.toggle` writes. A stub still on
+    disk when this returns is the switch as it now stands, so its flag wins; a
+    stub that is gone was switched ON, which is spelled by removing the row at
+    all (the folder governs), and a row put back with the old flag would switch
+    the agent off again after that toggle had answered success.
     """
     entries = _read_agents()
     current = next((e for e in entries if e.get("name") == stored_name), None)
     if current is None:
         if materialized:
+            if switch_row:
+                target["enabled"] = True
             entries.append(target)
             return entries, target
         raise SubagentNotFoundError(
-            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            f"sub-agent {stored_name!r} was renamed or removed while this change was being checked, so it was not changed",
             data={"name": stored_name, "field": "name"},
         )
+    if materialized and shipped is not None and _is_switch_row(current, shipped):
+        target["enabled"] = bool(current.get("enabled", False))
+        return [target if e is current else e for e in entries], target
     current.update({key: value for key, value in target.items() if before.get(key) != value})
     return entries, current
 
@@ -1594,6 +1814,248 @@ async def subagents_test_cancel(params: dict) -> dict:
     return {"cancelled": True}
 
 
+_MENU_TASKS: dict[tuple[str, str], asyncio.Task[Any]] = {}
+"""The menu reads in flight, by (source, agent name), so concurrent asks share one handshake.
+
+The source is part of the key because a config row and a preset may share a
+name; one is not the other's stored menu, and a task started for one must not
+answer the other."""
+
+_MENU_READ_AT: dict[tuple[str, str], tuple[float, bool, str]] = {}
+"""``time.monotonic()``, ``ok`` and ``detail`` of each (source, agent) menu's last read.
+
+Recorded however the read ended, because the failure is what an automatic ask
+next has to be told: a failed read keeps the previous menu in the store, and a
+picker opening again inside the cooldown is answered from here. Stamped on
+failure as well as on success, since launching an agent that has just failed to
+start, once per open, is what the cooldown is there to stop -- so the entry has
+to carry the outcome too, or suppressing the launch would report the recorded
+menu as a fresh read."""
+
+_MENU_REFRESH_COOLDOWN_S = 5.0
+"""How long an automatic ask trusts the last read, answered or failed.
+
+A picker opened, closed and opened again is one reader looking at one menu; it
+should not launch the agent a second time -- and an agent that just failed to
+start should not be launched again inside the same window either. Its answer is
+the outcome recorded with the stamp. A manual refresh (`force`) always reads,
+because that press means the menu itself moved."""
+
+_MENU_REFRESH_TIMEOUT_S = 60.0
+"""How long a menu read may take before the caller is told it did not answer.
+
+Under the Mirasim presets' own 150 s start budget and over the adapter's 30 s
+catalog read, so a slow host still answers where an agent that hung is reported."""
+
+
+def _wire_choices(choices: Any) -> list[dict[str, str]]:
+    """Model choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name, "group": c.group} for c in choices or ()]
+
+
+def _wire_efforts(choices: Any) -> list[dict[str, str]]:
+    """Effort choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name} for c in choices or ()]
+
+
+def _recorded_menu(cfg: Any) -> dict[str, Any]:
+    """The menu the capability store holds for ``cfg``, in ``subagents.list``'s shape."""
+    meta = agent_meta(cfg, snapshot=acp_snapshot_for(cfg))
+    return {
+        "models": _wire_choices(meta.model_choices),
+        "effort_choices": _wire_efforts(getattr(meta, "effort_choices", ())),
+    }
+
+
+_READ_BOOKKEEPING = ("measuredAtMs", "elapsedMs", "status", "detail")
+
+
+def _read_left_the_capabilities_alone(previous: Any, stored: Any) -> bool:
+    """Did this read change a capability the composed table derives?
+
+    ``previous`` is the row the store held before the read and ``stored`` the one
+    it holds after.
+
+    Compared on the stored row without the read's own bookkeeping -- when it was
+    taken, how long it took, and what it said about the attempt -- because every
+    other field is what ``_row_for`` builds a row's caps and injectability from.
+    A failed read keeps the previous capabilities and rewrites only that
+    bookkeeping (``_test_record``), so it belongs here too: recomposing for it
+    would replace every backend to show what the table already showed.
+
+    A measurement that cannot produce a stored row (a test double, a shape this
+    function does not know) is never called unchanged, so a read is never left
+    unsynced on the strength of a shape that is not the real one.
+    """
+    if previous is None or stored is None:
+        return False
+    stored_before = getattr(previous, "to_row", None)
+    stored_after = getattr(stored, "to_row", None)
+    if not callable(stored_before) or not callable(stored_after):
+        return False
+    left, right = stored_before(), stored_after()
+    for key in _READ_BOOKKEEPING:
+        left.pop(key, None)
+        right.pop(key, None)
+    return left == right
+
+
+async def _read_menu_and_sync(
+    key: tuple[str, str], cfg: Any, source: str, agent_loop_factory: "AgentLoopFactory | None"
+) -> Any:
+    """One menu read, and the table sync that belongs with it.
+
+    The body of the shared task rather than of a waiter: the read is shielded, so
+    it completes after every asker has timed out or disconnected, and the store
+    still gets the menu it measured. The table has to be recomposed here too, or
+    `subagents.list` (which reads the store) and the composed table answer
+    different menus until the next apply.
+
+    Recomposed only when the read changed a capability: the picker asks for this
+    read every time it opens, and an apply replaces every backend instance. When
+    the handshake reports what the row already held there is nothing for the
+    table to pick up. The comparison is against the row the store now holds, not
+    the handshake's own answer: a failed handshake answers with no capabilities
+    at all while the store keeps the previous ones, and read off the answer every
+    failure looked like news.
+
+    Stamped for the cooldown however the read ended, with how it ended. A failed
+    read leaves the recorded menu standing, and that is what a picker opening
+    moments later takes; launching an agent that just failed to start on every
+    open is what the cooldown is there to stop, and the outcome recorded with
+    the stamp is what the suppressed ask answers with. A press of the refresh
+    control still reads.
+    """
+    previous = acp_snapshot_for(cfg)
+    snapshot = await record_capabilities(cfg)
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    # Stamped for the cooldown however the read ended, with the outcome: a
+    # failed read leaves the recorded menu standing, and that is what a picker
+    # opening moments later takes -- told how this read went, so it repeats the
+    # reason instead of presenting the old menu as a fresh one. A press of the
+    # refresh control still reads.
+    _MENU_READ_AT[key] = (time.monotonic(), measured, str(getattr(snapshot, "detail", "") or ""))
+    if source != "preset" and not _read_left_the_capabilities_alone(previous, acp_snapshot_for(cfg)):
+        # The roster reads `stateful` and the menu from the table built the last
+        # time `apply` ran, so a snapshot written now has to reach the table or
+        # `subagents.list` and the instance picker answer different menus.
+        try:
+            _hot_apply(agent_loop_factory)
+        except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
+            logger.warning("subagent menu refreshed but the agent table was not re-composed: {}", exc)
+    return snapshot
+
+
+async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Read an acp agent's model menu from its handshake again, spending no prompt.
+
+    An acp row's menu is a capability snapshot: a launch-config change invalidates
+    it, and a Test or a session response re-learns it. But the agent's own menu can
+    move while its launch stays identical -- Mirasim adds the user's provider
+    profiles to the catalog it answers with -- and then nothing marks the snapshot
+    stale. The picker goes on drawing yesterday's menu until someone runs a whole
+    Test, which spends a prompt, or starts a turn through the agent.
+
+    This is that read without the prompt: ``initialize`` plus ``session/new``, the
+    free handshake :func:`record_capabilities` records. A session is opened in a
+    throwaway directory and never prompted, so it costs no tokens.
+
+    ``force`` separates the two callers. A reader pressing refresh means the menu
+    moved since the last read, so it always launches. A picker opening on its own
+    does not: a read moments ago is taken as current rather than launching the
+    agent again -- and answered as it ended, so a failed one still says why.
+    Concurrent asks for one agent share one handshake either way, and
+    the sync to the composed table is part of that shared read -- a read that
+    outlives its last asker still leaves the store and the table agreeing. A read
+    that reports the capabilities the row already held does not recompose at all:
+    the rebuild replaces every backend instance, and there is nothing new to show.
+
+    A read that fails keeps the recorded menu in place (``record_capabilities``
+    hands a failed measurement to ``_test_record``, which retains the previous
+    capabilities) and answers it with ``ok: false``, so the picker can show the old
+    list with the reason beside it instead of emptying.
+
+    Unlike a Test or a Connect, this does not take the login shell's environment
+    again. Those presses follow a fix made in a terminal; this one reads a menu,
+    and the press that follows a fix is still Check again or Test.
+
+    Only an acp row has a menu to read. Every other kind is refused rather than
+    answered with an empty one, which would read as an agent that offers nothing.
+    """
+    name = params.get("name", "")
+    source = params.get("source", "config")
+    force = bool(params.get("force", False))
+    cfg = _find(name, source)
+    if getattr(cfg, "kind", None) != "acp":
+        raise ConfigFieldReadonlyError(
+            f"sub-agent {name!r} has no model menu to re-read: only an acp agent advertises one",
+            data={"field": "model", "name": name},
+        )
+
+    key = (source, name)
+    task = _MENU_TASKS.get(key)
+    if task is None or task.done():
+        last = _MENU_READ_AT.get(key)
+        if not force and last is not None and time.monotonic() - last[0] < _MENU_REFRESH_COOLDOWN_S:
+            # The read this stands in for, told as it ended: a failed one leaves
+            # the recorded menu in the store, and answering `ok` would draw that
+            # menu as current and drop the reason the picker was showing.
+            return {"ok": last[1], "detail": last[2], **_recorded_menu(cfg)}
+        task = asyncio.ensure_future(_read_menu_and_sync(key, cfg, source, agent_loop_factory))
+        _MENU_TASKS[key] = task
+        task.add_done_callback(lambda done, key=key: _forget_menu_task(key, done))
+
+    try:
+        # Shielded: the read is shared, so one asker's budget running out, or its
+        # connection closing, must not cancel it under every asker joined to it.
+        snapshot = await asyncio.wait_for(asyncio.shield(task), timeout=_MENU_REFRESH_TIMEOUT_S)
+    except TimeoutError:
+        return {
+            "ok": False,
+            "detail": f"the agent did not report its menu within {_MENU_REFRESH_TIMEOUT_S:.0f}s",
+            **_recorded_menu(cfg),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - one failed read must not end the connection
+        logger.warning("subagents: {!r} menu could not be read: {}", name, exc)
+        return {"ok": False, "detail": str(exc) or type(exc).__name__, **_recorded_menu(cfg)}
+
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    # The measured menu is the one just recorded; the store read is only for the
+    # paths where a failed read keeps the previous one in place. The effort menu
+    # is sent too: for a model-specific option it moves with the model, and the
+    # picker that asked for this read is still open on the old rungs.
+    recorded = _recorded_menu(cfg)
+    if measured:
+        # Read the two menus off the snapshot the read just returned rather than
+        # through `agent_meta`, which also derives policy a refresh must not
+        # re-evaluate (and which test doubles for the handshake do not carry);
+        # `acp_menus` is the derivation `agent_meta` itself uses.
+        menus = acp_menus(snapshot)
+        models = _wire_choices(menus.models)
+        effort_choices = _wire_efforts(menus.efforts)
+    else:
+        models = recorded["models"]
+        effort_choices = recorded["effort_choices"]
+    return {
+        "ok": measured,
+        "detail": getattr(snapshot, "detail", "") or "",
+        "models": models,
+        "effort_choices": effort_choices,
+    }
+
+
+def _forget_menu_task(key: tuple[str, str], done: asyncio.Task[Any]) -> None:
+    """Drop a finished read from the in-flight table, only while it is still this one."""
+    if _MENU_TASKS.get(key) is done:
+        _MENU_TASKS.pop(key, None)
+    if not done.cancelled():
+        # A read that outlived its last asker has no one to raise into; marking
+        # the exception retrieved keeps the loop from logging it as unhandled.
+        done.exception()
+
+
 async def subagents_presets(params: dict) -> dict:
     """The presets an entry can be made from on a registered machine, and where each already is.
 
@@ -1689,6 +2151,12 @@ def register_subagents_methods(
     dispatcher.register("subagents.test", _test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
+    async def _refresh_models(params: dict) -> dict:
+        # Wrapped like the test: the handshake it records feeds the same table.
+        return await subagents_refresh_models(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("subagents.refresh_models", _refresh_models)
+
 
 __all__ = [
     "subagents_list",
@@ -1700,5 +2168,6 @@ __all__ = [
     "subagents_build",
     "subagents_test",
     "subagents_test_cancel",
+    "subagents_refresh_models",
     "register_subagents_methods",
 ]

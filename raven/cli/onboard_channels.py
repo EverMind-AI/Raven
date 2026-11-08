@@ -293,10 +293,12 @@ def _scancode_login(channel: str, *, non_interactive: bool = False) -> None:
             if channel == "whatsapp":
                 oc.console.print(t("  [dim]Building the WhatsApp bridge — the first run can take 30–120s…[/dim]"))
             oc.console.print(t("  [dim]Starting {a0} QR login…[/dim]", a0=spec.display_name))
+            wait_note = t(" WhatsApp stops waiting after five minutes.") if channel == "whatsapp" else ""
             oc.console.print(
                 t(
-                    "  [dim]A login link / QR code will appear below — scan it with {a0} (or open the link on a phone signed in to {a0}) to connect. This waits until you finish.[/dim]",
+                    "  [dim]A login link / QR code will appear below — scan it with {a0} (or open the link on a phone signed in to {a0}) to connect. This waits until you scan the code.{note}[/dim]",
                     a0=spec.display_name,
+                    note=wait_note,
                 )
             )
             from loguru import logger as _wiz_logger

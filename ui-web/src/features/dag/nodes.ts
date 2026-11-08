@@ -23,6 +23,8 @@
  * request follows, or the other way round, and neither may erase the other.
  */
 
+import { attemptOrder, attemptsOf, instanceOf } from '../../lib/attempts'
+
 import type { DagNode, NodeInput } from './types'
 
 /* A dag call's `nodes` argument. Deliberately loose: this is a tool call the
@@ -111,6 +113,7 @@ export interface SnapshotRow {
   node?: unknown
   subagent?: unknown
   instance?: unknown
+  attempt_agents?: unknown
   depends_on?: unknown
   status?: unknown
   started_at?: unknown
@@ -128,18 +131,22 @@ export function fromSnapshot(files: unknown): DagNode[] {
   if (!Array.isArray(files)) return []
   return files
     .filter((f): f is SnapshotRow => !!f && typeof f === 'object' && typeof (f as SnapshotRow).node === 'string')
-    .map((f) => ({
-      ...blank(str(f.node)),
-      subagent: str(f.subagent),
-      instance: str(f.instance) || null,
-      depends_on: strs(f.depends_on),
-      status: str(f.status) || 'pending',
-      started_at: num(f.started_at),
-      ended_at: num(f.ended_at),
-      node_summary: str(f.node_summary) || null,
-      prompt_template: str(f.prompt_template) || null,
-      inputs: inputsOf(f.inputs),
-    }))
+    .map((f) => {
+      const attempts = attemptsOf(f.attempt_agents)
+      return {
+        ...blank(str(f.node)),
+        subagent: str(f.subagent),
+        instance: str(f.instance) || null,
+        ...(attempts !== undefined ? { attempt_agents: attempts } : {}),
+        depends_on: strs(f.depends_on),
+        status: str(f.status) || 'pending',
+        started_at: num(f.started_at),
+        ended_at: num(f.ended_at),
+        node_summary: str(f.node_summary) || null,
+        prompt_template: str(f.prompt_template) || null,
+        inputs: inputsOf(f.inputs),
+      }
+    })
 }
 
 /* How far through its life a node is. A node only ever moves forward inside a
@@ -181,10 +188,31 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
     const next = by.get(n.id)
     if (!next) return n
     by.delete(n.id)
+    const held = n.attempt_agents
+    const history = next.attempt_agents
+    /* A read asked for before the reassignment landed answers with the node as
+       it was: no history, or a shorter one than the live frames have already
+       moved. It still knows the request and the branch, so those are taken --
+       the attempt (identity, status, timing) is not. */
+    const order = attemptOrder(held, history)
+    if (order === 'stale') {
+      return {
+        ...n,
+        depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
+        node_summary: next.node_summary ?? n.node_summary,
+        prompt_template: next.prompt_template ?? n.prompt_template,
+        inputs: next.inputs ?? n.inputs,
+      }
+    }
+    /* A longer history is a later attempt, and it supersedes what the node says
+       however it ended: the old attempt's terminal status, agent and clock all
+       belong to the attempt the node has moved past. */
+    const newer = order === 'newer'
     return {
       ...n,
       subagent: next.subagent || n.subagent,
-      instance: next.instance ?? n.instance,
+      instance: newer ? (next.instance ?? null) : (next.instance ?? n.instance),
+      ...(history !== undefined ? { attempt_agents: history } : {}),
       depends_on: next.depends_on.length ? next.depends_on : n.depends_on,
       /* Not last-writer-wins, because these sources are not ordered in time. A
          `dag.get` read is issued when the card is opened and answers whenever
@@ -192,9 +220,13 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
          asked -- while the events kept arriving. Letting it win pushed finished
          nodes back to `pending`, where they sat for the rest of the run with a
          clock ticking from the start time this same merge had kept. */
-      status: stage(String(next.status)) >= stage(String(n.status)) ? next.status || n.status : n.status,
-      started_at: next.started_at ?? n.started_at,
-      ended_at: next.ended_at ?? n.ended_at,
+      status: newer
+        ? next.status || n.status
+        : stage(String(next.status)) >= stage(String(n.status))
+          ? next.status || n.status
+          : n.status,
+      started_at: newer ? (next.started_at ?? null) : (next.started_at ?? n.started_at),
+      ended_at: newer ? (next.ended_at ?? null) : (next.ended_at ?? n.ended_at),
       node_summary: next.node_summary ?? n.node_summary,
       prompt_template: next.prompt_template ?? n.prompt_template,
       inputs: next.inputs ?? n.inputs,
@@ -209,17 +241,39 @@ export function merge(have: DagNode[], incoming: DagNode[]): DagNode[] {
    server never described. */
 export function applyUpdate(
   nodes: DagNode[],
-  update: { node?: unknown; status?: unknown; started_at?: unknown; ended_at?: unknown },
+  update: {
+    node?: unknown
+    status?: unknown
+    started_at?: unknown
+    ended_at?: unknown
+    subagent?: unknown
+    instance?: unknown
+    instance_auto?: unknown
+    attempt_agents?: unknown
+  },
 ): DagNode[] {
   const id = str(update.node)
-  if (!id || !nodes.some((n) => n.id === id)) return nodes
+  const at = nodes.findIndex((n) => n.id === id)
+  if (at < 0) return nodes
+  const held = nodes[at]!.attempt_agents
+  const history = attemptsOf(update.attempt_agents)
+  /* A frame that cannot claim a newer attempt than the node holds is from the
+     attempt it has moved past -- the frames of the agent that gave up can still
+     be in flight when the next one starts -- so it changes nothing. */
+  const order = attemptOrder(held, history)
+  if (order === 'stale') return nodes
+  const newer = order === 'newer'
+
   return nodes.map((n) =>
     n.id === id
       ? {
           ...n,
+          ...(typeof update.subagent === 'string' && update.subagent ? { subagent: update.subagent } : {}),
+          ...instanceOf(update),
+          ...(history !== undefined ? { attempt_agents: history } : {}),
           status: str(update.status) || n.status,
-          started_at: num(update.started_at) ?? n.started_at,
-          ended_at: num(update.ended_at) ?? n.ended_at,
+          started_at: newer ? num(update.started_at) : (num(update.started_at) ?? n.started_at),
+          ended_at: newer ? num(update.ended_at) : (num(update.ended_at) ?? n.ended_at),
         }
       : n,
   )

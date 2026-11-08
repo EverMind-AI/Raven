@@ -44,17 +44,19 @@ export interface ModulePage {
    from it. Read through `PAGES`, which is the same rows with the shape above
    rather than a shape per row.
 
-   Three pages and one place. Schedules and memory are set up once and then
+   Four pages and one place. Schedules and memory are set up once and then
    left alone, so they are sections of the settings dialog (features/settings/
    store.ts's SECTIONS). Agents and channels are the two things Raven connects
    to -- what it hands work to, and where it can be reached from -- so they
    share one rail button and one header (state/hub.ts), and stay two pages so
    each domain keeps its own island, sheet and fetch. Knowledge is the one a
-   reader goes TO rather than sets up once, so it keeps a button of its own. */
+   reader goes TO rather than sets up once, so it keeps a button of its own,
+   and so does the task board, which gathers every conversation's Task Groups. */
 const DECLARED = [
   { id: 'extAgentsPage', bodyId: 'extAgentsBody', navButtons: ['agentsBtn'], escapeRank: 1, head: 'gui.page.agents', aria: 'gui.page.agents' },
   { id: 'connectionsPage', bodyId: 'connectionsBody', navButtons: ['agentsBtn'], escapeRank: 2, head: 'gui.conn.page', aria: 'gui.conn.page' },
   { id: 'knowledgePage', bodyId: 'knowledgeBody', navButtons: ['knowledgeBtn'], escapeRank: 3, head: 'gui.page.knowledge', aria: 'gui.page.knowledge' },
+  { id: 'tasksBoardPage', bodyId: 'tasksBoardBody', navButtons: ['boardsBtn'], escapeRank: 4, head: 'gui.page.tasks_board', aria: 'gui.page.tasks_board' },
 ] as const satisfies readonly ModulePage[]
 
 /** The module pages, keyed as their `<section>` ids. */

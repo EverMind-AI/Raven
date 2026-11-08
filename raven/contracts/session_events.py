@@ -18,6 +18,12 @@ Three disciplines are the paper, not a convention:
 - **In-process only.** A deletion performed by another process (a CLI
   invocation, a stray ``rm``) is out of the store's sight; an observer
   whose state must survive that keeps its own out-of-band probe.
+- **Where it lived.** An observer that declares the keyword ``session_dir``
+  is handed the session's metadata directory as the store resolved it before
+  the transcript went. Asked afterwards, the store could not tell it: a
+  session another process filed under its project's slug is found only
+  through its transcript. One written without the keyword is called as it
+  was written.
 
 Only a resident host attaches observers (a one-shot turn never does); the
 host owns the attachment lifecycle alongside the generation's services.
@@ -25,6 +31,7 @@ host owns the attachment lifecycle alongside the generation's services.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
@@ -32,7 +39,7 @@ from typing import Protocol, runtime_checkable
 class SessionObserver(Protocol):
     """What a ``[[plugin.contributes.session_observers]]`` factory returns."""
 
-    def on_session_deleted(self, session_key: str, removed: bool) -> None: ...
+    def on_session_deleted(self, session_key: str, removed: bool, *, session_dir: Path | None = None) -> None: ...
 
 
 __tier__ = "contract"

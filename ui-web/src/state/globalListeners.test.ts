@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/* The order the page registers its document- and window-level listeners in.
+/* The order the page registers its page-level listeners in.
  *
  * Five of them are capture-phase and read an event before the element the
  * reader touched ever sees it, and inside one phase the first handler
@@ -34,6 +34,11 @@ import * as shellWindow from './shellWindow'
 import * as tip from './tooltip'
 import * as visibility from './visibility'
 
+/* happy-dom has no visual viewport. The page registers one listener on it, so
+   the recorder below hooks that target as well. */
+const visualViewport = new EventTarget()
+Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport })
+
 /* One row per listener: target, event, phase, the handler itself where another
    module owns it, and who it belongs to in words.
    The handler is in the row rather than in a second table keyed by position:
@@ -54,6 +59,7 @@ const ORDER: ReadonlyArray<readonly [string, string, string, unknown, string]> =
   ['document', 'click', 'capture', browser.trap, 'the link trap (features/browser)'],
   ['window', 'beforeunload', 'bubble', composer.parkDraftNow, 'the unparked draft (features/composer)'],
   ['window', 'resize', 'bubble', composer.fitField, "the field's height cap (features/composer)"],
+  ['visualViewport', 'resize', 'bubble', composer.fitField, 'the same cap under a soft keyboard (features/composer)'],
   ['document', 'dragstart', 'bubble', composer.onPageDragStart, 'a drag beginning in this document (features/composer)'],
   ['document', 'dragend', 'bubble', composer.onPageDragEnd, 'the same drag ending (features/composer)'],
   ['document', 'scroll', 'capture', scrollbars.onScroll, 'the overlay scrollbars (chrome/behaviour/scrollbars)'],
@@ -86,8 +92,12 @@ type Row = [string, string, string, boolean, unknown]
    into nothing. */
 function record(): Row[] {
   const rows: Row[] = []
-  const real = { document: document.addEventListener, window: window.addEventListener }
-  const patch = (name: 'document' | 'window') =>
+  const real = {
+    document: document.addEventListener,
+    window: window.addEventListener,
+    visualViewport: visualViewport.addEventListener,
+  }
+  const patch = (name: 'document' | 'window' | 'visualViewport') =>
     (type: string, fn: unknown, opts?: unknown): void => {
       const capture = opts === true
         || (typeof opts === 'object' && opts !== null && (opts as AddEventListenerOptions).capture === true)
@@ -95,11 +105,13 @@ function record(): Row[] {
     }
   document.addEventListener = patch('document') as typeof document.addEventListener
   window.addEventListener = patch('window') as typeof window.addEventListener
+  visualViewport.addEventListener = patch('visualViewport') as typeof visualViewport.addEventListener
   try {
     installGlobalListeners()
   } finally {
     document.addEventListener = real.document
     window.addEventListener = real.window
+    visualViewport.addEventListener = real.visualViewport
   }
   return rows
 }
@@ -110,8 +122,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-describe('the page\'s document and window listeners', () => {
-  it('registers twenty-three, in one order, nothing twice', () => {
+describe('the page\'s page-level listeners', () => {
+  it('registers twenty-four, in one order, nothing twice', () => {
     const rows = record()
     expect(rows.map(([target, type, phase]) => [target, type, phase]))
       .toEqual(ORDER.map(([target, type, phase]) => [target, type, phase]))

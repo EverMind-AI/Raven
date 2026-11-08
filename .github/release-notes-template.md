@@ -87,7 +87,10 @@ the beta channel (a `~/.raven/beta.json` that only the beta installer writes).
 installing it. Editable source checkouts are never overwritten, and a page
 served by one refuses the update row as well: `raven upgrade` reports the
 checkout path and how far it is ahead of or behind `origin/main`, and the remedy
-is `git pull && ./install.sh` in the checkout. Rerunning the one-line installer
+is `git pull && ./install.sh` in the checkout on Linux and macOS, or, on
+Windows, `raven web --stop`, `git pull`, then
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1` once the pull
+succeeds. Rerunning the one-line installer
 also upgrades, and ends on the running page.
 
 ## Release Status

@@ -33,6 +33,7 @@ from raven.config.live import (
     max_tool_iterations,
     reasoning_effort,
     skill_gate_pin,
+    skill_hub_enabled,
 )
 
 
@@ -232,6 +233,124 @@ class TestBothSpellingsCount:
         path = tmp_path / "config.json"
         _write(path, {"tools": {"disabledTools": "exec"}})
         assert disabled_tool_names(LiveConfig(path)) == frozenset()
+
+
+class TestTheHubSwitch:
+    """The conversational Hub source is read live: its off switch must stop the
+    next query, not the next process, and a hand-written value must read the
+    way the loader reads it."""
+
+    def _live(self, tmp_path: Path, payload: dict) -> LiveConfig:
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        return LiveConfig(path)
+
+    def test_no_block_is_off(self, tmp_path: Path) -> None:
+        assert skill_hub_enabled(self._live(tmp_path, {})) is False
+
+    def test_an_endpoint_is_on(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        assert skill_hub_enabled(live) is True
+
+    def test_an_explicit_off_is_off(self, tmp_path: Path) -> None:
+        live = self._live(
+            tmp_path,
+            {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": False}}}},
+        )
+        assert skill_hub_enabled(live) is False
+
+    @pytest.mark.parametrize("written", [0, "false", "off"])
+    def test_a_hand_written_false_reads_like_the_loader(self, tmp_path: Path, written) -> None:
+        live = self._live(
+            tmp_path,
+            {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": written}}}},
+        )
+        assert skill_hub_enabled(live) is False
+
+    def test_the_snake_case_block_is_read(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skill_forge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        assert skill_hub_enabled(live) is True
+
+    def test_both_spellings_are_off_like_the_loader(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "skillForge": {"router": {"hub": {"endpoint": "https://cam.test"}}},
+                "skill_forge": {"router": {"hub": {"endpoint": "https://snake.test"}}},
+            },
+        )
+        assert skill_hub_enabled(LiveConfig(path)) is False
+
+    def test_a_switch_off_is_the_next_answer(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.json"
+        _write(path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+        live = LiveConfig(path)
+        assert skill_hub_enabled(live) is True
+
+        _write(path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "enabled": False}}}})
+        assert skill_hub_enabled(live) is False
+
+    def test_an_invalid_hub_block_is_off(self, tmp_path: Path) -> None:
+        live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": 7}}}})
+        assert skill_hub_enabled(live) is False
+
+    @pytest.mark.parametrize(
+        ("payload", "on"),
+        [
+            ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetchBodies": 1}}}}, True),
+            ({"skill_forge": {"router": {"hub": {"endpoint": "https://hub.test", "prefetch_bodies": 1}}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "prefetchBodies": 1}}}, True),
+            ({"skill_router": {"hub": {"endpoint": "https://legacy.test"}}}, True),
+            ({"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}}, False),
+            (
+                {
+                    "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
+                    "skillForge": {"router": {"hub": {"enabled": False}}},
+                },
+                False,
+            ),
+        ],
+    )
+    def test_a_shape_the_loader_migrates_reads_like_the_loader(self, tmp_path: Path, payload: dict, on: bool) -> None:
+        """The loader rewrites these shapes in memory only -- ``_persist_migrations``
+        never writes them back -- so the file keeps them for good, and a reader
+        of the raw file that skips the migration turns off a Hub the runtime built."""
+        from raven.config.raven import load_raven_config
+
+        path = tmp_path / "config.json"
+        _write(path, payload)
+        hub = load_raven_config(path).skill_forge.router.hub
+
+        assert (bool(hub.endpoint) and hub.enabled) is on
+        assert skill_hub_enabled(LiveConfig(path)) is on
+
+    def test_a_section_the_migration_cannot_walk_answers_off(self, tmp_path: Path) -> None:
+        """The migration walks the whole file for this one answer. A hand edit
+        that breaks an unrelated section is a file the loader refuses: it costs
+        the Hub, not every search that asks."""
+        live = self._live(tmp_path, {"tools": [], "skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
+
+        assert skill_hub_enabled(live) is False
+
+    def test_the_migration_runs_once_per_change_of_the_file(self, tmp_path: Path, monkeypatch) -> None:
+        """Asked before every Hub search and tool call: the copy-and-migrate is
+        paid when the bytes change, not per ask."""
+        import raven.config.loader as loader
+
+        real = loader._migrate_config
+        calls: list[int] = []
+        monkeypatch.setattr(loader, "_migrate_config", lambda data, **kw: calls.append(1) or real(data, **kw))
+        path = tmp_path / "config.json"
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test"}}})
+        live = LiveConfig(path)
+
+        assert [skill_hub_enabled(live) for _ in range(3)] == [True, True, True]
+        assert len(calls) == 1
+
+        _write(path, {"skillRouter": {"hub": {"endpoint": "https://legacy.test", "enabled": False}}})
+        assert skill_hub_enabled(live) is False
+        assert len(calls) == 2
 
 
 class TestThePlaybookSwitch:
@@ -1241,6 +1360,99 @@ class TestLiveVendorKeyFollowsTheCanonicalOrder:
         _write(path, {"tools": {"web": {"jinaApiKey": ""}}})
 
         assert live_vendor_key(LiveConfig(path), "jina", boot="sk-jina-boot") == ""
+
+    def test_a_borrowing_vendor_reads_the_llm_providers_key_live(self, tmp_path: Path) -> None:
+        """DeepSeek's web slot is optional; the key under ``providers.deepseek``
+        pays for it too, and a rotation there has to reach the next call the way
+        every other key in this reader does."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-llm"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-llm"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": "sk-rotated"}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "sk-rotated"
+
+        _write(
+            path,
+            {
+                "providers": {"deepseek": {"apiKey": ""}},
+                "tools": {"web": {"providers": {"deepseek": {"apiKey": ""}}}},
+            },
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-llm") == "", "a cleared LLM key revokes"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == "sk-boot", "no file entry keeps boot"
+
+    def test_a_borrow_follows_the_section_address_and_its_endpoints_live(self, tmp_path: Path) -> None:
+        """The live answer obeys the same host rule as the boot one, and an
+        endpoint's key replaces the flat one it supersedes."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-gw", "apiBase": "https://llm-gw.corp.example/v1"}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-gw") == ""
+
+        _write(
+            path,
+            {"providers": {"deepseek": {"apiKey": "sk-old", "endpoints": [{"label": "a", "apiKey": "sk-new"}]}}},
+        )
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="") == "sk-new"
+
+    def test_a_rejected_provider_edit_keeps_the_last_live_borrowed_key(self, tmp_path: Path) -> None:
+        """A file being rewritten is briefly invalid; a rejected edit must keep
+        the last admitted borrowed key serving and not roll it back to boot,
+        while removing the provider section still hands the boot value back."""
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-1"}}})
+        live = LiveConfig(path)
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": {"nested": 1}}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-1", "a rejected edit keeps the last admitted key"
+
+        _write(path, {"providers": {"deepseek": {"apiKey": "sk-2"}}})
+        assert live_vendor_key(live, "deepseek", boot="") == "sk-2"
+
+        _write(path, {"tools": {"web": {}}})
+        assert live_vendor_key(live, "deepseek", boot="sk-boot") == "sk-boot", "an absent provider falls back to boot"
+
+    def test_an_empty_provider_key_without_a_web_slot_is_a_revocation(self, tmp_path: Path) -> None:
+        from raven.config.live import live_vendor_key
+
+        path = tmp_path / "config.json"
+        _write(path, {"providers": {"deepseek": {"apiKey": ""}}})
+        assert live_vendor_key(LiveConfig(path), "deepseek", boot="sk-boot") == ""
+
+    def test_a_malformed_provider_section_dispenses_no_live_answer(self, tmp_path: Path) -> None:
+        """A provider block the schema rejects is named but carries no answer;
+        the live reader admits it through its last-good memory. A provider the
+        file does not name at all is a different state -- the boot value keeps
+        serving."""
+        from raven.config.schema import live_borrowed_web_answer
+
+        assert live_borrowed_web_answer("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) == (True, None)
+        assert live_borrowed_web_answer("deepseek", {"openai": {"apiKey": "x"}}) == (False, None)
+        assert live_borrowed_web_answer("deepseek", ["not", "a", "dict"]) == (False, None)
 
     def test_a_leaf_the_schema_rejects_dispenses_no_new_answer(self, tmp_path: Path) -> None:
         from raven.config.live import web_jina_key

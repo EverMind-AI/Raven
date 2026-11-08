@@ -13,7 +13,7 @@ import { installWsPane } from '../../test/wsPaneHarness'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import * as store from './store'
-import { TaskPane, TaskRuns, TasksApp } from './TasksPage'
+import { TaskPane, TaskRuns, TasksPanel } from './TasksPage'
 
 import type { WsChange } from '../workspace/types'
 import type { NodeRecord, SubagentRow, TaskNode, TaskRow, TasksSource } from './types'
@@ -76,7 +76,7 @@ afterEach(() => {
 
 describe('the tasks list', () => {
   const draw = async (): Promise<void> => {
-    render(<TasksApp />)
+    render(<TasksPanel />)
     await act(async () => { await store.refresh() })
   }
 
@@ -1612,15 +1612,16 @@ describe('the node panel', () => {
       })
       pick(withTwo, 0)
       await act(async () => {})
-      /* The process fold starts closed for a settled node (item 15); open it
-         to reach the thought inside. */
+      /* The process fold starts closed for a settled node (item 15), and a
+         node's own reasoning does too -- open both to read the thought. */
       fireEvent.click(document.querySelector('.tkprock') as Element)
-      fireEvent.click(document.querySelector('.tkthh') as Element)
       expect(document.querySelector('.tkthink blockquote')).toBeNull()
+      fireEvent.click(document.querySelector('.tkthh') as Element)
+      expect(document.querySelector('.tkthink blockquote')).not.toBeNull()
       fireEvent.click(document.querySelectorAll('.daggraph .nd')[1] as Element)
       await act(async () => {})
       fireEvent.click(document.querySelector('.tkprock') as Element)
-      expect(document.querySelector('.tkthink blockquote')).not.toBeNull()
+      expect(document.querySelector('.tkthink blockquote')).toBeNull()
     })
   })
 
@@ -1950,5 +1951,93 @@ describe('a node record still being written', () => {
     fireEvent.click(document.querySelectorAll('.pane-head-seg button')[1] as Element)
     await readAgain('second')
     expect(body().scrollTop).toBe(4403)
+  })
+})
+
+/* A node handed to another agent mid-run. The pane keeps naming the agent that
+   runs it now, and says which agents tried it before -- in the detail block, not
+   on any always-visible list. */
+describe('the pane of a reassigned node', () => {
+  const pick = (task: TaskRow, i = 0): void => {
+    render(<TaskPane task={task} full />)
+    fireEvent.click(document.querySelectorAll('.daggraph .nd')[i] as Element)
+  }
+  const moved = (over: Partial<TaskNode> = {}): TaskRow => task({
+    id: 'a', kind: 'dag', status: 'running',
+    nodes: [node({
+      node_id: 'fix', status: 'running', started_at: 1000, agent: 'beta', instance: 'fix-minted',
+      attempt_agents: ['alpha', 'alpha', 'beta'], ...over,
+    })],
+  })
+
+  it('names the agent running it now in the header, and the history in its detail', () => {
+    pick(moved())
+
+    expect(document.querySelector('.pane-head-meta')?.textContent).toContain('beta')
+    const facts = [...document.querySelectorAll('.tkbranch .tkfield')]
+      .map((f) => [f.querySelector('.tkfk')?.textContent, f.querySelector('.tkfv')?.textContent])
+    expect(facts).toEqual([['gui.tasks.node_attempts', 'alpha x2 -> beta']])
+  })
+
+  it('draws no attempt line for a node that never moved', () => {
+    pick(task({
+      id: 'a', kind: 'dag', status: 'running',
+      nodes: [node({ node_id: 'fix', status: 'running', started_at: 1000, agent: 'alpha' })],
+    }))
+
+    expect(document.querySelector('.tkbranch')).toBeNull()
+    expect(document.body.textContent).not.toContain('gui.tasks.node_attempts')
+  })
+
+  it('says nothing for an empty history', () => {
+    pick(moved({ attempt_agents: [] }))
+
+    expect(document.querySelector('.tkbranch')).toBeNull()
+  })
+
+  it('keeps the sequence and its label in the shared catalogue, translated', () => {
+    const entry = I18N.ui['gui.tasks.node_attempts']
+    expect(entry?.en).toBe('Attempts')
+    expect(entry?.zh).toBeTruthy()
+    expect(entry?.zh).not.toBe(entry?.en)
+  })
+})
+
+/* Execution failures are said in words on the task surfaces. The warning
+   colour stays for the stop control, diff deletions, and the data-read errors
+   that ask the reader to look (`.tkerrb` / `.tkberr`). A token cannot be
+   observed in happy-dom, so the stylesheet is what these read. */
+describe('the task surfaces\' failure colour', () => {
+  const rule = (head: string): string => {
+    const css = readFileSync('src/features/tasks/styles.css', 'utf8')
+    const at = css.indexOf(head)
+    expect(at, head).toBeGreaterThanOrEqual(0)
+    return css.slice(at, css.indexOf('}', at) + 1)
+  }
+
+  it('paints a failed task or step with the neutral tokens', () => {
+    for (const sel of [
+      '.tkmeta[data-st="error"] .dot {', '.tkwhy {', '.tkretry {',
+      '.tkexit.bad {', '.tkfork .nd[data-st="failed"] .tkrunrt {',
+      '.tkstep[data-st="error"] .tkmark {', '.tkstt .dot.bad {',
+    ]) {
+      expect(rule(sel), sel).not.toMatch(/--(?:clay|chat-danger)/)
+    }
+    /* The banner still has its own surface; only the alarm colour is gone. */
+    expect(rule('.tkwhy {')).toContain('var(--surface)')
+  })
+
+  it('keeps the data-read failures in the system warning colour', () => {
+    /* `.tkerrb` is a node record that could not be read; `.tkberr` is the
+       Tasks page failing to refresh. Neither is an execution outcome, so both
+       keep the original clay treatment. */
+    expect(rule('.tkerrb {')).toMatch(/color:\s*var\(--clay\)/)
+    expect(rule('.tkerrb {')).toContain('color-mix(in oklab, var(--clay) 8%, var(--paper))')
+    expect(rule('.tkberr {')).toMatch(/color:\s*var\(--clay\)/)
+  })
+
+  it('keeps the destructive stop and the diff deletion count in the warning colour', () => {
+    expect(rule('.tkhalt:hover:not(:disabled) {')).toContain('--clay')
+    expect(rule('.tkchips .del {')).toContain('--clay')
   })
 })

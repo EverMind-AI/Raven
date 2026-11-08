@@ -236,7 +236,7 @@ def is_configured(cap: Capability, config: "Config") -> bool:
         vendor = image_search_vendor(config.tools.web.search.provider, config.tools.web.vendor_key)
         return ImageSearchTool.is_configured(config.tools.web.vendor_key(vendor), vendor)
     provider = config.tools.web.search.provider
-    return WebSearchTool.is_configured(config.tools.web.vendor_key(provider), provider)
+    return WebSearchTool.is_configured(config.effective_web_vendor_key(provider), provider)
 
 
 def disabled_by(cap: Capability, config: "Config") -> str:
@@ -309,7 +309,7 @@ def has_credential(cap: Capability, config: "Config") -> bool:
 
     if cap.tool == WebSearchTool.name:
         provider = config.tools.web.search.provider
-        return WebSearchTool.has_key(config.tools.web.vendor_key(provider), provider)
+        return WebSearchTool.has_key(config.effective_web_vendor_key(provider), provider)
     return is_configured(cap, config)
 
 
@@ -383,6 +383,10 @@ def configured_from(cap: Capability, config: "Config") -> str:
             return f"tools.web.providers.{provider}.apiKey"
         if provider == "serper" and config.tools.web.search.api_key:
             return "tools.web.search.apiKey"
+        from raven.config.schema import borrowed_web_key, web_vendor_llm_source
+
+        if borrowed_web_key(provider, config.providers):
+            return f"borrowed: providers.{web_vendor_llm_source(provider)}.apiKey"
     env_var = resolve(cap, config).env_var
     return env_var if os.environ.get(env_var) else ""
 

@@ -205,6 +205,9 @@ class SearchProviderSpec:
 
 
 DEFAULT_SEARCH_PROVIDER = "serper"
+# DeepSeek's Search API accepts 1-128 Unicode characters in ``query``; longer
+# answers HTTP 400, which the ledger's status-only error path cannot explain.
+DEEPSEEK_SEARCH_QUERY_MAX_CHARS = 128
 
 SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "serper": SearchProviderSpec(
@@ -275,6 +278,14 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # No documented result offset; ``max_results`` is honoured as asked.
         paginates=False,
         needs_key=False,
+    ),
+    "deepseek": SearchProviderSpec(
+        vendor="deepseek",
+        label="DeepSeek",
+        env_var="DEEPSEEK_API_KEY",
+        # No offset of any kind, so the ``paginate`` rung is declared
+        # unavailable rather than attempted; ``widen`` stays useful.
+        paginates=False,
     ),
 }
 
@@ -351,6 +362,13 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
         extractor="keenable-fetch",
         # Reads pages without a key at a lower rate limit, like Jina.
         needs_key=False,
+    ),
+    "deepseek": FetchProviderSpec(
+        vendor="deepseek",
+        label="DeepSeek",
+        env_var="DEEPSEEK_API_KEY",
+        extractor="deepseek-fetch",
+        needs_key=True,
     ),
 }
 
@@ -1059,6 +1077,16 @@ class WebSearchTool(Tool):
                 [],
                 dict(_NO_SHAPING),
             )
+        if self.provider == "deepseek" and len(query) > DEEPSEEK_SEARCH_QUERY_MAX_CHARS:
+            # The vendor's own limit, checked before the request: its 400 reads as
+            # a bare status through this tool's error path, so the model would
+            # otherwise never learn to shorten the query.
+            return (
+                f"Error: DeepSeek accepts at most {DEEPSEEK_SEARCH_QUERY_MAX_CHARS} characters in a search "
+                f"query; this one is {len(query)}. Shorten it and call web_search again.",
+                [],
+                dict(_NO_SHAPING),
+            )
 
         try:
             # ``k`` reaches this path but must not become a larger ``num``. Probed
@@ -1278,6 +1306,17 @@ class WebSearchTool(Tool):
                 headers=headers,
                 timeout=10.0,
             )
+        if self.provider == "deepseek":
+            return await client.post(
+                "https://api.deepseek.com/v1/tools/search",
+                json={"query": query, "count": n},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=10.0,
+            )
         # AnySearch.
         return await client.post(
             "https://api.anysearch.com/v1/search",
@@ -1362,6 +1401,21 @@ class WebSearchTool(Tool):
                     for row in _rows(data.get("results"), url="url", snippet="snippet")
                 ]
             }
+        if self.provider == "deepseek":
+            # ``summary`` (600-800 characters) is the field the vendor documents
+            # as the one the model reads; ``snippet`` is the UI line beside it.
+            organic = []
+            for item in data.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                organic.append(
+                    {
+                        "title": str(item.get("title") or ""),
+                        "link": str(item.get("url") or ""),
+                        "snippet": str(item.get("summary") or item.get("snippet") or ""),
+                    }
+                )
+            return {"organic": organic}
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item
@@ -2174,6 +2228,22 @@ class WebFetchTool(Tool):
             data = r.json()
             if not isinstance(data, dict) or not (text := str(data.get("content") or "")):
                 raise _ProviderPageError("Keenable returned no page content")
+            return text, r.status_code
+
+        if self.provider == "deepseek":
+            headers = {**json_headers, "Authorization": f"Bearer {self.api_key}"}
+
+            async def _send_deepseek() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.post(
+                        "https://api.deepseek.com/v1/tools/fetch", json={"url": url}, headers=headers
+                    )
+
+            r = await _send_with_retry(_send_deepseek, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            text = str(data.get("content") or "") if isinstance(data, dict) else ""
+            if not text:
+                raise _ProviderPageError("DeepSeek returned no page content")
             return text, r.status_code
 
         # AnySearch. No cache-bust header is published, so the garbled-page

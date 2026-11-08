@@ -52,9 +52,11 @@ class FakeDagTool:
     def __init__(self):
         self.calls = []
         self.context = None
+        self.surface = None
 
-    def set_context(self, channel, chat_id, session_key=None):
+    def set_context(self, channel, chat_id, session_key=None, surface=None):
         self.context = (channel, chat_id, session_key)
+        self.surface = surface
 
     async def execute(
         self, nodes, task_summary="", background=True, confirm=False, mcp_servers=None, mcp_scope=None, **_
@@ -1238,6 +1240,18 @@ async def test_context_is_recorded_for_the_dispatch_address(tmp_path: Path):
     await rt.load("weekly-feedback", {"week_of": "w"})
 
     assert tool.context == ("web", "room-7", "web:room-7")
+
+
+async def test_a_playbook_run_keeps_the_surface_of_the_turn_that_loaded_it(tmp_path: Path):
+    """Its result comes back as a turn of its own, and the terminal and the page
+    share a channel: the surface is what tells that turn which one reads it."""
+    tool = FakeDagTool()
+    rt = _runtime(tmp_path, [_dag_spec()], dag_tool=tool)
+
+    rt.set_context(channel="tui", chat_id="c1", session_key="tui:c1", surface="tui")
+    await rt.load("weekly-feedback", {"week_of": "w"})
+
+    assert (tool.context, tool.surface) == (("tui", "c1", "tui:c1"), "tui")
 
 
 # --- Run-unique node ids: the runner holds ids unique per session, authors

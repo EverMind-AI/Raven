@@ -30,7 +30,9 @@ from raven.acp.updates import (
     MAX_RAW_INPUT_CHARS,
     MAX_RESULT_PREVIEW,
     SIDE_CHANNEL_METHODS,
+    UNSERVED_EVENT_TYPES,
     AcpSession,
+    Translated,
     TurnAlreadyRunningError,
     UpdateTranslator,
     translate,
@@ -65,20 +67,26 @@ class TestWireVocabulary:
         import inspect
         import re
 
+        from raven.agent.task_board import service as task_board_service
         from raven.rpc import spine
         from raven.rpc.methods import turn
 
         emitted = set()
-        for module in (spine, turn):
+        for module in (spine, turn, task_board_service):
             source = inspect.getsource(module)
             emitted |= set(re.findall(r'"type": "([a-z_.]+)"', source))
         emitted |= set(re.findall(r'"(dag\.[a-z_]+)"', inspect.getsource(spine)))
         emitted |= {"cron.delivered", "cron.missed"}
 
-        missing = emitted - KNOWN_EVENT_TYPES
+        missing = emitted - KNOWN_EVENT_TYPES - UNSERVED_EVENT_TYPES
         assert missing == set(), (
             f"these wire events reach the ACP sink with no branch in the translator: {sorted(missing)}"
         )
+
+    def test_an_unserved_event_is_dropped_and_never_also_served(self):
+        assert UNSERVED_EVENT_TYPES.isdisjoint(KNOWN_EVENT_TYPES)
+        for kind in UNSERVED_EVENT_TYPES:
+            assert translate({"type": kind, "payload": {"session_key": "acp:s1"}}) == Translated()
 
     def test_the_pinned_set_does_not_claim_events_that_do_not_exist(self):
         # The other direction: a name left behind after an event was renamed
@@ -488,6 +496,10 @@ class TestUsage:
         what was reported stands, and before any price there is none to send."""
         assert self._costs(_session(), None, 0.01, None) == pytest.approx([None, 0.01, 0.01])
 
+    def test_a_cost_that_is_no_finite_amount_leaves_the_total_where_it_was(self):
+        """``inf`` added once would be the session's total for good."""
+        assert self._costs(_session(), 0.01, float("inf"), 0.02) == pytest.approx([0.01, 0.01, 0.03])
+
     def test_a_session_that_was_resumed_counts_on_from_its_earlier_spend(self):
         session = _session()
         session.cost_usd = 1.5
@@ -555,6 +567,12 @@ class TestTerminationMapping:
     def test_other_notices_stay_off_the_wire(self):
         for kind in ("progress", "tool_hint", "injected", "delivery_failed"):
             assert translate({"type": "notice", "payload": {"kind": kind}}).updates == ()
+
+    def test_a_silent_turn_notice_writes_nothing_of_what_its_reply_showed(self):
+        """ACP has no way to take a chunk back, and the detail is text the client already holds."""
+        payload = {"kind": "silent_turn", "detail": "<think>nothing new</think>", "transient": False}
+        result = translate({"type": "notice", "payload": payload})
+        assert (result.updates, result.latch, result.stop) == ((), None, None)
 
 
 class TestUnmappedEvents:

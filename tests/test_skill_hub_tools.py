@@ -559,3 +559,49 @@ class TestUseSkillAutoInstall:
         )
         assert not out.startswith("Error") and not out.startswith("Skill install skipped")
         assert client.install_calls == ["foo"]
+
+
+class TestTheHubSwitch:
+    """Off is checked per call, before any request leaves for the Hub; the
+    local sources are not affected."""
+
+    async def test_a_hub_read_is_refused_when_the_switch_is_off(self) -> None:
+        client = _FakeClient(get_result={"skill_md": "x", "name": "Foo"})
+
+        out = await ReadSkillTool(client=client, enabled_reader=lambda: False).execute(skill_id="hub/foo")
+
+        assert out.startswith("Error") and "turned off" in out
+        assert client.get_calls == []
+
+    async def test_the_switch_is_read_per_read(self) -> None:
+        on = {"value": False}
+        client = _FakeClient(get_result={"skill_md": "do the thing", "name": "Foo"})
+        tool = ReadSkillTool(client=client, enabled_reader=lambda: on["value"])
+
+        assert "turned off" in await tool.execute(skill_id="hub/foo")
+        on["value"] = True
+        out = await tool.execute(skill_id="hub/foo")
+
+        assert "Foo" in out and client.get_calls == ["foo"]
+
+    async def test_a_local_read_still_works_when_the_switch_is_off(self, tmp_path: Path) -> None:
+        reg = _registry_with(tmp_path, workspace=["x"])
+
+        out = await ReadSkillTool(registry=reg, enabled_reader=lambda: False).execute(skill_id="local/x")
+
+        assert "body" in out
+
+    async def test_a_hub_install_is_refused_when_the_switch_is_off(self) -> None:
+        client = _FakeClient(install_result={"slug": "foo", "version": "v1", "skill_md": "x"})
+
+        out = await UseSkillTool(client=client, enabled_reader=lambda: False).execute(skill_id="hub/foo")
+
+        assert out.startswith("Error") and "turned off" in out
+        assert client.get_calls == [] and client.install_calls == []
+
+    async def test_a_local_use_still_works_when_the_switch_is_off(self, tmp_path: Path) -> None:
+        reg = _registry_with(tmp_path, workspace=["x"])
+
+        out = await UseSkillTool(registry=reg, enabled_reader=lambda: False).execute(skill_id="local/x")
+
+        assert "body" in out

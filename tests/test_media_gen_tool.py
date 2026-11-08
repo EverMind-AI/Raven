@@ -209,9 +209,10 @@ _JPG = b"\xff\xd8\xff\xe0" + b"jpg pixels"
 
 async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_picture(monkeypatch, tmp_path) -> None:
     """The Volces Ark Agent-Plan endpoint speaks its own dialect on
-    /images/generations -- ``size`` as an explicit WxH pair at the 2K budget,
-    no response_format -- and answers with ``data[].url`` only, so the picture
-    behind the URL is fetched and written like any other generated file."""
+    /images/generations -- ``size`` as an explicit WxH pair at the 2K budget --
+    and this one ignores the request for inline bytes and answers with
+    ``data[].url`` only, so the picture behind the URL is fetched and written
+    like any other generated file."""
     sent: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -232,7 +233,13 @@ async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_pictur
     assert out["success"] and out["model"] == "doubao-seedream-5-0-pro"
     path = Path(out["paths"][0])
     assert path.suffix == ".jpg" and path.read_bytes() == _JPG
-    assert sent["body"] == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2736x1539"}
+    assert sent["body"] == {
+        "model": "doubao-seedream-5-0-pro",
+        "prompt": "a poster",
+        "n": 1,
+        "size": "2736x1539",
+        "response_format": "b64_json",
+    }
     # The download URL is the provider's own storage, not its API: the key the
     # generation call carried must not travel with the fetch.
     assert sent["download"].headers.get("Authorization") is None
@@ -445,6 +452,139 @@ async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, t
     assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
 
 
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://ark.cn-beijing.volces.com/api/v3", "https://ark.cn-beijing.volces.com/api/plan/v3"],
+    ids=["standard", "agent-plan"],
+)
+async def test_an_ark_base_asks_for_the_picture_inline(monkeypatch, tmp_path, api_base) -> None:
+    """A URL answer is a second request to provider-named storage; behind a
+    fake-IP resolver the guarded fetch refuses it and a billed picture is
+    lost. Ark can answer inline, so both Ark bases ask for b64_json."""
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "output_format": "png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base=api_base,
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"]
+    assert sent["body"]["response_format"] == "b64_json"
+
+
+@pytest.mark.parametrize(
+    ("output_format", "payload", "suffix"),
+    [("jpeg", _JPG, ".jpg"), ("png", _PNG, ".png")],
+    ids=["jpeg", "png"],
+)
+async def test_an_ark_inline_picture_takes_its_type_from_output_format(
+    monkeypatch, tmp_path, output_format, payload, suffix
+) -> None:
+    """Ark names the type on the entry as ``output_format``, not ``media_type``;
+    reading only the latter wrote every picture as .png."""
+    encoded = base64.b64encode(payload).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": encoded, "output_format": output_format}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == suffix and path.read_bytes() == payload
+
+
+@pytest.mark.parametrize(
+    ("output_format", "mime"),
+    [
+        ("jpeg", "image/jpeg"),
+        ("jpg", "image/jpeg"),
+        ("png", "image/png"),
+        ("PNG", "image/png"),
+        (".jpg", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("tiff", "image/gif"),
+    ],
+    ids=["jpeg", "jpg-alias", "png", "uppercase", "leading-dot", "webp", "unknown"],
+)
+def test_picture_mime_reads_every_spelling_of_output_format(output_format, mime) -> None:
+    """The jpg alias, case folding and a leading dot all resolve to a known
+    MIME; an unknown format falls to the caller's default."""
+    assert media_gen._picture_mime({"output_format": output_format}, "image/gif") == mime
+
+
+async def test_an_ark_url_picture_without_an_image_content_type_takes_output_format(monkeypatch, tmp_path) -> None:
+    """Storage can answer without an image content type; the entry's
+    ``output_format`` is then what says the JPEG is not a .png."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v3/images/generations":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://1.2.3.4/tos/signed.bin", "output_format": "jpeg"}]},
+            )
+        return httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == ".jpg" and path.read_bytes() == _JPG
+
+
+@pytest.mark.parametrize(
+    ("api_base", "model", "payload", "suffix"),
+    [
+        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _JPG, ".jpg"),
+        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _PNG, ".png"),
+        ("https://gw.test/v1", "gpt-image-2", _JPG, ".jpg"),
+        ("https://gw.test/v1", "gpt-image-2", _PNG, ".png"),
+    ],
+    ids=["ark-jpeg", "ark-png", "other-jpeg", "other-png"],
+)
+async def test_a_picture_that_names_no_type_is_typed_from_its_bytes(
+    monkeypatch, tmp_path, api_base, model, payload, suffix
+) -> None:
+    """An entry that names no type is typed from the bytes it carries on every
+    base: a JPEG is a .jpg whether it came from Ark or a gateway. This is the
+    rule the MiniMax path already uses, not a per-base guess at the default."""
+    encoded = base64.b64encode(payload).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model=model,
+        workspace=tmp_path / "ws",
+        api_base=api_base,
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == suffix and path.read_bytes() == payload
+
+
 async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tmp_path) -> None:
     """data[].url is read on every Images base, not only Ark's: a gateway
     answering OpenAI's documented url form used to look like no image at all,
@@ -452,7 +592,9 @@ async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tm
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/images/generations":
-            assert json.loads(request.content)["size"] == "1024x1536"
+            body = json.loads(request.content)
+            assert body["size"] == "1024x1536"
+            assert "response_format" not in body
             return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/cdn/signed.png"}]})
         return httpx.Response(200, headers={"content-type": "image/png"}, content=_PNG)
 
@@ -821,8 +963,9 @@ async def test_a_section_on_a_named_provider_sends_the_id_that_provider_serves(m
 
 async def test_a_section_on_volcengine_speaks_ark_on_the_address_it_borrows(monkeypatch, tmp_path) -> None:
     """``provider: volcengine`` lends VolcEngine's address and key, and that address
-    is Volces Ark: the frame goes out as Ark's explicit pair, and the picture is
-    fetched from the URL the answer carries, without the key."""
+    is Volces Ark: the frame goes out as Ark's explicit pair, inline bytes are
+    asked for, and the picture is fetched from the URL this answer carries
+    anyway, without the key."""
     from raven.config.loader import load_config
 
     seen: list[httpx.Request] = []
@@ -847,7 +990,13 @@ async def test_a_section_on_volcengine_speaks_ark_on_the_address_it_borrows(monk
     assert str(generation.url) == "https://ark.cn-beijing.volces.com/api/v3/images/generations"
     assert generation.headers["authorization"] == "Bearer ark-key"
     body = json.loads(generation.content)
-    assert body == {"model": "doubao-seedream-5-0-pro", "prompt": "a poster", "n": 1, "size": "2736x1539"}
+    assert body == {
+        "model": "doubao-seedream-5-0-pro",
+        "prompt": "a poster",
+        "n": 1,
+        "size": "2736x1539",
+        "response_format": "b64_json",
+    }
     assert download.headers.get("authorization") is None
 
 
@@ -1261,6 +1410,124 @@ def test_a_plain_config_section_stays_a_snapshot() -> None:
 
     tool = ImageGenerateTool(MediaToolConfig(api_key="sk-static"))
     assert tool.api_key == "sk-static"
+
+
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        ({}, "high"),
+        ({"quality": ""}, "high"),
+        ({"quality": "low"}, "low"),
+    ],
+    ids=["unset", "picker-saved-empty", "named"],
+)
+def test_settings_quality_wins_only_where_it_names_one(section: dict, expected: str) -> None:
+    """`mediaSelection()` saves `quality: ""` when the reader picks a model
+    without choosing a quality. An empty string is the section's "no quality
+    named", not a choice that outranks the tool call's own request."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model="custom/gpt-image-2.5", provider="custom", **section)
+
+    assert ImageGenerateTool(config).effective_quality("high") == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("custom/gpt-image-2", "medium"),
+        ("custom/gpt-image-2.5", None),
+    ],
+    ids=["gpt-image-2-has-a-default", "gpt-image-2.5-has-no-default"],
+)
+@pytest.mark.parametrize(
+    "section",
+    [{}, {"quality": ""}],
+    ids=["unset", "picker-saved-empty"],
+)
+def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None, section: dict) -> None:
+    """With nothing on the call either, an empty Settings value lands where a
+    section that never had the key lands: gpt-image-2's medium default, and
+    nothing for the other gpt-image ids."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model=model, provider="custom", **section)
+
+    assert ImageGenerateTool(config).effective_quality(None) == expected
+
+
+async def test_an_empty_settings_quality_leaves_the_call_s_quality_in_the_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The picker's saved `quality: ""` used to read as an authoritative choice
+    that the `if quality:` sites then dropped, so a tool call asking for high
+    quality went out with no quality at all. Empty means unset, so the call's
+    value travels; a quality named in Settings still wins over the call's."""
+    from raven.config.schema import ImageToolConfig
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    picker_saved = ImageToolConfig(model="openai/gpt-image-2.5", quality="", api_key="k")
+    assert json.loads(await ImageGenerateTool(picker_saved, workspace=tmp_path).execute("a kitten", quality="high"))[
+        "success"
+    ]
+    assert seen[-1]["quality"] == "high"
+
+    named = ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k")
+    assert json.loads(await ImageGenerateTool(named, workspace=tmp_path).execute("a kitten", quality="high"))["success"]
+    assert seen[-1]["quality"] == "low"
+
+
+async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report's shape: a Custom provider section the picker saved with
+    ``quality: ""``, read live from the config file. That base's generation
+    route is a different quality-injection site from OpenRouter's ``/images``,
+    so the call's own value is checked where the report's request went."""
+    from raven.config.schema import MediaToolConfig
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    source = tmp_path / "host.json"
+    source.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "media": {
+                        "image": {
+                            "apiBase": "https://custom.example/v1",
+                            "apiKey": "custom-key",
+                            "model": "openai/gpt-image-2.5",
+                            "quality": "",
+                        }
+                    }
+                }
+            }
+        )
+    )
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    tool._config_static = MediaToolConfig(selection_config=str(source))
+
+    result = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert result["success"] and result["model"] == "openai/gpt-image-2.5"
+    assert seen[-1].url.path == "/v1/images/generations"
+    body = json.loads(seen[-1].content)
+    assert body["model"] == "openai/gpt-image-2.5"
+    assert body["quality"] == "high"
 
 
 @pytest.mark.parametrize(

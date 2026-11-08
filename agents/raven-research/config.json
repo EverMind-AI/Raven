@@ -12,7 +12,10 @@
       "maxToolIterations": 40,
       "maxTokens": 16384,
       "contextWindowTokens": 65536,
-      "requestTimeoutSeconds": 600
+      "requestTimeoutSeconds": 600,
+      "taskBoard": {
+        "enabled": false
+      }
     }
   },
   "memory": {

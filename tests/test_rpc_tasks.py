@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 import raven.home as raven_home_module
+from raven.agent.subagent import task_rows
 from raven.agent.subagent.dag_reader import read_run
 from raven.agent.subagent.dag_store import DagRunStore, index_guard
 from raven.agent.subagent.history import SpawnRecord, dag_root, nodes_root, session_history_root, spawn_live_key
@@ -582,6 +583,76 @@ async def test_a_finalized_two_node_run_is_one_completed_task(workspace: Path) -
     assert "tool_failure_count" not in n2
 
 
+async def test_a_reassigned_node_reads_back_its_current_agent_and_attempt_history(workspace: Path) -> None:
+    """Before the manifest lands the registry row is the only record of who is
+    running the node; a reader that fell back to ``graph.json`` would name the
+    agent that gave up."""
+    from raven.agent.subagent import instances as instances_mod
+
+    session_dir = _session_dir(workspace)
+    graph = {
+        "task_summary": "moved",
+        "nodes": [{"id": "fix", "subagent": "alpha", "node_summary": "do it", "depends_on": [], "instance": None}],
+    }
+    await _make_run(session_dir, RUN_ID, graph, ["fix"])
+    registry = instances_mod.get_registry()
+    await registry.upsert_dag_node(SESSION, RUN_ID, "fix", "alpha", "exception")
+    await registry.move_dag_node(
+        SESSION,
+        run_id=RUN_ID,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-minted",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert (node["agent"], node["instance"]) == ("beta", "fix-minted")
+    assert node["instance_auto"] is True
+    assert node["attempt_agents"] == ["alpha", "beta"]
+
+
+async def test_a_finalized_reassigned_run_reads_the_same_identity_from_its_manifest(workspace: Path) -> None:
+    """After finalization the manifest is the record, and it agrees with what the
+    registry said while the run was going: same agent, handle, flag and history."""
+    session_dir = _session_dir(workspace)
+    graph = {"task_summary": "moved", "nodes": [{"id": "fix", "subagent": "alpha", "depends_on": []}]}
+    store = await _make_run(session_dir, RUN_ID, graph, ["fix"])
+    await store.write_manifest(
+        {
+            "fix": _manifest_entry(
+                status="completed",
+                subagent="beta",
+                instance="fix-minted",
+                attempt_agents=["alpha", "beta"],
+            )
+        }
+    )
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert (node["agent"], node["instance"]) == ("beta", "fix-minted")
+    assert node["attempt_agents"] == ["alpha", "beta"]
+    assert node["instance_auto"] is False
+
+
+async def test_a_node_that_never_moved_keeps_the_node_keys_it_always_had(workspace: Path) -> None:
+    session_dir = _session_dir(workspace)
+    graph = {"task_summary": "plain", "nodes": [{"id": "fix", "subagent": "Raven", "depends_on": []}]}
+    await _make_run(session_dir, RUN_ID, graph, ["fix"])
+
+    row = (await tasks_list({"session_key": SESSION}))["tasks"][0]
+
+    (node,) = row["nodes"]
+    assert not {"attempt_agents", "instance_auto"} & set(node)
+
+
 async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(workspace: Path) -> None:
     """The v1 bug this replaces: `_mark_stopped` leaves a completed node alone,
     so a run stopped after its first node finishes ends as a *mix* of
@@ -623,27 +694,27 @@ async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(worksp
 
 
 def test_counts_carry_the_new_status() -> None:
-    counts = tasks_mod._counts(["not_executed", "completed"])
+    counts = task_rows._counts(["not_executed", "completed"])
 
     assert counts["not_executed"] == 1
     assert counts["completed"] == 1
     assert counts["total"] == 2
-    assert tasks_mod._counts(["completed"])["not_executed"] == 0, "present on every row, zero when nothing branched"
+    assert task_rows._counts(["completed"])["not_executed"] == 0, "present on every row, zero when nothing branched"
 
 
 def test_a_run_whose_only_oddity_is_an_unselected_branch_reads_as_completed() -> None:
-    assert tasks_mod._task_status(["completed", "not_executed"]) == "completed"
-    assert tasks_mod._task_status(["not_executed"]) == "completed"
+    assert task_rows._task_status(["completed", "not_executed"]) == "completed"
+    assert task_rows._task_status(["not_executed"]) == "completed"
 
 
 def test_an_unselected_branch_moves_no_rung_of_the_status_ladder() -> None:
     """The rungs it sits beside answer as they did: it is not a state that
     stopped the run, so it neither adds to a cancelled run nor hides a failure."""
-    assert tasks_mod._task_status(["completed", "skipped"]) == "cancelled"
-    assert tasks_mod._task_status(["completed", "cancelled", "not_executed"]) == "cancelled"
-    assert tasks_mod._task_status(["failed", "not_executed"]) == "failed"
-    assert tasks_mod._task_status(["running", "not_executed"]) == "running"
-    assert tasks_mod._task_status(["interrupted", "not_executed"]) == "interrupted"
+    assert task_rows._task_status(["completed", "skipped"]) == "cancelled"
+    assert task_rows._task_status(["completed", "cancelled", "not_executed"]) == "cancelled"
+    assert task_rows._task_status(["failed", "not_executed"]) == "failed"
+    assert task_rows._task_status(["running", "not_executed"]) == "running"
+    assert task_rows._task_status(["interrupted", "not_executed"]) == "interrupted"
 
 
 _BRANCHING_GRAPH = {
@@ -1341,16 +1412,16 @@ async def test_newest_first_across_both_kinds(workspace: Path) -> None:
 def test_head_is_none_for_a_missing_file_and_for_one_that_cannot_be_opened(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert tasks_mod._head(tmp_path / "absent.md", 10) is None
+    assert task_rows._head(tmp_path / "absent.md", 10) is None
     present = tmp_path / "present.md"
     present.write_text("0123456789abcdef", encoding="utf-8")
-    assert tasks_mod._head(present, 10) == "0123456789"
+    assert task_rows._head(present, 10) == "0123456789"
 
     def _refuse(self: Path, *args: Any, **kwargs: Any) -> Any:
         raise OSError("locked")
 
     monkeypatch.setattr(Path, "open", _refuse)
-    assert tasks_mod._head(present, 10) is None
+    assert task_rows._head(present, 10) is None
 
 
 def test_tool_call_count_reads_only_the_listed_calls() -> None:
@@ -1358,16 +1429,16 @@ def test_tool_call_count_reads_only_the_listed_calls() -> None:
     tally. Failures are the sub-agent's to report now, so the helper derives
     the call count alone -- a record that still carries ``tool_failures`` is
     evidence the field is ignored, not a second number to publish."""
-    assert tasks_mod._tool_call_count({}) is None
-    assert tasks_mod._tool_call_count({"tool_calls": "not a list"}) is None
-    assert tasks_mod._tool_call_count({"tool_calls": ["a", "b"]}) == 2
-    assert tasks_mod._tool_call_count({"tool_calls": ["a", "b"], "tool_failures": ["b"]}) == 2
+    assert task_rows._tool_call_count({}) is None
+    assert task_rows._tool_call_count({"tool_calls": "not a list"}) is None
+    assert task_rows._tool_call_count({"tool_calls": ["a", "b"]}) == 2
+    assert task_rows._tool_call_count({"tool_calls": ["a", "b"], "tool_failures": ["b"]}) == 2
 
 
 def test_clip_only_clips_strings() -> None:
-    assert tasks_mod._clip(None) is None
-    assert tasks_mod._clip(12) is None
-    assert tasks_mod._clip("x" * 600) == "x" * 500
+    assert task_rows._clip(None) is None
+    assert task_rows._clip(12) is None
+    assert task_rows._clip("x" * 600) == "x" * 500
 
 
 def test_run_id_epoch_ms_reads_the_utc_prefix_and_refuses_the_rest() -> None:
@@ -1386,7 +1457,7 @@ def test_liveness_is_advisory_when_the_manager_refuses(workspace: Path) -> None:
         subagents = _Manager()
 
     assert tasks_mod._live_spawn_handles(_factory(_Loop()), SESSION) == set()
-    assert tasks_mod._manager_of(None) is None
+    assert task_rows.live_spawn_handles(None, SESSION) == set()
 
 
 async def test_a_graph_node_without_an_id_is_skipped_and_skills_pass_through(workspace: Path) -> None:
@@ -1458,8 +1529,15 @@ async def test_register_binds_the_method_name_to_the_reader(monkeypatch: pytest.
             handlers[name] = handler
 
     tasks_mod.register_tasks_methods(_Dispatcher(), agent_loop_factory=None)  # type: ignore[arg-type]
-    assert set(handlers) == {"tasks.list"}
+    assert set(handlers) == {
+        "tasks.list",
+        "tasks.board",
+        "tasks.boards",
+        "tasks.set_group_status",
+        "tasks.ignore_question",
+    }
     assert await handlers["tasks.list"]({"session_key": ""}) == {"tasks": []}
+    assert (await handlers["tasks.board"]({"session_key": ""}))["board"]["groups"] == []
 
 
 # ---------------------------------------------------------------------------

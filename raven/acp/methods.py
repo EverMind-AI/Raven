@@ -43,7 +43,9 @@ from raven.acp.modes import SessionModes, build_session_modes
 from raven.acp.replay import replay
 from raven.acp.updates import AcpSession, TurnAlreadyRunningError, UpdateTranslator
 from raven.config import load_config
+from raven.providers.usage import reported_cost
 from raven.security import redact
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 
 # Methods in the stable manifest that raven does not serve yet. Answered with
 # method-not-found, which is the same answer an unknown name gets -- the
@@ -284,11 +286,27 @@ class AcpMethods:
             return await self._session_cancel(params)
         if method == protocol.STEER_METHOD:
             return await self._session_steer(params)
+        if method == protocol.RESIDENT_WORK_METHOD:
+            return self._resident_work()
         if method in UNIMPLEMENTED_METHODS:
             raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"{method} is not implemented")
         raise AcpMethodError(protocol.METHOD_NOT_FOUND, f"unknown method {method}")
 
     # -- handlers ---------------------------------------------------------
+
+    def _resident_work(self) -> dict[str, Any]:
+        """What this agent holds that runs with nobody asking (``_raven/residentWork``).
+
+        An armed cron job of this agent's partition fires only from this
+        process, and a plugin service lives only as long as it does, so a client
+        about to close the agent for idleness asks first. Read at the moment of
+        asking: a one-shot wake that has fired no longer counts.
+        """
+        loop = self._agent_loop
+        cron = getattr(loop, "cron_service", None)
+        jobs = len(cron.armed_jobs()) if cron is not None else 0
+        services = len(getattr(loop, "running_plugin_services", ()) or ())
+        return {"resident": bool(jobs or services), "cronJobs": jobs, "services": services}
 
     def _initialize(self, params: dict[str, Any]) -> dict[str, Any]:
         """Answer the handshake and keep what the client declared.
@@ -407,7 +425,8 @@ class AcpMethods:
         from ``session.usage``, the account that outlives the process, once per
         session opened rather than per turn: it walks every day of telemetry
         since the session began. Unreadable, the session sends no cost at all; a
-        total counted from here would understate it.
+        total counted from here would understate it. An answer whose spend is
+        not an amount by ``reported_cost`` is unreadable too.
         """
         try:
             spent = await self._call("session.usage", {"session_id": session.session_key})
@@ -416,8 +435,13 @@ class AcpMethods:
             session.cost_known = False
             return
         cost = spent.get("cost_usd") if isinstance(spent, dict) else None
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-            session.cost_usd = float(cost)
+        if cost is None:
+            return
+        if (amount := reported_cost(cost)) is None:
+            logger.warning("acp: what session {} had spent is not an amount: {!r}", session.session_id, cost)
+            session.cost_known = False
+            return
+        session.cost_usd = amount
 
     async def _session_resume(self, params: dict[str, Any]) -> dict[str, Any]:
         """Reopen a stored session for its own state, without replaying it.
@@ -522,7 +546,15 @@ class AcpMethods:
             self._translator.release_session(session_id)
         await self._release_per_session_mcp(session_id)
         if manager is not None:
-            manager.delete(session_id)
+            from raven.agent.task_board.service import remove_unheard
+
+            # Found before the transcript goes, as the store finds it for its observers.
+            board_dir = manager.session_dir(session_id)
+            removed = manager.delete(session_id)
+            transcript_kept = not removed and manager.exists(session_id)
+            remove_unheard(
+                getattr(self._agent_loop, "task_board", None), session_id, board_dir, transcript_kept=transcript_kept
+            )
         self._titles.pop(session_id, None)
         logger.info("acp: deleted session {}", session_id)
         return {}
@@ -967,7 +999,7 @@ class AcpMethods:
         if stop != "end_turn" or sessions is None:
             return stop
         metadata = getattr(sessions.get_or_create(session_key), "metadata", {})
-        for key, refined in (("budget_stop_turn_at", "max_turn_requests"), ("output_limit_turn_at", "max_tokens")):
+        for key, refined in ((BUDGET_STOP_TURN_AT, "max_turn_requests"), (OUTPUT_LIMIT_TURN_AT, "max_tokens")):
             at = metadata.get(key)
             if isinstance(at, int) and at >= filed_before:
                 return refined

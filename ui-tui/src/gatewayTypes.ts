@@ -698,4 +698,4 @@ export type GatewayEvent =
       session_id?: string
       type: 'message.complete'
     }
-  | { payload?: { message?: string }; session_id?: string; type: 'error' }
+  | { payload?: { message?: string; usage?: Usage }; session_id?: string; type: 'error' }

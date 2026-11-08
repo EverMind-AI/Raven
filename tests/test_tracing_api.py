@@ -16,6 +16,16 @@ import pytest
 
 from raven.tracing import spans as _spans
 from raven.tracing import store as _store_mod
+
+
+def _stored_text(path):
+    """A stored payload's plaintext, whichever encoding it was written under."""
+    from raven.tracing.codec import decompress_bytes, is_compressed
+
+    data = Path(path).read_bytes()
+    return (decompress_bytes(data) if is_compressed(data) else data).decode("utf-8")
+
+
 from raven.tracing import trace
 
 
@@ -198,7 +208,7 @@ def test_llm_span_records_what_the_call_asked_for(trace_dir):
     assert attrs["llm.request.temperature"] == 0.95
     assert attrs["llm.request.effort_sent"] == "reasoning.effort=high"
     assert "Z.AI" in attrs["llm.request.provider_fence"]
-    payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    payload = json.loads(_stored_text(attrs["llm.input.artifact_path"]))
     assert payload["generation"]["reasoning"] == {"effort": "high"}
     assert "secret" not in json.dumps(attrs) and "openrouter.ai" not in json.dumps(attrs)
 
@@ -344,8 +354,7 @@ def test_skill_gate_extractor_records_the_subagent_roster(trace_dir):
             None,
         )
     a = _spans_written(trace_dir)[0]["attributes"]
-    with open(a["skill.gate.input.artifact_path"], encoding="utf-8") as fh:
-        payload = json.load(fh)
+    payload = json.loads(_stored_text(a["skill.gate.input.artifact_path"]))
     assert payload["available_subagents"] == "Scribe [stateless] (writes decks)"
 
 
@@ -508,7 +517,7 @@ def test_a_mutated_artifact_does_not_corrupt_the_next_record(trace_dir):
     Path(first["path"]).write_text("CORRUPT", encoding="utf-8")
 
     second = store.persist_artifact("tool.output", {"traceId": "t2"}, payload)
-    text = Path(second["path"]).read_text(encoding="utf-8")
+    text = _stored_text(second["path"])
 
     assert json.loads(text) == payload
     assert hashlib.sha1(text.encode("utf-8")).hexdigest() == second["sha1"]
@@ -548,7 +557,7 @@ def test_an_intact_blob_is_not_rehashed_for_every_span(trace_dir, monkeypatch):
     real_open = Path.open
 
     def counting_open(self, mode="r", *args, **kwargs):
-        if _store_mod.BLOBS_DIR_NAME in self.parts and "b" in mode:
+        if _store_mod.BLOBS_DIR_NAME in self.parts and "b" in mode and not self.name.endswith(".tmp"):
             blob_reads.append(self)
         return real_open(self, mode, *args, **kwargs)
 
@@ -569,8 +578,8 @@ def test_identical_payloads_share_one_inode(trace_dir):
     p1, p2 = Path(first["path"]), Path(second["path"])
     assert p1 != p2
     assert p1.stat().st_ino == p2.stat().st_ino
-    assert json.loads(p1.read_text(encoding="utf-8")) == payload
-    assert json.loads(p2.read_text(encoding="utf-8")) == payload
+    assert json.loads(_stored_text(p1)) == payload
+    assert json.loads(_stored_text(p2)) == payload
     assert first["sha1"] == second["sha1"]
     assert first["bytes"] == second["bytes"]
 
@@ -613,7 +622,7 @@ def test_write_path_falls_back_when_hard_links_are_unavailable(trace_dir, monkey
     art = store.persist_artifact("tool.input", {"traceId": "t1"}, payload)
 
     path = Path(art["path"])
-    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert json.loads(_stored_text(path)) == payload
     assert path.stat().st_nlink == 1
     assert art.get("error") is None
     assert not list(store.blobs_dir.rglob("*.tmp"))
@@ -621,7 +630,7 @@ def test_write_path_falls_back_when_hard_links_are_unavailable(trace_dir, monkey
 
 def test_failed_temp_write_leaves_no_orphan_tmp_file(trace_dir, monkeypatch):
     store = _spans._get_store()
-    real_write_text = Path.write_text
+    real_write_bytes = Path.write_bytes
     calls = {"n": 0}
 
     def _fail_first_call(self, data, *args, **kwargs):
@@ -629,17 +638,17 @@ def test_failed_temp_write_leaves_no_orphan_tmp_file(trace_dir, monkeypatch):
         if calls["n"] == 1:
             # Simulate a write that reaches disk before it fails (e.g. ENOSPC
             # mid-write), so a leftover temp file would prove the bug.
-            real_write_text(self, data, *args, **kwargs)
+            real_write_bytes(self, data, *args, **kwargs)
             raise OSError("simulated disk full")
-        return real_write_text(self, data, *args, **kwargs)
+        return real_write_bytes(self, data, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", _fail_first_call)
+    monkeypatch.setattr(Path, "write_bytes", _fail_first_call)
     payload = {"m": "diskfull"}
 
     art = store.persist_artifact("tool.input", {"traceId": "t1"}, payload)
 
     path = Path(art["path"])
-    assert json.loads(path.read_text(encoding="utf-8")) == payload
+    assert json.loads(_stored_text(path)) == payload
     assert path.stat().st_nlink == 1
     assert art.get("error") is None
     assert not list(store.blobs_dir.rglob("*.tmp"))
@@ -652,7 +661,7 @@ def test_string_payloads_keep_the_txt_extension(trace_dir):
 
     path = Path(art["path"])
     assert path.suffix == ".txt"
-    assert path.read_text(encoding="utf-8") == "raw text"
+    assert _stored_text(path) == "raw text"
     assert (store.blobs_dir / art["sha1"][:2] / f"{art['sha1']}.txt").exists()
 
 
@@ -781,7 +790,7 @@ def test_standard_span_required_attributes(trace_dir):
     assert by["llm.call"]["attributes"]["llm.model"]
     assert by["tool.call"]["attributes"]["tool.name"] == "grep"
     output_path = Path(by["llm.call"]["attributes"]["llm.output.artifact_path"])
-    assert json.loads(output_path.read_text(encoding="utf-8"))["thinking_blocks"] == _Resp.thinking_blocks
+    assert json.loads(_stored_text(output_path))["thinking_blocks"] == _Resp.thinking_blocks
 
 
 def test_llm_span_carries_the_request_size_and_the_transport_facts(trace_dir):
@@ -820,13 +829,13 @@ def test_llm_span_carries_the_request_size_and_the_transport_facts(trace_dir):
     assert attrs["llm.request_image_bytes"] == 300
     assert attrs["llm.request_bytes"] > 400
 
-    input_payload = json.loads(Path(attrs["llm.input.artifact_path"]).read_text(encoding="utf-8"))
+    input_payload = json.loads(_stored_text(attrs["llm.input.artifact_path"]))
     assert input_payload["request"] == {
         "bytes": attrs["llm.request_bytes"],
         "images": 1,
         "imageBytes": 300,
     }
-    output_payload = json.loads(Path(attrs["llm.output.artifact_path"]).read_text(encoding="utf-8"))
+    output_payload = json.loads(_stored_text(attrs["llm.output.artifact_path"]))
     assert output_payload["call"]["body"] == '{"choices": []}'
 
 
@@ -1179,7 +1188,7 @@ def test_address_items_repairs_a_mutated_message_blob(trace_dir):
     store_2 = _store_mod.TraceStore(trace_dir)
     store_2.address_items([message])
 
-    assert blob.read_text(encoding="utf-8") == v2.message_text(message)
+    assert _stored_text(blob) == v2.message_text(message)
 
 
 def test_spans_address_items_returns_the_input_when_the_store_fails(trace_dir, monkeypatch):

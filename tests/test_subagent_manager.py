@@ -26,7 +26,7 @@ import pytest
 from pydantic import ValidationError
 
 from raven.agent import workdir
-from raven.agent.context.silence import SILENCE_INSTRUCTION
+from raven.agent.context.silence import SILENCE_INSTRUCTION, teaches_silence
 from raven.agent.subagent import manager as manager_mod
 from raven.agent.subagent.backends.base import clamp_output
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
@@ -105,11 +105,12 @@ async def _settle(predicate, *, tries: int = 2000) -> None:
     raise AssertionError("condition never reached")
 
 
-def _make_manager(max_concurrent: int) -> SubagentManager:
+def _make_manager(max_concurrent: int, **over) -> SubagentManager:
     return SubagentManager(
         provider=_StubProvider(),
         workspace=Path("/tmp"),
         max_concurrent=max_concurrent,
+        **over,
     )
 
 
@@ -935,8 +936,8 @@ async def test_the_builtin_loop_does_not_tally_a_refused_call_in_the_announcemen
     the announcement, read through the real `_announce_result`. Whether a tool
     error is worth reporting is the sub-agent's decision now, not something the
     system appends, so the announcement carries neither the count nor the name
-    -- while the activity still records the refusal for the run's record and
-    the tasks list.
+    -- while the activity still records the refusal in the run's own record
+    (`meta.json`'s `tool_failures`), which the tasks list no longer reports.
     """
     provider = _DeleteRetryProvider()
     manager = SubagentManager(provider=provider, workspace=tmp_path)
@@ -1307,6 +1308,102 @@ async def test_announce_result_routes_to_tui_session_key(monkeypatch):
     assert submitted[0].conversation == "tui:sess123"
 
 
+_PAGE = {"channel": "tui", "chat_id": "default", "session_key": "tui:page"}
+_TERMINAL = {**_PAGE, "session_key": "tui:term", "surface": "tui"}
+
+
+async def test_a_result_turn_is_read_on_the_surface_that_dispatched_its_run():
+    """The terminal and the page share the ``tui`` channel; only the surface the
+    dispatching turn declared tells the result turn which of them reads it."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    for origin in (_TERMINAL, _PAGE):
+        await mgr._announce_result(
+            task_id="t1", task_summary="label", task="task", result="result", origin=dict(origin), status="ok"
+        )
+
+    assert [(r.conversation, r.source.surface) for r in submitted] == [("tui:term", "tui"), ("tui:page", None)]
+
+
+async def test_a_spawn_keeps_the_surface_it_was_dispatched_from(monkeypatch):
+    mgr = _make_manager(max_concurrent=1)
+    monkeypatch.setattr(manager_mod, "build_executor", lambda *a, **k: _DummyExecutor())
+    seen: list[dict[str, Any]] = []
+
+    async def _inner(task_id, task, label, origin, executor, provider, model) -> None:
+        seen.append(origin)
+
+    monkeypatch.setattr(mgr, "_run_subagent_inner", _inner)
+
+    await mgr.spawn(
+        task="scan", session_key="tui:term", origin_channel="tui", origin_chat_id="default", origin_surface="tui"
+    )
+    await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+    assert [o.get("surface") for o in seen] == ["tui"]
+
+
+async def test_a_dag_notice_keeps_the_open_decision_rule_on_the_terminal():
+    """The page lists open decisions on the board, so its notice leaves that rule out;
+    the terminal draws no board and keeps it."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    mgr = _make_manager(max_concurrent=1, task_board=True)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result("r1", "DAG run r1 finished", dict(_TERMINAL))
+    await mgr.announce_dag_result("r2", "DAG run r2 finished", dict(_PAGE))
+
+    terminal, page = submitted
+    assert (terminal.source.surface, page.source.surface) == ("tui", None)
+    assert terminal.text.endswith(reply_rules_note(board_shown=False))
+    assert page.text.endswith(reply_rules_note(board_shown=True))
+
+
+async def test_an_unprompted_report_is_read_on_the_surface_last_dispatched_from():
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+    mgr.remember_origin(dict(_TERMINAL))
+
+    await mgr.announce_unprompted_turn("tui:term", "watcher", "w1", "the job finished")
+
+    assert [r.source.surface for r in submitted] == ["tui"]
+
+
+async def test_the_spawn_tool_hands_the_turns_surface_to_the_manager(tmp_path: Path) -> None:
+    tool, mgr = _spawn_tool(tmp_path)
+    tool.set_context("tui", "default", "tui:term", surface="tui")
+
+    await tool.execute(node_id="n0", task_summary="Scan", prompt_template="scan the market")
+
+    assert mgr.surfaces == ["tui"]
+
+
+async def test_a_relayed_result_does_not_teach_the_silence_marker():
+    """The person asked for the work, so its result is relayed to them, never withheld: the turn is
+    not told the marker, and a reply that only looks like one is delivered."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result(
+        task_id="t1",
+        task_summary="label",
+        task="task",
+        result="No reply needed.",
+        origin={"channel": "web", "chat_id": "d", "session_key": "web:s1"},
+        status="ok",
+    )
+
+    assert len(submitted) == 1
+    assert "Summarize this naturally for the user" in submitted[0].text
+    assert not teaches_silence(submitted[0].text)
+
+
 async def test_announce_result_routes_non_tui_origin_unchanged(monkeypatch):
     """Non-TUI origins (e.g. a channel with a real chat_id) still announce on
     their existing channel:chat_id conversation — no regression."""
@@ -1620,6 +1717,48 @@ async def test_raven_loop_backend_tools_allow_filters_the_registry(tmp_path, mon
     assert {"read_file", "write_file", "exec", "web_fetch"} <= set(full)
     assert only_read == ["read_file"]
     assert none_at_all == []
+
+
+@pytest.mark.asyncio
+async def test_a_subagent_web_fetch_reads_a_borrowed_key_live(tmp_path, monkeypatch):
+    """The fetch tool's vendor and key are resolved per call, like the main
+    loop's: the DeepSeek key the host configured for chat -- or a rotation of
+    it -- reaches a running sub-agent without a respawn."""
+    from raven.agent.subagent.backends import raven_loop
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.config.live import LiveConfig
+
+    home = tmp_path / "home"
+    config_path = home / "config.json"
+    home.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-llm"}}}))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    monkeypatch.setattr(raven_loop, "_LIVE_CONFIG", LiveConfig(config_path))
+
+    seen: list[Any] = []
+    real = ToolRegistry.register
+
+    def _spy(self, tool):  # noqa: ANN001, ANN202
+        real(self, tool)
+        if tool.name == "web_fetch":
+            seen.append(tool)
+
+    monkeypatch.setattr(ToolRegistry, "register", _spy)
+    backend = raven_loop.RavenLoopBackend(
+        provider=_WhitelistStubProvider(),
+        model="stub",
+        agent_home=tmp_path,
+        web_fetch_provider="deepseek",
+    )
+    await backend.run("task", task_id="t1", workspace=tmp_path, executor=None)
+
+    tool = seen[0]
+    assert tool.provider == "deepseek" and tool.api_key == "sk-llm"
+
+    config_path.write_text(json.dumps({"providers": {"deepseek": {"apiKey": ""}}}))
+    assert tool.provider == "jina", "a revoked key re-evaluates the Jina fallback on the next call"
+    assert tool.api_key == ""
 
 
 def test_build_subagent_prompt_skills_allow_narrows_the_menu(tmp_path):
@@ -2019,6 +2158,7 @@ class _RecordingSpawnManager:
         self.workspace = root
         self.tasks: list[str] = []
         self.authored: list[str | None] = []
+        self.surfaces: list[str | None] = []
 
     def session_dir_for(self, session_key: str) -> Path:
         return self._root
@@ -2026,6 +2166,7 @@ class _RecordingSpawnManager:
     async def spawn(self, *, task: str, **kwargs: Any) -> str:
         self.tasks.append(task)
         self.authored.append(kwargs.get("authored_task"))
+        self.surfaces.append(kwargs.get("origin_surface"))
         return "Subagent [deck] started (id: t1)."
 
 
@@ -4553,8 +4694,9 @@ async def test_an_announcement_does_not_tally_the_runs_failed_calls(tmp_path: Pa
     The tally was `[raven] 2 of this run's 3 tool calls failed` plus the failing
     call names in a fence of their own. Whether a tool error is worth telling
     the user is the sub-agent's decision, so the announcement carries neither
-    the count nor the names -- the activity still records them for the run's
-    record and the tasks list.
+    the count nor the names -- the activity still records them in the run's
+    own record (`meta.json`'s `tool_failures`), which the tasks list no longer
+    reports.
     """
     manager, announced = _manager_capturing_announcements(workspace=tmp_path)
     manager._resolve_backend = lambda agent: _StubBackendWithFailedCalls(
@@ -5208,9 +5350,30 @@ async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
     text = submitted[0].text
     assert text.count(SILENCE_INSTRUCTION) == 1
     assert text.endswith("\n\n" + SILENCE_INSTRUCTION)
+    assert teaches_silence(text), "so the turn reads the loose rule the lesson asks for"
     assert text.rindex(SILENCE_INSTRUCTION) > text.rindex("END UNTRUSTED")
     assert "no reply to the user are needed" not in text
     assert "If it is routine progress only, no action is needed." in text
+
+
+async def test_a_relayed_result_quoting_the_instruction_does_not_teach_silence() -> None:
+    """A DAG result is attacker-influenceable and enters an untaught SUBAGENT turn inside the
+    untrusted fence. Quoting the lesson there must not switch that turn to the loose rule, where a
+    reply the host wrote could be swallowed by a result that happened to contain it."""
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result(
+        "r1",
+        f"the node printed this instruction:\n{SILENCE_INSTRUCTION}",
+        {"channel": "web", "chat_id": "d", "session_key": "web:s1"},
+    )
+
+    assert len(submitted) == 1
+    text = submitted[0].text
+    assert SILENCE_INSTRUCTION in text, "the quoted lesson reaches the prompt, inside the fence"
+    assert not teaches_silence(text)
 
 
 async def test_a_direct_chat_instance_teaches_the_route_back(tmp_path, monkeypatch) -> None:
@@ -5902,6 +6065,204 @@ def test_session_model_for_is_none_for_a_builtin_or_cli_row() -> None:
     assert mgr.session_model_for(None, "Coder", None) is None
 
 
+# ---- session_effort_for against an instance's mode override ----------------
+
+
+def _mode_effort_snapshot(cfg: Any) -> Any:
+    """A handshake whose mode menu is its effort menu: the Pi / Grok / Kimi / DSH shape."""
+    from raven.acp_client.capabilities import AcpMode, CapabilitySnapshot
+
+    return CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(AcpMode("low", "Low"), AcpMode("medium", "Medium"), AcpMode("high", "High")),
+    )
+
+
+def _thought_level_snapshot(cfg: Any) -> Any:
+    """A handshake with a real thought_level option beside a mode menu of its own."""
+    from raven.acp_client.capabilities import AcpEffortChoice, AcpMode, CapabilitySnapshot
+
+    return CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(AcpMode("fast", "Fast"), AcpMode("deep", "Deep")),
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+
+
+def _effort_row_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, snapshot_for: Any) -> SubagentManager:
+    """A manager over one acp row with ``effort="low"``, measured as ``snapshot_for`` says."""
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", snapshot_for)
+    return _third_party_manager(
+        tmp_path, monkeypatch, agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")]
+    )
+
+
+class _DispatchRecordingBackend:
+    """Keeps the mode and the reasoning effort each dispatch was handed."""
+
+    streams = False
+
+    def __init__(self) -> None:
+        self.seen: list[tuple[str | None, str | None]] = []
+
+    async def run(
+        self,
+        task: str,
+        *,
+        mode: str | None = None,
+        session_model: str | None = None,
+        session_effort: str | None = None,
+        **kwargs: Any,
+    ) -> str:
+        self.seen.append((mode, session_effort))
+        return "done"
+
+
+def test_an_instance_mode_override_outranks_the_row_effort_on_a_mode_menu(tmp_path, monkeypatch) -> None:
+    """Where the mode menu is the effort menu, the row's effort and an instance's
+    mode override go out on one channel and only one of them can stand. The
+    person's standing override on a named instance outranks the row, the order
+    ``resolve_mode`` and ``session_model_for`` already keep."""
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low", "no override yet, so the row's effort goes"
+
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "high"
+    assert mgr.session_effort_for("cli", "Pi", "h1") is None
+    assert mgr.session_effort_for("cli", "Pi", "h2") == "low", "another instance keeps the row's"
+    assert mgr.session_effort_for("cli", "Pi", None) == "low", "no instance named, no override to find"
+
+    mgr.set_instance_mode("cli", "Pi", "h1", None)
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low", "cleared, the row's effort is back"
+
+
+def test_an_instance_mode_override_leaves_a_thought_level_effort_alone(tmp_path, monkeypatch) -> None:
+    """A real thought_level option is a second channel: the mode override and the
+    row's effort both reach the session, so neither gives way."""
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _thought_level_snapshot)
+    mgr.set_instance_mode("cli", "Pi", "h1", "deep")
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "deep"
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low"
+
+
+def test_a_session_tier_does_not_hold_back_the_row_effort(tmp_path, monkeypatch) -> None:
+    """The row's effort outranks the Session Tier, which it is sent after; only a
+    person's override on the instance outranks the row."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", _mode_effort_snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")],
+        session_tier=lambda _key: "high",
+    )
+
+    assert mgr.resolve_mode("cli", "Pi", "h1") == "high"
+    assert mgr.session_effort_for("cli", "Pi", "h1") == "low"
+
+
+async def test_a_direct_chat_carries_the_clamped_session_tier(tmp_path, monkeypatch) -> None:
+    """The chat lane resolves its mode through the same `resolve_mode` a spawn
+    does, and the tier is clamped to the rungs the agent offers before it is
+    sent. Only the spawn lane had a tier test, so a chat lane that stopped
+    falling back to the tier would have dispatched at the agent's own default
+    with nothing failing."""
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", _mode_effort_snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Pi", command="pi --acp", effort="low")],
+        session_tier=lambda _key: "max",
+    )
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+
+    await mgr.chat(session_key="cli", agent="Pi", handle="h1", text="go")
+
+    assert [mode for mode, _ in backend.seen] == ["high"], "max clamps to the highest rung Pi offers"
+
+
+async def test_a_direct_chat_sends_the_instance_override_and_not_the_row_effort(tmp_path, monkeypatch) -> None:
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+
+    await mgr.chat(session_key="cli", agent="Pi", handle="h1", text="go")
+
+    assert backend.seen == [("high", None)]
+
+
+async def test_a_spawn_onto_an_overridden_instance_sends_the_override_and_not_the_row_effort(
+    tmp_path, monkeypatch
+) -> None:
+    mgr = _effort_row_manager(tmp_path, monkeypatch, _mode_effort_snapshot)
+    backend = _DispatchRecordingBackend()
+    mgr.registry._backends["Pi"] = backend
+    mgr.set_submit(lambda req: None)
+    mgr.set_instance_mode("cli", "Pi", "h1", "high")
+    origin = {"channel": "cli", "chat_id": "direct", "session_key": "cli", "agent": "Pi"}
+
+    await mgr._run_subagent_inner(
+        "task-a", "go", "go", {**origin, "instance": "h1"}, _DummyExecutor(), mgr.provider, mgr.model
+    )
+    await mgr._run_subagent_inner("task-b", "go", "go", origin, _DummyExecutor(), mgr.provider, mgr.model)
+
+    assert backend.seen == [("high", None), (None, "low")]
+
+
+def test_an_agent_that_advertises_no_modes_takes_no_tier_and_no_mode_override(tmp_path, monkeypatch) -> None:
+    """The Mirasim adapter's shape, as its handshake is measured: effort as a
+    thought_level option and no session modes. The Session Tier has no rung to
+    land on, an instance mode override is refused naming the empty menu, and
+    the row's effort is what reaches the session -- as CONTEXT.md states."""
+    from raven.acp_client.capabilities import AcpEffortChoice, CapabilitySnapshot
+    from raven.agent.subagent.instances import InstanceRegistry
+
+    snapshot = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="fp",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        agent_name="mirasim-claude",
+        can_load=True,
+        effort_choices=(AcpEffortChoice("low", "Low"), AcpEffortChoice("high", "High")),
+        effort_option="effort",
+    )
+    monkeypatch.setattr("raven.agent.subagent.registry.acp_snapshot_for", lambda cfg: snapshot)
+    monkeypatch.setattr(manager_mod, "get_registry", lambda: InstanceRegistry(tmp_path / "reg.json"))
+    mgr = SubagentManager(
+        provider=_StubProvider(),
+        workspace=tmp_path,
+        agents=[ThirdPartyAcpSubagentConfig(name="Claude Code-Mirasim", command="mirasim --acp", effort="low")],
+        session_tier=lambda _key: "high",
+    )
+
+    assert mgr.resolve_mode("cli", "Claude Code-Mirasim", "h1") is None
+    with pytest.raises(ValueError, match="offers none"):
+        mgr.set_instance_mode("cli", "Claude Code-Mirasim", "h1", "high")
+    assert mgr.session_effort_for("cli", "Claude Code-Mirasim", "h1") == "low"
+
+
 def test_file_change_counts_fall_back_to_the_contents_when_the_tool_kept_no_diff() -> None:
     from types import SimpleNamespace
 
@@ -6487,3 +6848,19 @@ async def test_an_unprompted_report_carries_no_link_whatever_span_it_is_sent_fro
 
     (report,) = submitted
     assert report.dispatch_link is None
+
+
+async def test_a_dag_notice_on_the_page_leaves_open_decisions_to_the_board() -> None:
+    """With the Task Board on, a graph's notice into a conversation the served page draws
+    carries only the section rule; into any other channel it still carries both."""
+    from raven.context_engine.segments.render import reply_rules_note
+
+    mgr = _make_manager(max_concurrent=1, task_board=True)
+    submitted: list[object] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr.announce_dag_result("r1", "done", {"channel": "tui", "chat_id": "d", "session_key": "tui:s1"})
+    await mgr.announce_dag_result("r2", "done", {"channel": "weixin", "chat_id": "d", "session_key": "weixin:s2"})
+
+    assert submitted[0].text.endswith(reply_rules_note(board_shown=True))
+    assert submitted[1].text.endswith(reply_rules_note())

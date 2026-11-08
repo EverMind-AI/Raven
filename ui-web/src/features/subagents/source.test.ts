@@ -72,3 +72,22 @@ describe('the sub-agent heartbeat', () => {
     expect(beat).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('the direct-turn seam', () => {
+  it('addresses a stop to the instance lane, carrying the target turn.cancel needs', async () => {
+    const { sources } = await harness()
+    const calls: Array<[string, Record<string, unknown>]> = []
+    await fakeGateway(async (method: string, params: Record<string, unknown>) => {
+      calls.push([method, params])
+      return {}
+    })
+    await sources.subagents!.instanceCancel!('Raven-Design', 'handle-1')
+    /* Without the target the lookup is the bare session key, and every direct
+       turn is registered under direct_lane(...) instead -- the exact miss that
+       left a direct chat unstoppable. */
+    expect(calls).toEqual([[
+      'turn.cancel',
+      { session_key: 's1', target: { agent: 'Raven-Design', handle: 'handle-1' } },
+    ]])
+  })
+})

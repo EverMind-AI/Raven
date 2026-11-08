@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -25,6 +26,8 @@ _MAX_PROCESSED_IDS = 1000
 _RECONNECT_SECONDS = 5
 _BRIDGE_READY_SECONDS = 30.0
 _LOGIN_POLL_SECONDS = 0.5
+_LOGIN_TIMEOUT_SECONDS = 300.0
+_LOGIN_HINT_SECONDS = 30.0
 
 
 class WhatsAppChannel(ChannelBase):
@@ -40,6 +43,7 @@ class WhatsAppChannel(ChannelBase):
         self._ws = None
         self._connected = False
         self._bridge_up = False
+        self._bridge_available = False
         self._bridge_proc: asyncio.subprocess.Process | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
         self._lid_to_phone: dict[str, str] = {}
@@ -69,11 +73,30 @@ class WhatsAppChannel(ChannelBase):
 
     async def login(self, force: bool = False) -> bool:
         """Pair by QR from a terminal: run the same bridge the gateway runs and
-        wait until it reports a paired session (the bridge prints the code)."""
+        wait until it reports a paired session (the bridge prints the code),
+        giving up ``_LOGIN_TIMEOUT_SECONDS`` after the bridge comes up."""
         logger.info(f"{__logo__} Starting WhatsApp bridge for QR login...")
         task = asyncio.create_task(self.start())
+        next_hint = time.monotonic() + _LOGIN_HINT_SECONDS
+        deadline: float | None = None
         try:
             while not task.done() and not self._connected:
+                now = time.monotonic()
+                if self._bridge_available:
+                    # The build is a precondition, not the QR wait: start counting
+                    # only once the bridge is up.
+                    if deadline is None:
+                        deadline = now + _LOGIN_TIMEOUT_SECONDS
+                    if now >= deadline:
+                        logger.warning(
+                            "WhatsApp login did not finish within {:g} seconds of the bridge coming up; "
+                            "stopping the bridge. Run `raven channels login whatsapp` again when ready.",
+                            _LOGIN_TIMEOUT_SECONDS,
+                        )
+                        break
+                if now >= next_hint:
+                    logger.info("Still waiting for WhatsApp login (bridge build or QR scan); press Ctrl-C to cancel.")
+                    next_hint = now + _LOGIN_HINT_SECONDS
                 await asyncio.sleep(_LOGIN_POLL_SECONDS)
             paired = self._connected
         finally:
@@ -142,6 +165,7 @@ class WhatsAppChannel(ChannelBase):
                 if not await self._ensure_bridge_process():
                     self._running = False
                     return
+                self._bridge_available = True
                 if not self._running:
                     return  # stopped while the bridge came up, which can take minutes
                 try:
@@ -177,6 +201,7 @@ class WhatsAppChannel(ChannelBase):
         self._running = False
         self._connected = False
         self._bridge_up = False
+        self._bridge_available = False
         if self._ws:
             await self._ws.close()
             self._ws = None

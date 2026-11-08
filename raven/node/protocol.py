@@ -123,9 +123,10 @@ MCP_MAX_FRAME = 32 * 1024 * 1024
 TASK_KEEP_S = 7 * 24 * 3600
 
 #: Third-party packages the daemon cannot run without, beside Raven's own
-#: code: the only ones its file tools import (measured 2026-10-10), pinned to
-#: the host's versions.
-REQUIREMENTS = ("loguru", "pillow")
+#: code: the file tools' two, plus zstandard, which the tracing store the
+#: daemon links imports for its payload frames (measured 2026-10-29), pinned
+#: to the host's versions.
+REQUIREMENTS = ("loguru", "pillow", "zstandard")
 
 #: Installed when the machine can get it, not required. ``ripgrep-bin`` puts the
 #: same ``rg`` beside the daemon's Python that the host has beside its own, so a

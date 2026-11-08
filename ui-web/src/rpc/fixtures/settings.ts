@@ -67,6 +67,9 @@ function seed(ext: ExtFixture): Record<string, Json> {
     tools: { disabledTools: ext.disabledTools },
     plugins: { disabled: ext.disabledPlugins },
     permissions: { mode: 'ask' },
+    /* An onboarded install: the settings page draws the Skill Hub switch on
+       and the row's off state is reachable by clicking it. */
+    skillForge: { router: { hub: { endpoint: 'https://skillhub.evermind.ai' } } },
   }
 }
 
@@ -131,6 +134,13 @@ function pick(from: Record<string, Json>, key: string): Json | undefined {
   ), from)
 }
 
+/* The server's Skill Hub answer for the canvas's own store, which only ever
+   holds what the page wrote: an endpoint, and `enabled` as a boolean. */
+const hubOn = (config: Record<string, Json>): boolean => {
+  const endpoint = pick(config, 'skillForge.router.hub.endpoint')
+  return typeof endpoint === 'string' && endpoint !== '' && pick(config, 'skillForge.router.hub.enabled') !== false
+}
+
 /* A ledger with nothing in it. The four `*_missing_calls` counts are part of
    the shape rather than decoration: they are how the panel says an answer is
    incomplete, and zero is the truthful value where nothing was spent. */
@@ -149,6 +159,9 @@ export interface SettingsFixture {
 export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixture {
   const config = seed(ext)
   let tier = 'high'
+  /* The effort the library's conversation runs at: null is the default rung. */
+  let effort: string | null = null
+  const EFFORTS = ['minimal', 'low', 'medium', 'high'] as const
 
   return {
     fixtures: {
@@ -187,6 +200,8 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         settings: clone(config),
         config_path: '~/.raven/config.json',
         raven_version: '0.1.0',
+        skill_hub_on: hubOn(config),
+        skill_hub_awaiting_reload: false,
       }),
       'settings.set': (p) => {
         put(config, p.key, p.value)
@@ -226,6 +241,15 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         const mode = (p as { mode?: string }).mode
         if (mode) tier = mode
         return { mode: tier, availableModes: tierMenu() }
+      },
+      /* The conversation's reasoning effort: the pick, what it runs at
+         without one, and the words. One value for the whole library, as the
+         tier is; the default is the fixture's configured one. */
+      'session.set_effort': (p) => {
+        const q = p as { session_key?: string; effort?: string; clear?: boolean }
+        if (q.clear) effort = null
+        else if (q.effort) effort = q.effort
+        return { session_key: q.session_key ?? '', effort, default: 'medium', options: [...EFFORTS] }
       },
       /* An upgrade with no gateway to replace: nothing was started, and the
          card reads the status rather than waiting on a restart that will not

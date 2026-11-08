@@ -130,9 +130,13 @@ export function installGlobalListeners(): void {
      workspace chrome -- read before the transcript can act on it. */
   document.addEventListener('click', linkTrap, true)
   /* The dock: a draft the debounce has not parked yet, and a field whose
-     height cap is a share of the window. */
+     height cap is a share of the visual viewport. */
   window.addEventListener('beforeunload', parkDraftNow)
   window.addEventListener('resize', fitField)
+  /* A soft keyboard shrinks the visual viewport without a window resize on iOS
+     Safari, so the same re-clamp follows it: the cap comes down with the
+     keyboard and goes back up when it closes. */
+  window.visualViewport?.addEventListener('resize', fitField)
   /* Whether a drag under way began in this document, for the composer's drop
      target: the drag itself can start anywhere in the document, so the
      document is what listens (features/composer/mount.tsx). */

@@ -143,6 +143,53 @@ async def test_the_unconfigured_error_names_the_selected_vendors_slot(tmp_path) 
     assert str(cfg) in answer
 
 
+def test_a_web_vendor_borrows_the_key_of_the_llm_provider_it_shares_an_account_with() -> None:
+    """DeepSeek serves its search and fetch endpoints on the same account as its
+    chat API, so the key already configured for the model pays for the web tools
+    too. The web slot stays optional: an explicit key there still wins."""
+    config = Config.model_validate({"providers": {"deepseek": {"apiKey": "sk-llm"}}})
+
+    assert config.tools.web.vendor_key("deepseek") == "", "no web key was written"
+    assert config.effective_web_vendor_key("deepseek") == "sk-llm"
+    assert config.effective_web_vendor_keys() == {"deepseek": "sk-llm"}
+    assert WebSearchTool.is_configured(config.effective_web_vendor_key("deepseek"), "deepseek")
+
+    config.tools.web.providers.deepseek.api_key = "sk-web"
+    assert config.effective_web_vendor_key("deepseek") == "sk-web"
+    assert config.effective_web_vendor_keys() == {"deepseek": "sk-web"}
+
+
+def test_the_borrow_follows_the_section_address_and_its_endpoints() -> None:
+    """The web endpoints are literals, so a key may only be lent by a section
+    that resolves to DeepSeek's own host: a gateway key would travel to a party
+    that never issued it. Endpoints are the section's own key/address groups,
+    so the endpoint's key wins over the flat one it replaces."""
+    gateway = Config.model_validate(
+        {"providers": {"deepseek": {"apiKey": "sk-gateway", "apiBase": "https://llm-gw.corp.example/v1"}}}
+    )
+    assert gateway.effective_web_vendor_key("deepseek") == ""
+
+    rotated = Config.model_validate(
+        {"providers": {"deepseek": {"apiKey": "sk-old", "endpoints": [{"label": "a", "apiKey": "sk-new"}]}}}
+    )
+    assert rotated.effective_web_vendor_key("deepseek") == "sk-new"
+
+    endpoint_only = Config.model_validate(
+        {"providers": {"deepseek": {"endpoints": [{"label": "a", "apiKey": "sk-only"}]}}}
+    )
+    assert endpoint_only.effective_web_vendor_key("deepseek") == "sk-only"
+
+
+def test_a_malformed_provider_section_yields_no_borrowed_key() -> None:
+    """The borrow is a read of somebody else's section: a value the schema
+    rejects, or a subtree that is not an object at all, answers no key rather
+    than raising out of the credential resolution."""
+    from raven.config.schema import borrowed_web_key
+
+    assert borrowed_web_key("deepseek", {"deepseek": {"apiKey": {"nested": 1}}}) == ""
+    assert borrowed_web_key("deepseek", ["not", "a", "dict"]) == ""
+
+
 # --------------------------------------------------------------------------- #
 # Search: what each vendor is sent
 
@@ -198,6 +245,12 @@ _SEARCH_REQUESTS: dict[str, tuple[str, str, dict[str, Any], dict[str, str]]] = {
         {"json": {"query": "q1", "max_results": 4}},
         {"x-api-key": "k", "X-Keenable-Title": "Raven"},
     ),
+    "deepseek": (
+        "POST",
+        "https://api.deepseek.com/v1/tools/search",
+        {"json": {"query": "q1", "count": 4}},
+        {"Authorization": "Bearer k"},
+    ),
 }
 
 
@@ -225,6 +278,25 @@ async def test_a_status_error_never_echoes_the_key(vendor: str, monkeypatch: pyt
 
     assert "SECRET-KEY-123" not in rendered
     assert rendered == f"Error: {SEARCH_PROVIDERS[vendor].label} answered HTTP 500"
+
+
+async def test_a_deepseek_query_over_the_vendor_limit_is_refused_before_the_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepSeek accepts 1-128 Unicode characters; a longer query is answered with
+    HTTP 400, which this tool renders as the status alone, so the model was never
+    told to shorten it. Refuse it here with both lengths, and leave the boundary
+    itself sendable."""
+    with _patched(monkeypatch, {}) as client:
+        rendered = await WebSearchTool(api_key="k", provider="deepseek").execute("x" * 129)
+
+    assert client.calls == [], "an over-limit query must not spend a request"
+    assert "128" in rendered and "129" in rendered
+
+    with _patched(monkeypatch, {}) as client:
+        await WebSearchTool(api_key="k", provider="deepseek").execute("x" * 128)
+
+    assert len(client.calls) == 1, "the limit itself is allowed"
 
 
 @pytest.mark.parametrize("vendor", sorted(_SEARCH_REQUESTS))
@@ -307,6 +379,7 @@ _SEARCH_PAYLOADS: dict[str, Any] = {
     "firecrawl": {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]},
     "serply": {"results": [{"title": "T1", "link": "https://a.example", "description": "S1"}]},
     "keenable": {"results": [{"title": "T1", "url": "https://a.example", "description": "", "snippet": "S1"}]},
+    "deepseek": {"results": [{"title": "T1", "url": "https://a.example", "snippet": "SHORT", "summary": "S1"}]},
 }
 
 
@@ -319,6 +392,18 @@ async def test_each_search_vendor_renders_through_the_shared_path(vendor: str, m
     assert "1. T1\n   https://a.example\n   S1" in rendered
     # Exa's whole-page ``text`` never reaches the rendering; only the highlight does.
     assert "xxxx" not in rendered
+
+
+async def test_deepseek_renders_the_summary_it_publishes_for_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DeepSeek's ``snippet`` is the 100-200 character line for a UI; ``summary``
+    is the 600-800 character one its reference says the model reads. This render
+    path has one slot, so the summary is what goes in."""
+    payload = {"results": [{"title": "T1", "url": "https://a.example", "snippet": "SHORT", "summary": "S1"}]}
+    with _patched(monkeypatch, payload):
+        rendered = await WebSearchTool(api_key="k", provider="deepseek").execute("q1")
+
+    assert "S1" in rendered
+    assert "SHORT" not in rendered
 
 
 async def test_a_firecrawl_refusal_inside_a_200_reads_as_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -435,6 +520,12 @@ _FETCH_CASES: dict[str, tuple[str, str, dict[str, Any], Any]] = {
         "https://api.keenable.ai/v1/fetch",
         {"params": {"url": "https://a.example"}},
         {"url": "https://a.example", "title": "T", "content": "PAGE", "description": ""},
+    ),
+    "deepseek": (
+        "POST",
+        "https://api.deepseek.com/v1/tools/fetch",
+        {"json": {"url": "https://a.example"}},
+        {"title": "T", "content": "PAGE"},
     ),
 }
 
@@ -981,7 +1072,7 @@ def test_the_settings_page_offers_exactly_the_schemas_vendors() -> None:
     assert search["vendors"] == list(get_args(WebSearchProvider))
     assert fetch["vendors"] == list(get_args(WebFetchProvider))
     # Not vacuous: the parse found real lists, so an empty one cannot pass.
-    assert len(search["vendors"]) == 9 and len(fetch["vendors"]) == 6
+    assert len(search["vendors"]) == 10 and len(fetch["vendors"]) == 7
     assert search["fallback"] == DEFAULT_SEARCH_PROVIDER
     assert fetch["fallback"] == DEFAULT_FETCH_PROVIDER
     assert search["path"] == "tools.web.search.provider"
@@ -1015,6 +1106,39 @@ def test_the_settings_page_names_every_vendor_the_way_the_spec_table_does() -> N
 
     assert labels == spec_labels
     assert set(labels) == set(WEB_VENDOR_ENV_VARS), "every vendor a key can be held for needs a label"
+
+
+def _tsx_borrowed_vendors() -> set[str]:
+    body = _SETTINGS_PAGE.read_text(encoding="utf-8")
+    found = re.search(r"export const BORROWED_VENDOR = new Set\(\[(.*?)\]\)", body, re.S)
+    assert found, f"BORROWED_VENDOR is gone from {_SETTINGS_PAGE.name}"
+    return set(re.findall(r"'([^']+)'", found.group(1)))
+
+
+def test_the_settings_page_borrows_exactly_the_schemas_borrowing_vendors() -> None:
+    """The page decides the "needs setup" badge itself, so its borrow list is a
+    third copy of the rule. Held to the schema's copy here rather than trusted."""
+    from raven.config.schema import WEB_VENDOR_BORROWED_KEYS
+
+    assert _tsx_borrowed_vendors() == set(WEB_VENDOR_BORROWED_KEYS)
+
+
+def _tsx_own_web_hosts() -> dict[str, str]:
+    body = _SETTINGS_PAGE.read_text(encoding="utf-8")
+    found = re.search(r"const OWN_WEB_HOST[^=]*= \{([^}]*)\}", body, re.S)
+    assert found, f"OWN_WEB_HOST is gone from {_SETTINGS_PAGE.name}"
+    return dict(re.findall(r"(\w+):\s*['\"]([^'\"]+)['\"]", found.group(1)))
+
+
+def test_the_settings_page_checks_the_borrow_against_the_schemas_hosts() -> None:
+    """The page decides the "needs setup" badge from the host rule as well, so
+    its host table is the fourth copy of the borrow rule. Held to the schema's
+    copy here: a drifted host makes the page claim a key the server refuses --
+    the tool is withheld with nothing on the page saying why -- or hide one the
+    server grants."""
+    from raven.config.schema import WEB_VENDOR_WEB_HOSTS
+
+    assert _tsx_own_web_hosts() == dict(WEB_VENDOR_WEB_HOSTS)
 
 
 # --------------------------------------------------------------------------- #
@@ -1070,3 +1194,22 @@ async def test_registry_image_search_preserves_the_single_query_fallback(monkeyp
     assert calls == want
     assert params == original
     assert ("Invalid parameters" in result) is (not want)
+
+
+def test_a_resolver_failure_lends_no_key_and_a_foreign_host_is_not_the_vendors(monkeypatch) -> None:
+    """The borrow is a read of somebody else's section: a resolver that cannot
+    read it lends nothing, and only DeepSeek's own parsed host qualifies (a
+    look-alike domain does not)."""
+    from raven.config import update_providers
+    from raven.config.schema import borrowed_web_key, is_web_vendor_address
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("resolver failed")
+
+    monkeypatch.setattr(update_providers, "provider_connection", boom)
+    assert borrowed_web_key("deepseek", {"deepseek": {"apiKey": "sk"}}) == ""
+
+    monkeypatch.undo()
+    assert is_web_vendor_address("deepseek", "http://[") is False
+    assert is_web_vendor_address("deepseek", "https://api.deepseek.com.evil.example") is False
+    assert is_web_vendor_address("serper", "https://api.deepseek.com") is False

@@ -42,8 +42,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+import zstandard
+
 from raven.tracing import artifact_v2
 from raven.tracing import config as tracing_config
+from raven.tracing.codec import ZSTD_MAGIC
 from raven.trajectory import store as tstore
 
 _log = logging.getLogger("raven.trajectory.conversation")
@@ -131,6 +134,18 @@ def _kind(name: str) -> str:
     return _KIND_BY_DOMAIN.get(name.split(".", 1)[0], "other")
 
 
+def _read_packed_message(target: Path, limit: int) -> tuple[str | None, str | None]:
+    """A message whose file was moved into a pack; the cap matches a file read."""
+    from raven.tracing import message_pack
+
+    data = message_pack.read_path(target, limit + 1)
+    if data is None:
+        return None, "artifact missing"
+    if len(data) > limit:
+        return data[:limit].decode("utf-8", errors="replace"), f"content over {limit // 1024} KiB — truncated"
+    return data.decode("utf-8", errors="replace"), None
+
+
 def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tuple[str | None, str | None]:
     """(text, degraded reason); (None, reason) means unreadable.
 
@@ -148,10 +163,20 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
             return None, "artifact path outside the trace store"
         if target.exists() and not target.is_file():
             return None, "artifact is not a regular file"
+        if not target.exists():
+            return _read_packed_message(target, limit)
         with target.open("rb") as handle:
-            data = handle.read(limit + 1)
+            head = handle.read(4)
+            handle.seek(0)
+            if head == ZSTD_MAGIC:
+                with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                    data = reader.read(limit + 1)
+            else:
+                data = handle.read(limit + 1)
     except OSError:
         return None, "artifact missing"
+    except zstandard.ZstdError:
+        return None, "artifact unreadable: corrupt compressed content"
     except ValueError:
         # A pointer with an embedded NUL cannot name a file.
         return None, "artifact unreadable: the path is not valid"
@@ -572,6 +597,11 @@ def _emit_llm(
         thinking = _thinking_text(obj)
         if thinking:
             _emit(info, records, "LLM thinking", _PHASE_OUTPUT, thinking, slot="llm.thinking", meta=meta)
+            # A span that only thought has no output to show: its words are the
+            # thinking record above, and an empty "LLM output" row beside them
+            # reads as a run that said nothing.
+            if not text.strip():
+                return
     elif not read and "llm.reasoning_preview" in info.attrs:
         reasoning = _preview_attr(info.attrs, "llm.reasoning_preview")
         _emit(

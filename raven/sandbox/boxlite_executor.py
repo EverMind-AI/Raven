@@ -402,6 +402,9 @@ class BoxliteExecutor(SandboxExecutor):
         import anyio
         from mcp.shared.message import SessionMessage
         from mcp.types import JSONRPCMessage
+        from pydantic import TypeAdapter
+
+        rpc_adapter = TypeAdapter(JSONRPCMessage)
 
         box = await self._ensure_box()
         vm_cwd = self._translate_process_cwd(cwd)
@@ -424,7 +427,7 @@ class BoxliteExecutor(SandboxExecutor):
         stdin_writer = execution.stdin()
 
         async def _stdout_bridge() -> None:
-            # MCP SDK 1.x: read stream carries SessionMessage (wrapping JSONRPCMessage).
+            # MCP SDK 2.x: read stream carries SessionMessage (wrapping JSONRPCMessage).
             # boxlite stdout yields chunks (not guaranteed to be line-aligned for large
             # messages). Buffer and split on '\n' to reconstruct complete JSON lines.
             buf = ""
@@ -437,7 +440,7 @@ class BoxliteExecutor(SandboxExecutor):
                         if not line:
                             continue
                         try:
-                            rpc_msg = JSONRPCMessage.model_validate_json(line)
+                            rpc_msg = rpc_adapter.validate_json(line)
                             await read_send.send(SessionMessage(message=rpc_msg))
                         except Exception as parse_exc:
                             # Non-JSON stdout (e.g. startup banners). Log and skip.
@@ -451,7 +454,7 @@ class BoxliteExecutor(SandboxExecutor):
                 line = buf.strip()
                 if line:
                     try:
-                        rpc_msg = JSONRPCMessage.model_validate_json(line)
+                        rpc_msg = rpc_adapter.validate_json(line)
                         await read_send.send(SessionMessage(message=rpc_msg))
                     except Exception:
                         pass
@@ -475,7 +478,7 @@ class BoxliteExecutor(SandboxExecutor):
                 logger.error("MCP stderr bridge error: %s", exc)
 
         async def _stdin_bridge() -> None:
-            # MCP SDK 1.x: write stream carries SessionMessage; serialize the inner
+            # MCP SDK 2.x: write stream carries SessionMessage; serialize the inner
             # JSONRPCMessage as newline-delimited JSON to the VM process stdin.
             try:
                 async for session_msg in write_recv:

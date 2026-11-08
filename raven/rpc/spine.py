@@ -74,6 +74,16 @@ def _present(source: dict, keys: tuple[str, ...]) -> dict:
     return {key: source[key] for key in keys if source.get(key) is not None}
 
 
+def _present_exact(source: dict, keys: tuple[str, ...]) -> dict:
+    """The given keys the source set at all, null included.
+
+    For the fields whose presence is the message: a reassigned node's
+    ``instance`` is null when its current attempt keeps no session, and dropping
+    that for looking empty would leave a client showing a handle the node left.
+    """
+    return {key: source[key] for key in keys if key in source}
+
+
 def _dag_payload(name: str, payload: dict) -> dict:
     """One progress event's wire payload."""
     common = {"run_id": payload.get("run_id"), **_present(payload, ("tool_call_id",))}
@@ -98,6 +108,10 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "node": payload.get("node"),
             "status": payload.get("status"),
             **_present(payload, ("started_at", "ended_at", "reason", "selected_routes", "route_evidence")),
+            # Who runs the node now, and every agent that tried it. The runner
+            # sets these only once the node has been reassigned, so no frame of
+            # an ordinary run grows a key.
+            **_present_exact(payload, ("subagent", "instance", "instance_auto", "attempt_agents")),
         }
     if name == "dag_run_replanned":
         return {
@@ -126,6 +140,14 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "node": entry.get("node"),
             "status": entry.get("status"),
             **_present(entry, ("output_file", "error", "reason", "selected_routes", "route_evidence")),
+            # The runner stamps the agent, handle and flag on every file; only a
+            # node it reassigned has more to say than its own start frame did,
+            # and only that one is allowed to grow the payload.
+            **(
+                _present_exact(entry, ("subagent", "instance", "instance_auto", "attempt_agents"))
+                if "attempt_agents" in entry
+                else {}
+            ),
         }
         for entry in manifest.get("files") or []
     ]
@@ -161,6 +183,20 @@ class RpcTurnRunner(AgentTurnRunner):
     - it fires the synthetic tool.complete when the turn replied via the
       message tool (the loop's general tool path skips the message tool), so the
       UI records that the agent acted.
+
+    ``live_usages`` holds each streamed turn's usage sink under its turn id from
+    the moment the turn starts until the sink sees it end. A turn that ends
+    without an answer reports what it measured from there: a failed one on its
+    ``error`` event, a stopped one on the error ``turn.cancel`` sends while it
+    unwinds. Keyed by turn rather than by lane, because a queued turn shares
+    its lane with the turn that is running.
+
+    It sits beside ``usages``, the per-lane copy an answered turn's
+    ``message.complete`` reads. Both hold the loop's usage sink, whose window
+    reading moves only on a call that read one -- the terms the turn's stored
+    reading moves on -- so either end reports the reading its record keeps.
+    ``reported_usage`` adds one rule for an error: a turn that read no window
+    sends no usage.
     """
 
     def __init__(
@@ -171,6 +207,7 @@ class RpcTurnRunner(AgentTurnRunner):
         readback_texts: dict[str, str],
         approval_responder: ApprovalResponder | None = None,
         credential_asker: CredentialAsker | None = None,
+        live_usages: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=True)
         self._emitter = emitter
@@ -178,6 +215,7 @@ class RpcTurnRunner(AgentTurnRunner):
         self._readback_texts = readback_texts
         self._approval_responder = approval_responder
         self._credential_asker = credential_asker
+        self._live_usages = live_usages if live_usages is not None else {}
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         cid = conversation_id(req)
@@ -238,10 +276,18 @@ class RpcTurnRunner(AgentTurnRunner):
         # delivers a cron.delivered event to every session (the cron:<job_id>
         # conversation has no subscriber, so its hub deliverables no-op). Mirrors
         # the gateway's GatewayTurnRunner read-back path.
+        #
+        # Its usage is stashed as any turn's is. A wake runs on the session's own
+        # conversation, and its message.complete reports the lane's slot: left to
+        # the turn before (one that did not own the lane, so never cleared it),
+        # that turn's spend was reported again.
         if req.origin is Origin.CRON:
             text_sink: dict[str, str] = {}
+            cron_usage: dict[str, Any] = {}
             try:
-                outcome = await self._loop.run_turn(req, emit, drain, stream=False, text_sink=text_sink)
+                outcome = await self._loop.run_turn(
+                    req, emit, drain, stream=False, usage_sink=cron_usage, text_sink=text_sink
+                )
             finally:
                 # A turn that fails stores nothing and the submitter pops by
                 # conversation, so the previous run's text must not be left for
@@ -250,8 +296,11 @@ class RpcTurnRunner(AgentTurnRunner):
                     self._readback_texts.pop(req.conversation, None)
             if req.conversation is not None and (text := text_sink.get("text")) is not None:
                 self._readback_texts[req.conversation] = text
+            self._usages[cid] = dict(cron_usage)
             return outcome
         usage_sink: dict[str, Any] = {}
+        if req.turn_id:
+            self._live_usages[req.turn_id] = usage_sink
         outcome = await self._loop.run_turn(req, emit, drain, stream=True, usage_sink=usage_sink)
 
         # A synthetic tool.complete when the message tool fired (the loop
@@ -528,6 +577,7 @@ class RpcOutlet:
         target: dict[str, str] | None = None,
         turn_id: str = "",
         full_detail: str = "",
+        usage: dict[str, Any] | None = None,
     ) -> None:
         """A turn's failure, tagged with the turn it belongs to when known.
 
@@ -541,6 +591,9 @@ class RpcOutlet:
 
         ``full_detail`` is the failure's long account beside the bounded
         ``detail``, sent only when the runner had more to say.
+
+        ``usage`` is what the failed turn measured, in ``message.complete``'s
+        shape, sent only when it read a window (``reported_usage``).
         """
         payload: dict[str, Any] = {"code": code, "message": message, "reason": reason}
         if turn_id:
@@ -549,9 +602,24 @@ class RpcOutlet:
             payload["detail"] = detail
         if full_detail:
             payload["full_detail"] = full_detail
+        if usage:
+            payload["usage"] = usage
         if target is not None:
             payload["target"] = target
         await self._emitter.emit(self._subscription(conversation_id, target), {"type": "error", "payload": payload})
+
+
+def reported_usage(measured: dict[str, Any] | None) -> dict[str, Any] | None:
+    """What a turn that ended without an answer measured, for the error that says so.
+
+    Only a usage that read the window is sent. A last call that reported zeros, or
+    a sink that holds no reading at all, has nothing to tell the context ring, and
+    sent it would draw the ring empty.
+    """
+    if not measured:
+        return None
+    used = measured.get("context_used")
+    return dict(measured) if isinstance(used, int) and used > 0 else None
 
 
 def _make_rpc_sink(
@@ -563,6 +631,7 @@ def _make_rpc_sink(
     direct_targets: dict[str, dict[str, str]],
     on_turn_end: Callable[[str], None] | None,
     on_turn_start: Callable[[str, str], str | None] | None = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
     """Adapt the hub into the scheduler's EventSink for the TUI. Deliverables
     route through the hub; a turn's end fires message.complete / error after the
@@ -574,7 +643,11 @@ def _make_rpc_sink(
     injected text -- so this sink can bind the lane to it and open it on the
     wire; ``turn.send`` could not, since it answered before the fallback was
     decided. This sink is build_rpc_spine's alone — the CLI keeps its own
-    lifecycle-dropping sink."""
+    lifecycle-dropping sink.
+
+    ``live_usages`` is the runner's map of what each turn has measured (see
+    ``RpcTurnRunner``); every turn's end takes its entry back."""
+    live = live_usages if live_usages is not None else {}
 
     async def _finish(conversation_id: str) -> None:
         # close_stream clears the hub's per-stream state (so the next turn on this
@@ -616,6 +689,7 @@ def _make_rpc_sink(
 
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnEnded):
+            live.pop(event.turn_id, None)
             await _finish(event.conversation_id)
             usage = usages.get(event.conversation_id) or {
                 "prompt_tokens": 0,
@@ -635,6 +709,7 @@ def _make_rpc_sink(
             await outlet.emit_complete(event.conversation_id, event.turn_id, usage, target, round(event.latency_ms))
             return
         if isinstance(event, TurnFailed):
+            measured = live.pop(event.turn_id, None)
             await _finish(event.conversation_id)
             owns = _owns_lane(event.conversation_id, event.turn_id)
             target = _drop(event.conversation_id, owns=owns)
@@ -654,6 +729,7 @@ def _make_rpc_sink(
                     # started yet.
                     turn_id=event.turn_id,
                     full_detail=event.full_detail or "",
+                    usage=reported_usage(measured),
                 )
             return
         if isinstance(event, TurnStarted):
@@ -698,6 +774,7 @@ def build_rpc_spine(
     readback_texts: dict[str, str] | None = None,
     approval_responder: ApprovalResponder | None = None,
     credential_asker: CredentialAsker | None = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
     user_pool: int = 1,
     system_pool: int = 1,
     direct_pool: int = 8,
@@ -729,7 +806,11 @@ def build_rpc_spine(
     permission. The runner binds it per turn on the same gate the asker uses: a
     USER turn always, a SUBAGENT relay when a surface is watching its
     conversation, and no other origin -- a CRON or otherwise unattended turn is
-    refused at the ask tier. ``credential_asker`` is bound on the same terms."""
+    refused at the ask tier. ``credential_asker`` is bound on the same terms.
+
+    ``live_usages`` is what each running turn has measured, by turn id (see
+    ``RpcTurnRunner``). Pass the same dict ``register_turn_methods`` is given,
+    so a stopped turn's cancel can report it; defaults to a private map."""
     hub = DeliveryHub()
     if direct_targets is None:
         direct_targets = {}
@@ -737,6 +818,8 @@ def build_rpc_spine(
     hub.register(outlet)
     turn_ids: dict[str, str] = {}
     usages: dict[str, dict[str, Any]] = {}
+    if live_usages is None:
+        live_usages = {}
     if readback_texts is None:
         readback_texts = {}
     scheduler = Scheduler(
@@ -747,9 +830,12 @@ def build_rpc_spine(
             readback_texts,
             approval_responder=approval_responder,
             credential_asker=credential_asker,
+            live_usages=live_usages,
         ),
         OriginPools(user=user_pool, system=system_pool, direct=direct_pool),
-        _make_rpc_sink(hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start),
+        _make_rpc_sink(
+            hub, outlet, channel, turn_ids, usages, direct_targets, on_turn_end, on_turn_start, live_usages=live_usages
+        ),
     )
 
     async def teardown() -> None:

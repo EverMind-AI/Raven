@@ -52,10 +52,11 @@ exports[`transcript island, history > keeps its rendered shape 1`] = `
                     path
                     path
                   span.vb
+                  span.chip.bad
                   span.err
                   svg.cv
                     path
-      div.answer.in
+      div.answer.in[data-answer=6]
         div.prose
           p
     div.ansfoot

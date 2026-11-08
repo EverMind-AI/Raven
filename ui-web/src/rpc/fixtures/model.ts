@@ -131,6 +131,17 @@ const wire = (e: Entry, current: string): Provider => ({
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
 })
 
+/* The vendor's answer to a key before it is stored. A key spelled `bad` (or
+   `sk-bad...`) is refused the way a vendor refuses one it never issued;
+   anything else is confirmed against the row's own list. */
+const keyCheck = (row: Entry | undefined, key?: string): ResultOf<'model.check_key'> => {
+  if (key && /^(sk-)?bad/.test(key)) {
+    return { ok: false, status: 'invalid_key', http_status: 401, models_count: 0, error: 'HTTP 401', refused: true }
+  }
+  if (!row) return { ok: false, status: 'unknown_provider', refused: false }
+  return { ok: true, status: 'valid', http_status: 200, models_count: row.models.length, refused: false }
+}
+
 export interface ModelFixture {
   fixtures: Fixtures
 }
@@ -144,6 +155,7 @@ export function createModel(_env: FixtureEnv): ModelFixture {
   return {
     fixtures: {
       'model.options': (p) => ({ model, provider, providers: p.include_providers === false ? [] : rows.map((p) => wire(p, provider)) }),
+      'model.check_key': (p) => keyCheck(find(p.slug), p.api_key),
       'model.save_key': (p) => {
         const row = find(p.slug)
         if (row) row.authenticated = true
@@ -188,6 +200,7 @@ export function createModel(_env: FixtureEnv): ModelFixture {
             added: !!row && row.models.includes(id),
           })),
           status: 'ok',
+          refused: false,
         }
       },
       'model.add_models': (p) => {
@@ -228,6 +241,7 @@ export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => v
     'model.options': (p) => p.include_providers === false
       ? { model: picked?.model ?? '', provider: current(), providers: [] }
       : wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
+    'model.check_key': (p) => wait(keyCheck(rows.find((x) => x.slug === p.slug), p.api_key)),
     'model.save_key': (p) => {
       const row = rows.find((x) => x.slug === p.slug)
       /* The contract's answer is a provider, so a slug this library does not

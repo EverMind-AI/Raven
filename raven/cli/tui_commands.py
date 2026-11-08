@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import typer
 
@@ -128,8 +128,17 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
-    """Find a usable node executable (>= 22).
+def _meets_tui_floor(version: Tuple[int, int, int]) -> bool:
+    return version >= _MIN_NODE_VERSION
+
+
+def find_node(
+    accept: Callable[[Tuple[int, int, int]], bool] = _meets_tui_floor,
+) -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
+    """Find a usable node executable (>= 22, or whatever ``accept`` says).
+
+    ``accept`` lets a caller with a stricter floor keep searching past a node
+    the TUI would take, instead of being handed that one and refusing it.
 
     Returns (path, version_tuple) or (None, None) if not found.
     """
@@ -208,7 +217,7 @@ def find_node() -> Tuple[Optional[str], Optional[Tuple[int, int, int]]]:
             version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
             continue
-        if version >= _MIN_NODE_VERSION:
+        if accept(version):
             return (node_path, version)
         if best_below_min is None or version > best_below_min[1]:
             best_below_min = (node_path, version)
@@ -438,6 +447,9 @@ async def _run_rpc_server_until_done(
     # turn.send binds a turn's addressee into it and the spine's outlet/sink read
     # it back to tag that turn's events (see build_rpc_spine).
     direct_targets: dict[str, dict[str, str]] = {}
+    # Owned here for the same reason: the spine keeps what each running turn has
+    # measured in it, and turn.cancel reads a stopped turn's reading back.
+    live_usages: dict[str, dict[str, Any]] = {}
     turn_teardown = None
     if agent_loop is not None:
         from raven.core.cron_stack import make_on_cron_job
@@ -453,6 +465,7 @@ async def _run_rpc_server_until_done(
             direct_targets=direct_targets,
             readback_texts=cron_readback,
             approval_responder=approval_broker,
+            live_usages=live_usages,
         )
         # Subagent result re-injection submits a SUBAGENT-origin turn.
         agent_loop.subagents.set_submit(turn_scheduler.submit)
@@ -508,6 +521,7 @@ async def _run_rpc_server_until_done(
         turn_ids=turn_ids,
         direct_targets=direct_targets,
         build_error=build_error,
+        live_usages=live_usages,
     )
 
     serve_task = asyncio.create_task(server.serve_forever())

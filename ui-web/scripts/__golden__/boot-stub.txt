@@ -51,6 +51,12 @@ div.app[data-rail=on]
             path
             path
         span
+      button#boardsBtn.navi
+        svg
+          path
+          path
+        span
+        span.chrome-nav-badge
       button#importedBtn.navi
         svg
           path
@@ -136,6 +142,7 @@ div.app[data-rail=on]
         div.dock
           div#sheetRack.sheets
           div.dock-in
+            div#composerGrip.chrome-composer-grip
             div#queued.queued
             div#atts.atts
             div.field
@@ -232,101 +239,164 @@ section#connectionsPage.page[data-open=false]
       p.hub-head-sub
       div.su-tabs
         button.su-tab
-          span.su-wbar.su-wtn
+          span.su-tn
         button.su-tab
-          span.su-wbar.su-wtn
+          span.su-tn
         button.su-tab
-          span.su-wbar.su-wtn
+          span.su-tn
       div.su-grid
-        div.su-card.su-wcard
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+              span.su-led
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark.channel-mark-inset
+              svg
+                rect
+                path
+            div.su-nm
+              span.su-t
+              span.su-led
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
-        div.su-card.su-wcard
+            div.su-foot.su-foot-quiet
+        div.su-card
           div.su-ctop
-            span.su-wbar.su-wtile
-            span.su-wbar.su-wname
-          span.su-wbar.su-wline
+            span.channel-mark.channel-mark-inset
+              img
+            div.su-nm
+              span.su-t
+            button.su-cbtn
+              svg
+                path
+          div.su-one
           div.su-foot-slot
-            span.su-wbar.su-wfoot
+            div.su-foot.su-foot-quiet
 section#knowledgePage.page[data-open=false]
   header
     h2
   div.work
     div#knowledgeBody.wrap
+section#tasksBoardPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#tasksBoardBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header

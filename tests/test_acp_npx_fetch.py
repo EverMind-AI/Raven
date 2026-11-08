@@ -57,7 +57,12 @@ with open(os.environ["FAKE_NPX_LOG"], "a") as log:
         "marked": sorted(key for key in os.environ if key.startswith("RAVEN_ACP_HOST")),
     }) + "\\n")
 if fetching:
-    if os.environ.get("FAKE_NPX_FETCH") == "fail":
+    fail = os.environ.get("FAKE_NPX_FETCH") == "fail"
+    once = os.environ.get("FAKE_NPX_FAIL_ONCE")
+    if once and not os.path.exists(once):
+        open(once, "w").close()
+        fail = True
+    if fail:
         sys.stderr.write(os.environ["FAKE_NPX_STDERR"])
         sys.exit(254)
     time.sleep(float(os.environ.get("FAKE_NPX_DELAY", "0")))
@@ -532,6 +537,82 @@ async def test_a_pooled_launch_the_mirror_took_over_is_not_fetched(
         await pool.close_all()
 
     assert _fetches(stand_in.log) == [], "the fetch went to a registry the mirror took over from"
+
+
+@needs_posix
+async def test_a_fetch_the_registry_refused_is_retried_from_the_mirror(
+    stand_in: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """npm's report of a connection that would not answer is what moves the retry to the mirror.
+
+    The retry installs the entry the launch afterwards finds: npx names that entry
+    by the specs alone, so a package fetched from another registry is still the
+    one `npx -y <spec>` starts.
+    """
+
+    monkeypatch.delenv(mirrors.OPT_OUT_ENV, raising=False)
+    monkeypatch.setattr(mirrors, "package_launch_async", _deciding(["npx", "-y", _SPEC]))
+    env = {
+        **stand_in.env,
+        "FAKE_NPX_FAIL_ONCE": str(stand_in.log.parent / "refused-once"),
+        "FAKE_NPX_STDERR": "npm error code ECONNRESET\nnpm error network request to the registry failed\n",
+    }
+
+    await npx_fetch.ensure_fetched("Claude Code", ["npx", "-y", _SPEC], env=env, cwd=stand_in.cwd)
+
+    fetches = _fetches(stand_in.log)
+    assert len(fetches) == 2, "the refused fetch, then one retry"
+    assert not any(word.startswith("--registry=") for word in fetches[0]["argv"])
+    assert f"--registry={mirrors.NPM_REGISTRY}" in fetches[1]["argv"]
+    assert _finished(stand_in.log), "the retry installed the entry"
+    assert (stand_in.entry / "package.json").is_file()
+
+
+@needs_posix
+async def test_a_mirror_that_refuses_too_is_reported_after_one_retry(
+    stand_in: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One retry, never a loop: the mirror attempt is the last one, and its failure is the answer."""
+    monkeypatch.delenv(mirrors.OPT_OUT_ENV, raising=False)
+    monkeypatch.setattr(mirrors, "package_launch_async", _deciding(["npx", "-y", _SPEC]))
+    env = {**stand_in.env, "FAKE_NPX_FETCH": "fail", "FAKE_NPX_STDERR": "npm error code ECONNRESET\n"}
+
+    with pytest.raises(AcpConnectionError):
+        await npx_fetch.ensure_fetched("Claude Code", ["npx", "-y", _SPEC], env=env, cwd=stand_in.cwd)
+
+    fetches = _fetches(stand_in.log)
+    assert len(fetches) == 2, "the refused fetch and exactly one mirror retry"
+    assert f"--registry={mirrors.NPM_REGISTRY}" in fetches[1]["argv"]
+
+
+def test_a_retry_from_the_mirror_is_taken_only_when_the_registry_was_not_chosen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The codes npm reports for "it would not serve this" are what a retry answers."""
+    monkeypatch.delenv(mirrors.OPT_OUT_ENV, raising=False)
+    home = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    argv = ["/usr/bin/npx"]
+
+    retry = npx_fetch._mirror_retry("Claude Code", argv, _SPEC, "npm error code ECONNRESET\n", home, str(tmp_path))
+    assert retry is not None and f"--registry={mirrors.NPM_REGISTRY}" in retry
+    assert retry[0] == argv[0], "the resolved npx is reused"
+    assert npx_fetch._mirror_retry("a", retry, _SPEC, "npm error code ECONNRESET\n", home, str(tmp_path)) is None, (
+        "the retry is the last attempt, however it fails"
+    )
+
+    assert npx_fetch._mirror_retry("a", argv, _SPEC, "npm error code EACCES\n", home, str(tmp_path)) is None
+    chosen = {**home, "npm_config_registry": "https://corp.example/simple/"}
+    assert npx_fetch._mirror_retry("a", argv, _SPEC, "npm error code ECONNRESET\n", chosen, str(tmp_path)) is None
+    assert (
+        npx_fetch._mirror_retry(
+            "a", argv, _SPEC, "npm error code ECONNRESET\n", {**home, mirrors.OPT_OUT_ENV: "1"}, str(tmp_path)
+        )
+        is None
+    ), "the opt-out turns the retry off, as it turns every fallback off"
+    (tmp_path / ".npmrc").write_text("registry=https://corp.example/simple/\n")
+    assert npx_fetch._mirror_retry("a", argv, _SPEC, "npm error code ECONNRESET\n", home, str(tmp_path)) is None, (
+        "a registry the project names settles it"
+    )
 
 
 # ---- reading npm's report of an incomplete entry -------------------------------

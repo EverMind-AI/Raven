@@ -11,7 +11,8 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      ``ACP_STUB_REPLY`` replaces the chunk's text (``pong``),
                      ``ACP_STUB_USAGE_UPDATE`` the ``usage_update`` body (JSON), and
                      ``ACP_STUB_PROMPT_USAGE`` adds a ``usage`` to the prompt response (JSON).
-                     ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode.
+                     ``ACP_STUB_EMPTY_PROMPTS=N`` ends the first N prompts empty, in any mode,
+                     still with the ``ACP_STUB_PROMPT_USAGE`` they spent.
                      ``ACP_STUB_AGENT_NAME`` replaces ``agentInfo.name`` (``stub-agent``).
                      ``ACP_STUB_AGENT_VERSION`` replaces ``agentInfo.version`` (``9.9.9``); empty drops it.
                      ``ACP_STUB_COST_PER_PROMPT`` reports a cumulative cost growing by it each prompt.
@@ -31,6 +32,13 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      and still reports ``stopReason: end_turn``, with the real
                      reason on stderr. This is the shape measured on a live
                      ``hermes acp`` whose provider rejected the credential.
+- ``empty_turn_no_tokens`` - like ``empty_turn``, but the answer also reports
+                     zero tokens and says nothing on stderr: the shape measured
+                     on a live ``opencode acp`` whose inference endpoint refused
+                     the call and whose agent swallowed the refusal.
+- ``empty_turn_unreadable_tokens`` - like ``empty_turn_no_tokens``, but the
+                     total it reports is ``Infinity``: a value JSON parsers
+                     accept and that is no count.
 - ``failed_call``  - like ``ok``, but the tool call answers ``status: "failed"``
                      and the turn goes on to say something after it. A run that
                      failed a call and still finished, which is the shape a
@@ -90,7 +98,7 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                      loop, so this is what fails if answering one blocks it.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
-                     boundary in the chunks themselves.
+                     boundary in the chunks themselves. ``ACP_STUB_REPLY`` replaces the answer.
 - ``cancelled``    - streams one chunk, then reports ``stopReason: "cancelled"``. The
                      shape measured on codex-acp when a turn is torn down part-way: a
                      reply that reads finished and is not.
@@ -105,6 +113,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
                       table to the prompt response, the field ACP reserves for
                       it. Proves the host keeps it on the run record verbatim.
 - ``silent``       - reads and never answers, for the timeout path.
+- ``resident``     - declares ``raven.residentWork``; a prompt arms an in-process
+                     wake (``ACP_STUB_WAKE_S`` later it writes
+                     ``ACP_STUB_WAKE_MARK``) and ends, and ``_raven/residentWork``
+                     answers resident until the wake has fired.
 - ``wedged``       - answers the first ``initialize`` and swallows everything
                      after it, pipes open, process alive: the shape where only
                      a probe round trip can tell nobody is home.
@@ -122,6 +134,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 
 MODE = os.environ.get("ACP_STUB_MODE", "ok")
@@ -176,6 +189,9 @@ _SESSIONS = 0
 _SESSION_CWD = ""
 # What each session is currently answering with, so a resumed one can report it.
 _SESSION_MODELS: dict[str, str] = {}
+# The reasoning effort each session is on, for the same reason; the ACP option
+# that carries it has its own id (`effort`) and category (`thought_level`).
+_SESSION_EFFORTS: dict[str, str] = {}
 
 _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
@@ -205,6 +221,24 @@ CAPABILITIES = {
 # not call what was not declared.
 if os.environ.get("ACP_STUB_NO_STEER"):
     del CAPABILITIES["agentCapabilities"]["_meta"]
+if MODE == "resident":
+    CAPABILITIES["agentCapabilities"]["_meta"]["raven.residentWork"] = True
+
+_WAKES: list = []
+
+
+def arm_wake() -> None:
+    """Fire once, ``ACP_STUB_WAKE_S`` from now, in this process: the armed cron job of a real agent."""
+
+    def fire() -> None:
+        with open(os.environ["ACP_STUB_WAKE_MARK"], "w", encoding="utf-8") as mark:
+            mark.write("fired")
+        _WAKES.remove(timer)
+
+    timer = threading.Timer(float(os.environ.get("ACP_STUB_WAKE_S", "1.0")), fire)
+    timer.daemon = True
+    _WAKES.append(timer)
+    timer.start()
 
 
 def send(frame: dict) -> None:
@@ -335,16 +369,56 @@ def _permission_input() -> dict:
     return {"rawInput": {"command": command}} if command else {}
 
 
+def _empty_answer(request_id) -> None:
+    """A turn that says nothing, in the shape the mode measures.
+
+    ``empty_turn`` is the credential refusal the agent reported on stderr;
+    ``empty_turn_no_tokens`` is the shape measured on a live opencode, where
+    the refusal was swallowed and only a zero token count says the model call
+    never ran.
+    """
+    if MODE == "empty_turn_no_tokens":
+        ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": 0, "inputTokens": 0, "outputTokens": 0}})
+        return
+    if MODE == "empty_turn_unreadable_tokens":
+        ok(request_id, {"stopReason": "end_turn", "usage": {"totalTokens": float("inf")}})
+        return
+    print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
+    ok(request_id, {"stopReason": "end_turn"})
+
+
 _PROMPTS = 0
+
+
+def _ended() -> dict:
+    """A finished prompt's result, with ``ACP_STUB_PROMPT_USAGE`` as its ``usage`` when set."""
+    answered: dict = {"stopReason": "end_turn"}
+    if counts := os.environ.get("ACP_STUB_PROMPT_USAGE"):
+        answered["usage"] = json.loads(counts)
+    return answered
+
+
+def _answers_without_a_turn(request_id) -> bool:
+    """The prompts that end the turn before any mode's own script runs.
+
+    ``ACP_STUB_EMPTY_PROMPTS`` applies whatever the mode, so it settles first;
+    a resident prompt then arms its wake and ends.
+    """
+    if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
+        ok(request_id, _ended())
+        return True
+    if MODE == "resident":
+        arm_wake()
+        ok(request_id, {"stopReason": "end_turn"})
+        return True
+    return False
 
 
 def handle_prompt(request_id, params) -> None:
     global _PROMPTS
     _PROMPTS += 1
     session_id = params.get("sessionId") or "stub-session-1"
-    if _PROMPTS <= int(os.environ.get("ACP_STUB_EMPTY_PROMPTS", "0")):
-        # The first N prompts end with nothing said, whatever the mode.
-        ok(request_id, {"stopReason": "end_turn"})
+    if _answers_without_a_turn(request_id):
         return
     if MODE == "dies_mid_turn":
         # Half an answer, then the process is gone: the prompt went out and
@@ -615,10 +689,31 @@ def handle_prompt(request_id, params) -> None:
         update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "look."}})
         update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "status": "pending"})
         update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "it is "}})
+        answer = os.environ.get("ACP_STUB_REPLY")
+        opening, rest = ("it is ", "a repo.") if answer is None else ("", answer)
+        if opening:
+            update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": opening}})
         update(session_id, {"sessionUpdate": "usage_update", "size": 1000, "used": 7})
-        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a repo."}})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": rest}})
         ok(request_id, {"stopReason": "end_turn"})
+        return
+    if MODE in ("many_steps", "many_steps_held"):
+        # A long run: a hundred messages, each followed by the call it announced.
+        # Held, the turn stays open past the live writer's one-second interval
+        # after the last of them, so its timer fires with every step still due.
+        for i in range(100):
+            update(
+                session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": f"step {i}."}}
+            )
+            update(
+                session_id, {"sessionUpdate": "tool_call", "toolCallId": f"t{i}", "title": "ls", "status": "pending"}
+            )
+            update(session_id, {"sessionUpdate": "tool_call_update", "toolCallId": f"t{i}", "status": "completed"})
+        update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "done."}})
+        if MODE == "many_steps_held":
+            sys.stdout.flush()
+            time.sleep(1.3)
+        ok(request_id, {"stopReason": "end_turn", "usage": {"inputTokens": 120, "outputTokens": 30}})
         return
     if MODE == "ends_on_a_step":
         # Two messages, each followed by the call it announced, and nothing said
@@ -668,9 +763,8 @@ def handle_prompt(request_id, params) -> None:
         # A provider that takes its time: the prompt is answered after the delay
         # -- from the first prompt, or from the one ACP_STUB_PROMPT_DELAY_FROM names.
         time.sleep(float(delay))
-    if MODE == "empty_turn":
-        print("provider rejected the credential: HTTP 401", file=sys.stderr, flush=True)
-        ok(request_id, {"stopReason": "end_turn"})
+    if MODE in ("empty_turn", "empty_turn_no_tokens", "empty_turn_unreadable_tokens"):
+        _empty_answer(request_id)
         return
     update(session_id, {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "thinking"}})
     # The shape measured on claude-agent-acp and opencode alike: the opening
@@ -719,10 +813,7 @@ def handle_prompt(request_id, params) -> None:
         # Cumulative, as the schema defines it: the process's whole spend so far.
         reported["cost"] = {"amount": round(float(per_prompt) * _PROMPTS, 6), "currency": "USD"}
     update(session_id, {"sessionUpdate": "usage_update", **reported})
-    answered: dict = {"stopReason": "end_turn"}
-    if counts := os.environ.get("ACP_STUB_PROMPT_USAGE"):
-        answered["usage"] = json.loads(counts)
-    ok(request_id, answered)
+    ok(request_id, _ended())
 
 
 def handle_cancel(params) -> None:
@@ -735,6 +826,44 @@ def handle_cancel(params) -> None:
             continue
         _AWAITING_CANCEL.remove(held)
         ok(held[0], {"stopReason": "cancelled"})
+
+
+def _set_config_option(request_id, params) -> None:
+    """One ``session/set_config_option`` frame: the model, or the reasoning effort.
+
+    Split out of ``main`` when the effort arm pushed its complexity past the
+    gate; the two options share the log-on-entry rule below, so they stay one
+    handler.
+    """
+    # Logged on entry, not on success: a test asserting that NO frame was sent
+    # has to see every frame, and a print behind the refusals below leaves an
+    # unrequested call looking identical to no call at all.
+    print(
+        f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
+        # Takes a switch and refuses the way back, which is the shape a host
+        # has to survive: it moved the session and cannot unmove it.
+        err(request_id, -32011, "will not switch back to 'stub:model-a'")
+    elif MODE == "no_models":
+        err(request_id, -32602, "unknown configuration option 'model'")
+    elif params.get("configId") == "effort":
+        if params.get("value") not in ("low", "high", "max", "default"):
+            err(request_id, -32011, f"will not switch to effort {params.get('value')!r}")
+        else:
+            _SESSION_EFFORTS[str(params.get("sessionId"))] = str(params.get("value"))
+            ok(request_id, {"configOptions": []})
+    elif params.get("configId") != "model":
+        err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
+    elif params.get("value") not in ("stub:model-a", "stub:model-b"):
+        # The runtime's own refusal, with its own code: a value it will not
+        # write is not an internal error.
+        err(request_id, -32011, f"will not switch to {params.get('value')!r}")
+    else:
+        _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
+        ok(request_id, {"configOptions": []})
 
 
 def main() -> None:
@@ -897,33 +1026,24 @@ def main() -> None:
                                     }
                                 ],
                             },
+                            {
+                                "id": "effort",
+                                "name": "Effort",
+                                "category": "thought_level",
+                                "type": "select",
+                                "currentValue": _SESSION_EFFORTS.get(f"stub-session-{_SESSIONS}", "default"),
+                                "options": [
+                                    {"value": "low", "name": "low"},
+                                    {"value": "high", "name": "high"},
+                                    {"value": "max", "name": "max"},
+                                    {"value": "default", "name": "default"},
+                                ],
+                            },
                         ],
                     },
                 )
         elif method == "session/set_config_option":
-            # Logged on entry, not on success: a test asserting that NO frame was
-            # sent has to see every frame, and a print behind the refusals below
-            # leaves an unrequested call looking identical to no call at all.
-            print(
-                f"stub: session/set_config_option {params.get('configId')}={params.get('value')}",
-                file=sys.stderr,
-                flush=True,
-            )
-            if MODE == "refuse_restore" and params.get("value") == "stub:model-a":
-                # Takes a switch and refuses the way back, which is the shape a
-                # host has to survive: it moved the session and cannot unmove it.
-                err(request_id, -32011, "will not switch back to 'stub:model-a'")
-            elif MODE == "no_models":
-                err(request_id, -32602, "unknown configuration option 'model'")
-            elif params.get("configId") != "model":
-                err(request_id, -32602, f"unknown configuration option {params.get('configId')!r}")
-            elif params.get("value") not in ("stub:model-a", "stub:model-b"):
-                # The runtime's own refusal, with its own code: a value it will
-                # not write is not an internal error.
-                err(request_id, -32011, f"will not switch to {params.get('value')!r}")
-            else:
-                _SESSION_MODELS[str(params.get("sessionId"))] = str(params.get("value"))
-                ok(request_id, {"configOptions": []})
+            _set_config_option(request_id, params)
         elif method == "session/set_mode":
             if MODE == "no_modes":
                 err(request_id, -32601, "session/set_mode is not implemented")
@@ -950,7 +1070,19 @@ def main() -> None:
                                 "type": "select",
                                 "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
                                 "options": [],
-                            }
+                            },
+                            {
+                                "id": "effort",
+                                "category": "thought_level",
+                                "type": "select",
+                                "currentValue": _SESSION_EFFORTS.get(sid, "default"),
+                                "options": [
+                                    {"value": "low", "name": "low"},
+                                    {"value": "high", "name": "high"},
+                                    {"value": "max", "name": "max"},
+                                    {"value": "default", "name": "default"},
+                                ],
+                            },
                         ]
                     },
                 )
@@ -966,6 +1098,8 @@ def main() -> None:
             handle_prompt(request_id, params)
         elif method == "_raven/session/steer":
             handle_steer(request_id, params)
+        elif method == "_raven/residentWork" and MODE == "resident":
+            ok(request_id, {"resident": bool(_WAKES)})
         elif request_id is not None:
             err(request_id, -32601, f"unknown method {method}")
 

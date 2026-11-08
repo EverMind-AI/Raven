@@ -162,9 +162,16 @@ a brief; two labels may name one agent with different briefs, which is how a sin
 gets a worker per subject without registering an agent per pair. The label reaches the model
 as a live enum on `spawn`, `run_subagent_dag`, and `resolve_dag_node`, and resolves to the
 agent during DAG preflight or before a spawn dispatch, because a label resolves to no backend.
-The brief travels as a preamble on the task a worker is given. A stored Playbook's private DAG
+The brief travels as a preamble on the task a worker is given. A `reassign` deliberately
+names a roster agent rather than a label: the move takes the node out of this table, and
+the node keeps the Charter of the role it was submitted under (see **Charter**). A stored
+Playbook's private DAG
 tool never consults this turn-scoped table: its graph already names roster agents and carries
-its own authored prompts, so a coincidentally equal worker label cannot rewrite it.
+its own authored prompts, so a coincidentally equal worker label cannot rewrite it. When a
+completed run is saved as a Playbook, a worker-labelled node that finished on another agent
+keeps its role by gaining a derived delegate row named `<label>--reassign-<n>`, one per
+(role, finishing agent) pair; that row exists only in the saved Harness, and the turn-scoped
+table it came from is untouched.
 _Avoid_: reading the table itself as a permission. It decides who the dispatching model may
 hand work to; what a dispatched worker may then do is its Charter's business, applied in the
 worker's own process. And reading it as configuring the main agent: it does not. The main
@@ -181,6 +188,10 @@ allows -- a charter may take a tool away and may not hand one back, may shorten 
 and may not lengthen one -- which is what makes it safe to accept from another process. And
 reading a refused judge as a refusal: source the gate rejects is dropped with a log line, and
 a judge that raises has said nothing, so the declarative rules beside it still apply.
+A reassigned node keeps the Charter of the role it was submitted under, even when the move
+names a roster agent the table does not carry: the role, not the agent, is what the Charter
+was authored for, and its structured fields are enforced by the Raven transports only, the
+same as they already are for the role itself.
 
 **Turn Runner**:
 The behavioural `Protocol` seam between Spine and an agent implementation:
@@ -248,8 +259,14 @@ the stable schema.
 **Session Tier** (`medium`/`high`/`max`; `TIER_LADDER` in `config/schema.py`):
 What the shipped built-in Session Mode catalogue moves in place of an iteration cap or an
 overlay: a session's current mode id (`session_policy(key).mode`, falling through to the
-catalogue's default) is offered to every sub-agent that session dispatches, as the effort
-level to run it at. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
+catalogue's default) is offered to every sub-agent that session dispatches whose handshake
+advertised a mode menu, as the effort level to run it at. An agent that advertises no modes
+is offered no tier and runs on its own default (`TierDecline.NO_SHARED_RUNG`), and its
+instances take no mode override: `subagents.instance.set_mode` refuses, naming the empty
+menu. The Mirasim adapter is such an agent: it advertises its effort rungs as a
+`thought_level` config option rather than as session modes, so once its capability snapshot
+is measured the tier does not reach a Mirasim agent, and a Mirasim turn runs on the
+**Row Effort**, else on Mirasim's own default. `clamp_tier` (`agent/subagent/mode_tiers.py`) is the clamp that lands
 it on one sub-agent: the nearest rung at or below on that agent's own probed menu, or
 `None` -- leave the agent on its own default -- in three cases. A tier outside the ladder
 (another vocabulary, "nearest" undefined); a menu sharing no rung with it at all; and a menu
@@ -257,8 +274,10 @@ carrying a rung the ladder cannot rank at the point where raising the effort is 
 move left, since the cheapest rung the ladder can *see* may not be the cheapest the agent
 has. An agent that converges on the ladder plus an id of its own still clamps on the real
 overlap, and an exact hit is honoured in any vocabulary that spells the rung the same way.
-Exactly one thing outranks it, and a person sets it: a standing override on a named instance
-(`subagents.instance.set_mode`). There is no per-dispatch mode -- the model composing a
+Two things outrank it. A person's standing override on a named instance
+(`subagents.instance.set_mode`), which `resolve_mode` sends in its place; and, on an agent
+whose mode menu is its effort menu, the **Row Effort**, sent in its place on the same
+channel -- the tier goes out only when there is none, or when the agent refuses it. Of those two the instance override ranks first. There is no per-dispatch mode -- the model composing a
 `spawn` cannot know what the operator chose, so `resolve_mode` takes no such argument and
 the spawn schema offers none.
 The three built-in descriptions are `raven.i18n` message ids resolved in
@@ -273,6 +292,64 @@ exactly what it declines to guess at.
 _Avoid_: putting the scope of the control on the rungs. Each row says only what
 distinguishes it; that raven's own effort is unchanged is stated once by whichever surface
 draws the control.
+
+**Row Effort** (`effort` on an acp entry in `subagents.agents[]`; `SubagentManager.session_effort_for`):
+The reasoning effort an operator sets on one acp row, sent to every session that row's
+dispatches open; a spawn, a direct chat and a DAG node all resolve it through
+`session_effort_for`. It travels on the channel the agent advertises effort on: its
+`thought_level` config option (OpenCode 1.19.4, the Mirasim adapter), or, on an agent whose
+mode menu is made only of level names with at least one besides `default` and `none` (Pi,
+Grok, Kimi, DSH; `mode_efforts`), `session/set_mode`, where it is sent in place of the
+**Session Tier** and so outranks it. On that
+shared channel a person's standing mode override on a named instance outranks the Row
+Effort in turn, and the row's value is withheld for that instance; on a `thought_level`
+agent the two are separate channels and both are sent. The menu it is picked from is the
+one the probe measured on the row's own model (`verify_agent` puts the row's model on its
+throwaway session first), and moving a row to another model re-measures it there
+(`subagents.update`): a stored Row Effort that menu lacks is dropped, and kept when the
+read fails, since nothing measured then says otherwise. The menu a live session reports
+after a model switch belongs to that session and never rewrites the row's, but it decides
+what that session is sent: an instance moved to a model whose menu lacks the Row Effort is
+not sent it. A cleared Row Effort sends the session back to what it would otherwise be on,
+from a record held per agent and parent binding (`_SESSION_STATE`) for as long as an
+instance can resume that session -- across the pool closing the idle agent and reloading
+the session in a new process, though not across a Raven restart.
+
+**Session Reasoning Effort** (`agent/session_effort.py`; `session.set_effort` over RPC, `/effort` in
+the TUI, the effort row of the WebUI's model picker):
+The reasoning effort one session picked for its own model calls, kept on the session's
+metadata beside `model` (`reasoning_effort`; null once cleared, since a metadata patch sets
+keys and never removes one) rather than on the loop's in-memory policy, so it outlives the
+gateway and a resumed conversation runs at what it was left at, and a fork carries it with
+the model (`FORK_CARRIES` in `session/manager.py`). `_run_agent_loop` is handed
+it by the turn entrance that holds the record, the way the model is, and ranks it: the
+configured `agents.defaults.reasoningEffort` underneath, a Session Mode's own
+`reasoningEffort` over that, this pick over both, a hook's rollback override on top. The
+ranking is `session_effort.in_force`, one rule with one home: the turn runs at it
+(`session_reasoning_effort` on the loop) and `session.info` / `session.set_effort` report
+it, and the turn sends the word in force on every call, None included, so a default cleared
+on a running gateway lands on its next turn -- the provider's own copy of the key, frozen at
+boot, is never consulted. The pick's words are the levels the conversation's model declares
+(`providers/effort_levels.py`: the route row's own `reasoning_effort_levels`, else its
+per-level flags, else the vendor row's `reasoning_effort_levels`, else the flags inherited
+from that row, else the serving provider's `ProviderSpec.reasoning_efforts`, else the flags'
+defaults, with a provider's `model_overlay.reasoningEfforts` over all of them; the serving
+provider is the config's route for the model, not the id's prefix, and a row filed under
+another provider than that section is skipped); `session.set_effort` offers and validates
+exactly those, a model that declares none has no row, and a stored pick the current model
+does not declare is dropped at the turn and in `session.info` (`session_effort.clamp`); the mode's
+word or the configured default then runs, since those two are not narrowed by the model.
+The install-wide `agents.defaults.reasoningEffort` keeps `REASONING_EFFORTS`
+(`config/schema.py`), shared with the console's checker and the agent's own `raven_config`
+door -- a key that is clearable on both (null is the provider's own default) and that the
+settings page draws, when unset, as a rung of its own rather than as `low`. Lands on the
+next turn, like a tier;
+reaches no sub-agent, unlike one -- a sub-agent is still told the configured default
+(`RAVEN_PARENT_REASONING_EFFORT`), and the TUI's `/effort` is refused inside a direct chat
+with an instance, since the pick is the main conversation's and an instance has none.
+_Avoid_: reading the pick off `SessionPolicy`. A mode switch replaces the whole policy and a
+restart empties it; the record is the pick's one home, and the policy carries only the
+mode's own effort.
 
 **Subagent** (`agent/subagent/`):
 A background agent task spawned by `SubagentManager`. Runs with its own tool set; its result
@@ -704,14 +781,69 @@ parsing so a playbook can leave it for the model to fill, and `validate_and_orde
 it before any node runs. It replaces the first-line-of-the-template guess a row used to
 make.
 
-**Task** (`tasks.list`, `raven/rpc/methods/tasks.py`):
+**Task** (`tasks.list`, `raven/rpc/methods/tasks.py`; rows built by `raven/agent/subagent/task_rows.py`):
 one unit of delegated work a conversation started, as the wire lists it: a `spawn` call, or
 a `run_subagent_dag` run (a playbook run is one), each as a run-level row carrying its nodes.
 Built from the run dir, the session node registry (`subagents/nodes.json`) and the Instance
 Registry, without the live graph tool; the row's status is derived from its nodes'
-(`docs/specs/2026-09-18-desk-tasks-list-design.md`).
+(`docs/specs/2026-09-18-desk-tasks-list-design.md`). The Task Board's recall reads a linked
+Task's status off the same row.
 _Avoid_: "task" for a spine `TurnRequest`, an asyncio task, or the `task` text handed to a
 sub-agent -- those are a Turn, a coroutine, and a prompt.
+
+**Task Board** (`raven/agent/task_board/`, `<session_dir>/task_board.json`):
+one host session's set of Task Groups, kept by the host model in one extra call after each
+completed turn that answered or dispatched work, and read back through the `task_board` tool. A turn
+known to be about a group -- one a delegated result opened, one whose message a Move on or an
+Answer named the group for -- writes only to that group and to wherever it places the work it
+started. Only the Raven host keeps one; a subagent or product agent never does
+(`docs/specs/2026-10-29-task-board-design.md`).
+_Avoid_: "task list" (that is `tasks.list`), "todo" (Raven-Code's Checklist).
+
+**Task Group**:
+one matter a conversation is pushing, spanning any number of turns -- a bug fix, a release
+note. Carries a title (at most 20 words, a CJK character counting as one), a summary of
+where the matter stands (asked for at most 50, refused only past 100; any turn may rewrite
+it), a status and its Progress Steps. The status is one of four the model sets after each
+turn: `needs_you` (the reply asks the user to answer, confirm or decide about it -- an error
+only the user can resolve included -- even while a run it started still works),
+`running` (a run it started is still working), `idle` (nothing in flight, nothing asked) and
+`completed` (finished or dropped; nothing further moves it). Chinese surfaces -- the zh
+prompt pack, the conversation -- call it 任务.
+_Avoid_: "task" for this in English -- a Task is one delegated unit, and hangs under a step;
+where a Task Group is 任务, a delegated unit is a 子智能体 or a DAG run.
+
+**Board category** (`raven/agent/task_board/overview.py` `category_of`, `tasks.boards`;
+`categoryOf` in `ui-web/src/features/tasks/boards.ts`):
+the type a Task Group is shown as, everywhere one is shown -- the Task Board page's columns
+and list, the rail badge, the sidebar's tasks tab -- one of *Needs you*, *Running*, *Idle* and
+*Completed*, after the status of the same name. `needs_you` and `completed` stand as written.
+Between the other two the live runs decide, not the model: a group is *Running* while a Task
+it links is one the sidebar's `tasks.list` reads as `running` -- so never a run this gateway
+no longer executes -- and *Idle* otherwise. Chinese surfaces: 需要你回答 / 运行中 / 闲置 / 已完成.
+_Avoid_: "Waiting on you" and "Stuck" -- *Needs you* is one type for a question and an error
+alike; "Archived" for a completed Task Group -- an archived conversation is the rail's, and
+its groups are left off the page altogether.
+
+**Progress Step**:
+one turn's advance on one Task Group: a title the page shows (at most 20 words) and a
+summary of any length that recall reads back, keyed by the timestamp of the message that
+opened the turn, with the Tasks that turn dispatched for it. A turn that
+advanced three groups writes three steps. The step that leaves its group `needs_you` opens its
+summary with what the user is asked and lists each question about the matter; while the group
+waits, the page shows that summary under the step and frames each question in a box of its own
+on the card, with an Ignore that sets that one question aside (`tasks.ignore_question`; the
+last one set aside leaves the group idle; the host is told at its next turn, as declined, so it
+does not ask again), one Answer (a reply drafted in the composer), and Move on; each names the
+group the next message is about, in that message's turn; recall reads the
+ones still open back to the host. A turn that updates a waiting group without asking anything
+new carries those questions onto its step, so the latest step normally holds the whole list;
+when that pass gets no answer -- a provider error, three refusals, or a reader's change
+meanwhile -- the update stands as written and the earlier step keeps them. Because the page lists them, the host's reply rules stop asking open questions again on every reply for a reader of
+the page with the board on (`render.board_on_page`); other channels and the terminal still do, and a turn a run's result opens is read on the surface the turn that dispatched it declared. Chinese surfaces call it 事件. The page marks it running while a Task it started runs, failed when one failed, and
+done otherwise; clicking it scrolls the transcript to that turn's reply.
+_Avoid_: "subtask" (it records progress, it is not a unit of work), "step" alone (the node
+record's steps are another thing).
 
 **Instance Title** / **Run Title** (`InstanceRow.title` / `InstanceRow.runTitle`):
 what one instance was asked, and what the graph it belongs to was asked. Computed by
@@ -744,27 +876,30 @@ _Avoid_: "function" — a Tool is the agent-facing capability, not a Python func
 
 **Web Vendor** (`config/schema.py`, `WebProvidersConfig`):
 Who issues a web credential, as opposed to which tool spends it. Keys live at
-`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl or Keenable
-account serves both `web_search` and `web_fetch`; a key held per tool would have to be
+`tools.web.providers.<vendor>.apiKey` because one AnySearch, Tavily, Exa, Firecrawl, Keenable or
+DeepSeek account serves both `web_search` and `web_fetch`; a key held per tool would have to be
 pasted twice and could drift into two values for one credential. The pre-vendor leaves
 (`tools.web.search.apiKey`, `tools.web.jinaApiKey`) are still read, after the vendor
 slot, and only for Serper and Jina. `~/.raven/env` mirrors every vendor key out under
-its bare env var.
+its bare env var. DeepSeek's web endpoints run on the account its chat API uses, so its
+web slot is optional: when it is empty, `Config.effective_web_vendor_key` answers with
+`providers.deepseek.apiKey` instead of asking for the same key twice.
 _Avoid_: "provider" unqualified — that is the LLM Provider in this vocabulary; and
 "the web key" — there is one per vendor.
 
 **Web Search Provider** / **Web Fetch Provider** (`agent/tools/web.py`, `SEARCH_PROVIDERS` / `FETCH_PROVIDERS`):
 Which interchangeable backend each web tool calls: `tools.web.search.provider` selects
-`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply` or
-`keenable`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`, `tavily`, `exa`,
-`firecrawl` or `keenable`. Every endpoint is a literal in the tool, so a selection names a vendor and
-never a URL. `web_search` is registered whatever the config holds and *withheld* from the
-offered set while the selected vendor's key does not resolve (Keenable searches without
-one and is offered keyless, as Jina reads pages keyless), so a key pasted mid-run
-surfaces it without a restart -- read live from the vendor slot and, for Serper, from the
-pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty slot
-is a revocation rather than a miss; `web_fetch` is always offered, falling back to Jina,
-which reads pages without a key. The two sub-agent launchers inherit the host's selection
+`serper` (default), `anysearch`, `serpapi`, `tavily`, `exa`, `brave`, `firecrawl`, `serply`,
+`keenable` or `deepseek`, and `tools.web.fetch.provider` selects `jina` (default), `anysearch`,
+`tavily`, `exa`, `firecrawl`, `keenable` or `deepseek`. Every endpoint is a literal in the tool,
+so a selection names a vendor and never a URL. `web_search` is registered whatever the config
+holds and *withheld* from the offered set while the selected vendor's key does not resolve
+(Keenable searches without one and is offered keyless, as Jina reads pages keyless), so a key
+pasted mid-run surfaces it without a restart -- read live from the vendor slot and, for Serper,
+from the pre-vendor leaf, in the order `WebToolsConfig.vendor_key` resolves them, and an empty
+slot is a revocation rather than a miss (except for a borrowing vendor, whose empty slot is the
+ordinary state and whose LLM provider key answers instead); `web_fetch` is always offered,
+falling back to Jina, which reads pages without a key. The two sub-agent launchers inherit the host's selection
 differently: the in-process backend (`agent/subagent/backends/raven_loop.py`) takes it and
 then declines to *register* `web_search` when no key resolves and the vendor needs one, while
 the agent launcher (`agents/raven-research/run.py`, and the retired fork before it -- its
@@ -811,11 +946,15 @@ _Avoid_: "shadow git" as the term — Checkpoint is the per-turn snapshot it pro
 **Silence Marker** (`agent/context/silence.py`):
 What a model answers with to say a turn has nothing to report: `[SILENT]`, `SILENT`, `NO_REPLY`
 or `NO REPLY` (`SILENCE_MARKERS`); `SILENCE_INSTRUCTION` is the two sentences that teach the
-bracketed form. The turn's `Origin` picks the rule, in one place (`is_silence`). A `USER` turn, or
-one with no origin, is never taught a marker, so it honours only `[SILENT]` itself with nothing but
-whitespace around it: a one-word answer such as `Silent.` or `No reply.` is the person's answer, and
-is delivered. A turn from a proactive origin -- `SENTINEL`, `CRON`, `HEARTBEAT` or `SUBAGENT` --
-reads the whole set by two rules: the strict one (`is_exact_silence`), a reply that is exactly a
+bracketed form. The turn's `Origin`, and whether its prompt taught the marker, pick the rule, in one
+place (`is_silence`). A turn whose prompt does not end with `SILENCE_INSTRUCTION`
+(`teaches_silence`) honours only `[SILENT]` itself with nothing but whitespace around it: a `USER`
+turn, one with no origin, and a proactive one that was never taught -- a heartbeat task, a
+sub-agent's relayed result, a sentinel notice. There a one-word answer such as `Silent.` or
+`No reply.`, or a reply ending on one, is the model's answer, and is delivered. A turn from a
+proactive origin (`PROACTIVE_ORIGINS`) whose prompt ends with it -- the cron reminder, a cron wake,
+and a sub-agent's unprompted report --
+reads the whole set by two rules (`reads_loose_silence`): the strict one (`is_exact_silence`), a reply that is exactly a
 marker, with case, edge whitespace and stray edge punctuation forgiven up to `SILENCE_MAX_CHARS`;
 and the loose one (`is_loose_silence`): nobody is waiting on such a turn and models wrap the marker
 in a note on why they stayed quiet, so a marker alone on the first or last line, or a bracketed
@@ -837,13 +976,16 @@ bracket goes out at once), reads past an inline think block the way the loop doe
 as it arrives, and what follows it is held; a closing tag with no block open is debris, as the loop
 reads it, and does not end the hold), keeps holding across a stream cut while the reply could
 still be the marker, and drops what it held when the loop reads the reply as
-a marker (a turn from a proactive origin, whose marker may close a report, holds the
+a marker (a turn that reads the loose rule, whose marker may close a report, holds the
 whole call instead). An exhausted turn's wrap-up is gated and read the same way. The marker row
-stays in the history holding the model's whole reply -- the marker, or, from a proactive origin,
+stays in the history holding the model's whole reply -- the marker, or, under the loose rule,
 the note around it -- filed with `silent: true` so a reload does not read it as an answer, and it
 carries the turn's Response Meta. The turn reports itself as
 `TurnOutcome.silent` and, for a surface drawing it live, as a closing `NoticeKind.SILENT_TURN`
-notice. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
+notice. Its detail is what that reply had streamed before it was read as the marker -- at most a
+think block the model inlined ahead of it -- counted over the step a reader draws it in (its call and
+a cut answer's continuations, or the wrap-up alone; `LoopOutcome.shown`), so a client takes back
+exactly that suffix of the step's text and keeps the narration before it. The kernel holds no marker rules -- they live in `agent/context/silence.py` -- and the
 spine's `TurnEnded` carries no flag of its own; what the kernel names of silence is the outcome
 (`TurnOutcome.silent`), the notice (`NoticeKind.SILENT_TURN`) and which origins are proactive
 (`PROACTIVE_ORIGINS`).
@@ -852,9 +994,10 @@ The `after_send` hook chain still runs, with
 queued for the next reply, and the personalizer learns nothing; text a hook composes there is
 delivered as the reply, the closing row is filed as that text rather than the marker, and the turn
 is then not silent. A turn the message tool has already answered (`MessageTool.sent_in_turn`: a send
-to the turn's own chat that went out) is not a Silent Turn whatever it ends on -- its answer reached
-the reader, so no
-`SILENT_TURN` notice goes out; a marker it ends on is still filed `silent: true`, so a reload
+that went out, which the tool hands to the turn's own reader whatever chat the call names), or one in
+which a tool delivered files the reader now holds, is not a Silent Turn whatever it ends on -- its
+answer reached the reader, so no `SILENT_TURN` notice goes out and the turn reports an explicit
+reply rather than `TurnOutcome.silent`; a marker it ends on is still filed `silent: true`, so a reload
 draws the muted line after the delivered reply where the live view drew none. The turn's last
 assistant row with text or tool calls -- the marker's row when it ends on one, else, after an empty
 closing reply, which is not stored, its last tool call, not necessarily the send; never a notice the
@@ -862,7 +1005,11 @@ runtime files after the turn -- carries that live verdict as `replied_via_tool`,
 surfaces that read a stored turn -- the ACP replay, which draws it, and the session list, which
 orders sessions by it -- read the flag from
 one place (`session/turn_shape.py`) rather than guess it from the calls they can see, where a send
-that failed or went to another chat would look like an answer.
+that failed would look like an answer. Which turns they take back whole is one rule in the same
+module (`TakeBack`), read by both and by the live turn: a turn the runtime opened that ends on a
+marker no tool answered goes, the marker's row closing it. Such a turn files no unanswered-question
+notice after its marker, so none is left behind as an orphan; a person's Silent Turn, which they
+keep, still files it.
 Distinct from a `no_output` failure. A Silent Turn is the model saying nothing on purpose, so it
 succeeds; `no_output` is what a turn is failed with when its last reply was empty -- no text, no
 tool call, no reasoning -- once every retry was spent, or, with recovery switched off, when its
@@ -893,13 +1040,18 @@ continued rather than taken for silence, and a stream that had already received 
 keeps it, so the refusal is handled as one rather than continued. The model is asked to go on, and
 the parts are joined, up to `MAX_CONTINUATIONS` times,
 after which the partial is delivered with `PARTIAL_STREAM_NOTE` as an `interrupted` turn. A
-continuation that comes back empty leaves what streamed as the answer, and so does one that is a
-marker on its own, unless the cut left a think block open, when it is read only joined to what came
-before it; one that comes back as an
-error, a stream cut off before any new text included, ends the turn at once on the partial with
-the note, as `interrupted`, with no wait and no fallback model -- and so does a turn that runs out
-of iterations or time while a continuation is still owed, with no wrap-up. On each of those exits
-the reply the turn ends on is the joined parts with their closed think blocks taken out of the whole
+continuation that comes back empty leaves what streamed as the answer, and on a person's turn, which
+showed what streamed, so does one that is a marker on its own; a turn that reads the loose rule showed
+nothing of it, so there such a marker is read with what came before it, on its own line, as the
+reply uncut would be. Either way a continuation inside a think block the cut left open is read only
+joined to what came before it. One that comes back as an error, a stream cut off before any new text
+included, ends the turn at once on the partial with the note, as `interrupted`, with no wait and no
+fallback model, and so does a turn that runs out of iterations or time while a continuation is still
+owed, with no wrap-up. One that raises ends on the partial the same way, but not at once: only after
+`stream_llm_call` has spent its reconnects and, on a failure it still reads as transient, waited out
+`llm_error_retry_delays` (15, 30 and 60 seconds by default), with no retry notice shown.
+On each of those exits the reply the turn ends on is the joined parts with their closed think blocks
+taken out of the whole
 -- a cut can split one -- and a block still unclosed left in as text, read for a Silence Marker by
 the turn's rule as a reply with no cut is, and
 one that is a marker ends the turn as a **Silent Turn**: nothing of it shown, its row filed
@@ -1662,7 +1814,13 @@ conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
-`api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it). `SkillHubClient` offers
+`enabled` / `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it, and
+`enabled=false` switches it off without clearing the URL -- off is read live). Both
+onboarding wizards seed the shared catalog URL and say what that sends; the settings page's
+Skill Hub switch is `enabled`, drawn from `settings.get`'s answer rather than the raw file.
+While on, text from the conversation (a turn's message, or a `find_skill` query) is sent as
+the catalog query.
+`SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
 candidates into the weighted RRF (weight 0.85, below Local 0.96 and Everos 0.9), and the
@@ -1947,8 +2105,10 @@ verdict wins.
 A plugin's session-retirement contribution (the `session_observers` kind): the session
 store calls `on_session_deleted` synchronously after it has acted on a delete, from
 whichever host surface asked. The store notifies and never waits -- an observer that
-raises is logged and skipped; no veto, no repair. For a plugin keeping per-session state
-outside the session store (an allocation ledger, a provisioned directory).
+raises is logged and skipped; no veto, no repair. One that declares `session_dir` is also
+handed the session's metadata directory as the store found it before the transcript went.
+For a plugin keeping per-session state outside the session store (an allocation ledger, a
+provisioned directory).
 
 **Visual Domain Selector** (`plugins-dist/design-engine/raven_design/selector.py`, hook seat `raven_design/plugin/hook.py`):
 The design engine's per-turn domain router, seated on the `hooks` kind
@@ -2152,7 +2312,7 @@ reaches `config.admission` for the door vocabulary and builds a loop by hand for
 legal, because it is a harness over recorded runs, not an entrance. One package holds two
 seats: in `agent/`, `agent/loop` is the L2 harness shell every entrance runs, and its
 siblings -- `tools`, `subagent`, `context`, `hook`, `personalizer`, `workdir`,
-`harness`, `window` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
+`harness`, `window`, `task_board` -- are L3 cargo the loop consumes; the "cargo does not import the loop shell"
 import-linter contract keeps the two seats apart in the shared directory, which is why
 the package is not split physically (ruled 2026-08-30). The one exception the target
 tree always named: the ACP client family -- the client, the `acp_agent` backend that
@@ -2542,12 +2702,29 @@ sha1 of `json.dumps(message, ensure_ascii=False, default=str)` — key order
 preserved, since sorting would make resolution hand back a reordered copy. Beside
 `_blobs/` and never inside it: `raven.tracing.compact` sweeps a blob whose link count
 is 1, and a Message Blob's is permanently 1 because a shell references it from its
-JSON text rather than by hard link. `compact` names both stores in
-`_CONTENT_STORES` and walks neither as an artifact tree -- their layout is
+JSON text rather than by hard link. `compact` names the three content stores
+(`_blobs/`, `_messages/`, `_message_packs/`) in `_CONTENT_STORES` and walks none
+of them as an artifact tree -- their layout is
 indistinguishable from `<kind>/<day>/<file>`, so a store left in the walk is rehashed
-whole on every run and hard-linked into `_blobs/`, breaking this boundary. No reclaim path yet; growth is bounded only by use.
+whole on every run and hard-linked into `_blobs/`, breaking this boundary. Its
+reclaim path is Message Pack: `raven tracing pack-messages` moves the files into
+packs; until that runs, growth is bounded only by use.
 _Avoid_: storing one under `_blobs/` — that directory holds whole-artifact
 payloads, and `compact` sweeps any member of it whose link count is 1.
+
+**Message Pack** (`raven/tracing/message_pack.py`):
+Message Blobs concatenated into multi-megabyte zstd frames under
+`_message_packs/<uuid>.pack.zst`, with `index.json` mapping each sha1 to
+`(pack, plaintext offset, length)`. A migration, not a writer change:
+`raven tracing pack-messages` writes the packs, replaces the index atomically, and
+only then deletes the message files, so a never-packed store, a half-packed one,
+and a crash at any step all leave every address readable (a reader that finds no
+file reads its slice). The index travels with an imported store and is untrusted:
+a pack name is a generated basename and the range fields are non-negative
+integers, validated before any path is built. A reader keeps at most 32 MB of
+decompressed packs; a larger pack is streamed per read.
+_Avoid_: "archive" — that names the rotated-log directory; a pack is not a
+whole-store backup.
 
 **Artifact Shell** (`raven/observability/semconv.py`):
 An `llm.input` artifact in `audit.artifact.v2` form: the call's identity plus one
@@ -2840,7 +3017,7 @@ has no scope until the parent arrives, when the index reprojects it under a new 
 a boundary trimmed to a skeleton loses its entries, so its scope has no entry to open it
 while its descendants keep the scope id (the skeleton keeps the span's name and `tool.name`,
 so it still counts as a boundary). These fields are the input the trajectory view's
-per-sub-agent tabs are built from.
+agent rows are built from -- the waterfall's one row per agent, keyed by scope.
 _Avoid_: "Lane" -- the scheduler's term; "sub-agent trace" -- a spawned run's steps live in the
 spawning turn's trace; `origin` for the boundary -- it says only whether a trace was dispatched.
 
@@ -2880,8 +3057,8 @@ turn returns), every ok turn end it records is `empty_reply` and
 `redundant_reply` cannot fire; the latter takes effect once that is fixed.
 A `subagent.run` entry's `meta` names the run: `label` and `task_id`, and `agent`,
 `instance`, `handle`, `dispatch`, `outcome`, `dag_run_id`, `node_id` and `attempt` each only
-when recorded with a value; these keys belong to the same input contract for the
-trajectory view's per-sub-agent tabs as the Sub-agent Scope fields.
+when recorded with a value; these keys feed the trajectory view's agent rows alongside
+the Sub-agent Scope fields -- the waterfall's one row per agent, keyed by scope.
 _Avoid_: calling a Conversation Record an entry — that is the CLI's text
 projection, without identity, structured status or timing.
 
@@ -2922,7 +3099,9 @@ slot, else its `summary`. Inputs and turn markers are charged zero
 the record), other artifact slots of the same span are `"shared"`, and a span
 without a trustworthy end time charges `None` (`"unknown"`, never zero). A span's
 time is therefore counted at most once, while parent and child spans each keep
-their own, so the duration bar sums charged time, not wall-clock time.
+their own, so a sum of charged time is the work done, not wall-clock time. The
+details pane shows the charge; the waterfall draws each span's real extent
+(`operation_start` to `operation_end`) instead, since it shows who was busy when.
 _Avoid_: reading `tool.duration_ms` or usage fields as the owner's charge — they
 are diagnostics, not the span clock.
 
@@ -3343,9 +3522,10 @@ Registry** so the model has no interface for claiming it, and is written into th
 conversation at the loop's `drain` seam -- the one point where the turn's own task owns
 the message list with every tool result already in it.
 _Avoid_: reading it as a *default* for a question. The broker's `default` is what its
-fail-safe paths return (timeout, cancellation, an undeliverable question, connection EOF),
-and autofill never sets one, so a question it deferred and nobody answered is the same
-empty skip it always was.
+fail-safe paths return (timeout, an undeliverable question, connection EOF, the pending wait
+cancelled by someone else); cancelling the asking task itself raises instead, so a stopped
+turn ends rather than reading "no answer". Autofill never sets a default, so a question it
+deferred and nobody answered is the same empty skip it always was.
 
 **Frame Journal** (`raven/acp_client/journal.py`):
 Every frame of one ACP connection, both directions, in wire order, on disk. Distinct from
@@ -3365,6 +3545,67 @@ like a connection that went quiet. Mode `0600`, because the frames carry the who
 and every tool result.
 _Avoid_: calling it a transcript - a reader drawing a delegated run wants the Instance Log
 or `transcript.jsonl`, not this.
+
+**Idle close** (`AcpConnectionPool.close_idle`, `subagents.runtime.idleCloseS`):
+The pool ending a pooled ACP agent's process once the connection has been quiet for the
+configured budget: no request of the host's unanswered (a held wake is one), none of the agent's
+being answered, no frame from the agent and no lease for the whole budget. Only an agent that
+advertises `loadSession`, or one that never opened a session, is closed, so a stateful
+instance's next turn reopens its session in a fresh process with `session/load`. An agent that
+declares `raven.residentWork` is asked first and kept while it holds Resident work. Each event
+loop closes only the connections made on it, whose pipes are its own.
+_Avoid_: calling it a timeout - nothing in flight is cut short, nor anything held for later.
+
+**Resident work** (`_raven/residentWork`, `CronService.armed_jobs`, `running_plugin_services`):
+What a Raven agent holds that runs with nobody asking: an enabled cron job of its own partition
+while its scheduler runs, and a running plugin Service. Neither puts anything on the wire, and
+closing the process loses both: no other partition claims the job, and the Service lives only as
+long as the process. The agent declares `raven.residentWork` in `agentCapabilities._meta` and
+answers `_raven/residentWork` as things stand at the moment of asking, so a one-shot wake that
+has fired no longer counts. The host decides on it, so it is a protocol extension the host asks,
+not Response Meta.
+_Avoid_: a held wake (`raven.holdTurn`) for it - that keeps a prompt open and the agent busy;
+resident work is what an agent holds between prompts.
+
+**LLM relay** (`raven/providers/relay.py`, `relay_provider.py`, `relay_server.py`, `subagents.runtime.llmRelay`):
+The host making a Raven agent's LiteLLM calls for it. The host offers a local socket and a token
+in the launch environment (`RAVEN_LLM_RELAY`), and an agent that reads them builds a
+`RelayProvider` where it would have built a `LiteLLMProvider`: the same construction and the
+same answers (both stand on `LiteLLMShape`), with only the single `chat` / `chat_stream` attempt
+and the `relayed` catalogue lookups crossing to the host. Retry, classification, usage records
+and traces stay in the agent; the host's calls run under `recorded_by_caller` so a call is
+billed once. The relay is served by the event loop that started it: a later loop starts another,
+and a loop running beside it in another thread is offered the same socket. A connection presents
+the token first, alone and under a deadline, so a peer without it is dropped before a frame is
+read. The host builds an agent's provider without writing the agent's key into its own
+environment, and makes each call in a context of its own under the window of the agent's turn,
+so the output ceiling on the wire is the one the agent's loop reserved. A call is made with the
+host's environment, so an agent whose own configuration sets something LiteLLM reads from it (an
+endpoint, a cloud credential, a proxy or CA bundle) is launched without the relay; and a refusal
+of prompt-cache marks is learned on the host too, which builds the agent's resend. An agent that
+cannot reach the host loads LiteLLM and works as before.
+
+**Fork template** (`raven/acp_client/fork_template.py`, `raven/cli/_fork_template.py`, `subagents.runtime.forkTemplate`):
+On Linux, one process per host that has imported what Raven agents import, frozen out of the
+collector's reach, and forks each Raven agent the host launches, so the agents share those pages.
+Two halves: the host's side in `acp_client` decides when to ask, starts and ends the template and
+holds the endpoint a forked agent runs behind; the template's own side is a launcher beside the
+CLI, because it loads the surfaces by name and runs `python -m raven`, which the client shelf may
+not. The client starts it through Raven's entry point, which settles the certificate store first,
+and never imports it. It starts through the parent-death
+wrapper like any agent, its stdin is a lifeline only the host holds, and it belongs to the event
+loop that started it: its pipes and the watcher that reaps it are that loop's, so it is ended with
+that loop and a later loop starts another; a loop running beside it in another thread launches the
+ordinary way rather than end the agents it still has. Each forked agent leads a session of its own
+and arms the parent-death signal against the template. A product launcher's `os.execv` of
+`python -m raven` runs Raven in the same process. Agents write the modules they imported beside
+the template, per product, and the next template loads the modules at least two products import
+(one product's own while only one has been seen): a module one product alone imports is shared by
+no other process, so it is left for that product to import after the fork. Only the host's own
+interpreter starting `-m raven` or a product launcher is forked; anything else launches the
+ordinary way. A template that has not reported ready within a minute is ended, and launches go
+the ordinary way for ten minutes before a new one is started; one that reports it cannot serve,
+or fails to start any other way, is not used again by that loop.
 
 **Leftover agent** (`raven/acp_client/leftovers.py`):
 An ACP agent process group whose launching host is no longer running. An ACP agent runs in a
@@ -3390,11 +3631,18 @@ write failed, or its leader had already exited when the record was taken), and a
 by a Raven older than the records.
 
 On Windows, each locally launched ACP connection owns an unnamed, non-inheritable Job Object with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. A launcher waits for one byte on stdin before starting
-the agent; the host sends it only after assigning the launcher to the job. Host death before
-assignment closes stdin, so no agent starts. After assignment, host death or closing the
-connection closes the job's only handle, ending its processes and descendants even if the
-original launcher has already exited.
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway permission. A launcher waits for one byte
+on stdin before starting the agent; the host sends it only after assigning the launcher to the
+job. Host death before assignment closes stdin, so no agent starts. After assignment, host death
+or closing the connection closes the job's only handle, ending its processes and descendants
+even if the original launcher has already exited. Work an agent hands off on purpose is started
+by the host when that channel is present: the host serves a named pipe whose address and key
+reach the agent in `RAVEN_ACP_HANDOFF_PIPE` and `RAVEN_ACP_HANDOFF_KEY`, and starts the hand-off
+relay outside the job. The handed-off job therefore outlives the host while nothing in the
+agent's tree can leave the job -- a breakaway permission would have let Git for Windows spend it
+on every native program the agent's Bash tool starts. Without the channel (a host older than this
+mechanism, or a backend run outside an ACP agent), the relay starts inside the job and the job
+ends when that job object closes.
 _Avoid_: "orphaned" - in POSIX terms every agent group is an orphaned process group from the
 moment it starts, since its session does not hold the host; and the DAG vocabulary rules the
 word out for a released run.
@@ -3716,7 +3964,7 @@ subsystem; this one judges a single DAG node's output against its own prompt and
 follow-ups.
 
 **exception** (node status) -- a DAG node that did not accomplish its task and is
-waiting for the main agent to decide whether to continue, abandon, or replan it.
+waiting for the main agent to decide whether to continue, abandon, reassign or replan it.
 Reached by two routes: the backend raised, or the backend returned and the
 verdict said the task was not accomplished. Non-terminal: its dependents stay
 `pending` rather than cascading to `skipped`.
@@ -3810,6 +4058,43 @@ naming it. A completed node of the old run is reused by reference (`depends_on` 
 adjudicated node and no attempt budget crosses the boundary.
 _Avoid_: "reorchestrate" -- orchestration is what the main agent does with graphs generally;
 this names one decision about one graph.
+
+**reassign** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
+to an exception report that changes who runs the node next instead of what it is: the main
+agent names another enabled roster agent and a message, and the next attempt of the node runs
+there. It keeps the node's id, its task, its dependencies and its dependents, and the run is
+neither stopped nor replaced; only the agent and its session change. It spends one
+continuation as `continue` does, and the attempt budget is not reset. A node on an `instance`
+takes the run's other unfinished nodes on that instance with it, and a shared instance
+requires a `[stateful]` target. The new agent's first prompt is a **Handover**. A stint round
+cannot be reassigned: its roles are the compiled role table's.
+_Avoid_: "retry on another agent" -- that names the effect, not the decision; and "replan",
+which replaces the graph rather than the agent.
+
+**Handover** (`raven/agent/subagent/dag_handover.py`) -- the text that seeds a reassigned
+node's new agent: the earlier turns of the source conversation as plain `User:` / `Assistant:`
+text inside a `<handover>` block, a fixed sentence saying the conversation continues, then the
+message that attempt would otherwise dispatch with -- the main agent's reassign message for
+the node it answered, or a moved sibling's own prompt when that sibling dispatches first.
+Drawn from the old agent's Instance Log when the node's last attempt ran on a handle and that
+log proves it holds every archived attempt of the node; otherwise from the node's own attempt
+archives, with a notice when a recorded instance history was expected but could not be used.
+For a moved instance group the turns are the instance's whole conversation, and whichever
+moved node dispatches first plants them. It carries visible text only -- no tool calls, no
+tool output and none of the old agent's private context -- and a `[failed]` row, which holds
+the verdict or the error, is left out, so the main agent states what went wrong in its
+message. Carried text is escaped so it can neither open a turn of its own nor close the block
+early; that escape is a framing guard, not a sanitizer for instructions inside the text.
+Each carried answer is also wrapped with `wrap_untrusted` (`source="subagent"`), and a
+handover carried inside an earlier user row is fenced the same way, because both are
+sub-agent output by construction (the fence rule below); the task, the person's and the
+main agent's words, and the raven-minted trailer stay unfenced. A steer row is fenced
+too: the collector records one for any user chunk that differs from the prompt, including
+a chunk the agent process or a remote host emitted, so its provenance is not the person's
+word by construction.
+_Avoid_: "handoff" -- the **Handoff Block** (`raven/agent/subagent/direct_chat.py`) is the
+raven-minted pointer block in the main agent's next turn after Direct Chat activity, and it
+carries no transcript text.
 
 **outbox** (`raven/agent/subagent/dag_adjudication.py`) -- a foreground DAG run's tray of
 events: its nodes' exception reports and its final result, waiting for the tool call

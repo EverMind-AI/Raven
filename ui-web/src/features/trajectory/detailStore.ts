@@ -150,12 +150,20 @@ export interface FileBody {
 
 export type Tab = 'overview' | string
 
+export interface Place { x: number; y: number }
+
 export interface DetailsState {
   open: boolean
   /** The reader's own width in pixels, or null for the default. */
   width: number | null
+  /** The reader's own height in pixels, or null for all the room under the header. */
+  height: number | null
+  /** Where the reader moved the pane, its top-left corner in the area's pixels; null while it sits where it opens. */
+  place: Place | null
   /** The trajectory area's width, as the island measured it. */
   areaWidth: number
+  /** The trajectory area's height, as the island measured it. */
+  areaHeight: number
   /** The identity of the descriptor the pane is showing, once one was accepted. */
   current: Identity | null
   /** The list says the selected entry moved on; the descriptor is to be read again. */
@@ -176,14 +184,13 @@ export interface DetailsState {
   pins: Record<string, Tab | null>
   /** The entry the pane just arrived at, whose tab the pin is still to decide. */
   arrival: string | null
-  /** Whether the pane was open in each Scope Tab not on screen, by `list.scopeKey`. */
+  /** Whether the pane was open in each scope but the current one, by `list.scopeKey`. */
   openByScope: Record<string, boolean>
   /** The blocks to open first on an entry's next arrival when no pin applies, best first; spent on that arrival. */
   preferred: Record<string, string[]>
   /** The pane last closed because the reader moved to a tab where it was closed, not because they closed it. */
   swapped: boolean
   /** Scroll offsets by entry and tab: an intention, kept across revisions. */
-  scrollByEntryTab: Record<string, number>
   descriptors: Record<string, DescriptorRecord>
   blocks: Record<string, BlockRecord>
   /** Message outlines by descriptor key: one per entry identity. */
@@ -202,7 +209,17 @@ export interface DetailsState {
 export const DEFAULT_WIDTH = 480
 export const MIN_WIDTH = 320
 export const NARROW_BELOW = 800
+export const MIN_HEIGHT = 240
+/** How far one arrow press on the pane's corner moves an edge. */
 export const RESIZE_STEP = 16
+/** The pane's margin from the area's edges wherever it is: the stylesheet's own 10px where it opens. */
+export const CARD_GAP = 10
+/* How far a press on the head travels before it moves the pane, and how near
+   where the pane opens a drop has to land to put it back there: the desk
+   palette's own numbers (features/desk/geometry.ts), so the two floating
+   cards answer the hand alike. */
+export const DRAG_THRESHOLD = 4
+export const SNAP_DISTANCE = 34
 /** Bytes of descriptors and block bodies kept at once. */
 export const BUDGET = 8 * 1024 * 1024
 /** Pages of one block kept at once; the earliest go as more arrive. */
@@ -218,7 +235,10 @@ export const REVISION_RETRIES = 3
 const initial: DetailsState = {
   open: false,
   width: null,
+  height: null,
+  place: null,
   areaWidth: 0,
+  areaHeight: 0,
   current: null,
   stale: false,
   unstable: false,
@@ -231,7 +251,6 @@ const initial: DetailsState = {
   openByScope: {},
   preferred: {},
   swapped: false,
-  scrollByEntryTab: {},
   descriptors: {},
   blocks: {},
   outlines: {},
@@ -381,6 +400,27 @@ export const detailsWidthPx = (s: DetailsState = store.get()): number => {
 
 export const narrow = (s: DetailsState = store.get()): boolean => s.areaWidth > 0 && s.areaWidth < NARROW_BELOW
 
+/* A height the reader set, held between the minimum and the area; null while
+   the pane fills the room under the header, which the stylesheet sizes. */
+export const detailsHeightPx = (s: DetailsState = store.get()): number | null => {
+  if (s.height === null) return null
+  const ceiling = s.areaHeight > 0 ? s.areaHeight - 2 * CARD_GAP : Number.POSITIVE_INFINITY
+  return Math.max(MIN_HEIGHT, Math.min(s.height, Math.max(MIN_HEIGHT, ceiling)))
+}
+
+/* Where a pane drawn `height` tall goes with its corner at `at`: wholly
+   inside the area, a gap from each edge. */
+export const holdPlace = (at: Place, height: number, s: DetailsState = store.get()): Place => {
+  const along = (value: number, size: number, area: number): number =>
+    Math.round(area > 0 ? Math.max(CARD_GAP, Math.min(value, area - size - CARD_GAP)) : value)
+  return { x: along(at.x, detailsWidthPx(s), s.areaWidth), y: along(at.y, height, s.areaHeight) }
+}
+
+/* Where a moved pane is drawn, held against the area as it is now: the
+   reader's own place comes back once the area grows again. */
+export const detailsPlace = (s: DetailsState = store.get()): Place | null =>
+  s.place === null ? null : holdPlace(s.place, detailsHeightPx(s) ?? MIN_HEIGHT, s)
+
 export function openDetails(): void {
   if (store.get().open) return
   bump()
@@ -402,13 +442,39 @@ export function closeDetails(): void {
   patch({ open: false, swapped: false, arrival: null })
 }
 
-export function setWidth(px: number): void {
-  patch({ width: Math.round(px) })
-}
-
 export function setAreaWidth(px: number): void {
   if (store.get().areaWidth === px) return
   patch({ areaWidth: px })
+}
+
+export function setAreaHeight(px: number): void {
+  if (store.get().areaHeight === px) return
+  patch({ areaHeight: px })
+}
+
+/* The reader's pull on the pane's corner. A pull that only moves the width
+   keeps an auto height -- null -- so the card still fills the room under the
+   header rather than freezing the height it happened to have. */
+export function resizeDetails(width: number, height: number | null): void {
+  patch({ width: Math.round(width), height: height === null ? null : Math.round(height) })
+}
+
+/* Where a moved pane comes to rest: back where it opens when let go within
+   SNAP_DISTANCE of there -- as tall as the room there again,
+   unless the reader made it shorter -- and where it was let go otherwise.
+   `height` is the pane's drawn height, which a pane leaving its place keeps;
+   `homeTop` is that place's top, NaN when it is not known. */
+export function dropDetails(at: Place, height: number, homeTop: number): void {
+  const s = store.get()
+  const kept = s.height ?? Math.round(height)
+  const held = holdPlace(at, detailsHeightPx({ ...s, height: kept }) ?? kept, s)
+  const homeX = s.areaWidth - CARD_GAP - detailsWidthPx(s)
+  if (Math.abs(held.x - homeX) <= SNAP_DISTANCE && Math.abs(held.y - homeTop) <= SNAP_DISTANCE) {
+    const room = s.areaHeight - homeTop - CARD_GAP
+    patch({ place: null, height: kept < room - 1 ? kept : null })
+    return
+  }
+  patch({ place: held, height: kept })
 }
 
 export const tabOf = (entryId: string): Tab => store.get().tabByEntry[entryId] ?? 'overview'
@@ -420,13 +486,17 @@ export function setTab(entryId: string, tab: Tab): void {
   patch({ tabByEntry: { ...store.get().tabByEntry, [entryId]: tab }, unstable: false })
 }
 
+/* Where each entry's tab was scrolled to, kept OUTSIDE the store: only the
+   restore path reads it, and putting it in the store re-rendered the whole
+   pane -- messages list included -- on every pixel of every scroll. It goes
+   with the conversation, as the store's own state does (`follow`). */
+const scrollMemory = new Map<string, number>()
+
 export function setTabScroll(entryId: string, tab: Tab, top: number): void {
-  const key = scrollKey(entryId, tab)
-  if (store.get().scrollByEntryTab[key] === top) return
-  patch({ scrollByEntryTab: { ...store.get().scrollByEntryTab, [key]: top } })
+  scrollMemory.set(scrollKey(entryId, tab), top)
 }
 
-export const tabScroll = (entryId: string, tab: Tab): number => store.get().scrollByEntryTab[scrollKey(entryId, tab)] ?? 0
+export const tabScroll = (entryId: string, tab: Tab): number => scrollMemory.get(scrollKey(entryId, tab)) ?? 0
 
 /* ── the pinned tab ───────────────────────────────────────────────────── */
 
@@ -1301,9 +1371,13 @@ function follow(): void {
   if (now.sessionKey !== was.sessionKey) {
     bump()
     inflight.clear()
+    scrollMemory.clear()
     revisionHops = 0
     const d = store.get()
-    store.set({ ...initial, paused: !now.permitted, width: d.width, areaWidth: d.areaWidth, pins: withPinOf(d.pins, now.sessionKey) })
+    store.set({
+      ...initial, paused: !now.permitted, width: d.width, height: d.height, place: d.place,
+      areaWidth: d.areaWidth, areaHeight: d.areaHeight, pins: withPinOf(d.pins, now.sessionKey),
+    })
     return
   }
   /* The view left or came back, the switch flipped, the snapshot was let go:
@@ -1314,9 +1388,9 @@ function follow(): void {
     bump()
     patch({ paused: !now.permitted })
   }
-  /* Another Scope Tab: the pane is as that tab left it, unless the move
-     brought a selection of its own (a link, a tab opening on its entry),
-     which opens it the way a click would. Coming back to a tab is not an
+  /* Another scope: the pane is as that scope left it, unless the move
+     brought a selection of its own (a link, a scope entered on its entry),
+     which opens it the way a click would. Coming back to a scope is not an
      arrival -- its entry stays on the block the reader left it on. */
   if (now.scope !== was.scope) {
     bump()
@@ -1375,23 +1449,23 @@ export const hasFocus = (): boolean => {
   return !!pane && pane.contains(document.activeElement)
 }
 
-/* The one layer the surfaces share: the dense block's pick list and the
-   duration filter's popover, which are open or not, and the pane, which
-   counts only while it holds the focus. The list goes first, then the
-   popover, being the things on top. */
+/* The one layer the surfaces share: the stretch picked on the ruler, which is
+   taken back wherever the focus is, and the pane, which counts only while it
+   holds the focus. The pick answers first, as the bar's own popovers did before
+   it: an Escape in the pane still closes the pane once nothing is picked. */
 onTrajectoryEscape({
   id: 'trajectory.escapeOpen()',
-  isOpen: () => list.get().timeline.bucket !== null || list.get().timeline.threshold || (store.get().open && hasFocus()),
+  isOpen: () => list.get().picked !== null || (store.get().open && hasFocus()),
   close: () => {
-    if (list.get().timeline.bucket !== null) list.closeBucket()
-    else if (list.get().timeline.threshold) list.setThresholdOpen(false)
-    else closeDetails()
+    if (list.get().picked !== null) { list.setPicked(null); return }
+    closeDetails()
   },
 })
 
 /** `keepStorage` stands in for a reload: everything in memory goes, the tab's storage stays. */
 export function _resetForTests(opts: { keepStorage?: boolean } = {}): void {
   store._resetForTests()
+  scrollMemory.clear()
   if (!opts.keepStorage) PINS.clear()
   gen = 0
   clock = 0

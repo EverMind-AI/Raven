@@ -747,6 +747,12 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       case 'error':
         turnController.recordError()
 
+        // A failed turn still measured its calls and filed the reading, so the
+        // bar moves on with it rather than staying on the turn before.
+        if (ev.payload?.usage) {
+          patchUiState(state => ({ ...state, usage: { ...state.usage, ...ev.payload!.usage } }))
+        }
+
         {
           const message = String(ev.payload?.message || 'unknown error')
 

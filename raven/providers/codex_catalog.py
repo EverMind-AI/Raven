@@ -9,12 +9,19 @@ we carry. The account is the only source that knows, so the picker asks it.
 Hidden entries are dropped. The catalogue marks some (`codex-auto-review`, a
 watermarked variant) `visibility: "hide"` -- they are reachable but not meant to
 be offered.
+
+The cache also keeps each model's ``supported_reasoning_levels``, the account's
+own declaration of the effort words it takes. ``account_efforts`` answers from
+that cache for the turn, or fetches when the RPC says it may; a level outside
+this build's ladder (``ultra``) is dropped there.
 """
 
 from __future__ import annotations
 
 import time
 from typing import Any
+
+from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
 
 CATALOG_URL = "https://chatgpt.com/backend-api/codex/models"
 
@@ -39,8 +46,8 @@ _CACHE_TTL_SECONDS = 300
 #: offline, are states that change -- an account's entitlements are not.
 _FAILURE_TTL_SECONDS = 30
 
-#: (credential fingerprint, monotonic stamp, slugs)
-_cache: tuple[object, float, tuple[str, ...]] | None = None
+#: (credential fingerprint, monotonic stamp, slug -> the levels it states)
+_cache: tuple[object, float, dict[str, tuple[str, ...]]] | None = None
 #: (credential fingerprint, monotonic stamp)
 _failure: tuple[object, float] | None = None
 
@@ -84,22 +91,57 @@ def account_models(*, timeout: float = 5.0, strict: bool = False) -> tuple[str, 
     now = time.monotonic()
     fingerprint = _credential_fingerprint()
     if _cache is not None and _cache[0] == fingerprint and now - _cache[1] < _CACHE_TTL_SECONDS:
-        return _cache[2]
+        return tuple(_cache[2])
     if not strict and _failure is not None and _failure[0] == fingerprint and now - _failure[1] < _FAILURE_TTL_SECONDS:
         return ()
 
     try:
-        slugs = _fetch(timeout=timeout)
+        models = _fetch(timeout=timeout)
     except Exception:
         if strict:
             raise
         _failure = (fingerprint, now)
         return ()
 
-    _cache = (fingerprint, now, slugs)
+    _cache = (fingerprint, now, models)
     _failure = None
 
-    return slugs
+    return tuple(models)
+
+
+def account_efforts(slug: str, *, refresh: bool = False, timeout: float = 5.0) -> tuple[str, ...]:
+    """The reasoning levels this account's catalogue states for ``slug``, least first.
+
+    Never ``None``: an answer that exists is kept as last-good past its refresh
+    time, because a turn may not wait on the network and dropping a stored pick
+    to the provider default is safer than sending an unvalidated word. ``()``
+    means the catalogue has no answer to offer -- it never was read, the fetch
+    failed with nothing cached, or it does not offer this model (or states no
+    levels for it). The turn and reports read cache-only; an explicit effort
+    set passes ``refresh=True`` to fetch, and a failed refresh falls back to
+    the last-good answer.
+    """
+    global _cache, _failure
+
+    now = time.monotonic()
+    fingerprint = _credential_fingerprint()
+    cached = _cache if _cache is not None and _cache[0] == fingerprint else None
+    if cached is not None and now - cached[1] < _CACHE_TTL_SECONDS:
+        return cached[2].get(slug, ())
+    if not refresh:
+        return cached[2].get(slug, ()) if cached is not None else ()
+    if _failure is not None and _failure[0] == fingerprint and now - _failure[1] < _FAILURE_TTL_SECONDS:
+        return cached[2].get(slug, ()) if cached is not None else ()
+
+    try:
+        models = _fetch(timeout=timeout)
+    except Exception:
+        _failure = (fingerprint, now)
+        return cached[2].get(slug, ()) if cached is not None else ()
+
+    _cache = (fingerprint, now, models)
+    _failure = None
+    return models.get(slug, ())
 
 
 def reset_cache() -> None:
@@ -110,7 +152,7 @@ def reset_cache() -> None:
     _failure = None
 
 
-def _fetch(*, timeout: float) -> tuple[str, ...]:
+def _fetch(*, timeout: float) -> dict[str, tuple[str, ...]]:
     import httpx
 
     from raven.providers.chatgpt_token import access_token_and_account
@@ -128,19 +170,29 @@ def _fetch(*, timeout: float) -> tuple[str, ...]:
     )
     response.raise_for_status()
 
-    return _visible_slugs(response.json())
+    return _visible_models(response.json())
 
 
-def _visible_slugs(payload: Any) -> tuple[str, ...]:
+def _visible_models(payload: Any) -> dict[str, tuple[str, ...]]:
+    """Every offered slug, in catalogue order, with the levels it states."""
     if not isinstance(payload, dict):
-        return ()
+        return {}
 
-    out: list[str] = []
+    out: dict[str, tuple[str, ...]] = {}
     for entry in payload.get("models") or ():
         if not isinstance(entry, dict) or entry.get("visibility") == "hide":
             continue
         slug = entry.get("slug")
         if isinstance(slug, str) and slug:
-            out.append(slug)
+            out[slug] = _levels(entry)
 
-    return tuple(out)
+    return out
+
+
+def _levels(entry: dict[str, Any]) -> tuple[str, ...]:
+    """The ladder words this entry offers, least first; an unstated set is empty."""
+    raw = entry.get("supported_reasoning_levels")
+    offered = {
+        str(item.get("effort")) for item in raw or () if isinstance(item, dict) and isinstance(item.get("effort"), str)
+    }
+    return tuple(name for name in reversed(REASONING_EFFORT_LADDER) if name in offered)

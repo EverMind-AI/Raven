@@ -147,3 +147,23 @@ def test_a_remote_file_authority_is_not_a_local_posix_path(monkeypatch) -> None:
     monkeypatch.setattr(server_mod, "sys", SimpleNamespace(platform="linux"))
     monkeypatch.setattr(server_mod, "Path", lambda _: pytest.fail("a remote URI became a local path"))
     assert server_mod._local_file("file://review-server/etc/local.txt") is None
+
+
+def test_text_blocks_keep_a_blank_line_between_them() -> None:
+    text, files = _prompt_input([{"type": "text", "text": "one"}, {"type": "text", "text": "two"}])
+    assert files == []
+    assert text == "one\n\ntwo"
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        ("a\ud800b", "unpaired surrogate"),
+        ("a\x00b", "NUL byte"),
+    ],
+    ids=["lone-surrogate", "nul"],
+)
+def test_text_the_host_cannot_carry_is_refused(content: str, reason: str) -> None:
+    """A refusal reaches the caller as a protocol error; an encode failure at send time is an internal error."""
+    with pytest.raises(server_mod.RefusalError, match=reason):
+        read_prompt([{"type": "text", "text": content}], images=False)

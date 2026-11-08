@@ -36,9 +36,166 @@ def test_a_windows_remote_dir_is_used_as_given():
     assert _root({"remote_dir": r"E:\runs"}) == r"E:\runs"
 
 
+def test_the_backend_and_the_host_name_the_handoff_variables_the_same_way():
+    # The reader cannot import the producer (the plugin runs without raven on
+    # its path), so the two spellings are pinned here rather than by a comment.
+    from oncall_flow import windows_backend
+
+    from raven.acp_client import windows
+
+    assert windows_backend._HANDOFF_PIPE_ENV == windows.HANDOFF_PIPE
+    assert windows_backend._HANDOFF_KEY_ENV == windows.HANDOFF_KEY
+
+
+def _channel(*, answer=None, error=None):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    recv = Mock(return_value=json.dumps(answer).encode("utf-8")) if error is None else Mock(side_effect=error)
+    return SimpleNamespace(send_bytes=Mock(), recv_bytes=recv, close=Mock())
+
+
+def _with_channel(monkeypatch, channel=None, error=None):
+    import multiprocessing.connection
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    factory = Mock(return_value=channel) if channel is not None else Mock(side_effect=error)
+    monkeypatch.setattr(multiprocessing.connection, "Client", factory)
+    return windows_backend
+
+
+def test_a_host_channel_that_cannot_be_reached_falls_back(monkeypatch):
+    backend = _with_channel(monkeypatch, error=OSError("no host"))
+    assert backend._handoff_answer(["py"], "job") is None
+
+
+def test_a_host_channel_that_refuses_the_relay_is_not_a_fallback(monkeypatch):
+    backend = _with_channel(monkeypatch, channel=_channel(answer={"error": "no interpreter"}))
+    with pytest.raises(backend.JobBackendError, match="could not start the job"):
+        backend._handoff_answer(["py"], "job")
+
+
+def test_a_lost_answer_after_the_request_is_not_retried_here(monkeypatch):
+    backend = _with_channel(monkeypatch, channel=_channel(error=EOFError("gone")))
+    with pytest.raises(backend.JobBackendError, match="may have started the job"):
+        backend._handoff_answer(["py"], "job")
+
+
+def test_a_host_channel_that_never_answers_falls_back(monkeypatch):
+    import threading
+
+    release = threading.Event()
+
+    def blocked(*args, **kwargs):
+        release.wait(5)
+        raise OSError("released")
+
+    backend = _with_channel(monkeypatch, error=blocked)
+    monkeypatch.setattr(backend, "_HANDOFF_DEADLINE_S", 0.2, raising=False)
+    outcome = []
+    thread = threading.Thread(target=lambda: outcome.append(backend._handoff_answer(["py"], "job")), daemon=True)
+    thread.start()
+    thread.join(2.0)
+    try:
+        assert not thread.is_alive(), "a host that never answers must not wedge submit"
+        assert outcome == [None]
+    finally:
+        release.set()
+
+
+def test_a_host_channel_that_never_answers_after_the_send_is_not_retried(monkeypatch):
+    import multiprocessing.connection
+    import threading
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_HANDOFF_DEADLINE_S", 0.2, raising=False)
+    release = threading.Event()
+
+    class Channel:
+        def send_bytes(self, data):
+            pass
+
+        def recv_bytes(self):
+            release.wait(5)
+            raise EOFError("released")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(multiprocessing.connection, "Client", lambda *args, **kwargs: Channel())
+    outcome = []
+
+    def call():
+        try:
+            outcome.append(("ok", windows_backend._handoff_answer(["py"], "job")))
+        except BaseException as exc:  # noqa: BLE001 - the test reports either side
+            outcome.append(("raised", exc))
+
+    thread = threading.Thread(target=call, daemon=True)
+    thread.start()
+    thread.join(2.0)
+    try:
+        assert not thread.is_alive(), "a lost answer must not wedge submit"
+        assert outcome and outcome[0][0] == "raised"
+        assert "may have started" in str(outcome[0][1])
+    finally:
+        release.set()
+
+
+def test_the_fallback_relay_does_not_inherit_the_handoff_key(monkeypatch):
+    import subprocess
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_note_unhosted", lambda log_path: None)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "1\n", "")
+
+    monkeypatch.setattr(windows_backend.subprocess, "run", run)
+    assert windows_backend._start_relay(["py"], "job", "log") == (0, "1\n", "")
+    assert windows_backend._HANDOFF_PIPE_ENV not in seen["env"]
+    assert windows_backend._HANDOFF_KEY_ENV not in seen["env"]
+
+
+def test_the_fallback_note_is_not_written_when_the_relay_cannot_start(monkeypatch, tmp_path):
+    import subprocess
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    log = tmp_path / "job.log"
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_in_a_job", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(windows_backend.subprocess, "run", Mock(side_effect=OSError("no interpreter")))
+    with pytest.raises(windows_backend.JobBackendError):
+        windows_backend._start_relay(["py"], "job", str(log))
+    assert not log.exists()
+
+
 _SUBMITTER = r"""
-import asyncio, sys
+import asyncio, os, sys
 sys.path.insert(0, sys.argv[1])
+if len(sys.argv) > 4 and sys.argv[4] == "drop-handoff":
+    os.environ.pop("RAVEN_ACP_HANDOFF_PIPE", None)
+    os.environ.pop("RAVEN_ACP_HANDOFF_KEY", None)
 from oncall_flow.backend import JobSpec
 from oncall_flow.windows_backend import WindowsExecutor
 
@@ -50,9 +207,11 @@ time.sleep(120)
 """
 
 _BODY = r"""
-import json, time
+import json, os, time
 time.sleep(4)
-json.dump({"status": "succeeded", "written_by": "body", "gpu_minutes_used": 0.1}, open("result.json", "w"))
+with open("result.json.tmp", "w") as fh:
+    json.dump({"status": "succeeded", "written_by": "body", "gpu_minutes_used": 0.1}, fh)
+os.replace("result.json.tmp", "result.json")
 """
 
 
@@ -81,6 +240,86 @@ def test_a_job_outlives_a_tree_kill_of_the_agent_that_submitted_it(tmp_path):
     finally:
         if agent.poll() is None:
             agent.kill()
+
+
+def _hand_off_from_an_agent(tmp_path, close, drop_handoff=False):
+    """An agent started the way the host starts one (``raven.acp_client.windows.launch``)
+    submits a job; the host's job object is closed or left open. Returns (agent ended, result path)."""
+    from raven.acp_client import windows
+
+    body = tmp_path / "body.py"
+    body.write_text(_BODY, encoding="utf-8")
+    root = tmp_path / "ops"
+    argv = [sys.executable, "-c", _SUBMITTER, str(PLUGIN_DIR), str(root), f'"{sys.executable}" "{body}"']
+    if drop_handoff:
+        argv.append("drop-handoff")
+    result = root / "jobs" / "survivor" / "result.json"
+
+    async def run():
+        proc, job = await windows.launch(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        try:
+            line = await asyncio.wait_for(proc.stdout.readline(), 60)
+            assert line.decode().strip() == "submitted"
+            if not close:
+                # The job object stays open until the job is done, as while the host runs.
+                deadline = time.time() + 30
+                while not result.exists() and time.time() < deadline:
+                    await asyncio.sleep(0.2)
+                return False
+            job.close()
+            await asyncio.wait_for(proc.wait(), 10)
+            return True
+        finally:
+            job.close()
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+
+    import asyncio
+
+    return asyncio.run(run()), result
+
+
+def _written_by(result, wait=30):
+    deadline = time.time() + wait
+    while True:
+        try:
+            return json.loads(result.read_text(encoding="utf-8"))["written_by"]
+        except (OSError, KeyError, ValueError):
+            if time.time() >= deadline:
+                raise AssertionError(f"the job wrote no valid result at {result}") from None
+            time.sleep(0.05)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_outlives_the_host_closing_the_agents_job_object(tmp_path):
+    # The host keeps each agent in a kill-on-close job object and closes it on
+    # exit. The agent asks the host, which is not in that job, to start the
+    # relay, so the handed-off job is outside it and only the agent ends.
+    agent_ended, result = _hand_off_from_an_agent(tmp_path, close=True)
+    assert agent_ended
+    assert _written_by(result) == "body"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_without_the_host_channel_starts_inside_the_job_and_says_so(tmp_path):
+    # A host old enough to have no hand-off channel (or a backend run outside
+    # an ACP agent) still starts the job, but inside the agent's job object.
+    # While the host lives it runs, and the log says what that costs.
+    _, result = _hand_off_from_an_agent(tmp_path, close=False, drop_handoff=True)
+    assert _written_by(result) == "body"
+    log = (result.parent / "job.log").read_text(encoding="utf-8", errors="replace")
+    assert "may end when that job closes" in log
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="job objects are Windows'")
+def test_a_job_without_the_host_channel_dies_with_the_host(tmp_path):
+    # The fallback is not a second way to survive: the launcher stays in the
+    # agent's kill-on-close job, so closing it ends the job mid-run.
+    agent_ended, result = _hand_off_from_an_agent(tmp_path, close=True, drop_handoff=True)
+    assert agent_ended
+    time.sleep(6)
+    assert not result.exists()
 
 
 _ENV_BODY = r"""
@@ -228,3 +467,109 @@ def test_a_cancel_before_the_command_started_writes_the_record_itself(tmp_path):
     finally:
         if launcher.poll() is None:
             launcher.kill()
+
+
+def test_the_host_request_env_does_not_carry_the_handoff_key(monkeypatch):
+    import multiprocessing.connection
+    from unittest.mock import Mock
+
+    from oncall_flow import windows_backend
+
+    monkeypatch.setenv(windows_backend._HANDOFF_PIPE_ENV, "pipe")
+    monkeypatch.setenv(windows_backend._HANDOFF_KEY_ENV, "00")
+    connection = _channel(answer={"returncode": 0, "stdout": "1\n", "stderr": ""})
+    monkeypatch.setattr(multiprocessing.connection, "Client", Mock(return_value=connection))
+    assert windows_backend._handoff_answer(["py"], "job") == {
+        "returncode": 0,
+        "stdout": "1\n",
+        "stderr": "",
+    }
+    request = json.loads(connection.send_bytes.call_args.args[0].decode("utf-8"))
+    assert windows_backend._HANDOFF_PIPE_ENV not in request["env"]
+    assert windows_backend._HANDOFF_KEY_ENV not in request["env"]
+
+
+def test_the_handoff_deadline_outlasts_the_hosts_budget():
+    from oncall_flow import windows_backend
+
+    from raven.acp_client import windows
+
+    assert windows_backend._HANDOFF_DEADLINE_S > windows._REQUEST_TIMEOUT_S + windows._RELAY_TIMEOUT_S
+
+
+def test_a_relative_remote_dir_is_absolute_for_the_handoff(tmp_path, monkeypatch):
+    import asyncio
+
+    from oncall_flow import windows_backend
+    from oncall_flow.backend import JobSpec
+
+    captured = {}
+
+    def relay(argv, job_dir, log_path):
+        captured.update(argv=argv, job_dir=job_dir, log=log_path)
+        return 0, "123\n", ""
+
+    monkeypatch.setattr(windows_backend, "_start_relay", relay)
+    monkeypatch.setattr(windows_backend.WindowsExecutor, "_await_pid", lambda self, job_dir, tries=50: 123)
+    monkeypatch.chdir(tmp_path)
+    executor = windows_backend.WindowsExecutor(remote_dir="relative-ops", command="echo hi")
+    asyncio.run(executor.submit(JobSpec(payload={}, idem_key="k", labels={})))
+    assert os.path.isabs(captured["job_dir"])
+    assert os.path.isabs(captured["log"])
+    assert os.path.isabs(captured["argv"][4])
+    assert captured["job_dir"] == os.path.abspath(os.path.join("relative-ops", "jobs", "k"))
+
+
+def test_submit_calls_the_relay_off_the_event_loop(tmp_path, monkeypatch):
+    import asyncio
+    import threading
+
+    from oncall_flow import windows_backend
+    from oncall_flow.backend import JobSpec
+
+    seen = []
+
+    def relay(argv, job_dir, log_path):
+        seen.append(threading.current_thread())
+        return 0, "123\n", ""
+
+    monkeypatch.setattr(windows_backend, "_start_relay", relay)
+    monkeypatch.setattr(windows_backend.WindowsExecutor, "_await_pid", lambda self, job_dir, tries=50: 123)
+    executor = windows_backend.WindowsExecutor(remote_dir=str(tmp_path / "ops"), command="echo hi")
+    asyncio.run(executor.submit(JobSpec(payload={}, idem_key="k", labels={})))
+    assert seen
+    assert seen[0] is not threading.main_thread()
+
+
+def test_the_fallback_note_is_not_written_when_the_relay_exits_nonzero(monkeypatch, tmp_path):
+    from oncall_flow import windows_backend
+
+    log = tmp_path / "job.log"
+    monkeypatch.setattr(windows_backend, "_handoff_answer", lambda argv, job_dir: None)
+    monkeypatch.setattr(windows_backend, "_in_a_job", lambda: True)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(
+        windows_backend.subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "boom"),
+    )
+    assert windows_backend._start_relay(["py"], "job", str(log)) == (1, "", "boom")
+    assert not log.exists()
+
+
+def test_written_by_waits_for_a_result_that_is_still_being_written(tmp_path):
+    import threading
+
+    result = tmp_path / "result.json"
+    result.write_text("", encoding="utf-8")
+
+    def finish():
+        time.sleep(0.3)
+        result.write_text(json.dumps({"written_by": "body"}), encoding="utf-8")
+
+    thread = threading.Thread(target=finish, daemon=True)
+    thread.start()
+    try:
+        assert _written_by(result, wait=3) == "body"
+    finally:
+        thread.join()

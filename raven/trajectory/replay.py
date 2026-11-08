@@ -113,10 +113,11 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable
 
 from loguru import logger
 
+from raven.agent.subagent.backends.observability import SPAN_NAME as EXTERNAL_RUN_SPAN
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers import prompt_cache
 from raven.providers.base import (
@@ -339,6 +340,40 @@ def _load_artifact(bundle_dir: Path, ref: Any) -> Any:
         return None
 
 
+def _inside_external_runs(spans: Iterable[dict[str, Any]]) -> set[str]:
+    """The ids of every span recorded inside an external agent's run.
+
+    An external agent made its model and tool calls in its own process, and
+    they are written afterwards as steps of its ``subagent.external`` run.
+    Replay answers the tool that launched the agent from the recording, so the
+    agent never runs again and nothing inside it is ever asked for -- fed by
+    order, its steps would stand in front of the loop's own calls. Everything
+    under the run is out, however deep.
+    """
+    parents: dict[str, str] = {}
+    runs: set[str] = set()
+    for span in spans:
+        span_id = span.get("spanId")
+        if not isinstance(span_id, str):
+            continue
+        if span.get("name") == EXTERNAL_RUN_SPAN:
+            runs.add(span_id)
+        parent = span.get("parentSpanId")
+        if isinstance(parent, str) and parent:
+            parents[span_id] = parent
+    inside: set[str] = set()
+    for span_id in parents:
+        seen = {span_id}
+        current = parents.get(span_id)
+        while current is not None and current not in seen:
+            if current in runs or current in inside:
+                inside.add(span_id)
+                break
+            seen.add(current)
+            current = parents.get(current)
+    return inside
+
+
 def load_recording(bundle_dir: Path) -> Recording:
     """Parse a bundle directory into the ordered calls replay feeds from.
 
@@ -348,7 +383,8 @@ def load_recording(bundle_dir: Path) -> Recording:
     turns). Model calls are any span carrying an ``llm.output`` artifact
     reference; tool calls any span carrying a ``tool.input`` reference — by
     artifact key rather than span name, because a skill-tool call is retyped
-    to ``skill.read`` but records the same artifacts.
+    to ``skill.read`` but records the same artifacts. What an external agent
+    did inside its own run is neither (see :func:`_inside_external_runs`).
     """
     bundle_dir = Path(bundle_dir)
     manifest_path = bundle_dir / "manifest.json"
@@ -373,10 +409,13 @@ def load_recording(bundle_dir: Path) -> Recording:
             del deduped[span_id]
         deduped[span_id] = span
 
+    external = _inside_external_runs(deduped.values())
     llm_calls: list[RecordedLLMCall] = []
     tool_calls: list[RecordedToolCall] = []
     turns: list[RecordedTurn] = []
     for span in deduped.values():
+        if span.get("spanId") in external:
+            continue
         attrs = span.get("attributes") or {}
         if attrs.get("llm.output.artifact_path") or span.get("name") == "llm.call":
             llm_calls.append(

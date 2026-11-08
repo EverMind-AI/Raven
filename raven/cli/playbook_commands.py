@@ -513,6 +513,7 @@ def playbook_run(
         guide_skill_id=None,
         state_for=manager.instance_state,
         model_for=manager.session_model_for,
+        effort_for=manager.session_effort_for,
         # The manager was built from the same tools.sandbox above; its builder
         # keeps a node's exec inside that sandbox rather than on the host.
         sandbox_for=manager.sandbox_executor_for,

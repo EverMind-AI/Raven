@@ -62,6 +62,24 @@ roster。不要假定修改显示名就创建了新身份。可通过 `raven onb
 launcher。readiness probe 成功或收到委派回执，都不代表任务已完成；仍需检查结果、文件、
 测试或报告产物。
 
+### 与宿主共享内存 { #sharing-memory-with-the-host }
+
+每个原生 Agent 都是一个独立的 Raven 进程。宿主 `config.json` 中 `subagents.runtime`
+下的三个设置让它不必每个 Agent 都占用一整份 Raven 的内存。三者默认开启，并实时读取，
+修改后从下一次启动起生效。
+
+| 键 | 默认值 | 作用 |
+| --- | --- | --- |
+| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。仍持有已设定的提醒或正在运行的插件服务的 Agent 会被保留。只关闭能重新加载会话的 Agent，因此下一轮会在新进程中续上原对话。`0` 或 `null` 表示一直保留到宿主退出。 |
+| `llmRelay` | `true` | 由宿主代为发出原生 Agent 的 LiteLLM 调用，Agent 自身不再加载 LiteLLM。请求组装、重试和用量记录仍由 Agent 自己完成。若 Agent 自己的 `env` 设置了 LLM 端点、云凭据、代理或 CA 证书，它会自己发起调用。 |
+| `forkTemplate` | `true` | 在 Linux 上，原生 Agent 从一个已加载 Raven 的进程 fork 出来，共享这些内存页，而不是各自加载一份。其他系统仍按原方式启动。 |
+
+模板只预加载至少两个原生 Agent 共用的模块，某个 Agent 独有的模块由它在 fork 之后自行
+导入，因此模板的大小取决于各 Agent 的共同部分，而不是 Agent 的种类数。模板本身也是一个
+进程，因此同时运行两个及以上原生 Agent 时才会省内存；只有一个 Agent 时，它的占用会略多于
+它省下的部分。只会运行单个 Agent 的设备可将 `forkTemplate` 设为 `false`。中转或模板无法服务的 Agent（宿主不可达，或 Agent 使用另一个解释器）
+会按原方式启动。
+
 ### 最小 ACP 调用 { #minimal-acp-invocation }
 
 随 Raven 发布的每个 Agent 都由自己的 launcher 启动。使用对应命令：
@@ -156,11 +174,12 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
-| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（桌面应用的端口且令牌已写出，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
+| `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（Mirasim host 写出了令牌的端口，例如桌面应用或 `mirasim serve` 的端口，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用或启动 `mirasim serve`，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 
 GitHub Copilot、Qwen Code、CodeBuddy、Qoder、Grok Build、Kimi Code 和 Pi 也有预设。
-适配器版本与精确命令维护在 `raven/agent/subagent/presets.py` 和
-`raven/agent/subagent/acp_registry_presets.py`，优先使用已安装版本的预设，不要自行猜 flags。
+适配器版本与精确命令维护在 `raven/agent/subagent/presets.py`、
+`raven/agent/subagent/acp_registry_presets.py` 和
+`raven/agent/subagent/mirasim_presets.py`，优先使用已安装版本的预设，不要自行猜 flags。
 
 `mirasim_*` 预设接入 Mirasim 运行的 Agent，每个 Agent 一行：
 Claude Code、Codex、Kimi Code、Antigravity、Qwen Code、Grok Build、DSH、Pi 和 ZCode CLI，
@@ -175,8 +194,8 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 路由，因此已有对话的会话改选另一组后，从下一轮起即切到那条路由。未选模型的会话使用 Mirasim
 为该 Agent 设定的默认模型和默认路由。
 
-适配器是本机已在运行的 Mirasim host 的又一个客户端——桌面端的 host，或 Mirasim 经 SSH
-接入的机器上的 host——自身不启动任何服务，Raven 发起的轮次在 Mirasim 应用中实时可见。
+适配器是本机已在运行的 Mirasim host 的又一个客户端——桌面端的 host、`mirasim serve`
+运行的 host，或 Mirasim 经 SSH 接入的机器上的 host——自身不启动任何服务，Raven 发起的轮次在 Mirasim 应用中实时可见。
 每轮以流式返回：思考、正文、工具调用、计划和交付的文件随发生随送达 Raven，结束时报告
 所用上下文。取消会停止该轮。对 Claude Code、Codex、DSH、Pi 和 ZCode CLI，运行中追加的
 文字会并入当前轮。图片以内联方式送达 Claude Code；其他 Agent 收到以本地文件链接给出的
@@ -186,9 +205,15 @@ Kimi Code 和 ZCode CLI 的自有模型，因此这四个 Agent 的这些模型�
 （例如后台任务的报告）也会转给 Raven，这类轮次中的提问留给 Mirasim 应用处理。
 
 适配器按以下顺序查找 host：Mirasim 经 SSH 接入的机器上的 host socket
-（`~/.mirasim-remote/run/server.sock`，仅限 Linux 和 macOS），然后是桌面端在
-`127.0.0.1:4970` 上的 host，其 token 写在 Mirasim 状态目录（`MIRASIM_HOME`，否则为
-`~/.mirasim`）下的 `run/local-4970.token`。若 host 监听在其他位置，用
+（`~/.mirasim-remote/run/server.sock`，仅限 Linux 和 macOS），然后是 Mirasim 状态目录
+（`MIRASIM_HOME`，否则为 `~/.mirasim`）下每个以 `run/local-<port>.token` 写出了 token
+的本机回环端口：先试桌面端的 `4970`，再试 `mirasim serve` 默认监听的 `4939`，其余按端口号
+从小到大，第一个应答的就是 host；写出了 token 文件的端口只有在它的 `/api/health`
+自称 Mirasim host 时才算应答，该文件里的 token 只会发给自证了身份的 host，不会发给之后
+占用该端口的其他程序。health 答不出来的 host 仍可用 `RAVEN_MIRASIM_HOST` 指名接入。
+host 按实际绑定的端口写这个文件，所以因原端口被占而换了
+端口的 host 照样能找到，被强行结束的 host 留下的文件会被跳过，host 重启后换了端口，适配器
+重连时也会到新端口找它。若 host 监听在其他位置，用
 `RAVEN_MIRASIM_HOST` 指明：socket 写作 `unix:<path>`（Windows 不支持，那里经桌面端的
 端口接入），本机回环端口写作 `<port>`、`127.0.0.1:<port>`、`localhost:<port>` 或
 `[::1]:<port>`。在 Linux 和 macOS 上，适配器使用的是登录 shell 的环境加上该行自己的

@@ -6,7 +6,7 @@
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://arxiv.org/abs/2609.33439"><img src="https://img.shields.io/badge/arXiv-2609.33439-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
   <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-%231%20Paper%20of%20the%20Day-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face #1 Paper of the Day"></a>
-  <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://discord.gg/QHQ2YYp7cH"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FQHQ2YYp7cH%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
@@ -15,6 +15,14 @@
 </div>
 
 <br>
+
+## ❯❯ What's New
+
+### ❯ 多智能体轨迹观测
+
+**每个智能体、每个 Turn、每个 Step，都落在同一条时间线上。** Raven 新增的多智能体轨迹观测页面，把运行中的会话变成一张实时瀑布图，从整段运行一直缩放到单个 Step。
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
 
 # Raven 是什么
 
@@ -205,7 +213,11 @@ Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，�
 
 ## ❯❯ 新闻
 
-- 📣 **2026-09-30** — Raven 技术报告获评 Hugging Face [**#1 Paper of the day**](https://huggingface.co/papers/2609.33439)。
+- 📣 **2026-09-30** — Raven 技术报告在 [**Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) 上拿下日榜（2026-09-30）、周榜（2026-10-04）、月榜（2026-10-10）第一。
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29"><img src="https://github.com/user-attachments/assets/03296c4b-6dd7-49ec-a1f2-3d26b37c6d29" alt="Three Crowns on Hugging Face, Chinese edition: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
 
 ## ❯❯ 快速开始
 

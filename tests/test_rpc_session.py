@@ -2095,11 +2095,17 @@ async def test_session_resume_reports_the_window_the_last_call_measured(
     assert usage["context_estimated"] is False
 
 
-@pytest.mark.parametrize("junk", [0, -5, True, "50000", 1.5], ids=["zero", "negative", "bool", "string", "float"])
+@pytest.mark.parametrize(
+    "junk",
+    [0, -5, True, "50000", 1.5, 10**12, 10**400],
+    ids=["zero", "negative", "bool", "string", "float", "past_any_window", "past_float_range"],
+)
 async def test_session_resume_reads_past_a_stored_reading_that_is_no_token_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, junk: object
 ) -> None:
-    """Only a positive integer is a reading -- and ``True`` is an ``int`` to Python."""
+    """Only a positive integer a window could hold is a reading -- ``True`` is an
+    ``int`` to Python, and a count past float range would raise on the way to a
+    percentage, turning the reader's conversation into a fresh empty one."""
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
     cfg.agents.defaults.context_window_tokens = 200_000
@@ -3478,6 +3484,231 @@ async def test_a_clear_wins_over_a_mode_given_alongside_it():
 
 
 # ---------------------------------------------------------------------------
+# session.set_effort: this session's own reasoning effort
+# ---------------------------------------------------------------------------
+
+
+class _EffortLoop:
+    """A loop over a real session manager, which is where the pick is kept."""
+
+    def __init__(self, tmp_path: Path, mode_effort: str | None = None) -> None:
+        self.sessions = SessionManager(tmp_path)
+        self._mode_effort = mode_effort
+
+    def session_policy(self, key):
+        from raven.agent.loop._shared import SessionPolicy
+
+        return SessionPolicy(reasoning_effort=self._mode_effort)
+
+
+def _configured_effort(monkeypatch: pytest.MonkeyPatch, effort: str | None) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.reasoning_effort = effort
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+
+def _filed(mgr: SessionManager, key: str) -> None:
+    """A session with a record on disk, which is what a metadata patch lands on."""
+    mgr.save(mgr.get_or_create(key))
+
+
+@pytest.fixture(autouse=True)
+def levels(monkeypatch):
+    """Keep the effort tests off the real LiteLLM table; a test may narrow it."""
+
+    def use(words):
+        monkeypatch.setattr(
+            session_module.effort_levels,
+            "levels_for",
+            lambda model, declared=(), *, provider=None, refresh=False: None if words is None else tuple(words),
+        )
+
+    use(["minimal", "low", "medium", "high"])
+    return use
+
+
+def test_effort_levels_asks_the_provider_the_config_routes_through(monkeypatch) -> None:
+    """A forced gateway serves a bare vendor id; the ladder and the overlay
+    must follow the gateway, not the id's prefix."""
+    seen: dict[str, str | None] = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["provider"] = provider
+        return ("minimal", "low", "medium", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+
+    class _Routed:
+        providers = None
+
+        def get_provider_name(self, model):
+            return "openrouter"
+
+    assert session_module._effort_levels("deepseek/deepseek-r1", _Routed()) == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    assert seen["provider"] == "openrouter"
+
+    class _Unrouted:
+        providers = None
+
+    session_module._effort_levels("deepseek/deepseek-r1", _Unrouted())
+    assert seen["provider"] == "deepseek"
+
+
+async def test_an_effort_read_reports_no_pick_the_default_and_the_words(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result == {
+        "session_key": "tui:1",
+        "effort": None,
+        "default": "low",
+        "options": ["minimal", "low", "medium", "high"],
+    }
+
+
+async def test_an_unset_default_reports_null_not_low(tmp_path, monkeypatch) -> None:
+    """No configured effort means the provider's own default, which has no
+    word: reporting a rung for it is the mistake the settings page made."""
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] is None
+
+
+async def test_an_effort_set_lands_on_the_record_and_outlives_the_manager(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] == "high" and result["default"] == "low"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
+    # On disk, not only on the cached copy: a fresh manager reads it back.
+    assert SessionManager(tmp_path).peek("tui:1").metadata["reasoning_effort"] == "high"
+    again = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert again["effort"] == "high"
+
+
+async def test_an_effort_clear_returns_the_session_to_the_default(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "clear": True}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] is None and result["default"] == "low"
+    # Null rather than absent: a patch sets keys, and both read as "no pick".
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] is None
+    assert SessionManager(tmp_path).peek("tui:1").metadata["reasoning_effort"] is None
+
+
+async def test_an_effort_clear_wins_over_an_effort_given_alongside_it(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "high", "clear": True}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] is None
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] is None
+
+
+async def test_the_modes_effort_is_the_default_where_the_catalogue_sets_one(tmp_path, monkeypatch) -> None:
+    """raven-code's modes each set an effort; that, not the file's, is what a
+    session in such a mode runs at without a pick of its own."""
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path, mode_effort="medium")
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] == "medium"
+
+
+async def test_an_unknown_effort_is_refused_naming_the_words(tmp_path, monkeypatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "turbo"}, agent_loop_factory=lambda: loop
+        )
+    assert "minimal, low, medium, high" in str(exc.value)
+    assert "reasoning_effort" not in loop.sessions.peek("tui:1").metadata, "a refused set must not half-land"
+
+
+async def test_a_draft_reads_the_default_but_cannot_set_without_a_key(tmp_path, monkeypatch) -> None:
+    """The page's draft has no session yet; it still draws the row from the
+    default and the words, and stages a pick until the first message mints one."""
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, "medium")
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": ""}, agent_loop_factory=lambda: loop)
+    assert result == {
+        "session_key": "",
+        "effort": None,
+        "default": "medium",
+        "options": ["minimal", "low", "medium", "high"],
+    }
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort({"effort": "high"}, agent_loop_factory=lambda: loop)
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort({"clear": True}, agent_loop_factory=lambda: loop)
+
+
+async def test_an_effort_set_on_a_draft_is_held_until_its_first_save(tmp_path, monkeypatch) -> None:
+    """A conversation the first message has not filed yet has no record to
+    patch; the pick waits on the in-memory copy, which that first save writes."""
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:draft", "effort": "minimal"}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] == "minimal"
+    held = loop.sessions.get_or_create("tui:draft")
+    assert held.metadata["reasoning_effort"] == "minimal"
+    loop.sessions.save(held)
+    assert SessionManager(tmp_path).peek("tui:draft").metadata["reasoning_effort"] == "minimal"
+
+
+async def test_the_bundle_reports_the_effort_in_force(tmp_path, monkeypatch) -> None:
+    """The status bar sits beside the model; it shows the pick where there is
+    one and the default otherwise, the same answer the next turn runs at."""
+    from unittest.mock import MagicMock
+
+    _configured_effort(monkeypatch, "low")
+    # MagicMock for the unrelated skills/tools enumeration, as the session-info
+    # tests above do; the manager and the policy are real.
+    loop = MagicMock()
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: "vendor-a/model"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = _EffortLoop(tmp_path).session_policy
+    _filed(loop.sessions, "tui:1")
+    config = session_module.load_config()
+    before = await session_module._default_session_info(loop, config, "tui:1")
+    assert before["reasoning_effort"] == "low"
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    after = await session_module._default_session_info(loop, config, "tui:1")
+    assert after["reasoning_effort"] == "high"
+    fresh = await session_module._default_session_info(loop, config, None)
+    assert fresh["reasoning_effort"] == "low"
+
+
+async def test_set_effort_is_registered_beside_set_mode() -> None:
+    d = Dispatcher()
+    register_session_methods(d, agent_loop_factory=lambda: None)
+    assert "session.set_effort" in d.methods() and "session.set_mode" in d.methods()
+
+
+# ---------------------------------------------------------------------------
 # session.list {archived} and the lazy auto-archive pass
 # ---------------------------------------------------------------------------
 
@@ -4296,3 +4527,120 @@ async def test_delete_of_an_imported_conversation(tmp_path: Path) -> None:
     assert not state.exists()
     assert state.resolve() not in tidx._INDEXERS
     assert await session_delete({"session_id": key}) == {"deleted": None, "still_on_disk": False}
+
+
+async def test_effort_options_come_from_the_models_declared_levels(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == ["medium", "high", "xhigh"]
+
+
+async def test_a_declared_level_is_refused_when_the_model_does_not_carry_it(tmp_path, monkeypatch, levels):
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "minimal"}, agent_loop_factory=lambda: loop
+        )
+
+
+async def test_a_draft_read_names_the_model_it_asks_about(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort(
+        {"session_key": "", "model": "openai/gpt-5.5-pro"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == "openai/gpt-5.5-pro"
+    assert result["options"] == ["low", "high"]
+
+
+async def test_a_model_that_declares_no_reasoning_offers_no_words(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels([])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == []
+
+
+async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, levels):
+    """A pick the model stopped declaring reads as no pick, and the default
+    the turn actually falls back to is reported as it stands."""
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["medium"])
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["effort"] is None and result["default"] == "low"
+
+
+async def test_the_default_is_not_narrowed_by_the_model(tmp_path, monkeypatch, levels):
+    """The mode's word and the configured default are sent as they stand; only
+    a pick is bounded by what the model declares."""
+    _configured_effort(monkeypatch, "xhigh")
+    levels(["low", "medium"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] == "xhigh"
+    assert result["options"] == ["low", "medium"]
+
+
+async def test_the_bundle_reports_the_default_when_the_pick_is_clamped(tmp_path, monkeypatch, levels):
+    from unittest.mock import MagicMock
+
+    _configured_effort(monkeypatch, "low")
+    loop = MagicMock()
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: "vendor-a/model"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = _EffortLoop(tmp_path).session_policy
+    _filed(loop.sessions, "tui:1")
+    config = session_module.load_config()
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["low", "medium"])
+    info = await session_module._default_session_info(loop, config, "tui:1")
+    assert info["reasoning_effort"] == "low"
+
+
+async def test_a_pick_comes_back_when_a_later_model_declares_it(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["medium"])
+    dropped = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert dropped["effort"] is None
+    levels(["medium", "high"])
+    back = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert back["effort"] == "high"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
+
+
+async def test_a_model_param_does_not_override_a_sessions_model(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    await session_module.session_set_effort(
+        {"session_key": "tui:1", "model": "other/model"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == session_module.load_config().agents.defaults.model

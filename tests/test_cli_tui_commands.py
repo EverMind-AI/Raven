@@ -512,6 +512,23 @@ async def test_the_acp_snapshot_backfill_is_scheduled_on_the_tui_server_path(
     ctx["schedule_backfill"].assert_called_once_with(ctx["agent_loop"].subagents)
 
 
+async def test_the_tui_spine_and_turn_cancel_share_one_map_of_what_running_turns_measured(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """Hand-wired like the backfill above: a stopped turn's cancel reads what
+    the turn measured from the map the spine's runner fills, so the two have to
+    be handed the same one."""
+    ctx = rpc_server_deps
+    register = MagicMock()
+    monkeypatch.setattr("raven.rpc.methods.register_aligned_methods_except_system", register)
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    spine_map = ctx["fake_build_rpc_spine"].call_args.kwargs["live_usages"]
+    assert isinstance(spine_map, dict)
+    assert register.call_args.kwargs["live_usages"] is spine_map
+
+
 async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):
     """Helper: drive ``_run_rpc_server_until_done`` with proc_done set immediately
     so the function exits as fast as possible (handshake timeout path — still

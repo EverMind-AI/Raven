@@ -20,11 +20,11 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { adoptSelection, chipModel, loadProviders, rememberUsed, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
-import { loadPermMode, stagedPerm } from '../../features/settings/source'
+import { loadPermMode } from '../../features/settings/source'
 import * as transcript from '../../features/transcript/mount'
 import { down as scrollTranscriptDown } from '../../features/transcript/tail'
 import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
@@ -38,13 +38,14 @@ import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/s
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
-import { set as setCtx } from '../ctxChip'
+import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir, staged as stagedWorkdir } from '../workdir'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
+import { applyUsage } from './ctxReport'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
 import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
@@ -133,13 +134,18 @@ export class SessionRuntime {
      conversation. */
   lastAsk = ''
 
+  /* The bubble a send drew for a turn whose `message.start` has not arrived:
+     that frame files the turn's id on it, and a task board step finds the
+     turn by that id. Null once filed. */
+  asked: number | null = null
+
   /* The wait for a generated title: the opening line to fall back to, and the
      backstop timer. */
   naming: { fallback: string; timer: ReturnType<typeof setTimeout> } | null = null
 
   /* A model, tier and permission mode picked while this was still a draft.
      Applied to the conversation the first message mints, then forgotten. */
-  staged: Staging = { model: null, tier: null, perm: null }
+  staged: Staging = { model: null, tier: null, perm: null, effort: null }
 
   wsRoot: string | null = null
 
@@ -262,7 +268,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   turn.dispatch({ type: 'idle' })
   const inTok = usage.input_tokens || usage.prompt_tokens || 0
   /* The window fill is the turn's prompt, not the running total. */
-  setCtx(usage.context_used || inTok, usage.context_max as number)
+  applyUsage(usage, inTok)
   const s = sess(sessionCurrent())
   /* A silent turn delivered nothing: it writes no preview, does not move its
      row up the rail (the server's list skips it for its time too) and raises no
@@ -295,6 +301,23 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
 export const mediaOf = (text: unknown): { media?: string[] } => {
   const paths = splitAtts(String(text)).atts
   return paths.length ? { media: paths } : {}
+}
+
+/* What a message carries when it goes, lent at boot (src/app/install.ts)
+   rather than imported from a domain: the Task Board's Move on, which tells
+   the server which group the message is about. It rides the send itself, so
+   nothing waits between the two and a Stop finds no moment where one has gone
+   without the other. A message with one waits for a turn of its own rather
+   than joining the one running, which was told about something else. Unlent,
+   nothing is carried. */
+export interface BeforeSend {
+  pending: (sessionKey: string | null) => boolean
+  take: (sessionKey: string | null) => string | null
+}
+let beforeSend: BeforeSend | null = null
+
+export function lendBeforeSend(hook: BeforeSend | null): void {
+  beforeSend = hook
 }
 
 /* Into the turn that is already running: the server merges it at that turn's
@@ -336,13 +359,17 @@ export function send(text: string): void {
      message typed a moment later would call the gateway with no session key at
      all, which is a refusal the reader sees as a red row over a message the
      queue then delivers anyway. It waits in the queue, as it always has. */
-  if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
+  if (turn.busy() && !registryIsDraft() && !promoting) {
+    if (beforeSend?.pending(sessionCurrent())) queuePush(text)
+    else sendMidTurn(text)
+    return
+  }
   if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   rt.lastAsk = text
-  ask(text)
+  rt.asked = ask(text)
   turn.dispatch({ type: 'send' })
   dropStaleSteps(rt)
   reset(rt)
@@ -405,7 +432,11 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
+  const moveOn = current ? (beforeSend?.take(current) ?? null) : null
+  gateway()
+    .call('turn.send', {
+      session_key: current as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
+    })
     .then((r) => {
       if (ran && r.accepted !== false) rememberUsed(ran)
       if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
@@ -626,8 +657,9 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
-  await applyStagedTier(draftRt, s.id)
-  await applyStagedPerm(draftRt, s.id)
+  await applyStagedTier(draftRt, s.id, gen)
+  await applyStagedEffort(draftRt, s.id, gen)
+  await applyStagedPerm(draftRt, s.id, gen)
   sessionDraw()
   await subscribe(s.id)
   return s.id
@@ -679,30 +711,73 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
 
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedTier()
+   a refusal is the one outcome worse than the refusal.
+
+   `gen` is the ticket the promotion began under, as `applyStagedModel` takes
+   it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's rung
+   painted over that conversation's own read. Under the promotion's ticket the
+   source drops that answer instead. */
+export async function applyStagedTier(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const mode = rt.staged.tier
+  rt.staged.tier = null
   if (!mode) return
   try {
     await gateway().call('session.set_mode', { session_key: sessionId, mode })
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier()
+  void loadTier(sessionId, gen)
+}
+
+/* The reasoning effort picked while this was still a draft, written now that
+   there is a session_key to write it under. Awaited before the turn is sent,
+   for the reason the tier is: the turn's first call reads it, and a pick that
+   lands after the call went out is one that turn did not run at. Said rather
+   than reversed silently on a failure, and then re-read, as the tier is.
+
+   The re-read is about the session the promotion minted and carries the
+   ticket the promotion began under, as `applyStagedModel`'s does: a ticket
+   taken after the awaited write is whichever view the reader has opened
+   since, and under that one the source would paint this session's rung over
+   that view's own read. The source drops the late answer instead.
+
+   The pick is read off the draft's own runtime, not the view on screen now:
+   the model and tier writes above can await long enough for the reader to
+   open another conversation, and its staging is not this draft's. */
+export async function applyStagedEffort(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const effort = rt.staged.effort
+  rt.staged.effort = null
+  if (!effort) return
+  try {
+    await gateway().call('session.set_effort', { session_key: sessionId, effort })
+  } catch (e) {
+    toast(`${t('gui.effort.title')}: ${detailOf(e)}`)
+  }
+  void loadEffort(sessionId, gen)
 }
 
 /* The permission mode picked while this was still a draft, written now that
    there is a session_id to write it under. Awaited before the turn is sent so
-   its first tool call already reads the chosen mode. */
-export async function applyStagedPerm(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedPerm()
+   its first tool call already reads the chosen mode.
+
+   `gen` is the ticket the promotion began under, as the tier and effort writes
+   take it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's mode
+   painted over that conversation's own read. Under the promotion's ticket the
+   read drops that answer instead. */
+export async function applyStagedPerm(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const mode = rt.staged.perm
+  rt.staged.perm = null
   if (!mode) return
   try {
     await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId })
   } catch (e) {
     toast(`${t('gui.perm.title')}: ${detailOf(e)}`)
   }
-  void loadPermMode(sessionId)
+  void loadPermMode(sessionId, gen)
 }
 
 const detailOf = (e: unknown): string => {

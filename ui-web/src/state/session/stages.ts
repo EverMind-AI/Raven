@@ -32,7 +32,8 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
 import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
-import { ask, noteRow, unask } from './conversation'
+import { ask, noteRow, tagTurn, unask } from './conversation'
+import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
 import { rereadChips, viewRuntime } from './registry'
 import {
@@ -98,8 +99,14 @@ export const STAGES: readonly Stage[] = [
     if ((!turn.busy() || held) && p.content) {
       const drawn = rt.injected.get(p.turn_id)
       if (drawn !== undefined) { unask(drawn); rt.injected.delete(p.turn_id) }
-      ask(p.content)
+      rt.asked = ask(p.content)
     }
+    /* The question this turn opens on -- drawn just above, or by this window's
+       own send -- is filed under the turn's id. A task board step names its
+       turn by that id and by a time on the server's clock, which a bubble drawn
+       here does not carry: across time zones the time alone misses it. */
+    if (rt.asked !== null && p.turn_id) tagTurn(rt.asked, p.turn_id)
+    rt.asked = null
     if (p.content) touchSession(sessionCurrent(), p.content)
     rt.openedTurn = null
     rt.turnId = p.turn_id
@@ -146,6 +153,7 @@ export const STAGES: readonly Stage[] = [
         body: d.content || '',
         output: d.output,
         outputTruncated: d.output_truncated,
+        turnId: p.turn_id,
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
           ds('transcript').openSpawn!(d.node_id || '')
@@ -197,11 +205,11 @@ export const STAGES: readonly Stage[] = [
     if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
     /* The model ended the turn on its silence marker, so the turn has no answer:
-       the reply the open step was streaming is taken back, and the turn lands
-       without promoting anything it said on the way. The row below is all of it.
-       The server holds a marker back while it streams -- past a think block the
-       model inlined, which streams as it comes, and across a stream cut and its
-       continuation -- so there is usually nothing to take back. An exhausted
+       what the notice's detail says that reply showed is taken back from the open
+       step, and the turn lands without promoting anything it said on the way. The
+       row below is all of it. The server holds a marker back while it streams, so
+       the detail is at most a think block the model inlined ahead of it, and is
+       empty when nothing went out; it is not drawn in the row. An exhausted
        turn's wrap-up shares its step with the last call's narration, which stays.
        Not marked while this page is cancelling the turn: the stop already folded
        it, and the message.complete that would read and clear the mark is
@@ -212,11 +220,11 @@ export const STAGES: readonly Stage[] = [
        above stays where it was said. */
     if (rt.st) {
       rt.st.seal()
-      if (silent) rt.st.dropReply()
+      if (silent) rt.st.dropReply(p.detail || '')
       rt.st = null
     }
     flushSay(rt)
-    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
+    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), silent ? '' : p.detail || '', { quiet: true })
   }),
 
   arm('thinking.delta', (rt, p) => {
@@ -293,6 +301,12 @@ export const STAGES: readonly Stage[] = [
        notice, and dropping it keeps the queue held for the turn that is
        starting. Any silent mark that turn set is dropped with it. */
     if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) { rt.silent = false; return }
+    /* A turn that ended without an answer, failed or stopped, still measured
+       its calls, and the record it filed carries the last reading, so the ring
+       moves on with it rather than staying on the turn before -- otherwise a
+       reload reads a number the ring never showed. Ahead of the stop's own
+       early exits: a stopped turn's reading rides only this event. */
+    applyUsage(p.usage)
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
@@ -341,6 +355,10 @@ export const STAGES: readonly Stage[] = [
     transcript.spawnFeed(p)
     sources.tasks?.onSubagentStatus?.(p)
   }),
+
+  /* The host's task board after a write: the tasks tab's to draw, reached
+     through the seam like every other tasks consumer. */
+  arm('tasks.board_updated', (_rt, p) => { sources.tasks?.onBoardUpdated?.(p) }),
 
   /* A result was submitted, not yet visible: the turn it opens is still queued
      behind its parent, so the row does NOT belong here. It arrives with the
@@ -440,6 +458,7 @@ function stageOf(ev: TurnEvent): Stage | undefined {
     case 'dag.run_replanned':
     case 'dag.node_stalled':
     case 'media':
+    case 'tasks.board_updated':
       return BY_TYPE.get(ev.type)
     default:
       return assertNever(ev)

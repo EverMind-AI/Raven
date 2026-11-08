@@ -60,7 +60,7 @@ def make_appworld_eval_fn(aw: "aw_adapter.AppWorldConfig", repo_root: str | Path
 
             cfg = replace(aw, split=split)
         with git_ops.worktree_at(root, node.git_commit_sha) as wt:
-            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, cwd=wt)
+            return aw_adapter.run_eval(cfg, K=k, experiment=job_name, task_ids=task_ids, cwd=wt, reuse_complete=True)
 
     return eval_fn
 

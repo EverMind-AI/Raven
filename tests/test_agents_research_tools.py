@@ -657,6 +657,10 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"results": [{"title": "T", "url": "https://e.com/a", "description": "", "snippet": "S"}]},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
+    "deepseek": (
+        {"results": [{"title": "T", "url": "https://e.com/a", "snippet": "short", "summary": "S"}]},
+        {"title": "T", "link": "https://e.com/a", "snippet": "S"},
+    ),
 }
 
 
@@ -736,6 +740,27 @@ async def test_each_search_vendor_normalises_into_the_render_shape(monkeypatch, 
 
     assert seen == [[expected["link"]]], f"{vendor} row did not reach the ledger"
     assert expected["title"] in rendered and expected["link"] in rendered
+
+
+@pytest.mark.asyncio
+async def test_a_deepseek_query_over_the_vendor_limit_is_refused_before_the_request(monkeypatch):
+    """The mirrored adapter forwards the same unbounded query; DeepSeek answers
+    HTTP 400 and the model is only told the status. Refuse it here too, so both
+    adapters honour the vendor's documented 1-128 character limit."""
+    transport = _CaptureTransport({"results": []})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    rendered = await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 129, count=3)
+
+    assert transport.seen == [], "an over-limit query must not spend a request"
+    assert "128" in rendered and "129" in rendered
+
+    allowed = transport.seen
+    allowed.clear()
+    await WebSearchTool(api_key="K", provider="deepseek").execute(query="x" * 128, count=3)
+
+    assert len(allowed) == 1, "the limit itself is allowed"
 
 
 @pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
@@ -864,6 +889,7 @@ async def test_a_fetch_backend_with_no_anonymous_tier_refuses_before_the_request
         ("firecrawl", {"success": True, "data": {"markdown": "page body"}}),
         ("anysearch", {"code": 0, "data": {"content": "page body"}}),
         ("keenable", {"url": "https://example.com/a", "title": "T", "content": "page body", "description": ""}),
+        ("deepseek", {"title": "T", "content": "page body"}),
     ],
 )
 @pytest.mark.asyncio

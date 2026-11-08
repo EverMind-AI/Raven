@@ -91,6 +91,7 @@ async def test_vendor_http_errors_use_direct_html(transport, vendor, status):
         "api.firecrawl.dev",
         "api.anysearch.com",
         "api.keenable.ai",
+        "api.deepseek.com",
     ]:
         responses[host] = httpx.Response(status)
     tool = web.WebFetchTool(api_key="secret", provider=vendor)
@@ -102,6 +103,19 @@ async def test_vendor_http_errors_use_direct_html(transport, vendor, status):
     assert result["extractor"] == "direct-http"
     assert len(calls) == 2
     assert tool._refusal.active(vendor, "secret") == (status if status in {401, 402} else None)
+
+
+async def test_a_deepseek_page_without_text_reports_it(transport):
+    """A 200 whose body carries no content is the vendor answering without a
+    page; it must read as that failure, not as an empty page."""
+    responses, calls = transport
+    responses["origin.example"] = httpx.Response(500)
+    responses["api.deepseek.com"] = httpx.Response(200, json={"title": "T", "content": ""})
+
+    result = json.loads(await web.WebFetchTool(api_key="k", provider="deepseek").execute("https://origin.example/a"))
+
+    assert result["error"] == "DeepSeek returned no page content"
+    assert [call.url.host for call in calls] == ["origin.example", "api.deepseek.com"]
 
 
 async def test_paused_vendor_still_allows_direct_read(transport):
@@ -335,3 +349,26 @@ async def test_size_limited_html_is_available_when_jina_fails(transport):
     assert result["truncated"] is True
     assert result["text"] == "x" * 50000
     assert stream.closed
+
+
+async def test_the_deepseek_reader_dials_through_the_configured_proxy(transport, monkeypatch):
+    """The reader's client is built with the configured proxy; nothing asserted
+    that for any vendor, so a dropped ``proxy`` would go unnoticed."""
+    responses, _calls = transport
+    seen: list[str | None] = []
+    inner = web.httpx.AsyncClient
+
+    def factory(**kwargs):
+        seen.append(kwargs.pop("proxy", None))
+        return inner(**kwargs)
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", factory)
+    responses["origin.example"] = httpx.Response(500)
+    responses["api.deepseek.com"] = httpx.Response(200, json={"title": "T", "content": "PAGE"})
+
+    raw = await web.WebFetchTool(api_key="k", provider="deepseek", proxy="http://127.0.0.1:7890").execute(
+        "https://origin.example/a"
+    )
+
+    assert json.loads(raw)["extractor"] == "deepseek-fetch"
+    assert seen[-1] == "http://127.0.0.1:7890", "the provider client carries the configured proxy"

@@ -24,9 +24,9 @@ describe('the detail vocabulary', () => {
        (raven/trajectory/details.py). */
     const expected = [
       'content', 'media', 'origin', 'capabilities', 'turn', 'messages', 'system', 'prompt', 'model', 'tools', 'request',
-      'thinking', 'thinkingBlocks', 'toolCalls', 'finish', 'usage', 'response', 'tool', 'params', 'schema', 'result',
+      'thinking', 'reasoning', 'thinkingBlocks', 'toolCalls', 'finish', 'usage', 'response', 'tool', 'params', 'schema', 'result',
       'skill', 'skills', 'stats', 'query', 'decision', 'task', 'candidates', 'agent', 'settings', 'hits', 'injected',
-      'used', 'position', 'operation', 'qa', 'summary', 'plugin', 'contribution', 'transcript', 'frames', 'attributes',
+      'used', 'position', 'operation', 'qa', 'summary', 'plugin', 'contribution', 'transcript', 'frames', 'replay', 'attributes',
       'error', 'timing', 'relations', 'integrity', 'raw', 'outline',
     ]
     expect([...BLOCK_IDS].sort()).toEqual([...expected].sort())
@@ -38,7 +38,7 @@ describe('the detail vocabulary', () => {
     const ui = catalogue()
     const known: Array<[string[], (code: string) => string | null]> = [
       [['empty', 'not_recorded', 'missing', 'truncated', 'unreadable', 'unsupported'], availabilityKey],
-      [['not_loaded', 'schema_unproven', 'preview_dropped', 'not_recorded', 'artifact_missing', 'artifact_unreadable', 'artifact_outside_store', 'artifact_truncated'], reasonKey],
+      [['not_loaded', 'schema_unproven', 'preview_dropped', 'not_recorded', 'artifact_missing', 'artifact_unreadable', 'artifact_outside_store', 'artifact_truncated', 'reasoning_withheld'], reasonKey],
       [['artifact_outside_store', 'artifact_missing', 'artifact_unreadable', 'artifact_truncated', 'blob_missing', 'blob_truncated'], integrityKey],
       [['outer_only', 'in_progress_snapshot', 'data_incomplete'], noteKey],
       [['running', 'ok', 'error', 'cancelled', 'unknown'], statusKey],

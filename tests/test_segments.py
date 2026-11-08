@@ -156,6 +156,18 @@ class TestIdentityBootstrap:
         legacy = ContextBuilder(workspace=tmp_path, has_memory_backend=True)._get_identity()
         assert seg.text == legacy
 
+    async def test_the_board_on_the_page_takes_the_ask_again_rule_out(self, tmp_path: Path) -> None:
+        import dataclasses
+
+        on = IdentitySegmentBuilder(tmp_path, task_board=True)
+        page = (await on.build(dataclasses.replace(_ctx(tmp_path), channel="tui"))).text
+        terminal = (await on.build(dataclasses.replace(_ctx(tmp_path), channel="tui", surface="tui"))).text
+        im = (await on.build(dataclasses.replace(_ctx(tmp_path), channel="weixin"))).text
+        off = (await IdentitySegmentBuilder(tmp_path).build(dataclasses.replace(_ctx(tmp_path), channel="tui"))).text
+
+        assert "Ask on every reply" not in page
+        assert all("Ask on every reply" in text for text in (terminal, im, off))
+
     async def test_the_identity_renders_the_task_it_is_handed(self, tmp_path: Path) -> None:
         """The segment owns how the identity reads and nothing about deciding it.
 
@@ -811,6 +823,32 @@ class TestHostRole:
         assert "end your reply by asking about each one still open" in role
         assert "Ask on every reply until the user decides it, drops it, or says to leave it for later" in role
         assert "do not decide it for them" in role
+
+    def test_on_the_page_the_role_leaves_open_decisions_to_the_board(self, tmp_path: Path) -> None:
+        """Where the Task Board is drawn beside the conversation, every question still
+        open is in front of the user already: the decision stays theirs, but it is not
+        asked again on every reply."""
+        role = _role_of(render.identity_text(tmp_path, board_shown=True))
+        assert "stays open until they make it" in role
+        assert "do not decide it for them" in role
+        assert "Ask on every reply" not in role
+        assert "end your reply by asking about each one still open" not in role
+        assert "on the user's task board, so do not ask it again on later replies" in role
+
+    def test_on_the_page_a_dispatch_receipt_carries_only_the_section_rule(self) -> None:
+        note = render.reply_rules_note(board_shown=True)
+        assert note.startswith("\n\nNote: ")
+        assert "still open" not in note
+        assert "gives each task its own `### <task>` section" in note
+
+    def test_the_board_is_on_screen_only_on_the_page(self) -> None:
+        """Kept for every host conversation, the board is drawn only by the served page,
+        whose conversations ride the `tui` channel; the terminal shares that channel
+        and draws none of it, and neither does any other channel."""
+        assert render.board_on_page(True, "tui", None)
+        assert not render.board_on_page(True, "tui", "tui")
+        assert not render.board_on_page(True, "weixin", None)
+        assert not render.board_on_page(False, "tui", None)
 
     def test_a_dispatch_receipt_carries_the_open_decision_rule(self, tmp_path: Path) -> None:
         """The host writes its closing text right after it reads a dispatch's receipt, so

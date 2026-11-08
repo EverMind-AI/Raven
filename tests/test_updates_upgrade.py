@@ -580,6 +580,101 @@ def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
 
 
 @pytest.mark.parametrize(
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_names_the_platform_s_install_script(windows: bool, script: str) -> None:
+    """install.sh stops on Windows with "on Windows use install.ps1", so the CLI
+    and the page's editable refusal must both name the script by platform --
+    read from this one definition so the two spellings cannot drift apart."""
+    assert upgrade_commands.install_script(windows=windows) == script
+
+
+@pytest.mark.parametrize(
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_defaults_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch, windows: bool, script: str
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: windows)
+
+    assert upgrade_commands.install_script() == script
+
+
+@pytest.mark.parametrize(
+    ("windows", "command"),
+    [
+        (True, 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'),
+        (False, "./install.sh"),
+    ],
+    ids=["windows", "posix"],
+)
+def test_install_command_runs_the_platform_s_installer(windows: bool, command: str) -> None:
+    """The page and the CLI must share the invocation, not only the script name:
+    a bare `.\\install.ps1` is refused by the stock Windows client policy."""
+    assert upgrade_commands.install_command(windows=windows) == command
+
+
+def test_install_command_defaults_to_the_running_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.install_command() == (
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("windows", "commands"),
+    [
+        (
+            True,
+            (
+                "raven web --stop",
+                "git pull",
+                'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+            ),
+        ),
+        (False, ("git pull && ./install.sh",)),
+    ],
+    ids=["windows", "posix"],
+)
+def test_checkout_update_commands_are_runnable_in_the_platform_s_shell(
+    windows: bool, commands: tuple[str, ...]
+) -> None:
+    """Windows PowerShell 5.1 rejects `&&` as a statement separator, and
+    cmd.exe cannot run a .ps1 by name, so the Windows form is several commands
+    and names the PowerShell that runs the installer. It stops the page first:
+    `uv tool install --force` cannot replace a running `raven.exe`. POSIX keeps
+    the one-line form every release has printed."""
+    assert upgrade_commands.checkout_update_commands(windows=windows) == commands
+
+
+def test_checkout_update_commands_default_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.checkout_update_commands() == (
+        "raven web --stop",
+        "git pull",
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+    )
+
+
+@pytest.mark.parametrize(("name", "windows"), [("nt", True), ("posix", False)])
+def test_the_platform_switch_reads_os_name(monkeypatch: pytest.MonkeyPatch, name: str, windows: bool) -> None:
+    """The CLI's default path must read the real predicate, not a patched seam:
+    an inverted `_on_windows` would print the POSIX form on Windows, which is
+    the defect this change removes."""
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", name)
+        assert upgrade_commands._on_windows() is windows
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         None,

@@ -658,6 +658,57 @@ async def test_the_panel_lists_the_agents_a_graph_ran(workspace: Path) -> None:
     assert by_node["write"]["ended_at"] is None
 
 
+async def test_a_reassigned_node_is_one_row_under_the_agent_that_ran_it_last(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The graph names the agent that gave up; the node's durable row names the one
+    that is running it now. An unfinalized run has no manifest to say otherwise."""
+    from raven.agent.subagent import instances as instances_mod
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    run_id = "20260812T120000Z-deadbeef"
+    _write_run(workspace, run_id, nodes=[{"id": "fix", "subagent": "alpha", "depends_on": []}])
+    await registry.upsert_dag_node(SESSION, run_id, "fix", "alpha", "exception")
+    await registry.move_dag_node(
+        SESSION,
+        run_id=run_id,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert set(by_node) == {"fix"}
+    assert by_node["fix"]["agent"] == "beta"
+    assert by_node["fix"]["instance"] == "fix-b"
+    assert by_node["fix"]["instance_auto"] is True
+    assert by_node["fix"]["attempt_agents"] == ["alpha", "beta"]
+
+
+async def test_a_node_that_never_moved_keeps_the_row_keys_it_always_had(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    run_id = "20260812T120000Z-deadbeef"
+    _write_run(workspace, run_id, nodes=[{"id": "fix", "subagent": "alpha", "depends_on": []}])
+    await registry.upsert_dag_node(SESSION, run_id, "fix", "alpha", "running")
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    (row,) = [i for i in items if i["kind"] == "dag"]
+    assert not {"attempt_agents", "instance_auto"} & set(row)
+
+
 async def test_a_skipped_node_is_not_a_row(workspace: Path) -> None:
     """A skipped node never ran -- no transcript, no cost, no clock -- so the
     panel does not list it. The graph view is where "skipped because its

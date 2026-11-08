@@ -593,11 +593,13 @@ function Test-AssetStale([string]$Artifact, [string[]]$Sources) {
 # older than the sources they were built from, before first run.
 function Build-WebAssets([string]$ScriptDir, [string]$NodePath, [string]$UvPath) {
     $needTui = Test-AssetStale (Join-Path $ScriptDir "ui-tui\dist\entry.js") @((Join-Path $ScriptDir "ui-tui"))
-    # The page inlines the shared catalogue (ui-web/build.py reads
-    # i18n/messages.json), so a catalogue-only change is a page change.
+    # The page inlines the shared catalogues -- the bundle reads
+    # i18n/messages.json and ui-shared/*.json -- so a catalogue-only change is
+    # a page change.
     $needPage = Test-AssetStale (Join-Path $ScriptDir "ui-web\dist\index.html") @(
         (Join-Path $ScriptDir "ui-web"),
-        (Join-Path $ScriptDir "i18n")
+        (Join-Path $ScriptDir "i18n"),
+        (Join-Path $ScriptDir "ui-shared")
     )
     if (-not ($needTui -or $needPage)) { return }
 

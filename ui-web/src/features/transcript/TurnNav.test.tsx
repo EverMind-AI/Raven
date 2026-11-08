@@ -17,6 +17,7 @@ import * as lang from '../../state/lang'
 import { hold as holdHost } from '../../state/session/hosts'
 import { resetSources, setSources } from '../../state/sources'
 import * as mount from './mount'
+import { revealTurnAt } from './source'
 import * as store from './store'
 import * as tail from './tail'
 import { TranscriptApp } from './TranscriptApp'
@@ -228,6 +229,31 @@ describe('the turn nav', () => {
     expect(tail.isStuck()).toBe(false)
   })
 
+  /* The header floats over the scroller (page.css, .top), so the scroller's
+     own top edge is behind the frost: a click has to land the question under
+     the band, or the reader is sent to something they cannot see. */
+  it('puts the question under the frosted header, not at the scroller edge', async () => {
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('second question')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const top = document.createElement('div')
+    top.className = 'top'
+    Object.defineProperty(top, 'offsetHeight', { configurable: true, value: 52 })
+    ;(scroll.parentElement as HTMLElement).append(top)
+    const turns = [...stage().querySelectorAll<HTMLElement>('[data-ask]')]
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 600 } as DOMRect)
+    vi.spyOn(turns[0]!, 'getBoundingClientRect').mockReturnValue({ top: -300 } as DOMRect)
+    scroll.scrollTop = 900
+    const to = vi.spyOn(scroll, 'scrollTo').mockImplementation(() => {})
+
+    act(() => { fireEvent.click(marks()[0]!) })
+
+    /* 900 + (-300 - 0), less the band and the lead. */
+    expect((to.mock.calls[0]![0] as ScrollToOptions).top).toBe(900 - 300 - 52 - 16)
+  })
+
   it('marks the turn being read as the reader scrolls', async () => {
     await settle(() => {
       mount.ask('first question')
@@ -252,6 +278,38 @@ describe('the turn nav', () => {
     await settle(() => { scroll.dispatchEvent(new Event('scroll')) })
     await settle()
     expect(marks().map((m) => m.getAttribute('aria-current'))).toEqual([null, null, 'true'])
+  })
+
+  /* The header floats over the scroller (page.css, .chat > .top), so the
+     reading line is a fraction of the height the header leaves visible, not of
+     the scroller's whole box: it has to stay where it was before the header
+     left the flow. */
+  it('keeps the reading line below the floating header, not on the scroller box', async () => {
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('second question')
+      mount.ask('third question')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const top = document.createElement('div')
+    top.className = 'top'
+    Object.defineProperty(top, 'offsetHeight', { configurable: true, value: 52 })
+    ;(scroll.parentElement as HTMLElement).append(top)
+    const turns = [...stage().querySelectorAll<HTMLElement>('[data-ask]')]
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 1000 } as DOMRect)
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 5000 })
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 1000 })
+    /* 370 sits between the scroller-box line (350) and the band-relative one
+       (52 + (1000 - 52) * 0.35 = 383.8), so only the band-relative reading
+       counts the second turn as reached. */
+    const tops = [-1500, 370, 1400]
+    turns.forEach((el, i) => {
+      vi.spyOn(el, 'getBoundingClientRect').mockImplementation(() => ({ top: tops[i] }) as DOMRect)
+    })
+
+    await settle(() => { scroll.dispatchEvent(new Event('scroll')) })
+    await settle()
+    expect(marks().map((m) => m.getAttribute('aria-current'))).toEqual([null, 'true', null])
   })
 
   it('follows the conversation on the stage, not one held off it', async () => {
@@ -302,7 +360,7 @@ describe('the turn nav', () => {
       const st = mount.step()
       st.sayDelta('Checking the logs.')
       st.seal()
-      st.dropReply()
+      st.dropReply('')
       mount.note('Raven chose not to reply.', '', { quiet: true })
       mount.finishTurn(null, [st], '3s', true)
       mount.ask('and now?')
@@ -343,5 +401,229 @@ describe('readingTurn', () => {
 
   it('is no turn when there are none', () => {
     expect(readingTurn([], 300, false)).toBe(-1)
+  })
+})
+
+describe('revealTurnAt', () => {
+  /* A step on the task board names its turn by the timestamp the session log
+     stores on the turn's opening message. A turn asked on this page carries the
+     browser's clock instead, so the nearest opening question is the match,
+     within five minutes either way. */
+  it('scrolls to the opening question nearest that time', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toHaveLength(1)
+  })
+
+  /* What a task board event opens is what Raven said in that turn: the reply
+     the turn ended on, rather than the question that opened it. happy-dom has
+     no layout, so the rows are pinned where a tall transcript would put them. */
+  const pin = (el: Element, top: number): void => {
+    (el as HTMLElement).getBoundingClientRect = () => ({ top }) as DOMRect
+  }
+
+  it('scrolls to the reply the named turn ended on', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply'); mount.answer('first reply, continued') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question'); mount.answer('second reply') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 3100][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 1200, 3600][i]!))
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z')).toBe(true)
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toEqual([1200 - 16, 3600 - 16])
+  })
+
+  it('looks past a message merged into the running turn for its reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => {
+      mount.ask('first question')
+      mount.ask('and one more thing', null, { midTurn: true })
+      mount.answer('the reply to both')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 400][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 900))
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z')).toBe(true)
+    expect(moved).toEqual([900 - 16])
+  })
+
+  it('scrolls to the question while the named turn has no reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T11:00:00Z'))
+    await settle(() => { mount.ask('second question') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, 100 + i * 1000))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, 600 + i * 1000))
+
+    expect(revealTurnAt('2026-10-29T11:00:30Z')).toBe(true)
+    expect(moved).toEqual([1100 - 16])
+  })
+
+  /* A delegated result re-entering opens a turn with no question typed: its
+     delivered row is where that turn begins, and a step keyed by it names it. */
+  it('finds a turn a delivered result opened, and scrolls to its reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:30:00Z'))
+    await settle(() => {
+      mount.delivered({ label: 'the search', isDag: false, open: () => {} })
+      mount.answer('what the search found')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 2600][i]!))
+
+    expect(revealTurnAt('2026-10-29T10:30:05Z')).toBe(true)
+    expect(revealTurnAt('2026-10-29T10:00:05Z')).toBe(true)
+    expect(moved).toEqual([2600 - 16, 600 - 16])
+  })
+
+  it('scrolls to the delivered row while the turn it opened has no reply', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:30:00Z'))
+    await settle(() => { mount.delivered({ label: 'the search', isDag: false, open: () => {} }) })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 600))
+
+    expect(revealTurnAt('2026-10-29T10:30:05Z')).toBe(true)
+    expect(moved).toEqual([2100 - 16])
+  })
+
+  it('finds a delivered result s turn in a conversation read back from history', async () => {
+    await settle(() => {
+      mount.history([
+        { role: 'user', text: 'find the PRs', timestamp: '2026-10-30T09:28:33.706973' },
+        { role: 'assistant', text: 'Sent a subagent to look.', timestamp: '2026-10-30T09:29:11.896748' },
+        {
+          role: 'user', text: 'the subagent s report', timestamp: '2026-10-30T09:34:50.345450',
+          delegated: { kind: 'spawn', label: 'find the PRs', status: 'ok', node_id: 'n1' },
+        },
+        { role: 'assistant', text: 'Four PRs set the effort.', timestamp: '2026-10-30T09:35:01.840139' },
+      ])
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 2600][i]!))
+
+    expect(revealTurnAt('2026-10-30T09:34:50.345450')).toBe(true)
+    expect(moved).toEqual([2600 - 16])
+  })
+
+  it('answers false for a time no opening question is near', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.ask('first question') })
+
+    expect(revealTurnAt('2026-10-29T15:00:00Z')).toBe(false)
+    expect(revealTurnAt('not a time')).toBe(false)
+  })
+
+  /* A step's time is the server's clock with no zone, read here as this
+     browser's; a turn asked on this page carries the browser's own clock. Across
+     zones the two sit hours apart, so a turn drawn live is found by the id its
+     opening frame named. */
+  it('finds a turn asked on this page by its id, however far the step time sits', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('first question'), 't-1'); mount.answer('first reply') })
+    vi.setSystemTime(new Date('2026-10-29T10:01:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('second question'), 't-2'); mount.answer('second reply') })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el, i) => pin(el, [100, 3100][i]!))
+    stage().querySelectorAll('[data-answer]').forEach((el, i) => pin(el, [600, 3600][i]!))
+
+    expect(revealTurnAt('2026-10-29T18:00:30', 't-1')).toBe(true)
+    expect(revealTurnAt('2026-10-29T10:00:00Z', 't-2')).toBe(true)
+    expect(moved).toEqual([600 - 16, 3600 - 16])
+  })
+
+  it('finds a delivered result s turn by its id', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => {
+      mount.delivered({ label: 'the search', isDag: false, open: () => {}, turnId: 't-d' })
+      mount.answer('what the search found')
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-delivered]').forEach((el) => pin(el, 2100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 2600))
+
+    expect(revealTurnAt('2026-10-29T18:00:05', 't-d')).toBe(true)
+    expect(moved).toEqual([2600 - 16])
+  })
+
+  /* An opening that carries another turn's id is not the one named, however
+     near its time: two turns a minute apart are both within reach. */
+  it('never takes a turn tagged with another id for the one named', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-29T10:00:00Z'))
+    await settle(() => { mount.tagTurn(mount.ask('first question'), 't-1'); mount.answer('first reply') })
+
+    expect(revealTurnAt('2026-10-29T10:00:30Z', 't-other')).toBe(false)
+  })
+
+  it('still matches an untagged opening by time when the step names an id', async () => {
+    await settle(() => {
+      mount.history([
+        { role: 'user', text: 'find the PRs', timestamp: '2026-10-30T09:28:33.706973' },
+        { role: 'assistant', text: 'Looked.', timestamp: '2026-10-30T09:29:11.896748' },
+      ])
+    })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)) }) as typeof scroll.scrollTo
+    pin(scroll, 0)
+    stage().querySelectorAll('[data-ask]').forEach((el) => pin(el, 100))
+    stage().querySelectorAll('[data-answer]').forEach((el) => pin(el, 600))
+
+    expect(revealTurnAt('2026-10-30T09:28:33.706973', 't-from-history')).toBe(true)
+    expect(moved).toEqual([600 - 16])
   })
 })

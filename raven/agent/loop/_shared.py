@@ -110,8 +110,8 @@ _NOTICE_KEY = "_notice"
 # ``_notice``: ``_save_turn`` writes it as ``silent``.
 _SILENT_KEY = "_silent"
 
-# Marks the last assistant row with text or tool calls of a turn whose reply went out
-# through the message tool, read off ``MessageTool.sent_in_turn``: the live verdict, so a stored
+# Marks the last assistant row with text or tool calls of a turn a tool already answered -- a
+# message sent or files delivered, read off ``_answered_by_tool``: the live verdict, so a stored
 # reader need not guess it from the calls it can see. ``_save_turn`` writes it as
 # ``replied_via_tool``.
 _REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
@@ -164,7 +164,11 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
 
 
 # How full a model call left the window, on the assistant entry that stands for
-# it: the reply it produced, or the text a hook put in that reply's place.
+# it: the reply it produced, or the text a hook put in that reply's place. A
+# reply that is not filed leaves it on the newest row the turn keeps instead
+# (``turn_path._stamp_context_used_on_kept``), and a turn that fails or is
+# stopped files its newest reading on the marker it ends on
+# (``_save_broken_turn``).
 # Same underscore-then-rename convention as the spans above; ``_save_turn``
 # writes it as ``context_used``. A resume has no other way to know what the
 # model was sent: the context engine compacts on its own and leaves the stored
@@ -178,8 +182,9 @@ def _window_reading(usage: dict[str, Any] | None) -> int:
     Not what the prompt was billed as. A provider that reports cache reads apart
     from ``prompt_tokens`` (``prompt_tokens_include_cache`` false, the Anthropic
     Messages shape) bills a fraction of a warm prompt while all of it still
-    occupies the window, so the cached counts are added back. Same add-back, for
-    the same reason, as ``transport_failure.never_processed``.
+    occupies the window, so the cached counts are added back -- and only then:
+    where ``prompt_tokens`` already holds them, adding them again would count the
+    warm prompt twice.
     """
     if not usage:
         return 0
@@ -191,13 +196,31 @@ def _window_reading(usage: dict[str, Any] | None) -> int:
     return used
 
 
+def _reads_no_window(response: Any) -> bool:
+    """Whether a call's usage says nothing about how full the window is.
+
+    A response the provider flagged as an upstream transport failure
+    (``upstream_transport_failure``) carries the upstream's account of a call
+    that failed, and that account can be the very evidence that flagged it -- a
+    prompt billed at a size the request cannot have been. The call may never
+    have been read, so its usage is no reading of the window.
+    """
+    classification = getattr(response, "error_classification", None)
+    return getattr(classification, "category", None) == "upstream_transport_failure"
+
+
+def _call_window(response: Any) -> int:
+    """How full a model call left the window, or 0 when it gives no reading."""
+    return 0 if _reads_no_window(response) else _window_reading(getattr(response, "usage", None))
+
+
 def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
     """Put a model call's window reading on the assistant entry that stands for it.
 
     Absent when the provider reported no usage, and absent means unknown: a
     resume reads the newest entry that has one.
     """
-    used = _window_reading(getattr(response, "usage", None))
+    used = _call_window(response)
     if used > 0 and messages:
         messages[-1][_CONTEXT_USED_KEY] = used
 
@@ -291,6 +314,11 @@ class LoopOutcome:
     ``silent`` is set when the turn's last reply is a silence marker. That is the
     model's answer, not a failure and not an empty reply: the row stays in the
     history and carries ``_silent``, and the reader is shown none of it.
+    ``shown`` is what that reply had already streamed before it was read as the
+    marker -- a think block the model inlined ahead of it goes out as it comes --
+    counted over the step a reader draws it in: its call and the continuations
+    of a cut answer, or the wrap-up alone. A client that drew it takes back
+    exactly this, and nothing it drew before. Empty when the reply showed nothing.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
@@ -298,8 +326,16 @@ class LoopOutcome:
     error_full: str | None = None
     no_output: bool = False
     silent: bool = False
+    shown: str = ""
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
+    # What the turn's last model call carried into the strategies, and the effort
+    # it asked for: the host's post-turn task board call sends the same, so it
+    # runs at the main model's settings and shares that call's cached prefix.
+    # None when the turn made no model call (or, for the effort, asked for none).
+    last_tools: list[dict] | None = None
+    last_model: str | None = None
+    last_effort: str | None = None
 
 
 def _filter_qualified_ids(

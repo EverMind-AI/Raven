@@ -22,7 +22,7 @@ import * as seen from './seen'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskFile, TaskRow } from '../tasks/types'
+import type { TaskFile, TaskGroup, TaskRow } from '../tasks/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -288,6 +288,73 @@ describe('a tab with nothing in it', () => {
   })
 })
 
+/* A conversation that delegated nothing still has the matters its board keeps:
+   the tasks tab is empty only with no Task and no group, and loads the board
+   itself rather than trusting that something else did. */
+describe('the tasks tab of a conversation with a board', () => {
+  const waiting: TaskGroup = {
+    id: 'g_a', title: 'Fix bug A', summary: 'Cause found', status: 'needs_you', created_at: 1, updated_at: 1,
+    steps: [{ id: 's_a', turn_at: '2026-10-29T10:02:13', turn_id: 't1', title: 'Found it', summary: 'Empty token.', questions: ['Which fix?'], tasks: [] }],
+  }
+  const holding = (groups: TaskGroup[]): void => {
+    sources.tasks!.board = async () => ({ board: { version: 1, groups, unassigned: [] }, lineage: {} })
+  }
+  const tasksTab = async (): Promise<void> => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
+    await act(async () => {})
+  }
+
+  beforeEach(() => { tasksStore._resetForTests() })
+  afterEach(() => { tasksStore._resetForTests() })
+
+  it('draws the board of a conversation that delegated nothing', async () => {
+    holding([waiting])
+    await tasksTab()
+
+    expect(emptyOf()).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+  })
+
+  it('opens the group the Task Board page asked for, where no Task was dispatched', async () => {
+    holding([waiting])
+    tasksStore.requestFocus('s1', 'g_a')
+    await tasksTab()
+
+    expect(document.querySelector('.tkgroup[data-group="g_a"]')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  /* A reconnect to the same conversation resets the store without a switch, so
+     nothing but the tab itself can read the board back: an unread board is not an
+     empty one. */
+  it('reads the board back after a reconnect resets it, the conversation unchanged', async () => {
+    holding([waiting])
+    await tasksTab()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+
+    await act(async () => { tasksStore.reset() })
+    await act(async () => {})
+
+    expect(emptyOf()).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+  })
+
+  it('says nothing is here with no Task and no group', async () => {
+    holding([])
+    await tasksTab()
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
+  })
+
+  it('lists the Tasks of a conversation whose board holds no group', async () => {
+    taskRows = [task('t1')]
+    holding([])
+    await tasksTab()
+
+    expect(emptyOf()).toBeNull()
+  })
+})
+
 describe('the desk shelf', () => {
   it('says the session has delivered nothing rather than showing an empty list', async () => {
     await shelf()
@@ -371,6 +438,36 @@ describe('the desk shelf', () => {
 
     const panes = desk.get().panes
     expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
+  })
+
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine. */
+  it('offers the attachment link on a delivered row', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/a.md', name: 'a.md', title: 'Comparison', download_path: '/files/download?token=t1' },
+    ]))
+    await shelf()
+    const a = document.querySelector('.desk-dlv .desk-dl') as HTMLAnchorElement
+    expect(a.getAttribute('href')).toBe('/files/download?token=t1')
+    expect(a.getAttribute('download')).toBe('a.md')
+  })
+
+  /* A delivery that is gone offers none: its token is gone with it, and the
+     row says so already. */
+  it('offers no attachment link on a row that is gone', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/gone.md', name: 'gone.md', title: 'Gone', download_path: '/files/download?token=t2', missing: true },
+    ]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
+  })
+
+  /* A manifest written before the field, or the offline canvas's: no link of
+     its own, so no control that points nowhere. */
+  it('offers no attachment link on a delivery with no link of its own', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/b.md', name: 'b.md', title: 'B' }]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
   })
 
   /* The demo shell's source cannot read a file, and a viewer with nothing to
