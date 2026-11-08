@@ -75,7 +75,7 @@ describe('the agent catalogue', () => {
   it('tells a desktop-app reader that the CLI is a separate install', () => {
     const r = row({ preset: 'minimax_code' })
     expect(installOf(r).note).toBe('gui.agent.minimax_cli_note')
-    expect(signInNoteOf(r)).toBe('gui.agent.minimax_data_dir_note')
+    expect(signInNoteOf(r)).toBe('gui.agent.minimax_sign_in_note')
   })
 
   it('says nothing about a row nobody catalogued', () => {

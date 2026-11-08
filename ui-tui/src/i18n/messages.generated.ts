@@ -1877,8 +1877,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.short_minimax_code': "MiniMax's coding agent",
     'gui.agent.minimax_cli_note':
       'The MiniMax Code desktop app does not include the mcode CLI; install it separately with the command below.',
-    'gui.agent.minimax_data_dir_note':
-      "If the desktop app is already signed in, also set MINIMAX_DATA_DIR to the absolute path of its data directory (the folder ~/.minimax; for example /Users/you/.minimax or C:\\Users\\you\\.minimax) in this agent's environment.",
+    'gui.agent.minimax_sign_in_note':
+      "If your MiniMax account is not on the cn region, add --region global (or --region cn) to that command: the CLI signs into the cn account site by default. If the desktop app already holds the login, also point this agent at its data directory: set MINIMAX_DATA_DIR to the absolute path of that folder (for example /Users/you/.minimax or C:\\Users\\you\\.minimax), either in this agent's env map in ~/.raven/config.json or in the environment Raven launches agents from (press Check again afterwards, so that environment is read again).",
     'gui.agent.short_pi': "Pi's coding agent",
     'gui.agent.short_mirasim': 'A coding agent run through Mirasim',
     'gui.agent.by_raven': 'Built into Raven',
@@ -5450,8 +5450,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.short_kimi_code': '月之暗面的编码智能体',
     'gui.agent.short_minimax_code': 'MiniMax 的编码智能体',
     'gui.agent.minimax_cli_note': 'MiniMax Code 桌面端不包含 mcode CLI，请用下面的命令单独安装。',
-    'gui.agent.minimax_data_dir_note':
-      '如果桌面端已经登录，请同时把这个 agent 的环境变量 MINIMAX_DATA_DIR 设为它数据目录的绝对路径（即 ~/.minimax 展开后的目录，例如 /Users/you/.minimax 或 C:\\Users\\you\\.minimax）。',
+    'gui.agent.minimax_sign_in_note':
+      '如果你的 MiniMax 账号不在 cn 区，请在那条命令后面加上 --region global（或 --region cn）：CLI 默认登录的是 cn 账号站。如果桌面端已经登录，还要把这个 agent 指向它的数据目录——把 MINIMAX_DATA_DIR 设成那个目录的绝对路径（例如 /Users/you/.minimax 或 C:\\Users\\you\\.minimax），可以写在这个 agent 在 ~/.raven/config.json 里的 env，也可以写进 Raven 启动 agent 时读的环境变量（改完按“重新检测”，让它重新读一遍）。',
     'gui.agent.short_pi': 'Pi 的编码智能体',
     'gui.agent.short_mirasim': '经 Mirasim 运行的编码智能体',
     'gui.agent.by_raven': 'Raven 自带',

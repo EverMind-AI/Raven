@@ -132,7 +132,7 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     site: 'minimax.io',
     cmd: 'npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3',
     note: 'gui.agent.minimax_cli_note',
-    signInNote: 'gui.agent.minimax_data_dir_note',
+    signInNote: 'gui.agent.minimax_sign_in_note',
   },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
   mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },

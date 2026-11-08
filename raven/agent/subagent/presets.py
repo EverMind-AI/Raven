@@ -528,7 +528,17 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # 0.6.12: a machine whose desktop app had signed in under ~/.minimax still
     # reported "Authentication required" until MINIMAX_DATA_DIR named that
     # directory, because the ACP server's default data dir did not carry that
-    # login. The command is the remedy when no login exists at all.
+    # login.
+    #
+    # The command names no region because the CLI has one of its own:
+    # `mcode login --help` lists `--region <region>` ("cn or global"), and the
+    # region it falls back to is `cn` -- its account site is account.minimax.cn,
+    # the global one account.minimax.io -- so a global account has to ask for
+    # its own (`mcode login --region global`). Signing into the wrong site
+    # leaves the session unauthenticated on the ACP server as well. Which
+    # region a reader needs is a fact about their account and not about the
+    # agent, so the remedy names the command and the catalogue's note carries
+    # the flag beside it.
     "minimax_code": SignIn(exe="mcode", local="mcode login"),
 }
 """How to sign in to the agent a row defers to, by preset key.

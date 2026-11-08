@@ -2995,6 +2995,27 @@ def test_a_core_install_hint_reaches_its_row() -> None:
     assert install_hint_for(ThirdPartyAcpSubagentConfig(name="mine", command="mcode acp")) is None
 
 
+def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes() -> None:
+    """The two facts the sign-in command alone does not carry.
+
+    ``mcode login`` signs into the cn account site unless ``--region`` says
+    otherwise, so a global account has to ask for its own; and the data
+    directory reaches the agent through the row's own ``env`` map, which no
+    page and no tool writes -- so the note has to name the file it goes in.
+    """
+    import json
+    from pathlib import Path
+
+    catalogue = json.loads(
+        (Path(__file__).resolve().parents[1] / "i18n" / "messages.json").read_text(encoding="utf-8")
+    )["ui"]
+    sign_in = catalogue["gui.agent.minimax_sign_in_note"]
+    assert "--region" in sign_in["en"]
+    assert "MINIMAX_DATA_DIR" in sign_in["en"]
+    assert "config.json" in sign_in["en"]
+    assert sign_in["zh"]
+
+
 def test_every_shim_requirement_names_a_shim_launched_row() -> None:
     """The executable a fetched command needs is only a question for a fetched command.
 

@@ -2030,7 +2030,7 @@ describe('the MiniMax Code notes', () => {
     ])
     await mount()
     await openSheet('MiniMax Code')
-    expect(note()!.querySelector('.extAgents-about')!.textContent).toBe('gui.agent.minimax_data_dir_note')
+    expect(note()!.querySelector('.extAgents-about')!.textContent).toBe('gui.agent.minimax_sign_in_note')
   })
 
   it('leaves the data-directory sentence off a fix that is not about signing in', async () => {
