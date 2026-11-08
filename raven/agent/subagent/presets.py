@@ -12,7 +12,8 @@ So connecting is: verify the one path this table names. If it fails, say why
 fallback to another transport, because a silent fallback would hand the user an
 agent with different capabilities than the one they asked for.
 
-Measured on the date each bullet names, which is what fixed each transport below:
+Measured on 2026-08-11 unless a bullet names a later date, which is what fixed
+each transport below:
 
 - ``Hermes Agent`` - ACP, native (``hermes acp``). resume + fork + load.
 - ``Claude Code`` - ACP through the ACP project's adapter. It reads the *local*
