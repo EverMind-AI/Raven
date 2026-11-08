@@ -1878,7 +1878,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.minimax_cli_note':
       'The MiniMax Code desktop app does not include the mcode CLI; install it separately with the command below.',
     'gui.agent.minimax_data_dir_note':
-      "If the desktop app is already signed in, also set MINIMAX_DATA_DIR to ~/.minimax in this agent's environment.",
+      "If the desktop app is already signed in, also set MINIMAX_DATA_DIR to the absolute path of its data directory (the folder ~/.minimax; for example /Users/you/.minimax or C:\\Users\\you\\.minimax) in this agent's environment.",
     'gui.agent.short_pi': "Pi's coding agent",
     'gui.agent.short_mirasim': 'A coding agent run through Mirasim',
     'gui.agent.by_raven': 'Built into Raven',
@@ -5451,7 +5451,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.short_minimax_code': 'MiniMax 的编码智能体',
     'gui.agent.minimax_cli_note': 'MiniMax Code 桌面端不包含 mcode CLI，请用下面的命令单独安装。',
     'gui.agent.minimax_data_dir_note':
-      '如果桌面端已经登录，请同时把这个 agent 的环境变量 MINIMAX_DATA_DIR 设为 ~/.minimax。',
+      '如果桌面端已经登录，请同时把这个 agent 的环境变量 MINIMAX_DATA_DIR 设为它数据目录的绝对路径（即 ~/.minimax 展开后的目录，例如 /Users/you/.minimax 或 C:\\Users\\you\\.minimax）。',
     'gui.agent.short_pi': 'Pi 的编码智能体',
     'gui.agent.short_mirasim': '经 Mirasim 运行的编码智能体',
     'gui.agent.by_raven': 'Raven 自带',
