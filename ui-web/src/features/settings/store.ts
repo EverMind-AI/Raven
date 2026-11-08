@@ -21,14 +21,7 @@ import { statedTags } from '../model/types'
 
 import type { Kind } from '../model/types'
 import type {
-  ArchivedSession,
-  ConnectProbe,
-  ModelCandidate,
-  SettingsSnapshot,
-  SettingsSource,
-  SkillDetail,
-  UsageRange,
-  UsageStats,
+  ArchivedSession, ConnectProbe, KeyCheck, ModelCandidate, SettingsSnapshot, SettingsSource, SkillDetail, UsageRange, UsageStats,
 } from './types'
 
 export type SectionId =
@@ -144,7 +137,7 @@ export interface SettingsState {
 }
 
 const emptySnap = (): SettingsSnapshot => ({
-  raw: {}, configPath: '~/.raven/config.json', everos: null, providers: [],
+  raw: {}, configPath: '~/.raven/config.json', skillHub: { on: false, awaitingReload: false }, everos: null, everosCloud: null, providers: [],
   curProvider: '', model: '', tools: [], skills: [], mcp: [],
 })
 
@@ -190,6 +183,24 @@ export function set(patch: Partial<SettingsState>): void {
 }
 
 export const source = (): SettingsSource => ds('settings')
+
+/* Adding a skill or an MCP server is the chat's: use_skill fetches the Skill
+   Hub bundle and the plugin tool connects the PlugHub entry, and no row of the
+   two pages here can do either. So each page's "add" button leads into the
+   chat with the request half written. The verb is the composer's, lent at
+   boot (src/app/install.ts) rather than imported from a sibling domain;
+   unlent, the button does nothing, which is what a case that mounts the
+   dialog alone wants. */
+type AskInChat = (text: string) => void
+let askInChat: AskInChat | null = null
+
+export function lendAskInChat(fn: AskInChat | null): void {
+  askInChat = fn
+}
+
+export function addInChat(text: string): void {
+  askInChat?.(text)
+}
 
 /* ISO day, local time: the range the usage page asks for is the reader's
    calendar, and the server reads the same wall clock. */
@@ -249,6 +260,12 @@ export async function refresh(): Promise<void> {
   loading = (async () => {
     try {
       const snap = await source().load()
+      /* The cloud probe lands after the snapshot; patch it in so the card leaves
+         its checking state without a second open of the dialog. */
+      void source().everosCloud?.().then((everosCloud) => {
+        const now = get()
+        if (now.snap.everosCloud !== everosCloud) set({ snap: { ...now.snap, everosCloud } })
+      })
       const cur = get()
       if (cur.loaded && sameSnap(cur.snap, snap)) return
       set({ snap, loaded: true, epoch: cur.epoch + 1 })
@@ -391,10 +408,22 @@ const setProbe = (slug: string, probe: ConnectProbe | null): void => {
   set({ probes })
 }
 
-/* Store a credential, then test it on the side. The save is the connect: a
-   check can be wrong -- a public catalogue, a proxy, a vendor that is down --
-   so its answer never holds the key back. The row says "testing" until the
-   verdict lands, and a failed one is marked and offers a retry. */
+/* The fields a check is asked about: the key and the address the form sends,
+   and nothing it did not. */
+const keyParams = (params: Record<string, unknown>): { api_key?: string; api_base?: string } => ({
+  ...(typeof params.api_key === 'string' && params.api_key ? { api_key: params.api_key } : {}),
+  ...(typeof params.api_base === 'string' && params.api_base ? { api_base: params.api_base } : {}),
+})
+
+/* Ask the vendor about the credential, then store it. One answer holds the key
+   back: the vendor's own refusal (`refused` -- a 401 to this key, or the key
+   named invalid). A key the vendor has never issued cannot work, and storing it
+   only moved the failure to the first message while the row read "Connected"
+   beside "the provider rejects the saved key". Every other answer stores the
+   key and says what is still worth knowing: a check can be wrong -- a public
+   catalogue, a proxy, a vendor that is down -- and none of that is the key's
+   fault. A check that cannot run at all does not hold the key back either: the
+   key is stored and tested on the side, as before. */
 export async function connect(key: string, slug: string, params: Record<string, unknown>): Promise<boolean> {
   /* A header carries ASCII only: a key with anything else in it is text pasted
      from the wrong place and could never be sent, so it is refused here rather
@@ -403,9 +432,31 @@ export async function connect(key: string, slug: string, params: Record<string, 
     refuse(t('gui.settings.providers.key_not_ascii'))
     return false
   }
-  const stored = await run(key, () => source().provider('save_key', params))
-  if (stored) void recheck(slug)
-  return stored
+  /* Held in an object rather than a `let`: an assignment inside the closure is
+     not one the type narrowing after `run` sees. */
+  const seen: { verdict: KeyCheck | null } = { verdict: null }
+  const stored = await run(key, async () => {
+    try {
+      seen.verdict = await source().checkKey(slug, keyParams(params))
+    } catch {
+      seen.verdict = null
+    }
+    if (seen.verdict?.refused) {
+      const vendor = get().snap.providers.find((p) => p.id === slug)?.name ?? slug
+      refuse(t('gui.settings.providers.key_refused', { vendor }))
+      throw { handled: true }
+    }
+    return source().provider('save_key', params)
+  })
+  if (!stored) return false
+  const verdict = seen.verdict
+  if (verdict) {
+    setProbe(slug, { ok: verdict.ok, status: verdict.status, models_count: verdict.models_count ?? null, error: verdict.error ?? null, refused: verdict.refused })
+    if (verdict.status === 'valid') reloadOffer()
+  } else {
+    void recheck(slug)
+  }
+  return true
 }
 
 /* A live read that succeeded wrote what the vendor serves to the server's
@@ -426,8 +477,8 @@ export async function recheck(slug: string): Promise<void> {
   await run(`probe:${slug}`, async () => {
     const r = await source().fetchModels(slug, true)
     setProbe(slug, r.status === 'ok'
-      ? { ok: true, status: 'valid', models_count: (r.models || []).filter((m) => m.source === 'live').length }
-      : { ok: false, status: r.status, error: r.error ?? null })
+      ? { ok: true, status: 'valid', models_count: (r.models || []).filter((m) => m.source === 'live').length, refused: false }
+      : { ok: false, status: r.status, error: r.error ?? null, refused: r.refused ?? false })
     if (r.status === 'ok') reloadOffer()
   })
 }
@@ -533,4 +584,5 @@ export function _resetForTests(): void {
   store._resetForTests()
   store.set(initial())
   lazy = false
+  askInChat = null
 }

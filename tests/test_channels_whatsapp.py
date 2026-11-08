@@ -14,7 +14,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from loguru import logger
 
+from raven.channels.adapters.whatsapp import channel as wa_channel
 from raven.channels.adapters.whatsapp.bridge import load_or_create_bridge_token
 from raven.channels.adapters.whatsapp.channel import WhatsAppChannel
 from tests.conftest import make_channel_config
@@ -381,6 +383,55 @@ def test_ensure_bridge_dir_rebuilds_a_build_that_does_not_match_the_source(
     assert (built / "src" / "index.ts").exists()
 
 
+def test_the_bridge_install_fetches_from_a_mirror_when_npm_cannot_be_reached(tmp_path, monkeypatch):
+    """`npm install` is the one step of the build that needs the registry, and
+    the only one started with the mirror in its environment. Asked about the
+    directory it installs in, raven's own, whose lockfile is raven's too."""
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    runs: list[tuple[list[str], object, object]] = []
+    asked: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(
+        wb.subprocess, "run", lambda cmd, **kwargs: runs.append((list(cmd[1:]), kwargs.get("env"), kwargs.get("cwd")))
+    )
+
+    def npm_registry_env(env, cwd=None):
+        asked.append(cwd)
+        return {"npm_config_registry": mirrors.NPM_REGISTRY}
+
+    monkeypatch.setattr(mirrors, "npm_registry_env", npm_registry_env)
+
+    wb.ensure_bridge_dir()
+
+    (install, install_env, install_cwd), (build, build_env, _build_cwd) = runs
+    assert install == ["install"] and install_env["npm_config_registry"] == mirrors.NPM_REGISTRY
+    assert "PATH" in install_env or "Path" in install_env, "the rest of the environment comes along"
+    assert asked == [str(install_cwd)], "asked about the directory npm installs in"
+    assert build == ["run", "build"] and build_env is None
+
+
+def test_the_bridge_install_inherits_the_environment_when_npm_answers(tmp_path, monkeypatch):
+    from raven.utils import mirrors
+
+    source = _bridge_source_tree(tmp_path / "source")
+    built = _installed_build(tmp_path / "installed", None)
+    envs: list[object] = []
+    monkeypatch.setattr(wb, "_find_bridge_source", lambda: source)
+    monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: built)
+    monkeypatch.setattr(wb.shutil, "which", lambda _name: "/usr/bin/npm")
+    monkeypatch.setattr(wb.subprocess, "run", lambda cmd, **kwargs: envs.append(kwargs.get("env")))
+    monkeypatch.setattr(mirrors, "npm_registry_env", lambda env, cwd=None: {})
+
+    wb.ensure_bridge_dir()
+
+    assert envs == [None, None]
+
+
 def test_source_fingerprint_follows_a_changed_src_file(tmp_path):
     source = _bridge_source_tree(tmp_path / "source")
     before = wb.source_fingerprint(source)
@@ -441,8 +492,11 @@ def test_ensure_bridge_dir_keeps_a_build_it_cannot_check(tmp_path, monkeypatch):
 def test_ensure_bridge_dir_raises_without_the_packaged_source(tmp_path, monkeypatch):
     monkeypatch.setattr(wb, "_find_bridge_source", lambda: None)
     monkeypatch.setattr("raven.config.paths.get_bridge_install_dir", lambda: tmp_path / "absent")
-    with pytest.raises(RuntimeError, match="bridge source not found"):
+    with pytest.raises(RuntimeError) as exc:
         wb.ensure_bridge_dir()
+    assert "official installer" in str(exc.value)
+    assert "pip install" not in str(exc.value)
+    assert "uv tool install raven" not in str(exc.value)
 
 
 def test_ensure_bridge_dir_raises_without_npm(tmp_path, monkeypatch):
@@ -602,6 +656,9 @@ class _FakeBridge:
         await ws.wait_closed()
 
     async def emit(self, frame: dict) -> None:
+        # The adapter sets _bridge_up once its auth frame is sent, which can be
+        # before _serve has read it; a frame emitted then reaches no one.
+        await _wait_for(lambda: bool(self.clients))
         for ws in self.clients:
             await ws.send(json.dumps(frame))
 
@@ -907,6 +964,111 @@ async def test_login_fails_when_the_pairing_codes_expire(tmp_path, monkeypatch):
     assert proc.terminated is True
 
 
+@pytest.mark.production_timing  # the login deadline is the property under test
+async def test_login_times_out_when_the_qr_is_never_scanned(tmp_path, monkeypatch):
+    """An unscanned QR must not hold the terminal and the bridge forever: the
+    wizard's retry/skip menu only appears once login returns."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    async def _ready(host, port, timeout):  # noqa: ARG001
+        return True
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "wait_for_port", _ready)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", lambda: tmp_path / "bridge")
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr(wa_channel, "_LOGIN_TIMEOUT_SECONDS", 1.0)
+    monkeypatch.setattr(wa_channel, "_LOGIN_HINT_SECONDS", 0.3)
+    monkeypatch.setattr(wa_channel, "_LOGIN_POLL_SECONDS", 0.01)
+
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level="INFO")
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(lambda: ch._bridge_proc is not None)
+        await _wait_for(lambda: fake.clients)
+        assert await asyncio.wait_for(login, timeout=5) is False
+    finally:
+        logger.remove(sink)
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert any("did not finish" in message for message in messages)
+    assert any("Ctrl-C" in message for message in messages)
+    assert proc.terminated is True
+    assert ch.is_running is False
+    assert ch.connected is False
+
+
+@pytest.mark.production_timing
+async def test_login_counts_the_deadline_from_the_bridge_coming_up(tmp_path, monkeypatch):
+    """The build is a precondition, not the QR wait: a build slower than the
+    deadline must not end the login before a code can even appear."""
+    port = _free_port()
+    fake, proc = _FakeBridge(), _FakeProcess()
+    building, release = threading.Event(), threading.Event()
+
+    async def _spawn(bridge_dir, token, auth_dir, spawn_port):  # noqa: ARG001
+        await fake.start(spawn_port)
+        return proc
+
+    def _build():
+        building.set()
+        release.wait(30)
+        return tmp_path / "bridge"
+
+    async def _closed(host, port, timeout=1.0):  # noqa: ARG001
+        return False
+
+    async def _ready(host, port, timeout):  # noqa: ARG001
+        return True
+
+    ch = _make_channel(monkeypatch, tmp_path, bridge_url=f"ws://127.0.0.1:{port}")
+    monkeypatch.setattr(wb, "port_is_open", _closed)
+    monkeypatch.setattr(wb, "wait_for_port", _ready)
+    monkeypatch.setattr(wb, "ensure_bridge_dir", _build)
+    monkeypatch.setattr(wb, "spawn_bridge", _spawn)
+    monkeypatch.setattr(wa_channel, "_LOGIN_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(wa_channel, "_LOGIN_HINT_SECONDS", 0.1)
+    monkeypatch.setattr(wa_channel, "_LOGIN_POLL_SECONDS", 0.01)
+
+    login = asyncio.create_task(ch.login())
+    try:
+        await _wait_for(building.is_set)
+        await asyncio.sleep(0.4)  # twice the deadline, still building
+        assert login.done() is False, "the build is not the QR wait"
+        release.set()
+        await _wait_for(lambda: fake.clients)
+        assert await asyncio.wait_for(login, timeout=5) is False
+    finally:
+        release.set()
+        login.cancel()
+        with suppress(asyncio.CancelledError):
+            await login
+        await fake.stop()
+
+    assert proc.terminated is True
+    assert ch.is_running is False
+
+
+@pytest.mark.production_timing
+def test_login_deadline_keeps_the_approved_defaults():
+    """The timeout and hint cadence are the values approved for this behavior."""
+    assert wa_channel._LOGIN_TIMEOUT_SECONDS == 300.0
+    assert wa_channel._LOGIN_HINT_SECONDS == 30.0
+
+
 async def test_cancelling_the_channel_task_does_not_orphan_its_bridge(tmp_path, monkeypatch):
     """A cancel with no stop() first must still take down the bridge we spawned;
     an orphaned one keeps pairing and printing codes into the terminal."""
@@ -961,7 +1123,7 @@ async def test_cancelling_during_the_reconnect_wait_does_not_orphan_its_bridge(t
 
     task = asyncio.create_task(ch.start())
     try:
-        await _wait_for(lambda: ch._bridge_up)
+        await _wait_for(lambda: ch._bridge_up and bool(fake.clients))
         for ws in fake.clients:
             await ws.close()
         await asyncio.wait_for(reconnecting.wait(), timeout=5)
@@ -993,6 +1155,9 @@ async def test_a_restart_after_expiry_pairs_again(tmp_path, monkeypatch):
     await _wait_for(lambda: ch._bridge_up)
     await fake.emit({"type": "status", "status": "pairing_expired"})
     await asyncio.wait_for(first, timeout=5)
+    # start() swallows the cancel wait_for sends on timeout, so only the
+    # stopped flag shows the first start() ended on the expiry frame.
+    assert ch.is_running is False
     fake.clients.clear()
 
     second = asyncio.create_task(ch.start())

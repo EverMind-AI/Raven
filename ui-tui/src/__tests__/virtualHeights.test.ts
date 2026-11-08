@@ -10,7 +10,7 @@ import { $directChat, viewKeyOf } from '../app/directChatStore.js'
 import { $folds, callFolds, resetFolds, toggleFold } from '../app/foldStore.js'
 import { turnFoldScope } from '../components/episodeView.js'
 import { MessageLine } from '../components/messageLine.js'
-import { DAG_TRACE_BOX_ROWS } from '../config/limits.js'
+import { DAG_TRACE_BOX_ROWS, MESSAGE_FOLD_KEEP_OPEN_CHARS } from '../config/limits.js'
 import { layoutDagGraph } from '../lib/dagGraphLayout.js'
 import { dagNodeKey } from '../lib/dagOpenNodes.js'
 import { estimatedMsgHeight, messageHeightKey, wrappedLines } from '../lib/virtualHeights.js'
@@ -374,5 +374,47 @@ describe('estimatedMsgHeight covers an open tool card', () => {
     expect(estimatedMsgHeight(msg, 80, { ...BASE, cardFolds: callFolds($folds.get(), scope) })).toBe(
       estimatedMsgHeight(msg, 80, BASE)
     )
+  })
+})
+
+// A message of two or more rendered lines keeps its stretch open by default,
+// and the reader can still shut it. Both states have to measure the same rows
+// the renderer draws, or the virtualizer reserves the wrong height.
+describe('estimatedMsgHeight follows the message rule', () => {
+  const scope = turnFoldScope(viewKeyOf($directChat.get().active), 't1')
+  const msg = (narration: string): Msg => ({
+    episodes: [
+      { index: 0, narration, reasoning: '', tools: [] },
+      {
+        index: 1,
+        narration: '',
+        reasoning: '',
+        tools: [
+          { done: true, id: 'a', name: 'exec', ok: true, summary: 'ls' },
+          { done: true, id: 'b', name: 'exec', ok: true, summary: 'pwd' }
+        ]
+      }
+    ],
+    foldId: 't1',
+    kind: 'episodes',
+    role: 'assistant',
+    text: ''
+  })
+  const estimate = (m: Msg) =>
+    estimatedMsgHeight(m, 92, { ...BASE, cardFolds: callFolds($folds.get(), scope) })
+
+  beforeEach(resetFolds)
+
+  it('reserves the open rows, then the folded row once the reader shuts it', async () => {
+    const m = msg('x'.repeat(MESSAGE_FOLD_KEEP_OPEN_CHARS))
+
+    const open = estimate(m)
+    expect(open).toBeGreaterThanOrEqual(await renderedRows(m, 92))
+
+    toggleFold(scope, 'seg:a', true)
+
+    const closed = estimate(m)
+    expect(closed).toBeGreaterThanOrEqual(await renderedRows(m, 92))
+    expect(closed).toBeLessThan(open)
   })
 })

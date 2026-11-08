@@ -11,8 +11,10 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from raven.config.raven import NudgePolicyConfig
-from raven.core.cron_stack import _record_cron_dispatch_to_ledger
+from raven.core.cron_stack import _record_cron_dispatch_to_ledger, make_on_cron_job
 from raven.proactive_engine.schedulers.cron.types import (
     CronJob,
     CronPayload,
@@ -23,6 +25,7 @@ from raven.proactive_engine.sentinel.feedback.tracker import (
     NudgeFeedbackTracker,
 )
 from raven.proactive_engine.sentinel.trigger_policy.policy import NudgePolicy
+from raven.spine import TurnOutcome, Usage
 
 
 class _Clock:
@@ -178,3 +181,46 @@ def test_cron_fire_suppresses_next_sentinel_tick_same_topic(tmp_path):
     )
     assert result.verdict == "deny"
     assert "topic" in result.reason  # topic_quota or similar
+
+
+def _submit_resolving(outcome: TurnOutcome):
+    """A spine ``submit`` whose turn resolves with ``outcome``, as the lane hands it back."""
+
+    class _Handle:
+        async def result(self):
+            return outcome
+
+    return lambda req: _Handle()
+
+
+async def test_a_silent_run_records_no_ledger_dispatch(tmp_path):
+    """The ledger says "this surface just nudged the user". A run the model ended
+    on a silence marker nudged no one, so it must not make the Sentinel back off
+    a topic nobody was told about."""
+    runner = _make_runner(tmp_path)
+    handler = make_on_cron_job(
+        submit=_submit_resolving(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False, silent=True)),
+        sentinel_runner=runner,
+    )
+
+    await handler(_make_job(topic_tag="inbox_check", message="check the inbox"))
+
+    assert runner.policy._topic_fired_at == {}
+    assert runner.feedback.recent() == []
+    assert runner.feedback.counts(since_days=1)[FeedbackSignal.DISPATCHED.value] == 0
+
+
+@pytest.mark.parametrize("explicit_reply", [True, False], ids=["replied", "no_reply_and_no_marker"])
+async def test_a_run_that_was_not_silent_still_records_a_ledger_dispatch(tmp_path, explicit_reply):
+    """Only silence is exempt: a run that replied, and a completion that ended with
+    neither a reply nor a marker, are recorded as before."""
+    runner = _make_runner(tmp_path)
+    handler = make_on_cron_job(
+        submit=_submit_resolving(TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=explicit_reply)),
+        sentinel_runner=runner,
+    )
+
+    await handler(_make_job(topic_tag="inbox_check", message="check the inbox"))
+
+    assert len(runner.policy._topic_fired_at["inbox_check"]) == 1
+    assert runner.feedback.counts(since_days=1)[FeedbackSignal.DISPATCHED.value] == 1

@@ -1,6 +1,7 @@
+import { absorb } from './capabilities'
 import { RpcError } from './transport'
 
-import type { ParamsOf, ResultOf, RpcMethod } from './generated'
+import type { ParamsOf, ResultOf, RpcMethod, SystemHelloResult } from './generated'
 import type { PushMethod } from './notifications'
 import type {
   BinaryHandler,
@@ -101,10 +102,14 @@ export class FixtureTransport implements RpcTransport {
     if (responder === undefined) {
       throw new RpcError(-32601, `fixture: no response recorded for ${method}`)
     }
-    if (typeof responder === 'function') {
-      return await (responder as (p: ParamsOf<M>) => ResultOf<M> | Promise<ResultOf<M>>)(params)
-    }
-    return responder as ResultOf<M>
+    const result = typeof responder === 'function'
+      ? await (responder as (p: ParamsOf<M>) => ResultOf<M> | Promise<ResultOf<M>>)(params)
+      : (responder as ResultOf<M>)
+    /* The handshake's list is recorded here as the socket records it
+       (wsTransport.ts), so a page on this library knows what its gateway
+       serves the same way a page on a real one does. */
+    if (method === 'system.hello') absorb((result as SystemHelloResult).server_capabilities)
+    return result
   }
 
   async callUnchecked(method: string, params: Record<string, unknown>): Promise<unknown> {

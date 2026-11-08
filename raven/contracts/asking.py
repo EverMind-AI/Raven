@@ -75,6 +75,10 @@ class QuestionResponder(Protocol):
     transport that constructs it and is injected at assembly (mirror of
     ``ApprovalResponder`` in ``shell.py``). Structural: no machine imports
     this, nothing here imports a machine.
+
+    ``await_question`` returns the question's fail-safe default when nobody
+    answers. Cancelling the calling task itself raises ``CancelledError``
+    instead: a stopped turn has no loop left to hand a string to.
     """
 
     async def await_question(
@@ -103,7 +107,9 @@ class SupportsDirectAsk(Protocol):
     at ``ask_user`` for this shape, and a tool without it leaves the turn with no
     asker, so a sub-agent's question declines rather than reaching a method the
     tool does not have. ``None`` from ``ask_direct`` means the round-trip is
-    structurally unavailable; ``""`` is the user's non-answer.
+    structurally unavailable; ``""`` is the user's non-answer when the question
+    fails safe. Cancelling the calling task raises ``CancelledError`` rather
+    than answering it.
     """
 
     async def ask_direct(

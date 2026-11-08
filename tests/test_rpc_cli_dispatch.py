@@ -258,13 +258,13 @@ def test_channels_login_normal_channels_dispatch():
 
 
 def test_blacklist_full_coverage():
-    """9-entry blacklist (5 original + tui + onboard + upgrade + tracing compact).
+    """11-entry blacklist (5 original + tui + onboard + upgrade + 3 tracing maintenance).
 
     `tui` blocks recursive Ink+Node spawn; `onboard` blocks prompt_toolkit
     wizard stdin hijack; `upgrade` blocks replacing the active Raven process;
-    `tracing compact` blocks a full-store hash walk that can outrun the RPC
-    timeout with no cancellation of the backing thread. All are necessary
-    because reflection will otherwise let them through.
+    the three `tracing` maintenance actions block a full-store walk that can
+    outrun the RPC timeout with no cancellation of the backing thread. All are
+    necessary because reflection will otherwise let them through.
     """
     from raven.rpc.methods.cli_dispatch import _DISPATCH_BLACKLIST
 
@@ -278,9 +278,11 @@ def test_blacklist_full_coverage():
         ("onboard",),
         ("upgrade",),
         ("tracing", "compact"),
+        ("tracing", "compress"),
+        ("tracing", "pack-messages"),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 9 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 11 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
@@ -291,8 +293,10 @@ def test_blacklist_full_coverage():
     assert _is_dispatch_compatible(["upgrade", "--check"]) is False  # prefix
     assert _is_dispatch_compatible(["tracing", "compact"]) is False
     assert _is_dispatch_compatible(["tracing", "compact", "--dry-run"]) is False  # prefix
+    assert _is_dispatch_compatible(["tracing", "compress"]) is False
+    assert _is_dispatch_compatible(["tracing", "pack-messages"]) is False
     # Bare `tracing` and its other action stay dispatchable -- only the
-    # specific `compact` action is terminal-only.
+    # maintenance actions are terminal-only.
     assert _is_dispatch_compatible(["tracing"]) is True
     assert _is_dispatch_compatible(["tracing", "stop"]) is True
 
@@ -303,7 +307,7 @@ def test_tracing_compact_is_rejected_whatever_the_option_order():
     The blacklist compares fixed argv positions, so the prefix tuple alone
     only catches the action at argv[1]: `tracing --port 1 compact` would
     otherwise reach dispatch and run a real, writing compaction detached
-    past the timeout. `_is_tracing_compact` closes every order.
+    past the timeout. `_is_tracing_maintenance` closes every order.
     """
     for argv in (
         ["tracing", "--dry-run", "compact"],
@@ -323,6 +327,35 @@ def test_tracing_compact_is_rejected_whatever_the_option_order():
         ["tracing", "--foreground"],
     ):
         assert _is_dispatch_compatible(argv) is True, argv
+
+
+def test_tracing_compress_is_rejected_whatever_the_option_order():
+    """``compress`` walks the whole artifact store and writes in place, like
+    ``compact``; it must never run detached from a TUI slash command."""
+    for argv in (
+        ["tracing", "compress"],
+        ["tracing", "compress", "--dry-run"],
+        ["tracing", "--dry-run", "compress"],
+        ["tracing", "--port", "1", "compress"],
+        ["tracing", "-p", "1", "compress"],
+    ):
+        assert _is_dispatch_compatible(argv) is False, argv
+
+
+def test_tracing_pack_messages_is_rejected_whatever_the_option_order():
+    """``pack-messages`` walks the whole message store and deletes files.
+
+    Like the other maintenance actions it is positional, so Click accepts it
+    after any option and the fixed-position blacklist prefix would miss it.
+    """
+    for argv in (
+        ["tracing", "pack-messages"],
+        ["tracing", "pack-messages", "--dry-run"],
+        ["tracing", "--dry-run", "pack-messages"],
+        ["tracing", "--port", "1", "pack-messages"],
+        ["tracing", "-p", "1", "pack-messages"],
+    ):
+        assert _is_dispatch_compatible(argv) is False, argv
 
 
 # ---------------------------------------------------------------------------
@@ -707,3 +740,125 @@ async def test_an_unregistered_host_is_not_dispatch_compatible():
     finally:
         if saved[0] is not None:
             cli_socket.register_cli(saved[0], saved[1])
+
+
+# ---------------------------------------------------------------------------
+# Finding the console hosts
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unregistered_socket():
+    """The socket with nothing registered, then what the suite registered put back."""
+    from raven.rpc import cli_socket
+
+    saved = (cli_socket.cli_commands(), cli_socket.console_hosts())
+    cli_socket.reset()
+    yield cli_socket
+    cli_socket.reset()
+    if saved[0] is not None:
+        cli_socket.register_cli(saved[0], saved[1])
+
+
+def test_a_finder_handed_to_the_socket_runs_once_on_the_first_lookup(unregistered_socket) -> None:
+    import types
+
+    host = types.ModuleType("host")
+    finds: list[str] = []
+
+    def find() -> tuple[types.ModuleType, ...]:
+        finds.append("find")
+        return (host,)
+
+    unregistered_socket.register_cli(types.ModuleType("commands"), find)
+    assert finds == []
+
+    assert unregistered_socket.console_hosts() == (host,)
+    assert unregistered_socket.console_hosts() == (host,)
+    assert finds == ["find"]
+
+
+def test_a_reset_drops_a_finder_that_never_ran(unregistered_socket) -> None:
+    import types
+
+    finds: list[str] = []
+
+    def find() -> tuple[types.ModuleType, ...]:
+        finds.append("find")
+        return ()
+
+    unregistered_socket.register_cli(types.ModuleType("commands"), find)
+    unregistered_socket.reset()
+
+    assert unregistered_socket.console_hosts() == ()
+    assert finds == []
+
+
+@pytest.mark.parametrize(
+    ("askable", "at_registration"),
+    [(False, []), (True, ["find"])],
+    ids=["the terminal cannot be asked", "the terminal can be asked"],
+)
+def test_the_hosts_are_found_at_registration_only_where_the_terminal_can_be_asked(
+    unregistered_socket, monkeypatch, askable: bool, at_registration: list[str]
+) -> None:
+    """Finding the hosts imports every CLI module, and one of them asks the terminal
+    for its colours as it is imported. Where the terminal cannot be asked -- none, as
+    for the gateway `raven web` detaches, or Windows, SSH, screen or tmux, CI -- they
+    are found on the first console command; where it can, as from the TUI's host
+    before the Ink screen starts, at registration. The query itself is stubbed: a
+    case may be the first to import the module that makes it."""
+    from raven.cli import _console_feature, _theme
+    from raven.cli import commands as commands_module
+
+    find = _console_feature._console_host_modules
+    finds: list[str] = []
+
+    def counted():
+        finds.append("find")
+        return find()
+
+    monkeypatch.setattr(_console_feature, "_console_host_modules", counted)
+    monkeypatch.setattr(_theme, "_can_probe", lambda: askable)
+    monkeypatch.setattr(_theme, "_probe_osc11", lambda: None)
+
+    _console_feature.register_console_feature()
+    assert finds == at_registration
+
+    assert commands_module in unregistered_socket.console_hosts()
+    assert finds == ["find"]
+
+
+@pytest.mark.slow
+def test_where_the_terminal_cannot_be_asked_the_finder_imports_on_the_first_lookup(tmp_path) -> None:
+    """Checked in a fresh interpreter whose stdin and stdout are not a terminal. The
+    modules counted are the ones only the finder imports: the rest of the CLI came in
+    with the command table, which every host has imported by then."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import pkgutil, sys\n"
+        "import raven.cli, raven.cli.commands\n"
+        "from raven.cli import _console_feature, _theme\n"
+        "from raven.rpc import cli_socket\n"
+        "every = {f'raven.cli.{m.name}' for m in pkgutil.iter_modules(raven.cli.__path__) if not m.name.startswith('__')}\n"
+        "finders = every - set(sys.modules)\n"
+        "print('only the finder imports the colour query:', 'raven.cli._styles' in finders)\n"
+        "_console_feature.register_console_feature()\n"
+        "print('imported at registration:', sorted(finders & set(sys.modules)))\n"
+        "hosts = cli_socket.console_hosts()\n"
+        "print('left after the first lookup:', sorted(finders - set(sys.modules)), len(hosts) > 0)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe],
+        stdin=subprocess.DEVNULL,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert "only the finder imports the colour query: True" in done.stdout, done.stdout + done.stderr
+    assert "imported at registration: []" in done.stdout, done.stdout + done.stderr
+    assert "left after the first lookup: [] True" in done.stdout, done.stdout + done.stderr

@@ -1,4 +1,5 @@
 import { t } from '../../i18n/t'
+import { isImportedKey } from '../../lib/imported'
 import { setCurrent } from '../../lib/session'
 import { navState } from '../../state/page'
 import { NAV_BUTTONS } from '../../state/pages'
@@ -323,7 +324,8 @@ export function rename(): void {
     return
   }
   const s = snap.rows.find(x => x.id === snap.cur)
-  if (!s) return
+  /* An imported conversation is renamed on its own rail row, never here. */
+  if (!s || s.from === 'imported' || isImportedKey(snap.cur)) return
   const inp = document.createElement('input')
   inp.className = 'titin'
   inp.value = s.title

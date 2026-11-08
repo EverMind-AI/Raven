@@ -35,13 +35,14 @@ CustomEvent the web UI's DAG graph already renders.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -51,46 +52,64 @@ from raven.agent import workdir
 from raven.agent.subagent.backends.base import IN_SUBAGENT_RUN, optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     ABANDON,
+    REASSIGN,
     AdjudicationDesk,
     Final,
     Outbox,
+    ReassignPlan,
     ReplanPlan,
     Report,
     Stopped,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
+from raven.agent.subagent.dag_handover import HandoverError, load_handover_turns, render_handover
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
+from raven.agent.subagent.dag_reader import DagReadError, run_dir_of
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
-from raven.agent.subagent.dag_reader import run_dir_of
-from raven.agent.subagent.dag_runner import DagRunResult, ExceptionAnnouncer, ProgressPublisher, run_dag
+from raven.agent.subagent.dag_runner import (
+    DagRunResult,
+    ExceptionAnnouncer,
+    ProgressPublisher,
+    ReassignmentState,
+    _destination_occupied,
+    _source_key,
+    run_dag,
+)
 from raven.agent.subagent.dag_skills import fold_skills
 from raven.agent.subagent.dag_store import (
+    NOT_EXECUTED,
     RUNNING,
     DagRunStore,
     SessionNodes,
+    format_tally,
     index_guard,
     make_run_id,
     read_registry,
     read_session_nodes,
 )
-from raven.agent.subagent.dag_verdict import Verdict, describe_failure, judge, tail
+from raven.agent.subagent.dag_verdict import RouteUndeterminedError, Verdict, describe_failure, judge, tail
 from raven.agent.subagent.delegate import current_delegate, dispatch_charter
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root
+from raven.agent.subagent.history import dag_root, nodes_root, nodes_root_in, session_history_root
 from raven.agent.subagent.instances import mint_handle
 from raven.agent.subagent.prompt_backend import LocalFileBackend
+from raven.agent.subagent.prompt_capabilities import check_path_placeholders
 from raven.agent.subagent.prompt_errors import DagValidationError, RoundBudgetSpentError, RoundNotApprovedError
+from raven.agent.subagent.prompt_placeholders import parse_placeholders
 from raven.agent.subagent_memory import MemoryScope
+from raven.config.agent_names import canonical_agent_name
 from raven.config.raven import SubagentDagConfig
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import Tool, ToolResult
 from raven.security.trust import wrap_untrusted
 from raven.stint.record import STINTS_DIRNAME, StintRef
+from raven.tracing import trace
 
 if TYPE_CHECKING:
     from raven.agent.subagent.delegate import DelegateTable, Worker
     from raven.agent.subagent.registry import AgentRegistry
+    from raven.playbook.agent_spec import AgentPlaybookSpec
 
 # Sink: (conversation_id, event_name, payload) -> awaitable. Late-bound by the
 # host (the page mount wires it to the page's emitter).
@@ -147,14 +166,39 @@ def _with_notices(result: "str | ToolResult", notices: list[str]) -> "str | Tool
     On the model-facing text only. A notice says a field the graph carried will
     not take effect, which is something the caller has to know when it reads the
     output; the display line is a one-liner for a transcript row and has no room
-    for it.
+    for it. Everything else the result carries is kept, its provenance claim
+    included: the notice is this system's line, but the node output under it is
+    still the agent's.
     """
     if not notices:
         return result
     head = "Note: " + "; ".join(notices) + "."
     if isinstance(result, ToolResult):
-        return ToolResult(model_text=f"{head}\n\n{result.model_text}", display_text=result.display_text)
+        return replace(result, model_text=f"{head}\n\n{result.model_text}")
     return f"{head}\n\n{result}"
+
+
+def _with_capture_notice(result: str | ToolResult) -> str | ToolResult:
+    notice = (
+        "Playbook capture is automatic for this turn. The platform will compile and save this "
+        "graph only after a clean success. Do not write, reconstruct, or separately save "
+        "Playbook, Harness, Workflow, or run-record files."
+    )
+    if isinstance(result, ToolResult):
+        return replace(result, model_text=f"{result.model_text}\n\n{notice}")
+    return f"{result}\n\n{notice}"
+
+
+def _successful_final(event: Any) -> bool:
+    """Whether a foreground graph reached a clean terminal result."""
+    if not isinstance(event, Final) or event.stopped or not isinstance(event.result, DagRunResult):
+        return False
+    summary = event.result.summary or {}
+    return (
+        bool(summary.get("total"))
+        and summary.get("completed", 0) + summary.get(NOT_EXECUTED, 0) == summary.get("total")
+        and not any(summary.get(key, 0) for key in ("failed", "cancelled", "skipped"))
+    )
 
 
 @dataclass(frozen=True)
@@ -170,10 +214,20 @@ class _DagOrigin:
     channel: str
     chat_id: str
     conversation: str
+    # The span that dispatched the run, set where the graph is dispatched; part
+    # of one run's origin, never of the address a stint writes down.
+    dispatch_link: tuple[str, str] | None = None
+    # The front end the turn declared (``Source.surface``); the announce is read there.
+    surface: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        """The shape the announcers take: channel, chat, and session key."""
-        return {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        """The shape the announcers take: channel, chat, session key, the surface and
+        the dispatch link when there are."""
+        out = {"channel": self.channel, "chat_id": self.chat_id, "session_key": self.conversation}
+        if self.surface:
+            out["surface"] = self.surface
+        out.update(trace.dispatch_attrs(self.dispatch_link))
+        return out
 
     @classmethod
     def from_dict(cls, data: "Mapping[str, str]") -> "_DagOrigin":
@@ -188,6 +242,7 @@ class _DagOrigin:
             channel=str(data.get("channel") or ""),
             chat_id=str(data.get("chat_id") or ""),
             conversation=str(data.get("session_key") or ""),
+            surface=str(data["surface"]) if data.get("surface") else None,
         )
 
 
@@ -349,12 +404,122 @@ class Preflight:
     allowed to amend it, not because it currently does -- the one amendment it had,
     stamping each node with the machine its work was bound for, went away with the
     host-side machine checks.
+
+    ``workers`` and ``harness`` are the role data frozen at admission, kept for a
+    reassignment decided in a later turn: the worker behind a node's label, and the
+    generated Harness its table was rendered from. The mapping is copied deeply
+    enough to survive that table changing, because a frozen dataclass does not
+    freeze a mapping nested inside it.
     """
 
     spec: SubAgentDagSpec
     backends: dict[str, Any]
     notices: list[str]
     capabilities: dict[str, AgentCapabilities]
+    workers: "dict[str, Worker]" = field(default_factory=dict)
+    harness: "AgentPlaybookSpec | None" = None
+
+
+@dataclass(frozen=True)
+class RunSubmission:
+    """One run as it was admitted, kept for the moves a later turn may decide.
+
+    ``submitted`` is the graph before any of the runtime's own rewriting: worker
+    labels are still labels, skills are still the authored declarations, and no
+    handle has been minted. A move rebuilds its node from here, so a target never
+    inherits a source agent's already-folded prompt.
+
+    ``workers`` maps node ids to the worker their label resolved to at admission,
+    and ``named_instance_groups`` maps a node id to the agent and explicit handle
+    its group was submitted under -- the identity a move keeps across however many
+    hops the group makes.
+    """
+
+    submitted: SubAgentDagSpec
+    harness: "AgentPlaybookSpec | None"
+    workers: "Mapping[str, Worker]"
+    named_instance_groups: "Mapping[str, tuple[str, str]]"
+
+
+@dataclass(frozen=True)
+class _Reservation:
+    """One accepted move's claim on its source group, kept until the move installs."""
+
+    node_id: str
+    target_agent: str
+    target_instance: str | None
+    attempts: int
+
+
+@dataclass
+class _RunAdmission:
+    """One live run's frozen admission data, and the moves decided against it.
+
+    Owned by the tool instance that dispatched the run, beside its desk and
+    outbox, and dropped with them. ``build`` is the run-bound backend builder the
+    runner calls when a move installs; it is also what ``prepare_reassign`` uses
+    to validate every possible mover before the user is asked.
+    """
+
+    tool: "SubAgentDagTool"
+    run_id: str
+    conversation: str
+    dirs: "_RunDirs"
+    submission: RunSubmission
+    state: ReassignmentState
+    capabilities: dict[str, AgentCapabilities]
+    mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None
+    mcp_scope: str | None = None
+    mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None
+    reservations: dict[tuple[str, str], _Reservation] = field(default_factory=dict)
+
+    def mcp(self) -> "contextlib.AbstractContextManager[None]":
+        """Re-enter the run's own MCP definitions for a build done outside its task.
+
+        The definitions are scoped to the dispatching call, and the control tool
+        that prepares a reassignment runs in a different task: without this, a
+        playbook's own servers would resolve against the host's table and come
+        back "not connected" in every downgrade notice the model is shown. The
+        install inside the run's task already carries the context; this is for
+        the dry run at the door.
+        """
+        if self.mcp_servers is None and self.mcp_scope is None and self.mcp_credential_gaps is None:
+            return contextlib.nullcontext()
+        return run_mcp_scope(self.mcp_servers, scope=self.mcp_scope, credential_gaps=self.mcp_credential_gaps)
+
+    def authored(self) -> dict[str, DagNodeSpec]:
+        """The graph as submitted, by node id."""
+        return {node.id: node for node in self.submission.submitted.nodes}
+
+    async def build(self, node: DagNodeSpec) -> tuple[DagNodeSpec, Any]:
+        """Prepare one moved node for the agent and handle ``node`` names.
+
+        The authored prompt is the starting point, never the source agent's
+        folded one: target-dependent skills folding runs once, here, for the
+        agent that will actually open the session.
+        """
+        tool = self.tool
+        authored = self.authored().get(node.id)
+        if authored is None:
+            raise DagValidationError(f"node '{node.id}' is not part of this run's submitted graph")
+        skills = tool._group_skills(self.submission, node.id)
+        prepared = authored.model_copy(
+            update={
+                "subagent": node.subagent,
+                "instance": node.instance,
+                "skills": list(skills) if skills is not None else authored.skills,
+            }
+        )
+        # Every node the installer builds passes the same file-reference gate the
+        # proposal ran: it recomputes its movers from live status, which can name
+        # a node the proposal never saw, and a target that cannot read that
+        # node's paths must refuse the move rather than dispatch it.
+        tool._check_reassign_paths(prepared, tool._effective_capabilities(self))
+        with self.mcp():
+            execution, backend, notices = await tool._execution_for(self, prepared)
+        for notice in notices:
+            logger.warning("DAG reassign notice: {}", notice)
+        return execution, backend
 
 
 # How long a terminal event may take when a run ends without a manifest. It is
@@ -375,6 +540,11 @@ GUIDE_SKILL_ID = "local/subagent-dag-orchestration"
 #: roles would hold that many, for hours, and the conversation that started the
 #: stint would queue behind it.
 STINT_MAX_PARALLEL = 2
+
+#: Statuses a move may still apply to. ``pending`` and ``exception`` are what
+#: the scheduler relocates when a staged move installs; ``running`` may land in
+#: either once its attempt settles. Every terminal status stays where it ran.
+RELOCATABLE_STATUSES = ("pending", "exception", "running")
 
 
 class _StintShare:
@@ -419,11 +589,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "id": {
             "type": "string",
             "description": (
-                "Node id (^[A-Za-z0-9_-]+$), unique across this whole conversation -- not just this "
-                "graph, and not just this tool: a graph node and a spawn's node_id share one namespace. "
-                "It is how a later task of either kind names this node's output. Reusing an id is "
-                "rejected -- pick a fresh one (plan_v2, research_pricing) rather than repeating a generic "
-                "one, and to re-do work under the same name give the node a new id."
+                "Node id (^[A-Za-z0-9_-]+$), unique across this conversation -- not just this tool: a graph node and a spawn's node_id share one namespace, and a later task of either kind names this node's output."
             ),
         },
         "subagent": {
@@ -433,48 +599,23 @@ _NODE_SCHEMA: dict[str, Any] = {
         "node_summary": {
             "type": "string",
             "minLength": 1,
-            "description": (
-                "A short title for this step, written before its prompt -- the length of a "
-                "chat title, under ten words, not a sentence and not a summary of the "
-                "prompt. It is this node's row in the run, read by someone watching the "
-                "graph, so name the step and leave the detail to the prompt."
-            ),
+            "description": "A short title, under ten words.",
         },
         "prompt_template": {
             "type": "string",
             "description": (
-                "Node prompt. Placeholders: {{ <node>.output }} / {{ <node>.output_path }} inject a "
-                "node's output text/path; {{ inputs.<k> }} / {{ inputs.<k>.path }} inject an input; "
-                "{{ ref:<path> }} / {{ ref_path:<path> }} read a file. <node> is either a node of this "
-                "graph listed in this node's depends_on, or any task this conversation already "
-                "completed and left an output. One that failed, was skipped, was cancelled or is "
-                "still running keeps its id but is refused, saying which. To read a node's files "
-                "directly, "
-                "{{ ref:@nodes/<node>.out.md }} or {{ ref:@nodes/<node>.prompt.md }}. The _path forms need a "
-                "sub-agent the roster tags [local-files]; for a [no-local-files] one use the contents "
-                "forms instead, and every _path form must name a file that already exists. "
-                "Every key in inputs must be referenced by a placeholder. A long prompt belongs in a "
-                "file referenced with {{ ref:<path> }}, so the graph JSON stays small enough to write "
-                "in one reply."
+                "Node prompt. {{ <node>.output }} / .output_path a node's output, {{ inputs.<k> }} / .path an input, {{ ref:<path> }} a file; the _path forms need a [local-files] agent naming an existing file, not a [no-local-files] one. A node is readable if it is this graph's and listed in its depends_on, or a task this conversation completed and left an output; a failed, skipped, cancelled, not-executed or still-running one is refused, saying which. A node of this graph that was not executed (see when) leaves no output file, and its placeholders render \"<This task is not executed and the output is missing, please go on without this output.>\" instead: write one titled block per output that may be missing. A node may not run with a when of its own (<node>.done included), or when its in-graph dependencies all may not run; reach it with {{ <node>.output }} rather than a ref:@nodes/ path, which is refused. Every key in inputs must be referenced by a placeholder. A long prompt belongs in a file."
             ),
         },
         "depends_on": {
             "type": "array",
             "items": {"type": "string"},
-            "description": (
-                "Ids this node depends on. A node of this graph runs first; a task this conversation "
-                "already completed with an output is already done, so listing it only records the "
-                "dependency. Either way you may read it with {{ <node>.output }}."
-            ),
+            "description": "Ids this node depends on; an earlier task completed with an output is already done.",
         },
         "inputs": {
             "type": "object",
             "description": (
-                'Per-key literal string, {"file": <path>}, or {"node": <id>} to take another node\'s '
-                "output -- a dependency of this node, or any task this conversation already completed "
-                "with an output. Exactly one of those three and nothing else in the object: no second "
-                "key beside file or node, no empty path or id, and a number, boolean or list is "
-                "refused. {{ inputs.<k> }} injects the text, {{ inputs.<k>.path }} the file path."
+                'Per-key literal string, {"file": <path>}, or {"node": <id>} for a node completed with an output. Exactly one of those three and nothing else in the object: no second key beside file or node, no empty path or id, and a number, boolean or list is refused. {{ inputs.<k> }} injects the text, .path the path.'
             ),
         },
         "instance": {
@@ -482,20 +623,53 @@ _NODE_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "pattern": r"^\S(?:.*\S)?$",
             "description": (
-                "Optional stable handle; nodes sharing it run sequentially and reuse one sub-agent "
-                "session, including across separate runs in this conversation. Only give the same "
-                "handle to several nodes of a sub-agent the roster tags [stateful] -- elsewhere it "
-                "carries no context and the graph is rejected. Omit it and a [stateful] "
-                "sub-agent's node is given one automatically, reported in the run summary when "
-                "the node finishes, so that node can be continued later; a node on any other "
-                "sub-agent gets none and cannot be continued. To order nodes without sharing a "
-                "session, use depends_on."
+                "Optional handle: nodes sharing it run in sequence. Only on a [stateful] sub-agent; omitted, its nodes get one automatically, reported and continuable; others get none."
+            ),
+        },
+        "routes": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "description": (
+                'Makes this node a decision: route name -> the condition under which its answer selects that route. Raven\'s judge picks from its answer; nothing the node writes selects a route by itself. Names [A-Za-z0-9_-], not "done", and no two differing only in case; two or more for "one", one or more for "many".'
+            ),
+        },
+        "select": {
+            "type": "string",
+            "enum": ["one", "many"],
+            "description": (
+                'How many routes its answer may select: "one" (the default) -- exactly one, so give it a catch-all route for everything else; "many" -- any number, including none. Only on a node that declares routes.'
+            ),
+        },
+        "when": {
+            "type": "string",
+            "description": (
+                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here. A branch node needs no guard beyond naming any decision node it depends on; a node of the branch that also depends on something outside it, the decision node included, needs the branch's route, not <node>.done. A merge node that should run on every route keeps <node>.done."
             ),
         },
     },
     "required": ["id", "subagent", "node_summary", "prompt_template"],
     "additionalProperties": False,
 }
+
+
+_NODE_ALIASES = {
+    field.alias: name
+    for name, field in DagNodeSpec.model_fields.items()
+    if isinstance(field.alias, str) and field.alias != name
+}
+_GRAPH_ALIASES = {
+    field.alias: name
+    for name, field in SubAgentDagSpec.model_fields.items()
+    if isinstance(field.alias, str) and field.alias != name
+}
+
+
+def _canonical_keys(value: dict[str, Any], aliases: dict[str, str]) -> dict[str, Any]:
+    result = dict(value)
+    for alias, name in aliases.items():
+        if alias in result and name not in result:
+            result[name] = result.pop(alias)
+    return result
 
 
 class SubAgentDagTool(Tool):
@@ -509,6 +683,10 @@ class SubAgentDagTool(Tool):
     # for every call, background or not, the same way ``spawn`` declares it
     # while also returning before its sub-agent does -- see the note there.
     blocking_interaction = True
+    # A permission, not a claim: what this tool returns is mostly its own
+    # rendering of the run, and only the branches that quote a node's own output
+    # (its terminal results, a report) return a result claiming it.
+    agent_output = True
 
     def __init__(
         self,
@@ -529,6 +707,7 @@ class SubAgentDagTool(Tool):
         memory_for: "Callable[[str], MemoryScope | None] | None" = None,
         mode_for: "Callable[[str, str | None, str], str | None] | None" = None,
         model_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
+        effort_for: "Callable[[str | None, str | None, str | None], str | None] | None" = None,
         charge: QuotaCharger | None = None,
         ask: "Ask | None" = None,
         control_reachable: "Callable[[], bool] | None" = None,
@@ -536,6 +715,8 @@ class SubAgentDagTool(Tool):
         provider_for: "Callable[[], Any] | None" = None,
         binding_for: "Callable[[], tuple[Any, str | None]] | None" = None,
         worker_table_for: "Callable[[], DelegateTable | None] | None" = None,
+        spawn_offered: "Callable[[], bool] | None" = None,
+        sandbox_for: "Callable[[Path], Any] | None" = None,
         verdict_config: "SubagentDagConfig | None" = None,
         stint_driver: StintDriver | None = None,
     ) -> None:
@@ -580,6 +761,11 @@ class SubAgentDagTool(Tool):
         # same reason as `state_for`: this tool is built from the same config as
         # the manager but does not own one.
         self._model_for = model_for
+        # The manager's reasoning-effort resolution for an acp row, so a node
+        # runs on the same effort a spawn to it would. Injected for the same
+        # reason as `model_for`: this tool is built from the same config as the
+        # manager but does not own one.
+        self._effort_for = effort_for
         self._adopt = adopt
         self._charge = charge
         # A direct publisher (tests) and/or a late-bound conversation-keyed sink.
@@ -606,10 +792,27 @@ class SubAgentDagTool(Tool):
         # DAG tools may inject an empty source when their graph came from a
         # stored Playbook and must retain the agents and prompts it authored.
         self._worker_table_for = worker_table_for or current_delegate
+        # Whether this turn's tool array carries `spawn`, whose description ends
+        # with the roster: the description then points there instead of rendering
+        # a second copy. Injected by the loop (the registry's offer predicate);
+        # unwired hosts render the roster here, the old contract a test or an
+        # offline entry point expects.
+        self._spawn_offered = spawn_offered
+        # The spawn paths' own sandbox, handed over as a builder so a graph can
+        # give each node its VM the way a spawn gives each sub-agent one; None
+        # keeps node exec on the host exactly as before this seam existed.
+        self._sandbox_for = sandbox_for
         self._verdict_config = verdict_config if verdict_config is not None else SubagentDagConfig()
         self._cancels: dict[str, asyncio.Event] = {}
         self._desks: dict[str, AdjudicationDesk] = {}
         self._outboxes: dict[str, Outbox] = {}
+        # Per-run admission data a later turn's reassignment reads: the graph as
+        # submitted, the frozen roles, the live assignment record and its builder.
+        # Removed on every run exit beside the desk and the cancel event.
+        self._run_contexts: dict[str, _RunAdmission] = {}
+        # A replanned successor's admission data, keyed by the id its plan names,
+        # between `prepare_replan` and the submission that consumes it.
+        self._pending_submissions: dict[str, tuple[RunSubmission, dict[str, AgentCapabilities]]] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
         # garbage-collected mid-graph.
@@ -662,10 +865,17 @@ class SubAgentDagTool(Tool):
             for row in self._registry.enabled()
         }
 
-    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
+    def set_context(
+        self, channel: str, chat_id: str, session_key: str | None = None, surface: str | None = None
+    ) -> None:
         """Turn-local: record where this turn's progress and announces are addressed."""
         self._origin.set(
-            _DagOrigin(channel=channel, chat_id=chat_id, conversation=session_key or f"{channel}:{chat_id}")
+            _DagOrigin(
+                channel=channel,
+                chat_id=chat_id,
+                conversation=session_key or f"{channel}:{chat_id}",
+                surface=surface,
+            )
         )
 
     def _turn_conversation(self) -> str | None:
@@ -720,6 +930,16 @@ class SubAgentDagTool(Tool):
             roots.append(history)
         return tuple(roots)
 
+    def _reference_nodes_root(self) -> str | None:
+        """Where ``@nodes/`` resolves, inside the history root ``_reference_roots`` names.
+
+        Validation reads it so a reference reaching a node's artifacts by an
+        absolute path is checked as its ``@nodes/`` spelling is. ``None`` with no
+        history root, where there are no artifacts to reach.
+        """
+        history = self._history_root()
+        return str(nodes_root_in(history)) if history is not None else None
+
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this run's progress belongs to.
 
@@ -739,6 +959,11 @@ class SubAgentDagTool(Tool):
         if event is None:
             return False
         event.set()
+        # A run being stopped will apply no staged move; the group it reserved is
+        # free again, and the run's own exit drops the whole record anyway.
+        admission = self._run_contexts.get(run_id)
+        if admission is not None:
+            admission.reservations.clear()
         return True
 
     def resolve_node(
@@ -827,6 +1052,7 @@ class SubAgentDagTool(Tool):
                 # the fence as node evidence and once trusted.
                 model_text=wrap_untrusted(event.text, source="subagent") + "\n\n" + _FOREGROUND_REPORT_TAIL,
                 display_text=f"DAG {run_id}: node {event.node_id} needs a decision",
+                agent_output=True,
             )
         if isinstance(event, Final):
             return event.result
@@ -856,17 +1082,27 @@ class SubAgentDagTool(Tool):
         return ("\n\n" + "\n".join(rendered)) if rendered else ""
 
     def _report_announcer(self, run_id: str, origin: _DagOrigin):
-        async def _announce(node_id: str, text: str, *, awaiting_decision: bool, informational: bool = False) -> None:
+        async def _announce(
+            node_id: str,
+            text: str,
+            *,
+            awaiting_decision: bool,
+            informational: bool = False,
+            output: str | None = None,
+            dispatch_link: tuple[str, str] | None = None,
+        ) -> None:
             if self._announce_exception is None:
                 logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
                 return
+            address = origin if dispatch_link is None else replace(origin, dispatch_link=dispatch_link)
             await self._announce_exception(
                 run_id,
                 node_id,
                 text,
-                origin.as_dict(),
+                address.as_dict(),
                 awaiting_decision=awaiting_decision,
                 informational=informational,
+                output=output,
             )
 
         return _announce
@@ -899,6 +1135,7 @@ class SubAgentDagTool(Tool):
             *,
             awaiting_decision: bool,
             informational: bool = False,
+            output: str | None = None,
         ) -> None:
             if not awaiting_decision or informational:
                 if announce is not None:
@@ -909,6 +1146,7 @@ class SubAgentDagTool(Tool):
                         origin,
                         awaiting_decision=awaiting_decision,
                         informational=informational,
+                        output=output,
                     )
                 return
             try:
@@ -943,8 +1181,14 @@ class SubAgentDagTool(Tool):
         if self._announce is None:
             logger.debug("run {} had progress to report and no announcer wired", run_id)
             return
+        addressed = dict(origin or {})
+        if trace.dispatch_link_of(addressed) is None:
+            # A stint's address comes off disk with no link, and this is said from
+            # the finished round's own task, which still holds the context that
+            # round was dispatched in.
+            addressed.update(trace.dispatch_attrs(trace.dispatch_link()))
         try:
-            await self._announce(run_id, text, dict(origin or {}))
+            await self._announce(run_id, text, addressed)
         except Exception as exc:  # noqa: BLE001 - progress that cannot be said must not end the round
             logger.warning("run {} could not report progress: {}", run_id, exc)
 
@@ -1169,15 +1413,21 @@ class SubAgentDagTool(Tool):
             parts.append(f"{cancelled} cancelled")
         if skipped := summary.get("skipped", 0):
             parts.append(f"{skipped} skipped")
+        if not_executed := summary.get(NOT_EXECUTED, 0):
+            parts.append(f"{not_executed} not executed")
         return f"DAG {result.run_id}: {', '.join(parts)} -- outputs in {result.dir}"
 
     @property
     def description(self) -> str:
-        # Same roster rendering as ``spawn``: picking the agent for a node needs
-        # the same information as picking one for a spawn, and more of it — a
-        # node's `instance` field only makes sense once you know which agents
-        # are stateful, and a downstream node's prompt_template has to be
-        # written against the shape of what the upstream one returns.
+        # Same roster as ``spawn``: picking the agent for a node needs the same
+        # information as picking one for a spawn, and more of it — a node's
+        # `instance` field only makes sense once you know which agents are
+        # stateful, and a downstream node's prompt_template has to be written
+        # against the shape of what the upstream one returns. That is no reason
+        # for two copies, since the model reads the whole array: rendered once,
+        # at the end of spawn's description when spawn is listed, here otherwise.
+        # A turn's worker labels are not on spawn's roster, so they are always
+        # listed here.
         table = self._worker_table_for()
         if table:
             lines = []
@@ -1190,7 +1440,11 @@ class SubAgentDagTool(Tool):
                 lines.append(f"- {label}: {brief}{tail}" if brief else f"- {label}{tail}")
             names = "\n".join(lines)
         else:
-            names = self._registry.roster_text() or "(none configured)"
+            roster = self._registry.roster_text()
+            if roster and self._spawn_offered is not None and self._spawn_offered():
+                names = "the roster at the end of the `spawn` tool's description"
+            else:
+                names = roster or "(none configured)"
         guide = ""
         if self._guide_skill_id:
             guide = (
@@ -1199,6 +1453,16 @@ class SubAgentDagTool(Tool):
                 "It defines how to wire nodes, the placeholder syntax, the concurrency limit, and "
                 "when a single `spawn` is the better choice. Do not design the graph from this "
                 "description and the node schema alone. "
+            )
+        capture_note = ""
+        from raven.playbook.run_record import workflow_capture_requested
+
+        if workflow_capture_requested():
+            capture_note = (
+                " Playbook capture is active for this turn: put the complete reusable process in "
+                "one graph. After a clean success the platform automatically compiles and saves "
+                "the Harness, Workflow, and run record. Do not inspect the run to reconstruct it, "
+                "and do not write or separately save Playbook files."
             )
         # When to reach for a DAG at all is the always-injected guide's job, not
         # this description's: the model reads the digest before it picks a tool,
@@ -1210,7 +1474,7 @@ class SubAgentDagTool(Tool):
             "dependents through files (large outputs never enter your context). One call carries the "
             "whole graph -- do not issue a separate call per node. The graph runs in the background and "
             "its result is announced to you when it finishes, so do not poll it and do not re-submit it. "
-            f"{guide}"
+            f"{guide}{capture_note}"
             f"Available sub-agents for the `subagent` field: {names}."
         )
 
@@ -1243,16 +1507,13 @@ class SubAgentDagTool(Tool):
                         "summary. Name the goal, not the nodes."
                     ),
                 },
-                "nodes": {"type": "array", "items": self._node_schema(), "description": "The DAG nodes (a flat list)."},
+                "nodes": {"type": "array", "items": self._node_schema(), "description": "The nodes."},
                 "background": {
                     "type": "boolean",
                     "description": (
-                        "Default true: return as soon as the run starts and get the result as an "
-                        "announcement when the graph finishes, leaving you free to work meanwhile. "
-                        "Set false only when you cannot continue without the outputs: the call then "
-                        "blocks until the graph finishes or a node reports it could not accomplish "
-                        "its task, whichever comes first, and answering that report with "
-                        "resolve_dag_node resumes the wait."
+                        "Default true: return at once and get the result announced when the graph "
+                        "finishes. False blocks until it finishes or a node reports it could not "
+                        "accomplish its task; answer that report with resolve_dag_node."
                     ),
                 },
                 "confirm": {
@@ -1266,6 +1527,29 @@ class SubAgentDagTool(Tool):
             },
             "required": ["task_summary", "nodes"],
         }
+
+    def cast_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Accept the graph parser's declared aliases without guessing misspelled keys."""
+        from raven.agent.tools.params import cast_params
+
+        params = _canonical_keys(cast_params(self.parameters, params), _GRAPH_ALIASES)
+        if isinstance(nodes := params.get("nodes"), list):
+            params["nodes"] = [
+                _canonical_keys(node, _NODE_ALIASES) if isinstance(node, dict) else node for node in nodes
+            ]
+        return params
+
+    def validate_params(self, params: dict[str, Any]) -> list[str]:
+        errors = []
+        objects = [("", params, _GRAPH_ALIASES)]
+        if isinstance(nodes := params.get("nodes"), list):
+            objects.extend((f"nodes[{index}].", node, _NODE_ALIASES) for index, node in enumerate(nodes))
+        for path, obj, aliases in objects:
+            if isinstance(obj, dict):
+                for alias, name in aliases.items():
+                    if alias in obj and name in obj:
+                        errors.append(f"{path}{alias} conflicts with {path}{name}; send only {name}")
+        return errors
 
     def to_schema(self) -> dict[str, Any]:
         """Render the turn's worker roster instead of the admission snapshot.
@@ -1441,13 +1725,29 @@ class SubAgentDagTool(Tool):
                 "Error: run_subagent_dag is not available inside a sub-agent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
+        from raven.playbook.run_record import current_capture
+
+        playbook_capture = current_capture()
+        capture_workflow = bool(playbook_capture is not None and playbook_capture.capture_workflow)
+        if capture_workflow:
+            background = False
         # Wraps the whole call, not just the grant loop: a backgrounded run keeps
         # the context this task held when ``create_task`` copied it, so an
         # in-process node re-resolving its grant mid-run still finds the run's own
         # definitions. Reset on the way out, so the turn that dispatched a
         # background run does not carry them into whatever it does next.
         with run_mcp_scope(mcp_servers, scope=mcp_scope, credential_gaps=mcp_credential_gaps):
-            return await self._execute(nodes, background, confirm=confirm, task_summary=task_summary)
+            return await self._execute(
+                nodes,
+                background,
+                confirm=confirm,
+                task_summary=task_summary,
+                capture_workflow=capture_workflow,
+                playbook_capture=playbook_capture,
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
+            )
 
     async def run_round(
         self,
@@ -1502,6 +1802,9 @@ class SubAgentDagTool(Tool):
                 stint=stint,
                 origin=_DagOrigin.from_dict(origin) if origin is not None else None,
                 confirm_question=confirm_question,
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
             )
 
     async def _execute(
@@ -1510,9 +1813,14 @@ class SubAgentDagTool(Tool):
         background: bool,
         confirm: bool = False,
         task_summary: str = "",
+        capture_workflow: bool = False,
+        playbook_capture: Any = None,
         stint: StintRef | None = None,
         origin: _DagOrigin | None = None,
         confirm_question: "Callable[[], str] | None" = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
     ) -> str | ToolResult:
         # Refused whole rather than per node, and ahead of validation, for the
         # same reason validation runs early: a refused graph must cost zero
@@ -1528,15 +1836,17 @@ class SubAgentDagTool(Tool):
         # enough for the model to just fix and re-submit. Backgrounding must not
         # turn a malformed graph into an announcement that arrives a turn later.
         try:
-            spec = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
+            submitted = parse_dag_spec({"task_summary": task_summary, "nodes": nodes, "confirm": confirm})
+            spec = submitted
             # A dependency on a node an earlier run completed is checked against
             # that run's conversation. An addressed caller names it; a stint
             # resumed from a terminal or an RPC has no turn, and checking the
             # turn's registry found none of the roles the record said finished.
             known = await (self.session_nodes(origin.conversation) if origin is not None else self._session_nodes())
-            validate_and_order(spec, self._reference_roots(), known)
+            validate_and_order(spec, self._reference_roots(), known, nodes_root=self._reference_nodes_root())
             pre = await self._preflight(spec)
             spec, dispatch_backends, notices, capabilities = pre.spec, pre.backends, pre.notices, pre.capabilities
+            submission = self._run_submission(submitted, pre)
         except DagValidationError as exc:
             return self._validation_error(exc)
 
@@ -1597,12 +1907,25 @@ class SubAgentDagTool(Tool):
         # After validation so a rejected graph mints nothing, and before either
         # mode starts so the foreground and background paths share one site.
         spec, auto_instances = self._mint_missing_instances(spec, capabilities)
-        return _with_notices(
-            await self._dispatch(
-                spec, run_id, dirs, dispatch_backends, auto_instances, origin, call_id, background, stint=stint
-            ),
-            notices,
+        result = await self._dispatch(
+            spec,
+            run_id,
+            dirs,
+            dispatch_backends,
+            auto_instances,
+            origin,
+            call_id,
+            background,
+            capture=(playbook_capture, submitted) if capture_workflow else None,
+            stint=stint,
+            submission=submission,
+            capabilities=capabilities,
+            mcp_servers=mcp_servers,
+            mcp_scope=mcp_scope,
+            mcp_credential_gaps=mcp_credential_gaps,
         )
+        result = _with_notices(result, notices)
+        return _with_capture_notice(result) if capture_workflow else result
 
     async def _dispatch(
         self,
@@ -1614,7 +1937,13 @@ class SubAgentDagTool(Tool):
         origin: _DagOrigin,
         call_id: str | None,
         background: bool,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
         stint: StintRef | None = None,
+        submission: RunSubmission | None = None,
+        capabilities: dict[str, AgentCapabilities] | None = None,
+        mcp_servers: "Mapping[str, MCPServerConfig] | Callable[[], Mapping[str, MCPServerConfig]] | None" = None,
+        mcp_scope: str | None = None,
+        mcp_credential_gaps: "Callable[[], frozenset[str]] | None" = None,
     ) -> str | ToolResult:
         """Start a validated, minted spec running and return its first result.
 
@@ -1624,6 +1953,10 @@ class SubAgentDagTool(Tool):
         either parking on the first event or building the background message --
         is identical between a fresh submission and an applied replan.
         """
+        # Taken once, here: every report of this run starts from this origin, and
+        # several are sent where the dispatching span is no longer current -- a
+        # node's own task, or a released outbox drained after its turn closed.
+        origin = replace(origin, dispatch_link=trace.dispatch_link())
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
 
@@ -1638,8 +1971,36 @@ class SubAgentDagTool(Tool):
 
         if stint is not None:
             self._stints[run_id] = stint
+        admission: _RunAdmission | None = None
+        if submission is not None:
+            admission = _RunAdmission(
+                tool=self,
+                run_id=run_id,
+                conversation=origin.conversation,
+                dirs=dirs,
+                submission=submission,
+                state=ReassignmentState(),
+                capabilities=dict(capabilities or {}),
+                mcp_servers=mcp_servers,
+                mcp_scope=mcp_scope,
+                mcp_credential_gaps=mcp_credential_gaps,
+            )
+            self._run_contexts[run_id] = admission
         task = asyncio.create_task(
-            self._run_detached(spec, run_id, cancel, origin, dirs, call_id, auto_instances, backends, outbox, stint)
+            self._run_detached(
+                spec,
+                run_id,
+                cancel,
+                origin,
+                dirs,
+                call_id,
+                auto_instances,
+                backends,
+                outbox,
+                capture,
+                stint,
+                admission,
+            )
         )
         self._runs[run_id] = task
 
@@ -1665,6 +2026,7 @@ class SubAgentDagTool(Tool):
             # about any yield at all.
             self._outboxes.pop(run_id, None)
             self._stints.pop(run_id, None)
+            self._run_contexts.pop(run_id, None)
 
         task.add_done_callback(_retire)
         if self._adopt is not None and (refusal := self._adopt(run_id, task, origin.conversation)) is not None:
@@ -1744,7 +2106,12 @@ class SubAgentDagTool(Tool):
         that way.
         """
         spec = parse_dag_spec({"task_summary": plan.task_summary, "nodes": list(plan.nodes), "confirm": plan.confirm})
-        validate_and_order(spec, self._reference_roots(), await self._session_nodes())
+        # Popped ahead of the revalidation: a plan that is refused here is dead,
+        # and its admission data must not outlive the decision it was prepared for.
+        pending = self._pending_submissions.pop(plan.run_id, None)
+        validate_and_order(
+            spec, self._reference_roots(), await self._session_nodes(), nodes_root=self._reference_nodes_root()
+        )
         origin = self._origin.get() or self._default_origin
         session_dir = self._session_dir_for(self._turn_conversation())
         dirs = _RunDirs(
@@ -1754,8 +2121,32 @@ class SubAgentDagTool(Tool):
             subagents_root=str(session_history_root(session_dir)),
         )
         call_id = self._tool_call_id.get()
+        # The successor's own admission data, when this instance prepared it. The
+        # fallback covers a plan handed in from elsewhere: it can only describe
+        # the graph as already folded, which is still better than no role data.
+        if pending is not None:
+            submission, capabilities = pending
+        else:
+            submission = RunSubmission(
+                submitted=spec,
+                harness=None,
+                workers={},
+                named_instance_groups={
+                    node.id: (node.subagent, node.instance) for node in spec.nodes if node.instance is not None
+                },
+            )
+            capabilities = self._capability_map()
         return await self._dispatch(
-            spec, plan.run_id, dirs, plan.backends, plan.auto_instances, origin, call_id, background=not bound
+            spec,
+            plan.run_id,
+            dirs,
+            plan.backends,
+            plan.auto_instances,
+            origin,
+            call_id,
+            background=not bound,
+            submission=submission,
+            capabilities=capabilities,
         )
 
     async def prepare_replan(
@@ -1797,7 +2188,12 @@ class SubAgentDagTool(Tool):
             raw_graph.pop("replan", None)
             old = parse_dag_spec(raw_graph)
             spec = parse_dag_spec({"task_summary": old.task_summary, "nodes": nodes, "confirm": old.confirm})
-            validate_and_order(spec, self._reference_roots(), await self._session_nodes_for_replan(run_id, live))
+            validate_and_order(
+                spec,
+                self._reference_roots(),
+                await self._session_nodes_for_replan(run_id, live),
+                nodes_root=self._reference_nodes_root(),
+            )
             pre = await self._preflight(spec)
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -1809,9 +2205,10 @@ class SubAgentDagTool(Tool):
             )
         if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
             return refusal
+        submission = self._run_submission(spec, pre)
         spec, _handed = self._with_skills(pre.spec, pre.capabilities, str(workdir.current() or self._workspace))
         spec, auto = self._mint_missing_instances(spec, pre.capabilities)
-        return ReplanPlan(
+        plan = ReplanPlan(
             run_id=make_run_id(),
             from_node=from_node,
             reason=reason,
@@ -1822,6 +2219,570 @@ class SubAgentDagTool(Tool):
             task_summary=spec.task_summary,
             confirm=spec.confirm,
         )
+        # The admission record the successor will need if its own nodes are later
+        # reassigned. Keyed by the id its plan already names, consumed by the
+        # submission; the authored graph is the parsed one, not the folded copy.
+        self._pending_submissions[plan.run_id] = (submission, dict(pre.capabilities))
+        return plan
+
+    def _run_submission(self, submitted: SubAgentDagSpec, pre: Preflight) -> RunSubmission:
+        """The run's admission data, frozen before any runtime rewriting.
+
+        ``submitted`` is the parsed graph the caller handed over; ``pre`` is the
+        pre-dispatch phase, whose spec resolved worker labels to roster agents.
+        """
+        resolved = {node.id: node.subagent for node in pre.spec.nodes}
+        named = {
+            node.id: (resolved[node.id], node.instance)
+            for node in submitted.nodes
+            if node.instance is not None and node.id in resolved
+        }
+        return RunSubmission(
+            submitted=submitted,
+            harness=pre.harness,
+            workers=dict(pre.workers),
+            named_instance_groups=named,
+        )
+
+    @staticmethod
+    def _group_skills(submission: RunSubmission, node_id: str) -> list[str] | None:
+        """The skills an instance group was submitted with, for whichever member opens it next.
+
+        Submission lets only the first node of a group declare ``skills``; a move
+        may make another member the node that opens the new session, so the
+        declaration has to travel to whatever destination node opens it.
+        """
+        entry = submission.named_instance_groups.get(node_id)
+        if entry is None:
+            return None
+        agent, handle = entry
+        for nid, pair in submission.named_instance_groups.items():
+            if pair != (agent, handle):
+                continue
+            for node in submission.submitted.nodes:
+                if node.id == nid and node.skills is not None:
+                    return list(node.skills)
+        return None
+
+    def _effective_capabilities(self, admission: _RunAdmission) -> dict[str, AgentCapabilities]:
+        """The admission snapshot with the live table laid over it.
+
+        The live rows are what a move is admitted against; the snapshot answers
+        for a name the table no longer carries, so a build is never done blind.
+        """
+        return {**admission.capabilities, **self._capability_map()}
+
+    def _fold_for_target(self, admission: _RunAdmission, node: DagNodeSpec) -> DagNodeSpec:
+        """Fold a node's skills into its prompt once, for the agent it is prepared for."""
+        spec = admission.submission.submitted.model_copy(update={"nodes": [node]})
+        folded, _notices = self._with_skills(spec, self._effective_capabilities(admission), admission.dirs.workdir)
+        return folded.nodes[0]
+
+    async def _target_backend(self, node: DagNodeSpec, worker: "Worker | None") -> tuple[Any, list[str]]:
+        """The backend a moved node dispatches with, built by submission's own rules.
+
+        Deliberately the same builder ``_preflight`` uses rather than a copy of
+        it: a check added to one that did not reach the other is how a move
+        would be admitted where a submission is refused.
+        """
+        backend, notices = await self._node_backend(node)
+        if worker is not None:
+            backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
+        return backend, notices
+
+    async def _execution_for(self, admission: _RunAdmission, node: DagNodeSpec) -> tuple[DagNodeSpec, Any, list[str]]:
+        """One prepared mover's execution node, backend and downgrade notices."""
+        notices: list[str] = []
+        folded = self._fold_for_target(admission, node)
+        caps = self._effective_capabilities(admission).get(folded.subagent)
+        if folded.mcps is not None and caps is not None and not caps.injectable_mcps:
+            notices.append(
+                f"node '{folded.id}': agent '{folded.subagent}' cannot take injected mcp servers, "
+                f"so its 'mcps' list is ignored"
+            )
+        backend, grant_notices = await self._target_backend(folded, admission.submission.workers.get(node.id))
+        notices.extend(grant_notices)
+        return folded, backend, notices
+
+    def _check_reassign_paths(self, node: DagNodeSpec, capabilities: dict[str, AgentCapabilities]) -> None:
+        """Apply submission's file-reference gate to one possible mover, in reassign terms."""
+        caps = capabilities.get(node.subagent)
+        if caps is not None and not caps.reads_local_files:
+            check_path_placeholders(
+                parse_placeholders(node.prompt_template),
+                node.subagent,
+                reads_local_files=False,
+                subject=f"node '{node.id}'",
+                escape_hatch=", or choose a sub-agent tagged [local-files] for this reassign",
+            )
+
+    def _machine_notice(self, source_agent: str, target_agent: str) -> str | None:
+        """Where the earlier attempts' files stay, when the two agents do not share a disk."""
+        source = self._registry.get(source_agent)
+        target = self._registry.get(target_agent)
+        source_machine = source.caps.machine if source is not None else ""
+        target_machine = target.caps.machine if target is not None else ""
+        if source_machine:
+            return (
+                f"the earlier attempts ran on machine '{source_machine}', so the files they wrote stay "
+                "there -- put what the new sub-agent needs into your message"
+            )
+        if target_machine:
+            return (
+                f"agent '{target_agent}' runs on machine '{target_machine}', while the earlier attempts ran "
+                "on this computer, so the files they wrote stay here -- put what the new sub-agent needs "
+                "into your message"
+            )
+        return None
+
+    @staticmethod
+    def _possible_movers(
+        state: ReassignmentState,
+        members: frozenset[str],
+        anchor: str,
+        source: tuple[str, str | None],
+    ) -> list[str]:
+        """The nodes of a source group a move could take, anchor first.
+
+        A member is possible exactly when it may still be relocated: its status
+        is ``pending`` or ``exception`` -- what the scheduler moves at install --
+        or ``running``, which may land in either once its attempt settles. An
+        attempt still in flight may land in either too, whatever status it shows
+        meanwhile, so the pair it dispatched under counts as well: between the
+        backend's return and the judge's verdict a node reads ``completed`` while
+        that verdict can still suspend it. Every status that is terminal with no
+        attempt in flight -- ``completed``, ``failed``, ``skipped``,
+        ``cancelled``, ``not_executed`` -- stays where it ran. A member already
+        dispatched under another pair belongs to a move of its own.
+        """
+        movers: list[str] = [anchor]
+        for nid in sorted(members | {anchor}):
+            if nid == anchor:
+                continue
+            node = state.effective_nodes.get(nid)
+            if node is not None and (node.subagent, node.instance) != source:
+                continue
+            relocatable = state.status.get(nid) in RELOCATABLE_STATUSES
+            if not relocatable and state.active_attempts.get(nid) != source:
+                continue
+            movers.append(nid)
+        return movers
+
+    @staticmethod
+    def _reservation_draining(state: ReassignmentState, reservation: _Reservation) -> bool:
+        """Whether an accepted move has neither installed nor been replaced yet."""
+        node = state.effective_nodes.get(reservation.node_id)
+        if node is not None and (node.subagent, node.instance) == (
+            reservation.target_agent,
+            reservation.target_instance,
+        ):
+            return False
+        if len(state.attempt_agents.get(reservation.node_id, [])) > reservation.attempts:
+            return False
+        return True
+
+    def _reservation_blocks(self, admission: _RunAdmission, key: tuple[str, str]) -> bool:
+        """Whether an accepted move still holds the group; a dropped move releases it.
+
+        The runner records a staged move it could not install, so a group whose
+        accepted destination failed is free for another proposal instead of
+        waiting for an install that will never come.
+        """
+        state = admission.state
+        if key in state.dropped_moves:
+            state.dropped_moves.discard(key)
+            admission.reservations.pop(key, None)
+            return False
+        reservation = admission.reservations.get(key)
+        if reservation is None:
+            return False
+        if self._reservation_draining(state, reservation):
+            return True
+        admission.reservations.pop(key, None)
+        return False
+
+    @staticmethod
+    def _reassign_not_waiting(run_id: str, node_id: str) -> str:
+        return (
+            f"Node '{node_id}' of run {run_id} is no longer waiting for a decision, so the reassign was "
+            "not applied, no decision was recorded, and the node stayed where it was. "
+            'tool_call name "dag_status" shows where every node stands.'
+        )
+
+    @staticmethod
+    def _reassign_question(
+        run_id: str,
+        movers: list[str],
+        source_agent: str,
+        target_agent: str,
+    ) -> str:
+        lines = [f"- {nid}: {source_agent} -> {target_agent}" for nid in movers]
+        tail = ""
+        if len(movers) > 1:
+            tail = (
+                " A listed node may move with it; one whose attempt has not settled yet finishes that "
+                "attempt first, and one that already finished stays where it ran."
+            )
+        return f"Reassign {len(movers)} node(s) of DAG run {run_id} to {target_agent}?\n" + "\n".join(lines) + tail
+
+    async def prepare_reassign(
+        self,
+        run_id: str,
+        node_id: str,
+        agent: str,
+        message: str,
+        session_key: str | None,
+    ) -> "ReassignPlan | str":
+        """Check one proposed move and, when the run asks, put it to the user.
+
+        Returns the prepared plan, or a refusal the control tool hands back
+        verbatim. A refusal records nothing: the node stays suspended with its
+        question open. The checks run in the order a submission's do, so the
+        answer names the first thing that is wrong.
+        """
+        target = (agent or "").strip()
+        text = (message or "").strip()
+        if not target:
+            return (
+                f"Error: reassigning node '{node_id}' needs an `agent` -- the roster name of the "
+                "sub-agent that should run it next. No decision was recorded, so the node is still waiting."
+            )
+        if not text:
+            return (
+                f"Error: reassigning node '{node_id}' needs a message telling the new sub-agent what to "
+                "do next. No decision was recorded, so the node is still waiting."
+            )
+        try:
+            await self.read_run(run_id, session_key)
+        except DagReadError:
+            return (
+                f"No DAG run {run_id} in this conversation: a run id must resolve under this "
+                "conversation's run history before its nodes can be reassigned. No decision was recorded."
+            )
+        desk = self._desks.get(run_id)
+        admission = self._run_contexts.get(run_id)
+        if admission is None or desk is None:
+            return self._reassign_not_waiting(run_id, node_id)
+        if not desk.is_open(node_id) or desk.peek(node_id) is not None:
+            return self._reassign_not_waiting(run_id, node_id)
+        if (member := self._stints.get(run_id)) is not None:
+            return (
+                f"Error: run {run_id} is round {member.round_index} of stint {member.stint_id}, and a "
+                "round's nodes cannot be reassigned -- a round is a compiled view of the roles, so the "
+                "role table is what has to change. No decision was recorded, so the node is still waiting."
+            )
+        if self._is_paused is not None and self._is_paused():
+            return (
+                "Error: delegation is paused. The user paused sub-agent spawning; resume it before "
+                "reassigning this node. No decision was recorded, so the node is still waiting."
+            )
+        state = admission.state
+        authored = admission.authored()
+        if node_id not in authored:
+            return (
+                f"Error: run {run_id} has no node '{node_id}' in its submitted graph. No decision was "
+                "recorded, so nothing changed."
+            )
+        # The waiter and the assignment revision are read before anything awaits:
+        # the hand-off compares them again in one synchronous step, so a decision
+        # prepared against an adjudication or a group that has since changed is
+        # refused rather than landed on whatever now waits under this id.
+        waiter = desk.waiter(node_id)
+        revision = state.revision
+        row = self._registry.get(target)
+        if row is None:
+            label_note = ""
+            table = self._worker_table_for()
+            if table is not None and target in table.labels():
+                label_note = " -- that is a worker label of this turn, not a roster agent"
+            return (
+                f"Error: cannot reassign node '{node_id}' to '{target}': no sub-agent by that name is "
+                f"on this machine's roster{label_note}. Choose an enabled agent from the roster. "
+                "No decision was recorded, so the node is still waiting."
+            )
+        if not row.enabled or row.hidden:
+            return (
+                f"Error: cannot reassign node '{node_id}' to '{row.name}', which is turned off on this "
+                "machine -- enable it in the agents settings, or choose another agent. No decision was "
+                "recorded, so the node is still waiting."
+            )
+        target_agent = row.name
+        live = self._capability_map()
+        if target_agent not in live:
+            return (
+                f"Error: cannot reassign node '{node_id}' to '{target_agent}': it is no longer an enabled "
+                "sub-agent on this machine. No decision was recorded, so the node is still waiting."
+            )
+        source_node = state.effective(node_id, authored[node_id])
+        source_agent = source_node.subagent
+        source_instance = source_node.instance
+        if canonical_agent_name(target_agent) == canonical_agent_name(source_agent):
+            return (
+                f"Error: node '{node_id}' last ran on '{source_agent}', and '{target_agent}' is the same "
+                "agent under another name. Reassign only changes who runs the node; to have this agent try "
+                "again, choose continue. No decision was recorded, so the node is still waiting."
+            )
+        if (
+            refusal := await self._handover_refusal(
+                admission,
+                node_id,
+                source_agent=source_agent,
+                source_instance=source_instance,
+                target_agent=target_agent,
+                message=text,
+            )
+        ) is not None:
+            return refusal
+        key = _source_key(source_agent, source_instance, node_id)
+        members = state.original_groups.get((source_agent, source_instance), frozenset({node_id}))
+        shared = len(members | {node_id}) > 1
+        target_stateful = live[target_agent].stateful
+        movers = self._possible_movers(state, frozenset(members), node_id, (source_agent, source_instance))
+        instance_auto = False
+        if target_stateful:
+            if source_instance is not None and node_id not in state.auto_instances:
+                target_instance = source_instance
+            else:
+                target_instance = mint_handle(node_id)
+                instance_auto = True
+        else:
+            target_instance = None
+        # The file-reference gate comes before the stateful rule, in the order a
+        # submission checks them: it is about what the target can reach, and a
+        # target that cannot read the node's paths is the more concrete refusal.
+        # It runs over the mover set, so a pending or running sibling is checked
+        # and a terminal one cannot veto the move.
+        for nid in movers:
+            try:
+                self._check_reassign_paths(authored[nid].model_copy(update={"subagent": target_agent}), live)
+            except DagValidationError as exc:
+                detail = str(exc).rstrip()
+                if detail and detail[-1] not in ".!?":
+                    detail += "."
+                return f"Error: {detail} No decision was recorded, so the node is still waiting."
+        if shared and not target_stateful:
+            return (
+                f"Error: node '{node_id}' shares instance '{source_instance}' with "
+                f"{len(members | {node_id}) - 1} other node(s) in this run, so it can only be reassigned to "
+                f"a [stateful] sub-agent; '{target_agent}' is not one. No decision was recorded, so the "
+                "node is still waiting."
+            )
+        if target_instance is not None and not instance_auto:
+            if await _destination_occupied(
+                admission.dirs.subagents_root,
+                session_key or admission.conversation,
+                target_agent,
+                target_instance,
+            ):
+                return (
+                    f"Error: cannot reassign node '{node_id}' to '{target_agent}' on instance "
+                    f"'{target_instance}': that agent already has a conversation under that instance in "
+                    "this conversation. Choose another agent, or replan with a new instance name. "
+                    "No decision was recorded, so the node is still waiting."
+                )
+        reservation = admission.reservations.get(key)
+        if reservation is not None:
+            if self._reservation_blocks(admission, key):
+                return (
+                    f"Error: the instance group of node '{node_id}' already has an accepted move in "
+                    "progress, so a second reassignment was not accepted. Wait for that move to install, "
+                    "then ask again. No decision was recorded, so the node is still waiting."
+                )
+        prepared_nodes: list[DagNodeSpec] = []
+        backends: dict[str, Any] = {}
+        notices: list[str] = []
+        with admission.mcp():
+            for nid in movers:
+                group_skills = self._group_skills(admission.submission, nid)
+                prepared = authored[nid].model_copy(
+                    update={
+                        "subagent": target_agent,
+                        "instance": target_instance,
+                        "skills": list(group_skills) if group_skills is not None else authored[nid].skills,
+                    }
+                )
+                try:
+                    execution, backend, mover_notices = await self._execution_for(admission, prepared)
+                except DagValidationError as exc:
+                    detail = str(exc).rstrip()
+                    if detail and detail[-1] not in ".!?":
+                        detail += "."
+                    return f"Error: {detail} No decision was recorded, so the node is still waiting."
+                prepared_nodes.append(execution)
+                backends[nid] = backend
+                notices.extend(mover_notices)
+        if note := self._machine_notice(source_agent, target_agent):
+            notices.append(note)
+        cancel = self._cancels.get(run_id)
+        if cancel is not None and cancel.is_set():
+            return (
+                f"Error: DAG run {run_id} was cancelled, so the reassign was not applied. No decision "
+                f"was recorded, so node '{node_id}' is no longer waiting."
+            )
+        if desk.replanned.is_set():
+            return (
+                f"Error: DAG run {run_id} is being replaced by a replan, so the reassign was not applied. "
+                "No decision was recorded."
+            )
+        if admission.submission.submitted.confirm:
+            if self._ask is None:
+                return (
+                    f"Error: run {run_id} was submitted with confirm: true, and this host has no way to "
+                    "ask the user, so the reassignment was not applied. No decision was recorded, so the "
+                    "node is still waiting."
+                )
+            question = self._reassign_question(run_id, movers, source_agent, target_agent)
+            try:
+                approved = bool(await self._ask(admission.conversation, question))
+            except Exception as exc:  # noqa: BLE001 - an unreachable asker is a "no", not a crash
+                logger.warning("DAG reassign confirmation could not be delivered: {}", exc)
+                approved = False
+            if not approved:
+                return (
+                    f"The user did not approve this reassign, so no decision was recorded and node "
+                    f"'{node_id}' is still waiting."
+                )
+        # The roster and the destination are reread after the build and any ask:
+        # both can change while the proposal is in flight, and the move must not
+        # carry a target that has since been switched off or a handle that has
+        # since been used. Done for every proposal, not only a confirmed one.
+        if self._registry.get(target_agent) != row or target_agent not in self._capability_map():
+            return (
+                f"Error: sub-agent '{target_agent}' changed while the reassign was being prepared, so "
+                "nothing was applied. Request the reassignment again. No decision was recorded, so the "
+                "node is still waiting."
+            )
+        if target_instance is not None and not instance_auto:
+            if await _destination_occupied(
+                admission.dirs.subagents_root,
+                session_key or admission.conversation,
+                target_agent,
+                target_instance,
+            ):
+                return (
+                    f"Error: instance '{target_instance}' on sub-agent '{target_agent}' became occupied "
+                    "while the reassign was being prepared, so nothing was applied. Choose another "
+                    "agent. No decision was recorded, so the node is still waiting."
+                )
+        return ReassignPlan(
+            node_id=node_id,
+            source_agent=source_agent,
+            source_instance=source_instance,
+            target_agent=target_agent,
+            target_stateful=target_stateful,
+            target_instance=target_instance,
+            instance_auto=instance_auto,
+            revision=revision,
+            waiter=waiter,
+            nodes=tuple(prepared_nodes),
+            backends=backends,
+            notices=tuple(notices),
+        )
+
+    async def _handover_refusal(
+        self,
+        admission: _RunAdmission,
+        node_id: str,
+        *,
+        source_agent: str,
+        source_instance: str | None,
+        target_agent: str,
+        message: str,
+    ) -> str | None:
+        """Refuse a move whose handover could never be rendered.
+
+        The handover keeps the node's original task whole, so a task that does
+        not fit -- or a history that will not load -- means no attempt after the
+        move could run. The commit happens before the handover is built, so this
+        has to be checked at the door: at install time the node would fail, and
+        every continuation would rebuild the same failing handover.
+
+        The dry run reads the same source and renders with the same budget the
+        install will, so a pass here is the install's own precondition.
+        """
+        store = DagRunStore(
+            self._backend,
+            admission.dirs.run_root,
+            admission.run_id,
+            nodes_root=admission.dirs.nodes_root,
+            registry_root=admission.dirs.subagents_root,
+        )
+        subagents_root = admission.dirs.subagents_root
+        session_dir = Path(subagents_root).parent if subagents_root else None
+        try:
+            loaded = await load_handover_turns(
+                store,
+                node_id,
+                session_dir=session_dir,
+                source_agent=source_agent,
+                source_instance=source_instance,
+                attempt_agents=admission.state.attempt_agents.get(node_id, ()),
+            )
+            task = await store.read_text(store.prompt_path(node_id))
+            render_handover(loaded.turns, task=task, to_agent=target_agent, next_message=message)
+        except HandoverError as exc:
+            detail = str(exc)
+        except OSError:
+            detail = "its original prompt is unreadable, so a handover cannot be built"
+        else:
+            return None
+        detail = detail.rstrip()
+        if detail and detail[-1] not in ".!?":
+            detail += "."
+        return (
+            f"Error: cannot reassign node '{node_id}': {detail} No decision was recorded, so the node is still waiting."
+        )
+
+    def commit_reassign(self, run_id: str, prepared: ReassignPlan, message: str) -> bool:
+        """Hand an accepted move to the run. False when the adjudication moved on.
+
+        Everything here is synchronous, and everything it compares was read
+        before the move was validated and confirmed: the waiter identity, the
+        unanswered state, cancellation and replan flags, and the assignment
+        revision. A stale proposal is refused and has to be requested again.
+        """
+        admission = self._run_contexts.get(run_id)
+        desk = self._desks.get(run_id)
+        if admission is None or desk is None:
+            return False
+        if admission.state.revision != prepared.revision:
+            return False
+        if not desk.is_open(prepared.node_id) or desk.peek(prepared.node_id) is not None:
+            return False
+        if desk.waiter(prepared.node_id) is not prepared.waiter:
+            return False
+        if desk.replanned.is_set():
+            return False
+        cancel = self._cancels.get(run_id)
+        if cancel is not None and cancel.is_set():
+            return False
+        # The revision moves before the wake, so the scheduler cannot stage this
+        # move against a record that still reads as the pre-commit one.
+        admission.state.revision += 1
+        if not desk.resolve(
+            prepared.node_id,
+            REASSIGN,
+            message,
+            agent=prepared.target_agent,
+            reassignment=prepared,
+            expected_waiter=prepared.waiter,
+        ):
+            admission.state.revision -= 1
+            return False
+        # Reserved before the runner can act on the answer: one group cannot have
+        # two destinations racing for it, and the reservation is run-local -- the
+        # next move installs, the next attempt on the node, or the run's exit is
+        # what releases it.
+        key = _source_key(prepared.source_agent, prepared.source_instance, prepared.node_id)
+        admission.reservations[key] = _Reservation(
+            node_id=prepared.node_id,
+            target_agent=prepared.target_agent,
+            target_instance=prepared.target_instance,
+            attempts=len(admission.state.attempt_agents.get(prepared.node_id, [])),
+        )
+        if (outbox := self._outboxes.get(run_id)) is not None:
+            outbox.answered(prepared.node_id)
+        return True
 
     async def _read_graph_json(self, run_id: str, session_key: str | None) -> str:
         """One run's submitted graph, as text."""
@@ -1931,6 +2892,7 @@ class SubAgentDagTool(Tool):
         unwritten.
         """
         await self._record_link(run_id, self._link_entry(plan, started=False, error=reason))
+        self._pending_submissions.pop(plan.run_id, None)
 
     async def _emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
         origin = self._origin.get() or self._default_origin
@@ -1956,6 +2918,45 @@ class SubAgentDagTool(Tool):
         """
         await self._emit_replanned(run_id, plan)
 
+    async def _node_backend(self, node: DagNodeSpec) -> tuple[Any, list[str]]:
+        """One node's dispatch backend, and the downgrade notices it earned.
+
+        The single site both a submission and a reassignment build from. A node
+        names an agent that must be on this machine and switched on; its skills
+        narrowing resolves here; a cross-process MCP decision wraps it -- with
+        the same partial-grant notice either way, because a move must not lose
+        the sentence that says a server could not be resolved.
+        """
+        row = self._registry.get(node.subagent)
+        if row is None:
+            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+        if not row.enabled:
+            raise DagValidationError(
+                f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
+                "machine -- enable it in the agents settings, or point the node at another agent"
+            )
+        backend = self._resolve_node(node)
+        if backend is None:
+            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+        notices: list[str] = []
+        resolver = getattr(backend, "resolve_mcp_grant", None)
+        if row.injectable.mcps and resolver is not None:
+            # The async form when there is one: see SubagentManager._preflight_mcp
+            # for why the acp backend must not capture the adapter's login shell
+            # on this thread.
+            async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
+            grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
+            # A notice, never a refusal, whichever backend it is: the server that
+            # could not be resolved costs the node its tools and must not cost
+            # the graph its run.
+            if note := grant.note_text():
+                notices.append(f"node '{node.id}': {note}")
+            if getattr(backend, "kind", None) != "raven-loop":
+                backend = _DispatchBackend(backend, mcp_grant=grant)
+        elif node.mcps is not None:
+            backend = _DispatchBackend(backend, drop_mcps=True)
+        return backend, notices
+
     async def _preflight(self, spec: SubAgentDagSpec) -> Preflight:
         """Every pre-dispatch check that needs live registry data.
 
@@ -1964,6 +2965,17 @@ class SubAgentDagTool(Tool):
         ``DagValidationError`` for a refusal; a capability or MCP gap comes back
         as a notice instead, on the terms those two already had.
         """
+        # First, ahead of anything that reads the registry: a decision node cannot
+        # choose a route without a judge, so this host could never run the graph.
+        decisions = [node.id for node in spec.nodes if node.routes]
+        if decisions and self._judge_node() is None:
+            names = ", ".join(repr(node_id) for node_id in decisions)
+            subject = f"node {names} declares" if len(decisions) == 1 else f"nodes {names} declare"
+            raise DagValidationError(
+                f"{subject} routes, but this host has no provider to judge a node with, and a decision "
+                "node cannot choose a route without one. Remove the routes, or run the graph where an "
+                "agent loop is attached."
+            )
         capabilities = self._capability_map()
         # Resolve this turn's generated worker labels like spawn does before
         # any registry-dependent validation. The runner then receives real
@@ -1979,7 +2991,13 @@ class SubAgentDagTool(Tool):
             if worker is None:
                 resolved_nodes.append(node)
                 continue
-            workers[node.id] = worker
+            # The payload is a mapping inside a frozen dataclass, so freezing the
+            # worker freezes nothing it carries. Copied here, at admission, so a
+            # turn that rewrites its table cannot change what an in-flight run's
+            # nodes were narrowed by.
+            workers[node.id] = replace(
+                worker, payload=deepcopy(dict(worker.payload)) if worker.payload is not None else None
+            )
             resolved_nodes.append(node.model_copy(update={"subagent": worker.agent}))
         if workers:
             spec = spec.model_copy(update={"nodes": resolved_nodes})
@@ -1991,39 +3009,19 @@ class SubAgentDagTool(Tool):
         # as well so a misspelled name is still a refusal the model can fix
         # in the same turn, not an announcement a turn later.
         for node in spec.nodes:
-            row = self._registry.get(node.subagent)
-            if row is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
-            if not row.enabled:
-                raise DagValidationError(
-                    f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
-                    f"machine -- enable it in the agents settings, or point the node at another agent"
-                )
-            backend = self._resolve_node(node)
-            resolver = getattr(backend, "resolve_mcp_grant", None)
-            if row.injectable.mcps and resolver is not None:
-                # The async form when there is one: see
-                # SubagentManager._preflight_mcp for why the acp backend must
-                # not capture the adapter's login shell on this thread.
-                async_resolver = getattr(backend, "resolve_mcp_grant_async", None)
-                grant = await async_resolver(node.mcps) if async_resolver is not None else resolver(node.mcps)
-                # A notice, never a refusal, whichever backend it is. MCP is a
-                # capability a node asked for on top of the work, so a server
-                # that could not be resolved costs the node its tools and must
-                # not cost the graph its run: refusing here throws away every
-                # other node too, over an optional attachment. The caller is
-                # told which node lost what, and the node's own reply carries
-                # the same sentence.
-                if note := grant.note_text():
-                    notices.append(f"node '{node.id}': {note}")
-                if getattr(backend, "kind", None) != "raven-loop":
-                    backend = _DispatchBackend(backend, mcp_grant=grant)
-            elif node.mcps is not None:
-                backend = _DispatchBackend(backend, drop_mcps=True)
+            backend, node_notices = await self._node_backend(node)
+            notices.extend(node_notices)
             if worker := workers.get(node.id):
                 backend = _WorkerBackend(backend, charter=worker.charter, payload=worker.payload)
             backends[node.id] = backend
-        return Preflight(spec=spec, backends=backends, notices=notices, capabilities=capabilities)
+        return Preflight(
+            spec=spec,
+            backends=backends,
+            notices=notices,
+            capabilities=capabilities,
+            workers=workers,
+            harness=getattr(table, "harness", None) if table is not None else None,
+        )
 
     async def _confirmed(
         self,
@@ -2091,7 +3089,9 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
         stint: StintRef | None = None,
+        admission: _RunAdmission | None = None,
     ) -> None:
         """Run a graph as its own task, then hand the result on.
 
@@ -2116,7 +3116,9 @@ class SubAgentDagTool(Tool):
                 auto_instances,
                 dispatch_backends,
                 outbox=outbox,
+                capture=capture,
                 stint=stint,
+                admission=admission,
             )
         except asyncio.CancelledError:
             if outbox is not None:
@@ -2222,31 +3224,41 @@ class SubAgentDagTool(Tool):
 
         None rather than a no-op: the runner reads it as "do not judge", which is
         the previous behaviour, and an unwired host (a test, an offline entry
-        point) gets that behaviour without configuring anything.
+        point) gets that behaviour without configuring anything. A graph with a
+        decision node cannot take that path -- see ``_preflight``.
         """
         cfg = self._verdict_config
         # Bound here rather than read off self inside the closure: the guard
         # below must hold for the call, and an attribute re-read later is a
         # different value.
         provider_for = self._provider_for
-        if provider_for is None or not cfg.verdict_enabled:
+        if provider_for is None:
             return None
 
         async def _judge(
             *, node: Any, store: Any, output: str, error: str, crashed: bool, output_limited: bool = False
         ) -> Verdict:
+            # Read defensively: a caller may hand over a node that carries only its id.
+            routes = getattr(node, "routes", None) or None
+            select = getattr(node, "select", None) or "one"
             # Resolved here, not when this tool was built: the loop's provider is
             # a property over the running turn's binding, so a session that
             # switched model must reach the judge.
             provider = provider_for()
             if provider is None:
+                # A decision node has no route to default to, so it fails here. A crashed
+                # one reads no route and keeps the failure it already has.
+                if routes and not crashed:
+                    raise RouteUndeterminedError("no provider is bound to judge this node")
                 return Verdict(accomplished=True)
             evidence, complete = await self._node_evidence(store, node.id, cfg.evidence_budget_chars)
             prompt = await self._node_prompt(store, node.id)
+            follow_ups = await self._node_follow_ups(store, node.id)
             if crashed:
                 return await describe_failure(
                     provider,
                     prompt=prompt,
+                    follow_ups=follow_ups,
                     error=error,
                     evidence=evidence,
                     evidence_complete=complete,
@@ -2257,12 +3269,15 @@ class SubAgentDagTool(Tool):
             return await judge(
                 provider,
                 prompt=prompt,
+                follow_ups=follow_ups,
                 output=output,
                 evidence=evidence,
                 evidence_complete=complete,
                 model=cfg.verdict_model,
                 timeout_s=cfg.verdict_timeout_seconds,
                 output_limited=output_limited,
+                routes=routes,
+                select=select,
             )
 
         return _judge
@@ -2272,6 +3287,12 @@ class SubAgentDagTool(Tool):
             return await store.read_text(store.prompt_path(node_id))
         except Exception:  # noqa: BLE001 - the judge can work from output alone
             return ""
+
+    async def _node_follow_ups(self, store: Any, node_id: str) -> tuple[str, ...]:
+        try:
+            return tuple(await store.read_follow_ups(node_id))
+        except Exception:  # noqa: BLE001 - the judge can work from the prompt alone
+            return ()
 
     async def _node_evidence(self, store: Any, node_id: str, budget: int) -> tuple[str, bool]:
         """The transcript tail and whether there was a transcript at all.
@@ -2299,7 +3320,9 @@ class SubAgentDagTool(Tool):
         auto_instances: frozenset[str],
         dispatch_backends: dict[str, Any],
         outbox: Outbox | None = None,
+        capture: tuple[Any, SubAgentDagSpec] | None = None,
         stint: StintRef | None = None,
+        admission: _RunAdmission | None = None,
     ) -> str | ToolResult | DagRunResult:
         """Execute one validated graph and render its outcome.
 
@@ -2318,15 +3341,21 @@ class SubAgentDagTool(Tool):
                 _run_id: str,
                 node_id: str,
                 report: str,
-                _origin: dict[str, str],
+                origin: dict[str, str],
                 *,
                 awaiting_decision: bool,
                 informational: bool = False,
+                output: str | None = None,
             ) -> None:
                 # Whether a notification is dropped depends on whether a blocking call is
                 # still there to be handed the summary, which is the outbox's own state.
                 await outbox.put_report(
-                    node_id, report, awaiting_decision=awaiting_decision, informational=informational
+                    node_id,
+                    report,
+                    awaiting_decision=awaiting_decision,
+                    informational=informational,
+                    output=output,
+                    dispatch_link=trace.dispatch_link_of(origin),
                 )
 
             announce_exception = _to_outbox
@@ -2351,6 +3380,7 @@ class SubAgentDagTool(Tool):
                 nodes_root=dirs.nodes_root,
                 history_root=dirs.subagents_root,
                 subagents_root=dirs.subagents_root,
+                sandbox_factory=self._sandbox_for,
                 progress_publisher=emit,
                 semaphore=self._gate if stint is None else _StintShare(self._gate, STINT_MAX_PARALLEL),
                 session_key=origin.conversation,
@@ -2358,6 +3388,7 @@ class SubAgentDagTool(Tool):
                 memory_for=self._memory_for,
                 mode_for=self._mode_for,
                 model_for=self._model_for,
+                effort_for=self._effort_for,
                 capabilities=self._capability_map(),
                 run_id=run_id,
                 cancel=cancel,
@@ -2378,6 +3409,8 @@ class SubAgentDagTool(Tool):
                 released=released,
                 provider=provider,
                 model=model,
+                reassignment_state=admission.state if admission is not None else None,
+                build_reassigned=admission.build if admission is not None else None,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -2407,8 +3440,33 @@ class SubAgentDagTool(Tool):
         finally:
             self._cancels.pop(run_id, None)
             self._desks.pop(run_id, None)
+            self._run_contexts.pop(run_id, None)
 
         # A terminal event carrying the authoritative manifest, so the web UI can
+        if capture is not None and _successful_final(Final(result, stopped=cancel.is_set())):
+            from raven.playbook.run_record import record_completed_dag, rewrite_completed_dag
+
+            recorded, recorded_harness, attempt_agents = capture[1], None, None
+            if admission is not None and admission.state.reassigned:
+                state = admission.state
+                submission = admission.submission
+                attempt_agents = {node_id: list(agents) for node_id, agents in state.attempt_agents.items() if agents}
+                recorded, recorded_harness = rewrite_completed_dag(
+                    submission.submitted,
+                    harness=submission.harness,
+                    workers=submission.workers,
+                    named_instance_groups=submission.named_instance_groups,
+                    execution_nodes=result.execution_nodes,
+                    instance_assignments=result.instance_assignments,
+                )
+            record_completed_dag(
+                recorded,
+                run_id,
+                capture[0],
+                harness=recorded_harness,
+                attempt_agents=attempt_agents,
+            )
+
         # rebuild / finalize the graph (and survive a reload).
         await emit(
             "dag_run_completed",
@@ -2431,11 +3489,7 @@ class SubAgentDagTool(Tool):
             return result
 
         lines: list[str] = [
-            f"DAG run {result.run_id} finished: "
-            f"{result.summary.get('completed', 0)} completed, "
-            f"{result.summary.get('failed', 0)} failed, "
-            f"{result.summary.get('cancelled', 0)} cancelled, "
-            f"{result.summary.get('skipped', 0)} skipped (of {result.summary.get('total', 0)}).",
+            f"DAG run {result.run_id} finished: {format_tally(result.summary)}.",
             f"Run dir: {result.dir}",
             "",
             "Node output files:",
@@ -2447,10 +3501,18 @@ class SubAgentDagTool(Tool):
             lines.append(f"- {entry['node']} [{entry['status']}]{tag}: {of}")
             if entry.get("error"):
                 lines.append(f"    error: {entry['error']}")
+            if entry.get("reason"):
+                lines.append(f"    reason: {entry['reason']}")
+            # `is not None`, not truthiness: an empty selection is still a decision.
+            if entry.get("selected_routes") is not None:
+                lines.append(f"    selected_routes: {', '.join(entry['selected_routes']) or '(none)'}")
         if result.terminal_outputs:
             lines.append("")
             lines.append("Terminal outputs:")
             for term in result.terminal_outputs:
                 lines.append(f"### {term['node']}")
                 lines.append(term["text"])
-        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result))
+        # The model text quotes every terminal node's own output verbatim, so it
+        # is an agent's content; the tallies and paths above it are ours, which
+        # is why this is claimed here rather than declared on the tool.
+        return ToolResult(model_text="\n".join(lines), display_text=self._result_label(result), agent_output=True)

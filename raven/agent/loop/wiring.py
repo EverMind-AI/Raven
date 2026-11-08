@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from raven.a2a_client.tool import A2aTool
 from raven.acp_client.asker import held_question
+from raven.agent import knowledge_scope
 from raven.agent.loop._shared import (
     SEARCH_PROVIDERS,
     Any,
@@ -43,6 +44,7 @@ from raven.agent.subagent import charter as charter_mod
 from raven.agent.subagent.role import is_subagent_process
 from raven.agent.tools.ask_user import DEFAULT_TIMEOUT_S
 from raven.contracts.token_strategy import UsageSnapshot
+from raven.providers import effort_levels
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -174,6 +176,12 @@ class WiringMixin:
         for entry in configured:
             withheld.update(self.tools.resolve_configured(entry))
         withheld.update(self._unconfigured_tool_names())
+        # Nothing to search is not a tool to offer. Read from the turn's own
+        # binding rather than from config, so attaching a base takes effect on
+        # the next model call and detaching every base takes the tool away
+        # again -- both directions, mid-conversation.
+        if not knowledge_scope.selected():
+            withheld.add("knowledge_search")
         return frozenset(withheld - (RESOURCE_TOOL_NAMES | PROMPT_TOOL_NAMES | META_TOOL_NAMES))
 
     def _unconfigured_tool_names(self) -> set[str]:
@@ -184,7 +192,7 @@ class WiringMixin:
         unchanged: a media tool counts as configured only when its own section
         names a model or a key -- an OpenRouter key set for chat alone must not
         surface tools that bill per call -- and web_search counts a key from
-        the file or the environment.
+        the file or the environment, or a selected vendor that needs none.
 
         Gates the built-in INSTANCE, by identity: plugin tools register last
         precisely so one can shadow a built-in by name -- subclassing it or
@@ -212,7 +220,7 @@ class WiringMixin:
         # environment variable. A predicate spelled out again here was reading
         # SERPER_API_KEY whatever the deployment had chosen, which withheld a
         # keyed Tavily search.
-        if search is not None and search is gated.get(WebSearchTool.name) and not search.api_key:
+        if search is not None and search is gated.get(WebSearchTool.name) and not search.ready:
             names.add(WebSearchTool.name)
         pictures = self.tools.get(ImageSearchTool.name)
         if pictures is not None and pictures is gated.get(ImageSearchTool.name) and not pictures.api_key:
@@ -335,13 +343,57 @@ class WiringMixin:
         folder supplying nothing is configured from the host's
         ``tools.media.image`` -- so the two readers cannot disagree about a lane
         that was going to inherit anyway.
+
+        A folder pinning its pictures to a provider is answered for that provider
+        (:meth:`_pinned_lane_generates_images`).
         """
-        from raven.agent.subagent.vendored_agents import product_image_key
+        from raven.agent.subagent.vendored_agents import product_image_key, product_image_pin
         from raven.agent.tools.media_gen import _OpenRouterMediaTool
 
+        host = self._live_media_config("image", self.media_config.image)
+        provider, model = product_image_pin(target)
+        if provider:
+            return self._pinned_lane_generates_images(target, provider, model, host)
         if product_image_key(target):
             return True
-        return _OpenRouterMediaTool.has_key(self._live_media_config("image", self.media_config.image))
+        return _OpenRouterMediaTool.has_key(host)
+
+    def _pinned_lane_generates_images(self, target: str, provider: str, model: str, host) -> bool:
+        """Whether a lane pinned to ``provider`` draws, by the launcher's rule for the pin.
+
+        A mirror of ``configure_image_generation`` in the agent launchers, not a
+        call into it: a launcher can run on an older raven, so the rule is stated
+        twice and a test renders each case through both. The launcher refuses a
+        provider the image tool cannot run on, and a switch off the host's image
+        provider without a model of the lane's own. A switch leaves the host's
+        image key behind with the rest of its endpoint: the lane pays with its own
+        image key or the host's key for the provider it switched to, and with no
+        key at a base of its own. Only OpenRouter takes the key that pays for the
+        lane's words, which on the lane's own key is the only OpenRouter key its
+        render holds. Read-only, like every readiness question.
+        """
+        from raven.agent.subagent.vendored_agents import product_image_key, product_llm_key, product_secret
+        from raven.agent.tools.media_gen import _OpenRouterMediaTool
+        from raven.config.schema import live_media_tool_config, media_provider
+        from raven.providers.registry import canonical_provider_name, find_by_name
+
+        wanted = canonical_provider_name(provider)
+        spec = find_by_name(wanted)
+        if spec is None or not getattr(spec, "image_api", False):
+            return False
+        runs_on = media_provider(host) if host is not None else ""
+        if wanted != runs_on and not model:
+            return False
+        if product_image_key(target):
+            return True
+        if product_secret(target, "IMAGE_API_BASE"):
+            return False
+        if wanted == runs_on:
+            return _OpenRouterMediaTool.has_key(host)
+        if wanted == "openrouter" and product_llm_key(target):
+            return False
+        found = live_media_tool_config({"provider": wanted, "model": model}, self._live_config.get("providers"))
+        return _OpenRouterMediaTool.has_key(found)
 
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
@@ -461,12 +513,78 @@ class WiringMixin:
         it only at a restart. Sent as an explicit argument instead, which is
         the path a session's pinned effort already takes.
 
-        None passes nothing, which leaves the provider's own default standing
-        -- an explicit None would switch it off instead.
+        None is an answer, not an absence: the turn sends it as an explicit
+        None, which the provider takes as its own default (nothing on the
+        wire). Leaving the key out instead let the provider fill it from that
+        frozen copy, so a key cleared on a running gateway kept every call at
+        the word it booted with (``session_effort.in_force`` says the rule).
         """
         from raven.config.live import held, reasoning_effort
 
         return held(_EFFORT_KEY, lambda: reasoning_effort(self._live_config))
+
+    def session_reasoning_effort(
+        self,
+        session_key: str | None,
+        pick: str | None = None,
+        model: str | None = None,
+    ) -> str | None:
+        """The reasoning effort this session's own calls run at, short of a hook's override.
+
+        ``session_effort.in_force`` over this loop's inputs: the pick the caller
+        read off the session's record, the session's mode's word, and the
+        configured default as the file has it now. ``model`` is the id the loop
+        was handed for this turn -- the router's pick when it made one, else the
+        session's own -- and bounds the **pick** (``session_effort.clamp``): a
+        level it does not declare, by LiteLLM's table or its provider overlay,
+        is dropped rather than sent. The mode's word and the configured default
+        are not narrowed here; they are not this conversation's pick and were
+        sent as they stand before the pick existed. Beside ``session_tier`` for
+        the reason it gives -- the turn and the RPC need the one rule, and the
+        policy it reads lives here -- and reached on ``self`` by the turn, so
+        nothing imports anything new.
+        """
+        from raven.agent import session_effort
+        from raven.providers.overlay import declared_for
+        from raven.providers.registry import find_by_model, split_model_id
+
+        if model:
+            model_id = model
+            serving = getattr(self.provider, "provider_name", "") or ""
+        elif session_key and self.has_session_binding(session_key):
+            binding = self.binding_for_session(session_key)
+            model_id = binding.model
+            serving = getattr(binding.provider, "provider_name", "") or ""
+        else:
+            model_id = self.model
+            serving = getattr(self.provider, "provider_name", "") or ""
+        provider, _rest = split_model_id(model_id)
+        if not provider:
+            spec = find_by_model(model_id)
+            provider = getattr(spec, "name", "") if spec else ""
+        # The section the loop's binding actually sends through answers for
+        # both the overlay and the ladder; the id's own vendor is the fallback
+        # for a provider that cannot name a single section (a multi-vendor
+        # resolver, or a routed endpoint built with no section of its own).
+        provider = serving or provider
+        levels = effort_levels.levels_for(
+            model_id,
+            declared_for(self._live_config.get("providers") or {}, provider, model_id),
+            provider=provider,
+        )
+        valid_pick = session_effort.clamp(pick, levels)
+        if pick is not None and valid_pick is None:
+            logger.debug(
+                "session {}: reasoning effort {} is not declared by {}; using the session default",
+                session_key,
+                pick,
+                model_id,
+            )
+        return session_effort.in_force(
+            valid_pick,
+            self.session_policy(session_key or "").reasoning_effort,
+            self.default_reasoning_effort,
+        )
 
     @property
     def personalization_enabled(self) -> bool:
@@ -730,6 +848,10 @@ class WiringMixin:
         marking that claims we looked when we did not.
         """
         self._session_bindings.pop(session_key, None)
+        # The Persona goes with the session for the same reason the binding
+        # does: a deleted session has nothing left to run as, and this is the
+        # one place that says a session is over.
+        self._session_personas.pop(session_key, None)
 
     def _forget_transport_verdicts(self) -> None:
         """Drop the capability verdicts a new provider may answer differently.
@@ -783,64 +905,332 @@ class WiringMixin:
         """
         return self._session_charters.pop(session_key, None)
 
-    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
-        """This turn's worker table, or ``None`` to run it unconfigured.
+    def adopt_session_persona(self, session_key: str, resolution: Any) -> None:
+        """Make this session run as the Persona that was just generated.
 
-        ``None`` on every path that is not a deliberate, successful generation:
-        the feature off, a sub-agent process (a worker writing its own workers
-        would be the third level the two-level rule forbids), a direct chat with
-        one sub-agent, an empty roster, or a generation that failed. A turn that
-        dies because its setup step failed is strictly worse than one that runs
-        without it.
-
-        The binding is handed in rather than resolved here. It has to be the
-        turn's own pair, because this runs *before* ``use_binding`` opens and
-        ``self.provider`` still answers with the loop's default; and it has to
-        be resolved once for both, because this call awaits a model and a
-        session that switched while it was in flight would otherwise split the
-        turn across two pairs.
-
-        The tool names handed over are the registry's current view, taken
-        outside the turn's freeze for the same reason. They are a vocabulary for
-        the brief, not the array the turn will run on, so a session-overlay tool
-        missing from them costs a word the generator could have used and
-        nothing else.
+        The generating turn itself does not run as it -- that turn saves the
+        artifact and reports it, and a coordinator whose ``intake`` gates on
+        trip dates would refuse to answer that. What is adopted here is read by
+        every *later* turn of the session, which is the experience the Persona
+        was written for.
         """
-        cfg = self._playbook_config
-        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
+        if getattr(resolution, "coordinator_charter", None) is None:
+            self.bind_session_harness(session_key, None)
+            return
+        self.bind_session_harness(session_key, resolution.artifact_name or "", spec=resolution.spec)
+
+    def bind_session_harness(self, session_key: str, name: str | None, *, spec: Any = None) -> str | None:
+        """Freeze a Harness onto this session, for every turn it takes.
+
+        A snapshot rather than a name to look up later: the window the user
+        opened keeps the Harness they chose, so editing the library entry --
+        or deleting it -- does not rewrite or break a conversation already
+        running on it. It rides the session's own metadata, so it survives a
+        restart the way a pinned workdir does.
+
+        ``None`` unbinds. ``spec`` is for a caller that already holds the
+        Harness; everything else names one in the library.
+        """
+        self._session_personas.pop(session_key, None)
+        session = self.sessions.get_or_create(session_key)
+        if name is None:
+            session.metadata.pop("harness", None)
             return None
-        if is_subagent_process():
-            return None
-        # A direct chat with one sub-agent returns through ``subagents.chat``
-        # without ever rendering or executing ``spawn``, so a table written for
-        # it is never read. Guarded before the call rather than after: the cost
-        # of generating one is a model round trip (two, when the table needs a
-        # repair round), paid on every direct turn for nothing.
-        if getattr(req, "direct_target", None) is not None:
+        if spec is None:
+            stored = self._playbooks.spec(name) if self._playbooks is not None else None
+            spec = getattr(stored, "harness", None)
+            if spec is None:
+                raise ValueError(f"no stored Harness named {name!r}")
+        # ``exclude_unset`` for the reason ``UnifiedPlaybookSpec.block_dump``
+        # gives: a nested default re-emitted here reads back as an explicit
+        # choice, and ``Checks.impl`` then fails validation as a disabled field.
+        session.metadata["harness"] = {
+            "name": name,
+            "spec": spec.model_dump(by_alias=True, exclude_none=True, exclude_unset=True),
+        }
+        logger.info("agent playbook: session bound to Harness {} ({} worker(s))", name or "?", len(spec.delegate))
+        return name
+
+    def session_harness_name(self, session_key: str) -> str | None:
+        """The Harness this session is bound to, by name, for a client to show."""
+        held = self.sessions.get_or_create(session_key).metadata.get("harness")
+        return str(held.get("name") or "") or None if isinstance(held, dict) else None
+
+    def session_persona(self, session_key: str) -> "tuple[Charter, Any] | None":
+        """This session's bound Harness as seats, or ``None`` for an ordinary one.
+
+        Rebuilt from the frozen snapshot rather than from the library, and
+        cached per session because it is asked once a turn.
+        """
+        held = self._session_personas.get(session_key)
+        if held is not None:
+            return held
+        raw = self.sessions.get_or_create(session_key).metadata.get("harness")
+        if not isinstance(raw, dict) or not isinstance(raw.get("spec"), dict):
             return None
         try:
-            from raven.playbook.agent_generator import WorkerTableGenerator, roster_note
+            from raven.playbook.agent_generator import build_coordinator_charter, build_table
+            from raven.playbook.agent_spec import AgentPlaybookSpec
+
+            spec = AgentPlaybookSpec.model_validate(raw["spec"])
+            charter = build_coordinator_charter(spec)
+        except Exception:  # noqa: BLE001 - a Harness this build cannot read is not a reason to lose the turn
+            logger.opt(exception=True).warning("agent playbook: session Harness could not be rebuilt; running plain")
+            return None
+        if charter is None:
+            return None
+        seats = (charter, build_table(spec, {}))
+        self._session_personas[session_key] = seats
+        return seats
+
+    async def _resolve_playbook_turn(self, req: Any, session_key: str, binding: Any):
+        """Generate, persist and bind the Harness selected by this turn's mode."""
+        from raven.playbook.agent_generator import HarnessResolution
+
+        cfg = self._playbook_config
+        if cfg is None or not cfg.enabled or getattr(cfg, "agent_harness", "default") != "generate":
+            return HarnessResolution()
+        asked = getattr(req, "playbook_mode", None)
+        mode = asked or getattr(cfg, "default_generation_mode", "task")
+        if mode == "off":
+            return HarnessResolution()
+        if is_subagent_process() or getattr(req, "direct_target", None) is not None:
+            return HarnessResolution()
+        # A Persona is minted only for a turn that asked for one. The config's
+        # default says what this deployment generates, not that every message
+        # is a request to be given an identity -- and read as the latter it
+        # was: a reader typing "hi" spent a model call minting a Persona,
+        # bound the conversation to it, and heard the assistant volunteer a
+        # draft nobody had asked about. A Task artifact configures workers for
+        # the turn in hand and carries no identity, so the default still
+        # reaches it.
+        if mode == "persona" and asked != "persona":
+            return HarnessResolution()
+        try:
+            from raven.playbook.agent_generator import (
+                PersonaPlaybookGenerator,
+                TaskPlaybookGenerator,
+                persona_roster_profile,
+                task_roster_profile,
+            )
 
             metas = list(self.subagents.list_agents())
             agents = [a.name for a in metas]
             if not agents:
-                return None
-            # What each agent is for, in the registry's own words and its own
-            # advertised capabilities. Without them the generating model is
-            # handed a list of bare names and, on a roster that is not the
-            # shipped one, cannot tell which agent the task wants -- not even
-            # when only one of them can read the local files it is about.
-            notes = {a.name: roster_note(a) for a in metas}
-            tools = sorted((d.get("function", d) or {}).get("name", "") for d in self.tools.get_definitions())
-            table = await WorkerTableGenerator(binding.provider, binding.model).generate(
-                getattr(req, "text", "") or "", agents, [t for t in tools if t], notes
-            )
+                return HarnessResolution()
+            tool_catalog = self.tools.get_definitions()
+            query = getattr(req, "text", "") or ""
+            if mode == "persona":
+                profiles = {meta.name: persona_roster_profile(meta) for meta in metas}
+                names = self._playbooks.names() if self._playbooks is not None else []
+                resolution = await PersonaPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                    names,
+                )
+            else:
+                profiles = {meta.name: task_roster_profile(meta) for meta in metas}
+                resolution = await TaskPlaybookGenerator(binding.provider, binding.model).resolve(
+                    query,
+                    agents,
+                    tool_catalog,
+                    profiles,
+                )
+            if resolution.active:
+                # Only a Persona is a draft. A Task artifact is the record of
+                # a graph the turn is about to run and its Workflow is compiled
+                # into it when the turn ends (``_finish_playbook_turn``), so
+                # holding one back would leave that compile nothing to update.
+                if getattr(resolution, "generation_mode", None) == "persona":
+                    resolution = self._hold_generated_harness(resolution, query, session_key)
+                else:
+                    resolution = self._persist_generated_harness(resolution, query)
         except Exception:  # noqa: BLE001 - setup must not cost the turn
-            logger.opt(exception=True).warning("agent playbook: worker table failed; running unconfigured")
-            return None
+            logger.opt(exception=True).warning("agent playbook: resolution failed; running unconfigured")
+            return HarnessResolution()
+        table = resolution.table
         if table:
             logger.info("agent playbook: {} worker(s) for this turn: {}", len(table.workers), table.labels())
-        return table
+        return resolution
+
+    def _hold_generated_harness(self, resolution: Any, query: str, session_key: str):
+        """Hold a validated Harness as this session's draft; nothing is written.
+
+        A generated Persona is an answer on screen, not a library entry. The
+        page that asked for it saves it by name (``playbooks.draft_save``) or
+        lets it go, and until then the library is untouched -- which is the
+        whole difference from what this did before: a row was written on every
+        turn that generated one, so a reader who asked twice ended up with
+        ``travel-planner`` and ``travel-planner-2`` and nothing saying which of
+        the two they had meant to keep.
+
+        The draft still binds to the session (``adopt_session_persona`` runs on
+        the resolution this returns), because running as the Persona you just
+        described is the point of describing it; saving is what makes it
+        outlive the conversation.
+        """
+        if resolution.spec is None:
+            return resolution
+        from dataclasses import replace
+
+        artifact = self._generated_artifact(resolution, query)
+        self._session_drafts[session_key] = artifact
+        logger.info("playbook: holding generated Harness {!r} as {}'s draft", artifact.name, session_key)
+        return replace(resolution, artifact_name=artifact.name, persisted=False)
+
+    def _generated_artifact(self, resolution: Any, query: str):
+        """The library artifact a generated Harness would be saved as."""
+        import re
+
+        from raven.playbook.unified import PlaybookMatch, UnifiedPlaybookSpec
+
+        description = (resolution.description or query.strip().splitlines()[0])[:200]
+        keywords = [word.lower() for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]{2,}", query)[:8]]
+        return UnifiedPlaybookSpec(
+            name=resolution.artifact_name or resolution.spec.name,
+            description=description,
+            match=PlaybookMatch(summary=description, keywords=keywords or [description[:80]]),
+            harness=resolution.spec,
+        )
+
+    def _persist_generated_harness(self, resolution: Any, query: str):
+        """Save a validated Harness now; persistence failure never blocks binding.
+
+        The Task path's own. A Persona goes through ``_hold_generated_harness``
+        instead, because a Persona is something a reader decides to keep.
+        """
+        if self._playbooks is None or resolution.spec is None:
+            return resolution
+        from dataclasses import replace
+
+        artifact = self._generated_artifact(resolution, query)
+        try:
+            artifact, path = self._save_generated_artifact(artifact)
+            self._playbooks.adopt(artifact.name)
+            logger.info("playbook: saved generated Harness {!r} at {}", artifact.name, path)
+            return replace(
+                resolution,
+                spec=artifact.harness,
+                artifact_name=artifact.name,
+                persisted=True,
+            )
+        except Exception:  # noqa: BLE001 - persistence must not cost the turn
+            logger.opt(exception=True).warning("playbook: generated Harness could not be saved; using it in memory")
+            return resolution
+
+    def session_draft(self, session_key: str):
+        """The Persona this session generated and has not saved, or ``None``."""
+        return self._session_drafts.get(session_key)
+
+    def save_session_draft(self, session_key: str, name: str | None = None) -> str:
+        """Write this session's draft to the library, and answer its saved name.
+
+        The name is the reader's to choose: the generator proposes one, and the
+        page may send another. A collision takes the first free numeric suffix,
+        the way every other generated artifact does -- but now only when a
+        reader asked for the save, so the suffix means two Personas were kept,
+        not two turns were taken.
+        """
+        artifact = self._session_drafts.get(session_key)
+        if artifact is None:
+            raise ValueError("this session has no generated Persona to save")
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        wanted = (name or artifact.name).strip()
+        if not wanted:
+            raise ValueError("a Persona needs a name")
+        if wanted != artifact.name:
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": wanted})
+            artifact = artifact.model_copy(update={"name": wanted, "harness": harness})
+        saved, path = self._save_generated_artifact(artifact)
+        self._playbooks.adopt(saved.name)
+        self._session_drafts.pop(session_key, None)
+        logger.info("playbook: saved Persona {!r} at {}", saved.name, path)
+        return saved.name
+
+    def discard_session_draft(self, session_key: str) -> bool:
+        """Drop this session's unsaved Persona; ``True`` when there was one."""
+        return self._session_drafts.pop(session_key, None) is not None
+
+    def _save_generated_artifact(self, artifact: Any):
+        """Atomically save under the requested name or the first numeric suffix."""
+        if self._playbooks is None:
+            raise RuntimeError("Playbook runtime is unavailable")
+        from raven.playbook.store import PlaybookExistsError
+
+        base = artifact.name
+        attempt = 1
+        while True:
+            name = base if attempt == 1 else f"{base}-{attempt}"
+            harness = artifact.harness
+            if harness is not None:
+                harness = harness.model_copy(update={"name": name})
+            candidate = artifact.model_copy(update={"name": name, "harness": harness})
+            try:
+                return candidate, self._playbooks.store.save(candidate)
+            except PlaybookExistsError:
+                attempt += 1
+
+    async def _write_worker_table(self, req: Any, session_key: str, binding: Any) -> "DelegateTable | None":
+        """Backward-compatible table-only face used by focused tests."""
+        return (await self._resolve_playbook_turn(req, session_key, binding)).table
+
+    async def _finish_playbook_turn(self, resolution: Any, capture: Any, binding: Any) -> None:
+        """Update a Task artifact with proven Workflow evidence and save the run."""
+        if self._playbooks is None:
+            return
+        from raven.playbook.run_record import RunRecordStore
+
+        try:
+            capture.saved_playbook = resolution.artifact_name if resolution.persisted else None
+            if resolution.capture_workflow and capture.dags and not resolution.selected_playbook:
+                from raven.playbook.workflow_compiler import WorkflowCompiler
+
+                evidence = capture.dags[-1]
+                # The evidence's own Harness, when the run extended it with a
+                # derived role, is what the compiled graph names. Falling back to
+                # the resolution's keeps a run that moved nothing compiled against
+                # exactly the Harness the turn was given.
+                harness = evidence.harness if evidence.harness is not None else resolution.spec
+                artifact = await WorkflowCompiler(binding.provider, binding.model).compile(
+                    query=capture.query,
+                    dag=evidence.spec,
+                    run_id=capture.run_id,
+                    harness=harness,
+                    name_hint=resolution.artifact_name,
+                    description_hint=resolution.description,
+                )
+                store = self._playbooks.store
+                if resolution.persisted:
+                    # The compiler parameterizes a proven graph; it does not own
+                    # artifact identity. Keep the numeric suffix chosen by the
+                    # atomic Harness save even when the model ignores nameHint,
+                    # and stamp it on the Harness too: a run's frozen table was
+                    # built before a save collision could rename the artifact.
+                    stored_harness = (
+                        harness.model_copy(update={"name": resolution.artifact_name}) if harness is not None else None
+                    )
+                    artifact = artifact.model_copy(update={"name": resolution.artifact_name, "harness": stored_harness})
+                    path = store.save(artifact, overwrite=True)
+                else:
+                    artifact, path = self._save_generated_artifact(artifact)
+                self._playbooks.adopt(artifact.name)
+                capture.saved_playbook = artifact.name
+                logger.info("playbook: updated Task artifact {!r} with Workflow at {}", artifact.name, path)
+            capture.finish()
+        except Exception as exc:  # noqa: BLE001 - persistence must not replace the user's answer
+            logger.opt(exception=True).warning("playbook: turn finalization failed")
+            capture.finish(status="completed", error=str(exc))
+        finally:
+            try:
+                path = RunRecordStore(self._playbooks.store.root).save(capture)
+                logger.info("playbook: saved run record {}", path)
+            except Exception:  # noqa: BLE001 - record failure must not cost the turn
+                logger.opt(exception=True).warning("playbook: run record could not be saved")
 
     def set_default_binding(self, binding: ModelBinding) -> None:
         """Change what new sessions start on.
@@ -920,6 +1310,15 @@ class WiringMixin:
         allowed_dirs = (self.workspace,) if self.restrict_to_workspace else ()
         for cls in (ReadFileTool, WriteFileTool, EditFileTool, ListDirTool, GrepTool, FindTool):
             self.tools.register(cls(workspace=self.workspace, allowed_dirs=allowed_dirs))
+        # Only beside a history strategy that puts refs where the model reads
+        # them: next to one that does not, the tool is a capability the model
+        # reaches for and is always told "found nothing". Read with a default
+        # because an engine slotted in through the runtime door need not
+        # subclass the contract.
+        if getattr(self.context_engine, "mints_source_refs", False):
+            from raven.agent.tools.context_retrieve import ContextRetrieveTool
+
+            self.tools.register(ContextRetrieveTool(self.sessions))
         if self._deliverables is not None:
             from raven.agent.tools.deliver import DeliverFilesTool
 
@@ -956,6 +1355,13 @@ class WiringMixin:
         # type: a plugin that shadows one of these names -- even with a
         # subclass -- replaces the entry, and the built-in's config section
         # says nothing about the replacement's credential story.
+        # The material this conversation was pointed at. Registered always and
+        # withheld where nothing was picked, which is the reversible direction:
+        # a reader who attaches a base mid-conversation gets the tool on the
+        # next model call rather than on the next process.
+        from raven.agent.tools.knowledge import KnowledgeSearchTool
+
+        self.tools.register(KnowledgeSearchTool())
         self._config_gated_tools: dict[str, Any] = {}
         web_search = WebSearchTool(
             api_key=self._live_web_search_key,
@@ -1091,6 +1497,7 @@ class WiringMixin:
         )
         if skill_registry is not None or self._skill_hub_client is not None:
             from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool, UseSkillTool
+            from raven.config.live import skill_hub_enabled
 
             self.tools.register(
                 ReadSkillTool(
@@ -1099,6 +1506,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                 ),
             )
             # Pull-mode discovery: search on the model's own terms through the
@@ -1107,6 +1515,7 @@ class WiringMixin:
                 FindSkillTool(
                     lambda: getattr(self.context_engine, "skills_router", None),
                     hub_wired=self._skill_hub_client is not None,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
@@ -1119,6 +1528,7 @@ class WiringMixin:
                     min_safety=self._skill_min_safety,
                     blocklist=self._skill_blocklist,
                     blocklist_reader=self._skill_blocklist_reader,
+                    enabled_reader=lambda: skill_hub_enabled(self._live_config),
                     auto_install=self._skill_auto_install,
                     install_audit_path=(
                         self.workspace / "skills" / "hub" / "installs.jsonl"
@@ -1207,19 +1617,38 @@ class WiringMixin:
                 memory_for=self.subagents.memory_scope,
                 mode_for=self.subagents.resolve_mode,
                 model_for=self.subagents.session_model_for,
+                effort_for=self.subagents.session_effort_for,
                 gate=self.subagents.dispatch_gate,
                 announce=self.subagents.announce_dag_result,
                 announce_exception=self.subagents.announce_dag_exception,
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
+                # The manager's own sandbox builder, so a graph node's exec
+                # runs in the VM its tools.sandbox configured rather than on
+                # the host -- the silent fallback the sandbox docs disown.
+                sandbox_for=self.subagents.sandbox_executor_for,
                 ask=self._confirm_graph,
                 control_reachable=self.dag_control_reachable,
                 control_advert=self.dag_control_advert,
                 provider_for=self._verdict_provider,
                 binding_for=self._turn_binding,
+                spawn_offered=lambda: self.tools.offers_by_name("spawn"),
                 verdict_config=self.subagent_dag_config,
             )
         )
+        # The host's own record of the conversation's matters. Host-only for the
+        # same reason as everything above: a subagent's turns are its caller's
+        # business, and a board kept there would record the caller's matters twice.
+        if self._task_board_config.enabled:
+            from raven.agent.task_board.service import TaskBoardService
+            from raven.agent.task_board.tool import TaskBoardTool
+
+            self.task_board = TaskBoardService(self.sessions)
+            self.tools.register(TaskBoardTool(self.task_board, loop=self))
+        # The two close the array, in this order, so the roster spawn's
+        # description ends with is the last thing the array says and the graph
+        # tool's pointer to it lands on the tool read right after.
+        self.tools.list_last("run_subagent_dag", "spawn")
         # The graph tool's own acceptance text is the only advertisement these
         # three get: hidden from the schema so the per-turn tool list carries
         # nothing a conversation that never starts a DAG has any use for, they
@@ -1364,6 +1793,11 @@ class WiringMixin:
     _plugin_services_started = False
     _started_services: tuple = ()
 
+    @property
+    def running_plugin_services(self) -> tuple:
+        """The contributed services started and not yet stopped: work this host runs with nobody asking."""
+        return self._started_services
+
     async def start_plugin_services(self) -> None:
         """Start every contributed background service, once.
 
@@ -1374,7 +1808,8 @@ class WiringMixin:
 
         The contributed session observers ride this same lifecycle: attached
         to the session store here, detached in :meth:`stop_plugin_services`
-        (paper: contracts/session_events.py).
+        (paper: contracts/session_events.py). The host's own task board joins
+        them, so a deleted conversation's board goes with it.
         """
         if self._plugin_services_started:
             return
@@ -1393,7 +1828,8 @@ class WiringMixin:
                 continue
             started.append(service)
         self._started_services = tuple(started)
-        self.sessions.set_delete_observers(self.session_observers)
+        board = (self.task_board,) if self.task_board is not None else ()
+        self.sessions.set_delete_observers((*self.session_observers, *board))
 
     async def stop_plugin_services(self) -> None:
         """Stop started services, newest first; idempotent, loud on error.
@@ -1481,21 +1917,25 @@ class WiringMixin:
             state_for=self.subagents.instance_state,
             mode_for=self.subagents.resolve_mode,
             model_for=self.subagents.session_model_for,
+            effort_for=self.subagents.session_effort_for,
             gate=self.subagents.dispatch_gate,
             announce=self.subagents.announce_dag_result,
             announce_exception=self.subagents.announce_dag_exception,
             adopt=self.subagents.adopt_background_run,
             charge=self.subagents.charge_dag_run,
+            # Same manager hooks as the registered tool: the sandbox builder
+            # above, for the same reason -- a stored graph's nodes exec too.
+            sandbox_for=self.subagents.sandbox_executor_for,
             ask=self._confirm_graph,
             # Same manager hooks as the registered tool (see the docstring above):
             # a playbook step is an ordinary DAG node, so it is judged on the same
             # terms once judgement is wired in.
             provider_for=self._verdict_provider,
             binding_for=self._turn_binding,
-            # Stored Playbook nodes already name roster agents and carry their
-            # own prompts. A turn-scoped generated worker with the same label
-            # must not rewrite that persisted graph.
-            worker_table_for=lambda: None,
+            # PlaybookRuntime opens an explicit delegate scope for every stored
+            # graph: its durable Harness table for a v2 composite, or None for a
+            # legacy/workflow-only graph. Reading the scope here lets composites
+            # resolve aliases without exposing them to unrelated stored DAGs.
             control_reachable=self.dag_control_reachable,
             control_advert=self.dag_control_advert,
             verdict_config=self.subagent_dag_config,
@@ -1597,12 +2037,9 @@ class WiringMixin:
         credential -- a bare model id sent through another vendor's provider
         fails, and the judge fails open, so verdicts would go quietly off.
         """
-        pinned = self.subagent_dag_config.verdict_model
-        if pinned and self._provider_pool is not None:
-            binding = self._provider_pool.bind_pin(pinned)
-            if binding is not None:
-                return binding.provider
-        return self.provider
+        from raven.agent.subagent.dag_verdict import judge_provider
+
+        return judge_provider(self.provider, self._provider_pool, self.subagent_dag_config.verdict_model)
 
     async def _confirm_graph(self, conversation_id: str, question: str) -> bool:
         """The graph-level ``confirm`` gate's route to a human.
@@ -1679,9 +2116,14 @@ class WiringMixin:
         workspace: Path,
         skill_forge_router_config: "SkillForgeRouterConfig | None",
     ) -> "SkillHubClient | None":
-        """Construct the shared Skill Hub client, or ``None`` when no Hub is
-        configured. Downloads land under ``<workspace>/skills/hub`` so a
-        use_skill'd bundle is discoverable by the on-disk skill registry."""
+        """Construct the shared Skill Hub client, or ``None`` when no Hub
+        endpoint is configured. Downloads land under ``<workspace>/skills/hub``
+        so a use_skill'd bundle is discoverable by the on-disk skill registry.
+
+        Built while the switch is off too: the tools ask the live config
+        before each Hub call, so turning the source back on does not need the
+        loop rebuilt. Only the endpoint is fixed at construction.
+        """
         hub_cfg = getattr(skill_forge_router_config, "hub", None)
         if hub_cfg is None or not getattr(hub_cfg, "endpoint", None):
             return None
@@ -1751,9 +2193,18 @@ class WiringMixin:
         )
 
     def _set_tool_context(
-        self, channel: str, chat_id: str, message_id: str | None = None, session_key: str | None = None
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+        surface: str | None = None,
     ) -> None:
-        """Update context for all tools that need routing info."""
+        """Update context for all tools that need routing info.
+
+        ``surface`` goes to the tools that start runs, whose results come back as
+        turns of their own: the front end the turn declared is where those are read.
+        """
         # Before the per-tool contexts because the schema is assembled from this
         # same turn: a channel-bound tool is withheld by the registry, not by
         # its own refusal (see ToolRegistry.set_channel).
@@ -1767,19 +2218,23 @@ class WiringMixin:
             "dag_status",
             "cancel_dag",
             "resolve_dag_node",
+            "context_retrieve",
+            "task_board",
         ):
             if tool := self.tools.get(name):
                 if not hasattr(tool, "set_context"):
                     continue
                 if name == "message":
                     tool.set_context(channel, chat_id, message_id)
+                elif name in ("spawn", "run_subagent_dag"):
+                    tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}", surface=surface)
                 elif name in (
-                    "spawn",
-                    "run_subagent_dag",
                     "deliver_files",
                     "dag_status",
                     "cancel_dag",
                     "resolve_dag_node",
+                    "context_retrieve",
+                    "task_board",
                 ):
                     tool.set_context(channel, chat_id, session_key or f"{channel}:{chat_id}")
                 else:
@@ -1791,7 +2246,7 @@ class WiringMixin:
         # to that turn's own address rather than the last human conversation's.
         if self._playbooks is not None:
             self._playbooks.set_context(
-                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}"
+                channel=channel, chat_id=chat_id, session_key=session_key or f"{channel}:{chat_id}", surface=surface
             )
 
     def dag_tools(self) -> list[Any]:

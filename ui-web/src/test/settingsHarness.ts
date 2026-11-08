@@ -27,7 +27,7 @@ export const providers = (): ProviderRow[] => [
     labels: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one', context_window: 200000, kind: 'text' } } },
   { id: 'openrouter', name: 'OpenRouter', models: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small', 'google/gemini-2.5-flash-image'],
     configured: ['openai/gpt-4o', 'anthropic/claude-sonnet-4-5', 'text-embedding-3-small', 'google/gemini-2.5-flash-image'],
-    on: true, kind: 'key', acceptsKey: true, gateway: true,
+    on: true, kind: 'key', acceptsKey: true, gateway: true, imageApi: true, videoApi: true,
     /* Only the two the wire would describe: `_model_labels` skips a model no
        catalogue names and no tag reaches, and these two are reached by
        `inferred_tags` and by a catalogue row. The label is the id, which is what
@@ -37,7 +37,8 @@ export const providers = (): ProviderRow[] => [
       'google/gemini-2.5-flash-image': { label: 'gemini-2.5-flash-image', kind: 'image' },
     },
     apiBase: 'https://openrouter.ai/api/v1', defaultApiBase: 'https://openrouter.ai/api/v1', headers: { 'X-Title': '****set****' } },
-  { id: 'openai', name: 'OpenAI', models: [], configured: [], on: false, kind: 'key', acceptsKey: true, keyUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'openai', name: 'OpenAI', models: [], configured: [], on: false, kind: 'key', acceptsKey: true, imageApi: true,
+    keyUrl: 'https://platform.openai.com/api-keys' },
   { id: 'minimax_global', name: 'MiniMax Global', models: [], configured: [], on: false, kind: 'oauth', acceptsKey: false },
   { id: 'ollama', name: 'Ollama', models: [], configured: [], on: false, kind: 'local', acceptsKey: true, needsBase: true },
 ]
@@ -48,7 +49,7 @@ export const providers = (): ProviderRow[] => [
    composer's picker, which reads this one. */
 const asModelProvider = (p: ProviderRow): Provider => ({
   id: p.id, name: p.name, models: p.models, configured: p.configured,
-  on: p.on, kind: p.kind, labels: p.labels, gateway: p.gateway,
+  on: p.on, kind: p.kind, labels: p.labels, gateway: p.gateway, imageApi: p.imageApi, videoApi: p.videoApi,
   current: p.id === 'anthropic',
 })
 
@@ -84,6 +85,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
       providers: { anthropic: { modelOverlay: { 'claude-opus-4-5': { label: 'Opus', description: 'the big one' } } } },
     },
     configPath: '/home/me/.raven/config.json',
+    skillHub: { on: false, awaitingReload: false },
     everos: {
       available: true,
       owned: true,
@@ -96,6 +98,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
         ollama: ['embedding', 'llm', 'multimodal', 'rerank'],
       },
     },
+    everosCloud: null,
     providers: providers(),
     curProvider: 'anthropic',
     model: 'claude-opus-4-5',
@@ -161,12 +164,15 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
   const rec = (name: string, args: unknown): SettingsSnapshot => { calls.push([name, args]); return data }
   const built: SettingsSource = {
     load: async () => data,
+    everosCloud: async () => data.everosCloud ?? null,
     set: async (key, value) => rec('set', { key, value }),
     everosSet: async (section, model, provider, protocol) =>
       rec('everosSet', { section, model, provider, ...(protocol ? { protocol } : {}) }),
     usage: async (range) => { calls.push(['usage', range]); return null },
     provider: async (op, params) => rec('provider', { op, ...params }),
     fetchModels: async (slug, verify) => { calls.push([verify ? 'fetchModels:verify' : 'fetchModels', slug]); return { models: [], status: 'ok' } },
+    checkKey: async (slug, params) => { calls.push(['checkKey', { slug, ...params }]); return { ok: true, status: 'valid', http_status: 200, models_count: 0, refused: false } },
+    revealKey: async (slug) => { calls.push(['revealKey', slug]); return null },
     reloadProviders: async () => data,
     addModels: async (slug, models) => rec('addModels', { slug, models }),
     setFields: async (slug, fields) => rec('setFields', { slug, fields }),

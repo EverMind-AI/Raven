@@ -17,7 +17,10 @@
       "maxTokens": 32768,
       "contextWindowTokens": 400000,
       "maxToolIterations": 150,
-      "llmCallTimeout": 1800
+      "llmCallTimeout": 1800,
+      "taskBoard": {
+        "enabled": false
+      }
     }
   },
   "tools": {
@@ -71,8 +74,6 @@
   "plugins": {
     "config": {
       "everos-memory": {
-        "mode": "http",
-        "base_url": "http://localhost:18791",
         "user_id": "raven-oncall",
         "agent_id": "raven-oncall",
         "timeout_s": 360

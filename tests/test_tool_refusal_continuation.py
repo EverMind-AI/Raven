@@ -179,3 +179,54 @@ async def test_a_blocked_call_cancels_its_siblings_even_when_the_turn_goes_on(tm
 
     assert tool.calls == 1
     assert result == "Took another route."
+
+
+class _ForwardedProvider:
+    """One refusal, reached through ``tool_call`` -- the route a tool the model
+    cannot see is invoked by. Its result travels back out through the forwarder,
+    which owns none of the fields the registry unwrapped."""
+
+    def __init__(self, forwarded: str) -> None:
+        self.responses = [
+            LLMResponse(
+                content="",
+                tool_calls=[
+                    ToolCallRequest(id="call-a", name="tool_call", arguments={"name": forwarded, "arguments": {}})
+                ],
+                finish_reason="tool_calls",
+            ),
+            LLMResponse(content="Took another route.", finish_reason="stop"),
+        ]
+
+    async def chat_with_retry(self, **kwargs) -> LLMResponse:
+        return self.responses.pop(0)
+
+    def get_default_model(self) -> str:
+        return "fake/model"
+
+
+@pytest.mark.parametrize("withheld", [False, True])
+async def test_a_forwarded_refusal_keeps_the_turn_decision_it_carried(tmp_path, withheld: bool) -> None:
+    """Forwarding is a transport, not a filter.
+
+    ``tool_call`` hands the target's result straight back, so the refusal's own
+    answer about the turn survives the extra hop exactly as it does on the
+    direct path. Before this, a forwarded refusal lost both flags and the loop
+    read it as ordinary output -- the model was asked again and the turn went on
+    after an operation the user had stopped.
+    """
+    from raven.agent.tools.tool_search import ToolCallTool, ToolSearchController
+
+    forwarded = _Refuser(Continuation.ABORT_TURN)
+    provider = _ForwardedProvider("refuser")
+    agent = AgentLoop(provider=provider, workspace=tmp_path, model="fake/model")
+    agent.tools.register(forwarded)
+    controller = ToolSearchController(agent.tools, always_visible={"refuser"} if withheld else set())
+    agent.tools.register(ToolCallTool(controller))
+
+    result = await _run(agent)
+
+    assert forwarded.calls == 1
+    assert "no alternative method will be attempted" in result
+    # The second response is still on the shelf: the model was never asked again.
+    assert len(provider.responses) == 1

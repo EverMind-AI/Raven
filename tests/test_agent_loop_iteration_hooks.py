@@ -132,6 +132,30 @@ async def test_before_execute_tools_rollback_discards_the_proposal_and_does_not_
 
 
 @pytest.mark.asyncio
+async def test_a_hooks_own_max_tokens_stands_beside_a_prompt_that_leaves_less_room(tmp_path):
+    """Near the window a call is sized to the room beside its prompt, but a re-sample a hook
+    asked for with its own ``max_tokens`` goes out at that value: the hook chose it."""
+
+    class BounceOnce(AgentHook):
+        def __init__(self) -> None:
+            self.bounced = False
+
+        async def before_execute_tools(self, ctx):
+            if not self.bounced:
+                self.bounced = True
+                return HookDecision(rollback=True, rollback_overrides={"max_tokens": 9000})
+            return HookDecision()
+
+    provider = _ScriptedProvider([_tool_call("list_dir", {"path": "."}), _text("answered directly")])
+    loop = _loop(tmp_path, provider, [BounceOnce()])
+    loop._reply_room = lambda messages, tools, model: 3000
+
+    await loop._process_message(_req())
+
+    assert [call["max_tokens"] for call in provider.calls] == [3000, 9000]
+
+
+@pytest.mark.asyncio
 async def test_after_iteration_short_circuit_replaces_the_draft_without_persisting_it(tmp_path):
     class Replace(AgentHook):
         async def after_iteration(self, ctx):
@@ -266,7 +290,9 @@ async def test_a_session_policy_pins_the_reasoning_effort_of_its_calls(tmp_path)
     other = _ScriptedProvider([_text("plain")])
     quiet = _loop(tmp_path, other, [])
     await quiet._process_message(_req())
-    assert "reasoning_effort" not in other.calls[0]
+    # Sent as None, the provider's own default, rather than left out for the
+    # provider to fill from the copy it took at boot.
+    assert other.calls[0]["reasoning_effort"] is None
 
 
 @pytest.mark.asyncio
@@ -553,3 +579,22 @@ def test_the_loop_wires_this_sessions_tier_into_the_subagent_manager(tmp_path):
     loop.set_session_policy("cli:c", mode="max")
     assert loop.subagents._session_tier("cli:c") == "max", "a session's own tier reaches the manager"
     assert loop.subagents._session_tier("cli:other") == "high", "and only that session's"
+
+
+@pytest.fixture(autouse=True)
+def _fake_model_declares_every_level(monkeypatch):
+    """The turn clamps to the model's levels; fake/model declares them all."""
+    from raven.agent.loop import wiring
+
+    monkeypatch.setattr(
+        wiring.effort_levels,
+        "levels_for",
+        lambda model, declared=(), *, provider=None, refresh=False: (
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ),
+    )

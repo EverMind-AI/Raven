@@ -1,41 +1,42 @@
-/* The working directory a conversation runs in: the chip on the composer
- * (#wdChip), the popover it opens (#wdPop) and the tag beside a conversation's
- * title (#wdTag).
+/* The working directory a conversation runs in: the popover it is chosen from
+ * (#wdPop), raised by the "@" menu's Folder row, and the tag beside a
+ * conversation's title (#wdTag).
  *
  * A store rather than a writer, the way perm.ts and tier.ts next door are:
- * <WorkdirChip/>, <WorkdirPopover/> and <WorkdirTag/> render from it
- * (src/chrome/WorkdirChip.tsx, src/chrome/WorkdirPopover.tsx,
+ * <WorkdirPopover/> and <WorkdirTag/> render from it
+ * (src/chrome/WorkdirPopover.tsx,
  * src/chrome/WorkdirTag.tsx). Nothing here reads the document; what stays here
  * is what decides.
  *
- * Two states. On a DRAFT the chip is live: the reader picks a folder here, or
+ * Two states. On a DRAFT the row is live: the reader picks a folder here, or
  * leaves the default, and the pick is held in this module until the first
  * message mints a session -- the runtime's promotion reads it off `staged()`
  * and hands it to `session.create`, which is the only moment a working
  * directory can be set (raven/rpc/methods/session.py). Held here rather than
  * on the draft runtime because state/session/registry.ts imports the rail's
- * store and the rail's draw repaints this chip: a pick that lived on the
- * runtime would close that ring. IN a conversation the chip is gone and the
+ * store and the rail's draw repaints this row: a pick that lived on the
+ * runtime would close that ring. IN a conversation the row is gone and the
  * tag beside the title reports instead: the row's `workdir` names the folder,
  * with the path on its title, because the engine cannot move a conversation
  * once it has started -- and the default is nothing to announce.
  *
- * "Default" is the word for no pick, on the chip and in the menu: the engine's
+ * "Default" is the word for no pick, on the row and in the menu: the engine's
  * policy default is a real place to work, not an absence of one.
  *
  * The menu's recent folders come from the conversations on the rail, deduped
  * in the rail's own order (latest activity first). Its last row is one of two
- * things: on the reader's own desktop it opens the host's folder dialog
- * (`fs.pick_dir`), because a person choosing a folder already has Finder for
- * that; anywhere else it opens the in-page browser, which walks the gateway's
- * `fs.dirs` through the workspace domain's source, and a folder the engine
- * would refuse (the agent's own data, or an ancestor of it) is shown greyed
- * and explained rather than hidden, because the folders under an ancestor may
- * be perfectly good workspaces.
+ * things: on the reader's own desktop, where that desktop has one, it opens the
+ * host's folder dialog (`fs.pick_dir`), because a person choosing a folder
+ * already has Finder for that; anywhere else it opens the in-page browser,
+ * which walks the gateway's `fs.dirs` through the workspace domain's source,
+ * and a folder the engine would refuse (the agent's own data, or an ancestor
+ * of it) is shown greyed and explained rather than hidden, because the folders
+ * under an ancestor may be perfectly good working directories.
  */
 
 import { t } from '../i18n/t'
 import { current as sessionCurrent } from '../lib/session'
+import { servesFolderDialog } from '../rpc/capabilities'
 import { rows as sessionRows, sess } from './session/rows'
 import { ds } from './sources'
 import { makeStore } from './store'
@@ -55,7 +56,7 @@ export interface WdRow {
   readonly ticked: boolean
 }
 
-/* The chip's own values, as the last draw read the page: the word on it, the
+/* The row's own values, as the last draw read the page: the word on it, the
    sentence on its title, whether a folder (rather than the default) is named,
    and whether the reader may still change it. Null until the first draw. */
 export interface WdPaint {
@@ -66,32 +67,38 @@ export interface WdPaint {
 }
 
 export interface WdState {
-  /** Up or down: the popover's data-open and the chip's aria-expanded. */
+  /** Up or down: the popover's data-open. */
   readonly open: boolean
   /** The host's folder dialog is up, and the menu is waiting on it. */
   readonly picking: boolean
   /** Bumped by every open, so a popover opened twice is measured twice. */
   readonly opened: number
-  /** The menu, or the folder browser the menu's last row opens. */
-  readonly view: 'menu' | 'browse'
+  /** The menu, the folder browser the menu's last row opens, or the list of
+   *  drives that a browser standing on a root cannot reach by walking. */
+  readonly view: 'menu' | 'browse' | 'drives'
   /** The menu's rows, built on open; null while it has never been opened. */
   readonly listed: readonly WdRow[] | null
   /** The directory the browser stands in, or null before the first answer. */
   readonly listing: DirListing | null
   /** A listing is on its way. */
   readonly loading: boolean
+  /** Bumped by every read the browser asks for, refused or not: the path
+   *  bar holds what was typed into it, and a refusal leaves the browser where
+   *  it stood, so the field is keyed on this to come back with that path. */
+  readonly asked: number
   /** Why the browser could not open, said on the menu; null when it could. */
   readonly err: string | null
-  /** What the chip shows, or null while nothing has drawn it yet. */
+  /** What the "@" menu's row shows, or null while nothing has drawn it yet. */
   readonly paint: WdPaint | null
 }
 
 const shut: WdState = {
-  open: false, picking: false, opened: 0, view: 'menu', listed: null, listing: null, loading: false, err: null, paint: null,
+  open: false, picking: false, opened: 0, view: 'menu', listed: null, listing: null, loading: false, asked: 0,
+  err: null, paint: null,
 }
 const store = makeStore<WdState>(shut)
 
-/** The store, for <WorkdirChip/>, <WorkdirPopover/> and <WorkdirTag/>. */
+/** The store, for <WorkdirPopover/>, <WorkdirTag/> and the "@" menu's row. */
 export const { get, subscribe } = store
 
 const samePaint = (a: WdPaint | null, b: WdPaint | null): boolean => {
@@ -107,7 +114,8 @@ export function set(next: WdState): void {
   const now = get()
   if (next.open === now.open && next.picking === now.picking && next.opened === now.opened
     && next.view === now.view && next.listed === now.listed && next.listing === now.listing
-    && next.loading === now.loading && next.err === now.err && samePaint(next.paint, now.paint)) return
+    && next.loading === now.loading && next.asked === now.asked && next.err === now.err
+    && samePaint(next.paint, now.paint)) return
   store.set(next)
 }
 
@@ -123,7 +131,7 @@ let picked: string | null = null
 export const staged = (): string | null => picked
 
 /* The pick is spent or the draft is gone -- and so is any menu that was open
-   over it: a fresh draft starts with the chip closed. */
+   over it: a fresh draft starts with the menu closed. */
 export function clearStaged(): void {
   picked = null
   set({ ...get(), open: false })
@@ -136,9 +144,9 @@ export function base(path: string): string {
   return parts[parts.length - 1] || path
 }
 
-/* ---- the chip -------------------------------------------------------------- */
+/* ---- what the row and the tag say ----------------------------------------- */
 
-/* The chip and the tag, as the values <WorkdirChip/> and <WorkdirTag/> render.
+/* The name and the tag, as the "@" menu's row and <WorkdirTag/> render them.
    Called by the rail's own draw (features/rail/store.ts), which runs on every
    change of the list and of the conversation on screen -- the two things this
    reads -- and by the picks below. Nothing here reads the document. */
@@ -205,18 +213,25 @@ const menuRows = (): readonly WdRow[] => {
   ]
 }
 
-/* Open only while the pick can still change: a conversation's chip is hidden,
-   and a click that reached here anyway must not raise a menu over it. The way
-   back out is the chip, a pointer landing outside (state/globalListeners.ts's
+/* Open only while the pick can still change: a conversation's row is not
+   offered, and a click that reached here anyway must not raise a menu over it.
+   The way back out is a pointer landing outside (state/globalListeners.ts's
    click-away arbitration), Escape (state/escapeOrder.ts), a pick, or leaving
    the draft. */
 export function open(): void {
   if (get().paint?.locked) return
+  using = null
   set({ ...get(), open: true, view: 'menu', listed: menuRows(), err: null, opened: get().opened + 1 })
 }
 
 export function close(): void {
+  using = null
   set({ ...get(), open: false })
+}
+
+/* The handshake can change the menu's last row without changing this store. */
+export function redraw(): void {
+  if (get().open) store.set({ ...get() })
 }
 
 /* Whether the popover's last row may be pressed: not while the dialog is up. */
@@ -247,14 +262,27 @@ const detailOf = (e: unknown): string => {
    lands after a later ask, a close or a switch is dropped. */
 let asking = 0
 
-/* Whether the menu's last row opens the host's own folder dialog (Finder, the
-   Explorer dialog) rather than the in-page walk below: the gateway offers one
-   AND runs on this desktop, so the dialog opens where the reader is. A remote
-   gateway would open it on somebody else's screen. */
+/* One press of Use at a time: the read remounts the path bar with the folder
+   the browser is leaving, so the second click of a double press would name
+   that stale folder and stage it before the typed read lands. The ticket says
+   whose press holds it, so a press that lost the browser cannot release the
+   one that owns it. */
+let using: number | null = null
+let presses = 0
+
+/* Whether the menu's last row opens the host's own folder dialog (Finder, or
+   zenity/kdialog on a Linux desktop) rather than the in-page walk below: the
+   gateway's host has one AND runs on this desktop, so the dialog opens where
+   the reader is. A remote gateway would open it on somebody else's screen.
+   Whether the host has one is the handshake's to say: a gateway in a container,
+   or on a headless box reached through a forwarded port, is served at a
+   loopback address too. A Windows gateway never announces one -- its dialog
+   opens behind the browser (raven/rpc/folder_dialog.py) -- so the same few
+   lines put the walk in front of a reader on their own Windows desktop. */
 export function nativePick(): boolean {
   try {
     const src = ds('workspace')
-    return !!src.pickDir && !!src.hostIsLocal?.()
+    return !!src.pickDir && servesFolderDialog() && !!src.hostIsLocal?.()
   } catch {
     return false
   }
@@ -326,40 +354,110 @@ function dirs(): Dirs | null {
    browser once it stands somewhere -- and replaces nothing. Answers that land
    after the popover closed, or after a later ask, are dropped. */
 
-export async function browse(path?: string): Promise<void> {
+async function read(path?: string, also?: string): Promise<boolean> {
   const fn = dirs()
   if (!fn) {
     set({ ...get(), err: t('gui.wd.not_live') })
-    return
+    return false
   }
   const ticket = ++asking
-  set({ ...get(), loading: true, err: null })
+  set({ ...get(), loading: true, err: null, asked: get().asked + 1 })
   try {
-    const listing = await fn(path)
-    if (ticket !== asking || !get().open) return
+    let listing
+    try {
+      listing = await fn(path)
+    } catch (first) {
+      /* A paste carries the whitespace around it, and the folder it names does
+         not. The host refuses the padded path, so a second read tries it
+         without the padding -- and the refusal the reader is shown is the
+         first one, about the path they typed. What is acted on is the folder
+         the read landed on, so a name that ends in a space is still that
+         folder. */
+      if (!also || also === path) throw first
+      try {
+        listing = await fn(also)
+      } catch {
+        throw first
+      }
+    }
+    if (ticket !== asking || !get().open) return false
     set({ ...get(), view: 'browse', listing, loading: false, err: null })
+    return true
   } catch (e) {
-    if (ticket !== asking || !get().open) return
+    if (ticket !== asking || !get().open) return false
     set({ ...get(), loading: false, err: t('gui.wd.failed', { detail: detailOf(e) }) })
+    return false
   }
+}
+
+export function browse(path?: string): Promise<void> {
+  return read(path).then(() => undefined)
 }
 
 /** Back from the browser to the menu, rebuilt: a pick may have been made. */
 export function back(): void {
   asking += 1
+  using = null
   set({ ...get(), view: 'menu', listed: menuRows(), loading: false, err: null })
 }
 
-/** The browser's "use this folder", offered only where the engine would take it. */
-export function useHere(): void {
+/** The view a root needs: the other roots the gateway's machine exposes.
+ *  A root has no parent to go up to, so without this a browser that started
+ *  in the user's home could never reach a second drive. */
+export function drives(): void {
+  const here = get().listing
+  const roots = here?.roots
+  if (!roots || !roots.length) return
+  asking += 1
+  set({ ...get(), view: 'drives', loading: false, err: null })
+}
+
+/** A path typed into the browser's bar: read as any other folder, and refused
+ *  the same way, on the view the reader is looking at. The value is passed
+ *  through unchanged, because a Windows name may end in a space once the
+ *  extended path prefix authored it, and trimming would name a sibling; the
+ *  path without its surrounding whitespace is read only if the exact one is
+ *  refused, which is what a paste with a newline around it gets. */
+export function go(path: string): Promise<void> {
+  const at = path.trim()
+  if (!at) return Promise.resolve()
+  asking += 1
+  return read(path, at).then(() => undefined)
+}
+
+/** The browser's "use this folder", offered only where the engine would take
+ *  it. A path typed into the bar is read first, like Enter; only a successful
+ *  read is staged. */
+export async function useHere(path?: string): Promise<void> {
   const here = get().listing
   if (!here || !here.ok) return
-  pick(here.path)
+  if (using !== null) return
+  const at = path ?? ''
+  if (!at.trim() || at === here.path) {
+    pick(here.path)
+    return
+  }
+  const press = ++presses
+  using = press
+  try {
+    if (!(await read(at, at.trim()))) return
+    /* A typed path is judged as a row is: walking into a folder the engine would
+       refuse stays allowed, the pick alone is withheld. */
+    const landed = get().listing
+    if (!landed || !landed.ok) {
+      set({ ...get(), err: t('gui.wd.blocked') })
+      return
+    }
+    pick(landed.path)
+  } finally {
+    if (using === press) using = null
+  }
 }
 
 /* Test seam only: the pick, the ticket and the popover are the module's. */
 export function _resetForTests(): void {
   picked = null
+  using = null
   asking = 0
   set(shut)
 }

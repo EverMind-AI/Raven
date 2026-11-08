@@ -36,13 +36,17 @@ import type { ParamsOf, ResultOf } from '../../rpc/generated'
 import type { BannerSource } from '../../state/banner'
 import type { AuthField, ProviderOp, SettingsSnapshot, SettingsSource, SkillDetail } from './types'
 
-/* The config settings.get returned. Keys arrive camelCased
-   (agents.defaults.reasoningEffort), one level per dot. Handed to the island
-   inside its snapshot, which is the only reader. */
+/* The config settings.get returned, as the file writes it: a top-level block
+   may sit in either spelling (`skillForge` or `skill_forge`), and `dig` below
+   resolves both. One level per dot. Handed to the island inside its snapshot,
+   which is the only reader. */
 let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
+let skillHub = { on: false, awaitingReload: false }
 let everosLive: ResultOf<'settings.everos'> | null = null
+let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
+let cloudProbe: Promise<ResultOf<'settings.everosCloud'> | null> = Promise.resolve(null)
 
 /* The three members that need page chrome no island owns: the version the foot
    learned from `system.version`, the check that drives the update notice and
@@ -82,6 +86,17 @@ async function loadEveros(): Promise<void> {
   } catch {
     everosLive = null
   }
+}
+
+/* The cloud card's probe. Asked beside the roles, and again after its own key
+   is saved -- the answer is a health check of what is on disk now. */
+async function loadEverosCloud(): Promise<ResultOf<'settings.everosCloud'> | null> {
+  try {
+    everosCloudLive = await gateway().call('settings.everosCloud', {})
+  } catch {
+    everosCloudLive = null
+  }
+  return everosCloudLive
 }
 
 /* Read the permission mode the gate applies to the visible conversation --
@@ -125,6 +140,7 @@ export async function loadSettings(): Promise<void> {
   const r = await gateway().call('settings.get', {})
   RAW = (r.settings || {}) as Record<string, unknown>
   configPathLive = r.config_path || configPathLive
+  skillHub = { on: r.skill_hub_on === true, awaitingReload: r.skill_hub_awaiting_reload === true }
   drawBanner()
   const agents = RAW.agents as { defaults?: { model?: string; provider?: string } } | undefined
   const defaults = (agents && agents.defaults) || {}
@@ -154,7 +170,7 @@ export async function loadSettingsWithProviders(): Promise<void> {
 }
 
 export const settingsSnapshot = (): SettingsSnapshot => ({
-  raw: RAW, configPath: configPathLive, everos: everosLive,
+  raw: RAW, configPath: configPathLive, skillHub, everos: everosLive, everosCloud: everosCloudLive,
   // Both default-scoped on purpose: the settings page describes what new
   // conversations start on, so pairing the default model with the visible
   // session's provider badged the wrong row whenever the two scopes differ.
@@ -237,11 +253,17 @@ export const settingsSource: SettingsSource = {
     await loadSettingsWithProviders()
     void pushPermMode()
     await loadEveros()
+    /* Not awaited: the probe can take up to five seconds against a slow or absent
+       service; the card draws its checking state until the store patches the
+       answer in through `everosCloud()`. */
+    cloudProbe = loadEverosCloud()
     return settingsSnapshot()
   },
+  everosCloud: () => cloudProbe,
   set: (key, value) => run((async () => {
     const r = await gateway().call('settings.set', { key, value: value as ParamsOf<'settings.set'>['value'] })
     await loadSettings()
+    if (key.startsWith('plugins.config.everos-cloud-memory.')) { cloudProbe = loadEverosCloud(); await cloudProbe }
     void pushPermMode()
     /* Only when the server says a save costs something -- a reload-only key,
        a swapped embedding model that invalidates every stored vector. A plain
@@ -274,6 +296,10 @@ export const settingsSource: SettingsSource = {
      state. What it taught the server's cache reaches the offer through
      `reloadProviders`, which the store runs once the read succeeds. */
   fetchModels: (slug, verify) => gateway().call('model.fetch_models', verify ? { slug, verify: true } : { slug }),
+  /* A read as well: the verdict is the form's to act on, and a key the vendor
+     refused is refused where the wording lives, not toasted. */
+  checkKey: (slug, params) => gateway().call('model.check_key', { slug, ...params }),
+  revealKey: (slug) => run(gateway().call('model.reveal_key', { slug }).then((r) => r.api_key ?? null)),
   reloadProviders: afterProviders,
   addModels: (slug, models) => run(gateway().call('model.add_models', { slug, models }).then(afterProviders)),
   setFields: (slug, fields) => run(
@@ -353,12 +379,14 @@ interface WebVendorPick {
 export const WEB_VENDOR: Record<string, WebVendorPick> = {
   web_search: {
     path: 'tools.web.search.provider',
-    vendors: ['serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply'],
+    vendors: [
+      'serper', 'anysearch', 'serpapi', 'tavily', 'exa', 'brave', 'firecrawl', 'serply', 'keenable', 'deepseek',
+    ],
     fallback: 'serper',
   },
   web_fetch: {
     path: 'tools.web.fetch.provider',
-    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl'],
+    vendors: ['jina', 'anysearch', 'tavily', 'exa', 'firecrawl', 'keenable', 'deepseek'],
     fallback: 'jina',
   },
 }
@@ -372,18 +400,37 @@ export const WEB_VENDOR_LABEL: Record<string, string> = {
   brave: 'Brave Search',
   firecrawl: 'Firecrawl',
   serply: 'Serply',
+  keenable: 'Keenable',
+  deepseek: 'DeepSeek',
 }
 /* Where each vendor hands out keys. */
 export const WEB_VENDOR_URL: Record<string, string> = {
   serper: 'https://serper.dev', anysearch: 'https://anysearch.com', serpapi: 'https://serpapi.com',
   jina: 'https://jina.ai/reader', tavily: 'https://tavily.com', exa: 'https://exa.ai',
   brave: 'https://brave.com/search/api', firecrawl: 'https://firecrawl.dev', serply: 'https://serply.io',
+  keenable: 'https://keenable.ai',
+  deepseek: 'https://platform.deepseek.com/api_keys',
 }
-/* Jina reads without a key; every other reader needs one. */
-export const FETCH_KEYLESS = new Set(['jina'])
+/* Jina and Keenable read without a key; every other reader needs one. */
+export const FETCH_KEYLESS = new Set(['jina', 'keenable'])
+/* Keenable searches without a key; every other search vendor needs one. */
+export const SEARCH_KEYLESS = new Set(['keenable'])
 
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
+/* The snake twin pydantic's alias generator accepts for a camelCase name. */
+const toSnake = (name: string): string => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)
+
+/* Reads a dotted path. The first segment resolves both top-level spellings the
+   loader accepts: a config file may carry `skillForge` or `skill_forge`, the
+   loader drops a null block and reads the first non-null spelling, and the
+   writer keeps the one already there -- so a read takes the camel spelling
+   unless it is null, then the snake one. Below the top level the path matches
+   the key exactly. */
+export const dig = (raw: Record<string, unknown>, path: string): unknown => {
+  const [head, ...rest] = path.split('.')
+  let node: unknown = raw[head!] ?? raw[toSnake(head!)]
+  for (const key of rest) node = node && typeof node === 'object' ? (node as Record<string, unknown>)[key] : undefined
+  return node
+}
 export const str = (raw: Record<string, unknown>, path: string): string => {
   const v = dig(raw, path)
   return typeof v === 'string' ? v : ''
@@ -406,6 +453,67 @@ export const keySet = (tool: string, vendor: string, raw: Record<string, unknown
   return !!str(raw, vendorKey(vendor)) || (!!legacy && !!str(raw, legacy))
 }
 
+/* Web vendors whose API runs on the same account as an LLM provider: an empty
+   vendor slot borrows providers.<vendor>.apiKey. Mirrors
+   WEB_VENDOR_BORROWED_KEYS in raven/config/schema.py; the vendor tests hold
+   the two lists equal. */
+export const BORROWED_VENDOR = new Set(['deepseek'])
+
+/* The host each borrowing vendor's own web endpoints live on. A borrowed key
+   is issued for this host; a section pointed elsewhere lends nothing to a tool
+   whose endpoint is a literal. */
+const OWN_WEB_HOST: Record<string, string> = { deepseek: 'api.deepseek.com' }
+
+const asString = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+const field = (value: Record<string, unknown>, camel: string, snake: string): string =>
+  asString(value[camel]) || asString(value[snake])
+
+const hostOf = (base: string): string => {
+  try {
+    return new URL(base).hostname
+  } catch {
+    return ''
+  }
+}
+
+/* The key and address provider_connection resolves for the section: the first
+   endpoint with a key, else the first endpoint, else the flat fields. Mirrors
+   raven/config/update_providers.py so the page cannot claim a borrow the server
+   will refuse. */
+const resolvedConnection = (section: Record<string, unknown>): { base: string; key: string } => {
+  const flatBase = field(section, 'apiBase', 'api_base')
+  const endpoints = (Array.isArray(section.endpoints) ? section.endpoints : []).filter(
+    (entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object',
+  )
+  if (endpoints.length) {
+    const chosen = endpoints.find((entry) => !!field(entry, 'apiKey', 'api_key')) ?? endpoints[0]!
+    return { base: field(chosen, 'apiBase', 'api_base') || flatBase, key: field(chosen, 'apiKey', 'api_key') }
+  }
+  const keyList = (Array.isArray(section.apiKeyList) ? section.apiKeyList : Array.isArray(section.api_key_list) ? section.api_key_list : []).filter(
+    (key): key is string => typeof key === 'string',
+  )
+  if (keyList.length) return { base: flatBase, key: keyList[0]! }
+  return { base: flatBase, key: field(section, 'apiKey', 'api_key') }
+}
+
+export const borrowedKey = (vendor: string, raw: Record<string, unknown>): string => {
+  if (!BORROWED_VENDOR.has(vendor)) return ''
+  const section = dig(raw, `providers.${vendor}`)
+  if (!section || typeof section !== 'object' || Array.isArray(section)) return ''
+  const { base, key } = resolvedConnection(section as Record<string, unknown>)
+  return base && hostOf(base) !== OWN_WEB_HOST[vendor] ? '' : key
+}
+
+/* Whether a web tool has what it needs to run: a vendor that needs no key, a
+   key in its own slot (or the pre-vendor leaf), or a borrowed LLM-provider
+   key. The slot itself stays the editable one -- the borrow is a read. */
+export const webKeyReady = (tool: string, raw: Record<string, unknown>): boolean => {
+  const vendor = webVendor(tool, raw)
+  if ((tool === 'web_search' ? SEARCH_KEYLESS : FETCH_KEYLESS).has(vendor)) return true
+  return keySet(tool, vendor, raw) || !!borrowedKey(vendor, raw)
+}
+
 /* The onboarding wizard's two step-done predicates: whether its model step
    already has a connected provider and a chat model, and whether its web
    step already has a key on file for either web tool's vendor. */
@@ -419,8 +527,16 @@ export function memoryStepDone(): boolean {
   return !!everosLive?.sections?.embedding?.model
 }
 
+/* Whether the wizard's web step has a key on file for this tool: its own slot
+   (or the pre-vendor leaf), or the borrowed model-provider key. A keyless
+   vendor does not count -- the step asks for a key, not for a runnable tool. */
+const webKeyOnFile = (tool: string, raw: Record<string, unknown>): boolean => {
+  const vendor = webVendor(tool, raw)
+  return keySet(tool, vendor, raw) || !!borrowedKey(vendor, raw)
+}
+
 export function webStepDone(): boolean {
-  return keySet('web_search', webVendor('web_search', RAW), RAW) || keySet('web_fetch', webVendor('web_fetch', RAW), RAW)
+  return webKeyOnFile('web_search', RAW) || webKeyOnFile('web_fetch', RAW)
 }
 
 /* The manager's word on a server, pushed as it changes; the plugins page
@@ -432,6 +548,9 @@ export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mc
 export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
+  skillHub = { on: false, awaitingReload: false }
   everosLive = null
+  everosCloudLive = null
+  cloudProbe = Promise.resolve(null)
   chrome = { version: () => null, checkUpdate: async () => {}, newerVersion: () => null, upgrade: () => {}, setLang: () => {} }
 }

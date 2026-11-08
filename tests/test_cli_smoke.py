@@ -180,6 +180,9 @@ REGISTERED_COMMAND_NAMES = {
     # not a command -- raven spawns those agents itself.
     "acp",
     "agent",
+    # Portable Agent Plugins 1.0 packages (data-only), distinct from the
+    # kernel plugins below: `agent-plugins` reads a package directory.
+    "agent-plugins",
     # Plural beside the singular: `agents` manages the roster of agent
     # products (`agents new` scaffolds one), while `agent` talks to the
     # host's own agent.
@@ -203,6 +206,11 @@ REGISTERED_COMMAND_NAMES = {
     "plugin",
     "plugins",
     "provider",
+    # The weights and dictionaries that cannot live in git. On the CLI rather
+    # than only under `scripts/`, because the wheel carries no scripts: this is
+    # the command the two "not installed" errors name, and the one a one-line
+    # install runs for itself.
+    "resources",
     "sandbox",
     "sentinel",
     "serve",

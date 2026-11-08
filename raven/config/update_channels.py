@@ -234,6 +234,17 @@ def _coerce_value(value: Any, decl: dict[str, Any]) -> Any:
     return value
 
 
+def coerce_field_value(name: str, field: str, value: Any) -> Any:
+    """Normalize one raw CLI value exactly as the write path will.
+
+    Callers that must reason about a value before writing it -- the wildcard
+    gate -- use this so the check and the write cannot disagree about what a
+    spelling means. The declaration comes from the channel's own schema, not
+    from the flattened display specs, whose ``type`` spellings differ.
+    """
+    return _coerce_value(value, _walk_schema_path(_channel_schema(name), field))
+
+
 def _set_nested(dotted_key: str, value: Any, target: dict[str, Any]) -> Any:
     """Set ``target[a][b][...][leaf] = value``, returning the previous value (or None)."""
     segs = dotted_key.split(".")
@@ -422,6 +433,7 @@ def _patch_channel(
 __all__ = [
     "channel_names",
     "channel_field_specs",
+    "coerce_field_value",
     "enable_channel",
     "disable_channel",
     "set_channel_fields",

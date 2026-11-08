@@ -1,11 +1,11 @@
 """Built-in third-party subagent presets.
 
-One preset per agent, and each one already carries the transport that agent is
-reached over. That choice is made *here*, in the repo, from a measurement -- not
-rediscovered on every user's machine at connect time. Whether hermes speaks ACP
-is a fact about hermes, and probing for it per install would mean trying a second
-transport whose own verification costs the user real tokens (the cli test
-dispatches a task) while telling them nothing new.
+One preset per agent and route, and each one already carries the transport that
+agent is reached over. That choice is made *here*, in the repo, from a
+measurement -- not rediscovered on every user's machine at connect time. Whether
+hermes speaks ACP is a fact about hermes, and probing for it per install would
+mean trying a second transport whose own verification costs the user real tokens
+(the cli test dispatches a task) while telling them nothing new.
 
 So connecting is: verify the one path this table names. If it fails, say why
 (adapter not installed, gateway not running, not logged in). There is no
@@ -51,6 +51,15 @@ well (:data:`SHIM_REQUIRED_EXECUTABLES`), so a machine without ``pi`` reads Pi a
 absent rather than as connectable. :data:`SHIM_LAUNCHED_PRESETS` is that split,
 declared; a test holds every command to it.
 
+One shim is not fetched at all, because Raven ships it: the agents Mirasim runs
+(:mod:`raven.agent.subagent.mirasim_presets`) are reached through
+:mod:`raven.acp.mirasim`, launched on Raven's own interpreter, so its version is
+Raven's and there is nothing to pin (:data:`BUNDLED_SHIM_PRESETS`). Those rows
+are the one place an agent has a second preset. That is not a second transport
+for one install: a Mirasim row is the agent as Mirasim runs it, on Mirasim's
+accounts and model routes, which is a different thing to delegate to and to pay
+for than the same agent on its own login.
+
 Every preset runs unattended, so none of them may stop to ask permission: raven
 answers whatever an ACP agent asks (``raven/acp_client/permissions.py``), and the
 two adapters that also take a launch-time "never ask" setting are configured with
@@ -77,6 +86,9 @@ from raven.agent.subagent.acp_registry_presets import (
     ACP_REGISTRY_PRESETS,
     ACP_REGISTRY_SHIM_PRESETS,
 )
+from raven.agent.subagent.mirasim_presets import MIRASIM_PRESETS, MIRASIM_SHIM_PRESETS
+from raven.agent.subagent.vendored_agents import _resolved_python
+from raven.utils.commands import command_quote, resolve_subagent_command
 
 # Command templates for the cli transport, kept as reference rather than as
 # presets. Nothing reads them: they exist because the cli backend still runs
@@ -123,11 +135,11 @@ from raven.agent.subagent.acp_registry_presets import (
 # configured only through the config migration that carries the previous stock
 # command forward (``_RETIRED_SHIM_COMMANDS`` in raven/config/loader.py), since
 # ``subagents.add`` copies this string into the row.
-_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.81.1"
-_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@1.13.1"
+_CLAUDE_ACP = "npx -y @agentclientprotocol/claude-agent-acp@0.94.0"
+_CODEX_ACP = "npx -y @agentclientprotocol/codex-acp@2.2.2"
 
-SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS
-"""Presets whose command fetches an ACP shim rather than naming a local agent.
+SHIM_LAUNCHED_PRESETS = frozenset({"claude_code", "codex"}) | ACP_REGISTRY_SHIM_PRESETS | MIRASIM_SHIM_PRESETS
+"""Presets whose command starts an ACP shim rather than naming a local agent.
 
 Membership is a fact about the package, not a preference -- see the module
 docstring. Every other acp preset must name an executable the user installed.
@@ -137,32 +149,49 @@ depend on what the row is called, and a configured row's name is the user's to
 change (``test_provenance_survives_a_rename``).
 """
 
+BUNDLED_SHIM_PRESETS = MIRASIM_SHIM_PRESETS
+"""The shims Raven ships in its own package, which every other shim is fetched for.
+
+Their command runs a module of this package on the interpreter Raven runs on
+(``{PYTHON} -P -m raven.acp.mirasim``), so there is no package to fetch and no
+version to pin: the shim that answers is the Raven that launched it.
+"""
+
 SHIM_REQUIRED_EXECUTABLES: dict[str, tuple[str, str]] = {
     "pi": ("pi", "npm install -g @earendil-works/pi-coding-agent"),
 }
 """The local agent a shim drives, as ``(executable, install command)``, by preset key.
 
 A shim is plumbing in front of an agent the user installs themselves, and its
-``npx`` command resolves whether that agent is there or not. ``_probe_acp`` asks
-after this executable as well, so a machine without it reports the row absent
-with the install beside it, instead of offering a connect that fails a minute
-later inside the adapter with the same sentence. Listed only where the shim
-really does reach for a local install: ``pi-acp`` launches ``pi`` and fails
-with "executable not found" without it. The other two shims bring their agent
-along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
+command resolves whether that agent is there or not -- ``npx`` always does, and
+a bundled shim's interpreter is Raven's own. ``_probe_acp`` asks after this
+executable as well, so a machine without it reports the row absent with the
+install beside it, instead of offering a connect that fails a minute later
+inside the adapter with the same sentence. Listed only where the shim really
+does reach for a local install: ``pi-acp`` launches ``pi`` and fails with
+"executable not found" without it. A Mirasim row is not here: its adapter runs
+no executable, it reaches the Mirasim host running on the machine, and Mirasim
+puts its own CLI on no PATH -- so ``_probe_acp`` asks
+:func:`raven.agent.subagent.mirasim_presets.presence` after the host, or the
+launcher under Mirasim's home, instead. The
+other two shims bring their agent along -- ``codex-acp`` ships it as its own binary, and ``claude-agent-acp``
 runs the CLI its ``@anthropic-ai/claude-agent-sdk`` pin carries as a
-per-platform optional dependency (read from the 0.66.0, 0.79.0 and 0.81.1
-packages on 2026-09-20/21/23), so a ``claude`` on PATH is neither needed nor the
+per-platform optional dependency (read from the 0.66.0, 0.79.0, 0.81.1 and
+0.94.0 packages on 2026-09-20/21/23 and 2026-10-23), so a ``claude`` on PATH is neither needed nor the
 one that answers -- and what either wants is a login, not an install. The pin is
 also what decides which Claude models the row can reach: 0.66.0 bundled CLI
 2.1.220, which refuses a model newer than it knows ("version 2.1.251 or newer is
 required"), so an account whose Claude settings name a recent model could not
 connect at all, and its menu offers ``claude-fable-5[1m]`` where 0.79.0 and
-0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274 and 0.81.1
-bundles 2.1.280. The codex pin decides its menu the same
+0.81.1 offer ``claude-fable-5-1[1m]``; 0.79.0 bundles 2.1.274, 0.81.1
+bundles 2.1.280, and 0.94.0 bundles 2.1.303, past 2.1.284 and 2.1.293, the
+first CLIs that name Sonnet 5.5 and Haiku 5.5 (Claude Code's changelog). The
+codex pin decides its menu the same
 way, because ``codex-acp`` builds the model choices from its bundled codex's
 ``model/list``: 1.1.14 bundles codex 0.147.0, whose list stops at GPT-5.6, and
-1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23).
+1.13.1 bundles 0.156.1, which lists the GPT-6 family (measured 2026-09-23);
+2.2.2 bundles 0.160.1 (read 2026-10-23), past 0.159, the client version below
+which the model list Codex serves leaves out gpt-6.1-sol (measured 2026-10-16).
 """
 
 
@@ -177,7 +206,9 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         ),
         "command": _CLAUDE_ACP,
         # npx may have to download the adapter on the first connect, which is far
-        # slower than starting an installed binary.
+        # slower than starting an installed binary. On this computer that download
+        # runs before this window opens (`npx_fetch`); a registered machine's Raven
+        # node starts the adapter itself, so there it still runs inside it.
         "readyTimeoutMs": 120000,
     },
     "codex": {
@@ -193,7 +224,7 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # an ACP agent asks for anyway (raven/acp_client/permissions.py), so
         # asking buys nothing but a round trip per tool call -- and the mode is
         # also what restores network access, which no per-call approval does.
-        # Measured in codex-acp 1.1.14 and re-read in 1.13.1: AgentMode.AgentFullAccess
+        # Measured in codex-acp 1.1.14 and re-read in 1.13.1 and 2.2.2: AgentMode.AgentFullAccess
         # is approval policy "never", and INITIAL_AGENT_MODE still selects it.
         "env": {"INITIAL_AGENT_MODE": "agent-full-access"},
     },
@@ -256,7 +287,27 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         "stateful": False,
     },
     **ACP_REGISTRY_PRESETS,
+    **MIRASIM_PRESETS,
 }
+
+
+def _launchable(entry: dict[str, Any]) -> dict[str, Any]:
+    """``entry`` with this install's interpreter written into a bundled shim's command.
+
+    A bundled shim runs on the interpreter Raven itself runs on, which differs
+    per install and so cannot be spelled in the table. Which rows those are is
+    declared in :data:`BUNDLED_SHIM_PRESETS`, not inferred from the command's
+    text. Expanded when a preset is read -- the add path, the Test button and the
+    agents page all read it here -- so the row written into config carries the
+    absolute path, the same rule ``raven agents new --register`` follows for a
+    folder's manifest.
+    """
+    if entry.get("preset") not in BUNDLED_SHIM_PRESETS:
+        return entry
+    command = entry.get("command")
+    if not isinstance(command, str):
+        return entry
+    return {**entry, "command": resolve_subagent_command(command, python=_resolved_python(), subagent_dir="")}
 
 
 def _normalized(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -272,7 +323,7 @@ def _normalized(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     from raven.config.schema import SubagentsConfig
 
-    validated = SubagentsConfig(agents=entries)
+    validated = SubagentsConfig(agents=[_launchable(entry) for entry in entries])
     return [cfg.model_dump(by_alias=True) for cfg in validated.agents]
 
 
@@ -367,6 +418,15 @@ class SignIn(NamedTuple):
     Qwen Code opens on its prompt, not on a sign-in, and the command that reaches
     its providers is a slash command typed there. Without this a reader told to
     run ``qwen`` is left at a prompt with nothing saying what to do next."""
+    check: str | None = None
+    """The command that shows the credential state, for an agent that has one.
+
+    A separate verb from the sign-in: the sign-in is the fix, and this is how a
+    reader finds out whether one is needed. Named apart because the failure it
+    answers is the one Raven cannot classify -- an agent that defers its
+    credential to the first model call opens a session happily and fails
+    afterwards, so the only place the state is written down is the agent's own
+    command."""
 
 
 SIGN_IN_HINTS: dict[str, SignIn] = {
@@ -419,6 +479,13 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # declares no `engines.node` and a launch that quits on an old Node.js
     # was not measured, so it is not in `NODE_RUNTIME_PRESETS`.
     "github_copilot": SignIn(exe="copilot", local="copilot login"),
+    # `opencode auth login` is what OpenCode names itself: its ACP handshake
+    # advertises an auth method whose description is "Run `opencode auth login`
+    # in the terminal" (measured 2026-10-24, OpenCode 1.14.31), and the same
+    # build's `opencode auth --help` lists it under "manage AI providers and
+    # credentials". `opencode auth list` is the check beside it: it prints the
+    # credentials it holds ("0 credentials" on a machine that has none).
+    "opencode": SignIn(exe="opencode", local="opencode auth login", check="opencode auth list"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -537,13 +604,125 @@ DIAGNOSE_HINTS: dict[str, str] = {
     # (authentication failed, HTTP 401)") within seconds (measured 2026-09-29,
     # OpenClaw 2026.9.1).
     "openclaw": "openclaw agent --agent main -m hi --json",
+    # OpenCode relays a refused model call the same way: its inference endpoint
+    # answered 426 ("OpenCode 1.18.0 or newer is required to use the free tier")
+    # and the ACP session came back as `end_turn` with no content, 0 tokens and
+    # an empty stderr -- so the connect named an empty turn and nothing a reader
+    # could act on. `opencode run` is the one-shot form, and it takes the model
+    # (`--model`, `provider/model`), so the command asks for the row's own model
+    # rather than the agent's default one: a command that runs a different model
+    # answers a different question, and where the default answers and the pinned
+    # one does not, it hides the cause (measured 2026-10-24, OpenCode 1.14.31:
+    # the default answers 426, the pinned
+    # `opencode/nemotron-3.5-super-vl-free/low` answers "ProviderModelNotFound").
+    "opencode": "opencode run{model} hi",
 }
 """A command that makes the agent a row defers to say why it is not answering.
 
 For the failure that carries no reason at all: a connect that timed out while
 the agent kept working, or a turn that ended with nothing in it. Only for an
 agent measured to fail that way, because for the rest a timeout is not known to
-mean anything in particular."""
+mean anything in particular.
+
+``{model}`` is where the row's own model goes, for an agent whose command takes
+one: the command has to run the model the row is pinned to, or it answers about
+a different turn than the one that failed. It expands to the flag and the model,
+or to nothing when the row is on the agent's own default."""
+
+
+class VersionFloor(NamedTuple):
+    """The lowest build of an agent that still serves what Raven connects it for.
+
+    Not a version Raven requires in general: a build floor of one service of
+    one agent. The agent answers with its version in the ACP handshake, so the
+    gap is a fact to read rather than a guess -- but only for a failure the
+    floor is about, which is why the sentence that carries it also carries the
+    command that shows the provider's own answer.
+    """
+
+    version: str
+    """The lowest build that serves it, as the agent spells its version."""
+    what: str
+    """What the floor gates, in the reader's words."""
+    upgrade: str
+    """The agent's own command that moves it past the floor."""
+    measured: str
+    """When the floor was measured, and what the older build answered."""
+
+
+VERSION_FLOORS: dict[str, VersionFloor] = {
+    # OpenCode's own models moved behind a floor: a build under it answers the
+    # inference endpoint with 426 ("OpenCode 1.18.0 or newer is required to use
+    # the free tier"), the ACP session relays that as an empty turn with 0
+    # tokens, and nothing on the wire says why. Measured 2026-10-24 on
+    # 1.14.31; `opencode upgrade` is the command its own help names.
+    "opencode": VersionFloor(
+        version="1.18.0",
+        what="OpenCode's own (free) models need 1.18.0 or newer",
+        upgrade="opencode upgrade",
+        measured=(
+            "measured 2026-10-24: a 1.14.31 build answers its inference endpoint with 426 "
+            "'UpgradeRequired' and the turn comes back empty"
+        ),
+    ),
+}
+"""The build floors a row's agent can be under, by preset key.
+
+Only for an agent measured to answer under one: a floor nobody has seen an
+agent refuse on is a guess, and a guess about a version sends a reader after an
+upgrade that changes nothing."""
+
+
+def _version_numbers(version: str) -> tuple[int, ...]:
+    """A version's numbers, for the comparison a floor is about.
+
+    The leading digits of each dot-separated part, and the parts up to the first
+    that is not a number: "1.18.31" is (1, 18, 31), "1.18" is (1, 18), and
+    "1.18.0-rc1" is (1, 18, 0) -- the suffix is not a number and the
+    comparison stops there.
+    """
+    numbers: list[int] = []
+    for part in str(version or "").split("."):
+        digits = ""
+        for char in part:
+            if not char.isdigit():
+                break
+            digits += char
+        if not digits:
+            break
+        numbers.append(int(digits))
+    return tuple(numbers)
+
+
+def _at_least(found: str, floor: str) -> bool:
+    """Whether a version is at or above a floor.
+
+    A version either side cannot be read is no evidence of a gap: the floor is
+    a fact about a build, and an unreadable version says nothing about which
+    build it is. Missing parts count as zero, so "1.18" and "1.18.0" are the
+    same build.
+    """
+    here, want = _version_numbers(found), _version_numbers(floor)
+    if not here or not want:
+        return True
+    width = max(len(here), len(want))
+    here += (0,) * (width - len(here))
+    want += (0,) * (width - len(want))
+    return here >= want
+
+
+def version_gap_for(cfg: Any, found: str) -> VersionFloor | None:
+    """The floor this row's agent is under, or ``None`` when it is at or above it.
+
+    ``found`` is the version the agent answered the handshake with -- the live
+    one, not a stored snapshot, whose copy describes whatever build was measured
+    last and would keep naming a gap an upgrade had already closed.
+    """
+    preset = getattr(cfg, "preset", None)
+    floor = VERSION_FLOORS.get(preset) if preset else None
+    if floor is None or not str(found or "").strip():
+        return None
+    return None if _at_least(str(found), floor.version) else floor
 
 
 NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
@@ -574,9 +753,18 @@ def model_switch_hint_for(cfg: Any) -> InAgent | None:
 
 
 def diagnose_hint_for(cfg: Any) -> str | None:
-    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`."""
+    """How to see why this row's agent is silent, by provenance like :func:`sign_in_hint_for`.
+
+    The row's own model goes into the command where the agent's takes one: the
+    command has to run the turn the row asked for, or it answers about a
+    different one.
+    """
     preset = getattr(cfg, "preset", None)
-    return DIAGNOSE_HINTS.get(preset) if preset else None
+    template = DIAGNOSE_HINTS.get(preset) if preset else None
+    if template is None:
+        return None
+    model = str(getattr(cfg, "model", "") or "").strip()
+    return template.replace("{model}", f" --model {command_quote(model)}" if model else "")
 
 
 def upgrade_hint_for(cfg: Any) -> str | None:
@@ -586,9 +774,11 @@ def upgrade_hint_for(cfg: Any) -> str | None:
     of a bare package name installs whatever is newest only when nothing is
     installed yet, so over an old copy the plain hint can leave it where it is.
     Only for an ``npm i -g <package>`` hint, the one shape whose version is known
-    to go on the package's own word.
+    to go on the package's own word. For a shim row the agent is the one the shim
+    drives (:func:`shim_requirement_for`), whose release is the user's to move.
     """
-    hint = install_hint_for(cfg)
+    requirement = shim_requirement_for(cfg)
+    hint = install_hint_for(cfg) or (requirement[1] if requirement else None)
     if not hint:
         return None
     words = hint.split()
@@ -624,11 +814,15 @@ def shim_requirement_for(cfg: Any) -> tuple[str, str] | None:
 
 
 __all__ = [
+    "BUNDLED_SHIM_PRESETS",
+    "DIAGNOSE_HINTS",
     "SHIM_LAUNCHED_PRESETS",
     "SHIM_REQUIRED_EXECUTABLES",
     "LENDABLE_KEYS",
     "SIGN_IN_HINTS",
     "SignIn",
+    "VERSION_FLOORS",
+    "VersionFloor",
     "install_hint_for",
     "lendable_keys",
     "shim_requirement_for",
@@ -637,4 +831,5 @@ __all__ = [
     "session_mcp_for",
     "third_party_subagent_presets",
     "third_party_subagent_preset",
+    "version_gap_for",
 ]

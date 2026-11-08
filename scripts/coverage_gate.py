@@ -24,6 +24,7 @@ PRODUCTION_PATHSPECS = (
     # gate can judge what coverage measures (--cov=raven --cov=raven_everos), and
     # a changed file in an unmeasured tree would fail every PR that touches it.
     ":(glob)plugins-dist/everos-memory/**/*.py",
+    ":(glob)plugins-dist/everos-cloud-memory/**/*.py",
     # Scaffold templates are copied out by the scaffolder, never imported by
     # the runtime; they are data with a .py spelling, not production code.
     ":(glob,exclude)raven/templates/agents_scaffold/**",

@@ -6,6 +6,7 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+from raven.agent import knowledge_scope
 from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
     TYPE_CHECKING,
@@ -31,6 +32,7 @@ from raven.agent.loop._shared import (
     build_executor,
     datetime,
     logger,
+    session_of,
     use_binding,
     workdir,
 )
@@ -42,6 +44,7 @@ from raven.agent.loop.bundles import (
     TurnPolicy,
     resolve_wiring,
 )
+from raven.agent.loop.failure_text import attach_full_detail
 from raven.agent.loop.mcp_glue import McpGlueMixin
 from raven.agent.loop.organ_glue import OrganGlueMixin
 from raven.agent.loop.turn_path import TurnPathMixin
@@ -64,6 +67,13 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
+# What a turn that asked to design a Persona may reach. Talking to the reader
+# and nothing else: designing is the platform's own step, and every tool that
+# writes a file or dispatches work would be this turn doing by hand what it was
+# not asked to do (see the charter in `_run_turn`).
+MAKER_TOOLS: tuple[str, ...] = ("ask_user", "message")
+
+
 class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     """
     The agent loop is the core processing engine.
@@ -76,7 +86,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     5. Sends responses back
     """
 
-    _TOOL_RESULT_MAX_CHARS = 16_000
+    # The default of ``context.toolResultMaxChars``; an instance reads its own
+    # config over it. 0 writes every tool result whole.
+    _TOOL_RESULT_MAX_CHARS = 1_000_000
 
     # Reconnects allowed for a streamed call that failed before its first delta
     # (after one, the caller has output that a retry would duplicate).
@@ -159,6 +171,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         sandbox_config: SandboxConfig | None = None,
         executor: "SandboxExecutor | None" = None,
         mcp_servers: dict | None = None,
+        package_mcp_servers: dict | None = None,
         tools: "ToolWiring | None" = None,
         subagents: "SubagentWiring | None" = None,
         engine: "EngineWiring | None" = None,
@@ -198,6 +211,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         skill_forge_router_config = engine.skill_forge_router_config
         memory_config = engine.memory_config
         compaction_config = engine.compaction_config
+        task_board_config = engine.task_board_config
         backend = engine.backend
         playbook_config = engine.playbook_config
         max_iterations = policy.max_iterations
@@ -208,7 +222,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         cron_service = host.cron_service
         channels_config = host.channels_config
         from raven.agent.hook import CompositeHook
-        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig
+        from raven.config.schema import A2aConfig, AskUserToolConfig, CompactionConfig, ExecToolConfig, TaskBoardConfig
         from raven.token_wise.registry import StrategyRegistry
 
         self.channels_config = channels_config
@@ -274,6 +288,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.ask_user_config = ask_user_config or AskUserToolConfig()
         self.a2a_config = a2a_config or A2aConfig()
         self._compaction = compaction_config or CompactionConfig()
+        # Off unless the shell wires the config: the runtime passes
+        # `agents.defaults.taskBoard` (on by default there), while a loop built
+        # without it -- an embedding, a test -- makes no extra call per turn.
+        self._task_board_config = task_board_config or TaskBoardConfig(enabled=False)
+        # Set by `_register_orchestration_tools` on the host only; a subagent never keeps a board.
+        self.task_board = None
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         # TokenWise strategies — empty registry acts as pure pass-through.
@@ -323,6 +343,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             skill_forge_config=skill_forge_config,
             now_fn=now_fn,
             blocklist_reader=lambda: skill_blocklist(self._live_config),
+            has_memory_backend=backend is not None,
+            task_board=self._task_board_config.enabled,
         )
         self.sessions = session_manager or SessionManager(workspace)
         # Off switches with no config file behind them: an eval harness that
@@ -389,6 +411,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         from raven.context_engine import build_context_engine
 
         self.context_config = context_config
+        self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
 
         # Skill Hub client — built once and shared by the HubSkillSource
         # (catalog discovery) and the read_skill / use_skill tools (body /
@@ -435,6 +458,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # either missing or stale by the time a turn asks for it.
                 list_subagents=lambda: self.subagents.list_agents(),
                 get_tool_notices=self._mcp_tool_notices,
+                # Read at call time: the board is wired further down this constructor.
+                get_session_notices=lambda key: self.task_board.turn_notes(key) if self.task_board else [],
                 now_fn=now_fn,
                 # The factory uses these to assemble the unified engine's
                 # SkillForgeRouter + EverOS recall lane.
@@ -448,6 +473,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # scent menu screen against the list on disk now, so a skill
                 # switched off -- or back on -- reaches the next turn.
                 blocklist_reader=lambda: skill_blocklist(self._live_config),
+                task_board=self._task_board_config.enabled,
             )
 
         # The four strategy roles this generation runs on. Assembled here
@@ -476,6 +502,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # costs a lambda.
             compaction=lambda: self._compaction,
             output_ceiling=self._wire_output_ceiling,
+            headroom=lambda: self.context_config.headroom,
         )
 
         # Checkpointing is configured under ``runtime.checkpoint``;
@@ -535,6 +562,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             retry_delays=tuple(self._recovery_limits.llm_error_retry_delays),
             retry_after_output=bool(self._recovery_limits.llm_retry_after_output),
             provider_pool=self._provider_pool,
+            task_board=self._task_board_config.enabled,
         )
         # Reads the live direct chats through a lambda for the reason the identity
         # segment does: the manager is rebuilt on a hot config apply.
@@ -562,16 +590,35 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
-        from raven.config.paths import get_sandbox_dir
+        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root, get_sandbox_dir
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
+        # A package stdio server gets PLUGIN_DATA as a host path, and the VM
+        # reaches it only through a mount. The fixed guest path is what lets
+        # the executor translate the variable with the rest of the server's
+        # paths; without the volume it would stay a host path that cannot
+        # exist inside the sandbox.
+        data_volume: tuple[tuple[str, str, str], ...] = ()
+        if (
+            executor is None
+            and sandbox_config is not None
+            and sandbox_config.backend != "none"
+            and any(getattr(cfg, "type", None) == "stdio" for cfg in (package_mcp_servers or {}).values())
+        ):
+            data_volume = ((str(get_package_data_root()), PACKAGE_DATA_MOUNT, "rw"),)
         self._executor: SandboxExecutor = (
             # A caller that built its own executor hands it here; the mount and
             # home-volume derivation belong to the builder alone.
             executor
             if executor is not None
-            else build_executor(sandbox_config, mount_root, self._owned_ids, home_volume, sandbox_dir=get_sandbox_dir)
+            else build_executor(
+                sandbox_config,
+                mount_root,
+                self._owned_ids,
+                (*home_volume, *data_volume),
+                sandbox_dir=get_sandbox_dir,
+            )
         )
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
@@ -584,6 +631,11 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self.enable_personalization = False  # Set via configure_personalization()
         self._running = False
         self._mcp_servers = mcp_servers or {}
+        # The MCP servers the portable Agent Plugin packages contribute. Kept
+        # apart from the host's own so that a live answer about the host's
+        # servers cannot drop them, and so that every path to the manager
+        # carries them.
+        self._package_mcp_servers = package_mcp_servers or {}
         self._mcp_manager: MCPConnectionManager | None = None
         self._mcp_event_sink = None
         self._mcp_event_tasks: set = set()
@@ -644,6 +696,19 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # global for the reason session tools are: one process serves every
         # session on a connection.
         self._session_charters: dict[str, Any] = {}
+
+        # The Persona a session is running as, by session. Held rather than
+        # consumed, which is the whole difference from the dict above: a staged
+        # charter describes one dispatch, and a Persona is what the session is
+        # until another one replaces it.
+        self._session_personas: dict[str, tuple[Any, Any]] = {}
+
+        # The Persona a session has generated but not saved, by session. A
+        # generated Harness is a draft until someone says to keep it: the page
+        # shows this one and saves it by name, and a session that generates a
+        # second one before saving the first replaces it, because a draft is
+        # the answer to the request that is on screen.
+        self._session_drafts: dict[str, Any] = {}
 
         # ``self.subagents``, ``self.context_engine`` and
         # ``self.memory_consolidator`` were each handed ``provider`` earlier in
@@ -818,6 +883,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         stream: bool = True,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
+        reply_awaited: bool = False,
     ) -> "TurnOutcome":
         """Bind the turn to its session's model; see ``_run_turn`` for the turn.
 
@@ -836,6 +902,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """
         session_key = req.conversation or f"{req.source.channel}:{req.source.chat_id}"
         flush = True
+        capture = None
+        failure: BaseException | None = None
         try:
             # The tools a session brought with it become visible here, for the same
             # reason the model binding does: this is where the turn's task begins.
@@ -854,12 +922,75 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             # which is exactly what the Model Binding contract in CONTEXT.md
             # forbids: a turn resolves its pair once and holds it for the whole
             # turn tree.
-            binding = self._with_live_window(self.binding_for_session(session_key))
-            delegate_table = await self._write_worker_table(req, session_key, binding)
+            # A direct chat's conversation is the instance's lane, which nothing
+            # ever stores a binding under -- the session's switch lives on the
+            # bare session key. Strip the lane back to its session, as the
+            # direct-chat record path does (see raven.spine.turn.session_of).
+            binding = self._with_live_window(self.binding_for_session(session_of(session_key)))
+            resolution = await self._resolve_playbook_turn(req, session_key, binding)
+            delegate_table = resolution.table
+            if resolution.active:
+                from raven.playbook.run_record import PlaybookRunCapture
+
+                capture = PlaybookRunCapture(
+                    query=getattr(req, "text", "") or "",
+                    disposition=resolution.disposition,
+                    selected_playbook=resolution.selected_playbook,
+                    artifact_name=resolution.artifact_name,
+                    capture_workflow=resolution.capture_workflow,
+                )
+            from raven.playbook.run_record import capture_scope
+
             # The charter a dispatch staged for this session, taken for this turn
             # only. Both scopes below are None on an ordinary turn, which is the
             # path every reader answers to as "no playbook".
             charter = self._take_session_charter(session_key)
+            # A turn that asked to design a Persona never writes the library,
+            # whether or not the design came back. It used to be told not to,
+            # in a prompt, and only when generation had succeeded -- so a
+            # generation the validator threw away left an ordinary turn holding
+            # every tool, and a reader whose own words said "create and save it"
+            # got exactly that: a playbook written by `create_playbook`, a name
+            # collision, and a question about overwriting something they had
+            # never asked to save. The narrowing is the tool table now, not the
+            # wording: what this turn may reach is what it may do.
+            asked_persona = getattr(req, "playbook_mode", None) == "persona"
+            if asked_persona:
+                from raven.agent.subagent.charter import Charter
+
+                charter = Charter(
+                    prompt=(
+                        "The platform could not design a Persona for this request. Say so plainly, in one or "
+                        "two sentences, and say what you would need to try again. Create nothing and save "
+                        "nothing: the reader asked to design a Persona, not to have a playbook written for "
+                        "them."
+                    ),
+                    tools=MAKER_TOOLS,
+                )
+            if resolution.disposition == "artifact" and resolution.artifact_name:
+                from raven.agent.subagent.charter import Charter
+
+                artifact_status = (
+                    f"has generated the Persona Harness {resolution.artifact_name!r} and is holding it as a "
+                    "draft the reader can save or let go"
+                    if not resolution.persisted
+                    else f"has generated and saved the reusable Persona Harness {resolution.artifact_name!r}"
+                )
+                charter = Charter(
+                    prompt=(
+                        f"The platform {artifact_status}. Reply concisely with what the generated Harness is "
+                        "for and who it can hand work to. Do not claim it has been saved."
+                    ),
+                    tools=MAKER_TOOLS if asked_persona else None,
+                )
+                self.adopt_session_persona(session_key, resolution)
+                # The workers go with the coordinator, to the turns that will
+                # dispatch them. This turn was just told not to.
+                delegate_table = None
+            elif charter is None and (persona := self.session_persona(session_key)) is not None:
+                charter, persona_table = persona
+                if delegate_table is None:
+                    delegate_table = persona_table
             with (
                 use_binding(binding),
                 # Beside the binding and for the same reason: the settings a
@@ -867,26 +998,64 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 # through it.
                 self._turn_scope(),
                 self.tools.session_scope_for(session_key),
+                # Above `turn_scope`, which is the whole of why it is here and
+                # not in the turn body. That freeze decides which tools this
+                # turn's schema may carry, and it reads the withheld set --
+                # which asks this binding whether the conversation named a
+                # base. Bound after the freeze, the search tool was withheld at
+                # the moment that mattered and frozen out of every turn: the
+                # feature could not work at all, however well the rest of it
+                # was wired.
+                knowledge_scope.bind(knowledge_scope.read(self.sessions, session_key), session_key),
                 self.tools.turn_scope(),
                 delegate_scope(delegate_table),
                 charter_scope(charter),
+                capture_scope(capture),
                 # The participant seats in the hook chain ask this turn's modules,
                 # so a replaced Action or Planning decides what a plugin's
                 # judgement does -- bound per turn like the model.
                 bind_harness(self.harness),
             ):
-                return await self._run_turn(
+                outcome = await self._run_turn(
                     req,
                     emit,
                     drain,
                     stream=stream,
                     usage_sink=usage_sink,
                     text_sink=text_sink,
+                    reply_awaited=reply_awaited,
                 )
-        except asyncio.CancelledError:
+            if capture is not None:
+                await self._finish_playbook_turn(resolution, capture, binding)
+            return outcome
+        except asyncio.CancelledError as exc:
             flush = False
+            failure = exc
+            raise
+        except BaseException as exc:
+            # Recorded, never handled: the turn's error belongs to the caller.
+            # Held only so the run record below can say why the turn ended --
+            # the one record an operator reads to diagnose a failure used to
+            # claim ``failed`` and give no reason, while the finalization
+            # branch saved the full text for a *successful* turn whose compile
+            # step erred.
+            failure = exc
+            # The lane copies the runner's long account off the exception it lets out; the kernel cannot build it.
+            if isinstance(exc, Exception):
+                attach_full_detail(exc)
             raise
         finally:
+            if capture is not None and capture.status == "running" and self._playbooks is not None:
+                from raven.playbook.run_record import RunRecordStore
+
+                capture.finish(
+                    status="cancelled" if not flush else "failed",
+                    error=None if failure is None else f"{type(failure).__name__}: {failure}",
+                )
+                try:
+                    RunRecordStore(self._playbooks.store.root).save(capture)
+                except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+                    logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
             # Every way a turn ends passes here, which is what makes this the
             # place a foreground DAG run learns its turn is over. A direct chat
             # runs on an instance's own lane, concurrently with the main agent's

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 
 import { KeyInput } from '../../../components/KeyInput'
 import { t } from '../../../i18n/t'
-import { Card, Chip, Empty, GLYPH, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
+import { Card, Chip, Empty, GLYPH, Grow, KeyLink, Row, Rov, Spin, Switch, Xrow } from '../Fields'
 import { KeyFieldsWait } from '../Skeletons'
 import * as store from '../store'
 
@@ -176,18 +176,27 @@ export function Plugins(): JSX.Element {
     if (on && m.auth && m.auth !== 'none' && !m.credentialed) store.set({ plugOpen: m.name })
     void store.run(busyKey(m.name), () => store.source().toggleServer(m.name, on))
   }
+  /* Connecting a server is not this page's either: the plugin tool finds it in
+     the PlugHub catalogue and connects it in the chat, and the key or the
+     OAuth is then asked for in the drawer here. The button leads there with
+     the request half written; a server the catalogue lacks is written into
+     the config file by hand, and the line under the button says where. */
+  const add = (): void => store.addInChat(t('gui.settings.plugins.add_prompt'))
   return (
     <>
       {/* "0 of 0 connected" is a number about nothing: the empty card below
           already says there is no server, so the count only runs with rows. */}
-      {rows.length > 0 && (
-        <div className="settings-crumb">
-          <Rov>{t('gui.settings.plugins.counter', { on: connected, total: rows.length })}</Rov>
-        </div>
-      )}
+      <div className="settings-crumb">
+        {rows.length > 0 && <Rov>{t('gui.settings.plugins.counter', { on: connected, total: rows.length })}</Rov>}
+        <Grow />
+        <button type="button" className="mini" onClick={add}>{t('gui.settings.plugins.add')}</button>
+        <span className="settings-addhint">{t('gui.settings.plugins.add_hint', { path: s.snap.configPath })}</span>
+      </div>
       <Card>
         {!rows.length && (
-          <Empty icon={GLYPH.plug} title={t('gui.settings.plugins.none')}>{t('gui.settings.plugins.none_sub')}</Empty>
+          <Empty icon={GLYPH.plug} title={t('gui.settings.plugins.none')} action={{ label: t('gui.settings.plugins.add'), onClick: add }}>
+            {t('gui.settings.plugins.none_sub')}
+          </Empty>
         )}
         {rows.map((m) => {
           const panel = <Panel m={m} />

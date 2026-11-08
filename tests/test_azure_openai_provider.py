@@ -14,6 +14,7 @@ import pytest
 
 from raven.contracts.llm_provider import GenerationSettings
 from raven.providers.azure_openai_provider import AzureOpenAIProvider
+from raven.providers.usage import normalize_usage
 
 
 class _HangingClient:
@@ -238,6 +239,58 @@ def test_arguments_that_needed_repair_are_reported_as_such() -> None:
     assert cut.tool_calls[0].arguments["content"] == "import ran"
 
 
+@pytest.mark.parametrize(
+    "choice",
+    [{"message": {"content": "hi"}}, {"message": {"content": "hi"}, "finish_reason": None}],
+    ids=["absent", "null"],
+)
+def test_a_missing_finish_reason_reads_unknown(choice: dict) -> None:
+    """A choice that names no finish_reason never said how it ended. ``stop`` was
+    filled in for it, so a reply cut by the connection read as a finished one."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    response = provider._parse_response({"choices": [choice]})
+
+    assert response.content == "hi"
+    assert response.finish_reason == "unknown"
+
+
+def test_reasoning_tokens_are_kept() -> None:
+    """The count says a turn that returned nothing still thought; the Chat
+    Completions usage block carries it under ``completion_tokens_details``."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    response = provider._parse_response(
+        {
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 900,
+                "total_tokens": 1000,
+                "completion_tokens_details": {"reasoning_tokens": 812},
+            },
+        }
+    )
+
+    assert response.usage["reasoning_tokens"] == 812
+    assert response.usage["completion_tokens"] == 900
+
+
+def test_a_response_that_reports_no_reasoning_tokens_gets_no_count() -> None:
+    """Absent is not zero: a count that was never reported cannot be told apart
+    from a turn that did not think once it is written down as 0."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def usage(**extra: object) -> dict:
+        body = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, **extra}
+        choice = {"message": {"content": "hi"}, "finish_reason": "stop"}
+        return provider._parse_response({"choices": [choice], "usage": body}).usage
+
+    assert "reasoning_tokens" not in usage()
+    assert "reasoning_tokens" not in usage(completion_tokens_details={})
+    assert usage(completion_tokens_details={"reasoning_tokens": 0})["reasoning_tokens"] == 0
+
+
 def _gpt_payload(
     deployment: str,
     *,
@@ -280,3 +333,48 @@ def test_other_deployments_are_untouched() -> None:
     payload = _gpt_payload("gpt-4o", tools=True)
     assert "reasoning_effort" not in payload
     assert payload["temperature"] == 0.7
+
+
+def test_cached_prompt_tokens_are_kept() -> None:
+    """Chat Completions reports prompt-cache hits under ``prompt_tokens_details``;
+    dropping them leaves cached input counted as fresh input in usage."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def usage(**extra: object) -> dict:
+        body = {"prompt_tokens": 2006, "completion_tokens": 300, "total_tokens": 2306, **extra}
+        choice = {"message": {"content": "hi"}, "finish_reason": "stop"}
+        return provider._parse_response({"choices": [choice], "usage": body}).usage
+
+    assert usage(prompt_tokens_details={"cached_tokens": 1920})["cache_read_input_tokens"] == 1920
+    assert usage(prompt_tokens_details={"cached_tokens": 0})["cache_read_input_tokens"] == 0
+    assert "cache_read_input_tokens" not in usage()
+    assert "cache_read_input_tokens" not in usage(prompt_tokens_details={})
+    # Explicit nulls read as "not reported", the same as an absent key.
+    assert "cache_read_input_tokens" not in usage(prompt_tokens_details=None)
+    assert "cache_read_input_tokens" not in usage(prompt_tokens_details={"cached_tokens": None})
+    # A count of the wrong type is treated as unreported, per ``token_count``.
+    assert "cache_read_input_tokens" not in usage(prompt_tokens_details={"cached_tokens": "1920"})
+    # End to end: ``prompt_tokens`` already holds the cached count, so
+    # normalizing subtracts it instead of counting it twice.
+    counts = normalize_usage(usage(prompt_tokens_details={"cached_tokens": 1920}))
+    assert counts["input_tokens"] == 86
+    assert counts["cache_read_tokens"] == 1920
+
+
+def test_cached_write_tokens_are_kept() -> None:
+    """GPT-5.6 and later also report prompt-cache writes; the LiteLLM and
+    Responses paths map the same wire shape, and the direct Azure path must
+    record it too. Absent is not zero: only a reported count is written."""
+    provider = AzureOpenAIProvider(api_key="k", api_base="https://x.openai.azure.com")
+
+    def usage(**extra: object) -> dict:
+        body = {"prompt_tokens": 2006, "completion_tokens": 300, "total_tokens": 2306, **extra}
+        choice = {"message": {"content": "hi"}, "finish_reason": "stop"}
+        return provider._parse_response({"choices": [choice], "usage": body}).usage
+
+    assert usage(prompt_tokens_details={"cache_write_tokens": 100})["cache_creation_input_tokens"] == 100
+    assert usage(prompt_tokens_details={"cache_write_tokens": 0})["cache_creation_input_tokens"] == 0
+    assert "cache_creation_input_tokens" not in usage()
+    assert "cache_creation_input_tokens" not in usage(prompt_tokens_details={})
+    assert "cache_creation_input_tokens" not in usage(prompt_tokens_details={"cache_write_tokens": None})
+    assert "cache_creation_input_tokens" not in usage(prompt_tokens_details={"cache_write_tokens": "100"})

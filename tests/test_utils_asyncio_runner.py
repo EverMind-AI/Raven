@@ -110,9 +110,10 @@ _OWNING_ENTRY_POINTS = {
 # has nothing to give up on and the stdlib runner is the right one.
 _PROBES_EXEMPT_FROM_THE_MIGRATION = {
     "cli/_tui_relay.py": ["asyncio.run(_healthy(port))"],
-    # `_attach` is a two-second HTTP round trip that closes its own session; it
-    # starts no engine, so there is nothing for a bounded sweep to give up on.
-    "cli/serve_commands.py": ["asyncio.run(_attach("],
+    # `_attach` and `_health` are two-second HTTP round trips that close their
+    # own session; they start no engine, so there is nothing for a bounded
+    # sweep to give up on.
+    "cli/serve_commands.py": ["asyncio.run(_attach(", "asyncio.run(_health("],
 }
 
 

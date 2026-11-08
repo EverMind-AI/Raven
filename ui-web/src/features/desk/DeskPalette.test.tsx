@@ -15,14 +15,14 @@ import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
 import {
-  DESK_COLUMN_FLOOR, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH, DESK_DRAG_THRESHOLD,
-  DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
+  DESK_ANCHOR_GAP, DESK_COLUMN_FLOOR, DESK_COMPOSER_GAP, DESK_DEFAULT_HEIGHT, DESK_DEFAULT_WIDTH,
+  DESK_DRAG_THRESHOLD, DESK_GEOMETRY_KEY, DESK_LAUNCHER_EDGE, DESK_TEXT_GAP,
 } from './geometry'
 import * as seen from './seen'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
-import type { TaskFile, TaskRow } from '../tasks/types'
+import type { TaskFile, TaskGroup, TaskRow } from '../tasks/types'
 import type { WorkspaceSource, WsChange } from '../workspace/types'
 
 /* The wiring src/main.tsx does: the desk's file opener is handed to the
@@ -40,7 +40,7 @@ const task = (id: string): TaskRow => ({
   id, kind: 'spawn', task_summary: id, status: 'running', agent: 'raven', handle: id,
   counts: {
     total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0,
-    interrupted: 0, exception: 0,
+    interrupted: 0, exception: 0, not_executed: 0,
   },
   nodes: [],
 })
@@ -288,6 +288,73 @@ describe('a tab with nothing in it', () => {
   })
 })
 
+/* A conversation that delegated nothing still has the matters its board keeps:
+   the tasks tab is empty only with no Task and no group, and loads the board
+   itself rather than trusting that something else did. */
+describe('the tasks tab of a conversation with a board', () => {
+  const waiting: TaskGroup = {
+    id: 'g_a', title: 'Fix bug A', summary: 'Cause found', status: 'needs_you', created_at: 1, updated_at: 1,
+    steps: [{ id: 's_a', turn_at: '2026-10-29T10:02:13', turn_id: 't1', title: 'Found it', summary: 'Empty token.', questions: ['Which fix?'], tasks: [] }],
+  }
+  const holding = (groups: TaskGroup[]): void => {
+    sources.tasks!.board = async () => ({ board: { version: 1, groups, unassigned: [] }, lineage: {} })
+  }
+  const tasksTab = async (): Promise<void> => {
+    render(<DeskPalette />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
+    await act(async () => {})
+  }
+
+  beforeEach(() => { tasksStore._resetForTests() })
+  afterEach(() => { tasksStore._resetForTests() })
+
+  it('draws the board of a conversation that delegated nothing', async () => {
+    holding([waiting])
+    await tasksTab()
+
+    expect(emptyOf()).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+  })
+
+  it('opens the group the Task Board page asked for, where no Task was dispatched', async () => {
+    holding([waiting])
+    tasksStore.requestFocus('s1', 'g_a')
+    await tasksTab()
+
+    expect(document.querySelector('.tkgroup[data-group="g_a"]')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  /* A reconnect to the same conversation resets the store without a switch, so
+     nothing but the tab itself can read the board back: an unread board is not an
+     empty one. */
+  it('reads the board back after a reconnect resets it, the conversation unchanged', async () => {
+    holding([waiting])
+    await tasksTab()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+
+    await act(async () => { tasksStore.reset() })
+    await act(async () => {})
+
+    expect(emptyOf()).toBeNull()
+    expect([...document.querySelectorAll<HTMLElement>('.tkgroup')].map((b) => b.dataset.group)).toEqual(['g_a'])
+  })
+
+  it('says nothing is here with no Task and no group', async () => {
+    holding([])
+    await tasksTab()
+
+    expect(emptyOf()).toEqual({ title: 'gui.ws.tasks_none', hint: '', icon: true })
+  })
+
+  it('lists the Tasks of a conversation whose board holds no group', async () => {
+    taskRows = [task('t1')]
+    holding([])
+    await tasksTab()
+
+    expect(emptyOf()).toBeNull()
+  })
+})
+
 describe('the desk shelf', () => {
   it('says the session has delivered nothing rather than showing an empty list', async () => {
     await shelf()
@@ -371,6 +438,36 @@ describe('the desk shelf', () => {
 
     const panes = desk.get().panes
     expect(panes.map((pane) => pane.id)).toEqual(['file:/w/a.md'])
+  })
+
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine. */
+  it('offers the attachment link on a delivered row', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/a.md', name: 'a.md', title: 'Comparison', download_path: '/files/download?token=t1' },
+    ]))
+    await shelf()
+    const a = document.querySelector('.desk-dlv .desk-dl') as HTMLAnchorElement
+    expect(a.getAttribute('href')).toBe('/files/download?token=t1')
+    expect(a.getAttribute('download')).toBe('a.md')
+  })
+
+  /* A delivery that is gone offers none: its token is gone with it, and the
+     row says so already. */
+  it('offers no attachment link on a row that is gone', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([
+      { path: '/w/gone.md', name: 'gone.md', title: 'Gone', download_path: '/files/download?token=t2', missing: true },
+    ]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
+  })
+
+  /* A manifest written before the field, or the offline canvas's: no link of
+     its own, so no control that points nowhere. */
+  it('offers no attachment link on a delivery with no link of its own', async () => {
+    deliveries.record(deliveries.SESSION, 1, manifest([{ path: '/w/b.md', name: 'b.md', title: 'B' }]))
+    await shelf()
+    expect(document.querySelector('.desk-dl')).toBeNull()
   })
 
   /* The demo shell's source cannot read a file, and a viewer with nothing to
@@ -952,7 +1049,7 @@ describe('the reserve the palette publishes', () => {
     /* Nothing unmounts the palette today -- `DeskApp` renders it once and a
        module page hides `#deskHost` rather than dropping it. This pins the
        cleanup anyway, because the property lives outside React and the failure
-       is silent: a transcript left 324px narrow with nothing on screen to
+       is silent: a transcript left 362px narrow with nothing on screen to
        explain it. */
     chatIs(want + DESK_COLUMN_FLOOR + 40)
     const view = render(<DeskPalette />)
@@ -1246,6 +1343,324 @@ describe('resizing by the corner grab', () => {
     expect(palette()?.style.height).toBe(`${DESK_DEFAULT_HEIGHT + 20}px`)
     await act(async () => {
       window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500, clientY: 520 }))
+    })
+  })
+
+  /* How far down a pull goes: to the composer card's bottom edge. happy-dom
+     lays nothing out, so the card, the launcher and the palette each have their
+     rectangle stated where the stylesheet would put them. The card ends at x=600
+     unless told otherwise, clear of a 300px palette hanging from the launcher at
+     974 -- where the reserve puts it in a chat wide enough to spare one. The
+     returned call moves it. */
+  type Spot = { right?: number; bottom?: number }
+  const composerAt = (bottom: number, span: Spot = {}): ((to: Spot) => void) => {
+    document.body.insertAdjacentHTML('beforeend', '<div class="chat"><div class="dock"><div class="dock-in"></div></div></div>')
+    const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
+    let at = { right: span.right ?? 600, bottom }
+    const place = (to: Spot): void => {
+      at = { ...at, ...to }
+      const { right, bottom: b } = at
+      card.getBoundingClientRect = (() => ({
+        left: 36, right, top: b - 132, bottom: b, width: right - 36, height: 132, x: 36, y: b - 132,
+      })) as never
+    }
+    place({})
+    return place
+  }
+  const launcherAt = (bottom: number): void => {
+    const button = document.createElement('button')
+    button.className = 'desk-follow-toggle'
+    document.body.append(button)
+    button.getBoundingClientRect = (() => ({
+      left: 944, right: 974, top: bottom - 30, bottom, width: 30, height: 30, x: 944, y: bottom - 30,
+    })) as never
+  }
+  const pull = async (dy: number, dx = 0): Promise<void> => {
+    grab().setPointerCapture = () => {}
+    await act(async () => {
+      grab().dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+      }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 500 + dx, clientY: 500 + dy }))
+    })
+    await act(async () => {
+      window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 500 + dx, clientY: 500 + dy }))
+    })
+  }
+  /* Under the launcher (bottom 42, so the palette's top is 54) and short of a
+     card whose top is 568. */
+  const shortOfTheCard = `${700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP)}px`
+
+  it('pulls an anchored desk down to the composer card\'s bottom edge and stops there', async () => {
+    launcherAt(42)
+    composerAt(700)
+    await shelf()
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+  })
+
+  it('stops an anchored desk short of a composer card that runs under it', async () => {
+    launcherAt(42)
+    composerAt(700, { right: 836 })
+    await shelf()
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe(shortOfTheCard)
+  })
+
+  it('stops short of the card once widened onto it', async () => {
+    /* The column is the palette's own: 250px wide it clears a card ending at
+       x=700, and pulled 50px wider -- leftward, the right edge being pinned --
+       it is over the card. */
+    launcherAt(42)
+    composerAt(700, { right: 700 })
+    localStorage.setItem(DESK_GEOMETRY_KEY, JSON.stringify({ x: 0, y: 54, w: 250, h: 340, detached: false }))
+    await shelf()
+    await pull(1000)
+    expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+
+    await pull(0, -50)
+
+    expect(palette()?.style.width).toBe('300px')
+    expect(palette()?.style.height).toBe(shortOfTheCard)
+  })
+
+  it('holds a detached desk\'s top edge when the corner is pulled past the composer', async () => {
+    /* The limit is met by the bottom edge stopping, not by the palette climbing:
+       a top edge that runs from a hand pulling down is the opposite of what the
+       corner is for. */
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 300, w: 300, h: 300, detached: true }),
+    )
+    composerAt(700)
+    await shelf()
+    palette()!.getBoundingClientRect = (() => ({
+      left: 40, right: 340, top: 300, bottom: 600, width: 300, height: 300, x: 40, y: 300,
+    })) as never
+
+    await pull(600)
+
+    expect(palette()?.style.top).toBe('300px')
+    expect(palette()?.style.height).toBe('400px')
+  })
+
+  it('lets a detached desk reach the card\'s bottom edge over the card itself', async () => {
+    /* Only the anchored palette stops short of the card: a dragged one is where
+       the reader put it. The launcher is there and the card runs under its
+       column, so a palette that asked the anchored question would stop at 502. */
+    launcherAt(42)
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 40, y: 100, w: 300, h: 300, detached: true }),
+    )
+    composerAt(700, { right: 836 })
+    await shelf()
+    palette()!.getBoundingClientRect = (() => ({
+      left: 40, right: 340, top: 100, bottom: 400, width: 300, height: 300, x: 40, y: 100,
+    })) as never
+
+    await pull(1000)
+
+    expect(palette()?.style.height).toBe('600px')
+  })
+
+  /* The card moves without the palette rendering: it grows upward with a long
+     draft, and slides under the palette or out from under it as the reserve
+     comes and goes. happy-dom's ResizeObserver never calls back, so these drive
+     one that does. */
+  describe('when the composer card moves', () => {
+    const observers: Array<{ cb: ResizeObserverCallback; targets: Element[] }> = []
+    class FakeResizeObserver {
+      private readonly rec: { cb: ResizeObserverCallback; targets: Element[] }
+      constructor(cb: ResizeObserverCallback) {
+        this.rec = { cb, targets: [] }
+        observers.push(this.rec)
+      }
+      observe(el: Element): void { this.rec.targets.push(el) }
+      unobserve(el: Element): void { this.rec.targets = this.rec.targets.filter((x) => x !== el) }
+      disconnect(): void { this.rec.targets = [] }
+    }
+    /* Only what watches the dock hears it: the reserve slides the card by
+       the dock's padding, and the card's own box never changes for it. */
+    const relayout = async (): Promise<void> => {
+      const dock = document.querySelector('.chat > .dock') as Element
+      await act(async () => {
+        for (const o of observers) if (o.targets.includes(dock)) o.cb([], o as unknown as ResizeObserver)
+      })
+    }
+    beforeEach(() => {
+      observers.length = 0
+      vi.stubGlobal('ResizeObserver', FakeResizeObserver)
+    })
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    it('gives the height back when a card that slid under it slides away', async () => {
+      /* Kept apart from the height the reader set, or a visit to the landing
+         page would cost a tall palette its height for good. */
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+
+      place({ right: 836 })
+      await relayout()
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+
+      place({ right: 600 })
+      await relayout()
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP)}px`)
+    })
+
+    it('resizes from the height it is drawn at, not the one it was set to', async () => {
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      place({ right: 836 })
+      await relayout()
+
+      await pull(-50)
+
+      expect(palette()?.style.height).toBe(`${700 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP) - 50}px`)
+    })
+
+    it('follows the card when the window moves it without resizing the dock', async () => {
+      launcherAt(42)
+      const place = composerAt(700)
+      await shelf()
+      await pull(1000)
+      place({ right: 836 })
+      await relayout()
+
+      place({ bottom: 600 })
+      await act(async () => { window.dispatchEvent(new Event('resize')) })
+
+      expect(palette()?.style.height).toBe(`${600 - 132 - DESK_COMPOSER_GAP - (42 + DESK_ANCHOR_GAP)}px`)
+    })
+
+    it('keeps what it showed when let go short of a card that then moves away', async () => {
+      /* A pull past the stop sets the height the reader saw, not the one the
+         hand went on to: otherwise the palette would grow by itself later. */
+      launcherAt(42)
+      const place = composerAt(700, { right: 836 })
+      await shelf()
+      await pull(1000)
+
+      place({ right: 600 })
+      await relayout()
+
+      expect(palette()?.style.height).toBe(shortOfTheCard)
+    })
+  })
+
+  /* Widened leftward with its bottom level with the card's, the palette's left
+     edge runs toward the card's right edge -- and the reserve is what moves the
+     card out of its way, by exactly the width the palette gained. Measured in a
+     browser before this was fixed, the gesture went in three beats: the bottom
+     edge jumped up above the card, the card slid left, and the bottom dropped
+     back. The height had been measured against the card where it stood before
+     the reserve grew, and the card's own slide was a 190ms transition that
+     restarts on every frame of a drag and so does not move until the hand
+     pauses. Only a browser shows the pixels; these pin the two causes. */
+  describe('widening across the composer card', () => {
+    /* A chat wide enough to spare the reserve at both widths, and a card whose
+       right edge sits where the stylesheet puts it once the reserve applies:
+       the chat's right edge, less the dock's own 36px and the reserve. */
+    const chatRight = 1024
+    const besideTheReserve = (): void => {
+      const chat = document.querySelector('.chat') as HTMLElement
+      chat.getBoundingClientRect = (() => ({
+        left: 0, right: chatRight, top: 0, bottom: 740, width: chatRight, height: 740, x: 0, y: 0,
+      })) as never
+      const card = document.querySelector('.chat > .dock > .dock-in') as HTMLElement
+      card.getBoundingClientRect = (() => {
+        const reserve = parseFloat(document.documentElement.style.getPropertyValue('--desk-reserve')) || 0
+        const right = chatRight - 36 - reserve
+        return { left: 36, right, top: 568, bottom: 700, width: right - 36, height: 132, x: 36, y: 568 }
+      }) as never
+    }
+    /* Every height the palette was drawn with, not only the last: a frame at a
+       different height and back is the fault, and the end state alone would
+       pass it. */
+    const heightsDuring = async (gesture: () => Promise<void>): Promise<string[]> => {
+      const seen: string[] = []
+      const watch = new MutationObserver((records) => {
+        for (const r of records) seen.push(/height:\s*([^;]+)/.exec(r.oldValue || '')?.[1] ?? '')
+      })
+      watch.observe(palette()!, { attributes: true, attributeFilter: ['style'], attributeOldValue: true })
+      await gesture()
+      await act(async () => {})
+      watch.disconnect()
+      seen.push(palette()!.style.height)
+      return seen
+    }
+
+    it('keeps its bottom edge still while the card makes room', async () => {
+      launcherAt(42)
+      composerAt(700)
+      besideTheReserve()
+      await shelf()
+      /* Settled the way a conversation the reader has been sitting on is: the
+         window's resize re-measures against the card the reserve has already
+         moved. */
+      await act(async () => { window.dispatchEvent(new Event('resize')) })
+      await pull(1000)
+      const level = `${700 - (42 + DESK_ANCHOR_GAP)}px`
+      expect(palette()?.style.height).toBe(level)
+
+      /* 100px in one move: well past the 48px the reserve leaves between the
+         palette's left edge and the card's right one. */
+      const heights = await heightsDuring(() => pull(0, -100))
+
+      expect(palette()?.style.width).toBe(`${DESK_DEFAULT_WIDTH + 100}px`)
+      expect(new Set(heights)).toEqual(new Set([level]))
+    })
+
+    it('holds the inset still while the hand sets the width', async () => {
+      /* The flag the stylesheet keys `transition: none` on, for the length of
+         the gesture and no longer: the slide is right for a desk opening and
+         closing, and wrong for one the hand is sizing frame by frame. */
+      await shelf()
+      const root = document.documentElement
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      expect(root.dataset.deskResize).toBe('true')
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: 450, clientY: 500 }))
+      })
+      expect(root.dataset.deskResize).toBe('true')
+
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: 450, clientY: 500 }))
+      })
+
+      expect(root.dataset.deskResize).toBeUndefined()
+    })
+
+    it('lets the inset slide again if the palette goes mid-gesture', async () => {
+      const view = await shelf()
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      expect(document.documentElement.dataset.deskResize).toBe('true')
+
+      await act(async () => { view.unmount() })
+
+      expect(document.documentElement.dataset.deskResize).toBeUndefined()
     })
   })
 })

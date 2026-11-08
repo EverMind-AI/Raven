@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.agent import workdir
-from raven.agent.tools.params import cast_params, validate_params
+from raven.agent.tools.params import cast_params, render_param_errors, validate_params
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.observability import semconv
@@ -52,6 +52,7 @@ class ToolSpec:
     timeout_seconds: float | None
     truncation_hint: str | None
     incomplete_hint: str | None
+    agent_output: bool
     # The optional availability declaration (raven/contracts/plugin_surface.py):
     # a tool that bills against a credential the deployment may not have
     # configured authors ``configured()``, and the withheld axis asks it per
@@ -89,6 +90,9 @@ def admit_tool(tool: Tool) -> ToolSpec:
         raise ToolAdmissionError(f"tool {name!r}: timeout_seconds must be a number or None")
     truncation = getattr(tool, "truncation_hint", None)
     incomplete = getattr(tool, "incomplete_hint", None)
+    agent_output = getattr(tool, "agent_output", False)
+    if not isinstance(agent_output, bool):
+        raise ToolAdmissionError(f"tool {name!r}: agent_output must be a bool")
     configured = getattr(tool, "configured", None)
     if configured is not None and not callable(configured):
         # ``configured = False`` reads as an author declaring the tool
@@ -112,6 +116,7 @@ def admit_tool(tool: Tool) -> ToolSpec:
         timeout_seconds=float(timeout) if timeout is not None else None,
         truncation_hint=truncation if isinstance(truncation, str) else None,
         incomplete_hint=incomplete if isinstance(incomplete, str) else None,
+        agent_output=agent_output,
         configured=configured,
         tool=tool,
     )
@@ -342,6 +347,10 @@ class ToolRegistry:
         # consults it for dispatch, so the three cannot disagree).
         self._withheld: Callable[[], frozenset[str]] | None = None
         self._schema_hidden: set[str] = set()
+        # Placed at assembly, not by registering late: an MCP server connects,
+        # and a session brings its own tools, after the host wired its own, so
+        # registration order cannot keep anything at the end. See ``list_last``.
+        self._listed_last: tuple[str, ...] = ()
         # The tools a session brought with it, keyed by session, plus the
         # turn-local view of one session's set. Two halves because the two facts
         # have different lifetimes: the binding lives as long as the session, the
@@ -460,6 +469,18 @@ class ToolRegistry:
     def schema_hidden_names(self) -> frozenset[str]:
         """Every registered name withheld from the schema (still callable)."""
         return frozenset(self._schema_hidden)
+
+    def list_last(self, *names: str) -> None:
+        """Close the provider's tool array with these tools, in the order given.
+
+        The array is read top to bottom like the rest of the prompt, so where a
+        tool sits is part of what it says when another tool's text points at it:
+        ``run_subagent_dag`` names the roster at the end of ``spawn``'s
+        description instead of repeating it, which is only the next thing read
+        when the two close the array in that order. A name that is not on offer
+        leaves no gap; a later call replaces the earlier one.
+        """
+        self._listed_last = tuple(names)
 
     def set_channel(self, channel: str | None) -> None:
         """Record the channel this turn is answering on (turn-local).
@@ -816,14 +837,17 @@ class ToolRegistry:
         # served live -- declared dynamism, not silent widening. A session
         # overlay tool never passed the door and keeps its live schema.
         out: list[dict[str, Any]] = []
+        last: dict[str, dict[str, Any]] = {}
         for name, tool in self._visible_tools().items():
             if not self.offers(tool, withheld) or name in self._schema_hidden:
                 continue
             spec = self._specs.get(name)
-            if spec is None or spec.schema_dynamic:
-                out.append(tool.to_schema())
+            schema = tool.to_schema() if spec is None or spec.schema_dynamic else spec.schema
+            if name in self._listed_last:
+                last[name] = schema
             else:
-                out.append(spec.schema)
+                out.append(schema)
+        out.extend(last[name] for name in self._listed_last if name in last)
         return out
 
     def hidden_definition(self, name: str) -> dict[str, Any] | None:
@@ -861,9 +885,9 @@ class ToolRegistry:
         *,
         run_meta: RunMeta | None = None,
     ) -> str:
-        """Execute a tool by name with given parameters, its output scrubbed of the credentials it could carry.
+        """Execute a tool, preserving agent content and scrubbing Raven's own tool results.
 
-        Scrubbed here, inside the traced call, because every reader starts from
+        Local results are scrubbed here, inside the traced call, because every reader starts from
         this return value: the main and sub-agent loops, the sentinel's action
         executor, the tool forwarder, and the trace span that records it. A
         loop that scrubbed only its own copy left the span, the file diff sent
@@ -981,7 +1005,7 @@ class ToolRegistry:
             # dispatch was briefed to do.
             errors += self._verifier_refusals(name, params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _hint
+                return f"Error: Invalid parameters for tool '{name}':" + render_param_errors(errors) + _hint
 
             # Post-validation, pre-dispatch, and ahead of the plugin gates:
             # platform authority precedes plugin policy. The refusal (or the
@@ -1024,8 +1048,26 @@ class ToolRegistry:
             # Unwrap ToolResult here, at the boundary: `execute` promises model
             # text to every caller, and only the agent loop wants the display
             # string and multimodal blocks (which ride along on ToolOutput).
-            if isinstance(result, ToolResult):
-                model_text, display_text = result.model_text, result.display_text
+            #
+            # Provenance is a permission plus a claim, and takes both. The
+            # tool's declaration admits it to carrying another agent's words;
+            # the result claims that THIS one does. Judged on the declaration
+            # alone, a tool's own sentence about its own failure would read as
+            # an agent's -- `a2a_send` interpolates the exception into "the A2A
+            # call failed", and a peer credential echoed in it would reach the
+            # model unscrubbed. Judged on the claim alone, any tool could
+            # unscrub itself. So both are required, and the claim is opt-in: a
+            # bare string claims nothing, which is what every refusal and status
+            # line this process composed is, and a structured result claims only
+            # where it says so. A forwarder owns none of what it returns, so its
+            # declaration is read off the tool it forwarded to.
+            declared = getattr(spec or tool, "agent_output", False)
+            if not declared:
+                declared = bool(getattr(tool.metadata_owner(params), "agent_output", False))
+            agent_output = declared and bool(getattr(result, "agent_output", False))
+            if isinstance(result, (ToolResult, ToolOutput)):
+                model_text = result.model_text if isinstance(result, ToolResult) else str(result)
+                display_text = result.display_text
                 retryable, blocks_call = result.retryable, result.blocks_call
                 continuation = result.continuation
                 ok = result.ok
@@ -1042,9 +1084,11 @@ class ToolRegistry:
                 blocks = None
                 diff = None
                 file_change = None
-                # Read off the result rather than defaulted: a tool whose own
-                # return is already a ToolOutput (exec) misses the unwrap above,
-                # and its removals would be dropped at this boundary.
+                # Neither of the two result shapes, so nothing is declared
+                # about what this return carries: read off it the fields a
+                # caller may have attached (a `str` subclass a tool built for
+                # itself), and default the rest. Read rather than defaulted for
+                # the removals and writes, which no other field would carry.
                 removed = tuple(getattr(result, "removed", ()) or ())
                 written = tuple(getattr(result, "written", ()) or ())
             # Remembered once the verdict is in, and only when it is good. A
@@ -1084,6 +1128,7 @@ class ToolRegistry:
                     ok=False,
                     removed=removed,
                     written=written,
+                    agent_output=agent_output,
                 )
             return ToolOutput(
                 model_text,
@@ -1097,11 +1142,15 @@ class ToolRegistry:
                 file_change=file_change,
                 removed=removed,
                 written=written,
+                agent_output=agent_output,
             )
         except asyncio.TimeoutError:
             return f"Error: Tool '{name}' timed out after {ceiling:.0f}s." + _hint
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _hint
+            # Never the tool's declaration: this sentence is the registry's own,
+            # raised out of a call that produced nothing, so an agent tool that
+            # dies here reports its own error as exactly what it is.
+            return ToolOutput(f"Error executing {name}: {str(e)}" + _hint, ok=False)
 
     async def _adjudicate(self, name: str, params: dict[str, Any]) -> str | None:
         """Run the cast gates over one validated call; the first non-None
@@ -1139,7 +1188,7 @@ class ToolRegistry:
 
 
 def _scrubbed(arguments: Any, out: Any) -> Any:
-    """``out`` with every text it carries scrubbed: the model text, the display, the blocks and the file contents.
+    """Preserve agent output; scrub local model text, display, blocks and file contents.
 
     The file contents are display only (the page's diff, the removal watch);
     nothing writes them back, so a redaction there cannot reach a file.
@@ -1147,6 +1196,9 @@ def _scrubbed(arguments: Any, out: Any) -> Any:
     from dataclasses import replace
 
     from raven.config.held_secrets import scrub_tool_blocks, scrub_tool_output
+
+    if isinstance(out, ToolOutput) and out.agent_output:
+        return out
 
     def text(value: Any) -> Any:
         return scrub_tool_output(arguments, value) if isinstance(value, str) and value else value

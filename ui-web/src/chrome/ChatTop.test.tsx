@@ -17,8 +17,15 @@ import { readFileSync } from 'node:fs'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import * as exportWizard from '../features/export/store'
 import * as rail from '../features/rail/store'
+import * as trajectory from '../features/trajectory/store'
+import { _resetForTests as resetSession, setCurrent } from '../lib/session'
+import { absorb, resetCapabilities } from '../rpc/capabilities'
 import * as lang from '../state/lang'
+import * as menu from '../state/menu'
+import { _resetFreshForTests, pitch, unpitch } from '../state/session/conversation'
+import { resetSources, setSources } from '../state/sources'
 import { mountPageRoot } from '../test/pageRoot'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -76,6 +83,7 @@ describe('the chat column chrome', () => {
       'wdTag',
       'spacer',
       'wsBtn',
+      'moreBtn',
     ])
     expect(Array.from(el('scroll').children).map((child) => child.id)).toEqual([
       'bannerHost',
@@ -83,15 +91,20 @@ describe('the chat column chrome', () => {
       'stage',
     ])
     expect(Array.from(el('backpill').children).map((child) => child.tagName.toLowerCase())).toEqual(['svg'])
+    expect(Array.from(el('toppill').children).map((child) => child.tagName.toLowerCase())).toEqual(['svg'])
     expect(Array.from(el('brand').children).map((child) => child.className)).toEqual(['mk', 'wl'])
     /* Nothing portals into the seam: it has no interior, which is why it is
        the one region of the five this step leaves entirely to page.html. */
     expect(el('wsGrip').childNodes).toHaveLength(0)
+    /* Handed over empty: the transcript island's turn nav roots itself there. */
+    expect(el('turnNav').childNodes).toHaveLength(0)
   })
 
   it('renders every id the chrome, the islands and the writers reach for, once each', () => {
     render()
-    for (const id of ['title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage']) {
+    for (const id of [
+      'title', 'wdTag', 'wsBtn', 'wsBdg', 'bannerHost', 'flash', 'stage', 'trajHost', 'turnNav', 'toppill',
+    ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
     }
   })
@@ -113,7 +126,11 @@ describe('the chat column chrome', () => {
        than fetched -- so it is one element, and it is hidden from the reader
        along with the lockup around it. */
     expect(document.querySelector('#brand .mk > svg')).toBeTruthy()
-    for (const svg of [...top().querySelectorAll('svg'), ...el('backpill').querySelectorAll('svg')]) {
+    for (const svg of [
+      ...top().querySelectorAll('svg'),
+      ...el('backpill').querySelectorAll('svg'),
+      ...el('toppill').querySelectorAll('svg'),
+    ]) {
       expect(svg.getAttribute('aria-hidden')).toBe('true')
     }
   })
@@ -153,6 +170,426 @@ describe('the chat column chrome', () => {
       el('title').click()
     })
     expect(renames.n).toBe(2)
+  })
+
+  it('does not rename an imported conversation from its name', () => {
+    render()
+    setCurrent('imported:' + 'a'.repeat(32))
+    act(() => { el('title').click() })
+    expect(renames.n).toBe(0)
+    setCurrent('tui:a')
+    act(() => { el('title').click() })
+    expect(renames.n).toBe(1)
+    resetSession()
+  })
+})
+
+/* The trajectory toggle and the box its island fills. The store decides when
+   the toggle may show; this file answers for what the header does with that
+   decision: the button's presence, the scroller's parking and the composer's
+   indifference to either. */
+describe('the chat column chrome and the trajectory view', () => {
+  const trajectorySource = {
+    state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
+    list: async () => ({
+      epoch: 'e', snapshot_revision: 0, entries: [], next_cursor: null, complete: true,
+      index_state: {
+        phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0,
+        unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+      },
+    }),
+    changes: async (_k: string, epoch: string, after: number) => ({
+      epoch, from_revision: after, to_revision: after, upserts: [], removed: [], has_more: false, reset_required: false,
+      index_state: {
+        phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0,
+        unresolved_traces: 0, unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+      },
+    }),
+    detail: () => Promise.reject(new Error('not scripted')),
+    block: () => Promise.reject(new Error('not scripted')),
+  }
+  /* The wizard the menu opens lists the turns; its answer never lands here,
+     because this file answers for the button, not for the wizard. */
+  const exportSource = {
+    turns: () => new Promise<never>(() => undefined),
+    start: () => Promise.reject(new Error('not scripted')),
+    status: () => Promise.reject(new Error('not scripted')),
+    cancel: async () => ({ ok: true }),
+    reportProbe: async () => ({ reachable: true, target: 'https://bugs.example', reason: '' }),
+    reportStart: () => Promise.reject(new Error('not scripted')),
+    reportStatus: () => Promise.reject(new Error('not scripted')),
+    reportItem: () => Promise.reject(new Error('not scripted')),
+    reportDecide: () => Promise.reject(new Error('not scripted')),
+    reportUpload: () => Promise.reject(new Error('not scripted')),
+    reportRetry: () => Promise.reject(new Error('not scripted')),
+    reportCancel: async () => ({ ok: true }),
+  }
+
+  beforeEach(() => {
+    trajectory._resetForTests()
+    resetCapabilities()
+    _resetFreshForTests()
+    setSources({ trajectory: trajectorySource, export: exportSource })
+  })
+
+  afterEach(() => {
+    trajectory._resetForTests()
+    exportWizard._resetForTests()
+    menu._resetForTests()
+    resetSources()
+    resetCapabilities()
+  })
+
+  /* Everything the store needs to offer the view: the surface announced and
+     on, a conversation open, content in it. */
+  const offer = async (): Promise<void> => {
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => {
+      unpitch()
+      trajectory.sessionChanged('gui:a')
+    })
+  }
+
+  it('renders no toggle and a hidden box until the store offers the view', () => {
+    render()
+    expect(document.getElementById('trajBtn')).toBeNull()
+    expect(el('trajHost').hidden).toBe(true)
+    expect(el('trajHost').childNodes).toHaveLength(0)
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+  })
+
+  it('hides the toggle on a draft and on an empty conversation, and shows it once there is content', async () => {
+    render()
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+    act(() => { trajectory.sessionChanged('gui:a') })
+    /* Key set, column still in its empty state: no toggle. */
+    expect(document.getElementById('trajBtn')).toBeNull()
+    act(() => { unpitch() })
+    expect(document.getElementById('trajBtn')).not.toBeNull()
+    act(() => { pitch() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+  })
+
+  it('parks the scroller and shows the box on a click, and puts them back on the next', async () => {
+    render()
+    await offer()
+    const btn = el('trajBtn')
+    expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
+      'title', 'wdTag', 'spacer', 'trajBtn', 'wsBtn', 'moreBtn',
+    ])
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    ta.value = 'half a thought'
+    const rack = el('sheetRack')
+    const racked = document.createElement('div')
+    rack.appendChild(racked)
+    act(() => { btn.click() })
+    expect(trajectory.get().view).toBe('trajectory')
+    expect(el('scroll').getAttribute('data-parked')).toBe('')
+    expect(el('trajHost').hidden).toBe(false)
+    expect(document.getElementById('backpill')).not.toBeNull()
+    expect(el('trajBtn').getAttribute('aria-pressed')).toBe('true')
+    expect(ta.value).toBe('half a thought')
+    expect(rack.firstElementChild).toBe(racked)
+    act(() => { el('trajBtn').click() })
+    expect(trajectory.get().view).toBe('chat')
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+    expect(el('trajHost').hidden).toBe(true)
+    expect(ta.value).toBe('half a thought')
+  })
+
+  it('comes back to the conversation when it is cleared under the trajectory', async () => {
+    render()
+    await offer()
+    act(() => { el('trajBtn').click() })
+    expect(el('scroll').getAttribute('data-parked')).toBe('')
+    act(() => { pitch() })
+    expect(document.getElementById('trajBtn')).toBeNull()
+    expect(el('scroll').hasAttribute('data-parked')).toBe(false)
+    expect(el('trajHost').hidden).toBe(true)
+    expect(trajectory.get().view).toBe('chat')
+  })
+
+  /* The conversation menu sits in the corner whatever the conversation is, so
+     the launcher beside it never moves; what changes is whether it acts. */
+  it('keeps the menu button in the corner and enables it exactly when the view is offered', async () => {
+    render()
+    const more = (): HTMLButtonElement => el('moreBtn') as HTMLButtonElement
+    expect(more().disabled).toBe(true)
+    expect(more().getAttribute('aria-haspopup')).toBe('menu')
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => { trajectory.sessionChanged('gui:a') })
+    expect(more().disabled).toBe(true)
+    act(() => { unpitch() })
+    expect(more().disabled).toBe(false)
+    act(() => { pitch() })
+    expect(more().disabled).toBe(true)
+    act(() => { more().click() })
+    expect(menu.get().items).toEqual([])
+  })
+
+  it('disables the menu on an imported conversation however much it holds', async () => {
+    render()
+    const more = (): HTMLButtonElement => el('moreBtn') as HTMLButtonElement
+    absorb(['trajectory-v1'])
+    trajectory.install()
+    await act(async () => { await trajectory.refreshState() })
+    act(() => { trajectory.sessionChanged('imported:' + 'a'.repeat(32)) })
+    act(() => { unpitch() })
+    expect(trajectory.available()).toBe(true)
+    expect(more().disabled).toBe(true)
+    expect(el('trajBtn')).toBeTruthy()
+    act(() => { trajectory.sessionChanged('gui:a') })
+    expect(more().disabled).toBe(false)
+  })
+
+  it('raises one Export row under the button, and the row opens the wizard on this conversation', async () => {
+    render()
+    await offer()
+    act(() => { el('moreBtn').click() })
+    const items = menu.get().items
+    expect(items).toHaveLength(1)
+    const [row] = items as menu.MenuItem[]
+    expect(row!.label).toBe('Export')
+    expect(el('menu').dataset.open).toBe('true')
+    act(() => { menu.pick(row!) })
+    expect(el('menu').dataset.open).toBe('false')
+    expect(exportWizard.get().open).toBe(true)
+    expect(exportWizard.get().sessionKey).toBe('gui:a')
+  })
+
+  it('adds Report a problem while the gateway announces a bug report receiver, and it opens the report', async () => {
+    render()
+    await offer()
+    absorb(['trajectory-v1', 'bugreport-v1'])
+    act(() => { el('moreBtn').click() })
+    const rows = menu.get().items as menu.MenuItem[]
+    expect(rows.map((row) => row.label)).toEqual(['Export', 'Report a problem'])
+    act(() => { menu.pick(rows[1]!) })
+    expect(exportWizard.get().flow).toBe('report')
+    expect(exportWizard.get().sessionKey).toBe('gui:a')
+  })
+
+  it('reaches for no element of its own: the toggle is drawn from the store alone', () => {
+    const text = source('chrome/ChatTop.tsx')
+    expect(text).not.toMatch(/getElementById|querySelector\(/)
+  })
+  it('marks the document while the trajectory is up, and clears it on the way back', async () => {
+    render()
+    await offer()
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
+    act(() => { el('trajBtn').click() })
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(true)
+    act(() => { el('trajBtn').click() })
+    expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
+  })
+
+})
+
+/* The header floats over the transcript, so a bubble scrolled to the top
+ * passes under it instead of being cut at its edge, and what it passes under
+ * is a fade of frosted glass that reaches below the header's own row.
+ * happy-dom has no backdrop-filter in its property table and applies an
+ * @supports block without evaluating it, so the blur and its ramp are read off
+ * the rule's own text while the layout facts are read as computed styles: the
+ * header out of the flow, the scroller giving the row's height back as padding
+ * (the resting frame) but clearing the whole fade for scrollIntoView, and the
+ * trajectory view and parked copy starting clear of it. Only a browser can
+ * show the blur itself. */
+describe('the header band', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  function styled(): void {
+    render()
+    sheet = document.createElement('style')
+    sheet.textContent = source('styles/page.css')
+    document.head.append(sheet)
+  }
+
+  /* The custom property as the page declares it; happy-dom resolves the
+     substitution but not the calc, so the token is compared as written. */
+  const token = (name: string): string =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+    document.documentElement.removeAttribute('data-traj')
+    document.documentElement.removeAttribute('data-shell')
+    document.documentElement.style.removeProperty('--tl-row')
+  })
+
+  it('floats over the transcript instead of ending where it begins', () => {
+    styled()
+    expect(getComputedStyle(top()).position).toBe('absolute')
+  })
+
+  it('gives the row height back as padding, so the resting frame does not move', () => {
+    styled()
+    const row = getComputedStyle(top()).height
+    expect(row).toBe('52px')
+    const scroll = getComputedStyle(el('scroll'))
+    expect(scroll.paddingTop).toBe(row)
+    /* The frost is the title bar itself, so scrollIntoView clears that same
+       row; there is no fade below it to leave room for. */
+    expect(scroll.scrollPaddingTop).toBe(row)
+  })
+
+  it('starts the trajectory view below the title bar and parks the scroller at its live size', () => {
+    styled()
+    document.documentElement.setAttribute('data-traj', '')
+    /* The island is an inset card now (the waterfall's glass sheet), so the
+       title bar is its top margin, not padding inside it: padding would push
+       the content down while the card's top edge stayed under the header. */
+    expect(getComputedStyle(el('trajHost')).paddingTop).toBe('0px')
+    const css = source('styles/page.css')
+    const island = (css.match(/html\[data-traj\] #trajHost \{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(island).toMatch(/margin: calc\(var\(--topbar-h\) \+ 6px\) 14px 14px;/)
+    const scroll = el('scroll')
+    scroll.dataset.parked = ''
+    /* The parked copy is the live box out of the flow: inset 0 keeps its
+       size, so its content starts at the same offset the live one does. */
+    expect(getComputedStyle(scroll).getPropertyValue('inset').trim()).toBe('0')
+  })
+
+  it('places the up pill and the turn nav clear of the title bar', () => {
+    styled()
+    const css = source('styles/page.css')
+    /* The pill's top is a calc-of-calc, which happy-dom cannot read back as a
+       number, so the rule is pinned as written; the nav is a single token and
+       can be measured. */
+    expect(css).toMatch(/\.chrome-toppill \{ top: calc\(var\(--topbar-h\) \+ 12px\); bottom: auto; \}/)
+    sheet!.textContent = `${sheet!.textContent}\n${source('features/transcript/styles.css')}`
+    const nav = document.createElement('div')
+    nav.className = 'transcript-nav'
+    document.body.append(nav)
+    expect(getComputedStyle(nav).top).toBe(token('--topbar-h'))
+    nav.remove()
+  })
+
+  it('reads the shell title row into the row, the band and the scroller', () => {
+    styled()
+    document.documentElement.dataset.shell = '1'
+    document.documentElement.style.setProperty('--tl-row', '38px')
+    expect(getComputedStyle(top()).height).toBe('38px')
+    const scroll = getComputedStyle(el('scroll'))
+    expect(scroll.paddingTop).toBe('38px')
+    expect(scroll.scrollPaddingTop).toBe(token('--topbar-h'))
+    expect(source('styles/page.css'))
+      .toMatch(/:root\[data-shell="1"\] \{ --topbar-h: var\(--tl-row, 38px\); \}/)
+  })
+
+  it('splits a translucent tint from the blur, over an opaque ground where the blur is unsupported', () => {
+    styled()
+    const css = source('styles/page.css')
+
+    /* The blur layer carries no ground: an engine that paints the element's
+       background over the filtered backdrop would hide the blur entirely. */
+    const blur = (css.match(/\.chat > \.top::before\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(blur).toMatch(/-webkit-backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/backdrop-filter: blur\(16px\) saturate\(1\.4\)/)
+    expect(blur).toMatch(/height: var\(--topbar-h\)/)
+    expect(blur).not.toMatch(/background:/)
+    /* The ramp holds near full strength through the first third, declines
+       through the middle, and lands at none on the row's lower edge. */
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.92\) 30%/)
+    expect(blur).toMatch(/rgba\(0, 0, 0, \.55\) 80%/)
+    /* The ramp lands at the element's lower edge, not above it. */
+    expect(blur).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+
+    const tint = (css.match(/\.chat > \.top::after\s*\{([\s\S]*?)\}/) as RegExpMatchArray)[1] as string
+    expect(tint).toMatch(/height: var\(--topbar-h\)/)
+    expect(tint).toMatch(/background: var\(--topbar-tint\)/)
+    expect(tint).toMatch(/mask-image: linear-gradient\(180deg, #000 0/)
+    expect(tint).toMatch(/rgba\(0, 0, 0, 0\) 100%\)/)
+    /* Neither layer may depend on color-mix: engines with backdrop-filter but
+       without it would lose the ground and leave the title on a bare blur. */
+    expect(blur).not.toMatch(/color-mix/)
+    expect(tint).not.toMatch(/color-mix/)
+
+    /* The band is glass, not paint: the tint token's alpha has to stay low
+       enough that the bubble under it is still read as colour and shape. An
+       opaque --page here is the regression this guards. */
+    const tintValue = token('--topbar-tint')
+    const alpha = Number(tintValue.slice(tintValue.lastIndexOf(',') + 1).replace(')', '').trim())
+    expect(alpha).toBeGreaterThan(0)
+    expect(alpha).toBeLessThanOrEqual(0.35)
+    expect(token('--topbar-halo')).toMatch(/rgba\(/)
+    expect(token('--topbar-plate')).toMatch(/rgba\(/)
+
+    /* Each frost token is declared four times -- the root's light defaults,
+       the media dark block, the viewer's dark override and the viewer's light
+       override -- and a value that drifts in one of them is invisible until
+       someone opens that theme. Pin the count and the shared alpha. */
+    const declared = (name: string): string[] =>
+      [...css.matchAll(new RegExp(`${name}:\\s*(rgba\\([^)]*\\))`, 'g'))].map((m) => (m[1] as string))
+    const tintAlphas = declared('--topbar-tint').map((v) => Number(v.slice(v.lastIndexOf(',') + 1).replace(')', '').trim()))
+    expect(tintAlphas).toHaveLength(4)
+    expect(new Set(tintAlphas)).toEqual(new Set([0.3]))
+    expect(declared('--topbar-halo')).toHaveLength(4)
+    expect(declared('--topbar-plate')).toHaveLength(4)
+    /* Legibility over a dark bubble is the halo's and the plates' job, not a
+       heavier tint: both rules have to stay in the sheet. The plate comes
+       through --ghost-bg so .ghost-ic:hover still wins at its own weight. */
+    expect(css).toMatch(/\.chat > \.top h1,\n\.chat > \.top \.chrome-wd-tag \{ text-shadow: 0 0 2px var\(--topbar-halo\), 0 0 9px var\(--topbar-halo\); \}/)
+    expect(css).toMatch(/\.chat > \.top \{[^}]*--ghost-bg: var\(--topbar-plate\);/)
+    expect(css).toMatch(/\.ghost-ic \{[^}]*background: var\(--ghost-bg, transparent\);/)
+    expect(css).toMatch(/\.ghost-ic:hover \{[^}]*background: var\(--hover\)/ )
+
+    const fallback = (css.match(
+      /@supports not \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: blur\(1px\)\)\) \{([\s\S]*?)\n\}/,
+    ) as RegExpMatchArray)[1] as string
+    expect(fallback).toMatch(/\.chat > \.top::before \{ display: none; \}/)
+    expect(fallback).toMatch(/background: var\(--page\)/)
+    expect(fallback).toMatch(/-webkit-mask-image: none/)
+    expect(fallback).toMatch(/mask-image: none/)
+  })
+
+  it('strengthens the frost upward, from clear at the row lower edge to full at its top', () => {
+    styled()
+    const css = source('styles/page.css')
+    const layer = (selector: string): string =>
+      (css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`)) as RegExpMatchArray)[1] as string
+    const stops = (text: string): Array<{ at: number; alpha: number }> =>
+      [...text.matchAll(/(?:#000|rgba\(0, 0, 0, ([\d.]+)\)) (\d+)%/g)]
+        .map((m) => ({ at: Number(m[2]), alpha: m[1] === undefined ? 1 : Number(m[1]) }))
+    for (const selector of ['\\.chat > \\.top::before', '\\.chat > \\.top::after']) {
+      const mask = layer(selector).match(/mask-image: (linear-gradient\([^;]+\));/)?.[1] ?? ''
+      const ramp = stops(mask)
+      expect(ramp.length).toBeGreaterThanOrEqual(3)
+      expect(ramp.map((s) => s.at)).toEqual([...ramp.map((s) => s.at)].sort((a, b) => a - b))
+      expect(ramp.at(-1)).toEqual({ at: 100, alpha: 0 })
+      expect(ramp[0]!.alpha).toBe(1)
+      expect(ramp.some((s) => s.at > 0 && s.at < 100 && s.alpha > 0 && s.alpha < 1)).toBe(true)
+      for (let i = 1; i < ramp.length; i += 1) {
+        expect(ramp[i]!.alpha).toBeLessThanOrEqual(ramp[i - 1]!.alpha)
+      }
+    }
+  })
+
+  it('pins both frost ramps stop for stop, in both spellings', () => {
+    styled()
+    const css = source('styles/page.css')
+    const layer = (selector: string): string =>
+      (css.match(new RegExp(`${selector}\\s*\\{([\\s\\S]*?)\\}`)) as RegExpMatchArray)[1] as string
+    const ramps: Record<string, string> = {
+      '\\.chat > \\.top::before':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .92) 30%, rgba(0, 0, 0, .8) 58%, rgba(0, 0, 0, .55) 80%, rgba(0, 0, 0, 0) 100%)',
+      '\\.chat > \\.top::after':
+        'linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .82) 34%, rgba(0, 0, 0, .5) 62%, rgba(0, 0, 0, .2) 84%, rgba(0, 0, 0, 0) 100%)',
+    }
+    for (const [selector, ramp] of Object.entries(ramps)) {
+      for (const prop of ['-webkit-mask-image', 'mask-image']) {
+        expect(layer(selector)).toContain(`${prop}: ${ramp};`)
+      }
+    }
   })
 })
 

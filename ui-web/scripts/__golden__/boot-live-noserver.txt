@@ -45,6 +45,22 @@ div.app[data-rail=on]
             path
             path
         span
+      button#knowledgeBtn.navi
+        svg
+          g
+            path
+            path
+        span
+      button#boardsBtn.navi
+        svg
+          path
+          path
+        span
+      button#importedBtn.navi
+        svg
+          path
+          path
+        span
     div#findBox.find
       span.ic
         svg
@@ -82,13 +98,21 @@ div.app[data-rail=on]
               rect
               path
             span#wsBdg.bdg
+          button#moreBtn.ghost-ic.tipdn
+            svg
+              path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash
           div#stage.col
+        div#trajHost
+        button#toppill.backpill.tipdn.chrome-toppill
+          svg
+            path
         button#backpill.backpill
           svg
             path
+        div#turnNav
         div#wsGrip.grip
         div#brand
           span.mk
@@ -117,6 +141,7 @@ div.app[data-rail=on]
         div.dock
           div#sheetRack.sheets
           div.dock-in
+            div#composerGrip.chrome-composer-grip
             div#queued.queued
             div#atts.atts
             div.field
@@ -128,10 +153,9 @@ div.app[data-rail=on]
                     path
                 div#plusPop.pop[data-open=false]
               span.chrome-anch
-                button#wdChip.chip
-                  svg.pico
-                    path
-                  span#wdName
+                button#atBtn.plus
+                  span
+                div#atPop.pop[data-open=false]
                 div#wdPop.pop[data-open=false][data-view=menu]
               span.chrome-anch
                 button#permChip.chip
@@ -206,6 +230,7 @@ section#connectionsPage.page[data-open=false]
   div.work
     div#connectionsBody.wrap
       div.hub-head
+        button.hub-head-tab
         button.hub-head-tab
         button.hub-head-tab
       p.hub-head-sub
@@ -301,6 +326,16 @@ section#connectionsPage.page[data-open=false]
           span.su-wbar.su-wline
           div.su-foot-slot
             span.su-wbar.su-wfoot
+section#knowledgePage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#knowledgeBody.wrap
+section#tasksBoardPage.page[data-open=false]
+  header
+    h2
+  div.work
+    div#tasksBoardBody.wrap
 aside#detail.detail[data-open=false]
   div.dpanel
     header
@@ -326,6 +361,9 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
       div#spanels.spanels
       div#cronBody.spanels[data-for=cron]
       div#memoryBody.spanels[data-for=memory]
+div#exportVeil.veil[data-open=false]
+  div#exportModal.chrome-export-modal
+    div#exportBody.chrome-export-body
 div#veil.veil[data-open=false]
   div.sheet
     header#cfTitle

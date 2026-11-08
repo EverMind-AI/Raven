@@ -2,7 +2,7 @@
 """Host-side launcher for the Raven-Oncall ACP server -- the B side.
 
 The retired vendored Raven-Oncall carried a whole fork checkout; this
-product carries none. It renders its config and execs the
+product carries none. It renders its config and serves the
 installed raven's own ``raven acp``, so every turn runs through the same
 assembly door (build_runtime) as the host's TUI and gateway. The machinery
 of rendering lives in the launcher library
@@ -23,9 +23,9 @@ plugin's contributions, and the one-turn CLI adjudication path retires with
 its only callers (the wake shell and the fork benchmarks). This launcher
 serves ACP, nothing else.
 
-After rendering, this process execs ``python -m raven acp`` on its own
-interpreter (the row's ``{PYTHON}`` resolves at install time to one that
-imports raven), so the server inherits this pid, process group and stdio.
+After rendering, the launcher serves ``python -m raven acp`` on this
+interpreter with inherited stdio. POSIX replaces the launcher; Windows
+keeps it alive until the child exits, preserving the rendered config's owner.
 stdout belongs to the protocol; every diagnostic goes to stderr.
 """
 
@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -133,18 +134,31 @@ def connections_registry() -> Path:
 
 
 def seed_guide(workspace: Path) -> None:
-    """Seed the workspace TOOLS.md with the on-call section already in place.
+    """Write the workspace TOOLS.md with the on-call section already in place.
 
     The vendored twin appended TOOLS_ONCALL.md to the workspace TOOLS.md on
-    every sync while its gate was on; here the composed file is seeded once,
-    before first launch, so trunk's own template sync finds it existing and
-    leaves it alone. Once is the contract: the workspace copy is the live one
-    afterwards, and a product update must not silently overwrite what an
-    operator tuned in place. The composition mirrors the twin's append --
-    template body, blank line, section -- so the model-visible text is
+    every sync while its gate was on; here the composed file is written before
+    the engine starts, so trunk's own template sync finds it existing and
+    leaves it alone. Regenerated on every launch (``write_generated``): the
+    template half changes with the installed raven, and an operator's own
+    lines go in ``TOOLS.local.md``. The composition mirrors the twin's append
+    -- template body, blank line, section -- so the model-visible text is
     byte-equal to what the fork produced on a fresh workspace.
+
+    A raven older than ``write_generated`` -- a home tree copied out by a newer
+    wheel serves an older checkout too -- seeds the guide once instead, and
+    says that it will not be refreshed.
     """
-    render.seed_once(workspace / "TOOLS.md", _guide_text)
+    target = workspace / "TOOLS.md"
+    generate = getattr(render, "write_generated", None)
+    if generate is None:
+        render.seed_once(target, _guide_text)
+        log(f"[run] {target.name}: this raven predates regenerated prompts; seeded once, never refreshed")
+        return
+    try:
+        generate(target, _guide_text(), owner=PRODUCT, notify=lambda message: log(f"[run] {message}"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"error: cannot regenerate {target}: {exc}") from exc
 
 
 def _guide_text() -> str:
@@ -243,8 +257,11 @@ def main() -> int:
 
     rendered = render_config(Path(args.config).resolve())
     os.environ.setdefault(CONNECTIONS_ENV, str(connections_registry()))
-    log(f"[run] exec {sys.executable} -m raven acp (config {rendered})")
-    os.execv(sys.executable, [sys.executable, "-m", "raven", "acp", "--config", str(rendered)])
+    log(f"[run] serve {sys.executable} -m raven acp (config {rendered})")
+    argv = [sys.executable, "-m", "raven", "acp", "--config", str(rendered)]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv))
+    os.execv(sys.executable, argv)
     raise AssertionError("unreachable: execv does not return")
 
 

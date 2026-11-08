@@ -252,6 +252,18 @@ class TestUnparsableArguments:
         assert "missing required content" in result
 
     @pytest.mark.asyncio
+    async def test_the_internal_key_is_never_named_even_without_run_meta(self):
+        """A caller that forwards a repaired call without its ``run_meta`` still
+        reaches validation, and the key the provider invented must not be listed
+        as something the model sent."""
+        reg = _registry(_NeedsPath())
+
+        result = await reg.execute("write_file", {"_raw_arguments": '{"path": "a.py", "content": "x'})
+
+        assert "missing required path" in result
+        assert "_raw_arguments" not in result
+
+    @pytest.mark.asyncio
     async def test_a_long_argument_blob_is_capped(self):
         reg = _registry(_NeedsPath())
 
@@ -597,3 +609,198 @@ class TestWhetherOneCallWentWrong:
 
         assert call_failed(ToolOutput("wrote 12 lines", ok=True)) is False
         assert call_failed("wrote 12 lines") is False
+
+
+class _Asks(Tool):
+    """A nested schema shaped like ask_user's, so an error can sit inside an item."""
+
+    @property
+    def name(self) -> str:
+        return "asks"
+
+    @property
+    def description(self) -> str:
+        return "asks questions"
+
+    @property
+    def parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {
+                "questions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string"},
+                            "options": {"type": "array", "items": {"type": "string"}},
+                        },
+                        "required": ["question"],
+                    },
+                }
+            },
+            "required": ["questions"],
+        }
+
+    async def execute(self, **kwargs) -> str:
+        return "asked"
+
+
+class _Many(Tool):
+    """Twelve required parameters, for a rejection longer than anyone should read."""
+
+    @property
+    def name(self) -> str:
+        return "many"
+
+    @property
+    def description(self) -> str:
+        return "needs a lot"
+
+    @property
+    def parameters(self) -> dict:
+        keys = [f"k{i}" for i in range(12)]
+        return {"type": "object", "properties": {k: {"type": "string"} for k in keys}, "required": keys}
+
+    async def execute(self, **kwargs) -> str:
+        return "done"
+
+
+class TestHowAnInvalidCallIsReported:
+    """The rejection is the only thing the model learns from a call it got wrong."""
+
+    @pytest.mark.asyncio
+    async def test_several_errors_are_listed_one_per_line(self):
+        out = await _registry(_NeedsPath()).execute("write_file", {})
+
+        assert out.startswith("Error: Invalid parameters for tool 'write_file':")
+        assert "\n- missing required path" in out
+        assert "\n- missing required content" in out
+        assert "try a different approach" in out
+
+    @pytest.mark.asyncio
+    async def test_a_lone_error_stays_on_the_first_line(self):
+        """A single problem needs no list: the error stays one line."""
+        out = await _registry(_NeedsPath()).execute("write_file", {"path": "a.py"})
+
+        assert out.splitlines()[0] == "Error: Invalid parameters for tool 'write_file': missing required content"
+
+    @pytest.mark.asyncio
+    async def test_a_long_list_is_cut_with_a_count_of_what_was_left_out(self):
+        out = await _registry(_Many()).execute("many", {})
+
+        listed = [line for line in out.splitlines() if line.startswith("- missing required")]
+        assert len(listed) == 8
+        assert "4 more" in out
+
+    @pytest.mark.asyncio
+    async def test_an_error_inside_an_item_shows_what_that_item_should_look_like(self):
+        """Live ask_user: the model knew the schema and still nested the question in
+        its options. The level it lost track of is the one to show."""
+        out = await _registry(_Asks()).execute("asks", {"questions": [{"options": [{"question": "A?"}]}]})
+
+        shape = [line for line in out.splitlines() if line.startswith("Expected questions[0]:")]
+        assert len(shape) == 1
+        assert "question: string" in shape[0]
+        assert "options?" in shape[0]
+        assert "string[]" in shape[0]
+
+    @pytest.mark.asyncio
+    async def test_an_error_at_the_top_level_shows_no_shape(self):
+        """The whole schema is already in the tool definition the model called."""
+        out = await _registry(_NeedsPath()).execute("write_file", {"path": "a.py"})
+
+        assert "missing required content" in out
+        assert "Expected" not in out
+
+    @pytest.mark.asyncio
+    async def test_a_listed_rejection_still_counts_toward_the_same_streak(self):
+        """`failure_class` reads the first 200 characters for the prefix; a layout
+        that pushed it further would split one repeated mistake into new ones."""
+        from raven.agent.loop.failure_streak import failure_class
+
+        out = await _registry(_Many()).execute("many", {})
+
+        assert failure_class(out) == "schema"
+
+
+class _SchemaProbe(_Plain):
+    """A real registry dispatch with a supplied schema and no external effects."""
+
+    def __init__(self, schema: dict) -> None:
+        self._schema = schema
+
+    @property
+    def parameters(self) -> dict:
+        return self._schema
+
+
+@pytest.mark.slow
+def test_a_server_pattern_does_not_block_the_registry_event_loop() -> None:
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent("""
+        import asyncio, json, time
+        from raven.agent.tools.registry import ToolRegistry
+        from raven.contracts.tool import Tool
+
+        class Probe(Tool):
+            name = "pattern_probe"
+            description = "A schema-only probe."
+            timeout_seconds = 0.01
+            parameters = {"type": "object", "properties": {
+                "slug": {"type": "string", "pattern": "^([a-z0-9]+-?)+$"}}}
+            async def execute(self, **kwargs):
+                return "accepted"
+
+        async def main():
+            registry = ToolRegistry()
+            registry.register(Probe())
+            await registry.execute("pattern_probe", {"slug": "warmup"})
+            started = time.monotonic()
+            async def heartbeat():
+                await asyncio.sleep(0)
+                return time.monotonic() - started
+            beat = asyncio.create_task(heartbeat())
+            result = await registry.execute("pattern_probe", {"slug": "a" * 32 + "_"})
+            print(json.dumps({"result": result, "heartbeat": await beat}))
+        asyncio.run(main())
+    """)
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(map(str, sys.path))}
+    result = subprocess.run(
+        [sys._base_executable, "-c", script],
+        cwd=Path(__file__).resolve().parent.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    observed = json.loads(result.stdout)
+    assert observed["result"] == "accepted"
+    assert observed["heartbeat"] < 0.5
+
+
+@pytest.mark.asyncio
+async def test_an_invalid_array_bound_does_not_turn_a_call_into_an_execution_error():
+    schema = {"type": "object", "properties": {"items": {"type": "array", "minItems": "1"}}}
+    out = await _registry(_SchemaProbe(schema)).execute("plain", {"items": []})
+    assert out == "plain output"
+
+
+@pytest.mark.asyncio
+async def test_repeated_long_paths_keep_the_registry_rejection_bounded():
+    from raven.agent.loop.failure_streak import failure_class
+
+    keys = [f"k{i}" for i in range(25)]
+    schema = {"type": "object", "required": keys, "properties": {k: {"type": "integer"} for k in keys}}
+    key = "nested_" + "z" * 2000
+    out = await _registry(_SchemaProbe(schema)).execute("plain", {key: dict.fromkeys(keys, 1)})
+    assert out.startswith("Error: Invalid parameters for tool 'plain':")
+    assert len(out) <= 4096
+    assert "missing required k0" in out and "nested_" in out
+    assert key not in out and "..." in out
+    assert failure_class(out) == "schema"

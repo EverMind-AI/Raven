@@ -28,6 +28,7 @@ import { installGlobalListeners } from './state/globalListeners'
 import * as langEffects from './state/lang/effects'
 import { pageOf } from './state/pages'
 import * as portals from './state/portals'
+import { watchNarrow as watchRailFold } from './state/rail'
 import * as sheets from './state/sheetRack'
 import * as ws from './state/ws'
 import { setWsPane } from './state/wsPane'
@@ -181,6 +182,8 @@ installComposerPalette()
 /* What a match does is the panel's (state/ws.ts); the moment the split point is
    watched from is here, after every listener the page registers itself. */
 ws.watchNarrow()
+/* The rail's own fold, watched from the same moment for the same reason. */
+watchRailFold()
 /* The whole-page redraw a language pick asks for, then the settings transport
    and the model chip. */
 langEffects.install()

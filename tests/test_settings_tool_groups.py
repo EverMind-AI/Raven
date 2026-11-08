@@ -3,7 +3,8 @@
 ``ui-web/src/features/settings/toolGroups.json`` is the page's table: eight
 groups by tool name, read by the Tools page. A tool the loop registers and the
 table omits would have no switch anywhere, so the table is diffed here against
-a loop built with every switchable tool the bare wiring can register.
+a loop built with every switchable tool the bare wiring can register; the few
+the page deliberately does not switch are named in ``UNSWITCHABLE``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import EngineWiring, ToolWiring, TurnPolicy
 from raven.agent.tools.media_gen import ImageGenerateTool, SpeechGenerateTool, VideoGenerateTool
-from raven.config.schema import ToolSearchConfig
+from raven.config.schema import TaskBoardConfig, ToolSearchConfig
 from raven.providers.base import LLMProvider, LLMResponse
 
 GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "settings" / "toolGroups.json"
@@ -25,6 +26,17 @@ GROUPS = Path(__file__).resolve().parents[1] / "ui-web" / "src" / "features" / "
 # deliverables sink. Each is a tool name the page still has to offer a switch
 # for, and the set is pinned so a tool that stops registering shows up here.
 GATED = {"cron", "load_playbook", "create_playbook", "understand_media", "deliver_files"}
+
+# Registered by the loop but deliberately given no switch: ``context_retrieve``
+# comes with the history strategy that leaves refs in the window, and turning it
+# off alone would leave those refs pointing at text the model can no longer
+# read. It goes with the strategy (``context.history.strategy``), not with a
+# toggle on the page.
+#
+# ``task_board`` likewise: its post-turn call forces it by name, so a page toggle
+# that withheld it would leave that call naming a tool the request lacks. It goes
+# with ``agents.defaults.taskBoard``.
+UNSWITCHABLE = {"context_retrieve", "task_board"}
 
 
 class _StubProvider(LLMProvider):
@@ -50,7 +62,20 @@ def test_every_tool_is_in_exactly_one_group() -> None:
     groups = _listed()
     names = [t for tools in groups.values() for t in tools]
     assert len(names) == len(set(names)), "a tool sits in two groups"
-    assert set(groups) == {"file", "run", "net", "generate", "collab", "skills", "memory", "search"}
+    assert set(groups) == {
+        "file",
+        # The reader's own indexed material, which is neither the working tree
+        # nor memory: a base is a library they chose to put in front of the
+        # agent, and it is attached per conversation rather than always there.
+        "knowledge",
+        "run",
+        "net",
+        "generate",
+        "collab",
+        "skills",
+        "memory",
+        "search",
+    }
 
 
 def test_tool_groups_cover_the_default_tools() -> None:
@@ -70,10 +95,12 @@ def test_tool_groups_cover_the_default_tools() -> None:
                 connection_add=True,
                 tool_search_config=ToolSearchConfig(enabled=True),
             ),
-            engine=EngineWiring(),
+            # Wired as the runtime wires the host, so the task board is on the face.
+            engine=EngineWiring(task_board_config=TaskBoardConfig()),
         )
-        registered = set(loop.tools.names())
+        registered = set(loop.tools.names()) - UNSWITCHABLE
     listed = {t for tools in _listed().values() for t in tools}
+    assert not UNSWITCHABLE & listed, "a tool without a switch is not on the page either"
     assert registered <= listed, f"registered but ungrouped: {sorted(registered - listed)}"
     assert listed - registered == GATED, f"grouped but never registered: {sorted(listed - registered - GATED)}"
     # The media tools register on a bare loop under the names the table uses.

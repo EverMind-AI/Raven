@@ -2,15 +2,18 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import verbSpec from '../../../../ui-shared/verbs.json'
 import { Lightbox } from '../../chrome/Lightbox'
 import { setTranslator } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
+import { IMG_EXT } from '../../lib/pictureExt'
 import * as confirmStore from '../../state/confirm'
 import { close as closeLightbox } from '../../state/lightbox'
 import * as pageStore from '../../state/page'
 import { resetSources, setSources } from '../../state/sources'
 import { domSnapshot } from '../../test/domSnapshot'
 import * as tail from '../transcript/tail'
+import { fileKind } from '../workspace/store'
 import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn';
@@ -45,7 +48,7 @@ const WORDS: Record<string, Record<string, string>> = {
   zh: {
     'gui.send': '发送', 'gui.stop': '停止', 'gui.q.edit': '编辑', 'gui.q.remove': '删掉',
     'gui.att.uploading': '上传中', 'gui.att.remove': '移除 {name}', 'gui.att.fail': '{name} 上传失败',
-    'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部',
+    'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部', 'gui.pill.prev': '上一条用户消息',
     'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
     'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
   },
@@ -53,6 +56,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
     'gui.att.uploading': 'uploading', 'gui.att.remove': 'remove {name}', 'gui.att.fail': '{name} failed',
     'gui.live.busy': 'running {t}', 'gui.pill.bottom': 'back to the bottom',
+    'gui.pill.prev': 'previous user message',
     'gui.att.note': 'Files for you:', 'gui.att.pending': 'a file is still uploading',
     'gui.att.pending_body': '{n} still going; send once they land.',
   },
@@ -65,6 +69,7 @@ const word = (key: string): string => (WORDS[lang] as Record<string, string>)[ke
 const DOCK = `
   <div class="chat">
     <div class="scroll" id="scroll"><div class="col" id="stage"></div></div>
+    <button class="backpill chrome-toppill" id="toppill" hidden></button>
     <button class="backpill" id="backpill" hidden></button>
     <div class="dock">
       <div class="sheets" id="sheetRack"></div>
@@ -245,6 +250,22 @@ describe('the send button', () => {
     expect(calls.sent).toEqual([])
   })
 
+  it('sends nothing from an imported conversation, and never offers the model setup', async () => {
+    const { setCurrent, _resetForTests: resetSession } = await import('../../lib/session')
+    const beforeSend = vi.fn(() => false)
+    const { calls } = wire({ beforeSend })
+    setCurrent('imported:' + 'a'.repeat(32))
+    ta().value = 'can I add to it?'
+    store.fireSend()
+    expect(calls.sent).toEqual([])
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(ta().value).toBe('can I add to it?')
+    setCurrent('tui:a')
+    store.fireSend()
+    expect(calls.sent).toEqual(['can I add to it?'])
+    resetSession()
+  })
+
   it('preserves the draft when the page redirects an unavailable send', () => {
     const beforeSend = vi.fn(() => true)
     const { calls } = wire({ beforeSend })
@@ -255,6 +276,56 @@ describe('the send button', () => {
     expect(beforeSend).toHaveBeenCalledOnce()
     expect(calls.sent).toEqual([])
     expect(ta().value).toBe('configure a provider first')
+  })
+
+  it.each([true, false])('sends during a same-session refresh (selection-only: %s)', async (selectionOnly) => {
+    const models = await import('../model/source')
+    const selection = await import('../model/store')
+    const { absorb, resetCapabilities } = await import('../../rpc/capabilities')
+    const { FixtureTransport } = await import('../../rpc/fixtureTransport')
+    const { setGateway } = await import('../../rpc/gateway')
+    const { RpcError } = await import('../../rpc/transport')
+    models._resetForTests()
+    selection._resetForTests()
+    resetCapabilities()
+    absorb(selectionOnly ? ['model.options.selection_only'] : [])
+    const options = { model: 'deepseek/deepseek-chat', provider: 'deepseek', providers: [] }
+    const pending: Array<(value: typeof options) => void> = []
+    let refreshing = false
+    const gateway = new FixtureTransport({
+      'model.options': (params) => {
+        if (!selectionOnly && Object.keys(params).some((key) => key !== 'session_id')) {
+          throw new RpcError(-32011, 'config_validation_error')
+        }
+        if (refreshing) return new Promise<typeof options>((resolve) => { pending.push(resolve) })
+        return options
+      },
+    })
+    setGateway(gateway)
+    try {
+      const { calls } = wire({ beforeSend: models.blockSendForModel })
+      await models.loadProviders('visible-session')
+      expect(gateway.calls).toEqual(selectionOnly ? [
+        { method: 'model.options', params: { session_id: 'visible-session', include_providers: false } },
+        { method: 'model.options', params: { session_id: 'visible-session' } },
+      ] : [{ method: 'model.options', params: { session_id: 'visible-session' } }])
+      expect(selection.current()).toBe('deepseek/deepseek-chat')
+      refreshing = true
+      const refresh = models.loadProviders('visible-session')
+      expect(pending).toHaveLength(selectionOnly ? 2 : 1)
+      expect(selection.loadStatus()).toBe('ready')
+      ta().value = 'send during the background refresh'
+      store.fireSend()
+      expect(calls.sent).toEqual(['send during the background refresh'])
+      expect(ta().value).toBe('')
+      pending.forEach((resolve) => { resolve(options) })
+      await refresh
+    } finally {
+      setGateway(null)
+      models._resetForTests()
+      selection._resetForTests()
+      resetCapabilities()
+    }
   })
 })
 
@@ -382,6 +453,29 @@ describe('composer drafts', () => {
     let taken: string[] = []
     act(() => { taken = store.takeAtts() })
     expect(taken).toEqual(['uploads/slow.bin'])
+  })
+
+  /* `fs.upload` answers a short path as well, but `uploads/<name>` can name a
+     session root's own file too -- the workspace pane lists those, and a drag stages
+     them by that spelling -- so the short one would let the two answer for
+     each other. The bytes kept for the sent bubble are filed under the same
+     path, since the bubble looks them up by what the note names. */
+  it('stages an upload, and files its bytes, as the file it wrote', async () => {
+    wire({
+      upload: (req) => Promise.resolve({
+        path: `uploads/${req.name}`,
+        abs_path: `/home/me/.raven/workspace/uploads/${req.name}`,
+        size: 4,
+      }),
+    })
+    mountTray()
+    await act(async () => {
+      store.addFiles([new File(['x'], 'shot.png', { type: 'image/png' })])
+      await flush()
+    })
+
+    expect(paths()).toEqual(['/home/me/.raven/workspace/uploads/shot.png'])
+    expect(attachmentCache.get('/home/me/.raven/workspace/uploads/shot.png')).toMatch(/^data:image\/png/)
   })
 
   /* The other session stages one too: it is what tells a tray that forgot the
@@ -623,25 +717,198 @@ describe('the live turn row', () => {
     store.setLiveAnchor(0)
     store.setLiveAnchor(anchor - 61000)
     act(() => { store.drawTurnLive() })
-    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m01s')
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('1m 1s')
   })
 
-  it('paints the meter from the source and shows the pill only away from the tail', () => {
+  it('shows a word from the shared catalogue, kept out of the readable name', () => {
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    const row = document.querySelector('.turnlive') as HTMLElement
+    const word = row.querySelector('.cp-verb') as HTMLElement
+    expect(verbSpec.verbs).toContain(word.textContent)
+    expect(word.getAttribute('aria-hidden')).toBe('true')
+    expect(row.getAttribute('aria-label')).not.toContain(word.textContent)
+  })
+
+  it('starts at a random offset, as the TUI does', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    const expected = verbSpec.verbs[Math.floor(0.5 * verbSpec.verbs.length)]
+    expect(document.querySelector('.turnlive .cp-verb')).toHaveProperty('textContent', expected)
+  })
+
+  it('rotates one step per shared interval and keeps the clock in place', () => {
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    wire()
+    turn.dispatch({ type: 'stream', cancellable: true })
+    mountLive()
+    act(() => { store.drawTurnLive() })
+    expect((document.querySelector('.turnlive .cp-verb') as HTMLElement).textContent).toBe(verbSpec.verbs[0])
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('0s')
+    act(() => { vi.advanceTimersByTime(verbSpec.rotationMs) })
+    expect((document.querySelector('.turnlive .cp-verb') as HTMLElement).textContent).toBe(verbSpec.verbs[1])
+    /* `formatDuration` truncates, so 2500ms reads as 2s. */
+    expect((document.querySelector('.turnlive .lb') as HTMLElement).textContent).toBe('2s')
+  })
+
+  it('paints the meter from the source', () => {
     wire({ meter: () => '3 calls' })
     mountLive()
-    tail.setStuck(false)
-    const sc = document.getElementById('scroll')!
-    Object.defineProperty(sc, 'scrollHeight', { value: 900, configurable: true })
-    Object.defineProperty(sc, 'clientHeight', { value: 300, configurable: true })
-    sc.scrollTop = 0
     act(() => { store.drawMeter() })
     expect(document.getElementById('meter')!.textContent).toBe('3 calls')
-    const pill = document.getElementById('backpill') as HTMLElement
-    expect(pill.hidden).toBe(false)
-    expect(pill.dataset.tip).toBe('回到底部')
-    tail.setStuck(true)
-    act(() => { store.drawMeter() })
-    expect(pill.hidden).toBe(true)
+  })
+})
+
+/* The two round pills: where they sit is the stylesheet's, and what this file
+   owns is which one is up. The rule follows the reader's direction, except at
+   the ends, where the only way left is back. */
+describe('the quick-jump pills', () => {
+  const rect = (top: number): DOMRect => ({
+    top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top,
+  } as DOMRect)
+
+  const sized = (scrollTop: number, scrollHeight = 900, clientHeight = 300): HTMLElement => {
+    const sc = document.getElementById('scroll') as HTMLElement
+    Object.defineProperty(sc, 'scrollHeight', { value: scrollHeight, configurable: true })
+    Object.defineProperty(sc, 'clientHeight', { value: clientHeight, configurable: true })
+    sc.getBoundingClientRect = () => rect(0)
+    sc.scrollTop = scrollTop
+    return sc
+  }
+
+  const question = (top: number): HTMLElement => {
+    const el = document.createElement('div')
+    el.className = 'turn me'
+    el.getBoundingClientRect = () => rect(top)
+    ;(document.getElementById('stage') as HTMLElement).appendChild(el)
+    return el
+  }
+
+  const pills = (): { down: HTMLElement; up: HTMLElement } => ({
+    down: document.getElementById('backpill') as HTMLElement,
+    up: document.getElementById('toppill') as HTMLElement,
+  })
+
+  it('offers the way to the tail at the very top, before any scroll', () => {
+    wire()
+    sized(0)
+    store.pillPaint()
+    const { down, up } = pills()
+    expect(down.hidden).toBe(false)
+    expect(down.dataset.tip).toBe('回到底部')
+    expect(up.hidden).toBe(true)
+  })
+
+  it('offers the way back to the question at the very bottom', () => {
+    wire()
+    sized(600)
+    question(-200)
+    store.pillPaint()
+    const { down, up } = pills()
+    expect(down.hidden).toBe(true)
+    expect(up.hidden).toBe(false)
+    expect(up.dataset.tip).toBe('上一条用户消息')
+    expect(up.getAttribute('aria-label')).toBe('上一条用户消息')
+  })
+
+  it('keeps the last direction after the wheel stops', () => {
+    wire()
+    const sc = sized(200)
+    question(-100)
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+    sc.scrollTop = 300
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    expect(pills().up.hidden).toBe(true)
+    sc.scrollTop = 250
+    store.scrolled()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(false)
+  })
+
+  it('forgets the direction when another conversation opens', () => {
+    wire()
+    const sc = sized(200)
+    question(-100)
+    store.pillPaint()
+    sc.scrollTop = 300
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    store.loadDraft('b')
+    sc.scrollTop = 250
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('lets the top edge win over a scroll that pointed up', () => {
+    wire()
+    const sc = sized(600)
+    store.pillPaint()
+    sc.scrollTop = 500
+    store.scrolled()
+    sc.scrollTop = 0
+    store.scrolled()
+    expect(pills().down.hidden).toBe(false)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('lets the bottom edge win over a scroll that pointed down', () => {
+    wire()
+    const sc = sized(200)
+    question(-200)
+    store.pillPaint()
+    sc.scrollTop = 300
+    store.scrolled()
+    sc.scrollTop = 600
+    store.scrolled()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(false)
+  })
+
+  it('keeps both away when the conversation does not scroll', () => {
+    wire()
+    sized(0, 300, 300)
+    store.pillPaint()
+    expect(pills().down.hidden).toBe(true)
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('keeps the up pill away when no question sits above the viewport', () => {
+    wire()
+    sized(600)
+    question(0)
+    store.pillPaint()
+    expect(pills().up.hidden).toBe(true)
+  })
+
+  it('sends the reader up smoothly to that question and lets go of the tail', () => {
+    wire()
+    const sc = sized(600)
+    question(-200)
+    const scrollTo = vi.fn()
+    sc.scrollTo = scrollTo
+    store.topClick()
+    /* 600 - 200, less the lead every jump keeps under the band. */
+    expect(scrollTo).toHaveBeenCalledWith({ top: 384, behavior: 'smooth' })
+    expect(tail.isStuck()).toBe(false)
+  })
+
+  it('does nothing when there is no question above', () => {
+    wire()
+    const sc = sized(600)
+    const scrollTo = vi.fn()
+    sc.scrollTo = scrollTo
+    store.topClick()
+    expect(scrollTo).not.toHaveBeenCalled()
   })
 })
 
@@ -668,6 +935,97 @@ describe('the attachment tray', () => {
     expect((box.querySelector('.att') as HTMLElement).classList.contains('up')).toBe(false)
     expect(box.querySelector('.att img')!.getAttribute('title')).toBe('shot.png · 2 KB')
     expect(attachmentCache.get('uploads/shot.png')).toMatch(/^data:image\/png/)
+  })
+
+  /* Chrome on macOS hands an <img> dragged out of the transcript back as a File
+     named `download`, the name its drop code falls back to, with the format in
+     `type` alone. Uploaded under that name it became uploads/download, and
+     everything past the upload tells a picture by its extension: the sent
+     bubble drew a file chip where the picture should have been. */
+  it('uploads a picture whose name says no picture under the extension its type gives', async () => {
+    const names: string[] = []
+    const { calls } = wire({
+      upload: async (req) => {
+        names.push(req.name)
+        return { path: `uploads/${req.name}`, size: 4 }
+      },
+    })
+    mountTray()
+    await act(async () => {
+      store.addFiles([
+        new File(['x'], 'download', { type: 'image/png' }),
+        new File(['x'], 'download', { type: 'image/jpeg' }),
+        new File(['x'], 'chart.v2', { type: 'image/webp' }),
+      ])
+      await flush()
+    })
+    expect(names).toEqual(['download.png', 'download.jpg', 'chart.v2.webp'])
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(
+      `\n\n${word('gui.att.note')}\n- uploads/download.png\n- uploads/download.jpg\n- uploads/chart.v2.webp`)
+  })
+
+  it('keeps a name that already says what the file is', async () => {
+    const names: string[] = []
+    wire({
+      upload: async (req) => {
+        names.push(req.name)
+        return { path: `uploads/${req.name}`, size: 4 }
+      },
+    })
+    mountTray()
+    await act(async () => {
+      store.addFiles([
+        new File(['x'], 'Shot.PNG', { type: 'image/png' }),
+        new File(['x'], 'photo.jpeg', { type: 'image/jpeg' }),
+        new File(['x'], 'notes', { type: '' }),
+      ])
+      await flush()
+    })
+    expect(names).toEqual(['Shot.PNG', 'photo.jpeg', 'notes'])
+  })
+
+  it('attaches a file already on show by its path, sending nothing up', () => {
+    const up = vi.fn()
+    const { calls } = wire({ upload: up })
+    const box = mountTray()
+    act(() => {
+      store.addPaths([
+        { path: 'uploads/shot.png', url: 'http://localhost/file?path=uploads%2Fshot.png' },
+        { path: '/work/notes.pdf', url: 'http://localhost/file?path=%2Fwork%2Fnotes.pdf' },
+        { path: 'C:\\work\\plot.png', url: 'http://localhost/file?path=C%3A%5Cwork%5Cplot.png' },
+      ])
+    })
+    expect(up).not.toHaveBeenCalled()
+    expect(store.attsPending()).toBe(0)
+    const imgs = [...box.querySelectorAll('.att.img img')] as HTMLImageElement[]
+    expect(imgs.map((i) => i.getAttribute('src'))).toEqual([
+      'http://localhost/file?path=uploads%2Fshot.png',
+      'http://localhost/file?path=C%3A%5Cwork%5Cplot.png',
+    ])
+    /* Nothing here read the bytes, so the tooltip has no size to give. */
+    expect(imgs.map((i) => i.getAttribute('title'))).toEqual(['shot.png', 'plot.png'])
+    expect(box.querySelector('.att:not(.img) .nm')!.textContent).toBe('notes.pdf')
+    act(() => { store.fireSend() })
+    expect(calls.sent[0]).toBe(
+      `\n\n${word('gui.att.note')}\n- uploads/shot.png\n- /work/notes.pdf\n- C:\\work\\plot.png`)
+  })
+
+  /* The chip and the sent bubble tell a picture by its extension, and both read
+     the one table (lib/pictureExt) fileKind does, so a name the two disagree on
+     cannot exist. The table is spread here rather than restated: an extension
+     added to it is exercised by this case the moment it lands. */
+  it('draws a picture chip for exactly the names the sent bubble draws as pictures', () => {
+    wire({ upload: vi.fn() })
+    mountTray()
+    const exts = [...IMG_EXT, 'svg', 'PNG', 'tif', 'tiff', 'heic', 'jxl', 'pdf', 'txt', 'pptx']
+    act(() => {
+      store.addPaths(exts.map((ext) => ({ path: `uploads/x.${ext}`, url: `http://localhost/file?path=x.${ext}` })))
+    })
+    const drawn = store.get().atts.map((a) => !!a.url)
+    expect(drawn).toEqual(exts.map((ext) => ['img', 'svg'].includes(fileKind(`uploads/x.${ext}`))))
+    expect(drawn).toContain(true)
+    expect(drawn).toContain(false)
   })
 
   it('shows a non-image as a name, with its size in the tooltip', async () => {

@@ -28,6 +28,7 @@ from raven.agent.tools.capabilities import (
     is_configured,
     is_disabled,
     is_offered,
+    runs_keyless,
 )
 from raven.config.loader import load_config
 from raven.providers.base import LLMProvider, LLMResponse
@@ -94,7 +95,11 @@ def _media_attrs() -> list[str]:
     """
     from raven.config.schema import MediaGenConfig, MediaToolConfig
 
-    return [n for n, f in MediaGenConfig.model_fields.items() if f.annotation is MediaToolConfig]
+    return [
+        n
+        for n, f in MediaGenConfig.model_fields.items()
+        if isinstance(f.annotation, type) and issubclass(f.annotation, MediaToolConfig)
+    ]
 
 
 def _loop(workspace: Path, config, **kw) -> AgentLoop:
@@ -158,6 +163,26 @@ def test_a_configured_search_key_agrees_on_both_sides(workspace, tmp_path: Path)
     assert configured_from(cap, config) == "tools.web.search.apiKey"
 
 
+def test_a_search_key_borrowed_from_the_llm_provider_agrees_on_both_sides(workspace, tmp_path: Path) -> None:
+    """DeepSeek's web tools run on the account the chat API already uses, so the
+    doctor row has to say "reusing the key you have" rather than send the
+    deployer after a second one."""
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "deepseek"
+    config.providers.deepseek.api_key = "sk-deepseek"
+    loop = _loop(
+        workspace,
+        config,
+        web_search_provider="deepseek",
+        web_provider_keys=config.effective_web_vendor_keys(),
+    )
+
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
+    assert configured_from(cap, config) == "borrowed: providers.deepseek.apiKey"
+    assert has_credential(cap, config), "a borrowed key is a credential, not only a configured tool"
+
+
 def test_the_env_var_alone_agrees_on_both_sides(workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The half of the deploys a config-only reading would answer wrong."""
     monkeypatch.setenv("SERPER_API_KEY", "sk-from-env")
@@ -195,6 +220,42 @@ def test_an_openrouter_key_alone_switches_nothing_on(workspace, tmp_path: Path) 
     for cap in (c for c in CAPABILITIES if c.media_attr):
         assert not is_configured(cap, config), cap.tool
         assert not loop.tools.offers_by_name(cap.tool), cap.tool
+
+
+def test_a_search_vendor_that_needs_no_key_is_configured_without_a_credential(
+    workspace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keenable searches unauthenticated, so web_search on it is configured and
+    offered with no key. Readiness is not a key, though: a report that ticked
+    ``has_credential`` here would claim one that does not exist, and
+    ``runs_keyless`` is what keeps the row from reading as the media family's
+    configured-and-failing state instead."""
+    monkeypatch.delenv("KEENABLE_API_KEY", raising=False)
+    config = _config(tmp_path)
+    config.tools.web.search.provider = "keenable"
+    loop = _loop(workspace, config, web_search_provider="keenable")
+    cap = next(c for c in CAPABILITIES if c.tool == "web_search")
+
+    assert is_configured(cap, config) and loop.tools.offers_by_name("web_search")
+    assert not has_credential(cap, config)
+    assert runs_keyless(cap, config)
+    assert configured_from(cap, config) == ""
+
+    config.tools.web.providers.keenable.api_key = "kn"
+    assert has_credential(cap, config) and not runs_keyless(cap, config)
+    assert configured_from(cap, config) == "tools.web.providers.keenable.apiKey"
+
+
+def test_nothing_else_runs_keyless(tmp_path: Path) -> None:
+    """A keyed vendor is configured by its key and nothing else, so it never
+    reaches the keyless state with or without one; a media model with no key is
+    configured and broken, which is the state the warning is for."""
+    config = _config(tmp_path)
+    config.tools.media.image.model = "some/model"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
+
+    config.tools.web.search.api_key = "sk-serper"
+    assert not any(runs_keyless(c, config) for c in CAPABILITIES)
 
 
 def test_the_free_capability_needs_no_credential(workspace, tmp_path: Path) -> None:
@@ -323,6 +384,107 @@ def test_an_exported_key_is_reusable_too(attr, tool, monkeypatch: pytest.MonkeyP
     assert not config.providers.openrouter.api_key, "the environment must be the only source"
 
     assert borrowable_credential(cap, config) == "OPENROUTER_API_KEY"
+
+
+def test_a_media_section_on_a_named_provider_is_paid_by_that_provider(workspace, tmp_path: Path) -> None:
+    """The provider the section names supplies its address and its key together; the
+    OpenRouter key on the same install is not consulted."""
+    config = _config(tmp_path)
+    config.tools.media.image.model = "openai/gpt-image-2"
+    config.tools.media.image.provider = "openai"
+    config.providers.openai.api_key = "sk-openai"
+    config.providers.openrouter.api_key = "sk-or-test"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+    resolved = _resolved(config, "image")
+    assert (resolved.api_base, resolved.api_key) == ("https://api.openai.com/v1", "sk-openai")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("image_generate")
+    assert configured_from(cap, config) == "borrowed: providers.openai.apiKey"
+    assert has_credential(cap, config)
+
+
+def test_a_video_section_on_minimax_is_paid_by_minimax(workspace, tmp_path: Path) -> None:
+    """The video section names a provider as the image one does: MiniMax's address and
+    key, with the OpenRouter key on the same install left alone."""
+    config = _config(tmp_path)
+    config.tools.media.video.model = "MiniMax-Hailuo-2.3"
+    config.tools.media.video.provider = "minimax"
+    config.providers.minimax.api_key = "sk-mm"
+    config.providers.openrouter.api_key = "sk-or-test"
+    loop = _loop(workspace, config)
+
+    cap = next(c for c in CAPABILITIES if c.tool == "video_generate")
+    resolved = _resolved(config, "video")
+    assert (resolved.api_base, resolved.api_key) == ("https://api.minimax.io/v1", "sk-mm")
+    assert is_configured(cap, config) and loop.tools.offers_by_name("video_generate")
+    assert configured_from(cap, config) == "borrowed: providers.minimax.apiKey"
+    assert has_credential(cap, config)
+
+
+def test_a_row_on_a_named_provider_names_that_provider_s_key_and_no_openrouter_terms(tmp_path: Path) -> None:
+    """OpenRouter's variable never reaches a section on another provider, and that
+    provider bills it, so the row a deployer reads names the provider's key and
+    neither the variable nor OpenRouter's credit."""
+    from raven.agent.tools.capabilities import resolve
+
+    config = _config(tmp_path)
+    config.tools.media.video.provider = "minimax"
+    cap = resolve(next(c for c in CAPABILITIES if c.tool == "video_generate"), config)
+    assert (cap.key_path, cap.env_var) == ("providers.minimax.apiKey", "")
+    assert cap.cost_note and "OpenRouter" not in cap.cost_note
+
+    on_openrouter = resolve(next(c for c in CAPABILITIES if c.tool == "image_generate"), config)
+    assert (on_openrouter.key_path, on_openrouter.env_var) == ("tools.media.image.apiKey", "OPENROUTER_API_KEY")
+
+
+def test_a_named_provider_whose_section_does_not_validate_lends_nothing_at_boot() -> None:
+    """An undeclared provider's section loads as raw data and is validated only when
+    read, so the boot resolution reads it as absent rather than raising on start."""
+    from raven.config.schema import Config
+
+    config = Config.model_validate(
+        {
+            "providers": {"weirdvendor": {"apiKey": 123}},
+            "tools": {"media": {"image": {"model": "m", "provider": "weirdvendor"}}},
+        }
+    )
+    resolved = _resolved(config, "image")
+    assert (resolved.api_base, resolved.api_key) == ("", "")
+
+
+def test_an_unconfigured_section_on_a_named_provider_would_borrow_that_providers_key(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.tools.media.image.provider = "openai"
+    config.providers.openrouter.api_key = "sk-or-test"
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+    assert borrowable_credential(cap, config) == ""
+
+    config.providers.openai.api_key = "sk-openai"
+    assert borrowable_credential(cap, config) == "providers.openai.apiKey"
+
+
+@pytest.mark.parametrize(
+    ("attr", "tool"),
+    [("image", "image_generate"), ("speech", "text_to_speech"), ("video", "video_generate")],
+)
+def test_a_media_section_pointed_elsewhere_claims_no_openrouter_key(
+    attr, tool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Neither OpenRouter credential reaches a section whose address is somewhere else,
+    so neither may be reported as its source -- that row would read as working."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-from-env")
+    config = _config(tmp_path)
+    config.providers.openrouter.api_key = "sk-or-test"
+    section = getattr(config.tools.media, attr)
+    section.api_base = "https://relay.test/v1"
+    cap = next(c for c in CAPABILITIES if c.tool == tool)
+    assert borrowable_credential(cap, config) == ""
+
+    section.model = "some/model"
+    assert not _resolved(config, attr).api_key
+    assert configured_from(cap, config) == ""
+    assert not has_credential(cap, config)
 
 
 def test_only_the_media_family_borrows(tmp_path: Path) -> None:

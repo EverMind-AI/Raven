@@ -11,10 +11,11 @@
  *     site. Every one of them is named below and moved here unchanged, so the
  *     tolerances read as a list instead of being found by grep.
  *
- * `system.hello` is the third source and the coarsest: `server_capabilities`
- * announces "jsonrpc-2.0", "subscriptions" and "cli-dispatch" and nothing
- * finer (raven/rpc/methods/system.py), so `absorb()` records it and `serves()`
- * reads it -- and none of the field questions below can be answered from it.
+ * `system.hello` is the third source: `server_capabilities` announces protocol
+ * features and optional request modes, plus "trajectory-v1" while the trajectory
+ * policy is on, "bugreport-v1" while a receiver is configured, and
+ * "folder-dialog-v1" while the gateway's host has a folder dialog to open.
+ * `absorb()` records it on every handshake, and `serves()` reads it.
  */
 
 /** Names a call answered -32601 with. Absent, not merely unusable right now. */
@@ -32,6 +33,9 @@ export function absorb(serverCapabilities: readonly string[] | null | undefined)
 export function serves(capability: string): boolean {
   return announced.has(capability)
 }
+
+/** Older gateways reject the include_providers request field. */
+export const supportsModelSelectionOnly = (): boolean => serves('model.options.selection_only')
 
 /**
  * Record a rejection against a name and answer whether that name is now known
@@ -51,6 +55,16 @@ export function has(name: string): boolean {
   return !absent.has(name)
 }
 
+/**
+ * Take one name back off the absent list. A refusal is remembered for the
+ * gateway that gave it, and a reconnect may land on a newer one; the caller
+ * that knows the new handshake announced the surface forgets exactly that
+ * name, so every other memory stands.
+ */
+export function forget(name: string): void {
+  absent.delete(name)
+}
+
 /** Back to the state a fresh page starts in. For tests. */
 export function resetCapabilities(): void {
   absent.clear()
@@ -59,6 +73,29 @@ export function resetCapabilities(): void {
 
 const field = (holder: unknown, name: string): unknown =>
   holder !== null && typeof holder === 'object' ? (holder as Record<string, unknown>)[name] : undefined
+
+/**
+ * The gateway serves the `trajectory.*` methods: it announces them while its
+ * trajectory policy is on, which is the default. `trajectory.state` still says
+ * whether the view is on, and a refusal still stops the asking.
+ */
+export const servesTrajectory = (): boolean => serves('trajectory-v1')
+
+/**
+ * The gateway has a bug report receiver to upload to: it announces
+ * `bugreport-v1` only while the receiver's URL is set and valid, so the page
+ * offers "Report a problem" only where a report can go somewhere.
+ */
+export const servesBugReport = (): boolean => serves('bugreport-v1')
+
+/**
+ * The gateway's host has a folder dialog to open: it announces
+ * `folder-dialog-v1` only where `fs.pick_dir` finds one, so the
+ * working-directory picker offers that dialog only where one can come up
+ * (src/state/workdir.ts). An older gateway announces nothing, and the picker
+ * walks its folders instead, which works wherever it runs.
+ */
+export const servesFolderDialog = (): boolean => serves('folder-dialog-v1')
 
 /* ── the eleven version tolerances, each one site's own condition ────── */
 

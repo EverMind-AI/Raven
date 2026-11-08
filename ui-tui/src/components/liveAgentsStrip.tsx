@@ -36,7 +36,7 @@ import type { InstanceRow } from '../rpc/generated.js'
 import type { Theme } from '../theme.js'
 
 import { $directChat, directKey, enterDirect, isDirectTarget, leaveDirect } from '../app/directChatStore.js'
-import { $dagRuns, $liveAgents, dagRunCounts } from '../app/liveAgentsStore.js'
+import { $dagRuns, $liveAgents, agentRows, dagRunCounts } from '../app/liveAgentsStore.js'
 import { fmtDuration } from '../domain/messages.js'
 import { compactPreview } from '../lib/text.js'
 import { openAgentsOverlay, openAgentsOverlayAt } from './agentsOverlay.js'
@@ -81,7 +81,9 @@ export const stripRows = (
   now = Date.now(),
   lingerMs = LINGER_MS
 ): { overflow: number; visible: LiveAgentRow[] } => {
-  const active = rows.filter(r => {
+  // The overlay's own filter, so the two never disagree about which rows stand
+  // for an agent: a DAG node a branch left out gets no line here either.
+  const active = agentRows(rows).filter(r => {
     if (r.status === 'running' || r.status === 'pending') {
       return true
     }

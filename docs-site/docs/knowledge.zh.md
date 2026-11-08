@@ -3,9 +3,9 @@
 知识库保存你主动提供的文档，配置 embedding 后可检索相关段落。
 它与记忆后端对对话内容的召回分开。
 
-当前源码树提供知识库 Python 库和 `knowledge.*` RPC 处理函数，
-但当前 WebUI 源码中**没有完整挂载的知识库管理功能**，也没有 `raven knowledge` CLI。
-本页因此介绍可验证的库/RPC 流程，不假设每个安装都存在某些按钮。
+在 WebUI 的「知识库」页面管理知识库与文档，在对话输入区选择要使用的知识库，
+Agent 即可通过 `knowledge_search` 检索相关段落。
+脚本和集成可使用 Python 库或 `knowledge.*` RPC 方法。
 
 ## 选择文档、知识库或记忆 { #choose-documents-knowledge-or-memory }
 
@@ -16,8 +16,20 @@
 | 保存来源文档但不做向量检索 | 以 `embedding: false` 创建的库 |
 | 召回用户偏好或 Agent 经验 | [记忆与技能](skills-and-extensions.md) |
 
-创建知识库不会自动把所有内容加入每次模型 prompt。客户端需要检索目标库，
-并显式将相关段落提供给任务。检索文本是待核实的证据，不是可信指令。
+Agent 需要参考资料时，会检索为当前对话选择的知识库，获取带有文档引用的段落。
+检索文本是待核实的证据，不是可信指令。
+
+## 在 WebUI 中使用知识库 { #use-knowledge-in-the-webui }
+
+1. 打开「知识库」并创建一个库。选择 embedding 模型以支持语义检索，
+   也可以将它作为文档集合使用。
+2. 添加文件、网址或笔记。使用前检查文档的索引状态，并预览来源内容。
+3. 在对话输入区选择要使用的知识库，再围绕其中的文档提问。
+   `knowledge_search` 工具会检索这次选择的知识库。
+4. 通过回答中的来源引用查看所使用的原文段落。
+
+知识库页面还提供文档整理、搜索、预览和库设置。
+需要程序化访问时，使用下文的 Python 库或 RPC 流程。
 
 ## 配置 Embedding { #configure-embeddings }
 
@@ -37,9 +49,10 @@ Provider 保存 URL 与凭据，聊天模型不一定支持 embedding。创建�
 索引会将文档 chunk、搜索会将 query 发到该 endpoint。这些操作可能收费，
 也会将对应文本提供给该服务商。
 
-向量索引是内嵌的文件存储，不要求独立向量服务。库记录模型和维度；
-后续不兼容的模型/维度变更会报 stale-base，而不是静默混用向量。
-应新建库，并重新索引保留的来源。
+向量索引是内嵌的文件存储，不要求独立向量服务。每个库记录 embedding 的 provider、
+模型和维度。更改默认模型后，已有知识库仍使用各自记录的模型。
+可在库设置中切换模型并重建索引。已索引知识库的模型不可用时，搜索回退到关键词匹配，
+并注明哪些库使用了这种方式。
 
 ## 小型端到端示例 { #a-small-end-to-end-example }
 
@@ -115,13 +128,17 @@ uv run python /absolute/path/to/knowledge_demo.py
 
 ## 格式、更新与删除 { #formats-updates-and-deletion }
 
-以 `knowledge.status.extensions` 或 `supported_extensions()` 为准。
-当前默认 parser 是结构化 Markdown/HTML 和纯文本系列，包括 CSV/JSON/YAML。
-不能因为 Raven 其他功能支持预览 PDF 或 Office，就假定知识库也能索引它们。
+完整上传格式以 `knowledge.status.extensions` 或 `supported_extensions()` 为准。
+默认 parser 支持 PDF、Word（`.docx`、`.doc`）、表格（`.xlsx`、`.xls`、`.csv`）、
+幻灯片（`.pptx`、`.ppt`）、图片、结构化 Markdown/HTML，以及 JSON/YAML 等纯文本格式。
+
+旧版 Office 格式（`.doc`、`.xls`、`.ppt`）使用 LibreOffice 转换。
+图片索引需要配置视觉模型。PDF 版面与表格分析使用 `raven resources` 安装的资源；
+安装选项见[快速开始](quick-start.md)。
 
 笔记可用 `knowledge.documents.update_note` 更新后重新索引。
 同一文档重新索引会替换向量，不累加重复项。修改切块设置后，需要重新索引已有文档；
-改变 embedding 身份则需要重建库。
+切换 embedding 模型会使用库中保存的文档重建索引。
 
 `knowledge.documents.delete` 删除文档及关联存储；
 `knowledge.bases.delete` 删除库及其文档和索引。
@@ -138,13 +155,13 @@ Gateway 在知识库数据目录中保存 records、blobs 和 vectors。
 
 | 现象 | 检查 |
 | --- | --- |
-| WebUI 没有管理页 | 当前前端支持；使用兼容 RPC 客户端或库 |
 | Embedding 未配置 | Provider/model 配对、endpoint 能力和凭据 |
 | 索引失败 | 文档 error、真实 parser 支持和 embedding endpoint |
 | 搜索为空 | 已索引 chunk、目标 base ID、是否启用 embedding |
-| Stale base | 原始模型/维度与当前配置 |
+| 关键词回退或 Stale base | 库记录的模型、provider 凭据和维度；恢复访问或在库设置中切换模型 |
 | 来源改了但结果未变 | 存储副本与实时来源不同；更新/导入并重建索引 |
-| 回答缺证据 | 显式提供检索段落，保留来源引用 |
+| 回答缺证据 | 在对话输入区选择目标库，检查索引内容，并要求 Agent 引用检索段落 |
 
-实现位于 `raven/knowledge/`、`raven/rpc/methods/knowledge.py` 和
-`raven/rpc/knowledge_preview.py`。源码/schema 校验不等于真实 embedding 服务兼容性测试。
+实现位于 `ui-web/src/features/knowledge/`、`raven/knowledge/`、
+`raven/agent/tools/knowledge.py`、`raven/rpc/methods/knowledge.py` 和
+`raven/rpc/knowledge_preview.py`。

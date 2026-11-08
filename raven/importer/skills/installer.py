@@ -169,7 +169,7 @@ def _pool_registry_names(dest_root: Path) -> set[str]:
     names: set[str] = set()
     for skill_md in sorted(dest_root.rglob("SKILL.md")):
         try:
-            front, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"))
+            front, _ = parse_frontmatter(skill_md.read_text(encoding="utf-8", errors="replace"), line_fallback=True)
         except OSError:
             continue
         name = str(front.get("name") or "").strip()

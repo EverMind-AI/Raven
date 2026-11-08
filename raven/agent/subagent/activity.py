@@ -32,6 +32,7 @@ import time
 from collections.abc import Awaitable, Callable, Collection, Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ from uuid import uuid4
 from loguru import logger
 
 from raven.agent.tools import snapshot as workdir_snapshot
+from raven.config.agent_names import canonical_agent_name
 
 # Names a provider might report token counts under. OpenAI-shaped
 # (``prompt_tokens``) is what raven's own providers normalise to; the camelCase
@@ -317,6 +319,9 @@ def watching_instance(activity: RunActivity, instance: tuple[str, str, str] | No
     so a lane that opened its block before taking the instance's lock can
     register here once it holds it, and no lane can unseat the one answering.
     """
+    if instance is not None:
+        session_key, agent, handle = instance
+        instance = (session_key, canonical_agent_name(agent), handle)
     owned = False
     if instance and _live_instances.get(instance) is None:
         _live_instances[instance] = activity
@@ -351,7 +356,7 @@ def live(key: str) -> RunActivity | None:
 
 def live_instance(session_key: str, agent: str, handle: str) -> RunActivity | None:
     """The activity of the turn this instance is answering, if it is answering one."""
-    return _live_instances.get((session_key, agent, handle))
+    return _live_instances.get((session_key, canonical_agent_name(agent), handle))
 
 
 def current() -> RunActivity | None:
@@ -632,12 +637,28 @@ async def note_provider_usage(
 ) -> None:
     """Record one direct provider call in the run activity and usage ledger."""
     note_usage(usage)
+    await note_ledger_usage(usage, model=model, session_key=session_key, task_id=task_id)
+
+
+async def note_ledger_usage(
+    usage: Any,
+    *,
+    model: str,
+    session_key: str | None,
+    task_id: str,
+    counts_known: bool = True,
+) -> None:
+    """Book one delegated call in the usage ledger under the conversation that delegated it.
+
+    ``counts_known`` false books a call whose token counts are unknown: they are
+    stored as missing and only its cost is booked.
+    """
     if session_key is None or not isinstance(usage, dict):
         return
     try:
         from raven.token_wise.usage_tracker import record_delegated_usage
 
-        await record_delegated_usage(usage, model=model, root=session_key, task_id=task_id)
+        await record_delegated_usage(usage, model=model, root=session_key, task_id=task_id, counts_known=counts_known)
     except Exception:  # noqa: BLE001 - accounting must never fail the delegated run
         logger.debug("subagent activity: usage ledger write failed", exc_info=True)
 
@@ -721,13 +742,8 @@ def set_transcript(activity: "RunActivity | None", messages: list[dict[str, Any]
     # this on every update the agent sends, the openai_api lane on every
     # reasoning step. Without the stamp neither lane ever moved
     # ``last_event_ms`` before its end-of-turn notes.
-    from raven.config.held_secrets import scrub_held_value
-
     _touch(activity)
-    # A third-party agent's own words and tool output come back unfiltered --
-    # one handed Raven's key can print it -- and this is what the page draws
-    # and the run record keeps.
-    activity.transcript = [scrub_held_value(m) for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
+    activity.transcript = [deepcopy(m) for m in messages[:_MAX_TRANSCRIPT_MESSAGES] if isinstance(m, dict)]
 
 
 def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, failures: list[str] | None = None) -> None:
@@ -741,13 +757,9 @@ def set_tool_calls(activity: "RunActivity | None", calls: list[str] | None, fail
     if activity is None or not isinstance(calls, list):
         return
     _touch(activity)
-    from raven.config.held_secrets import scrub_held_secrets
-
-    # A third-party agent titles a call with its command (`curl -H 'Authorization:
-    # Bearer ...'`), and these labels reach meta.json, the DAG manifest and the chip.
-    activity.tool_calls = [scrub_held_secrets(c) for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+    activity.tool_calls = [c for c in calls[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
     if isinstance(failures, list):
-        activity.tool_failures = [scrub_held_secrets(c) for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
+        activity.tool_failures = [c for c in failures[:_MAX_TOOL_CALLS] if isinstance(c, str) and c]
 
 
 def note_closing(text: str | None) -> None:
@@ -757,12 +769,10 @@ def note_closing(text: str | None) -> None:
     reader of the record appends as the closing message, and the transcript is
     everything before that.
     """
-    from raven.config.held_secrets import scrub_held_secrets
-
     activity = _current.get()
     if activity is not None and text is not None:
         _touch(activity)
-        activity.closing = scrub_held_secrets(text)
+        activity.closing = text
 
 
 def append_closing(text: str) -> None:
@@ -773,11 +783,9 @@ def append_closing(text: str) -> None:
     sentence saying the answer is incomplete is missing from exactly the record
     a reader goes to for the answer.
     """
-    from raven.config.held_secrets import scrub_held_secrets
-
     activity = _current.get()
     if activity is not None and activity.closing is not None:
-        activity.closing = f"{activity.closing}{scrub_held_secrets(text)}"
+        activity.closing = f"{activity.closing}{text}"
 
 
 def note_output_truncation(full: str, *, returned: int, reason: str) -> None:
@@ -824,15 +832,10 @@ def persisted_output(activity: Any, delivered: str | None) -> str | None:
     no output row to write, and a truncation published before the failure
     describes an answer that never became the turn's result.
     """
-    from raven.config.held_secrets import scrub_held_secrets
-
     if delivered is None:
         return None
     whole = getattr(activity, "full_output", None) if getattr(activity, "truncation", None) else None
-    # Scrubbed because this is what the record keeps and, for a DAG node, what a
-    # later node's prompt renders through `{{ id.output }}`: an agent handed
-    # Raven's key can print it in its answer.
-    return scrub_held_secrets(whole if isinstance(whole, str) and len(whole) > len(delivered) else delivered)
+    return whole if isinstance(whole, str) and len(whole) > len(delivered) else delivered
 
 
 def note_transcript(messages: list[dict[str, Any]] | None) -> None:

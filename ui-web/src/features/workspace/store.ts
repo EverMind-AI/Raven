@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client'
 
 import { t } from '../../i18n/t'
 import { copy } from '../../lib/clipboard'
+import { IMG_EXT } from '../../lib/pictureExt'
 import { md } from '../../lib/prose'
 import { current as currentSession } from '../../lib/session'
 import { ds } from '../../state/sources'
@@ -10,8 +11,9 @@ import { pane } from '../../state/wsPane'
 import * as browser from '../browser/mount'
 import * as agents from '../subagents/mount'
 import * as deliveries from './deliveries'
+import { absPath } from './root'
 
-import type { WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
+import type { DeliveryRow, WorkspaceSnapshot, WorkspaceSource, WsFile, WsShared } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 
@@ -176,6 +178,14 @@ export const renderURL = (p: string): string => fileURL(p) + '&render=pdf'
 /* The first page of a deck as a picture, for a tile that has room for one
    picture and not for a viewer. */
 export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
+/* A picture the document has drawn from one URL is drawn again from memory
+   for that URL without asking -- the HTML list of available images, which no
+   Cache-Control reaches. So a file rewritten under the same path needs a URL
+   the document has not drawn yet, or the old picture comes back. `version` is
+   whatever moves when the bytes may have, riding along as a query the gateway
+   ignores. */
+export const versioned = (url: string, version?: number | string | null): string =>
+  url + (version ? '&v=' + encodeURIComponent(String(version)) : '')
 /* One page of the rendering as a picture. The viewer draws a PDF this way
    rather than framing the document: Safari does not draw a framed PDF served
    under the sandbox policy these files carry, and that policy is what keeps an
@@ -184,8 +194,8 @@ export const thumbURL = (p: string): string => fileURL(p) + '&render=thumb'
 
    `version` rides along as a query the gateway ignores, so a deck delivered
    again under the same path is fetched again rather than shown from cache. */
-export const pageURL = (p: string, n: number, version?: number | null): string =>
-  fileURL(p) + '&render=page&p=' + n + (version ? '&v=' + version : '')
+export const pageURL = (p: string, n: number, version?: number | string | null): string =>
+  versioned(fileURL(p) + '&render=page&p=' + n, version)
 
 /* The same route, asked to serve the file under a policy that lets its scripts
    run. One view of one file: the route remembers nothing, so the next request
@@ -195,7 +205,6 @@ export const runURL = (p: string): string => fileURL(p) + '&run=1'
 const TEXT_EXT = new Set(['c', 'cfg', 'conf', 'cpp', 'css', 'diff', 'env', 'go', 'h', 'ini', 'java',
   'js', 'json', 'jsonl', 'jsx', 'kt', 'log', 'lua', 'patch', 'php', 'pl', 'py', 'pyi', 'rb', 'rs',
   'sh', 'sql', 'swift', 'toml', 'ts', 'tsx', 'txt', 'vue', 'yaml', 'yml', 'zsh'])
-const IMG_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'avif'])
 /* What the gateway can turn into a PDF with LibreOffice, and so what the
    viewer draws as pictures of pages: raven/rpc/pdf_preview.py's
    RENDERABLE_SUFFIXES, which is the list to change first. */
@@ -401,24 +410,41 @@ export function openDelivery(p: string): void {
 }
 
 /* Re-exported so the viewer does not have to know where the registry lives;
-   the store is what it already talks to. */
-export const markDeliveryMissing = (path: string): void => deliveries.markMissing(path)
+   the store is what it already talks to.
+
+   The path is resolved first, because the registry keys the gateway's absolute
+   path and the panel holds the path as the model typed it: marking the row
+   missing under the panel's spelling alone would leave the row lit, and the
+   download link on it pointing at a token that is already gone. */
+export const markDeliveryMissing = (path: string): void => deliveries.markMissing(absPath(path))
 
 /* For the kinds that never read text: an <img> or a frame that failed to load
    says nothing about WHY, and "gone" is one of several answers -- the viewer
    caps a render at 25 MB and refuses a path outside what the agent may read,
    and a file served 200 that the browser cannot decode fails here too. So the
    status is asked for, and only 404 marks the shelf. The transcript's tile
-   probes the same way. */
+   probes the same way.
+
+   Two spellings, two jobs. The lookup resolves the path, because the registry
+   keys the gateway's absolute path; the fetch does not, because the server
+   roots a relative path itself -- and roots an upload against agent home
+   rather than the session's directory -- so the path it is given is the path
+   it needs. */
 export async function probeDeliveryMissing(path: string): Promise<number | null> {
+  const key = absPath(path)
+  const probed = deliveries.byPath(key)
   try {
     const r = await fetch(fileURL(path), { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' })
-    if (r.status === 404) deliveries.markMissing(path)
+    if (r.status === 404) markProbedMissing(key, probed)
     return r.status
   } catch {
     /* No answer at all is not an answer about the file. */
     return null
   }
+}
+
+function markProbedMissing(key: string, probed: DeliveryRow | null): void {
+  if (deliveries.byPath(key) === probed) deliveries.markMissing(key)
 }
 
 /* Fill the shelf from the gateway's registry for this conversation. Called when
@@ -447,19 +473,24 @@ export async function loadDeliveries(sessionKey: string): Promise<void> {
 
 /* Only 404 says the file is gone. A refusal (403) or a file too big to render
    (413) is the viewer's limit, not the file's absence, and marking a
-   deliverable missing for either would put a lie on the shelf. */
-function refused(f: WsFile, status: number): Error {
-  if (status === 404) deliveries.markMissing(f.path)
+   deliverable missing for either would put a lie on the shelf.
+
+   The path handed on is the registry's spelling, not the panel's: the row is
+   keyed by the gateway's absolute path, and marking under the spelling the
+   model typed would leave the row lit. */
+function refused(f: WsFile, status: number, probed: DeliveryRow | null): Error {
+  if (status === 404) markProbedMissing(absPath(f.path), probed)
   return new Error(status === 403 ? t('gui.ws.file_denied')
     : status === 404 ? t('gui.ws.file_gone')
       : status === 413 ? t('gui.ws.file_big') : `HTTP ${status}`)
 }
 
 export async function loadFileText(f: WsFile): Promise<void> {
+  const probed = deliveries.byPath(absPath(f.path))
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), { credentials: 'same-origin' })
-    if (!r.ok) throw refused(f, r.status)
+    if (!r.ok) throw refused(f, r.status, probed)
     f.text = await r.text()
   } catch (e) {
     f.err = (e as Error).message || String(e)
@@ -479,12 +510,13 @@ const SNIFF_BYTES = 8192
    over the view ceiling (413) cannot be read as text either way, so it stays
    the note, and so does an answer that is no answer at all. */
 export async function sniffFile(f: WsFile): Promise<void> {
+  const probed = deliveries.byPath(absPath(f.path))
   f.loading = true
   try {
     const r = await fetch(fileURL(f.path), {
       credentials: 'same-origin', headers: { Range: `bytes=0-${SNIFF_BYTES - 1}` },
     })
-    if (r.status === 403 || r.status === 404) throw refused(f, r.status)
+    if (r.status === 403 || r.status === 404) throw refused(f, r.status, probed)
     /* An empty file has no first byte to ask for; it is empty text. */
     if (r.status === 416) {
       f.raw = true

@@ -146,7 +146,25 @@ async def test_every_origin_records_the_playbook_address(tmp_path):
     )
     await loop._process_message(cron_req, origin=Origin.CRON)
 
-    assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1"} in stub.contexts
+    assert {"channel": "slack", "chat_id": "#team", "session_key": "cron:job-1", "surface": None} in stub.contexts
+
+
+async def test_a_terminal_turn_addresses_its_playbook_runs_to_the_terminal(tmp_path):
+    """The terminal and the page share the ``tui`` channel; a run's result turn is
+    read under the rules of the surface its turn declared."""
+    loop = AgentLoop(provider=_Provider(), workspace=tmp_path, model="fake/default")
+    _stub_edges(loop)
+    stub = _StubPlaybooks()
+    loop._playbooks = stub
+    terminal = TurnRequest(
+        origin=Origin.USER,
+        source=Source(channel="tui", chat_id="c1", sender_id="u", chat_type=ChatType.DM, surface="tui"),
+        text="run the weekly briefing playbook",
+    )
+
+    await loop._process_message(terminal)
+
+    assert stub.contexts and [c["surface"] for c in stub.contexts] == ["tui"] * len(stub.contexts)
 
 
 def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path) -> None:
@@ -199,6 +217,40 @@ def test_a_playbook_config_that_is_on_registers_both_entries_even_empty(tmp_path
     # fresh-install state once it is not.
     name_schema = loader.to_schema()["function"]["parameters"]["properties"]["name"]
     assert "enum" not in name_schema, name_schema
+
+
+def test_the_playbook_runtime_dag_tool_is_wired_to_the_manager_sandbox(tmp_path):
+    """The funnel's private graph tool is one of the sites that must hand over
+    the manager's sandbox builder. A stored graph's nodes exec too, and a site
+    that drops the keyword returns them to the host silently -- the shape of
+    the defect the builder seam was added for.
+    """
+    from raven.config.schema import PlaybookConfig
+    from raven.playbook import PlaybookExecutor
+
+    captured = {}
+    orig_init = PlaybookExecutor.__init__
+
+    def recording_init(self, *args, **kwargs):
+        captured["dag_tool"] = kwargs.get("dag_tool")
+        return orig_init(self, *args, **kwargs)
+
+    import pytest
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(PlaybookExecutor, "__init__", recording_init)
+    try:
+        loop = AgentLoop(
+            provider=_Provider(),
+            workspace=tmp_path,
+            model="fake/default",
+            policy=TurnPolicy(max_iterations=2),
+            engine=EngineWiring(playbook_config=PlaybookConfig(enabled=True)),
+        )
+    finally:
+        monkeypatch.undo()
+    assert loop._playbooks is not None, "the runtime must build for its tool to be pinned"
+    assert captured["dag_tool"]._sandbox_for == loop.subagents.sandbox_executor_for
 
 
 def test_a_user_playbook_in_the_library_registers_the_loader(tmp_path) -> None:

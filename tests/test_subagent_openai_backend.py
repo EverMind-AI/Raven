@@ -286,3 +286,37 @@ async def test_every_published_row_carries_a_clock_as_the_acp_lane_does() -> Non
 
     assert did.transcript, "nothing was published"
     assert all(row.get("timestamp") for row in did.transcript), f"unstamped row in {did.transcript}"
+
+
+async def test_a_blank_reply_is_no_answer_on_the_buffered_path(monkeypatch) -> None:
+    """The one-space reply a vendor hands back for an empty turn is not the
+    answer: returned as one, the run was recorded completed with nothing as
+    its result. The in-process backend reads a blank reply the same way."""
+    import pytest
+
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    backend = OpenAIApiBackend(name="Researcher", base_url="https://x/v1", model="m")
+
+    async def fake_post(self, url, *, json, headers, timeout):
+        return {"choices": [{"message": {"content": " "}}], "usage": {"prompt_tokens": 10, "completion_tokens": 0}}
+
+    monkeypatch.setattr(OpenAIApiBackend, "_post_chat", fake_post)
+    with activity.collecting() as did:
+        with pytest.raises(SubagentNoAnswerError, match="reply was empty"):
+            await backend.run("q", task_id="t9", workspace=None, executor=None)
+
+    assert did.tokens_in == 10, "the call that answered nothing is still accounted"
+
+
+async def test_a_blank_reply_is_no_answer_on_the_streamed_path() -> None:
+    """A stream that ends without a visible delta is the same blank reply."""
+    import pytest
+
+    from raven.contracts.subagent_backend import SubagentNoAnswerError
+
+    frames = [b'data: {"choices":[{"delta":{"content":" "}}]}\n\n', b"data: [DONE]\n\n"]
+    async with _sse_endpoint(frames) as base_url:
+        backend = OpenAIApiBackend(name="Researcher", base_url=base_url, model="m")
+        with pytest.raises(SubagentNoAnswerError, match="reply was empty"):
+            await backend.run("q", task_id="t10", workspace=None, executor=None, on_delta=_no_delta)

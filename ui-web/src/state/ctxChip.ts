@@ -98,7 +98,7 @@ export function draw(): void {
    bearing for as long as nobody greps for its readers. Marking an estimate is
    worth doing; it is a change to what the page says, so it belongs in a change
    about that and not in this one. */
-export function set(nextUsed: number, nextMax: number): void {
+export function set(nextUsed: number | undefined, nextMax: number | undefined): void {
   if (typeof nextMax === 'number' && nextMax > 0) max = nextMax
   if (typeof nextUsed === 'number' && nextUsed >= 0) used = nextUsed
   draw()

@@ -11,27 +11,29 @@
  *
  * The array below is that expectation, plus the desk's own layer added after
  * C11 (features/desk/store.ts's registered `desk.escapeOpen()`, for its own
- * fullscreen -> node -> pane -> collapse retreat). What is asserted against
+ * fullscreen -> node -> pane -> collapse retreat) and the export wizard's
+ * dialog (#exportVeil). What is asserted against
  * it is now the table, every entry's own predicate and action against a
- * fixture page, and all fifty-five pairs of layers. The three
- * capture-phase handlers
- * each open sheet registers run *before* the table and two of them act on
- * Escape without stopping propagation, so one Escape can both deny an approval
- * and interrupt the running turn: that is pinned here with the real sheet.
+ * fixture page, and all hundred and seventeen ordered pairs of layers. The capture-phase
+ * handlers the open sheets register run before the table. An approval
+ * consumes Escape after denying, leaving the running turn alone until a later
+ * Escape: that is pinned here with the real sheets.
  */
 // @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
 import { readFileSync } from 'node:fs'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { openApproval } from '../features/composer/approve'
+import { open as openConfirm, openApproval } from '../features/composer/approve'
 import * as turn from '../features/composer/turn'
 import * as desk from '../features/desk/store'
 import * as extAgents from '../features/extAgents/store'
+import * as trajectoryDetails from '../features/trajectory/detailStore'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as sessionReset, setCurrent } from '../lib/session'
 import * as escapeOrder from './escapeOrder'
 import * as find from './find'
 import { installEscapeOrder } from './globalListeners'
+import * as mentions from './mentions'
 import * as page from './page'
 import * as perm from './perm'
 import * as plus from './plus'
@@ -42,7 +44,7 @@ import * as workdir from './workdir'
 
 import type { ComposerSource } from '../features/composer/types'
 
-/* The eleven, in the order Escape reaches them. Each item is the text the chain
+/* The twelve, in the order Escape reaches them. Each item is the text the chain
    tests to decide whether that layer is on screen -- a selector for the seven
    elements, the predicate's own name for the three that have no element of
    their own to look at.
@@ -52,22 +54,27 @@ import type { ComposerSource } from '../features/composer/types'
 const LAYER_IDS = [
   '.lightbox',
   '#veil',
+  '#exportVeil',
   '#detail',
   '#extAgentsPage',
   '#connectionsPage',
+  '#knowledgePage',
+  '#tasksBoardPage',
   'setIsOpen()',
   'desk.escapeOpen()',
   '#permPop',
   '#plusPop',
+  '#atPop',
   '#wdPop',
+  'trajectory.escapeOpen()',
   'turn.busy()',
 ] as const
 
 const source = (path: string): string => readFileSync(path, 'utf8') as string
 
 /* Every element the table reads or clicks, in a page shaped like the real one:
-   the carriers of data-open, the two cancel buttons the two sheets are answered
-   through, the new-task button Cmd+N clicks, and the rail's three pieces the
+   the carriers of data-open, the three cancel buttons the three sheets are
+   answered through, the new-task button Cmd+N clicks, and the rail's three pieces the
    two rail shortcuts write. */
 const PAGE = [
   '<div class="app" data-rail="on">',
@@ -77,11 +84,16 @@ const PAGE = [
   '<div class="dock-in"><textarea id="ta"></textarea>',
   '<div class="pop" id="permPop" data-open="false"></div>',
   '<div class="pop" id="plusPop" data-open="false"></div>',
-  '<div class="pop" id="wdPop" data-open="false"></div></div></div></div>',
+  '<div class="pop" id="atPop" data-open="false"></div>',
+  '<div class="pop" id="wdPop" data-open="false"></div></div></div>',
+  '<div class="trajectory-details"><button id="trajFocus"></button></div></div>',
   '<section class="page" id="extAgentsPage" data-open="false"></section>',
   '<section class="page" id="connectionsPage" data-open="false"></section>',
+  '<section class="page" id="knowledgePage" data-open="false"></section>',
+  '<section class="page" id="tasksBoardPage" data-open="false"></section>',
   '<aside class="detail" id="detail" data-open="false"><div class="body" id="dBody"></div></aside>',
   '<div class="veil setveil" id="setVeil" data-open="false"><div id="setModal"></div></div>',
+  '<div class="veil" id="exportVeil" data-open="false"><button id="exportClose"></button></div>',
   '<div class="veil" id="veil" data-open="false"><button id="cfNo"></button></div>',
   '</div>',
   '<button id="railShow"></button>',
@@ -96,11 +108,12 @@ const spies = {
   pageShow: vi.fn(),
   permClose: vi.fn(),
   plusClose: vi.fn(),
+  atClose: vi.fn(),
   wdClose: vi.fn(),
   stop: vi.fn(),
 }
 
-/* Which button was pressed on the two sheets that are answered by a click. */
+/* Which button was pressed on the sheets that are answered by a click. */
 let cancelled: string[] = []
 
 const flag = (id: string) => (): void => { document.getElementById(id)!.dataset.open = 'true' }
@@ -121,9 +134,18 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     taken: () => !document.querySelector('.lightbox'),
   },
   '#veil': { up: flag('veil'), taken: () => cancelled.includes('cfNo') },
+  '#exportVeil': { up: flag('exportVeil'), taken: () => cancelled.includes('exportClose') },
   '#detail': { up: flag('detail'), taken: lowered('detail') },
   '#extAgentsPage': { up: flag('extAgentsPage'), taken: called(spies.extAgentsClose) },
   '#connectionsPage': { up: flag('connectionsPage'), taken: called(spies.pageShow) },
+  /* Closed by `page.show(null)` rather than by a verb of the domain's -- the
+     same generic close connections has, because the import-direction gate
+     pins the upward edges and will not take a new one; the task board stops
+     its poll off the page switch, so it has no verb to call either. The three
+     pages therefore answer by the same spy, which is why PAIRS below leaves
+     their pairs out. */
+  '#knowledgePage': { up: flag('knowledgePage'), taken: called(spies.pageShow) },
+  '#tasksBoardPage': { up: flag('tasksBoardPage'), taken: called(spies.pageShow) },
   'setIsOpen()': { up: () => settingsDialog.open(), taken: () => !settingsDialog.isOpen() },
   /* Its four-rung retreat (fullscreen -> node -> pane -> collapse) is
      store.test.ts's to prove; this fixture only needs one rung on screen and
@@ -133,12 +155,22 @@ const LAYERS: Record<string, { up: () => void; taken: () => boolean }> = {
     up: () => desk.set({ paletteOpen: true }),
     taken: () => !desk.get().paletteOpen,
   },
-  /* The three on the composer bar. Their flag is the component's to write from
+  /* The four on the composer bar. Their flag is the component's to write from
      the store, and nothing renders in this fixture, so the flag goes up by hand
      and what says the close ran is the store verb the table calls. */
   '#permPop': { up: flag('permPop'), taken: called(spies.permClose) },
   '#plusPop': { up: flag('plusPop'), taken: called(spies.plusClose) },
+  '#atPop': { up: flag('atPop'), taken: called(spies.atClose) },
   '#wdPop': { up: flag('wdPop'), taken: called(spies.wdClose) },
+  /* Open AND holding the focus: the pane answers closed to a key pressed
+     anywhere else, which escapeOrder.test's own case below pins. */
+  'trajectory.escapeOpen()': {
+    up: () => {
+      trajectoryDetails.set({ ...trajectoryDetails.get(), open: true })
+      document.getElementById('trajFocus')!.focus()
+    },
+    taken: () => !trajectoryDetails.get().open,
+  },
   'turn.busy()': { up: () => turn.dispatch({ type: 'send' }), taken: called(spies.stop) },
 }
 
@@ -154,6 +186,7 @@ beforeEach(() => {
   document.body.innerHTML = PAGE
   cancelled = []
   document.getElementById('cfNo')!.onclick = () => { cancelled.push('cfNo') }
+  document.getElementById('exportClose')!.onclick = () => { cancelled.push('exportClose') }
   for (const spy of Object.values(spies)) spy.mockClear()
   /* Each layer's own close, stood in for one export at a time: what is under
      test is which one the key reaches, not what any of them does. */
@@ -161,6 +194,7 @@ beforeEach(() => {
   vi.spyOn(page, 'show').mockImplementation(spies.pageShow)
   vi.spyOn(perm, 'close').mockImplementation(spies.permClose)
   vi.spyOn(plus, 'close').mockImplementation(spies.plusClose)
+  vi.spyOn(mentions, 'close').mockImplementation(spies.atClose)
   vi.spyOn(workdir, 'close').mockImplementation(spies.wdClose)
   sources.composer = { stop: spies.stop } as unknown as ComposerSource
   settingsDialog.close()
@@ -172,6 +206,7 @@ beforeEach(() => {
   setCurrent('a')
   sheets._resetForTests()
   desk._resetForTests()
+  trajectoryDetails._resetForTests()
 })
 
 afterEach(() => {
@@ -194,11 +229,11 @@ const key = (k: string, over: Partial<KeyboardEventInit> = {}): KeyboardEvent =>
 }
 
 describe('the Escape priority order', () => {
-  it('is the order the table reaches the eleven layers in', () => {
+  it('is the order the table reaches the sixteen layers in', () => {
     expect(escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)).toEqual([...LAYER_IDS])
   })
 
-  it('has no twelfth entry, and every entry is in the fixture', () => {
+  it('has no seventeenth entry, and every entry is in the fixture', () => {
     expect(escapeOrder.ESCAPE_ORDER).toHaveLength(LAYER_IDS.length)
     expect(Object.keys(LAYERS)).toEqual([...LAYER_IDS])
   })
@@ -218,11 +253,30 @@ describe('the Escape priority order', () => {
   /* The table's whole point: with two layers up, which one goes is the table's
      order and not the order they were raised in. A stack would answer the
      second of each pair. */
+  /* Every pair but three. The three pages with no close verb of their own are
+     all taken back by `page.show(null)`, so one spy answers for all three and
+     no assertion here can tell which of them the order reached -- the case
+     below pins that instead, by the one thing that does differ. Not a state
+     the page can be in either way: `page.show` opens one page and clears the
+     rest, so two pages are never up at once outside this fixture. */
+  const SHARED_CLOSE: ReadonlyArray<readonly [string, string]> = [
+    ['#connectionsPage', '#knowledgePage'],
+    ['#connectionsPage', '#tasksBoardPage'],
+    ['#knowledgePage', '#tasksBoardPage'],
+  ]
+  const shared = (a: string, b: string): boolean =>
+    SHARED_CLOSE.some(([x, y]) => (x === a && y === b) || (x === b && y === a))
   const pairs = LAYER_IDS.flatMap((first, i) =>
-    LAYER_IDS.slice(i + 1).map((second) => ({ first, second })))
+    LAYER_IDS.slice(i + 1).filter((second) => !shared(first, second)).map((second) => ({ first, second })))
 
-  it('has fifty-five pairs to answer for', () => {
-    expect(pairs).toHaveLength(55)
+  it('has a hundred and seventeen pairs to answer for, every pair but the three that share a close', () => {
+    expect(pairs).toHaveLength(117)
+  })
+
+  it('reaches the three pages that share a close in table order', () => {
+    const ids = escapeOrder.ESCAPE_ORDER.map((layer) => layer.id)
+    expect(ids.indexOf('#connectionsPage')).toBeLessThan(ids.indexOf('#knowledgePage'))
+    expect(ids.indexOf('#knowledgePage')).toBeLessThan(ids.indexOf('#tasksBoardPage'))
   })
 
   it.each(pairs)('takes back $first and leaves $second alone', ({ first, second }) => {
@@ -288,13 +342,12 @@ describe('the one listener that reads the order', () => {
     expect(clicks).toEqual(['newBtn'])
   })
 
-  it('is a bubble-phase listener, after the three the sheets register', () => {
-    /* Which is what lets one Escape do two things. The count is the pinned
-       fact: two in the approval sheet, one in the clarify sheet, all three
-       registered with capture. */
+  it('is a bubble-phase listener, after the sheets\' capture-phase handlers', () => {
+    /* Each sheet gets to answer before the page reads the key. */
     const capture = /document\.addEventListener\('keydown', onKey, true\)/g
     expect(source('src/features/composer/approve.ts').match(capture) ?? []).toHaveLength(2)
     expect(source('src/features/composer/clarify.ts').match(capture) ?? []).toHaveLength(1)
+    expect(source('src/features/composer/credential.ts').match(capture) ?? []).toHaveLength(1)
     /* And every keydown the page installs is bubble-phase, this one included:
        a third argument would show up in one of the matches below. Sorted,
        because what the three are registered in is declared in one place and
@@ -319,16 +372,62 @@ describe('the one listener that reads the order', () => {
     expect(spies.extAgentsClose).not.toHaveBeenCalled()
   })
 
-  /* The approval sheet's capture handler denies and does not stop the event,
-     so the same Escape carries on into the table and ends at the last entry --
-     which interrupts the turn the approval was blocking. */
-  it('both denies an approval and stops the running turn', () => {
+  it.each(['shell.exec', 'file.write', 'mcp.call', 'config.change', 'unknown'])(
+    'Escape denies %s approval and leaves stopping to the next Escape', (kind) => {
+      const said: string[] = []
+      openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell', kind },
+        { onChoice: (choice: string) => { said.push(choice) } }, 'a')
+      turn.dispatch({ type: 'send' })
+      key('Escape')
+      expect(said).toEqual(['deny'])
+      expect(spies.stop).not.toHaveBeenCalled()
+      expect(turn.busy()).toBe(true)
+      key('Escape')
+      expect(said).toEqual(['deny'])
+      expect(spies.stop).toHaveBeenCalledTimes(1)
+    })
+
+  it('denies a confirmation on Escape without stopping the running turn', () => {
+    const denied = vi.fn()
+    openConfirm('Confirm this action', vi.fn(), denied, 'a')
+    turn.dispatch({ type: 'send' })
+    key('Escape')
+    expect(denied).toHaveBeenCalledTimes(1)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
+    expect(denied).toHaveBeenCalledTimes(1)
+    expect(spies.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the normal close priority after an approval is denied', () => {
     const said: string[] = []
     openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell' },
       { onChoice: (choice: string) => { said.push(choice) } }, 'a')
     turn.dispatch({ type: 'send' })
+    LAYERS['desk.escapeOpen()']!.up()
+
     key('Escape')
     expect(said).toEqual(['deny'])
+    expect(desk.get().paletteOpen).toBe(true)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
+    expect(desk.get().paletteOpen).toBe(false)
+    expect(spies.stop).not.toHaveBeenCalled()
+    key('Escape')
     expect(spies.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets a parked approval leave Escape to the active conversation', () => {
+    const said: string[] = []
+    const approval = openApproval({ approvalId: '1', command: 'rm -rf build/', description: 'shell' },
+      { onChoice: (choice: string) => { said.push(choice) } }, 'b')
+    try {
+      turn.dispatch({ type: 'send' })
+      key('Escape')
+      expect(said).toEqual([])
+      expect(spies.stop).toHaveBeenCalledTimes(1)
+    } finally {
+      approval.close()
+    }
   })
 })

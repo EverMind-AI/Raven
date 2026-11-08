@@ -261,6 +261,16 @@ def test_max_runs_the_baselines_retrieval_ladder(flows):
     assert flows["max"].search.saturation == flows["medium"].search.saturation
 
 
+def test_high_closes_a_dry_search_streak_on_the_baselines_k(flows):
+    """High's saturation rule fires on a five-search dry streak, the same as medium and max.
+
+    Each rung of the ladder -- widen, then the next page, then closing search -- waits
+    for ``k`` consecutive searches that surface nothing new, so ``k`` sets how long a
+    dry turn keeps searching before search closes."""
+    assert flows["high"].search.saturation.k == 5
+    assert flows["high"].search.saturation == flows["medium"].search.saturation
+
+
 def test_the_caps_still_order_the_modes(flows, launcher):
     """A tier may raise ceilings too -- it just may not be only ceilings."""
     caps = {

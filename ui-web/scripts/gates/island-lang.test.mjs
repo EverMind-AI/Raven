@@ -38,13 +38,12 @@ const NO_ROOT = {
     'no island of its own: the run is state (features/dag/mount.ts), and the one '
     + 'surface that draws it -- the desk\'s task pane board -- subscribes from '
     + 'its own domain',
+  imported:
+    'no island of its own: the rail\'s chrome draws its button (src/chrome/Rail.tsx, '
+    + 'which subscribes to the language) and the rail island draws its rows',
   installed:
     'no island at all: one shared read of ext.list that the two capability tabs '
     + 'and the settings dialog draw from',
-  transcript:
-    'one root per lane rather than one per page, and its words are baked into '
-    + 'stored segments -- which is why the version bump per lane is the one '
-    + 'island step state/lang/effects.ts still spends',
 }
 
 /** Every `features/<domain>/` directory, and the files in it. */

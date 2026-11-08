@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from raven.spine.message import Media, Source
 
@@ -16,6 +17,14 @@ class Origin(StrEnum):
     SUBAGENT = "subagent"
 
 
+# The origins the runtime starts on its own: they share the system pool, and one whose prompt teaches
+# the silence marker reads the loose silence rule. SUBAGENT is the turn that re-injects a result; a
+# sub-agent's own execution runs off the scheduler behind a separate gate. An inbound A2A call runs as
+# HEARTBEAT too, and its peer does wait on the text, so that entrance runs its turn with
+# ``reply_awaited``, outside the silence protocol.
+PROACTIVE_ORIGINS = frozenset({Origin.SENTINEL, Origin.CRON, Origin.HEARTBEAT, Origin.SUBAGENT})
+
+
 class AnswerlessTurnError(Exception):
     """A runner's own report that the turn it ran ended with no answer.
 
@@ -24,7 +33,19 @@ class AnswerlessTurnError(Exception):
     up on, and why), so ``describe_failure`` passes the text through unchanged
     instead of prefixing it with this class name, and the ``turn_ended`` marker
     that says so is filed before the failure leaves the loop.
+
+    ``full_detail`` is the same report at length, for a reader who expands the
+    row. The runner builds and scrubs it -- the kernel imports nothing to do
+    that with -- and the lane copies it onto ``TurnFailed.full_detail``.
     """
+
+    def __init__(self, *args: object, full_detail: str | None = None, no_output: bool = False) -> None:
+        super().__init__(*args)
+        self.full_detail = full_detail
+        # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+        # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
+        # fails as a refusal either way. Earlier attempts are not covered.
+        self.no_output = no_output
 
 
 class BusyPolicy(StrEnum):
@@ -89,7 +110,7 @@ class TurnRequest:
     # delivery row instead. Shape: ``{"kind": "spawn"|"dag", "label": ...,
     # "status": ..., "run_id": ...}``, the same identity the
     # ``subagent.delivered`` event carries.
-    delegated: dict[str, str] | None = None
+    delegated: dict[str, Any] | None = None
     # Direct sub-agent delivery: when set to ``(agent, handle)`` the turn skips
     # the model and runs against that instance instead, streaming its reply back
     # to this conversation. Runs on that instance's own lane (``direct_lane``),
@@ -98,6 +119,17 @@ class TurnRequest:
     # transcript -- a direct chat exists to keep those exchanges out of the main
     # agent's context. See AgentLoop.run_turn.
     direct_target: tuple[str, str] | None = None
+    # The original session key cannot be recovered by splitting a direct lane:
+    # both the session and the instance handle may contain the lane separator.
+    parent_session: str | None = None
+    # Per-turn UI choice for Playbook generation. None inherits the configured
+    # default; off/task/persona are resolved before the setup model call.
+    playbook_mode: str | None = None
+    # ``(trace_id, span_id)`` of the span that dispatched the work this turn
+    # reports on, set only by a submitter announcing a dispatched result. A turn
+    # no longer inherits its submitter's context, so where it came from has to
+    # be stated here; the kernel carries the pair to the runner uninterpreted.
+    dispatch_link: tuple[str, str] | None = None
 
 
 # A lane is a serial domain, so an instance that is to answer while the main
@@ -110,19 +142,15 @@ _LANE_SEP = "#"
 def direct_lane(session_key: str, agent: str, handle: str) -> str:
     """The lane a direct chat with one instance runs on.
 
-    Derived rather than passed as a second field so nothing downstream has to
-    carry two ids: everything already keyed by conversation -- the active-turn
-    slot, the turn id, the addressee, the delivery hub's stream -- becomes
-    per-instance by construction.
+    This identifies the queue, turn, and addressee per instance. The request
+    carries its original parent session separately for permissions and records.
     """
     return f"{session_key}{_LANE_SEP}{agent}/{handle}"
 
 
 def session_of(lane: str) -> str:
-    """The session a lane belongs to; a main-agent lane *is* its session.
-
-    Splits on the **first** separator, which is what makes the encoding safe: a
-    session key is ``channel:chat_id`` and never contains one, while a handle is
-    free-form text the model chose and may contain anything at all.
+    """Legacy string-only lookup for parents without a separator. A request must
+    use ``session_key_for`` instead, since a caller can choose a parent key
+    containing ``#`` and a handle can contain it too.
     """
     return lane.split(_LANE_SEP, 1)[0]

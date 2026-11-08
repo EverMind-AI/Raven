@@ -22,7 +22,7 @@ from loguru import logger
 
 from raven.acp_client import resolver as autofill_resolver
 from raven.acp_client.asker import current_autofill
-from raven.agent import workdir
+from raven.agent import knowledge_scope, workdir
 from raven.agent.context import ContextBuilder
 from raven.agent.loop.failure_streak import (
     failure_class,
@@ -31,11 +31,9 @@ from raven.agent.loop.failure_streak import (
 )
 from raven.agent.loop.no_progress import NoProgressAction, NoProgressGuard
 from raven.agent.loop.recovery import (
-    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     RecoveryAction,
     RecoveryLimits,
-    classify_empty_response,
     is_only_think_debris,
     strip_think_blocks,
 )
@@ -107,6 +105,17 @@ _ABORTED_ACTION_REPLY = (
 # underscore keeps it out of the provider payload while the turn is live.
 _NOTICE_KEY = "_notice"
 
+# Marks the stored assistant row that is a silence marker the model wrote, so a
+# reload can tell it from an answer. Same underscore-then-rename convention as
+# ``_notice``: ``_save_turn`` writes it as ``silent``.
+_SILENT_KEY = "_silent"
+
+# Marks the last assistant row with text or tool calls of a turn a tool already answered -- a
+# message sent or files delivered, read off ``_answered_by_tool``: the live verdict, so a stored
+# reader need not guess it from the calls it can see. ``_save_turn`` writes it as
+# ``replied_via_tool``.
+_REPLIED_VIA_TOOL_KEY = "_replied_via_tool"
+
 # Marks the user entry of a turn the runtime opened on the agent's behalf, with
 # the origin that opened it. Same underscore-then-rename convention as
 # ``_notice``: ``_save_turn`` writes it as ``origin``, and the underscore keeps
@@ -152,6 +161,68 @@ def _stamp_reasoning_ms(messages: list[dict[str, Any]], response: Any) -> None:
     reasoning_ms = getattr(response, "reasoning_ms", None)
     if reasoning_ms is not None and messages:
         messages[-1][_REASONING_MS_KEY] = int(reasoning_ms)
+
+
+# How full a model call left the window, on the assistant entry that stands for
+# it: the reply it produced, or the text a hook put in that reply's place. A
+# reply that is not filed leaves it on the newest row the turn keeps instead
+# (``turn_path._stamp_context_used_on_kept``), and a turn that fails or is
+# stopped files its newest reading on the marker it ends on
+# (``_save_broken_turn``).
+# Same underscore-then-rename convention as the spans above; ``_save_turn``
+# writes it as ``context_used``. A resume has no other way to know what the
+# model was sent: the context engine compacts on its own and leaves the stored
+# log whole, so the log is not that.
+_CONTEXT_USED_KEY = "_context_used"
+
+
+def _window_reading(usage: dict[str, Any] | None) -> int:
+    """How full a call left the window: its prompt plus its reply, in tokens.
+
+    Not what the prompt was billed as. A provider that reports cache reads apart
+    from ``prompt_tokens`` (``prompt_tokens_include_cache`` false, the Anthropic
+    Messages shape) bills a fraction of a warm prompt while all of it still
+    occupies the window, so the cached counts are added back -- and only then:
+    where ``prompt_tokens`` already holds them, adding them again would count the
+    warm prompt twice.
+    """
+    if not usage:
+        return 0
+    used = int(usage.get("prompt_tokens", 0) or 0) + int(usage.get("completion_tokens", 0) or 0)
+    if not usage.get("prompt_tokens_include_cache", True):
+        used += int(usage.get("cache_read_input_tokens", 0) or 0) + int(
+            usage.get("cache_creation_input_tokens", 0) or 0
+        )
+    return used
+
+
+def _reads_no_window(response: Any) -> bool:
+    """Whether a call's usage says nothing about how full the window is.
+
+    A response the provider flagged as an upstream transport failure
+    (``upstream_transport_failure``) carries the upstream's account of a call
+    that failed, and that account can be the very evidence that flagged it -- a
+    prompt billed at a size the request cannot have been. The call may never
+    have been read, so its usage is no reading of the window.
+    """
+    classification = getattr(response, "error_classification", None)
+    return getattr(classification, "category", None) == "upstream_transport_failure"
+
+
+def _call_window(response: Any) -> int:
+    """How full a model call left the window, or 0 when it gives no reading."""
+    return 0 if _reads_no_window(response) else _window_reading(getattr(response, "usage", None))
+
+
+def _stamp_context_used(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put a model call's window reading on the assistant entry that stands for it.
+
+    Absent when the provider reported no usage, and absent means unknown: a
+    resume reads the newest entry that has one.
+    """
+    used = _call_window(response)
+    if used > 0 and messages:
+        messages[-1][_CONTEXT_USED_KEY] = used
 
 
 def _first_line(text: str) -> str:
@@ -217,18 +288,54 @@ class LoopOutcome:
     next turn's recovery prompt.
 
     ``error`` is the loop's own account of why this turn has no answer, in the
-    words a reader is shown: a model call it gave up on, or an empty-response
-    recovery that spent every budget without a word coming back. None when the
-    turn produced an answer or a hook salvaged one, and also when the turn
-    returned no text at all with the recovery switched off, which the caller
-    fails on by itself. The caller fails the turn on it unless one of the
-    turn's tools has already put an answer in front of the reader.
+    words a reader is shown: a model call it gave up on, or a reply that
+    recovery could not mend (nothing, only thinking, a cut that stayed cut, a
+    refusal). None when the turn produced an answer or a hook salvaged one, and
+    also when the turn returned no text at all with the recovery switched off,
+    which the caller fails on by itself; a refusal is the exception, worded here
+    whether the recovery is on or off. The caller fails the turn on it unless
+    one of the turn's tools has already put an answer in front of the reader.
+
+    ``error_full`` is the same failure at length: the failed call's content
+    unbounded, then the body its call record kept. The caller raises it with
+    the error so a reader who expands the row can read it, and the runner drops
+    it when it says nothing more than ``error`` (``attach_full_detail``).
+
+    ``no_output`` is set when the turn ended on a last reply with no text, no tool
+    call and nothing else to show for it: no reasoning, no refusal, no cut at the
+    output ceiling. Recovery sets it once it has spent its moves on such a reply;
+    with recovery switched off, any last reply without text sets it, thinking
+    included, because nothing there says more than that -- except a refusal,
+    which fails as a refusal either way and leaves it unset. A turn the message
+    tool had already answered can carry it too, on a last reply with no text of
+    its own; nothing fails that turn, so nothing reads it. The attempts before
+    the last are not covered: they may have thought.
+
+    ``silent`` is set when the turn's last reply is a silence marker. That is the
+    model's answer, not a failure and not an empty reply: the row stays in the
+    history and carries ``_silent``, and the reader is shown none of it.
+    ``shown`` is what that reply had already streamed before it was read as the
+    marker -- a think block the model inlined ahead of it goes out as it comes --
+    counted over the step a reader draws it in: its call and the continuations
+    of a cut answer, or the wrap-up alone. A client that drew it takes back
+    exactly this, and nothing it drew before. Empty when the reply showed nothing.
     """
 
     status: str = "completed"  # "completed" | "interrupted" | "error"
     error: str | None = None
+    error_full: str | None = None
+    no_output: bool = False
+    silent: bool = False
+    shown: str = ""
     checkpoint_id: str | None = None
     edited_files: list[str] = field(default_factory=list)
+    # What the turn's last model call carried into the strategies, and the effort
+    # it asked for: the host's post-turn task board call sends the same, so it
+    # runs at the main model's settings and shares that call's cached prefix.
+    # None when the turn made no model call (or, for the effort, asked for none).
+    last_tools: list[dict] | None = None
+    last_model: str | None = None
+    last_effort: str | None = None
 
 
 def _filter_qualified_ids(
@@ -327,6 +434,38 @@ def _appended_by_hook(before: str | None, after: str) -> str:
     if not after.startswith(head):
         return ""
     return after[len(head) :]
+
+
+def _file_composed_reply(messages: list[dict[str, Any]], reply: str) -> None:
+    """Put the reply an ``after_send`` hook composed on a silent turn in place of the marker row.
+
+    The hook's text is what the reader was sent, so it is what the turn files: a reload, a replay and
+    a cron run's preview read the marker row as no reply. Replaced with a copy, so a list that shares
+    the row is left as it was.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        row = messages[index]
+        if row.get("role") == "assistant" and row.get(_SILENT_KEY):
+            filed = {key: value for key, value in row.items() if key != _SILENT_KEY}
+            filed["content"] = reply
+            messages[index] = filed
+            return
+
+
+def _stamp_replied_via_tool(messages: list[dict[str, Any]], turn_base: int) -> None:
+    """Mark the turn's last assistant row with text or tool calls: the message tool sent this turn's reply.
+
+    An assistant row with neither is not filed (``_save_turn``), and the commonest such turn ends on
+    one -- the tool sent, then the model said nothing -- so the mark goes on the last row before it
+    that is filed, the turn's last tool call, which need not be the send. A turn that ends on its
+    marker has the marker's row marked. A notice ``_save_turn`` files after the turn is not marked.
+    Replaced with a copy, so a list that shares the row is left as it was.
+    """
+    for index in range(len(messages) - 1, turn_base - 1, -1):
+        row = messages[index]
+        if row.get("role") == "assistant" and (row.get("content") or row.get("tool_calls")):
+            messages[index] = {**row, _REPLIED_VIA_TOOL_KEY: True}
+            return
 
 
 #: A message a hook injected on rollback: the harness re-prompting itself (a
@@ -438,10 +577,14 @@ def turn_question(messages: list[dict[str, Any]] | None) -> str:
     Read once, at entry -- later the history has grown and the last user
     message may be an injection rather than what the user asked.
     """
+    from raven.context_engine.scratch import strip_turn_scratch
+
     for m in reversed(messages or []):
         if not isinstance(m, dict) or m.get("role") != "user":
             continue
-        content = m.get("content")
+        # The turn scratch rides at the end of the same message; it is recalled
+        # context, not part of what was asked.
+        content = strip_turn_scratch(m)
         text = ""
         if isinstance(content, str):
             text = content

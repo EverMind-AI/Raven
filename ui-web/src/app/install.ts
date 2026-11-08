@@ -11,21 +11,26 @@
  * need a transport and the actions need the document.
  */
 
+import { show as showScrollbar } from '../chrome/behaviour/scrollbars'
 import { onFrameBytes, onFrameJson, browserSource } from '../features/browser/source'
 import { open as approveSheet } from '../features/composer/approve'
 import { closeCredential, openCredential } from '../features/composer/credential'
-import { startTaskWith } from '../features/composer/startTaskWith'
+import { answerInChat, askInChat, focusChat, startTaskWith } from '../features/composer/startTaskWith'
 import { connSource } from '../features/connections/source'
 import { cronSource } from '../features/cron/source'
 import { openDeskTask } from '../features/desk/store'
+import { exportSource } from '../features/export/source'
 import { AgentsStepBody } from '../features/extAgents/AgentsBody'
-import { extAgentsSource } from '../features/extAgents/source'
+import { extAgentsSource, machinesSource } from '../features/extAgents/source'
 import * as extAgentsStore from '../features/extAgents/store'
+import { importedSource } from '../features/imported/source'
 import { importSyncSource } from '../features/importSync/source'
 import * as importSyncStore from '../features/importSync/store'
 import { capabilitiesSource, loadExt } from '../features/installed/source'
+import { knowledgeSource } from '../features/knowledge/source'
+import { reveal as revealDocument } from '../features/knowledge/store'
 import { memorySource } from '../features/memory/source'
-import { modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
+import { blockSendForModel, effortSource, modelSource, openModelsForMissingProvider, tierSource } from '../features/model/source'
 import { onboardSource } from '../features/onboard/source'
 import { isOpen as onboardOpen, setBodies as setOnboardBodies, subscribe as onOnboard } from '../features/onboard/store'
 import { markNew } from '../features/rail/store'
@@ -34,11 +39,17 @@ import { MemoryStepBody, ModelStepBody, WebStepBody } from '../features/settings
 import { bannerSource, memoryStepDone, modelStepDone, settingsSource, webStepDone } from '../features/settings/source'
 import * as settingsStore from '../features/settings/store'
 import { agentsSource, startAgentHeartbeat } from '../features/subagents/source'
+import { onBoardEvent, refresh as refreshBoards } from '../features/tasks/boards'
 import { tasksSource } from '../features/tasks/source'
 import {
-  byKey as taskByKey, onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus,
-  refresh as refreshTasks, reset as resetTasks,
+  byKey as taskByKey, lendAnswer as lendTaskAnswer, lendFocus as lendTaskFocus, moveOnPending, onBoardUpdated,
+  onNodeUpdated, onRunCompleted, onRunReplanned, onRunStarted, onSubagentStatus, refresh as refreshTasks,
+  refreshBoard as refreshTaskBoard, reset as resetTasks, takeMoveOn,
 } from '../features/tasks/store'
+import * as trajectoryDetails from '../features/trajectory/detailStore'
+import * as trajectoryPoll from '../features/trajectory/poll'
+import { trajectorySource } from '../features/trajectory/source'
+import * as trajectoryStore from '../features/trajectory/store'
 import {
   actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList,
 } from '../features/transcript/source'
@@ -51,17 +62,22 @@ import { $ } from '../lib/dom'
 import { hostPlatform } from '../lib/platform'
 import { current as sessionCurrent, onChange as onSessionChange } from '../lib/session'
 import { refusal as uploadRefusal } from '../lib/upload'
+import { forget as forgetAbsent, servesTrajectory } from '../rpc/capabilities'
 import { gateway } from '../rpc/gateway'
 import { setFault as setMemFault } from '../state/banner'
 import * as page from '../state/page'
+import { onDocument } from '../state/reveal'
+import * as scrollbars from '../state/scrollbars'
 import {
   clarifyRequest, dispatch, installPipeline, registerCredentialCard, replayPendingApprovals, replayPendingCredentials,
 } from '../state/session/pipeline'
 import { reconnect, switchToDraft } from '../state/session/registry'
-import { installComposerActions, installSlashActions } from '../state/session/runtime'
+import { installComposerActions, installSlashActions, lendBeforeSend } from '../state/session/runtime'
 import * as settingsDialog from '../state/settings'
 import { ds, sources } from '../state/sources'
 import { show as toast } from '../state/toast'
+import * as visibility from '../state/visibility'
+import { redraw as redrawWorkdir, staged as stagedWorkdir } from '../state/workdir'
 import { onReset as onWsReset } from '../state/ws'
 import { installConnectionUI, onReconnect, surface } from './connection'
 import { showUpNote } from './updates'
@@ -143,8 +159,9 @@ export function installSources(): void {
   sources.banner = bannerSource
   sources.settings = settingsSource
   sources.tier = tierSource
+  sources.effort = effortSource
   sources.model = modelSource
-  composer.beforeSend = openModelsForMissingProvider
+  composer.beforeSend = blockSendForModel
 
   sources.capabilities = capabilitiesSource
   sources.cron = cronSource
@@ -196,7 +213,9 @@ export function installSources(): void {
       done: memoryStepDone,
     },
   })
+  sources.export = exportSource
   sources.importSync = importSyncSource
+  sources.imported = importedSource
   /* The rail's import row reads the run the wizard's last step starts. Wired
      here rather than by either domain reading the other: the wizard closes,
      and the row asks the gateway what is running now. Watching the open flag's
@@ -210,6 +229,7 @@ export function installSources(): void {
   })
   sources.browser = browserSource
   sources.subagents = agentsSource
+  sources.trajectory = trajectorySource
   /* One source either way: `tasks.list` is a real gateway method now, so the
      offline page reads it through the fixture transport the same way every
      other domain does, rather than through a stand-in library of its own.
@@ -232,8 +252,20 @@ export function installSources(): void {
       return true
     },
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
+    /* The sidebar's board, and the Task Board page when it is open. */
+    onBoardUpdated: (p) => {
+      onBoardUpdated(p)
+      onBoardEvent()
+    },
   }
   sources.extAgents = extAgentsSource
+  sources.machines = machinesSource
+  sources.knowledge = knowledgeSource
+  /* How a citation in the transcript is followed. Registered by the island
+     that can do it rather than imported by the one that wants it: two domains
+     reaching for each other is what puts every island in every island's
+     closure (scripts/gates/import-direction.test.mjs). */
+  onDocument((at) => void revealDocument(at.baseId, at.documentId, at.chunkIndex))
 
   /* The workspace panel's chrome is still the page's, so the two things its
      source cannot work out for itself are handed over here. */
@@ -241,6 +273,12 @@ export function installSources(): void {
   setShortener((p) => ds('workspace').shortPath(p))
   sources.prose = proseSource
   sources.workspace = workspaceSource
+
+  const attachmentContext = () => {
+    const session = sessionCurrent()
+    const workdir = session ? null : stagedWorkdir()
+    return { session: session || 'tui:', ...(workdir ? { workdir } : {}) }
+  }
 
   /* Files are uploaded into <workspace>/uploads and handed to the agent as
      paths: every file tool is already workspace-scoped, so a path is all it
@@ -256,7 +294,7 @@ export function installSources(): void {
       content_b64: p.content_b64,
       /* Read per call, not captured: a file can be staged in a draft that
          becomes a session between the pick and the upload. */
-      session: sessionCurrent() || '',
+      ...attachmentContext(),
     })
   }
 
@@ -265,7 +303,7 @@ export function installSources(): void {
      on it. */
   composer.templates = {
     list: () => gateway().call('deck.templates.list', { covers: true }),
-    pick: (name) => gateway().call('deck.templates.pick', { name }),
+    pick: (name) => gateway().call('deck.templates.pick', { name, ...attachmentContext() }),
     pages: (name) => gateway().call('deck.templates.pages', { name }),
   }
 }
@@ -301,6 +339,10 @@ export function installPushes(): void {
      answer. */
   registerCredentialCard({ open: openCredential, close: closeCredential })
   extAgentsStore.lendAskRaven(startTaskWith)
+  settingsStore.lendAskInChat(askInChat)
+  lendTaskAnswer(answerInChat)
+  lendTaskFocus(focusChat)
+  lendBeforeSend({ pending: moveOnPending, take: takeMoveOn })
   installPipeline()
 
   gateway().on('system.update_available', onUpdateAvailable)
@@ -319,6 +361,11 @@ export function installPushes(): void {
      the running rows is rendered in the first frame, before any of this, so the
      ask it makes for itself finds no source and is not the one that lands. */
   void refreshTasks()
+  void refreshTaskBoard()
+  /* The rail's task board badge asks on that first frame too, and finds no
+     source the same way; left to its own minute-long poll, the count would not
+     show for a minute after every load. */
+  void refreshBoards()
 }
 
 /* ── the actions: controls whose answer belongs to the session ────────────── */
@@ -326,6 +373,7 @@ export function installPushes(): void {
 /** What has to happen again once a dropped connection is back. */
 async function afterReconnect(): Promise<void> {
   await gateway().call('system.hello', { client_version: '0.1.0', surface: surface() }).catch(() => {})
+  redrawWorkdir()
   await reconnect()
   /* The sheets a question was waiting in are gone with the old socket; the
      questions are not. */
@@ -344,11 +392,28 @@ async function afterReconnect(): Promise<void> {
      ended, without this page hearing; the row reads them again the way the
      boot did. */
   void importSyncStore.refresh()
+  /* The trajectory surface, asked again of the gateway that answered this
+     handshake. A refusal remembered from the gateway before it is forgotten
+     only when the new one announces the surface, so every other memory
+     stands; the store's handshake drops whatever the old one still owes. */
+  if (servesTrajectory()) forgetAbsent('trajectory')
+  trajectoryStore.handshake()
+  await trajectoryStore.refreshState()
+  trajectoryPoll.sync()
 }
 
 /** The composer's two actions, the rail's three writes, and the new-task button. */
 export function installActions(): void {
   onReconnect(() => { void afterReconnect() })
+  /* The trajectory view: its store mirrors the column's empty-state flag and
+     follows the conversation on screen, its two poll chains follow the store,
+     and the tab coming back to the front spends the page's one visibility
+     slot on a fresh beat of both. */
+  trajectoryStore.install()
+  trajectoryDetails.install()
+  trajectoryPoll.install()
+  onSessionChange(() => { trajectoryStore.sessionChanged(sessionCurrent()) })
+  visibility.onVisibleAgain(() => { trajectoryPoll.sync() })
   installComposerActions()
   installSessionActions()
   /* The slash palette's two session verbs, on the rows the dock declares. */
@@ -357,6 +422,9 @@ export function installActions(): void {
      Registered here because state/page.ts does not import features/ -- it
      declares the slot and when it runs (state/page.ts's `show`). */
   page.onShow('markNav', markNew)
+  /* The bars' one verb: a view asks for its bar at the size its content has
+     now, not at whatever size the last scroll left it drawn for. */
+  scrollbars.onShowBar(showScrollbar)
   /* What raises the settings dialog for the two domains that are sections of
      it (schedules, memory). Registered here for the same reason the slot above
      is: state/settings.ts declares it and does not import the island that
@@ -376,7 +444,7 @@ export function installActions(): void {
      own "not loaded yet" effect would otherwise fire under the session being
      left. Ownership changing is what should trigger the re-read, not `loaded`
      happening to be false. */
-  onSessionChange(() => { void refreshTasks() })
+  onSessionChange(() => { void refreshTasks(); void refreshTaskBoard() })
 
   $('#newBtn')!.onclick = () => {
     if (openModelsForMissingProvider()) return

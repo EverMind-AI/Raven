@@ -238,3 +238,19 @@ export function summary(d: DagRun): string {
   if (s.skipped) bits.push(t('gui.dag.skipped', { n: s.skipped }))
   return bits.join(' · ')
 }
+
+/* The agents that tried a node, in order, with an uninterrupted run of the same
+   agent collapsed into a count: `alpha x2 -> beta -> alpha`.
+
+   Only *consecutive* repeats are collapsed. An agent that came back later is a
+   separate attempt, and folding it into its first run would misstate the order
+   the node actually moved in. */
+export function formatAttemptAgents(agents: readonly string[]): string {
+  const runs: { agent: string; count: number }[] = []
+  for (const agent of agents) {
+    const last = runs[runs.length - 1]
+    if (last && last.agent === agent) last.count += 1
+    else runs.push({ agent, count: 1 })
+  }
+  return runs.map(({ agent, count }) => (count > 1 ? `${agent} x${count}` : agent)).join(' -> ')
+}

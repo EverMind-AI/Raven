@@ -38,13 +38,22 @@ export type ConfirmState = {
   /** The yes button's label, null while the served literal stands. */
   readonly label: string | null
   readonly tone: ConfirmTone
+  /** A second way to go ahead, beside yes; null on every question that has one answer. */
+  readonly alt: string | null
 }
 
-const store = makeStore<ConfirmState>({ open: false, title: null, body: '', label: null, tone: 'danger' })
+/** The second answer a question may offer: its button's words, and what choosing it does. */
+export interface ConfirmAlt {
+  readonly label: string
+  readonly fn: () => void
+}
 
-/* The answer, beside the state rather than in it: nothing renders it. Only yes
-   has one -- no caller of this dialog has ever wanted a no branch. */
+const store = makeStore<ConfirmState>({ open: false, title: null, body: '', label: null, tone: 'danger', alt: null })
+
+/* The answers, beside the state rather than in it: nothing renders them. No
+   caller of this dialog has ever wanted a no branch. */
 let onYes: (() => void) | null = null
+let onAlt: (() => void) | null = null
 
 /** What the sheet is asking; `set` is what asks and what answers. */
 export const { get, set, subscribe } = store
@@ -60,9 +69,12 @@ function paint(): void {
    Escape answers no -- Escape reaches the chain, which clicks it. A notice
    hides cancel, so its one button takes the focus instead: every key there
    means the same thing. */
-export function ask(title: string, body: string, label: string, fn: () => void, tone: ConfirmTone = 'danger'): void {
-  set({ open: true, title, body, label, tone })
+export function ask(
+  title: string, body: string, label: string, fn: () => void, tone: ConfirmTone = 'danger', alt?: ConfirmAlt,
+): void {
+  set({ open: true, title, body, label, tone, alt: alt ? alt.label : null })
   onYes = fn
+  onAlt = alt ? alt.fn : null
   paint()
   document.getElementById(tone === 'notice' ? 'cfYes' : 'cfNo')?.focus()
 }
@@ -76,13 +88,25 @@ export function ask(title: string, body: string, label: string, fn: () => void, 
 export function answer(ok: boolean): void {
   const fn = onYes
   onYes = null
+  onAlt = null
   set({ ...get(), open: false })
   paint()
   if (ok) fn?.()
+}
+
+/** The second answer, in the same order as the first: down first, then what it does. */
+export function answerAlt(): void {
+  const fn = onAlt
+  onYes = null
+  onAlt = null
+  set({ ...get(), open: false })
+  paint()
+  fn?.()
 }
 
 /** Test seam only: the question and its answer are the module's. */
 export function _resetForTests(): void {
   store._resetForTests()
   onYes = null
+  onAlt = null
 }

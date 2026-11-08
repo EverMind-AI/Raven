@@ -13,9 +13,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import shlex
 import shutil
-import tempfile
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -26,13 +24,20 @@ from typing import Any, Literal
 import aiohttp
 from loguru import logger
 
-from raven.agent.subagent import github_copilot, kimi_code
+from raven.agent.subagent import github_copilot, kimi_code, mirasim_presets
 from raven.agent.subagent.backends import acp_snapshot_for, build_third_party_backend, lent_key_env
 from raven.agent.subagent.backends.base import optional_keyword
 from raven.agent.subagent.backends.env import login_shell_env
 from raven.agent.subagent.instances import InstanceRegistry
+from raven.agent.subagent.mirasim_presets import (
+    MIRASIM_AGENTS,
+    MIRASIM_EXECUTABLE,
+    MIRASIM_INSTALL_HINT,
+    MIRASIM_SHIM_PRESETS,
+)
 from raven.agent.subagent.node_runtime import NodeTooOld, node_too_old
 from raven.agent.subagent.presets import (
+    SHIM_REQUIRED_EXECUTABLES,
     THIRD_PARTY_SUBAGENT_PRESETS,
     diagnose_hint_for,
     install_hint_for,
@@ -42,8 +47,11 @@ from raven.agent.subagent.presets import (
     sign_in_hint_for,
     third_party_subagent_presets,
     upgrade_hint_for,
+    version_gap_for,
 )
 from raven.agent.subagent.probe_state import LastTest, Remedy
+from raven.utils.commands import command_argv
+from raven.utils.scratch import ScratchDir
 
 ProbeStatus = Literal["ready", "attention", "missing", "unknown"]
 Source = Literal["config", "preset", "vendored"]
@@ -216,8 +224,12 @@ def _said(exc: BaseException) -> tuple[str, str | None]:
     when no agent answered at all (a timeout, a process that never started), and
     the whole text is then all there is to go on.
     """
+    from raven.acp_client.acp_agent import AcpProviderRefusalError
     from raven.acp_client.protocol import reason_of, remote_error_in
 
+    if isinstance(exc, AcpProviderRefusalError):
+        # The run already read the refusal; its words are the agent's answer.
+        return str(exc), exc.said
     shown = str(exc)
     error = remote_error_in(exc)
     if error is None:
@@ -261,13 +273,42 @@ def _refusal_detail(cfg: Any, said: str, answer: str | None = None) -> str:
     return _refusal(cfg, said, answer)[0]
 
 
+_PI_TOO_OLD = re.compile(r"get_available_thinking_levels failed: Unknown command")
+"""pi-acp 0.0.34 asks pi for its model's thinking levels as a session opens, an RPC
+pi answers from 0.81.0; an older pi refuses it by name, and no session opens until
+pi is upgraded (measured 2026-10-23 on pi 0.80.10)."""
+
+
+def _pi_too_old(cfg: Any, said: str, judged: str | None = None) -> tuple[str, Remedy] | None:
+    """pi-acp's refusal over a pi older than it needs, and the fix, or ``None`` for any other text.
+
+    One reading for every surface that shows the refusal: a connect (`_refusal`),
+    the Test button and the roster, the last two over the handshake's record
+    (`_process_refusal`, `_probe_acp`). The floor it names is config's
+    (`raven.config.loader.shim_agent_floor`), the one the pin migration reads.
+    """
+    if getattr(cfg, "preset", None) != "pi" or not _PI_TOO_OLD.search(said if judged is None else judged):
+        return None
+    from raven.config.loader import shim_agent_floor
+
+    floor = shim_agent_floor("pi")
+    first = f"older than {'.'.join(map(str, floor.oldest))}, the first pi" if floor else "older than the first pi"
+    up = upgrade_hint_for(cfg)
+    how = f" with `{up}`" if up else ""
+    return (
+        f"its pi is {first} that answers what its adapter asks as a session opens; "
+        f"upgrade pi{how} and connect again. It said: {said}"
+    )[:_DETAIL_CAP], Remedy("upgrade", up)
+
+
 def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remedy | None]:
     """`_refusal_detail`'s sentence, and the remedy it was written from.
 
     One decision with two renderings: the sentence is the record the log, the
     CLI and the TUI read, and the remedy is the same verdict as data a page can
-    put in its reader's language. ``None`` for a refusal that is not about a
-    credential, whose words are passed through as they came.
+    put in its reader's language. ``None`` for a refusal that is neither about a
+    credential nor an agent's own measured sentence, whose words are passed
+    through as they came.
     """
     from raven.acp_client.capabilities import looks_like_auth
 
@@ -278,6 +319,8 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
     # first so a bad API key is not told to sign in.
     if github_copilot.applies(cfg) and (named := github_copilot.read(judged)) is not None:
         return named[0][:_DETAIL_CAP], named[1]
+    if (named := _pi_too_old(cfg, said, judged)) is not None:
+        return named
     if not looks_like_auth(judged):
         # Read off the agent's answer only: a launch that died says nothing
         # about a provider, and its stderr can name an unreachable host that is
@@ -310,6 +353,19 @@ def _refusal(cfg: Any, said: str, answer: str | None = None) -> tuple[str, Remed
             else "sign in to it and connect again"
         )
     return f"{lead}; {advice}. It said: {said}"[:_DETAIL_CAP], remedy
+
+
+def _on_machine(text: str, machine: str) -> str:
+    """``text`` closed with where any fix is made, kept whole inside the cap however long ``text`` is.
+
+    Except for the one fix made here: the machine's Raven node, which this
+    computer installs (``install-node``), and whose absence ``text`` already
+    answers with that command.
+    """
+    if "install-node" in text:
+        return text[:_DETAIL_CAP]
+    note = f" (on machine {machine!r}: any fix is made there)"
+    return text[: _DETAIL_CAP - len(note)].rstrip() + note
 
 
 def _remedy_for(cfg: Any) -> Remedy:
@@ -384,9 +440,10 @@ def _provider_refusal(cfg: Any, said: str, answer: str) -> tuple[str, Remedy] | 
     return None
 
 
-_EXITED = re.compile(r"connection ended \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
-"""A launch that quit and said why on its way out. One that quit without a word
-is left unnamed: pointing a reader at what it said would point at nothing."""
+_EXITED = re.compile(r"(?:connection ended|npx could not fetch \S+) \(exit -?\d+\); stderr tail:\s*(?!<empty>)\S")
+"""A launch that quit and said why on its way out, or the npx fetch ahead of it. One
+that quit without a word is left unnamed: pointing a reader at what it said would
+point at nothing."""
 
 _NO_ACP_FLAG = re.compile(
     r"(?:unknown|no such|unexpected) (?:argument|option|flag|command)s?:?\s*['\"]?-{0,2}acp\b",
@@ -405,15 +462,38 @@ _EMPTY_TURN = re.compile(r"ended its turn with no content")
 
 
 def _silent_detail(said: str, run: str) -> str:
-    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk."""
-    return (
-        f"{said}: it kept working and said nothing, which is how it waits out a model provider that "
+    """The sentence for an agent that outlasted the wait saying nothing -- and how to make it talk.
+
+    The tail is composed first and ``said`` gets what is left of the cap, so the
+    command a reader has to run is never what the cap cuts off.
+    """
+    tail = (
+        ": it kept working and said nothing, which is how it waits out a model provider that "
         f"keeps refusing it (a spent quota, a rate limit, an unreachable host); run `{run}` in a terminal, "
-        f"which prints the reason within a few minutes"
-    )[:_DETAIL_CAP]
+        "which prints the reason within a few minutes"
+    )
+    return said[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail
 
 
-def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
+def _floor_note(cfg: Any, version: str) -> str:
+    """What this row's agent is too old for, when the build that answered is under a floor.
+
+    Empty when there is no floor for this agent, or when the build is at or above
+    it. What it states is a fact about the build, not the cause of the refusal:
+    only the agent's own provider can say what refused the turn, and the command
+    beside this note runs that turn.
+    """
+    gap = version_gap_for(cfg, version)
+    if gap is None:
+        return ""
+    name = str(getattr(cfg, "name", "") or "this agent")
+    return (
+        f"; {name} is {version}, and {gap.what} ({gap.measured}), so upgrade it (`{gap.upgrade}`) "
+        f"and connect again if that is what refused the turn"
+    )
+
+
+def _process_refusal(cfg: Any, shown: str, version: str = "") -> tuple[str, Remedy | None] | None:
     """A launch or a wait that failed without the agent answering, when there is evidence of which.
 
     An exit carries the agent's own last words on stderr; a flag it does not know
@@ -421,11 +501,23 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
     on a Node.js older than its package declares was run on the wrong one
     (`_stale_node`). A timed-out prompt or an empty turn carries nothing, and is
     named only for an agent measured to go silent that way
-    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why.
+    (`presets.DIAGNOSE_HINTS`), with the command that makes it say why. pi-acp's
+    refusal over a pi too old for it is read here as a connect reads it
+    (`_pi_too_old`), since the Test button reads the handshake's record here.
 
     Runs ``node --version`` for a Node.js agent that quit, so its callers keep it
     off the event loop.
+
+    An npx cache entry left without its package.json comes first: npm says so in
+    a line of its own, every later start of that spec fails the same way, and the
+    one fix is npm's own command for removing the entry
+    (`npx_fetch.incomplete_entry`).
     """
+    from raven.acp_client.capabilities import npx_incomplete_lead
+    from raven.acp_client.npx_fetch import incomplete_entry
+
+    if (entry := incomplete_entry(shown)) is not None:
+        return f"{npx_incomplete_lead(entry)}. It said: {shown}"[:_DETAIL_CAP], Remedy("exited", entry.clear_command)
     if _EXITED.search(shown):
         if _NO_ACP_FLAG.search(shown) or (getattr(cfg, "preset", None) == "grok" and _GROK_NO_AGENT.search(shown)):
             up = upgrade_hint_for(cfg)
@@ -445,16 +537,25 @@ def _process_refusal(cfg: Any, shown: str) -> tuple[str, Remedy | None] | None:
                 f"{stale.found} ({stale.node}); upgrade Node.js{how} and connect again. It said: {shown}"
             )[:_DETAIL_CAP], Remedy("runtime", stale.upgrade, needs=stale.needs, found=stale.found)
         return shown[:_DETAIL_CAP], Remedy("exited")
+    if (named := _pi_too_old(cfg, shown)) is not None:
+        return named
     if _PROMPT_TIMEOUT.search(shown):
         run = diagnose_hint_for(cfg)
         if run:
             return _silent_detail(shown, run), Remedy("silent", run)
     if _EMPTY_TURN.search(shown) and (run := diagnose_hint_for(cfg)):
-        return (
-            f"{shown}: it ended the turn without a reply, which is how it relays a model call its provider "
-            f"refused (a key, a model, a quota), and its stderr warnings are usually unrelated; run `{run}`, "
-            f"which prints the provider's answer"
-        )[:_DETAIL_CAP], Remedy("silent", run)
+        # The credential check, as its own clause: an agent that defers its
+        # credential to the first model call opens a session happily and fails
+        # afterwards, so this is the one class Raven cannot see and the one the
+        # agent's own command settles.
+        hint = sign_in_hint_for(cfg)
+        checked = f"; `{hint.check}` shows whether it is signed in" if hint and hint.check else ""
+        tail = (
+            ": it ended the turn without a reply, which is how it relays a model call its provider "
+            "refused (a key, a model, a quota), and its stderr warnings are usually unrelated"
+            f"{_floor_note(cfg, version)}{checked}; run `{run}`, which prints the provider's answer"
+        )
+        return (shown[: max(_DETAIL_CAP - len(tail), 0)].rstrip() + tail), Remedy("silent", run)
     if getattr(cfg, "preset", None) in {"grok", "github_copilot"} and "initialize timed out" in shown:
         return (f"its ACP server did not start; connect again. It said: {shown}")[:_DETAIL_CAP], None
     return None
@@ -515,13 +616,22 @@ def _stale_node(cfg: Any) -> NodeTooOld | None:
     if not runs_on_node(cfg):
         return None
     try:
-        argv = shlex.split((getattr(cfg, "command", None) or "").strip())
+        argv = command_argv((getattr(cfg, "command", None) or "").strip())
     except ValueError:
         return None
     if not argv:
         return None
     path = (getattr(cfg, "env", None) or {}).get("PATH") or _login_path()
     return node_too_old(argv[0], path)
+
+
+def _mirasim_env(cfg: Any) -> dict[str, str]:
+    """The environment a Mirasim row's adapter would find its host in: the login shell's, the row's own over it.
+
+    The spawn path's order (``{**login_shell_env(), **cfg.env}``), so the host the
+    probe looks for is the one the adapter would reach.
+    """
+    return {**login_shell_env(), **(getattr(cfg, "env", None) or {})}
 
 
 def _missing_detail(exe: str, hint: str | None) -> str:
@@ -537,7 +647,7 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = shlex.split(command)
+        argv = command_argv(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
@@ -545,6 +655,9 @@ def _probe_cli(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     exe = argv[0]
     if "{" in exe:
         return done("unknown", f"the command's first token is a placeholder ({exe})", exe)
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # A `which` here would answer for this computer, and the command runs there.
+        return _probe_remote(cfg, machine_id, done)
     # CliAgentBackend._exec builds the child's env as {**login_shell_env(), **self.env}
     # (cli_agent.py:139-140), so a configured PATH overrides the login shell's for a
     # real spawn; resolving against the login PATH alone here would report an agent
@@ -583,11 +696,13 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
     if not command:
         return done("unknown", "command is empty")
     try:
-        argv = shlex.split(command)
+        argv = command_argv(command)
     except ValueError as exc:
         return done("unknown", f"command cannot be parsed: {exc}")
     if not argv:
         return done("unknown", "command is empty")
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        return _probe_remote(cfg, machine_id, done)
     exe = argv[0]
     cfg_path = (getattr(cfg, "env", None) or {}).get("PATH")
     resolved = shutil.which(exe, path=cfg_path or path)
@@ -601,6 +716,32 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
                 off,
             )
         return replace(done("missing", _missing_exe_detail(cfg, exe), exe), absent=exe)
+    if getattr(cfg, "preset", None) in MIRASIM_SHIM_PRESETS:
+        # The adapter runs no executable of Mirasim's; it reaches the host. So the
+        # row is read by whether a host is there to reach, then by whether
+        # Mirasim is installed at all -- told apart, because the reader's next
+        # move differs: start a host -- open the app, start `mirasim serve`, or
+        # let the app on another computer reach this one again -- or install it.
+        # The not-running sentence names each way a host comes to be here, as
+        # the adapter's own refusal does.
+        state, where = mirasim_presets.presence(_mirasim_env(cfg), path=cfg_path or path)
+        if state == "absent":
+            return replace(
+                done(
+                    "missing",
+                    f"Mirasim is not installed on this computer; install {MIRASIM_INSTALL_HINT} and open it, "
+                    "or let the Mirasim app on another computer reach this one over ssh",
+                    MIRASIM_EXECUTABLE,
+                ),
+                absent=MIRASIM_EXECUTABLE,
+            )
+        if state == "installed":
+            return done(
+                "attention",
+                f"Mirasim is installed ({where}) but no host of it is running: open the Mirasim app or start "
+                "`mirasim serve`, or let the Mirasim app on another computer reach this one again, then check again",
+                where,
+            )
     requirement = shim_requirement_for(cfg)
     if requirement is not None:
         agent_exe, install = requirement
@@ -635,7 +776,18 @@ def _probe_acp(cfg: Any, *, source: Source, path: str | None) -> ProbeResult:
             f"installed at {resolved}, but its model menu has not been measured yet -- run a test",
             resolved,
         )
-    return done(snapshot.status, snapshot.detail, resolved)
+    if not getattr(snapshot, "effort_measured", True):
+        # A record minted from a live session has its menus but not the effort
+        # ladder, which belongs to the row's model; the boot backfill completes
+        # it, and until then the row says what is missing.
+        return done(
+            "attention",
+            f"installed at {resolved}, but its reasoning-effort menu has not been measured yet -- run a test",
+            resolved,
+        )
+    # The record of a refusal reads as Test and a connect read it.
+    named = _pi_too_old(cfg, snapshot.detail)
+    return done(snapshot.status, named[0] if named else snapshot.detail, resolved)
 
 
 def _model_ids(payload: Any) -> list[str] | None:
@@ -664,6 +816,10 @@ async def _probe_openai(cfg: Any, *, source: Source) -> ProbeResult:
         # endpoint (a local vLLM) is legitimate, and short-circuiting would
         # report a working agent as broken.
         return done("attention", "api key not set")
+    if machine_id := (getattr(cfg, "machine", None) or "").strip():
+        # The endpoint answers on the machine's network, through a tunnel a
+        # test opens; a request from here would ask the wrong network.
+        return _probe_remote(cfg, machine_id, lambda status, detail, target="": done(status, detail))
     url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {cfg.api_key}"} if has_key else {}
     try:
@@ -778,6 +934,7 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         return int((time.monotonic() - started) * 1000)
 
     kind = getattr(cfg, "kind", None)
+    on_machine = bool((getattr(cfg, "machine", None) or "").strip())
     if kind == "builtin":
         # Nothing to verify. A built-in agent is this process: there is no command
         # to launch, no endpoint to authenticate against, and no transcript parser
@@ -810,22 +967,29 @@ async def run_test(cfg: Any, *, source: Source) -> TestResult:
         if probe.status == "missing":
             return TestResult(cfg.name, source, "openai", False, probe.detail, None, elapsed())
         answered = await ping_agent(cfg)
-        detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
+        # On a machine the free probe said only where the endpoint is and to
+        # run this; the ping's own words are the whole verdict there.
+        if on_machine:
+            detail = answered.detail
+        else:
+            detail = probe.detail if answered.ok else f"{answered.detail}; {probe.detail}"
         return TestResult(cfg.name, source, "openai", answered.ok, detail, None, elapsed(), answered.remedy)
-    if probe.status != "ready":
+    # The free probe cannot say "ready" for a command on another machine, and
+    # this run through the machine's node is what can.
+    if probe.status != "ready" and not on_machine:
         return TestResult(cfg.name, source, "cli", False, probe.detail, None, elapsed())
 
     try:
-        with tempfile.TemporaryDirectory(prefix="raven_subagent_test_") as tmp:
+        async with ScratchDir("raven_subagent_test_") as tmp:
             backend = build_third_party_backend(
                 cfg,
                 # A stateful create commits a handle binding; a test must not leave
                 # that in the file the running gateway reads.
-                registry=InstanceRegistry(path=Path(tmp) / "probe_instances.json"),
+                registry=InstanceRegistry(path=tmp / "probe_instances.json"),
                 timeout=min(getattr(cfg, "timeout", None) or TEST_TIMEOUT_SECONDS, TEST_TIMEOUT_SECONDS),
             )
             reply = await backend.run(
-                PROBE_PROMPT, task_id=f"test-{uuid.uuid4().hex[:8]}", workspace=Path(tmp), executor=None
+                PROBE_PROMPT, task_id=f"test-{uuid.uuid4().hex[:8]}", workspace=tmp, executor=None
             )
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         # Covers an unwritable TMPDIR or an unrecognised kind too, neither reachable
@@ -844,13 +1008,14 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
     The answer is capped at `_ENABLE_PING_TIMEOUT_SECONDS`, the number a
     person waiting on a switch can stand. The handshake is not: an acp row
     starts within its own ``readyTimeoutMs``, the window every dispatch of it
-    gets (`AcpAgentBackend`), and for an ``npx`` command that window is where
-    the first download happens. Capping it too turned two things into "it did
-    not answer within 60s" -- a first download on a slow line (a cold fetch of
-    the Claude Code adapter is about 260 MB unpacked; 20s on a good line,
-    measured 2026-09-23), and npm's own "cannot reach the registry", which it
-    reports only after about 70s of retries (measured the same day), so the
-    reader never saw it.
+    gets (`AcpAgentBackend`). The first download of an ``npx`` row is in
+    neither: `ping_agent` has npx fetch the package before they start
+    (`npx_fetch`), because a cold fetch of the Claude Code adapter is 288 MB
+    (measured 2026-10-23), and a bound that ran out on one ended npx
+    half-installed. An ``npx`` command the fetch cannot repeat
+    (`npx_fetch.fetchable_package`) still downloads inside this window, and so
+    does a row on a registered machine, whose Raven node starts it with no fetch
+    ahead.
 
     The wait is the two added together, which keeps what the cap once kept:
     neither inner bound is ever cancelled from outside before the backend can
@@ -863,6 +1028,31 @@ def _ping_bounds(cfg: Any) -> tuple[int, int, float]:
         return _ENABLE_PING_TIMEOUT_SECONDS * 1000, answer, float(answer)
     ready_ms = getattr(cfg, "ready_timeout_ms", None) or _ENABLE_PING_TIMEOUT_SECONDS * 1000
     return ready_ms, answer, ready_ms / 1000 + answer
+
+
+def remote_check_handle() -> str:
+    """The handle every check of an agent on a registered machine runs under."""
+    from raven.acp_client import remote
+
+    return remote.CHECK_HANDLE
+
+
+def _version_in_chain(exc: BaseException) -> str:
+    """The handshake version on ``exc`` or the first of its causes that carries one.
+
+    A wrapper states its own reason and re-raises the failure under it
+    (``McpDispatchError`` for a withheld MCP grant), so the version sits one
+    level down and a top-level read finds nothing.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        version = str(getattr(current, "agent_version", "") or "")
+        if version:
+            return version
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return ""
 
 
 def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
@@ -881,7 +1071,10 @@ def _ping_refusal(cfg: Any, exc: BaseException) -> tuple[str, Remedy | None]:
         text, remedy = _refusal(cfg, *_said(exc))
         if remedy is not None:
             return text, remedy
-        return _process_refusal(cfg, str(exc)) or (text, None)
+        # The version the agent answered the handshake with, when the failure
+        # carried one: it is the build that was asked, and a floor is about a
+        # build.
+        return _process_refusal(cfg, str(exc), _version_in_chain(exc)) or (text, None)
     shipped = _shipped_command(cfg)
     run = f"`{shipped}`" if shipped else "this agent's launch command"
     advice = f"connect again, or run {run} once in a terminal to fetch it with no time limit"
@@ -914,6 +1107,51 @@ class PingResult:
     remedy: Remedy | None = None
 
 
+def _probe_remote(cfg: Any, machine_id: str, done: Any) -> ProbeResult:
+    """The free check for an agent on a registered machine: still registered, and verified?
+
+    No ssh: this runs on every listing, and one machine slow to answer would hold
+    the whole roster behind it. ``which`` here would answer for this computer,
+    which is not where the agent runs, and a request from here would ask the
+    wrong network for an endpoint behind the machine. What can be said for free
+    is whether the registry still names a usable machine, the link's state, and
+    what the last test recorded: for an acp row, its handshake, kept as a
+    capability snapshot; a cli or openai row records nothing for free, so its
+    verdict is the test's alone, kept beside the row (``last_test_*``), and the
+    probe says to run one.
+    """
+    from raven.acp_client import remote
+    from raven.ops import remote_path
+
+    try:
+        target = remote.machine(machine_id)
+    except remote.RemoteMachineError as exc:
+        return done("attention", str(exc), machine_id)
+    where = f"runs on machine {target.label}"
+    # The link's state is known here without a round trip: connected and
+    # how many agents it carries, idle, or the sentence of its last failure.
+    if (link := remote_path.nodes()) is not None and (said := link.status(machine_id).said()):
+        where += f" ({said})"
+    if getattr(cfg, "kind", None) != "acp":
+        return done(
+            "attention", f"{where}; nothing here can check it without reaching the machine -- run a test", machine_id
+        )
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None:
+        return done("attention", f"{where}; its ACP capabilities have not been recorded yet -- run a test", machine_id)
+    if snapshot.stale:
+        return done(
+            "attention", f"{where}, but its launch config changed since the last test -- run a test", machine_id
+        )
+    if not getattr(snapshot, "model_menu_measured", True):
+        return done("attention", f"{where}, but its model menu has not been measured yet -- run a test", machine_id)
+    if not getattr(snapshot, "effort_measured", True):
+        return done(
+            "attention", f"{where}, but its reasoning-effort menu has not been measured yet -- run a test", machine_id
+        )
+    return done(snapshot.status, snapshot.detail, machine_id)
+
+
 async def ping_agent(cfg: Any) -> PingResult:
     """Send one prompt and report whether the agent answered. Never raises.
 
@@ -942,41 +1180,60 @@ async def ping_agent(cfg: Any) -> PingResult:
     """
     # Function-level like the rest of this module's acp imports: the client family
     # is future shelf cargo and must not be named at import time.
+    from raven.acp_client import npx_fetch
     from raven.acp_client import pool as acp_pool
 
     ready_ms, answer_s, wait_s = _ping_bounds(cfg)
+    machine = (getattr(cfg, "machine", None) or "").strip()
     pool = acp_pool.AcpConnectionPool()
+    scratch: ScratchDir | None = None
     reply: str | None = None
     failure: Exception | None = None
     try:
-        with tempfile.TemporaryDirectory(prefix="raven_subagent_ping_") as tmp:
-            backend = build_third_party_backend(
-                cfg,
-                # A stateful create commits a handle binding; a ping must not leave
-                # that in the file the running gateway reads.
-                registry=InstanceRegistry(path=Path(tmp) / "ping_instances.json"),
-                timeout=answer_s,
-                ready_timeout_ms=ready_ms,
-                pool=pool,
+        scratch = ScratchDir("raven_subagent_ping_")
+        backend = build_third_party_backend(
+            cfg,
+            # A stateful create commits a handle binding; a ping must not leave
+            # that in the file the running gateway reads.
+            registry=InstanceRegistry(path=scratch.path / "ping_instances.json"),
+            timeout=answer_s,
+            ready_timeout_ms=ready_ms,
+            pool=pool,
+        )
+        # The row's own model, the way every dispatch of it runs: without
+        # it the ping asked the agent's default, so a row pinned to another
+        # model -- the fix for a default its provider refuses -- was judged
+        # by the model it was pinned away from.
+        pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
+        # On a registered machine the session directory is named by the
+        # handle; one shared by every check leaves one directory there
+        # rather than one per press.
+        checked = {"instance": remote_check_handle()} if machine else {}
+        if not machine and getattr(cfg, "kind", None) == "acp":
+            # Ahead of the bounds, not inside them: a first download is npx's
+            # work, not the handshake's, and one a bound ran out on was ended
+            # half-installed (`npx_fetch`). The launch below then finds it done.
+            await npx_fetch.ensure_fetched(
+                getattr(cfg, "name", "") or "",
+                getattr(cfg, "command", "") or "",
+                env=getattr(cfg, "env", None),
+                cwd=getattr(cfg, "cwd", None) or str(scratch.path),
             )
-            # The row's own model, the way every dispatch of it runs: without
-            # it the ping asked the agent's default, so a row pinned to another
-            # model -- the fix for a default its provider refuses -- was judged
-            # by the model it was pinned away from.
-            pinned = optional_keyword(backend, "session_model", getattr(cfg, "model", None) or None)
-            reply = await asyncio.wait_for(
-                backend.run(
-                    PROBE_PROMPT,
-                    task_id=f"ping-{uuid.uuid4().hex[:8]}",
-                    workspace=Path(tmp),
-                    executor=None,
-                    **pinned,
-                ),
-                timeout=wait_s,
-            )
+        reply = await asyncio.wait_for(
+            backend.run(
+                PROBE_PROMPT,
+                task_id=f"ping-{uuid.uuid4().hex[:8]}",
+                workspace=scratch.path,
+                executor=None,
+                **pinned,
+                **checked,
+            ),
+            timeout=wait_s,
+        )
     except asyncio.TimeoutError:
         said = f"it did not answer within {wait_s:.0f}s"
-        run = diagnose_hint_for(cfg)
+        # A diagnosis names a command to run here, and the agent is not here.
+        run = None if machine else diagnose_hint_for(cfg)
         return PingResult(False, _silent_detail(said, run), Remedy("silent", run)) if run else PingResult(False, said)
     except Exception as exc:  # noqa: BLE001 - every failure is the answer, not a crash
         failure = exc
@@ -985,6 +1242,10 @@ async def ping_agent(cfg: Any) -> PingResult:
         # pool left open holds the child process it launched for the rest of the
         # gateway's life -- one per press.
         await pool.close_all()
+        # Only now that the pool has ended the agent: its processes ran in this
+        # directory, and Windows will not remove one a live process works in.
+        if scratch is not None:
+            await scratch.remove()
 
     if failure is None and (reply or "").strip():
         # Copilot reports a refused model call as the assistant message of a
@@ -992,6 +1253,23 @@ async def ping_agent(cfg: Any) -> PingResult:
         if github_copilot.applies(cfg) and (named := github_copilot.read(reply)) is not None:
             return PingResult(False, named[0][:_DETAIL_CAP], named[1])
         return PingResult(True, "it ran and replied")
+    if machine:
+        # The local follow-ups below -- asking the agent again in print mode,
+        # reading this computer's node, a fix command offered to run -- all act
+        # on this computer, and this agent is on another one.
+        if failure is None:
+            return PingResult(False, "it started and then answered nothing")
+        from raven.acp_client.capabilities import npx_fetch_failure, npx_fetch_lead
+
+        shown, answer = _said(failure)
+        # npm's report reaches this side inside the node's own sentence
+        # (`stderr tail: ...`) rather than in an `stderr` field, so that
+        # sentence is the evidence read.
+        unfetched = npx_fetch_failure((getattr(cfg, "command", None) or "").strip(), failure, shown)
+        if unfetched is not None:
+            return PingResult(False, _on_machine(f"{npx_fetch_lead(unfetched)}. It said: {shown}", machine))
+        text, _fix = _refusal(cfg, shown, answer)
+        return PingResult(False, _on_machine(text, machine))
     # An agent whose ACP answer leaves the reason out is asked for it its own way,
     # once the pool is closed, so the process asked is not racing the one pinged.
     if (explained := await kimi_code.explain(cfg, failure, prompt=PROBE_PROMPT)) is not None:
@@ -1042,6 +1320,14 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
     # minute, while the menu and the statefulness it holds are launch facts.
     snapshot = await record_capabilities(cfg)
     reply = ", ".join(snapshot.available_models[:5]) or None
+    if not snapshot.usable and (machine := (getattr(cfg, "machine", None) or "").strip()):
+        # The follow-ups below -- asking the agent again in print mode, a fix
+        # command resolved on this computer's PATH, a crash read off this
+        # computer's node -- act here, and the agent is there. Recorded with no
+        # remedy: the one that applies is made on the machine, and a sign-in
+        # command the page offered to copy would fix this computer.
+        detail = _on_machine(snapshot.detail, machine) if snapshot.needs_auth else snapshot.detail
+        return TestResult(cfg.name, source, "acp", False, detail[:_DETAIL_CAP], reply, elapsed(), None)
     if not snapshot.usable:
         # The handshake already classified the refusal (`needs_auth`, from the
         # agent's own answer), so the remedy is read off that verdict rather than
@@ -1062,7 +1348,10 @@ async def _test_acp(cfg: Any, *, source: Source, elapsed: Any) -> TestResult:
         elif snapshot.unfetched:
             detail, remedy = snapshot.detail, Remedy("download", _shipped_command(cfg))
         else:
-            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail)
+            # The snapshot's version is the one this handshake measured, so it
+            # is the build that was asked -- the same fact the connect reads off
+            # the failure it raises.
+            read = await asyncio.to_thread(_process_refusal, cfg, snapshot.detail, snapshot.agent_version)
             detail, remedy = read or (snapshot.detail, None)
         return TestResult(cfg.name, source, "acp", False, detail, reply, elapsed(), remedy)
     answered = await ping_agent(cfg)
@@ -1087,13 +1376,14 @@ def _launch_kw(cfg: Any) -> dict[str, Any]:
 async def record_capabilities(cfg: Any) -> Any:
     """Measure an acp entry's capabilities live and write them down; the snapshot.
 
-    The one writer the manual test and the connect share. A connect proves the
-    agent answers (``ping_agent``) but records nothing, so until now a row
-    connected from the page stayed "capabilities not recorded -- run a test",
-    stateless and menuless, until someone pressed Test or the gateway restarted
-    into the boot backfill: no ``instance`` for it, no model pill, an attention
-    dot on an agent that had just replied. The handshake this records costs no
-    tokens, so the connect can afford it.
+    The one writer the manual test, the connect and the model-menu refresh
+    (``subagents.refresh_models``) share. A connect proves the agent answers
+    (``ping_agent``) but records nothing, so until now a row connected from the
+    page stayed "capabilities not recorded -- run a test", stateless and
+    menuless, until someone pressed Test or the gateway restarted into the boot
+    backfill: no ``instance`` for it, no model pill, an attention dot on an agent
+    that had just replied. The handshake this records costs no tokens, so the
+    connect and the menu read can afford it.
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
@@ -1176,21 +1466,28 @@ def _note_menu_re_measured(snapshot: Any, name: str) -> None:
 def capabilities_wanted(cfg: Any) -> bool:
     """Does this acp entry lack a fresh, complete capability record?
 
-    The same four cases the boot backfill re-measures: no snapshot, one whose
-    launch config has changed, one written before the model menu was recorded,
-    or one of raven's own whose menu came back empty -- that last one bounded as
-    ``_own_row_missing_its_menu`` bounds it. A row with a complete record keeps
-    it -- a connect must not spend a handshake re-measuring what is already
-    known.
+    Five cases: no snapshot, one whose launch config has changed, one written
+    before the model menu was recorded, one minted from a live session and left
+    with its effort menu unmeasured, or one of raven's own whose menu came back
+    empty -- that last one bounded as ``_own_row_missing_its_menu`` bounds it.
+    A recorded failure, a credential refusal included, is not one of them; the
+    boot backfill re-measures those as well as these five. A row with a complete
+    record keeps it -- a connect must not spend a handshake re-measuring what is
+    already known.
     """
     snapshot = acp_snapshot_for(cfg)
-    if snapshot is None or snapshot.stale or not getattr(snapshot, "model_menu_measured", True):
+    if (
+        snapshot is None
+        or snapshot.stale
+        or not getattr(snapshot, "model_menu_measured", True)
+        or not getattr(snapshot, "effort_measured", True)
+    ):
         return True
     return _own_row_missing_its_menu(snapshot, getattr(cfg, "name", "") or "")
 
 
 def _test_record(snapshot: Any, previous: Any) -> Any:
-    """What a manual test writes down: its verdict always, its capabilities only
+    """What a new measurement writes down: its verdict always, its capabilities only
     when it reached them.
 
     A verify that fails before ``session/new`` -- a cold shim start, a machine
@@ -1206,7 +1503,23 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
     after a config edit must not erase what it was trusting -- or ``None``,
     with nothing to keep. The record takes this test's fingerprint: it is a
     measurement of the config as it stands now, whatever it kept.
+
+    A usable result keeps the previous menu too when it could not read its own
+    (``model_menu_measured`` false): an agent that answered while its catalog
+    read failed -- a Mirasim host that did not answer it -- has measured nothing about its models.
     """
+    if previous is not None and snapshot.usable and not snapshot.model_menu_measured:
+        if previous.model_menu_measured:
+            return replace(
+                snapshot,
+                available_models=previous.available_models,
+                model_choices=previous.model_choices,
+                effort_choices=previous.effort_choices,
+                effort_option=previous.effort_option,
+                available_modes=previous.available_modes,
+                model_menu_measured=True,
+            )
+        return snapshot
     if snapshot.usable or previous is None:
         return snapshot
     return replace(
@@ -1215,9 +1528,21 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
         stale=False,
         status=snapshot.status,
         detail=snapshot.detail,
+        needs_auth=snapshot.needs_auth,
+        unfetched=snapshot.unfetched,
         measured_at_ms=snapshot.measured_at_ms,
         elapsed_ms=snapshot.elapsed_ms,
     )
+
+
+def _measured_at(snapshot: Any) -> int | None:
+    """When the record's verdict was measured; ``None`` for no record.
+
+    Every measurement stamps its own time (``_test_record`` carries it over), and
+    a menu relearn keeps the stamp it found, so a changed stamp means a newer
+    verdict and nothing else does.
+    """
+    return None if snapshot is None else getattr(snapshot, "measured_at_ms", 0)
 
 
 _SCHEDULED = False
@@ -1253,9 +1578,13 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
     Three filters, each for its own reason. A configured name is the registry
     half's already. A non-acp preset has no handshake to record -- an openai
     row's credential is settled by the free ``/models`` probe and a cli row is
-    never handshaken at all. And a command that does not resolve is one whose
-    verdict the free probe already reached for nothing: launching it to learn
-    the same thing is the cost this filter exists to refuse.
+    never handshaken at all. And a command that does not resolve -- or a shim
+    whose agent does not (``SHIM_REQUIRED_EXECUTABLES``), or a Mirasim row with
+    no host to reach (``mirasim_presets.presence``), which ``_probe_acp`` reads
+    as missing or as waiting on the app just the same -- is one whose verdict
+    the free probe already reached for nothing: launching it to learn the same
+    thing is the cost this filter exists to refuse. The shim half matters most
+    where the command is Raven's own interpreter, which resolves on every machine.
 
     ``path`` is the login shell's, captured once by the caller -- the same PATH
     ``_probe_acp`` resolves against. Reading this process's instead would answer
@@ -1270,13 +1599,26 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
         if preset.get("kind") == "acp" and preset.get("name") not in configured
     ]
     here = []
+    mirasim: tuple[str, str] | None = None
     for preset in wanted:
         try:
-            argv = shlex.split((preset.get("command") or "").strip())
+            argv = command_argv((preset.get("command") or "").strip())
         except ValueError:
             continue
-        if argv and shutil.which(argv[0], path=path or None) is not None:
-            here.append(preset)
+        if not argv or shutil.which(argv[0], path=path or None) is None:
+            continue
+        key = str(preset.get("preset") or "")
+        requirement = SHIM_REQUIRED_EXECUTABLES.get(key)
+        if requirement is not None and shutil.which(requirement[0], path=path or None) is None:
+            continue
+        if key in MIRASIM_SHIM_PRESETS:
+            # Asked once for all of Mirasim's rows: what their handshake needs is a
+            # host to reach, and `_probe_acp` reads a row without one as not here.
+            if mirasim is None:
+                mirasim = mirasim_presets.presence(login_shell_env(), path=path or None)
+            if mirasim[0] != "running":
+                continue
+        here.append(preset)
     if not here:
         return []
     try:
@@ -1290,7 +1632,7 @@ def _unconfigured_acp_preset_rows(configured: set[str], *, path: str | None) -> 
 
 
 def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
-    """Verify every enabled acp agent that has no fresh capability snapshot.
+    """Verify every enabled acp agent whose capability snapshot is missing, stale or a failure.
 
     Before this, the snapshot -- the record an acp row's ``stateful`` and
     ``can_resume`` are read from -- was written only by the UI Test button and a
@@ -1298,8 +1640,9 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
     the ``/new-instance`` picker hid those agents until someone opened a page
     and clicked. Backgrounded so a slow adapter (a first ``npx`` fetch) cannot
     delay startup; fire-and-forget, because a failure leaves the row stateless
-    with the snapshot's own detail rather than breaking the boot. Verification
-    costs no model tokens (handshake plus a throwaway ``session/new``).
+    with the snapshot's own detail rather than breaking the boot, and is
+    measured again at the next start. Verification costs no model tokens
+    (handshake plus a throwaway ``session/new``).
     """
     global _SCHEDULED
     if _SCHEDULED:
@@ -1326,22 +1669,30 @@ def schedule_snapshot_verification(manager: Any) -> asyncio.Task | None:
 
 
 async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured: set[str] | None = None) -> None:
-    """One verification per missing or stale row, sequentially, never raising.
+    """One verification per row whose snapshot is missing, stale or a failure, sequentially, never raising.
 
     Sequential, not concurrent: every acp verify spawns a child process, and a
     machine with a slow adapter among several would otherwise launch them all at
     once at boot. After the run the table is refreshed so the rows rebuilt at
     startup pick up the snapshots this task just recorded -- the alternative is
     a roster that reports an agent stateful and dispatches it stateless until
-    the next restart or hot-apply.
+    the next restart or hot-apply. The newest measurement wins: a row measured
+    while its handshake was in flight -- a manual Test, a connect -- keeps that
+    verdict, whatever the handshake returned.
     """
     from raven.acp_client.capabilities import SnapshotStore, verify_agent
 
     # After the configured rows, never before: those are the ones a run can
     # dispatch to this minute, and a slow preset adapter ahead of them would hold
     # the roster's own capabilities back behind an agent nobody has asked for yet.
+    path: str | None = None
     if configured is not None:
-        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=await _captured_login_path())]
+        path = await _captured_login_path()
+        rows = [*rows, *_unconfigured_acp_preset_rows(configured, path=path)]
+    # Asked once, and only once a Mirasim preset is about to be handshaken: the
+    # question launches the adapter, which waits for the host's agent list to settle.
+    mirasim_has: frozenset[str] | None = None
+    mirasim_asked = False
     store = SnapshotStore()
     # Optional: a caller's own stand-in (tests substitute a bare `record`-only
     # object) may not carry it, and its absence must not itself force a
@@ -1352,12 +1703,17 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
         cfg = getattr(row, "config", None)
         if cfg is None:
             continue
+        if (getattr(cfg, "machine", None) or "").strip():
+            # A verify of a row on a registered machine logs in there and
+            # starts the agent, and an unattended boot does neither: the
+            # listing says "run a test", and that press is the owner's own.
+            continue
         try:
             snapshot = acp_snapshot_for(cfg)
             name = getattr(row, "name", "") or ""
             outdated_menu = snapshot is not None and has_model_menu is not None and not has_model_menu(name)
             # Three reasons to re-measure besides staleness: a record written
-            # from before the model menu (above), a credential refusal, and one
+            # from before the model menu (above), a failed verification, and one
             # of raven's own that came back with an empty menu. Staleness asks
             # whether the launch config moved, and neither signing in nor
             # configuring a provider moves it -- so a recorded refusal never goes
@@ -1365,16 +1721,46 @@ async def _verify_missing_snapshots(manager: Any, rows: list[Any], *, configured
             # across every restart after the sign-in that cured it.
             refused = getattr(snapshot, "needs_auth", False)
             menuless_own = _own_row_missing_its_menu(snapshot, name)
-            if snapshot is not None and not snapshot.stale and not outdated_menu and not refused and not menuless_own:
+            failed_before = snapshot is not None and snapshot.status != "ready"
+            if (
+                snapshot is not None
+                and not snapshot.stale
+                and not outdated_menu
+                and not refused
+                and not menuless_own
+                and not failed_before
+                and getattr(snapshot, "effort_measured", True)
+            ):
                 continue
+            agent = MIRASIM_AGENTS.get(getattr(cfg, "preset", None) or "") if isinstance(row, _PresetRow) else None
+            if agent is not None:
+                if not mirasim_asked:
+                    mirasim_asked = True
+                    mirasim_has = await mirasim_presets.installed_agents(path=path)
+                own_host = any(key in (getattr(cfg, "env", None) or {}) for key in mirasim_presets.HOST_ENV_KEYS)
+                if mirasim_has is not None and agent[0] not in mirasim_has and not own_host:
+                    logger.debug("acp agent {!r}: Mirasim lists no {} on its host; not handshaken", name, agent[0])
+                    continue
             result = await verify_agent(cfg, **_launch_kw(cfg))
             _note_menu_re_measured(result, name)
-            # A pass, or a refusal the agent explained. Every other failure stays
-            # unrecorded on purpose: a timeout or a crashed adapter is a fact
-            # about this minute, and a snapshot of one would label a working
-            # agent broken until somebody happened to press Test.
-            if result.status == "ready" or getattr(result, "needs_auth", False):
-                store.record(result)
+            # Read again with nothing awaited between here and the write: the
+            # handshake held the row for up to the ready timeout. A measurement
+            # recorded meanwhile -- a manual Test, a connect -- is newer evidence
+            # than this one and stands. A dispatch relearning the agent's menus
+            # measures nothing and keeps the stamp, so it does not stop this
+            # write, and a failure below is kept over the re-read record, menus
+            # included.
+            current = acp_snapshot_for(cfg)
+            if _measured_at(current) != _measured_at(snapshot):
+                logger.info("acp agent {!r}: auto-verify {} superseded by a newer measurement", name, result.status)
+                continue
+            # Replace an old failure with what this attempt actually measured.
+            # Failed rows are retried next boot, so a timeout is not a permanent
+            # verdict. A formerly working row still keeps its old capabilities.
+            if result.status == "ready" or getattr(result, "needs_auth", False) or failed_before:
+                kept = result.status != "ready" or not getattr(result, "model_menu_measured", True)
+                record = _test_record(result, current) if current is not None and kept else result
+                store.record(record)
                 recorded = True
             logger.info("acp agent {!r}: auto-verify {}", name, result.status)
         except Exception as exc:  # noqa: BLE001 - a failed verify must not sink the rest

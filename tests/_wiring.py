@@ -35,6 +35,7 @@ _TOP_LEVEL = {
     "router",
     "sandbox_config",
     "mcp_servers",
+    "package_mcp_servers",
 }
 
 

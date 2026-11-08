@@ -1,4 +1,4 @@
-import { ArrowDown01Icon, MoreHorizontalIcon, Pin02Icon } from '@hugeicons/core-free-icons'
+import { ArrowDown01Icon, Delete02Icon, MoreHorizontalIcon, PencilEdit01Icon, Pin02Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 import { ArchiveGlyph, Icon } from '../../components/Icon'
@@ -56,6 +56,16 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
   ]
 }
 
+/* An Imported Conversation's menu: it cannot be pinned or archived, and its
+   name is changed here on the row, never in the conversation's header. */
+function importedItems(s: SessRow, startEdit: () => void): Array<MenuItem | '-'> {
+  return [
+    { label: t('gui.sess.rename'), fn: startEdit },
+    '-',
+    { label: t('gui.sess.delete'), bad: true, fn: () => store.remove(s) }
+  ]
+}
+
 const enterOrSpace = (fn: () => void) => (e: KeyboardEvent) => {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
@@ -108,13 +118,18 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
       store.open(s)
     }
   }
-  const beginEdit = (e: MouseEvent): void => {
-    e.preventDefault()
-    e.stopPropagation()
+  const imported = s.from === 'imported'
+  const startEdit = (): void => {
     finishing.current = false
     setDraftTitle(s.title)
     setEditing(true)
   }
+  const beginEdit = (e: MouseEvent): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    startEdit()
+  }
+  const items = (): Array<MenuItem | '-'> => (imported ? importedItems(s, startEdit) : sessItems(s))
   const finishEdit = (commit: boolean): void => {
     if (finishing.current) return
     finishing.current = true
@@ -128,11 +143,12 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
       role="button"
       tabIndex={0}
       aria-current={s.id === cur}
+      title={imported ? `${plainTitle(s.title)}\n${s.sourceName ?? ''}` : undefined}
       onClick={go}
       onDoubleClick={beginEdit}
       onKeyDown={editing ? undefined : enterOrSpace(go)}
       ref={el => {
-        if (el) (el as HTMLElement & { _ctx?: () => Array<MenuItem | '-'> })._ctx = () => sessItems(s)
+        if (el) (el as HTMLElement & { _ctx?: () => Array<MenuItem | '-'> })._ctx = items
       }}
     >
       <div className={s.naming && !editing ? 't skel' : 't'}>
@@ -140,11 +156,13 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
         {/* Keyed apart because all three are spans in one slot, which React
             would otherwise reconcile onto a single node: props get reset, and
             scroll offset is not a prop but state the browser keeps on the
-            element. The editing box is a scroll container on purpose (a long
-            name scrolls inside itself), so focusing the field scrolls it to
-            the caret -- and the finished title, drawn into that same node,
+            element. The editing box is a `.t span`, so it clips and can
+            scroll; while its column could outgrow the row it did, to the
+            caret -- and the finished title, drawn into that same node,
             inherited the offset and rendered outside its own box, which under
-            `text-overflow: ellipsis` paints nothing at all. */}
+            `text-overflow: ellipsis` paints nothing at all. The column now
+            stops at the row and the field scrolls instead, but the box is
+            still a scroller, so the keys stay. */}
         {editing ? (
           /* The box is the name's width, not the rail's: a two-character title in
              a box eight times its length reads as a form field waiting to be
@@ -203,41 +221,58 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
           <i />
         </span>
       ) : null}
-      <div className="quick" onDoubleClick={e => e.stopPropagation()}>
-        <button
-          className="quick-pin"
-          data-active={s.pin || undefined}
-          aria-label={t(s.pin ? 'gui.sess.unpin' : 'gui.sess.pin')}
-          onClick={e => {
-            e.stopPropagation()
-            togglePin(s)
-          }}
-        >
-          <Icon icon={Pin02Icon} />
-        </button>
-        <button
-          aria-label={t('gui.sess.archive')}
-          onClick={e => {
-            e.stopPropagation()
-            archiveSession(s)
-          }}
-        >
-          <ArchiveGlyph />
-        </button>
-        {/* The rest of the row's menu -- rename, delete -- from the same list
-            the context menu reads, dropped under the button that raised it. */}
-        <button
-          aria-label={t('gui.sess.more')}
-          aria-haspopup="menu"
-          onClick={e => {
-            e.stopPropagation()
-            const r = e.currentTarget.getBoundingClientRect()
-            showMenu(r.left, r.bottom + 4, sessItems(s))
-          }}
-        >
-          <Icon icon={MoreHorizontalIcon} />
-        </button>
-      </div>
+      {imported ? (
+        <div className="quick" onDoubleClick={e => e.stopPropagation()}>
+          <button aria-label={t('gui.sess.rename')} onClick={beginEdit}>
+            <Icon icon={PencilEdit01Icon} />
+          </button>
+          <button
+            aria-label={t('gui.sess.delete')}
+            onClick={e => {
+              e.stopPropagation()
+              store.remove(s)
+            }}
+          >
+            <Icon icon={Delete02Icon} />
+          </button>
+        </div>
+      ) : (
+        <div className="quick" onDoubleClick={e => e.stopPropagation()}>
+          <button
+            className="quick-pin"
+            data-active={s.pin || undefined}
+            aria-label={t(s.pin ? 'gui.sess.unpin' : 'gui.sess.pin')}
+            onClick={e => {
+              e.stopPropagation()
+              togglePin(s)
+            }}
+          >
+            <Icon icon={Pin02Icon} />
+          </button>
+          <button
+            aria-label={t('gui.sess.archive')}
+            onClick={e => {
+              e.stopPropagation()
+              archiveSession(s)
+            }}
+          >
+            <ArchiveGlyph />
+          </button>
+          {/* The rest of the row's menu -- rename, delete -- from the same list
+              the context menu reads, dropped under the button that raised it. */}
+          <button
+            aria-label={t('gui.sess.more')}
+            aria-haspopup="menu"
+            onClick={e => {
+              e.stopPropagation()
+              const r = e.currentTarget.getBoundingClientRect()
+              showMenu(r.left, r.bottom + 4, sessItems(s))
+            }}
+          >
+            <Icon icon={MoreHorizontalIcon} />
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -381,7 +416,7 @@ export function RailApp(): JSX.Element | null {
   // whether a conversation was pinned to a folder: the folder is said beside
   // the conversation's title once it is open, and two headings over one list
   // of recent work made the reader scan both to find a row.
-  const rest = rows.filter(x => !x.pin && x.from !== 'cron')
+  const rest = rows.filter(x => !x.pin && x.from !== 'cron' && x.from !== 'imported')
   return (
     <>
       <Group label={t('gui.rail.pinned')} items={rows.filter(x => x.pin)} gid="pin" cur={snap.cur} busy={snap.busy} />
@@ -401,6 +436,16 @@ export function RailApp(): JSX.Element | null {
         cap={15}
         gid="recent"
         always
+        cur={snap.cur}
+        busy={snap.busy}
+      />
+      {/* Packages read back in, which nothing here can change: only there
+          while there is one, like the pinned group. */}
+      <Group
+        label={t('gui.rail.imported')}
+        items={rows.filter(x => x.from === 'imported')}
+        cap={15}
+        gid="imported"
         cur={snap.cur}
         busy={snap.busy}
       />

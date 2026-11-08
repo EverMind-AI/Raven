@@ -36,6 +36,42 @@ def test_a_canonical_address_is_not_legacy() -> None:
     assert hosts.as_ip("[::1]") == ipaddress.ip_address("::1")
 
 
+@pytest.mark.parametrize(
+    ("host", "want"),
+    [
+        ("127.0.0.1", True),
+        ("127.0.0.2", True),
+        ("127.255.255.255", True),
+        ("::1", True),
+        ("0:0:0:0:0:0:0:1", True),
+        ("[::1]", True),
+        ("126.255.255.255", False),
+        ("128.0.0.0", False),
+        ("8.8.8.8", False),
+        ("0.0.0.0", False),
+        ("10.0.0.1", False),
+        ("::", False),
+        ("::2", False),
+        ("fe80::1", False),
+        ("::ffff:8.8.8.8", False),
+        ("64:ff9b::7f00:1", False),
+        ("localhost", False),
+        ("localhost.localdomain", False),
+        ("localhost.", False),
+        ("evil.localhost", False),
+        ("127.0.0.1.evil.example", False),
+        ("127.0.0.1.", False),
+        ("127.1", False),
+        ("2130706433", False),
+        ("0x7f000001", False),
+        ("0177.0.0.1", False),
+        ("", False),
+    ],
+)
+def test_only_canonical_loopback_ips_are_loopback(host: str, want: bool) -> None:
+    assert hosts.is_loopback_ip(host) is want
+
+
 def test_fullwidth_stops_map_onto_the_address() -> None:
     assert hosts.mapped_host("169\uff0e254\uff0e169\uff0e254") == "169.254.169.254"
 

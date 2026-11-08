@@ -39,7 +39,10 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from raven.playbook.agent_spec import AgentPlaybookSpec
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,15 @@ class DelegateTable:
 
     workers: Mapping[str, Worker] = field(default_factory=dict)
 
+    harness: "AgentPlaybookSpec | None" = None
+    """The generated Harness this table was rendered from, when it came from one.
+
+    A run may outlive the turn that wrote the table, and a reassignment has to
+    read the authored roles -- briefs, charters, the coordinator -- rather than
+    the rendered charter text each worker carries. Frozen by the producer as a
+    deep copy, so a later turn editing its own spec cannot change this one.
+    """
+
     def get(self, label: str) -> Worker | None:
         return self.workers.get(label)
 
@@ -108,9 +120,20 @@ def current_delegate() -> DelegateTable | None:
     return _TABLE.get()
 
 
+def bind_delegate_for_turn(table: DelegateTable | None) -> None:
+    """Replace the table inside the caller's existing turn scope.
+
+    ``load_playbook`` runs after the outer scope has opened; setting the same
+    ContextVar here makes a loaded durable Harness visible for the remainder of
+    that turn, and the outer scope's token still restores the previous value.
+    """
+    _TABLE.set(table or None)
+
+
 __all__ = [
     "DelegateTable",
     "Worker",
+    "bind_delegate_for_turn",
     "current_delegate",
     "delegate_scope",
     "dispatch_charter",

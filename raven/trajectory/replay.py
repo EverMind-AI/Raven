@@ -50,7 +50,12 @@ content or tool arguments still counts as a real divergence:
   lines (``security.trust.wrap_untrusted``) — fence *bodies* stay untouched;
 - prompt-cache breakpoints, removed from both sides via
   ``providers.prompt_cache.strip`` — cache placement is a transport
-  optimization, not conversation semantics.
+  optimization, not conversation semantics;
+- the turn scratch at the end of the live turn's user message
+  (``context_engine.scratch``) — recalled memory and routed skills, the same
+  environmental material as the system prompt below, only placed in the user
+  slot so the system prompt stays cacheable. It is cut where the assembler
+  marked it, and off the recorded twin of that message only.
 
 System-role message *content* is deliberately not compared: it is assembled
 from the live environment (workspace paths, current time, memory state) that
@@ -108,10 +113,11 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Iterable
 
 from loguru import logger
 
+from raven.agent.subagent.backends.observability import SPAN_NAME as EXTERNAL_RUN_SPAN
 from raven.agent.tools.registry import ToolRegistry
 from raven.providers import prompt_cache
 from raven.providers.base import (
@@ -334,6 +340,40 @@ def _load_artifact(bundle_dir: Path, ref: Any) -> Any:
         return None
 
 
+def _inside_external_runs(spans: Iterable[dict[str, Any]]) -> set[str]:
+    """The ids of every span recorded inside an external agent's run.
+
+    An external agent made its model and tool calls in its own process, and
+    they are written afterwards as steps of its ``subagent.external`` run.
+    Replay answers the tool that launched the agent from the recording, so the
+    agent never runs again and nothing inside it is ever asked for -- fed by
+    order, its steps would stand in front of the loop's own calls. Everything
+    under the run is out, however deep.
+    """
+    parents: dict[str, str] = {}
+    runs: set[str] = set()
+    for span in spans:
+        span_id = span.get("spanId")
+        if not isinstance(span_id, str):
+            continue
+        if span.get("name") == EXTERNAL_RUN_SPAN:
+            runs.add(span_id)
+        parent = span.get("parentSpanId")
+        if isinstance(parent, str) and parent:
+            parents[span_id] = parent
+    inside: set[str] = set()
+    for span_id in parents:
+        seen = {span_id}
+        current = parents.get(span_id)
+        while current is not None and current not in seen:
+            if current in runs or current in inside:
+                inside.add(span_id)
+                break
+            seen.add(current)
+            current = parents.get(current)
+    return inside
+
+
 def load_recording(bundle_dir: Path) -> Recording:
     """Parse a bundle directory into the ordered calls replay feeds from.
 
@@ -343,7 +383,8 @@ def load_recording(bundle_dir: Path) -> Recording:
     turns). Model calls are any span carrying an ``llm.output`` artifact
     reference; tool calls any span carrying a ``tool.input`` reference — by
     artifact key rather than span name, because a skill-tool call is retyped
-    to ``skill.read`` but records the same artifacts.
+    to ``skill.read`` but records the same artifacts. What an external agent
+    did inside its own run is neither (see :func:`_inside_external_runs`).
     """
     bundle_dir = Path(bundle_dir)
     manifest_path = bundle_dir / "manifest.json"
@@ -368,10 +409,13 @@ def load_recording(bundle_dir: Path) -> Recording:
             del deduped[span_id]
         deduped[span_id] = span
 
+    external = _inside_external_runs(deduped.values())
     llm_calls: list[RecordedLLMCall] = []
     tool_calls: list[RecordedToolCall] = []
     turns: list[RecordedTurn] = []
     for span in deduped.values():
+        if span.get("spanId") in external:
+            continue
         attrs = span.get("attributes") or {}
         if attrs.get("llm.output.artifact_path") or span.get("name") == "llm.call":
             llm_calls.append(
@@ -466,6 +510,26 @@ def _canonical_message(msg: Any) -> Any:
     return out
 
 
+def _without_turn_scratch(recorded: Any, live: Any) -> tuple[Any, Any]:
+    """The pair with the turn scratch taken off, when the live one is the envelope.
+
+    Only the live message the assembler marked is cut, by the text the mark
+    records, and only its recorded twin with it: through the trace the recorded
+    one may have lost the mark, so it is cut at its last tag instead. Every
+    other message is compared as it is, so a tag a user pasted is just text.
+    """
+    from raven.context_engine.scratch import TURN_SCRATCH_KEY, strip_turn_scratch, strip_turn_scratch_by_tag
+
+    if not (isinstance(live, dict) and isinstance(recorded, dict) and live.get(TURN_SCRATCH_KEY)):
+        return recorded, live
+    recorded_content = (
+        strip_turn_scratch(recorded)
+        if recorded.get(TURN_SCRATCH_KEY)
+        else strip_turn_scratch_by_tag(recorded.get("content"))
+    )
+    return {**recorded, "content": recorded_content}, {**live, "content": strip_turn_scratch(live)}
+
+
 def _dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
 
@@ -510,7 +574,8 @@ def compare_llm_request(
             len(live_msgs),
         )
     for i, (rec, live) in enumerate(zip(recorded_msgs, live_msgs)):
-        rec_c, live_c = _dump(_canonical_message(rec)), _dump(_canonical_message(live))
+        rec_cut, live_cut = _without_turn_scratch(rec, live)
+        rec_c, live_c = _dump(_canonical_message(rec_cut)), _dump(_canonical_message(live_cut))
         if rec_c != live_c:
             return Mismatch(f"messages[{i}]", _first_diff_excerpt(rec_c, live_c), rec, live)
 
@@ -1046,6 +1111,20 @@ def _pre_attempt_messages(recording: Recording) -> list[dict[str, Any]]:
     return records[:cut] if cut is not None else []
 
 
+def _adopt_recorded_revision(session: Any, session_path: Path) -> None:
+    """Give the replay's session the log revision the recorded one had.
+
+    A ref the recorded requests carry is scoped by that revision; a fresh log id
+    would spell every one of them differently and read as a divergence.
+    """
+    from raven.session.manager import read_session_file
+
+    recorded = read_session_file(session_path, session.key)
+    if recorded is not None:
+        session.log_id, session.log_generation = recorded.log_id, recorded.log_generation
+        session.log_started_at = recorded.log_started_at
+
+
 async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
     """Drive an ``AgentLoop`` through a bundle's recorded turns.
 
@@ -1100,6 +1179,7 @@ async def run_replay(bundle_dir: Path, mode: str = "warn") -> ReplayReport:
             pre_attempt = _pre_attempt_messages(recording)
             if session_key and pre_attempt:
                 session = sessions.get_or_create(session_key)
+                _adopt_recorded_revision(session, recording.bundle_dir / "session.jsonl")
                 for msg in pre_attempt:
                     session.record(dict(msg))
                 sessions.save(session)

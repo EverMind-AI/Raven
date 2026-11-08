@@ -13,7 +13,6 @@ import json
 from pathlib import Path
 
 from mcp import types
-from pydantic import AnyUrl
 
 from raven.contracts.tool import ToolResult
 from raven.mcp.resources import (
@@ -36,15 +35,15 @@ class _Session:
         self._contents = list(contents)
         self._fail = fail
 
-    async def list_resources(self):
+    async def list_resources(self, params=None):
         if self._fail:
             raise self._fail
         return types.ListResourcesResult(resources=self._resources)
 
-    async def list_resource_templates(self):
+    async def list_resource_templates(self, params=None):
         if self._fail:
             raise self._fail
-        return types.ListResourceTemplatesResult(resourceTemplates=self._templates)
+        return types.ListResourceTemplatesResult(resource_templates=self._templates)
 
     async def read_resource(self, uri):
         if self._fail:
@@ -67,7 +66,27 @@ class _Manager:
 
 
 def _res(uri: str, name: str, mime: str = "text/plain") -> types.Resource:
-    return types.Resource(uri=AnyUrl(uri), name=name, mimeType=mime, description=f"about {name}")
+    return types.Resource(uri=uri, name=name, mime_type=mime, description=f"about {name}")
+
+
+class _PagingSession:
+    """Answers each page by the cursor it was asked for; a call past the pages is a walk that lost its stop rule."""
+
+    def __init__(self, pages: dict) -> None:
+        self._pages = pages
+        self.cursors: list[str | None] = []
+
+    async def _page(self, params):
+        cursor = params.cursor if params else None
+        self.cursors.append(cursor)
+        assert len(self.cursors) <= len(self._pages), "walked past the last page"
+        return self._pages[cursor]
+
+    async def list_resources(self, params=None):
+        return await self._page(params)
+
+    async def list_resource_templates(self, params=None):
+        return await self._page(params)
 
 
 class TestListing:
@@ -101,7 +120,7 @@ class TestListing:
         assert "bad" in errors
 
     async def test_templates_are_listed_apart_from_concrete_resources(self):
-        tpl = types.ResourceTemplate(uriTemplate="file:///logs/{date}", name="logs")
+        tpl = types.ResourceTemplate(uri_template="file:///logs/{date}", name="logs")
         mgr = _Manager({"a": _Session(resources=[_res("file:///x", "x")], templates=[tpl])})
         concrete = json.loads(await ListMcpResourcesTool(mgr).execute())
         templates = json.loads(await ListMcpResourceTemplatesTool(mgr).execute())
@@ -111,6 +130,38 @@ class TestListing:
     async def test_an_empty_server_says_so_rather_than_returning_nothing(self):
         mgr = _Manager({"a": _Session()})
         assert "No resources" in await ListMcpResourcesTool(mgr).execute()
+
+    async def test_a_paging_server_hands_over_every_page(self):
+        pages = {
+            None: types.ListResourcesResult(resources=[_res("file:///a", "a")], next_cursor="page-2"),
+            "page-2": types.ListResourcesResult(resources=[_res("file:///b", "b")]),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourcesTool(_Manager({"a": session})).execute())
+        assert [row["uri"] for row in rows] == ["file:///a", "file:///b"]
+        assert session.cursors == [None, "page-2"]
+
+    async def test_a_paging_templates_server_hands_over_every_page(self):
+        logs = types.ResourceTemplate(uri_template="file:///logs/{date}", name="logs")
+        cfg = types.ResourceTemplate(uri_template="file:///cfg/{name}", name="cfg")
+        pages = {
+            None: types.ListResourceTemplatesResult(resource_templates=[logs], next_cursor="page-2"),
+            "page-2": types.ListResourceTemplatesResult(resource_templates=[cfg]),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourceTemplatesTool(_Manager({"a": session})).execute())
+        assert [row["name"] for row in rows] == ["logs", "cfg"]
+        assert session.cursors == [None, "page-2"]
+
+    async def test_a_repeated_cursor_ends_the_walk(self):
+        pages = {
+            None: types.ListResourcesResult(resources=[_res("file:///a", "a")], next_cursor="stuck"),
+            "stuck": types.ListResourcesResult(resources=[_res("file:///b", "b")], next_cursor="stuck"),
+        }
+        session = _PagingSession(pages)
+        rows = json.loads(await ListMcpResourcesTool(_Manager({"a": session})).execute())
+        assert [row["uri"] for row in rows] == ["file:///a", "file:///b"]
+        assert session.cursors == [None, "stuck"]
 
 
 class TestTheExecutionTimeGate:
@@ -143,14 +194,14 @@ class TestTheExecutionTimeGate:
 
 class TestReading:
     async def test_text_comes_back_inline(self):
-        contents = [types.TextResourceContents(uri=AnyUrl("file:///x"), mimeType="text/plain", text="hello")]
+        contents = [types.TextResourceContents(uri="file:///x", mime_type="text/plain", text="hello")]
         mgr = _Manager({"a": _Session(contents=contents)})
         out = await ReadMcpResourceTool(mgr).execute(server="a", uri="file:///x")
         assert out == "hello"
         assert not isinstance(out, ToolResult), "text-only must stay a plain string"
 
     async def test_a_renderable_image_rides_along_as_a_block(self):
-        contents = [types.BlobResourceContents(uri=AnyUrl("file:///p.png"), mimeType="image/png", blob=PNG)]
+        contents = [types.BlobResourceContents(uri="file:///p.png", mime_type="image/png", blob=PNG)]
         mgr = _Manager({"a": _Session(contents=contents)})
         out = await ReadMcpResourceTool(mgr, workspace=None).execute(server="a", uri="file:///p.png")
         assert isinstance(out, ToolResult)
@@ -160,8 +211,8 @@ class TestReading:
         raw = b"\x00\x01\x02not text"
         contents = [
             types.BlobResourceContents(
-                uri=AnyUrl("file:///blob.bin"),
-                mimeType="application/octet-stream",
+                uri="file:///blob.bin",
+                mime_type="application/octet-stream",
                 blob=base64.b64encode(raw).decode(),
             )
         ]
@@ -180,8 +231,8 @@ class TestReading:
         raw = b"x" * (MAX_BLOB_BYTES + 1)
         contents = [
             types.BlobResourceContents(
-                uri=AnyUrl("file:///big.bin"),
-                mimeType="application/octet-stream",
+                uri="file:///big.bin",
+                mime_type="application/octet-stream",
                 blob=base64.b64encode(raw).decode(),
             )
         ]
@@ -194,7 +245,7 @@ class TestReading:
         # failed read over a place to put a file.
         contents = [
             types.BlobResourceContents(
-                uri=AnyUrl("file:///b.bin"), mimeType="application/octet-stream", blob=base64.b64encode(b"z").decode()
+                uri="file:///b.bin", mime_type="application/octet-stream", blob=base64.b64encode(b"z").decode()
             )
         ]
         mgr = _Manager({"a": _Session(contents=contents)})

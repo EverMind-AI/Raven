@@ -32,11 +32,13 @@ import { hasToolOk } from '../../rpc/capabilities'
 import { session as sheetSession } from '../sheetRack'
 import { ds, sources } from '../sources'
 import { show as toast } from '../toast'
-import { ask, noteRow, unask } from './conversation'
+import { ask, noteRow, tagTurn, unask } from './conversation'
+import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
 import { rereadChips, viewRuntime } from './registry'
 import {
-  drain, duration, ensureStep, finishTurn, flushSay, reset, send, softStop,
+  drain, dropStaleSteps, duration, ensureStep, finishTurn, flushSay, reset, send,
+  softStop,
 } from './runtime'
 
 import type { DirectTarget, TurnEvent } from '../../rpc/generated'
@@ -78,6 +80,7 @@ const changesSettings = (name: string | undefined, args: unknown): boolean => {
    it is here because reading them in this order is how the turn reads. */
 export const STAGES: readonly Stage[] = [
   arm('message.start', (rt, p) => {
+    dropStaleSteps(rt)
     /* Read BEFORE the phase is set: the window that sent this turn has already
        drawn the question; a window that is only watching has not.
 
@@ -86,13 +89,28 @@ export const STAGES: readonly Stage[] = [
        a turn of its own, and the bubble that was drawn inside the ended turn
        belongs at the head of this one -- below that turn's answer, which is
        where a reload puts it. Taking it back and letting the ordinary path
-       draw it is what moves it. */
-    if (!turn.busy() && p.content) {
+       draw it is what moves it.
+
+       A hold made the machine busy without a turn running in it: the question
+       that arrives here belongs to the turn the hold was waiting for, so it
+       IS drawn, and the hold is over -- that turn is running now. */
+    const held = rt.holding
+    rt.holding = false
+    if ((!turn.busy() || held) && p.content) {
       const drawn = rt.injected.get(p.turn_id)
       if (drawn !== undefined) { unask(drawn); rt.injected.delete(p.turn_id) }
-      ask(p.content)
+      rt.asked = ask(p.content)
     }
+    /* The question this turn opens on -- drawn just above, or by this window's
+       own send -- is filed under the turn's id. A task board step names its
+       turn by that id and by a time on the server's clock, which a bubble drawn
+       here does not carry: across time zones the time alone misses it. */
+    if (rt.asked !== null && p.turn_id) tagTurn(rt.asked, p.turn_id)
+    rt.asked = null
     if (p.content) touchSession(sessionCurrent(), p.content)
+    rt.openedTurn = null
+    rt.turnId = p.turn_id
+    rt.silent = false
     rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
     advanceTurn()
   }),
@@ -114,6 +132,7 @@ export const STAGES: readonly Stage[] = [
   }),
 
   arm('turn.started', (rt, p) => {
+    dropStaleSteps(rt)
     /* A turn the RUNTIME opened (a delegated result re-entering) has begun.
        The spine suppresses message.start for these, so this event is the whole
        opening: the workspace turn advances, the client enters the busy state
@@ -132,6 +151,9 @@ export const STAGES: readonly Stage[] = [
         isDag,
         status: d.status,
         body: d.content || '',
+        output: d.output,
+        outputTruncated: d.output_truncated,
+        turnId: p.turn_id,
         open: () => {
           if (isDag) { ds('transcript').openDagRun!(d.run_id || d.label || ''); return }
           ds('transcript').openSpawn!(d.node_id || '')
@@ -145,7 +167,15 @@ export const STAGES: readonly Stage[] = [
        to timing it here, a stop being the one that always does. */
     rt.startedAt = Date.now()
     rt.answerAt = 0
-    rt.dispatch({ type: 'stream', cancellable: false }); goState(); drawMeter()
+    /* Cancellable by its id: nothing bound a handle to this turn, so the stop
+       button names it and turn.cancel reaches it as the lane's running turn. */
+    rt.openedTurn = p.turn_id
+    rt.turnId = p.turn_id
+    /* The hold was waiting for exactly this frame: the turn the lane was
+       holding the queue for has opened. */
+    rt.holding = false
+    rt.silent = false
+    rt.dispatch({ type: 'stream', cancellable: true }); goState(); drawMeter()
   }),
 
   arm('episode.start', (rt) => {
@@ -174,11 +204,27 @@ export const STAGES: readonly Stage[] = [
        line survives the whole silence and dies on the first real output. */
     if (p.transient) { transcript.status(t('gui.notice.' + (p.kind || ''), null, p.kind || '')); return }
     transcript.killStatus()
+    /* The model ended the turn on its silence marker, so the turn has no answer:
+       what the notice's detail says that reply showed is taken back from the open
+       step, and the turn lands without promoting anything it said on the way. The
+       row below is all of it. The server holds a marker back while it streams, so
+       the detail is at most a think block the model inlined ahead of it, and is
+       empty when nothing went out; it is not drawn in the row. An exhausted
+       turn's wrap-up shares its step with the last call's narration, which stays.
+       Not marked while this page is cancelling the turn: the stop already folded
+       it, and the message.complete that would read and clear the mark is
+       dropped, so the next turn would land under it. */
+    const silent = p.kind === 'silent_turn'
+    if (silent && turn.phase() !== 'cancelling') rt.silent = true
     /* Seals the open step first: this ends the turn, so the streamed prose
        above stays where it was said. */
-    if (rt.st) { rt.st.seal(); rt.st = null }
+    if (rt.st) {
+      rt.st.seal()
+      if (silent) rt.st.dropReply(p.detail || '')
+      rt.st = null
+    }
     flushSay(rt)
-    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), p.detail || '', { quiet: true })
+    noteRow(t('gui.notice.' + (p.kind || ''), null, p.kind || ''), silent ? '' : p.detail || '', { quiet: true })
   }),
 
   arm('thinking.delta', (rt, p) => {
@@ -234,19 +280,44 @@ export const STAGES: readonly Stage[] = [
      the queued send. */
   arm('message.complete', (rt, p) => {
     if (turn.phase() === 'cancelling') return
+    /* The turn the reader stopped is still owed its end: the server read the
+       cancel after that turn had already ended, so it is on the way -- behind
+       the refusal, which is written while the frames wait out the
+       subscription's window. Folding it here would release the queue into the
+       turn that is starting, and the stop already folded this one. A silent
+       mark its notice set goes with it: that notice reached a page holding the
+       lane, not one cancelling, and a turn that sends no opening frame would
+       otherwise land under it. */
+    if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) { rt.silent = false; return }
+    /* Any other completion ends the hold: the lane has moved on, and the turn
+       that ended is not the one the hold was waiting for. */
+    rt.holding = false
     finishTurn(p, rt)
   }),
 
   arm('error', (rt, p) => {
     transcript.killStatus()
+    /* The turn the reader stopped, unwinding late: this is that turn's own
+       notice, and dropping it keeps the queue held for the turn that is
+       starting. Any silent mark that turn set is dropped with it. */
+    if (rt.heldTurn !== null && p.turn_id === rt.heldTurn) { rt.silent = false; return }
+    /* A turn that ended without an answer, failed or stopped, still measured
+       its calls, and the record it filed carries the last reading, so the ring
+       moves on with it rather than staying on the turn before -- otherwise a
+       reload reads a number the ring never showed. Ahead of the stop's own
+       early exits: a stopped turn's reading rides only this event. */
+    applyUsage(p.usage)
     /* A cancelled turn is the one "error" a person asked for; the event still
        matters when the cancel came from ANOTHER client on the same session. */
     if (p.reason === 'cancelled_by_client') {
       if (turn.phase() === 'cancelling') return
+      /* Any other error ends the hold too: the lane has moved on. */
+      rt.holding = false
       if (turn.busy()) softStop(false, rt)
       setTimeout(drain, 400)
       return
     }
+    rt.holding = false
     /* The turn ends the way a stop ends it (softStop): the prose that streamed
        before the failure is promoted and its steps sealed, so the note lands
        under a finished turn rather than beside an open one; the runtime is
@@ -254,10 +325,13 @@ export const STAGES: readonly Stage[] = [
        out, since the engine is free. `turn_failed` is the lane's code for a
        turn that died and reads as the words the replayed marker reads; every
        other code keeps its own name. */
-    transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+    transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt), rt.silent)
     rt.dispatch({ type: 'idle' })
     noteRow(p.message === 'turn_failed' ? transcript.failedTurnLabel() : (p.message || 'error'),
-      p.detail || p.reason || '', rt.lastAsk ? { retry: () => send(rt.lastAsk) } : null)
+      p.detail || p.reason || '', {
+        ...(rt.lastAsk ? { retry: () => send(rt.lastAsk) } : {}),
+        ...(p.full_detail ? { full: p.full_detail } : {}),
+      })
     transcript.artifacts(wsCurrentTurn())
     reset(rt)
     goState(); drawMeter(); sessionDraw()
@@ -281,6 +355,10 @@ export const STAGES: readonly Stage[] = [
     transcript.spawnFeed(p)
     sources.tasks?.onSubagentStatus?.(p)
   }),
+
+  /* The host's task board after a write: the tasks tab's to draw, reached
+     through the seam like every other tasks consumer. */
+  arm('tasks.board_updated', (_rt, p) => { sources.tasks?.onBoardUpdated?.(p) }),
 
   /* A result was submitted, not yet visible: the turn it opens is still queued
      behind its parent, so the row does NOT belong here. It arrives with the
@@ -380,6 +458,7 @@ function stageOf(ev: TurnEvent): Stage | undefined {
     case 'dag.run_replanned':
     case 'dag.node_stalled':
     case 'media':
+    case 'tasks.board_updated':
       return BY_TYPE.get(ev.type)
     default:
       return assertNever(ev)

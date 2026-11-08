@@ -409,7 +409,9 @@ the dispatcher.
 pops the pending messages for that session and appends them to the agent's
 outgoing reply. The agent loop applies this in its `after_send` chain and skips
 it for system-origin turns so a proactive reply does not get a nudge layered on
-top of itself.
+top of itself. A turn the model ends on a silence marker has no reply for it to
+modify: the chain runs with no outbound text, the modifier is not called, and the
+queued nudge waits for the next reply.
 
 Constraints: a TTL drops stale entries, a per-session cap evicts the oldest
 beyond it (FIFO), and the pending queue is persisted through the shared
@@ -515,12 +517,14 @@ A cron fire also writes the shared NudgePolicy ledger (a topic-tag fire plus a
 dispatched record marked neutral) so the Sentinel suppresses its own proactive
 nudge on the same topic within the dedup window, without dragging down the
 acceptance rate the Sentinel learns from (a cron is user-initiated, not the
-Sentinel's own proposal). A recurring job that fires repeatedly with no user
+Sentinel's own proposal). A run the model ends on a silence marker nudged no
+one, so it writes nothing. A recurring job that fires repeatedly with no user
 response is automatically disabled when `silent_fire_count` reaches
-`silent_fire_limit` (default 12). Successful fires increment this count; user
-activity for the matching channel and recipient resets it. This counts fires
-without user activity, not execution failures, and contains runaway "every few
-minutes forever" jobs.
+`silent_fire_limit` (default 12). Successful fires increment this count, except
+a run the model ends on a silence marker, which sent the user nothing to respond
+to; user activity for the matching channel and recipient resets it. This counts
+fires without user activity, not execution failures, and contains runaway "every
+few minutes forever" jobs.
 
 ---
 
@@ -619,7 +623,8 @@ user a structured question and awaits the reply. It hands the turn's
 conversation_id and prompt to a `QuestionBroker`
 (`raven/rpc/question_broker.py`), which emits a `clarify.request`
 notification and blocks (on a future keyed by conversation_id) until an answer
-arrives, with a fail-safe default so the loop always gets a string back.
+arrives, with a fail-safe default for timeout and EOF. A stopped turn raises
+`CancelledError` instead of reading that default as an answer.
 `clarify.request` / `clarify.respond` is the ui-tui frontend's existing
 single-select question contract (ClarifyPrompt), which the broker reuses.
 

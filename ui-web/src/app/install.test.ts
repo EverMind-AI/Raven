@@ -4,10 +4,12 @@
  * openByNode and its five live-event consumers (state/session/stages.ts used
  * to import features/tasks/store.ts directly for these), and the session
  * pointer's own reload (features/tasks/store.ts's writes are guarded by the
- * session key, so something has to ask again once it changes).
+ * session key, so something has to ask again once it changes). The folder
+ * menu also has to redraw after a new handshake changes the picker it offers.
  */
 
-import { describe, expect, it } from 'vitest'
+import { act } from 'react'
+import { describe, expect, it, vi } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../scripts/module-harness.mjs'
 
@@ -16,6 +18,8 @@ import type { Sources } from '../state/sources'
 
 type Install = typeof import('./install')
 type Session = typeof import('../lib/session')
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 async function harness(fakes: Record<string, Record<string, unknown>> = {}) {
   const wiring = await loadPart(() => import('./install'), {
@@ -69,7 +73,10 @@ describe('the tasks seam installSources grows', () => {
 
     wiring.installSources()
     const { set: setTasks } = await import('../features/tasks/store')
-    setTasks({ rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {} })
+    setTasks({
+      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+      board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
+    })
 
     const found = sources.tasks!.openByNode!('node-9')
     const missing = sources.tasks!.openByNode!('no-such-node')
@@ -77,6 +84,43 @@ describe('the tasks seam installSources grows', () => {
     expect(found).toBe(true)
     expect(missing).toBe(false)
     expect(opened).toEqual([row])
+  })
+})
+
+describe('attachment destination context', () => {
+  it.each(['upload', 'template'])('passes the current draft or session directory on each %s', async (kind) => {
+    let session: string | null = null
+    let workdir: string | null = '/projects/pinned'
+    const wiring = await harness({
+      'src/lib/session': { current: () => session, onChange: () => {} },
+      'src/state/workdir': { staged: () => workdir },
+    })
+    const { setSources, sources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+    wiring.installSources()
+    const calls: Array<{ method: string; params: unknown }> = []
+    await fakeGateway(async (method: string, params: unknown) => {
+      calls.push({ method, params })
+      return { path: 'uploads/amber.pptx', abs_path: '/home/uploads/amber.pptx', size: 1 }
+    })
+    const attach = () => kind === 'upload'
+      ? sources.composer!.upload!({ name: 'amber.pptx', content_b64: 'eA==' })
+      : sources.composer!.templates!.pick('amber')
+
+    await attach()
+    workdir = null
+    await attach()
+    session = 'tui:created'
+    workdir = '/projects/stale-draft'
+    await attach()
+
+    const method = kind === 'upload' ? 'fs.upload' : 'deck.templates.pick'
+    const payload = kind === 'upload' ? { name: 'amber.pptx', content_b64: 'eA==' } : { name: 'amber' }
+    expect(calls).toEqual([
+      { method, params: { ...payload, session: 'tui:', workdir: '/projects/pinned' } },
+      { method, params: { ...payload, session: 'tui:' } },
+      { method, params: { ...payload, session: 'tui:created' } },
+    ])
   })
 })
 
@@ -105,6 +149,77 @@ describe('the session-pointer reload (installActions)', () => {
 
     expect(asked).toContain('s1')
     _resetForTests()
+  })
+})
+
+describe('the working-directory menu after reconnect', () => {
+  it.each([false, true])('updates an open menu when the next gateway has a dialog: %s', async (hasDialog) => {
+    let reconnect = (): void => { throw new Error('reconnect callback was not installed') }
+    const wiring = await harness({
+      'src/app/connection': { onReconnect: (fn: () => void) => { reconnect = fn } },
+      'src/features/installed/source': { loadExt: async () => {} },
+      'src/features/importSync/store': { refresh: async () => {} },
+    })
+    const { setSources } = await import('../state/sources')
+    const { workspaceSource } = await import('../features/workspace/source')
+    const { absorb } = await import('../rpc/capabilities')
+    const { FixtureTransport } = await import('../rpc/fixtureTransport')
+    const { setGateway } = await import('../rpc/gateway')
+    const { setTranslator, resetTranslator } = await import('../i18n/t')
+    const { mountPageRoot } = await import('../test/pageRoot')
+    const wd = await import('../state/workdir')
+    const poll = await import('../features/trajectory/poll')
+    const tasks = await import('../features/tasks/store')
+    tasks.set({ ...tasks.get(), loaded: true })
+    let answerHello = (): void => { throw new Error('handshake was not requested') }
+    const transport = new FixtureTransport({
+      'system.hello': () => new Promise((resolve) => {
+        answerHello = () => resolve({
+          server_version: '0.1.0', server_capabilities: hasDialog ? ['folder-dialog-v1'] : [],
+          session: { default_channel: 'tui', default_session_key: 'tui:default' },
+        })
+      }),
+      'fs.dirs': { path: '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] },
+      'fs.pick_dir': { path: '/w/chosen', ok: true },
+    })
+    setGateway(transport)
+    setSources({
+      composer: { slash: [], meter: () => '', slashName: () => '', slashHelp: () => '', send: () => {}, stop: () => {} },
+      workspace: { ...workspaceSource, hostIsLocal: () => true },
+      rail: { snapshot: () => ({ rows: [], cur: null, busy: false }), replace: () => {}, open: () => {} },
+    })
+    setTranslator((key) => key)
+    absorb(hasDialog ? [] : ['folder-dialog-v1'])
+    let unmount = (): void => {}
+    act(() => { unmount = mountPageRoot() })
+    try {
+      act(() => wiring.installActions())
+      act(() => { wd.pick('/w/staged'); wd.open() })
+      const before = wd.get()
+      const button = (): HTMLButtonElement => document.querySelector('#wdPop .chrome-wd-open')!
+      const oldLabel = hasDialog ? 'gui.wd.open_remote' : 'gui.wd.open'
+      expect(button().textContent).toBe(oldLabel)
+
+      act(() => reconnect())
+      expect(button().textContent).toBe(oldLabel)
+      await act(async () => { answerHello(); await Promise.resolve(); await Promise.resolve() })
+
+      expect(button().textContent).toBe(hasDialog ? 'gui.wd.open' : 'gui.wd.open_remote')
+      expect(wd.get()).toEqual(before)
+      expect(wd.staged()).toBe('/w/staged')
+      await act(async () => { button().click(); await Promise.resolve(); await Promise.resolve() })
+      expect(transport.calls.filter(({ method }) => method.startsWith('fs.'))).toEqual([
+        { method: hasDialog ? 'fs.pick_dir' : 'fs.dirs', params: {} },
+      ])
+      expect(hasDialog ? wd.staged() : wd.get().listing?.path).toBe(hasDialog ? '/w/chosen' : '/home/me')
+    } finally {
+      act(() => unmount())
+      poll._resetForTests()
+      wd._resetForTests()
+      setGateway(null)
+      resetTranslator()
+      document.body.innerHTML = ''
+    }
   })
 })
 
@@ -142,5 +257,109 @@ describe('the wizard asks for its import through the rail row (installSources)',
     expect(runs).toEqual([[['hermes'], 'memory_files']])
     expect(store.view(store.get()).kind).toBe('done')
     store._resetForTests()
+  })
+})
+
+/* The trajectory pane follows the list through the installer's wiring and
+   nothing else: a page that forgot the line would open a pane that never
+   changed entry. Driven through `installActions` on purpose, with no call
+   into the pane's own install. */
+describe('the trajectory pane follows the list (installActions)', () => {
+  it('opens on a selection, resets on the next, clears on a session switch, and goes stale on a revision', async () => {
+    const wiring = await harness()
+    const { setSources } = await import('../state/sources')
+    const { absorb } = await import('../rpc/capabilities')
+    const { unpitch, _resetFreshForTests } = await import('../state/session/conversation')
+    const list = await import('../features/trajectory/store')
+    const pane = await import('../features/trajectory/detailStore')
+    const entry = (id: string, revision: number) => ({
+      entry_id: id, revision, kind: 'tool.output', span_name: 'tool.call', slot: 'tool.output', trace_id: 't', span_id: id,
+      parent_span_id: null, turn_span_id: 'turn', turn_number: 1, turn_start: false, origin: 'main' as const, sort_key: [id],
+      event_time: '2026-01-01T00:00:00Z', preview: null, operation_status: 'ok' as const, status_evidence: [], failure_entry: false,
+      integrity: [], operation_start: null, operation_end: null, duration_ms: null, charged_ms: null,
+      timing_basis: 'span_full' as const, duration_owner: null, meta: {},
+    })
+    const ready = {
+      phase: 'ready' as const, scanned_bytes: 0, total_bytes: 0, head_truncated: 0, recovering_traces: 0, unresolved_traces: 0,
+      unresolved_dropped: 0, oversized_lines_dropped: 0, preview_pending: 0, failure: null,
+    }
+    setSources({
+      composer: { slash: [] },
+      tasks: { list: async () => [], one: async () => null, stop: async () => false, node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }), roster: async () => [] },
+      trajectory: {
+        state: async () => ({ enabled: true, policy_revision: 1, recording_enabled: true }),
+        list: async () => ({ epoch: 'e1', snapshot_revision: 1, entries: [entry('a', 1), entry('b', 1)], next_cursor: null, index_state: ready, complete: true }),
+        changes: async () => { throw new Error('not scripted') },
+        detail: async () => { throw new Error('not scripted') },
+        block: async () => { throw new Error('not scripted') },
+      },
+    } as unknown as Partial<Sources>)
+    list._resetForTests()
+    pane._resetForTests()
+    _resetFreshForTests()
+    document.body.innerHTML = '<div class="chat"></div>'
+    absorb(['trajectory-v1'])
+
+    wiring.installActions()
+    const { setCurrent, _resetForTests } = await import('../lib/session') as Session
+    unpitch()
+    setCurrent('gui:a')
+    await list.refreshState()
+    list.setView('trajectory')
+    await list.load()
+
+    list.select('a', { source: 'click' })
+    expect(pane.get().open).toBe(true)
+    pane.set({ ...pane.get(), current: { sessionKey: 'gui:a', epoch: 'e1', entryId: 'a', revision: 1 } })
+    list.select('b', { source: 'keyboard' })
+    expect(pane.get().open).toBe(true)
+    expect(pane.get().current).toBeNull()
+    pane.set({ ...pane.get(), current: { sessionKey: 'gui:a', epoch: 'e1', entryId: 'b', revision: 1 } })
+    list.applyChanges({ epoch: 'e1', from_revision: 1, to_revision: 2, upserts: [entry('b', 2)], removed: [], has_more: false, reset_required: false, index_state: ready })
+    expect(pane.get().stale).toBe(true)
+    setCurrent('gui:b')
+    expect(pane.get().open).toBe(false)
+    expect(pane.get().current).toBeNull()
+    _resetForTests()
+    list._resetForTests()
+    pane._resetForTests()
+  })
+})
+
+describe('the task board badge reads once its seam is on (installPushes)', () => {
+  it('asks for the count after the sources install, though the rail asked first and found none', async () => {
+    vi.useFakeTimers()
+    try {
+      const wiring = await loadPart(() => import('./install'), {
+        fakes: {
+          'src/lib/dom': { $: looseQuery() },
+          'src/lib/session': { current: () => 's1' },
+          'src/state/session/runtime': { mediaOf: () => ({}) },
+          'src/features/transcript/mount': { agentStage: () => {} },
+          'src/features/subagents/store': { directEvent: () => {} },
+        },
+      }) as Install
+      const asked: string[] = []
+      await fakeGateway((method: string) => {
+        asked.push(method)
+        return Promise.resolve(method === 'tasks.boards' ? { cards: [], completed_count: 0, needs_you_count: 2 } : {})
+      })
+      const boards = await import('../features/tasks/boards')
+      const { setSources } = await import('../state/sources')
+
+      boards.startBadge()
+      expect(asked).not.toContain('tasks.boards')
+
+      setSources({ composer: { slash: [] }, rail: {}, transcript: {} } as unknown as Partial<Sources>)
+      wiring.installSources()
+      wiring.installPushes()
+      await act(async () => {})
+
+      expect(asked.filter((m) => m === 'tasks.boards')).toHaveLength(1)
+      expect(boards.get().needsYouCount).toBe(2)
+      boards._resetForTests()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -102,6 +102,19 @@ describe('overlay scrollbars', () => {
     expect(vert()).toBeUndefined()
   })
 
+  it('draws no thumb over a hidden scroller, and takes a showing one down once it is hidden', () => {
+    const parked = scroller()
+    parked.style.visibility = 'hidden'
+    show(parked)
+    expect(thumbs()).toHaveLength(0)
+    const el = scroller()
+    show(el)
+    expect(vert()).toBeTruthy()
+    el.style.visibility = 'hidden'
+    sync()
+    expect(vert()).toBeUndefined()
+  })
+
   it('draws no thumb over a one-line field, however far its text runs', () => {
     /* A text input scrolls itself to the caret, so there is nothing to grab,
        and the bar was laid across the bottom of a box one line tall: 6px of
@@ -113,6 +126,21 @@ describe('overlay scrollbars', () => {
 
     const area = scroller({ clientHeight: 120, scrollHeight: 900 }, 'textarea')
     show(area)
+    expect(vert()).toBeTruthy()
+  })
+
+  it('draws no thumb over a scroller that declares it wants none, scrolled from anywhere', () => {
+    /* A strip that is its own position indicator -- the transcript's turn
+       nav, which scrolls itself to keep the mark being read in view -- would
+       wear a thumb that says the same thing a second time. */
+    const strip = scroller({ clientHeight: 300, scrollHeight: 900 })
+    strip.dataset.thumb = 'none'
+    show(strip)
+    strip.dispatchEvent(new Event('scroll'))
+    expect(thumbs()).toHaveLength(0)
+
+    delete strip.dataset.thumb
+    show(strip)
     expect(vert()).toBeTruthy()
   })
 
@@ -133,6 +161,25 @@ describe('overlay scrollbars', () => {
     expect(vert()!.dataset.on).toBe('true')
     vi.advanceTimersByTime(1)
     expect(vert()!.dataset.on).toBe('false')
+  })
+
+  it('keeps a bar a scroller asked to keep, and places it again on a resize', () => {
+    /* The trajectory view's bars: the reader reaches for them long after the
+       last scroll, so they are not on a timer. A resize places them from their
+       new boxes instead of taking them down with the fading ones. */
+    let top = 10
+    const el = scroller()
+    el.dataset.thumb = 'keep'
+    const rect = el.getBoundingClientRect.bind(el)
+    el.getBoundingClientRect = () => ({ ...rect(), top, bottom: top + 200 }) as DOMRect
+    show(el)
+    expect(vert()!.dataset.on).toBe('true')
+    vi.advanceTimersByTime(SB_HIDE * 3)
+    expect(vert()!.dataset.on).toBe('true')
+    top = 60
+    window.dispatchEvent(new Event('resize'))
+    expect(vert()!.dataset.on).toBe('true')
+    expect(px(vert()!, 'top')).toBe(60 + SB_PAD)
   })
 
   it('restarts the fade on the next scroll rather than stacking two', () => {
@@ -221,15 +268,51 @@ describe('overlay scrollbars', () => {
     const el = scroller()
     show(el)
     const t = vert()!
-    t.dispatchEvent(new PointerEvent('pointerdown', { clientY: 100, bubbles: true, pointerId: 1 }))
+    /* The thumb stands at 12..51 on screen; the grab is taken inside it, and
+       a 50px move down the track sends the content 50/157 of its range. */
+    t.dispatchEvent(new PointerEvent('pointerdown', { clientY: 30, bubbles: true, pointerId: 1 }))
     expect(t.dataset.drag).toBe('true')
     expect(document.body.style.userSelect).toBe('none')
-    t.dispatchEvent(new PointerEvent('pointermove', { clientY: 150, bubbles: true, pointerId: 1 }))
-    /* 50px down a track of (196 - 39.2) free pixels, over 800 scrollable ones. */
+    t.dispatchEvent(new PointerEvent('pointermove', { clientY: 80, bubbles: true, pointerId: 1 }))
     const track = 200 - SB_PAD * 2
-    const len = Math.max(SB_MIN, track * 0.2)
+    const len = Math.max(SB_MIN, Math.round(track * 0.2))
     expect(el.scrollTop).toBeCloseTo((50 * 800) / (track - len), 5)
     t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }))
+    expect(t.dataset.drag).toBeUndefined()
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  it('keeps the grabbed point of the bar under the pointer when the content grows under it', () => {
+    /* A message pane measures its rows while the reader scrolls: the content's
+       height can change mid-drag. The bar is redrawn shorter, so the mapping
+       from the pointer to the content has to be taken again -- a ratio read at
+       pointerdown would send the list to where the bar used to point. */
+    const el = scroller()
+    show(el)
+    const t = vert()!
+    t.dispatchEvent(new PointerEvent('pointerdown', { clientY: 30, bubbles: true, pointerId: 1 }))
+    Object.defineProperty(el, 'scrollHeight', { value: 3000, configurable: true })
+    t.dispatchEvent(new PointerEvent('pointermove', { clientY: 80, bubbles: true, pointerId: 1 }))
+    const track = 200 - SB_PAD * 2
+    /* 200/3000 of the track: the length floor is what keeps it grabbable now. */
+    const len = Math.max(SB_MIN, Math.round(track * (200 / 3000)))
+    expect(el.scrollTop).toBeCloseTo((50 * (3000 - 200)) / (track - len), 5)
+    t.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }))
+  })
+
+  it('follows the pointer after it leaves the bar', () => {
+    /* The bar is 6px wide. Pointer capture is an optimisation, so the moves
+       are heard on the window: a drag that needed the capture would stop the
+       moment the pointer stepped off the bar. */
+    const el = scroller()
+    show(el)
+    const t = vert()!
+    t.dispatchEvent(new PointerEvent('pointerdown', { clientY: 30, bubbles: true, pointerId: 1 }))
+    document.dispatchEvent(new PointerEvent('pointermove', { clientY: 80 }))
+    const track = 200 - SB_PAD * 2
+    const len = Math.max(SB_MIN, Math.round(track * 0.2))
+    expect(el.scrollTop).toBeCloseTo((50 * 800) / (track - len), 5)
+    document.dispatchEvent(new PointerEvent('pointerup'))
     expect(t.dataset.drag).toBeUndefined()
     expect(document.body.style.userSelect).toBe('')
   })

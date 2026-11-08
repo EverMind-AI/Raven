@@ -6,9 +6,12 @@ value substituted *into* it -- a file's contents, another node's output -- is
 fenced as untrusted data first. A node output is sub-agent-authored and a
 referenced file may hold anything a run fetched, so neither is an instruction
 this prompt is entitled to carry. The ``_path`` forms inject no content and
-are left alone, as are literal inputs: the author typed those here.
+are left alone, as are literal inputs: the author typed those here. The sentence
+that stands in for a node that was not executed is the runner's own words, so it
+is left alone too.
 """
 
+from collections.abc import Collection
 from typing import Any
 
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
@@ -22,6 +25,18 @@ from raven.agent.subagent.prompt_render import (
     resolve_file_placeholder,
 )
 
+MISSING_OUTPUT_TEXT = "<This task is not executed and the output is missing, please go on without this output.>"
+"""What a reference to a node that was not executed renders as.
+
+A constant the runner writes, and deliberately outside every untrusted fence: an
+upstream that writes this same sentence into its own output lands inside a
+nonce-tagged fence, where it reads as data rather than as the runner's word.
+"""
+
+MAYBE_MISSING_HEADING = "## Inputs that may be missing"
+
+_MAYBE_MISSING_TAIL = "Continue with the inputs you have, and do not guess what a missing one would have said."
+
 
 async def render_prompt(
     node: DagNodeSpec,
@@ -33,6 +48,8 @@ async def render_prompt(
     run_id: str | None = None,
     by_id: dict[str, "DagNodeSpec"] | None = None,
     capabilities: dict[str, "AgentCapabilities"] | None = None,
+    not_executed: Collection[str] = (),
+    may_not_execute: Collection[str] = (),
 ) -> str:
     """Render ``node.prompt_template`` into the node's prompt text.
 
@@ -56,6 +73,14 @@ async def render_prompt(
             Absolute directories a file reference may resolve into. Re-checked
             here as well as in ``dag_graph`` because this module is reachable
             without that validation pass.
+        not_executed (`Collection[str]`):
+            Ids of the nodes that were not executed in this run. A reference to
+            one reads as :data:`MISSING_OUTPUT_TEXT`, and the node gets no line
+            in the upstream memory block.
+        may_not_execute (`Collection[str]`):
+            Ids of the nodes that may not execute (``dag_graph.may_not_execute``).
+            A template that references one is followed by a note saying so,
+            whether or not the node ran this time.
 
     Returns:
         `str`:
@@ -82,11 +107,19 @@ async def render_prompt(
                 cwd=cwd,
                 nodes_root=nodes_root,
                 roots=roots,
+                not_executed=not_executed,
             )
         parts.append(cache[ph.raw])
         last = end
     parts.append(template[last:])
     rendered = "".join(parts)
+    maybe = [nid for nid in _referenced_ids(node) if nid in may_not_execute]
+    if maybe:
+        rendered = (
+            f"{rendered}\n\n{MAYBE_MISSING_HEADING}\n\n"
+            "Some inputs above come from steps that run only when an earlier decision selects them: "
+            f"{', '.join(maybe)}. A missing one reads exactly:\n{MISSING_OUTPUT_TEXT}\n{_MAYBE_MISSING_TAIL}"
+        )
     upstream = _upstream_memory_lines(
         node,
         backend=backend,
@@ -94,6 +127,7 @@ async def render_prompt(
         run_id=run_id,
         by_id=by_id,
         capabilities=capabilities,
+        not_executed=not_executed,
     )
     if upstream:
         rendered = f"{rendered}\n\n{_MEMORY_BLOCK_HEADING}\n\n" + "\n".join(upstream) + f"\n\n{_MEMORY_BLOCK_NOTE}"
@@ -107,6 +141,32 @@ _MEMORY_BLOCK_NOTE = (
     'carry \'"status": "pending"\'. Either way that upstream has no distilled memory available yet:\n'
     "proceed without it rather than waiting for it or treating its absence as an error."
 )
+
+
+def _named_node(ph: Placeholder, node: DagNodeSpec) -> str | None:
+    """The node a placeholder reads, or ``None`` when it reads no node.
+
+    ``{{ X.output }}`` and ``{{ X.output_path }}`` name ``X``; ``{{ inputs.k }}`` and
+    ``{{ inputs.k.path }}`` name what ``k`` points at, when that is ``{"node": <id>}``.
+    A literal or file input, and every ``ref`` form, name none.
+    """
+    if ph.kind in ("output", "output_path"):
+        return ph.name
+    if ph.kind in ("input", "input_path"):
+        spec = node.inputs.get(ph.name)
+        if isinstance(spec, dict) and "node" in spec:
+            return str(spec["node"])
+    return None
+
+
+def _referenced_ids(node: DagNodeSpec) -> list[str]:
+    """The node ids this template names, in template order, each once."""
+    seen: list[str] = []
+    for _, _, ph in iter_placeholders(node.prompt_template):
+        target = _named_node(ph, node)
+        if target is not None and target not in seen:
+            seen.append(target)
+    return seen
 
 
 def _transitive_upstream(node: DagNodeSpec, by_id: dict[str, DagNodeSpec]) -> list[str]:
@@ -138,13 +198,15 @@ def _upstream_memory_lines(
     run_id: str | None,
     by_id: dict[str, DagNodeSpec] | None,
     capabilities: dict[str, AgentCapabilities] | None,
+    not_executed: Collection[str] = (),
 ) -> list[str]:
     """One ``- <id>: <path>`` line per upstream whose record this node may read.
 
     Empty when the paths cannot be named (no node root or run id), when the
     node has no upstream, or when its sub-agent cannot open local paths -- the
     same capability the path placeholders are gated on, for the same reason: a
-    path reaches an agent running elsewhere as meaningless text.
+    path reaches an agent running elsewhere as meaningless text. An upstream
+    that was not executed never wrote a record, so it gets no line.
     """
     if not nodes_root or not run_id or by_id is None:
         return []
@@ -153,6 +215,8 @@ def _upstream_memory_lines(
         return []
     lines: list[str] = []
     for dep in _transitive_upstream(node, by_id):
+        if dep in not_executed:
+            continue
         lines.append(f"- {dep}: {memory_path_in(backend, nodes_root, dep)}")
     return lines
 
@@ -165,6 +229,7 @@ async def _resolve(
     cwd: str,
     nodes_root: str | None,
     roots: tuple[str, ...] | None,
+    not_executed: Collection[str] = (),
 ) -> str:
     """Resolve one placeholder to its replacement string.
 
@@ -184,6 +249,9 @@ async def _resolve(
             Root that ``@nodes/`` references resolve against.
         roots (`tuple[str, ...] | None`):
             Roots a file reference may resolve into.
+        not_executed (`Collection[str]`):
+            Ids of the nodes that were not executed. A placeholder that names
+            one resolves to :data:`MISSING_OUTPUT_TEXT` without reading anything.
 
     Returns:
         `str`:
@@ -195,6 +263,9 @@ async def _resolve(
             path that escapes its root, or a ``_path`` form naming a file
             that does not exist.
     """
+    target = _named_node(ph, node)
+    if target is not None and target in not_executed:
+        return MISSING_OUTPUT_TEXT
     shared = await resolve_file_placeholder(
         ph,
         node.inputs,

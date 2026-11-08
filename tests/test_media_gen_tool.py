@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,6 +204,511 @@ async def test_an_openai_compatible_base_takes_a_size_and_edits_by_multipart(mon
     assert b'name="image[]"' in edit.content and _PNG in edit.content and b"gpt-image-2" in edit.content
 
 
+_JPG = b"\xff\xd8\xff\xe0" + b"jpg pixels"
+
+
+async def test_an_ark_plan_base_is_answered_in_url_form_and_downloads_the_picture(monkeypatch, tmp_path) -> None:
+    """The Volces Ark Agent-Plan endpoint speaks its own dialect on
+    /images/generations -- ``size`` as an explicit WxH pair at the 2K budget --
+    and this one ignores the request for inline bytes and answers with
+    ``data[].url`` only, so the picture behind the URL is fetched and written
+    like any other generated file."""
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        sent["download"] = request
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and out["model"] == "doubao-seedream-5-0-pro"
+    path = Path(out["paths"][0])
+    assert path.suffix == ".jpg" and path.read_bytes() == _JPG
+    assert sent["body"] == {
+        "model": "doubao-seedream-5-0-pro",
+        "prompt": "a poster",
+        "n": 1,
+        "size": "2736x1539",
+        "response_format": "b64_json",
+    }
+    # The download URL is the provider's own storage, not its API: the key the
+    # generation call carried must not travel with the fetch.
+    assert sent["download"].headers.get("Authorization") is None
+
+
+async def test_an_ark_plan_base_without_a_ratio_leaves_size_to_the_endpoint(monkeypatch, tmp_path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            assert "size" not in json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster"))["success"]
+
+
+async def test_an_ark_plan_base_with_an_unknown_ratio_falls_back_to_the_2k_tier(monkeypatch, tmp_path) -> None:
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent["body"] = json.loads(request.content)
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    assert json.loads(await tool.execute("a poster", aspect_ratio="5:1"))["success"]
+    assert sent["body"]["size"] == "2K"
+
+
+async def test_a_seedream_3_t2i_ark_base_is_sized_inside_its_own_window(monkeypatch, tmp_path) -> None:
+    """Seedream 3.0-t2i's card lists WxH only, in [512x512, 2048x2048] -- the
+    model-independent 2736x1539 is a 400 there, and an unspellable ratio has
+    no tier to fall back to, so the endpoint default stands in."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-3-0-t2i-250415",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    for ratio in ("16:9", "21:9", "5:1"):
+        assert json.loads(await tool.execute("a poster", aspect_ratio=ratio))["success"]
+    # 16:9 hits the 2048 per-side cap; 21:9 lands on the pair that always
+    # worked pre-PR; 5:1 is unspellable and 3.0-t2i has no tier to send.
+    assert [body.get("size") for body in sent] == ["2048x1152", "1536x658", None]
+
+
+_EP_ID = "ep-20250101000000-abcde"
+
+
+def _ark_ep_tool(monkeypatch, handler, tmp_path: Path) -> ImageGenerateTool:
+    return _image_tool(
+        monkeypatch,
+        handler,
+        model=_EP_ID,
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+
+
+async def test_an_ark_endpoint_id_keeps_the_ratio_and_retries_sizeless_on_a_400(monkeypatch, tmp_path) -> None:
+    """An inference endpoint id names none of the family keywords, so the ratio
+    used to be dropped on the floor and the endpoint rendered its default
+    frame; and no single WxH is valid for every family behind an ep- id. The
+    ratio passes through, and a sized call the endpoint refuses is retried once
+    with no size at all, letting the endpoint default stand."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            if len(sent) == 1:
+                return httpx.Response(400, json={"error": {"message": "size exceeds the model's range"}})
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _JPG
+    # The explicit pair drawn from the default window first, then no size key.
+    assert sent[0]["size"] == "2736x1539"
+    assert "size" not in sent[1]
+
+
+async def test_an_ark_endpoint_id_whose_sized_call_succeeds_never_reposts(monkeypatch, tmp_path) -> None:
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))[
+        "success"
+    ]
+    assert len(sent) == 1 and sent[0]["size"] == "2736x1539"
+
+
+async def test_an_ark_endpoint_id_refused_both_times_propagates_the_400(monkeypatch, tmp_path) -> None:
+    """The retry is one shot: a size-less call still refused is a real error,
+    and it reaches the model the way every other HTTP failure does."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    out = json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 2 and "size" not in posts[1]
+
+
+async def test_a_ratio_less_ark_endpoint_call_sends_no_size_on_the_first_try(monkeypatch, tmp_path) -> None:
+    """Without a ratio there is nothing to spell, exactly as for a named model:
+    the first request carries no size key and no retry is waiting behind it."""
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            sent.append(json.loads(request.content))
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    assert json.loads(await _ark_ep_tool(monkeypatch, handler, tmp_path).execute("a poster"))["success"]
+    assert len(sent) == 1 and "size" not in sent[0]
+
+
+async def test_an_identified_family_s_400_is_not_retried(monkeypatch, tmp_path) -> None:
+    """A matched card's window is documented, so a 400 naming the size is a
+    real error there, not a guess to take back."""
+    posts: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            posts.append(json.loads(request.content))
+        return httpx.Response(400, text="InvalidParameter")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-4-5-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["error"] == "HTTP 400"
+    assert len(posts) == 1 and posts[0]["size"] == "2736x1539"
+
+
+def test_ark_explicit_sizes_stay_exact_and_inside_every_models_window() -> None:
+    """The reviewer's hand enumeration, locked into CI: for every supported
+    ratio and every Seedream window in the table (default included), the pair
+    sent keeps the ratio exact by construction -- the same coprime pair scaled
+    by one integer -- and fits the card's per-side and total-pixel bounds."""
+    windows = [(f"doubao-{needle}", *bounds) for needle, *bounds in media_gen._ARK_SIZE_WINDOWS]
+    windows.append(("doubao-seedream-future", None, None, 2560 * 1440, 4096 * 4096))
+    for ratio, dims in media_gen._SIZES.items():
+        width, height = (int(side) for side in dims.split("x"))
+        divisor = math.gcd(width, height)
+        for model_id, min_side, max_side, min_total, max_total in windows:
+            size = media_gen.ark_explicit_size(model_id, ratio)
+            assert size is not None, (model_id, ratio)
+            sw, sh = (int(side) for side in size.split("x"))
+            common = math.gcd(sw, sh)
+            assert (sw // common, sh // common) == (width // divisor, height // divisor)
+            assert min_total <= sw * sh <= max_total, (model_id, ratio, size)
+            if min_side:
+                assert min_side <= min(sw, sh), (model_id, ratio, size)
+            if max_side:
+                assert max(sw, sh) <= max_side, (model_id, ratio, size)
+
+
+async def test_an_ark_plan_base_still_takes_an_inline_b64_picture(monkeypatch, tmp_path) -> None:
+    """b64_json keeps working wherever it appears: the url form was added for
+    Ark, not swapped for it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://ark.cn-beijing.volces.com/api/v3", "https://ark.cn-beijing.volces.com/api/plan/v3"],
+    ids=["standard", "agent-plan"],
+)
+async def test_an_ark_base_asks_for_the_picture_inline(monkeypatch, tmp_path, api_base) -> None:
+    """A URL answer is a second request to provider-named storage; behind a
+    fake-IP resolver the guarded fetch refuses it and a billed picture is
+    lost. Ark can answer inline, so both Ark bases ask for b64_json."""
+    sent: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "output_format": "png"}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base=api_base,
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"]
+    assert sent["body"]["response_format"] == "b64_json"
+
+
+@pytest.mark.parametrize(
+    ("output_format", "payload", "suffix"),
+    [("jpeg", _JPG, ".jpg"), ("png", _PNG, ".png")],
+    ids=["jpeg", "png"],
+)
+async def test_an_ark_inline_picture_takes_its_type_from_output_format(
+    monkeypatch, tmp_path, output_format, payload, suffix
+) -> None:
+    """Ark names the type on the entry as ``output_format``, not ``media_type``;
+    reading only the latter wrote every picture as .png."""
+    encoded = base64.b64encode(payload).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": encoded, "output_format": output_format}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == suffix and path.read_bytes() == payload
+
+
+@pytest.mark.parametrize(
+    ("output_format", "mime"),
+    [
+        ("jpeg", "image/jpeg"),
+        ("jpg", "image/jpeg"),
+        ("png", "image/png"),
+        ("PNG", "image/png"),
+        (".jpg", "image/jpeg"),
+        ("webp", "image/webp"),
+        ("tiff", "image/gif"),
+    ],
+    ids=["jpeg", "jpg-alias", "png", "uppercase", "leading-dot", "webp", "unknown"],
+)
+def test_picture_mime_reads_every_spelling_of_output_format(output_format, mime) -> None:
+    """The jpg alias, case folding and a leading dot all resolve to a known
+    MIME; an unknown format falls to the caller's default."""
+    assert media_gen._picture_mime({"output_format": output_format}, "image/gif") == mime
+
+
+async def test_an_ark_url_picture_without_an_image_content_type_takes_output_format(monkeypatch, tmp_path) -> None:
+    """Storage can answer without an image content type; the entry's
+    ``output_format`` is then what says the JPEG is not a .png."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v3/images/generations":
+            return httpx.Response(
+                200,
+                json={"data": [{"url": "https://1.2.3.4/tos/signed.bin", "output_format": "jpeg"}]},
+            )
+        return httpx.Response(200, headers={"content-type": "application/octet-stream"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == ".jpg" and path.read_bytes() == _JPG
+
+
+@pytest.mark.parametrize(
+    ("api_base", "model", "payload", "suffix"),
+    [
+        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _JPG, ".jpg"),
+        ("https://ark.cn-beijing.volces.com/api/v3", "doubao-seedream-5-0-pro", _PNG, ".png"),
+        ("https://gw.test/v1", "gpt-image-2", _JPG, ".jpg"),
+        ("https://gw.test/v1", "gpt-image-2", _PNG, ".png"),
+    ],
+    ids=["ark-jpeg", "ark-png", "other-jpeg", "other-png"],
+)
+async def test_a_picture_that_names_no_type_is_typed_from_its_bytes(
+    monkeypatch, tmp_path, api_base, model, payload, suffix
+) -> None:
+    """An entry that names no type is typed from the bytes it carries on every
+    base: a JPEG is a .jpg whether it came from Ark or a gateway. This is the
+    rule the MiniMax path already uses, not a per-base guess at the default."""
+    encoded = base64.b64encode(payload).decode()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": [{"b64_json": encoded}]})
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model=model,
+        workspace=tmp_path / "ws",
+        api_base=api_base,
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"]
+    path = Path(out["paths"][0])
+    assert path.suffix == suffix and path.read_bytes() == payload
+
+
+async def test_any_openai_compatible_base_may_answer_in_url_form(monkeypatch, tmp_path) -> None:
+    """data[].url is read on every Images base, not only Ark's: a gateway
+    answering OpenAI's documented url form used to look like no image at all,
+    and the pixel size the same base takes is unchanged."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/images/generations":
+            body = json.loads(request.content)
+            assert body["size"] == "1024x1536"
+            assert "response_format" not in body
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/cdn/signed.png"}]})
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_PNG)
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("a poster", aspect_ratio="3:4"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+
+
+async def test_a_generated_picture_pointing_inward_is_refused_before_anything_is_fetched(monkeypatch, tmp_path) -> None:
+    """The download side of the URL form is a provider-supplied address too: the
+    guarded fetch refuses a link-local or private target, and -- the generation
+    already billed -- that refusal is its own error, not "no image returned"."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "http://169.254.169.254/latest/meta-data/"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "http://169.254.169.254/latest/meta-data/"
+    assert len(seen) == 1
+
+
+async def test_a_generated_picture_a_dead_network_cannot_deliver_is_not_read_as_missing(monkeypatch, tmp_path) -> None:
+    """A public URL the transport cannot reach is the same billed generation:
+    the answer names the fetch failure instead of reading as no image."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        raise httpx.ConnectError("[Errno 61] Connection refused to 1.2.3.4")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "https://1.2.3.4/tos/signed.jpeg"
+    assert "1.2.3.4" in out["detail"]
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(403, "AccessDenied: Request has expired"), (404, "NoSuchKey"), (500, "InternalError")],
+    ids=["expired-signature", "gone", "storage-error"],
+)
+async def test_a_generated_picture_its_storage_will_not_serve_is_not_read_as_a_failed_request(
+    monkeypatch, tmp_path, status, body
+) -> None:
+    """The storage behind the URL can answer with an error status of its own --
+    a signature that expired, an object already gone -- after the generation is
+    billed. That is the same unfetchable picture, not the generation request
+    failing: read as the request's own HTTP 403, it told the model to retry."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/plan/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(status, text=body)
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/plan/v3",
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == "https://1.2.3.4/tos/signed.jpeg"
+    assert out["detail"].startswith(f"HTTP {status}") and body in out["detail"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://169.254.169.254/latest/meta-data/", "https://1.2.3.4/cdn/signed.png"],
+    ids=["refused", "unreachable"],
+)
+async def test_a_gateway_s_picture_url_it_cannot_fetch_is_its_own_error_too(monkeypatch, tmp_path, url) -> None:
+    """Any Images base that answers in URL form has billed the picture before
+    the download, so a gateway's refused or unreachable URL is answered the way
+    Ark's is, not as "no image returned"."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/v1/images/generations":
+            return httpx.Response(200, json={"data": [{"url": url}]})
+        raise httpx.ConnectError("Connection refused to 1.2.3.4")
+
+    tool = _image_tool(
+        monkeypatch, handler, model="gpt-image-2", workspace=tmp_path / "ws", api_base="https://gw.test/v1"
+    )
+    out = json.loads(await tool.execute("a poster"))
+    assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+    assert out["url"] == url
+    assert seen[0].url.path == "/v1/images/generations"
+
+
 @pytest.mark.parametrize(
     ("model", "ratio", "size"),
     [
@@ -296,6 +802,225 @@ async def test_a_custom_image_endpoint_keeps_its_model_prefix(monkeypatch, tmp_p
     assert out["success"] and out["model"] == model
     assert len(seen) == 1 and str(seen[0].url) == api_base + "/images/generations"
     assert json.loads(seen[0].content)["model"] == model
+
+
+@pytest.mark.parametrize("model", ["sensenova-u1.5-lite", "google/gemini-2.5-flash-image"])
+async def test_an_openai_compatible_base_takes_every_model_through_the_images_api(monkeypatch, tmp_path, model) -> None:
+    """Chat routing with output modalities is OpenRouter's own. An OpenAI-compatible
+    base serves pictures at ``/images/generations`` whatever the model is called, and
+    answers ``chat/completions`` for an image model in its own words, which the
+    OpenRouter fallback does not recognise -- so the chat attempt only ever failed."""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    tool = _image_tool(monkeypatch, handler, model=model, workspace=tmp_path / "ws", api_base="https://relay.test/v1")
+    out = json.loads(await tool.execute("a poster"))
+    assert out["success"] and out["model"] == model
+    assert seen == ["/v1/images/generations"]
+
+
+async def test_the_exported_openrouter_key_never_goes_to_another_address(monkeypatch, tmp_path) -> None:
+    """``OPENROUTER_API_KEY`` is OpenRouter's credential. A keyless section pointed at
+    another endpoint used to take it anyway and send it there as the bearer token."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-env")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    elsewhere = SimpleNamespace(api_base="https://relay.test/v1", model="gpt-image-2", api_key="")
+    tool = ImageGenerateTool(elsewhere, workspace=tmp_path)
+    assert tool.api_key == "" and not ImageGenerateTool.has_key(elsewhere)
+    out = json.loads(await tool.execute("a poster"))
+    assert "no API key" in out["error"] and seen == []
+
+    on_openrouter = SimpleNamespace(api_base="", model="gpt-image-2", api_key="")
+    assert ImageGenerateTool(on_openrouter, workspace=tmp_path).api_key == "sk-or-env"
+
+
+async def test_a_named_provider_s_headers_ride_the_image_request(monkeypatch, tmp_path) -> None:
+    """A provider's connection is its address, its key and its headers: an endpoint
+    that routes or authenticates by header refuses a request carrying the first two
+    alone. Driven from the file through the live reader, the way the loop builds it."""
+    from raven.config.live import LiveConfig, media_tool_config
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "custom": {"apiKey": "sk-c", "apiBase": "https://relay.test/v1", "extraHeaders": {"X-Tenant": "t1"}}
+                },
+                "tools": {"media": {"image": {"model": "gpt-image-2", "provider": "custom"}}},
+            }
+        )
+    )
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    live = LiveConfig(path)
+    tool = ImageGenerateTool(lambda: media_tool_config(live, "image"), workspace=tmp_path / "ws")
+    assert json.loads(await tool.execute("a poster"))["success"]
+    assert str(seen[0].url) == "https://relay.test/v1/images/generations"
+    assert (seen[0].headers["x-tenant"], seen[0].headers["authorization"]) == ("t1", "Bearer sk-c")
+
+
+@pytest.mark.parametrize(
+    ("build", "call", "path"),
+    [
+        (lambda c: ImageGenerateTool(c, workspace=None), "a poster", "/v1/images/generations"),
+        (lambda c: SpeechGenerateTool(c), "read me", "/v1/chat/completions"),
+        (lambda c: VideoGenerateTool(c), "a river", "/v1/videos"),
+    ],
+    ids=["image", "speech", "video"],
+)
+async def test_the_section_headers_ride_every_media_request(monkeypatch, build, call, path) -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(500, text="stop here")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        api_base="https://relay.test/v1", api_key="k", model="gpt-image-2", extra_headers={"X-Tenant": "t1"}
+    )
+    await build(section).execute(call)
+    assert seen and seen[0].url.path == path
+    assert (seen[0].headers["x-tenant"], seen[0].headers["authorization"]) == ("t1", "Bearer k")
+
+
+async def test_a_section_header_replaces_the_key_s_in_any_case(monkeypatch) -> None:
+    """Header names compare without case, so a section's ``authorization`` replaces
+    the bearer the key builds instead of travelling beside it as a second one."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(500, text="stop here")
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        api_base="https://relay.test/v1", api_key="k", model="gpt-image-2", extra_headers={"authorization": "Bearer h"}
+    )
+    await ImageGenerateTool(section, workspace=None).execute("a poster")
+    assert seen[0].headers.get_list("authorization") == ["Bearer h"]
+
+
+def test_the_section_headers_stay_home_with_the_key() -> None:
+    """They can be credentials too, so a poll or content URL on another origin gets
+    neither them nor the key."""
+    tool = VideoGenerateTool(
+        SimpleNamespace(api_base="https://api.mycorp.example", model="", api_key="k", extra_headers={"X-Key": "s"})
+    )
+    headers = tool._headers()
+    assert headers["X-Key"] == "s"
+    assert tool._api_headers_for("https://api.mycorp.example/v1/x", headers) == headers
+    assert tool._api_headers_for("https://cdn.elsewhere.test/x", headers) is None
+
+
+async def test_a_section_on_a_named_provider_sends_the_id_that_provider_serves(monkeypatch, tmp_path) -> None:
+    """A provider's models are listed under its own prefix (``openai/gpt-image-2``) and
+    its Images API knows the bare name, so the prefix comes off on the way out -- the
+    way the embedding pin's does -- and the call goes to the provider's own address."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    section = SimpleNamespace(
+        provider="openai", api_base="https://api.openai.com/v1", api_key="sk-openai", model="openai/gpt-image-2"
+    )
+    tool = ImageGenerateTool(section, workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9", quality="low"))
+    assert out["success"] and out["model"] == "gpt-image-2"
+    assert [str(r.url) for r in seen] == ["https://api.openai.com/v1/images/generations"]
+    assert seen[0].headers["authorization"] == "Bearer sk-openai"
+    body = json.loads(seen[0].content)
+    assert (body["model"], body["size"], body["quality"]) == ("gpt-image-2", "1536x1024", "low")
+
+
+async def test_a_section_on_volcengine_speaks_ark_on_the_address_it_borrows(monkeypatch, tmp_path) -> None:
+    """``provider: volcengine`` lends VolcEngine's address and key, and that address
+    is Volces Ark: the frame goes out as Ark's explicit pair, inline bytes are
+    asked for, and the picture is fetched from the URL this answer carries
+    anyway, without the key."""
+    from raven.config.loader import load_config
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/v3/images/generations":
+            return httpx.Response(200, json={"data": [{"url": "https://1.2.3.4/tos/signed.jpeg"}]})
+        return httpx.Response(200, headers={"content-type": "image/jpeg"}, content=_JPG)
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    config = load_config(tmp_path / "absent.json")
+    config.providers.volcengine.api_key = "ark-key"
+    config.tools.media.image.model = "volcengine/doubao-seedream-5-0-pro"
+    config.tools.media.image.provider = "volcengine"
+    tool = ImageGenerateTool(config.effective_media_config().image, workspace=tmp_path / "ws")
+    out = json.loads(await tool.execute("a poster", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _JPG
+    generation, download = seen
+    assert str(generation.url) == "https://ark.cn-beijing.volces.com/api/v3/images/generations"
+    assert generation.headers["authorization"] == "Bearer ark-key"
+    body = json.loads(generation.content)
+    assert body == {
+        "model": "doubao-seedream-5-0-pro",
+        "prompt": "a poster",
+        "n": 1,
+        "size": "2736x1539",
+        "response_format": "b64_json",
+    }
+    assert download.headers.get("authorization") is None
+
+
+async def test_an_edit_on_an_ark_base_is_refused_before_anything_is_sent(monkeypatch, tmp_path) -> None:
+    """Ark has no ``/images/edits`` route, so a call with references is answered
+    there in so many words instead of with the 404 the edit form would draw."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(404, text="Not Found")
+
+    tool = _image_tool(
+        monkeypatch,
+        handler,
+        model="doubao-seedream-5-0-pro",
+        workspace=tmp_path / "ws",
+        api_base="https://ark.cn-beijing.volces.com/api/v3",
+    )
+    ref = tmp_path / "logo.png"
+    ref.write_bytes(_PNG)
+    out = json.loads(await tool.execute("blend the logo in", images=[str(ref)]))
+    assert seen == []
+    assert "edit" in out["error"] and out["model"] == "doubao-seedream-5-0-pro"
 
 
 # ── the image path: several pictures in one call ──
@@ -685,6 +1410,124 @@ def test_a_plain_config_section_stays_a_snapshot() -> None:
 
     tool = ImageGenerateTool(MediaToolConfig(api_key="sk-static"))
     assert tool.api_key == "sk-static"
+
+
+@pytest.mark.parametrize(
+    ("section", "expected"),
+    [
+        ({}, "high"),
+        ({"quality": ""}, "high"),
+        ({"quality": "low"}, "low"),
+    ],
+    ids=["unset", "picker-saved-empty", "named"],
+)
+def test_settings_quality_wins_only_where_it_names_one(section: dict, expected: str) -> None:
+    """`mediaSelection()` saves `quality: ""` when the reader picks a model
+    without choosing a quality. An empty string is the section's "no quality
+    named", not a choice that outranks the tool call's own request."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model="custom/gpt-image-2.5", provider="custom", **section)
+
+    assert ImageGenerateTool(config).effective_quality("high") == expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        ("custom/gpt-image-2", "medium"),
+        ("custom/gpt-image-2.5", None),
+    ],
+    ids=["gpt-image-2-has-a-default", "gpt-image-2.5-has-no-default"],
+)
+@pytest.mark.parametrize(
+    "section",
+    [{}, {"quality": ""}],
+    ids=["unset", "picker-saved-empty"],
+)
+def test_no_quality_anywhere_resolves_like_an_unset_section(model: str, expected: str | None, section: dict) -> None:
+    """With nothing on the call either, an empty Settings value lands where a
+    section that never had the key lands: gpt-image-2's medium default, and
+    nothing for the other gpt-image ids."""
+    from raven.config.schema import ImageToolConfig
+
+    config = ImageToolConfig(model=model, provider="custom", **section)
+
+    assert ImageGenerateTool(config).effective_quality(None) == expected
+
+
+async def test_an_empty_settings_quality_leaves_the_call_s_quality_in_the_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The picker's saved `quality: ""` used to read as an authoritative choice
+    that the `if quality:` sites then dropped, so a tool call asking for high
+    quality went out with no quality at all. Empty means unset, so the call's
+    value travels; a quality named in Settings still wins over the call's."""
+    from raven.config.schema import ImageToolConfig
+
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+
+    picker_saved = ImageToolConfig(model="openai/gpt-image-2.5", quality="", api_key="k")
+    assert json.loads(await ImageGenerateTool(picker_saved, workspace=tmp_path).execute("a kitten", quality="high"))[
+        "success"
+    ]
+    assert seen[-1]["quality"] == "high"
+
+    named = ImageToolConfig(model="openai/gpt-image-2.5", quality="low", api_key="k")
+    assert json.loads(await ImageGenerateTool(named, workspace=tmp_path).execute("a kitten", quality="high"))["success"]
+    assert seen[-1]["quality"] == "low"
+
+
+async def test_an_empty_settings_quality_reaches_a_custom_generations_route(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report's shape: a Custom provider section the picker saved with
+    ``quality: ""``, read live from the config file. That base's generation
+    route is a different quality-injection site from OpenRouter's ``/images``,
+    so the call's own value is checked where the report's request went."""
+    from raven.config.schema import MediaToolConfig
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"b64_json": _B64, "media_type": "image/png"}]})
+
+    source = tmp_path / "host.json"
+    source.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "media": {
+                        "image": {
+                            "apiBase": "https://custom.example/v1",
+                            "apiKey": "custom-key",
+                            "model": "openai/gpt-image-2.5",
+                            "quality": "",
+                        }
+                    }
+                }
+            }
+        )
+    )
+    tool = _image_tool(monkeypatch, handler, model="", workspace=tmp_path)
+    tool._config_static = MediaToolConfig(selection_config=str(source))
+
+    result = json.loads(await tool.execute("a kitten", quality="high"))
+
+    assert result["success"] and result["model"] == "openai/gpt-image-2.5"
+    assert seen[-1].url.path == "/v1/images/generations"
+    body = json.loads(seen[-1].content)
+    assert body["model"] == "openai/gpt-image-2.5"
+    assert body["quality"] == "high"
 
 
 @pytest.mark.parametrize(
@@ -1214,3 +2057,272 @@ async def test_a_batched_picture_is_told_which_reference_was_refused(monkeypatch
     failed = out["results"][1]
     assert out["failed"] == 1 and failed["error"] == "input image refused: not a fetchable public target"
     assert failed["url"] == "https://10.0.0.1/logo.png"
+
+
+# ── MiniMax, a provider the image section can name ──
+
+
+def _minimax_image_tool(monkeypatch, handler, workspace: Path, **section) -> ImageGenerateTool:
+    """An image section on MiniMax as borrowing leaves it: the provider named, its
+    address and key in place."""
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    recorder = section.pop("usage_recorder", None)
+    fields = {"provider": "minimax", "api_base": "https://api.minimax.io/v1", "api_key": "mm-key", "model": "image-01"}
+    return ImageGenerateTool(SimpleNamespace(**{**fields, **section}), workspace=workspace, usage_recorder=recorder)
+
+
+def _minimax_answer(*, pictures: list[str] | None = None, failed: str = "0", **extra) -> httpx.Response:
+    """MiniMax's image answer as its reference documents it, counts as strings."""
+    pictures = [_B64] if pictures is None else pictures
+    body = {
+        "id": "trace-1",
+        "data": {"image_base64": pictures},
+        "metadata": {"success_count": str(len(pictures)), "failed_count": failed},
+        "base_resp": {"status_code": 0, "status_msg": "success"},
+    }
+    return httpx.Response(200, json={**body, **extra})
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "url"),
+    [
+        ("minimax", "minimax/image-01", "https://api.minimax.io/v1/image_generation"),
+        ("minimax_cn_api", "image-01", "https://api.minimaxi.com/v1/image_generation"),
+    ],
+)
+async def test_an_image_section_on_minimax_borrows_its_connection(monkeypatch, tmp_path, provider, model, url) -> None:
+    """``provider: minimax`` lends MiniMax's address and key, and the picture is asked
+    of MiniMax's own image route with the id the provider serves; the capability
+    report reads the same key the tool sends."""
+    from raven.agent.tools.capabilities import CAPABILITIES, configured_from, has_credential
+    from raven.config.loader import load_config
+
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _minimax_answer()
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    config = load_config(tmp_path / "absent.json")
+    getattr(config.providers, provider).api_key = "mm-key"
+    config.tools.media.image.model = model
+    config.tools.media.image.provider = provider
+    tool = ImageGenerateTool(config.effective_media_config().image, workspace=tmp_path / "ws")
+
+    out = json.loads(await tool.execute("a portrait", aspect_ratio="16:9"))
+    assert out["success"] and Path(out["paths"][0]).read_bytes() == _PNG
+    assert [str(r.url) for r in seen] == [url]
+    assert seen[0].headers["authorization"] == "Bearer mm-key"
+    assert json.loads(seen[0].content) == {
+        "model": "image-01",
+        "prompt": "a portrait",
+        "n": 1,
+        "response_format": "base64",
+        "aspect_ratio": "16:9",
+    }
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+    assert has_credential(cap, config) and configured_from(cap, config) == f"borrowed: providers.{provider}.apiKey"
+
+
+async def test_a_minimax_key_only_in_the_environment_is_no_key_for_the_image_section(monkeypatch, tmp_path) -> None:
+    """The key travels with the provider's connection, so ``MINIMAX_API_KEY`` alone
+    reaches neither the tool nor the capability report, and the answer says where
+    the key belongs."""
+    from raven.agent.tools.capabilities import CAPABILITIES, has_credential
+    from raven.config.loader import load_config
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "mm-env")
+    config = load_config(tmp_path / "absent.json")
+    config.tools.media.image.model = "image-01"
+    config.tools.media.image.provider = "minimax"
+    tool = ImageGenerateTool(config.effective_media_config().image, workspace=tmp_path / "ws")
+    cap = next(c for c in CAPABILITIES if c.tool == "image_generate")
+
+    assert (tool.api_key, has_credential(cap, config)) == ("", False)
+    assert "providers.minimax" in json.loads(await tool.execute("a portrait"))["error"]
+
+
+async def test_a_minimax_address_alone_never_selects_minimax_s_request_shape(monkeypatch, tmp_path) -> None:
+    """MiniMax's own request shape follows the provider a section names, never its
+    address: a section naming none is called as an OpenAI-compatible base, a path
+    MiniMax's API answers with its router's plain 404."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(404, text="404 page not found")
+
+    tool = _image_tool(monkeypatch, handler, model="image-01", workspace=tmp_path, api_base="https://api.minimax.io/v1")
+    out = json.loads(await tool.execute("a portrait"))
+    assert [r.url.path for r in seen] == ["/v1/images/generations"]
+    assert (out["error"], out["detail"]) == ("HTTP 404", "404 page not found")
+    assert "MiniMax" not in json.dumps(tool.to_schema()), "nor does the address alone pick the schema"
+
+
+async def test_a_minimax_picture_keeps_one_character_and_a_local_one_travels_inline(monkeypatch, tmp_path) -> None:
+    """MiniMax keeps a character from one reference image per request: of several
+    the first is sent, a file on disk as a data URL."""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    portrait = workspace / "portrait.png"
+    portrait.write_bytes(_PNG)
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _minimax_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, workspace)
+    refs = [str(portrait), "https://example.test/second.png", "https://example.test/third.png"]
+    out = json.loads(await tool.execute("in a garden", images=refs, aspect_ratio="3:4", filename="garden"))
+
+    assert Path(out["paths"][0]).name == "garden.png"
+    assert seen[0]["subject_reference"] == [{"type": "character", "image_file": f"data:image/png;base64,{_B64}"}]
+
+
+async def test_a_minimax_batch_keeps_each_picture_s_own_reference(monkeypatch, tmp_path) -> None:
+    seen: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return _minimax_answer()
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path)
+    out = json.loads(
+        await tool.execute(
+            prompts=[
+                {"prompt": "first portrait", "images": ["https://example.test/first.png"]},
+                {"prompt": "second portrait", "images": ["https://example.test/second.png"]},
+            ]
+        )
+    )
+    assert len(out["paths"]) == 2
+    files = sorted(body["subject_reference"][0]["image_file"] for body in seen)
+    assert files == ["https://example.test/first.png", "https://example.test/second.png"]
+
+
+async def test_a_minimax_reference_outside_a_confined_workspace_is_refused_before_anything_is_sent(
+    monkeypatch, tmp_path
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        pytest.fail("a reference the workspace forbids must not reach the API")
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path / "ws")
+    tool._restrict_to_workspace = True
+    out = json.loads(await tool.execute("portrait", images=[str(tmp_path / "outside.png")]))
+    assert "outside the workspace" in out["detail"]
+
+
+@pytest.mark.parametrize(("code", "message"), [(1008, "insufficient balance"), (2013, "invalid params")])
+async def test_a_minimax_status_is_the_error_class_and_its_message_the_detail(monkeypatch, tmp_path, code, message):
+    """The vendor's sentence varies per call while the code does not, and the loop's
+    failure streak keys on ``error``: the code is the class, the sentence the detail."""
+    answer = httpx.Response(200, json={"base_resp": {"status_code": code, "status_msg": message}})
+    tool = _minimax_image_tool(monkeypatch, lambda _r: answer, tmp_path)
+    out = json.loads(await tool.execute("portrait"))
+    assert out == {"error": f"MiniMax status {code}", "detail": message, "model": "image-01"}
+
+
+@pytest.mark.parametrize(("failed", "error"), [("1", "image generation refused"), ("0", "no image returned")])
+async def test_a_minimax_picture_its_safety_check_withheld_reads_as_refused(monkeypatch, tmp_path, failed, error):
+    """``failed_count`` counts pictures MiniMax's content check withheld, which is a
+    refusal to rephrase around rather than an empty answer to ask again for."""
+    tool = _minimax_image_tool(monkeypatch, lambda _r: _minimax_answer(pictures=[], failed=failed), tmp_path)
+    out = json.loads(await tool.execute("portrait"))
+    assert (out["error"], out.get("retryable")) == (error, False if failed == "1" else None)
+
+
+async def test_a_minimax_picture_is_counted_as_a_call(monkeypatch, tmp_path) -> None:
+    """MiniMax reports no tokens, so the record carries none; the call still counts,
+    as the other image routes' do."""
+    recorded: list = []
+
+    async def recorder(snapshot) -> None:
+        recorded.append(snapshot)
+
+    tool = _minimax_image_tool(monkeypatch, lambda _r: _minimax_answer(), tmp_path, usage_recorder=recorder)
+    assert json.loads(await tool.execute("portrait"))["success"]
+    assert [(s.model, s.input_tokens, s.output_tokens) for s in recorded] == [("image-01", None, None)]
+
+
+@pytest.mark.parametrize(
+    "picture_url,fetched", [("https://8.8.8.8/image.png", True), ("http://127.0.0.1/image.png", False)]
+)
+async def test_a_minimax_picture_url_is_fetched_guarded_and_without_the_key(
+    monkeypatch, tmp_path, picture_url, fetched
+):
+    downloads: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return httpx.Response(200, json={"data": {"image_urls": [picture_url]}, "base_resp": {"status_code": 0}})
+        assert "authorization" not in request.headers
+        downloads.append(str(request.url))
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=_PNG)
+
+    tool = _minimax_image_tool(monkeypatch, handler, tmp_path)
+    out = json.loads(await tool.execute("portrait"))
+    if fetched:
+        assert Path(out["paths"][0]).read_bytes() == _PNG and downloads == [picture_url]
+    else:
+        assert out["error"] == "generated, but the picture URL was refused or could not be fetched"
+        assert (out["url"], downloads) == (picture_url, [])
+
+
+async def test_a_minimax_picture_keeps_the_format_its_bytes_declare(monkeypatch, tmp_path) -> None:
+    """MiniMax's base64 answer names no format, and its pictures are JPEG: the file
+    takes the extension the bytes declare instead of one assumed for every picture."""
+    jpeg = base64.b64encode(_JPG).decode()
+    tool = _minimax_image_tool(monkeypatch, lambda _r: _minimax_answer(pictures=[jpeg]), tmp_path)
+    out = json.loads(await tool.execute("portrait"))
+    assert Path(out["paths"][0]).suffix == ".jpg" and Path(out["paths"][0]).read_bytes() == _JPG
+
+
+def test_the_image_tool_says_what_references_do_on_the_provider_it_runs_on() -> None:
+    """Edited or varied on most routes, kept as a character on MiniMax: the model reads
+    the one its section's provider applies, per turn."""
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
+    registry = ToolRegistry()
+    registry.register(ImageGenerateTool(lambda: section, workspace=None))
+
+    def offered() -> dict:
+        return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "image_generate")
+
+    assert "MiniMax" not in json.dumps(offered())
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    assert "character" in offered()["parameters"]["properties"]["images"]["description"]
+    assert "edit" not in offered()["description"].split(".")[0]
+
+
+@pytest.mark.parametrize("tool_class", [ImageGenerateTool, VideoGenerateTool])
+def test_a_media_tool_read_off_its_class_answers_the_default_schema(tool_class) -> None:
+    """The class has no section, so no provider to pick by: it answers what a section
+    on no named provider is offered, and a reader that takes an argument's spelling
+    off the class still finds a schema there."""
+    tool = tool_class(lambda: SimpleNamespace(provider="", api_base="", api_key="k", model=""))
+    assert (tool_class.description, tool_class.parameters) == (tool.description, tool.parameters)
+
+
+def test_a_plain_section_an_embedder_hands_in_for_video_is_a_video_section() -> None:
+    """An embedder handing ``AgentLoop`` a plain ``MediaToolConfig`` for video keeps
+    working now that the video section has a class of its own, as the image one did."""
+    from raven.config.schema import MediaGenConfig, MediaToolConfig, VideoToolConfig
+
+    media = MediaGenConfig(video=MediaToolConfig(api_key="k", model="kwaivgi/kling-v3.0-std"))
+    assert isinstance(media.video, VideoToolConfig)
+    assert (media.video.api_key, media.video.model, media.video.provider) == ("k", "kwaivgi/kling-v3.0-std", "")
+
+
+def test_the_providers_offered_for_video_are_the_ones_the_video_tool_has_a_path_for() -> None:
+    """The registry's ``video_api`` decides what the roles card offers, and the tool's
+    dispatch decides what runs; nothing else ties the two together."""
+    from raven.providers.registry import PROVIDERS
+
+    assert {spec.name for spec in PROVIDERS if spec.video_api} == media_gen._MINIMAX_PROVIDERS | {"openrouter"}

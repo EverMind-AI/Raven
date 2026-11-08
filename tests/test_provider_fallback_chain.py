@@ -365,3 +365,61 @@ async def test_should_fallback_classification():
     assert LLMProvider.classify_error(content="maximum context length exceeded").should_fallback is False
     assert LLMProvider.classify_error(content="ok").should_fallback is False
     assert LLMProvider.classify_error(content=None).should_fallback is False
+
+
+class _EffortRecordingProvider(_ScriptedProvider):
+    """``_ScriptedProvider`` that also records the effort each hop carried."""
+
+    provider_name = "testbed"
+
+    def __init__(self, script):
+        super().__init__(script)
+        self.efforts: list[tuple[str | None, str | None]] = []
+
+    async def chat(
+        self,
+        messages,
+        tools=None,
+        model=None,
+        max_tokens=4096,
+        temperature=0.7,
+        reasoning_effort=None,
+        tool_choice=None,
+    ):
+        self.efforts.append((model, reasoning_effort))
+        return await super().chat(
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_hop_re_clamps_the_primarys_effort(monkeypatch):
+    """The primary's word is not evidence about the fallback; a recovery call
+    must not be rejected for an effort the fallback does not declare."""
+    from raven.providers import effort_levels
+
+    asked: list[str | None] = []
+
+    def levels(model, declared=(), *, provider=None, refresh=False):
+        asked.append(provider)
+        return ("low", "high") if model == "backup" else ("low", "high", "max")
+
+    monkeypatch.setattr(effort_levels, "levels_for", levels)
+    provider = _EffortRecordingProvider(
+        {
+            "primary": [LLMResponse(content="insufficient credit / billing", finish_reason="error")],
+            "backup": [LLMResponse(content="ok", finish_reason="stop")],
+        }
+    )
+    resp = await provider.chat_with_retry(
+        messages=[], model="primary", fallback_models=["backup"], reasoning_effort="max"
+    )
+    assert resp.content == "ok"
+    assert provider.efforts == [("primary", "max"), ("backup", "high")]
+    assert asked == ["testbed"], "the hop's ladder must follow the provider instance that sends it"

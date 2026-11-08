@@ -190,5 +190,5 @@ task 的 status message 中，不承诺逐 token 输出或生成文件的 artifa
 
 实现入口：`raven/acp/capabilities.py`、`raven/acp/methods.py`、
 `raven/acp_client/permissions.py`、`raven/a2a/card.py`、`raven/a2a/routes_aiohttp.py`、
-`raven/a2a/runtime.py` 和 `raven/a2a_client/client.py`。CLI help 可用于查启动方式，
-但部分 ACP 帮助文字早于会话模式和每会话 MCP 功能；支持情况以协商能力和方法实现为准。
+`raven/a2a/runtime.py` 和 `raven/a2a_client/client.py`。
+启动语法见 CLI help；会话模式和每会话 MCP 的支持情况以 ACP 能力握手为准。

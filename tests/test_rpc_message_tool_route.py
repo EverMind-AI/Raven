@@ -192,6 +192,7 @@ async def test_ac4_no_synthetic_tool_complete_when_message_tool_unused(workspace
     class _PlainProvider:
         async def chat_stream(self, **kwargs):
             yield ChatDelta(content="just text")
+            yield ChatDelta(content=None, finish_reason="stop")
 
         def get_default_model(self) -> str:
             return "fake/model"

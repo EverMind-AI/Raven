@@ -21,7 +21,7 @@
     },
     "search": {
       "saturation": {
-        "k": 10
+        "k": 5
       }
     }
   }

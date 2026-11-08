@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from raven.config.agent_names import GENERIC_AGENT
 from raven.config.update_subagents import (
     add_agent,
     get_agents,
@@ -121,8 +122,9 @@ def test_a_builtin_name_cannot_be_claimed_by_another_transport(tmp_path: Path) -
 
 
 class TestTheBuiltinNamesAreReserved:
-    """Both spellings of the generic row's name belong to it, and no transport
-    may claim either -- but a config that already holds one must stay editable.
+    """Every spelling of the generic row's name, current or former, belongs to it,
+    and no transport may claim one -- but a config that already holds one must stay
+    editable.
 
     `Raven` was accepted before the generic row was renamed to it, so real installs
     can hold such an entry. Refusing every write while one is on disk would lock the
@@ -130,7 +132,7 @@ class TestTheBuiltinNamesAreReserved:
     guard rejects *introducing* a reserved name, not possessing one.
     """
 
-    @pytest.mark.parametrize("name", ["Raven", "raven"])
+    @pytest.mark.parametrize("name", [GENERIC_AGENT, "Raven", "raven"])
     @pytest.mark.parametrize("kind", ["cli", "openai"])
     def test_a_new_entry_cannot_claim_either_spelling(self, tmp_path: Path, name: str, kind: str) -> None:
         p = tmp_path / "config.json"
@@ -139,7 +141,7 @@ class TestTheBuiltinNamesAreReserved:
         with pytest.raises(ValueError, match="built-in"):
             set_agents([{"name": name, "kind": kind, "command": "x {prompt}"}], config_path=p)
 
-    @pytest.mark.parametrize("name", ["Raven", "raven"])
+    @pytest.mark.parametrize("name", [GENERIC_AGENT, "Raven", "raven"])
     def test_an_acp_redeclaration_of_a_builtin_name_is_allowed(self, tmp_path: Path, name: str) -> None:
         """An acp row of a seed's name is the supported transport switch: the
         generic agent is then served over this raven's own `raven acp`. An empty
@@ -153,10 +155,10 @@ class TestTheBuiltinNamesAreReserved:
         from raven.agent.subagent.builtin_agents import canonical_agent_name
 
         stored = {canonical_agent_name(e["name"]): e for e in _entries(p)}
-        assert stored["Raven"]["kind"] == "acp"
+        assert stored[GENERIC_AGENT]["kind"] == "acp"
 
     def test_another_casing_is_not_reserved(self, tmp_path: Path) -> None:
-        # Only the two spellings the row answers to are taken. `RAVEN` resolves to
+        # Only the spellings the row answers to are taken. `RAVEN` resolves to
         # itself, collides with no seed, and is an ordinary name.
         p = tmp_path / "config.json"
         p.write_text(json.dumps({"subagents": {"agents": []}}))
@@ -210,3 +212,24 @@ class TestTheBuiltinNamesAreReserved:
         set_agents([], config_path=p)
 
         assert _entries(p) == []
+
+
+def test_agents_on_machine_names_the_entries_that_run_there(tmp_path: Path) -> None:
+    from raven.config.update_subagents import agents_on_machine
+
+    p = _cfg(tmp_path)
+    set_agents(
+        [
+            {"name": "claude_code", "kind": "cli", "command": "claude -p {prompt}"},
+            {"name": "claude_code@box", "kind": "cli", "command": "claude -p {prompt}", "machine": "box"},
+            {"name": "codex@box", "kind": "cli", "command": "codex -p {prompt}", "machine": "box", "enabled": False},
+            {"name": "hermes@gpu", "kind": "cli", "command": "hermes -p {prompt}", "machine": "gpu"},
+        ],
+        config_path=p,
+    )
+
+    assert agents_on_machine("box", config_path=p) == ["claude_code@box", "codex@box"]
+    assert agents_on_machine(" box ", config_path=p) == ["claude_code@box", "codex@box"]
+    # A disconnected entry dispatches nothing, so a removal is not refused over it.
+    assert agents_on_machine("box", only_enabled=True, config_path=p) == ["claude_code@box"]
+    assert agents_on_machine("nowhere", config_path=p) == []

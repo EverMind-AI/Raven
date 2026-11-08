@@ -36,6 +36,7 @@ from loguru import logger
 
 from raven.acp import protocol
 from raven.acp.tool_kinds import absolute_path, locations, title_for, tool_kind
+from raven.providers.usage import reported_cost
 from raven.security.redact import redact, redact_value
 
 # Every event type ``RpcOutlet``, the spine sink, the DAG bridge and the cron
@@ -65,6 +66,17 @@ KNOWN_EVENT_TYPES = frozenset(
         "cron.delivered",
         "cron.missed",
         "media",
+    }
+)
+
+# Subscription events an ACP client has no surface for. ``translate`` has no branch
+# for them and drops them on purpose; they are named here so the coverage test can
+# tell that decision from an event nobody wired.
+UNSERVED_EVENT_TYPES = frozenset(
+    {
+        # The page's task board. An ACP client draws none; the surfaces that do
+        # read the board whole through ``tasks.board``.
+        "tasks.board_updated",
     }
 )
 
@@ -197,7 +209,7 @@ def _meta_for(payload: dict[str, Any]) -> dict[str, Any] | None:
     return {"raven.target": target}
 
 
-def translate(event: Any, *, cwd: str | None = None) -> Translated:
+def translate(event: Any, *, cwd: str | None = None, session_cost: float | None = None) -> Translated:
     """Read one wire event. Pure: no state, no I/O, no event loop.
 
     Kept pure so the frames it produces can be validated against the official
@@ -207,6 +219,9 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
     An event this has no branch for yields an empty result rather than raising.
     A translator that crashed on an unrecognised event would take the whole
     connection down over a wire event somebody added for the web client.
+
+    ``session_cost`` is the session's cumulative cost, which the caller keeps:
+    it is what ACP's ``usage_update.cost`` reports, and no one event carries it.
     """
     if not isinstance(event, dict):
         return Translated()
@@ -242,7 +257,7 @@ def translate(event: Any, *, cwd: str | None = None) -> Translated:
         # latched one earlier; ``end_turn`` here is the default that a plain
         # completion means. The usage rides out first, so the client has the
         # turn's cost before the turn is over rather than after.
-        usage = _usage_update(payload.get("usage"))
+        usage = _usage_update(payload.get("usage"), session_cost)
         return Translated(updates=() if usage is None else (usage,), stop="end_turn")
 
     if kind == "media":
@@ -361,8 +376,8 @@ def _file_uri(path: str) -> str:
         return "file://" + quote(path, safe="/")
 
 
-def _usage_update(usage: Any) -> dict[str, Any] | None:
-    """How full the context window is, and what the turn cost.
+def _usage_update(usage: Any, session_cost: float | None = None) -> dict[str, Any] | None:
+    """How full the context window is, and what the session has cost so far.
 
     The one place the rich accounting already on the internal wire maps cleanly
     onto ACP: ``used`` and ``size`` are the context numbers, and ``Cost`` wants
@@ -373,8 +388,11 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     no usage at all (a cached reply, a hook short-circuit) has nothing to say
     here -- an update of zeroes is not the same statement as no update.
 
-    The currency is USD because cost_usd carries only verified dollar amounts
-    reported by the provider, never a locally estimated price.
+    ``cost`` is ``session_cost``, not the turn's ``cost_usd``: ACP defines it as
+    the session's cumulative cost, and the turn's alone made a client show the
+    last turn's spend as the whole session's. The currency is USD because the
+    total sums only dollar amounts providers reported, never a locally estimated
+    price.
     """
     if not isinstance(usage, dict):
         return None
@@ -383,10 +401,18 @@ def _usage_update(usage: Any) -> dict[str, Any] | None:
     if not isinstance(used, int) or not isinstance(size, int) or size <= 0 or used < 0:
         return None
     update: dict[str, Any] = {"sessionUpdate": "usage_update", "used": used, "size": size}
-    cost = usage.get("cost_usd")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost >= 0:
-        update["cost"] = {"amount": float(cost), "currency": "USD"}
+    if (amount := reported_cost(session_cost)) is not None:
+        update["cost"] = {"amount": amount, "currency": "USD"}
     return update
+
+
+def _turn_spend(event: Any) -> float | None:
+    """What the turn a ``message.complete`` ends reported spending, or None for any other event."""
+    if not isinstance(event, dict) or event.get("type") != "message.complete":
+        return None
+    payload = event.get("payload")
+    usage = payload.get("usage") if isinstance(payload, dict) else None
+    return reported_cost(usage.get("cost_usd")) if isinstance(usage, dict) else None
 
 
 def _clip_deep(value: Any, depth: int = 0) -> Any:
@@ -499,14 +525,16 @@ def _tool_call_update(payload: dict[str, Any], meta: dict[str, Any] | None) -> d
     }
     content: list[dict[str, Any]] = []
     if isinstance(preview, str) and preview:
-        # Scanned before it is cut, and the order is the whole point: cutting
+        # Local previews are scanned before they are cut: cutting
         # first can slice a credential so that it no longer matches the pattern
         # that would have caught it -- ``redact("token sk-ant-api")`` returns it
         # unchanged -- and then the head of it is published as ordinary text.
         # The scan cap in :mod:`raven.security.redact` is four times this one, so a
         # preview of any length that reaches here is scanned whole or truncated
         # by that module with a notice of its own.
-        scanned = redact(preview)
+        metadata = payload.get("metadata")
+        agent_output = isinstance(metadata, dict) and metadata.get("agent_output") is True
+        scanned = preview if agent_output else redact(preview)
         text = scanned[:MAX_RESULT_PREVIEW]
         if payload.get("truncated") or len(scanned) > MAX_RESULT_PREVIEW:
             text += "\n[truncated]"
@@ -696,6 +724,13 @@ class AcpSession:
     cwd: str
     subscription_id: str | None = None
     turn: _Turn | None = None
+    cost_usd: float | None = None
+    """What the session has cost so far, in provider-reported USD: what it had
+    spent when it was opened here, then each turn's spend added as it ends. None
+    until some call reports a price."""
+    cost_known: bool = True
+    """False when what the session had spent before it was opened here could not
+    be read: a total counted from zero would understate it, so none is sent."""
 
 
 class UpdateTranslator:
@@ -791,6 +826,11 @@ class UpdateTranslator:
         return tuple(self._by_session_id.values())
 
     # -- turn lifecycle ---------------------------------------------------
+
+    @property
+    def closing(self) -> bool:
+        """Whether the connection has begun draining its pending handlers."""
+        return self._closing
 
     def begin_turn(self, session_id: str) -> asyncio.Future[str]:
         """Open a turn and return the future its stop reason arrives on.
@@ -912,7 +952,9 @@ class UpdateTranslator:
         await self._deliver(session, params.get("event"))
 
     async def _deliver(self, session: AcpSession, event: Any) -> None:
-        result = translate(event, cwd=session.cwd)
+        if (spent := _turn_spend(event)) is not None:
+            session.cost_usd = (session.cost_usd or 0.0) + spent
+        result = translate(event, cwd=session.cwd, session_cost=session.cost_usd if session.cost_known else None)
         # Held thoughts go out before anything that has to follow them: a
         # chunk of the answer, a tool call, an ending. An event that carries
         # none of those (a thought, or nothing at all) leaves them held, which
@@ -1045,6 +1087,7 @@ __all__ = [
     "MAX_MEDIA_ITEMS",
     "MAX_RESULT_PREVIEW",
     "SIDE_CHANNEL_METHODS",
+    "UNSERVED_EVENT_TYPES",
     "AcpSession",
     "Translated",
     "TurnAlreadyRunningError",

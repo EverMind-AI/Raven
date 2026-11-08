@@ -9,31 +9,28 @@ from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 from raven import home as raven_home
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as rpc_console
+from tests._everos_env import forget_everos_binding
 
 pytestmark = pytest.mark.asyncio
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Take the operator's documented override out of the ambient shell.
+def _no_ambient_everos_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every case with no role exported and no provenance remembered.
 
-    ``EVEROS_EMBEDDING__*`` is a real input to ``role_is_env_managed``,
-    so a developer who exports it turns every case here that assumes no
-    override into a different case -- silently, and only on their machine. A
-    case that reads one answer on one machine and another elsewhere is not
-    pinning anything. Cases that are about the override set it themselves,
+    ``EVEROS_<ROLE>__*`` is a real input to ``role_is_env_managed``, for all
+    four roles: a developer who exports one, or a test elsewhere that bound
+    them and did not put the process back, turns every case here that assumes
+    no override into a different case -- silently, and only on that machine or
+    in that shard. A case that reads one answer there and another elsewhere is
+    not pinning anything. Cases that are about the override set it themselves,
     after this has run.
     """
-    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
-        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
-    import raven_everos.config as _ue
-
-    # Provenance is process-global; a case that bound the host endpoint would
-    # otherwise tell the next one that raven had already written those.
-    _ue._BOUND_HERE.clear()
+    forget_everos_binding(monkeypatch)
 
 
 @pytest.fixture()
@@ -264,7 +261,9 @@ async def test_default_permission_mode_is_a_settings_key(cfg):
         await rpc_console.settings_set({"key": "permissions.mode", "value": "yolo"})
 
 
-async def test_secret_key_writes_string(cfg):
+async def test_secret_key_writes_string(cfg, monkeypatch):
+    # A mirrored key's write takes the login-shell capture again, in the host's own shell.
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", lambda: True)
     r = await rpc_console.settings_set({"key": "tools.web.search.apiKey", "value": "sk-x"})
     assert r["applied"] is True
     assert _read(cfg)["tools"]["web"]["search"]["apiKey"] == "sk-x"
@@ -762,13 +761,33 @@ class TestTheCronTimezoneControl:
 
         assert r["applied"] is True
         assert _read(cfg)["cron"]["defaultTimezone"] == "Asia/Tokyo"
-        # Landing in the file is half of it: the writer spells the key one way
-        # and the loader has to read that same spelling back. Deliberately not a
-        # claim about scheduling -- ``CronConfig.default_timezone`` has exactly
-        # one consumer today, the ``raven cron config get`` display path, and
-        # ``_compute_next_run`` falls back to the machine's local zone rather
-        # than to this field.
         assert load_config(cfg).cron.default_timezone == "Asia/Tokyo"
+
+    @pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+    async def test_the_saved_default_reaches_new_jobs_on_the_running_service(self, cfg, spelling):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from raven.core.cron_stack import build_cron_service
+
+        cfg.write_text(json.dumps({"cron": {spelling: "UTC"}}), encoding="utf-8")
+        service = build_cron_service(allowed_channels=None)
+        service._now_fn = lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+        loop = SimpleNamespace(cron_service=service)
+        params = {"kind": "cron", "expr": "0 9 * * *", "name": "first", "message": "first"}
+        first = (await rpc_console.cron_save(params, agent_loop_factory=lambda: loop))["job"]
+        result = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        assert result["previous"] == "UTC"
+        assert _read(cfg)["cron"] == {spelling: "Asia/Tokyo"}
+        second = (
+            await rpc_console.cron_save(
+                {**params, "name": "second", "message": "second"}, agent_loop_factory=lambda: loop
+            )
+        )["job"]
+        assert first["tz"] == "UTC"
+        assert second["tz"] == "Asia/Tokyo"
+        assert first["next_run_at_ms"] == int(datetime(2026, 1, 1, 9, tzinfo=timezone.utc).timestamp() * 1000)
+        assert second["next_run_at_ms"] == int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp() * 1000)
 
     async def test_the_previous_timezone_comes_back(self, cfg):
         await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
@@ -783,6 +802,19 @@ class TestTheCronTimezoneControl:
     async def test_an_empty_timezone_is_refused(self, cfg):
         with pytest.raises(ConfigValidationError):
             await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": ""})
+
+    async def test_null_returns_new_jobs_to_local_time(self, cfg):
+        from raven.core.cron_stack import build_cron_service
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": "Asia/Tokyo"})
+        r = await rpc_console.settings_set({"key": "cron.defaultTimezone", "value": None})
+
+        assert r["previous"] == "Asia/Tokyo"
+        job = build_cron_service(allowed_channels=None).add_job(
+            "daily", CronSchedule(kind="cron", expr="0 9 * * *"), "daily"
+        )
+        assert job.schedule.tz is None
 
 
 async def test_the_retired_forward_channels_key_is_not_writable(cfg):
@@ -1170,6 +1202,7 @@ async def test_settings_set_new_scalar_keys_write_and_refuse(cfg, key, good, bad
     "key",
     [
         "agents.defaults.contextWindowTokens",
+        "agents.defaults.reasoningEffort",
         "context.curatorModel",
         "sessionTitle.provider",
         "sessions.autoArchiveAfterDays",
@@ -1217,6 +1250,421 @@ async def test_settings_set_blocklist_is_a_raw_list(cfg):
     assert _read(cfg)["skillForge"]["blocklist"] == ["codeword"]
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "skillForge.blocklist", "value": "codeword"})
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("section", [None, {"autoInstall": "off"}])
+async def test_settings_set_blocklist_preserves_the_section_spelling(cfg, spelling, section):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({spelling: section}), encoding="utf-8")
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {spelling: {**(section or {}), "blocklist": ["codeword"]}}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["codeword"]
+
+
+@pytest.mark.parametrize("spelling", ["skillForge", "skill_forge"])
+@pytest.mark.parametrize("invalid", [[], 0, 1, "invalid", False])
+async def test_settings_set_blocklist_preserves_invalid_sections(cfg, spelling, invalid):
+    cfg.write_text(json.dumps({spelling: invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["codeword"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "on"),
+    [
+        ({}, False),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}, True),
+        ({"skillForge": {"router": {"hub": {"endpoint": None}}}}, False),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": "y"}}}}, True),
+        ({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": " true "}}}}, False),
+        ({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test", "prefetchBodies": 1}}}, True),
+    ],
+)
+async def test_settings_get_reports_the_hub_switch_as_the_runtime_reads_it(cfg, payload, on):
+    """The page draws the Skill Hub switch from this answer instead of from the
+    raw file: the loader migrates legacy shapes in memory and parses lax
+    booleans by its own rules, and a page-side copy of either drifts."""
+    from raven.config.live import LiveConfig, skill_hub_enabled
+
+    cfg.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = await rpc_console.settings_get({})
+
+    assert result["skill_hub_on"] is on
+    assert skill_hub_enabled(LiveConfig(cfg)) is on
+
+
+class _ServingLoop:
+    """The one attribute the reload notice reads off the serving loop."""
+
+    def __init__(self, client: object | None) -> None:
+        self._skill_hub_client = client
+
+
+async def test_settings_set_hub_switch_on_seeds_the_endpoint(cfg):
+    from raven.config.raven import load_raven_config
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True},
+        agent_loop_factory=lambda: _ServingLoop(None),
+    )
+
+    # The serving loop was built without an endpoint, so it has no Hub client
+    # to switch on until a reload. Off is live.
+    assert result == {
+        "applied": True,
+        "previous": False,
+        "warning": "Saved. Skill Hub search starts after Raven reloads.",
+    }
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": True,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+    assert load_raven_config(config_path=cfg).skill_forge.router.hub.enabled is True
+
+
+async def test_settings_set_hub_switch_on_with_an_endpoint_needs_no_reload(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+
+    assert result == {"applied": True, "previous": True}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": True,
+    }
+
+
+async def test_settings_set_hub_switch_off_keeps_the_url(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": False})
+
+    assert result == {"applied": True, "previous": True}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "endpoint": "https://hub.internal.test",
+        "enabled": False,
+    }
+
+
+async def test_settings_set_hub_init_seeds_without_re_enabling(cfg):
+    """The web wizard's finish. It must match the CLI onboarding: seed the
+    endpoint, keep an explicit off, and keep a custom endpoint."""
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True},
+        agent_loop_factory=lambda: _ServingLoop(None),
+    )
+
+    # The source stays off, so nothing waits for a reload.
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": False,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+
+    await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {
+        "enabled": False,
+        "endpoint": "https://skillhub.evermind.ai",
+    }
+
+
+@pytest.mark.parametrize(
+    ("serving", "warned"),
+    [(None, False), (_ServingLoop(None), True), (_ServingLoop(object()), False)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+async def test_the_reload_notice_follows_the_serving_loop(cfg, serving, warned):
+    """The notice answers "can the loop serving now search?", not "did this
+    write seed the endpoint?": with no loop yet the first one is built from
+    this file, and a loop that started with an endpoint switches live."""
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert ("warning" in result) is warned
+    got = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (True, warned)
+
+
+async def test_the_reload_notice_repeats_while_the_loop_still_cannot_search(cfg):
+    """A second switch-on finds the endpoint already written, and the loop is
+    still the one built without it: the wait has not ended, so neither has the
+    notice."""
+    serving = _ServingLoop(None)
+    set_to = [
+        await rpc_console.settings_set(
+            {"key": "skillForge.router.hub.enabled", "value": value}, agent_loop_factory=lambda: serving
+        )
+        for value in (True, False, True)
+    ]
+
+    assert [r.get("warning") for r in set_to] == [
+        "Saved. Skill Hub search starts after Raven reloads.",
+        None,
+        "Saved. Skill Hub search starts after Raven reloads.",
+    ]
+    off = await rpc_console.settings_get({}, agent_loop_factory=lambda: serving)
+    assert off["skill_hub_awaiting_reload"] is True
+
+
+_HUB_RELOAD = "Saved. Skill Hub search starts after Raven reloads."
+_HUB_NOTICE = (
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation "
+    "to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+_HUB_NOTICE_RELOAD = (
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends "
+    "text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills."
+)
+
+
+@pytest.mark.parametrize(
+    ("serving", "notice"),
+    [(None, _HUB_NOTICE), (_ServingLoop(None), _HUB_NOTICE_RELOAD), (_ServingLoop(object()), _HUB_NOTICE)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+async def test_a_wizard_finish_that_turns_skill_hub_search_on_says_what_it_sends(cfg, serving, notice):
+    """Finishing the wizard is the opt-in, and the reader has not been told
+    what it sends anywhere else on the way: the answer says it, and how to stop."""
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert result == {"applied": True, "previous": None, "warning": notice}
+
+
+@pytest.mark.parametrize(
+    ("serving", "warning"),
+    [(None, None), (_ServingLoop(None), _HUB_RELOAD), (_ServingLoop(object()), None)],
+    ids=["no loop yet", "loop without a client", "loop with a client"],
+)
+async def test_a_wizard_finish_that_turned_nothing_on_reports_only_the_wait(cfg, serving, warning):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert result.get("warning") == warning
+
+
+async def test_the_skill_hub_notices_follow_the_reply_language(cfg, monkeypatch):
+    from raven import i18n
+
+    monkeypatch.setattr(i18n, "_language", "zh")
+    serving = _ServingLoop(None)
+
+    wizard = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.init", "value": True}, agent_loop_factory=lambda: serving
+    )
+    switch = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=lambda: serving
+    )
+
+    assert wizard["warning"] == i18n.t_in("zh", _HUB_NOTICE_RELOAD) != _HUB_NOTICE_RELOAD
+    assert switch["warning"] == i18n.t_in("zh", _HUB_RELOAD) != _HUB_RELOAD
+    assert i18n.t_in("zh", _HUB_NOTICE) != _HUB_NOTICE
+
+
+async def test_a_loop_that_failed_to_build_leaves_the_settings_page_working(cfg):
+    """The stack's factory raises the build error when the loop could not be
+    built, which is when a reader most needs this page. Nothing is serving, so
+    nothing waits for a reload."""
+
+    def broken():
+        raise RuntimeError("no model configured")
+
+    result = await rpc_console.settings_set(
+        {"key": "skillForge.router.hub.enabled", "value": True}, agent_loop_factory=broken
+    )
+    got = await rpc_console.settings_get({}, agent_loop_factory=broken)
+
+    assert result == {"applied": True, "previous": False}
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (True, False)
+
+
+async def test_settings_get_awaits_no_reload_while_the_source_is_off(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "enabled": False}}}}),
+        encoding="utf-8",
+    )
+
+    got = await rpc_console.settings_get({}, agent_loop_factory=lambda: _ServingLoop(None))
+
+    assert (got["skill_hub_on"], got["skill_hub_awaiting_reload"]) == (False, False)
+
+
+async def test_settings_set_hub_init_keeps_a_custom_endpoint(cfg):
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}),
+        encoding="utf-8",
+    )
+
+    await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": True})
+
+    assert _read(cfg)["skillForge"]["router"]["hub"] == {"endpoint": "https://hub.internal.test"}
+
+
+async def test_settings_set_hub_init_rejects_other_values(cfg):
+    before = cfg.read_bytes()
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.init", "value": False})
+    assert cfg.read_bytes() == before
+
+
+async def test_settings_set_hub_switch_rejects_a_non_bool(cfg):
+    with pytest.raises(ConfigValidationError):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": "on"})
+
+
+async def test_settings_set_hub_switch_refuses_a_broken_block(cfg):
+    cfg.write_text(json.dumps({"skillForge": []}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="object or null"):
+        await rpc_console.settings_set({"key": "skillForge.router.hub.enabled", "value": True})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,field,previous,value",
+    [
+        ("skillForge", "skill_forge", "blocklist", ["a"], ["zed"]),
+        ("sessionTitle", "session_title", "model", "old/model", "openai/new"),
+        ("skillForge", "skill_forge", "llmGateModel", "old/model", "openai/new"),
+    ],
+)
+async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active, camel, snake, field, previous, value):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    cfg.write_text(json.dumps({empty: None, active: {field: previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": f"{camel}.{field}", "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {field: value}}
+    load_raven_config(config_path=cfg)
+
+
+@pytest.mark.parametrize("snake_active", [False, True])
+@pytest.mark.parametrize(
+    "camel,snake,model_field,provider_field,keep",
+    [
+        ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
+        ("skillForge", "skill_forge", "llmGateModel", "llmGateProvider", {"llmGateEnabled": True}),
+    ],
+)
+async def test_settings_pin_merge_follows_the_non_null_alias(
+    cfg, snake_active, camel, snake, model_field, provider_field, keep
+):
+    from raven.config.raven import load_raven_config
+
+    active, empty = (snake, camel) if snake_active else (camel, snake)
+    previous = {model_field: "old/model", provider_field: "openai"}
+    value = {model_field: "openai/new", provider_field: "openai"}
+    cfg.write_text(json.dumps({empty: None, active: {**keep, **previous}}), encoding="utf-8")
+    load_raven_config(config_path=cfg)
+
+    result = await rpc_console.settings_set({"key": camel, "value": value})
+
+    assert result == {"applied": True, "previous": previous}
+    assert _read(cfg) == {empty: None, active: {**keep, **value}}
+    load_raven_config(config_path=cfg)
+
+
+async def test_settings_write_initializes_one_of_two_null_aliases(cfg):
+    from raven.config.raven import load_raven_config
+
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": None}), encoding="utf-8")
+
+    result = await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {"skillForge": {"blocklist": ["zed"]}, "skill_forge": None}
+    assert load_raven_config(config_path=cfg).skill_forge.blocklist == ["zed"]
+
+
+@pytest.mark.parametrize("invalid", [[], 0, False, "invalid"])
+async def test_settings_write_refuses_an_invalid_alias_beside_null(cfg, invalid):
+    cfg.write_text(json.dumps({"skillForge": None, "skill_forge": invalid}), encoding="utf-8")
+    before = cfg.read_bytes()
+
+    with pytest.raises(ConfigValidationError, match="non-object"):
+        await rpc_console.settings_set({"key": "skillForge.blocklist", "value": ["zed"]})
+
+    assert cfg.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "camel,snake,previous,value",
+    [
+        ("contextWindowTokens", "context_window_tokens", 200000, 100000),
+        ("reasoningEffort", "reasoning_effort", "low", "high"),
+    ],
+)
+async def test_settings_leaf_write_lands_on_the_alias_pydantic_reads(cfg, camel, snake, previous, value):
+    """A null camelCase leaf beside a populated snake_case one.
+
+    pydantic takes the alias whenever it is present, null or not, so the schema
+    reads None here while the live reader falls through to the snake_case
+    value. The write replaces the null alias: afterwards ``load_config`` and the
+    live reader both read the new value, and ``previous`` is the null the schema
+    was reading.
+    """
+    from raven.config import live
+    from raven.config.loader import load_config
+
+    # Each leaf's live reader carries its snake_case field name.
+    live_reader = getattr(live, snake)
+    cfg.write_text(json.dumps({"agents": {"defaults": {camel: None, snake: previous}}}), encoding="utf-8")
+    assert getattr(load_config(cfg).agents.defaults, snake) is None
+    assert live_reader(live.LiveConfig(path=cfg)) == previous
+
+    result = await rpc_console.settings_set({"key": f"agents.defaults.{camel}", "value": value})
+
+    assert result == {"applied": True, "previous": None}
+    assert _read(cfg) == {"agents": {"defaults": {camel: value, snake: previous}}}
+    assert getattr(load_config(cfg).agents.defaults, snake) == value
+    assert live_reader(live.LiveConfig(path=cfg)) == value
+
+
+@pytest.mark.parametrize("raw", [{"tools": None}, {"tools": {"media": None}}])
+async def test_settings_set_initializes_null_parents_of_a_merged_object(cfg, raw):
+    cfg.write_text(json.dumps(raw), encoding="utf-8")
+
+    result = await rpc_console.settings_set(
+        {"key": "tools.media.speech", "value": {"model": "tts-1", "quality": "high"}}
+    )
+
+    assert result == {"applied": True, "previous": {"model": None, "quality": None}}
+    assert _read(cfg) == {"tools": {"media": {"speech": {"model": "tts-1", "quality": "high"}}}}
 
 
 async def test_settings_set_media_speech_selection_merges(cfg):
@@ -1323,6 +1771,60 @@ def _tool_row(name: str, call_id: str) -> dict:
     }
 
 
+async def test_usage_reads_each_daily_file_once(telemetry, tmp_path, monkeypatch):
+    for day in (0, 1):
+        telemetry(day, [_telemetry_row("a", 1.0), _tool_row("exec", f"call-{day}")])
+    opened = []
+    original_open = Path.open
+
+    def track_open(path, *args, **kwargs):
+        if path.parent == tmp_path / "telemetry":
+            opened.append(path.name)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    report = await rpc_console.settings_usage({"days": 2})
+
+    assert report["llm"]["total"]["calls"] == 2
+    assert report["tools"]["total"] == 2
+    assert sorted(opened) == sorted(f"usage-{_iso(day)}.jsonl" for day in (0, 1))
+
+
+@pytest.mark.parametrize("invalid", ["not-json", "null", "[]", ""])
+async def test_usage_keeps_valid_calls_after_an_invalid_record(telemetry, tmp_path, invalid):
+    telemetry(0, [_telemetry_row("a", 1.0), _tool_row("exec", "before")])
+    path = tmp_path / "telemetry" / f"usage-{_iso(0)}.jsonl"
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(invalid + "\n")
+    telemetry(0, [_telemetry_row("a", 2.0), _tool_row("exec", "after")])
+
+    report = await rpc_console.settings_usage({"days": 1})
+
+    assert report["llm"]["total"]["calls"] == 2
+    assert report["llm"]["total"]["cost_usd"] == 3.0
+    assert report["tools"] == {"total": 2, "counts": [{"name": "exec", "count": 2}]}
+
+
+async def test_usage_filters_both_tallies_by_the_delegation_root(telemetry):
+    child = {"session_key": "sub:child", "root_session_key": "web:s1"}
+    other = {"session_key": "web:other", "root_session_key": None}
+    telemetry(
+        0,
+        [
+            {**_telemetry_row("a", 1.0), **child},
+            {**_tool_row("exec", "child"), **child},
+            {**_telemetry_row("b", 9.0), **other},
+            {**_tool_row("read_file", "other"), **other},
+        ],
+    )
+    report = await rpc_console.settings_usage({"days": 1, "session_key": "web:s1"})
+
+    assert report["sessions"] == ["web:other", "web:s1"]
+    assert report["llm"]["total"]["calls"] == 1
+    assert report["llm"]["total"]["cost_usd"] == 1.0
+    assert report["tools"] == {"total": 1, "counts": [{"name": "exec", "count": 1}]}
+
+
 def _transcript(home, name: str, days_ago: int, calls: list[str], channel: str = "tui") -> None:
     """One session file carrying tool calls, with its mtime set by ``days_ago``.
 
@@ -1403,3 +1905,155 @@ async def test_usage_from_to_win_over_days(telemetry):
     r = await rpc_console.settings_usage({"days": 30})
     assert r["llm"]["total"]["calls"] == 1
     assert r["from"] == _iso(29)
+
+
+# ── a second memory backend behind the same page ─────────────────────────
+
+
+@pytest.fixture
+def memory_cfg(tmp_path):
+    """raven's config with a chosen ``memory.backend`` and plugin slices."""
+    import json
+
+    def build(backend, *, cloud=None, everos=None, providers=None):
+        cfg = tmp_path / "config.json"
+        raw: dict = {"memory": {"backend": backend}, "providers": providers or {}, "plugins": {"config": {}}}
+        if cloud is not None:
+            raw["plugins"]["config"]["everos-cloud-memory"] = dict(cloud)
+        if everos is not None:
+            raw["plugins"]["config"]["everos-memory"] = dict(everos)
+        cfg.write_text(json.dumps(raw), encoding="utf-8")
+        raven_home.set_config_path(cfg)
+        return cfg
+
+    yield build
+    raven_home.set_config_path(None)
+
+
+async def test_everos_roles_answer_other_backend_for_the_cloud_and_for_a_stale_name(memory_cfg):
+    for backend in ("everos-cloud", "mem0"):
+        memory_cfg(backend, cloud={"api_key": "k"})
+        out = await rpc_console.settings_everos({})
+        assert out["reason"] == "other_backend" and backend in out["note"]
+        assert set(out["sections"]) == {"embedding"} and set(out["required"]) <= {"embedding"}
+
+
+async def test_everos_roles_hide_every_everos_row_on_a_cloud_only_install(memory_cfg, monkeypatch):
+    """The local plugin absent: still reason other_backend, so the page draws no EverOS row and
+    not the 'plugin isn't installed' pill on each of them; sections is empty because nothing can
+    describe the embedding pin there."""
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    monkeypatch.setattr("raven.core.plugin_stack.everos_plugin_installed", lambda: False)
+    out = await rpc_console.settings_everos({})
+    assert out["available"] is False and out["reason"] == "other_backend" and "everos-cloud" in out["note"]
+    assert out["sections"] == {} and out.get("required", []) == []
+
+
+async def test_everos_roles_unchanged_for_everos_and_none(memory_cfg):
+    for backend in ("everos", None):
+        memory_cfg(backend)
+        out = await rpc_console.settings_everos({})
+        assert out["available"] is True and out.get("reason") is None
+        assert set(out["sections"]) == {"llm", "embedding", "rerank", "multimodal"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_writes_a_declared_plugin_field(memory_cfg):
+    import json
+
+    cfg = memory_cfg("everos-cloud", cloud={"base_url": "http://fake"})
+    out = await rpc_console.settings_set({"key": "plugins.config.everos-cloud-memory.api_key", "value": "ecm-key-rot8"})
+    assert out == {"applied": True, "previous": None}
+    slice_ = json.loads(cfg.read_text())["plugins"]["config"]["everos-cloud-memory"]
+    assert slice_ == {"base_url": "http://fake", "api_key": "ecm-key-rot8"}
+
+
+@pytest.mark.everos_cloud
+async def test_settings_set_refuses_undeclared_wrong_type_and_unknown_plugin(memory_cfg):
+    cfg = memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    before = cfg.read_text()
+    for key, value in (
+        ("plugins.config.everos-cloud-memory.nope", "x"),
+        ("plugins.config.everos-cloud-memory.api_key", 42),
+        ("plugins.config.not-a-plugin.api_key", "x"),
+        ("plugins.config.everos-cloud-memory", {"api_key": "x"}),
+        # Declared, but not settable: the endpoint decides where the stored key goes.
+        ("plugins.config.everos-cloud-memory.base_url", "http://attacker.test"),
+        # A dotted field and an empty plugin id never reach the slice.
+        ("plugins.config.everos-cloud-memory.api_key.x", "x"),
+        ("plugins.config..api_key", "x"),
+    ):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_set({"key": key, "value": value})
+        assert key in str(exc.value)
+    assert cfg.read_text() == before
+
+
+@pytest.mark.everos_cloud
+@pytest.mark.parametrize(
+    ("mode", "status", "fragment"),
+    [("ok", "ok", "http://cloud.test"), ("401", "missing", "rejected (401)")],
+)
+async def test_everos_cloud_status_reports_key_source_and_health(memory_cfg, monkeypatch, mode, status, fragment):
+    import httpx
+
+    from tests._everos_cloud_fake import FakeCloud
+
+    memory_cfg("everos-cloud", cloud={"api_key": "ecm-key-7f3a", "base_url": "http://cloud.test"})
+    fake = FakeCloud(mode=mode)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real_client(transport=fake.transport(), **kw))
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["available"] is True and out["selected"] is True
+    assert out["api_key_set"] is True and out["key_source"] == "file"
+    assert out["base_url"] == "http://cloud.test" and out["status"] == status and fragment in out["hint"]
+    assert fake.ledger[0]["headers"]["authorization"] == "Bearer ecm-key-7f3a"
+
+
+@pytest.mark.everos_cloud
+async def test_everos_cloud_status_without_a_key_or_selection(memory_cfg, monkeypatch):
+    monkeypatch.delenv("EVEROS_CLOUD_API_KEY", raising=False)
+    memory_cfg("everos", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is False and out["api_key_set"] is False and out["status"] is None
+    memory_cfg("everos-cloud", cloud={})
+    out = await rpc_console.settings_everos_cloud({})
+    assert out["selected"] is True and out["status"] == "missing" and "no API key" in out["hint"]
+
+
+async def test_provider_save_does_not_restart_everos_for_the_cloud_backend(memory_cfg, monkeypatch):
+    applied: list = []
+    monkeypatch.setattr(rpc_console, "_everos_applied", lambda factory, cost="": applied.append(factory))
+    providers = {"openrouter": {"apiKey": "sk-x", "models": ["anthropic/claude-sonnet-4.5"]}}
+    memory_cfg(
+        "everos-cloud",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    # Memory off: nothing runs on EverOS, so a provider save restarts nothing (spec C9's one exception, H15).
+    memory_cfg(
+        None, everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}}, providers=providers
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert applied == []
+    memory_cfg(
+        "everos",
+        everos={"llm": {"model": "anthropic/claude-sonnet-4.5", "provider": "openrouter"}},
+        providers=providers,
+    )
+    rpc_console.everos_follows_provider("openrouter", object())
+    assert len(applied) == 1
+
+
+async def test_role_write_is_refused_for_the_cloud_backend(memory_cfg):
+    memory_cfg("everos-cloud", cloud={"api_key": "k"})
+    for section in ("llm", "rerank", "multimodal"):
+        with pytest.raises(ConfigValidationError) as exc:
+            await rpc_console.settings_everos_set({"section": section, "model": "m", "provider": "p"})
+        assert "everos-cloud" in str(exc.value)
+    # Embedding stays writable: knowledge bases size themselves to that pin.
+    with pytest.raises(ConfigValidationError) as exc:
+        await rpc_console.settings_everos_set({"section": "embedding", "model": "m", "provider": "p"})
+    assert "everos-cloud" not in str(exc.value)  # refused for its own reason (no such provider), not the backend's

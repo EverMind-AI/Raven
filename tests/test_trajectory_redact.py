@@ -556,3 +556,27 @@ def test_end_to_end_report_with_real_tracer(tmp_path, monkeypatch):
         assert meta["exact_replacements"]["config.providers.anthropic.api_key"] >= 1
     finally:
         _spans._store = None
+
+
+def test_a_crlf_file_keeps_its_line_endings_where_a_text_write_translates_them(tmp_path, monkeypatch):
+    """The redaction reads bytes and keeps a file's own line endings in the text.
+    Written back through a newline-translating text write -- what write_text
+    does on Windows -- each CRLF became CR CR LF, a blank line between every
+    record of a JSONL file. The copy is written back as bytes."""
+    from pathlib import Path
+
+    real = Path.write_text
+
+    def windows_write_text(self, data, encoding=None, errors=None, newline=None):
+        if newline is None:
+            data = data.replace("\n", "\r\n")
+        return real(self, data, encoding=encoding, errors=errors, newline="")
+
+    bundle = _make_bundle(tmp_path, spans_text="", artifact_text="clean")
+    crlf = b'{"traceId": "trace-1"}\r\n{"traceId": "trace-2"}\r\n'
+    (bundle / "spans.jsonl").write_bytes(crlf)
+    monkeypatch.setattr(Path, "write_text", windows_write_text)
+
+    report = tredact.redact_bundle(bundle, tmp_path / "red", secrets=[])
+
+    assert (report.redacted_dir / "spans.jsonl").read_bytes() == crlf

@@ -1,10 +1,10 @@
 """Web tool credentials cluster of the onboard wizard (Step 5).
 
 Two tools, each behind a vendor the user picks here, and the keys are not the
-same kind of thing. A search key is what makes ``web_search`` exist at all --
-the agent loop withholds the tool entirely without one -- while the page
-reader defaults to Jina, which works unauthenticated at a lower rate limit, so
-its key only raises the ceiling; the other readers refuse without one. The
+same kind of thing. A search key is what makes ``web_search`` exist at all,
+Keenable aside -- the agent loop withholds the tool without one -- while the
+page reader defaults to Jina, which works unauthenticated at a lower rate limit,
+so its key only raises the ceiling; the other readers refuse without one. The
 screen says so, because presenting the keys as equal blanks invites skipping
 the one that actually costs a capability. The search key is then spent on
 one real query before it is kept: no search vendor has a free ``/v1/models``,
@@ -17,10 +17,12 @@ Providers and keys land in ``config.json`` through ``update_tools``, keyed by
 vendor (``tools.web.providers.<vendor>.apiKey``), and the keys are then mirrored
 into ``~/.raven/env`` as ``export`` lines. The mirror is what reaches consumers
 that never read raven's config: the user's own shell, and -- the reason it is
-here rather than in a docs page -- every ``cli`` and ``acp`` sub-agent, whose
+here rather than in a docs page -- POSIX ``cli`` and ``acp`` sub-agents, whose
 environment is a capture of ``$SHELL -lic`` (see
 ``raven.agent.subagent.backends.env``) rather than anything raven passes down.
-Which files that capture actually reads is the subtle part, and ``rc_targets_for``
+Windows children inherit Raven's environment with a refreshed registry PATH
+instead; these shell exports do not reach them.
+Which files the POSIX capture reads is the subtle part, and ``rc_targets_for``
 carries it.
 A ``kind: openai`` sub-agent is an HTTP call with no subprocess, so no
 environment variable can reach it; the step does not pretend otherwise.
@@ -60,6 +62,15 @@ SOURCE_LINE = f'[ -f "$HOME/.raven/env" ] && . "$HOME/.raven/env"  {RC_MARKER}'
 #: none exist, ``~/.profile`` is the one a login shell reads by convention.
 _BASH_LOGIN_CANDIDATES = (".bash_profile", ".bash_login", ".profile")
 
+#: The explanation above the web step. Its exact text is the gettext key, so the
+#: zh catalogue maps this constant rather than a second copy that silently drifts.
+WEB_STEPS_INTRO = (
+    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n"
+    "              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n"
+    "  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n"
+    "              rate limit; other readers need a key or a borrowed model-provider key."
+)
+
 
 def _stored_provider(kind: str) -> str:
     """The vendor config currently selects for ``search`` or ``fetch``."""
@@ -69,10 +80,12 @@ def _stored_provider(kind: str) -> str:
 
 
 def _stored_key(vendor: str) -> str:
-    """One vendor's key as config holds it, unredacted."""
+    """One vendor's key as config holds it, unredacted -- the model-provider key
+    a borrowing vendor runs on included, exactly as the tool resolves it."""
+    from raven.config.live import default_live, live_vendor_key
     from raven.config.update_tools import get_web_provider_key
 
-    return get_web_provider_key(vendor, redact=False)
+    return get_web_provider_key(vendor, redact=False) or live_vendor_key(default_live(), vendor, boot="")
 
 
 def rc_targets_for(shell_name: str) -> list[Path]:
@@ -158,7 +171,7 @@ def _pick_provider(kind: str, current: str) -> Optional[str]:
     choices = []
     for vendor, spec in specs.items():
         note = ""
-        if kind == "fetch" and not spec.needs_key:
+        if not spec.needs_key:
             note = t(" (no key needed)")
         elif kind == "fetch":
             note = t(" (key required)")
@@ -302,15 +315,7 @@ def _step5_web(
         oc.console.print(t("  [dim]Skipping the web tool keys (set them up later: raven onboard).[/dim]"))
         return None
 
-    oc.console.print(
-        t(
-            "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key; without\n"
-            "              one the tool is not offered to the model at all.\n"
-            "  [dim]web_fetch [/dim]  Read a page — Jina works with no key at a lower rate limit;\n"
-            "              every other reader needs its key."
-        ),
-        highlight=False,
-    )
+    oc.console.print(t(WEB_STEPS_INTRO), highlight=False)
     oc.console.print()
 
     search = _pick_provider("search", _stored_provider("search"))
@@ -323,14 +328,15 @@ def _step5_web(
             label=t("{label} API key", label=spec.label),
             obtain_from=spec.signup,
             current=_stored_key(search),
-            optional_note=t(" enables web_search"),
+            optional_note=t(" enables web_search") if spec.needs_key else t(" optional"),
         )
         if search_key is None:
             raise typer.Exit(1)
         keys[search] = search_key.strip()
         # A stored key that Enter kept is probed too: it may have been revoked
         # since it was typed. No key at all means web_search stays withheld,
-        # which is a choice, not a failure.
+        # which is a choice, not a failure -- unless a borrowing vendor answers
+        # from the model-provider key, which the stored-key read includes.
         live = keys[search] or _stored_key(search)
         if not live or _verify_search_key(search, live, non_interactive=non_interactive):
             break

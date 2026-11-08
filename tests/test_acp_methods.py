@@ -64,6 +64,15 @@ class _Stack:
         self.dispatcher.register("session.resume", self._resume)
         self.dispatcher.register("model.options", self._model_options)
         self.dispatcher.register("config.set", self._config_set)
+        # What ``session.usage`` reports a session to have spent; an exception is raised.
+        self.usage_result: dict | Exception = {"cost_usd": None}
+        self.dispatcher.register("session.usage", self._usage)
+
+    async def _usage(self, params: dict) -> dict:
+        self.calls.append(("session.usage", params))
+        if isinstance(self.usage_result, Exception):
+            raise self.usage_result
+        return self.usage_result
 
     async def _model_options(self, params: dict) -> dict:
         self.calls.append(("model.options", params))
@@ -475,6 +484,38 @@ class TestSessionLoad:
         for frame in rig.written:
             validate_outbound(frame)
 
+    async def test_a_reloaded_silent_turn_replays_no_answer(self, rig):
+        """The live turn sent no text for a marker row, only what the model
+        thought, so a load that replayed ``[SILENT]`` would show the marker as
+        the agent's reply. The last row is the control: the same shape without
+        the flag still speaks, so the absence above is the flag's doing."""
+        rig.stack.stored["acp:old"] = [
+            {"role": "user", "text": "anything new?"},
+            {"role": "assistant", "text": "[SILENT]", "silent": True, "reasoning_content": "nothing has changed"},
+            {"role": "user", "text": "and now?"},
+            {"role": "assistant", "text": "all quiet"},
+        ]
+        await rig.handshake()
+
+        await rig.call(
+            "session/load",
+            {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []},
+        )
+
+        replayed = [
+            (u["sessionUpdate"], u["content"]["text"])
+            for u in rig.updates()
+            if "content" in u and "text" in u["content"]
+        ]
+        assert replayed == [
+            ("user_message_chunk", "anything new?"),
+            ("agent_thought_chunk", "nothing has changed"),
+            ("user_message_chunk", "and now?"),
+            ("agent_message_chunk", "all quiet"),
+        ]
+        for frame in rig.written:
+            validate_outbound(frame)
+
     async def test_the_session_becomes_promptable(self, rig):
         """A load that did not register the session would replay a history the
         client then cannot continue."""
@@ -572,6 +613,64 @@ class TestSessionLoad:
         # servers were an attachment to it. The two above are the request itself
         # being unanswerable.
         assert "error" not in servers, servers
+
+
+class TestSessionCost:
+    """``usage_update.cost`` is the session's cumulative cost, so a session
+    opened here starts from what it had already spent: the same figure the
+    session's own usage panel reports, which outlives the process."""
+
+    async def _opened(self, rig, method: str):
+        rig.stack.stored["acp:old"] = [{"role": "user", "text": "hi"}]
+        await rig.handshake()
+        await rig.call(method, {"sessionId": "acp:old", "cwd": str(rig.tmp_path / "project"), "mcpServers": []})
+        return rig.translator.get("acp:old")
+
+    @pytest.mark.parametrize("method", ["session/load", "session/resume"])
+    async def test_a_session_opened_here_starts_from_what_it_had_spent(self, rig, method):
+        rig.stack.usage_result = {"cost_usd": 1.5}
+
+        session = await self._opened(rig, method)
+
+        assert (session.cost_usd, session.cost_known) == (1.5, True)
+        assert ("session.usage", {"session_id": "acp:old"}) in rig.stack.calls
+
+    async def test_a_session_whose_spend_cannot_be_read_has_no_total(self, rig):
+        rig.stack.usage_result = RuntimeError("telemetry unreadable")
+
+        session = await self._opened(rig, "session/load")
+
+        assert session.cost_known is False
+
+    @pytest.mark.parametrize("reported", [float("inf"), float("nan"), -1.0, True, "1.5"])
+    async def test_a_spend_that_is_no_amount_is_as_unreadable_as_a_failed_read(self, rig, reported):
+        """``session.usage`` answered, but not with an amount ``reported_cost`` accepts.
+
+        An infinite baseline used to be adopted, and every later total was then
+        an infinity the update drops, so the session sent no cost again while
+        still claiming to know it; a nan or a negative was skipped, and the total
+        counted from zero understated what the session had spent.
+        """
+        rig.stack.usage_result = {"cost_usd": reported}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, False)
+
+    async def test_a_session_that_priced_nothing_yet_counts_from_here(self, rig):
+        rig.stack.usage_result = {"cost_usd": None}
+
+        session = await self._opened(rig, "session/load")
+
+        assert (session.cost_usd, session.cost_known) == (None, True)
+
+    async def test_a_new_session_has_spent_nothing_and_asks_nobody(self, rig):
+        await rig.handshake()
+        response = await rig.call("session/new", {"cwd": str(rig.tmp_path / "project"), "mcpServers": []})
+
+        session = rig.translator.get(response["result"]["sessionId"])
+        assert (session.cost_usd, session.cost_known) == (None, True)
+        assert not any(name == "session.usage" for name, _ in rig.stack.calls)
 
 
 class TestSessionResume:
@@ -716,6 +815,24 @@ class TestSessionDelete:
 
         assert response["result"] == {}
         assert rig.engine.sessions.exists("acp:gone") is False
+
+    async def test_it_takes_the_board_along_where_no_board_service_heard(self, rig):
+        """No board service hears this delete -- this engine keeps none -- and a key a client
+        deleted may come back: the board a host wrote for it goes with the conversation."""
+        from raven.agent.task_board.board import Board, TaskGroup
+        from raven.agent.task_board.store import BOARD_FILENAME, save_board
+
+        session = rig.engine.sessions.get_or_create("acp:gone")
+        session.add_message("user", "hi")
+        rig.engine.sessions.save(session)
+        board_dir = rig.engine.sessions.session_dir("acp:gone")
+        save_board(board_dir, Board([TaskGroup("g_a", "Fix bug A", "", "idle", 1, 1, [])], []))
+        await rig.handshake()
+
+        response = await rig.call("session/delete", {"sessionId": "acp:gone"})
+
+        assert response["result"] == {}
+        assert not (board_dir / BOARD_FILENAME).exists()
 
     async def test_it_drops_a_held_session_from_the_connection(self, rig):
         await rig.handshake()
@@ -1122,6 +1239,29 @@ class TestConfigOptions:
 
         assert "result" in response
         assert "configOptions" not in response["result"]
+
+    @pytest.mark.parametrize("method,closing", [("model.options", False), ("turn.subscribe", True)])
+    async def test_session_creation_preserves_cancellation_outside_shutdown_metadata(self, rig, method, closing):
+        entered = asyncio.Event()
+
+        async def suspended(params):
+            entered.set()
+            await asyncio.Future()
+
+        rig.stack.dispatcher._handlers[method] = suspended
+        await rig.handshake()
+        if closing:
+            rig.translator.close()
+        task = asyncio.create_task(rig.new_session())
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 class TestPrompt:
@@ -1830,6 +1970,169 @@ class TestPromptMeta:
         assert response["result"] == {"stopReason": "end_turn"}
 
 
+class _ScriptedStream:
+    """LiteLLM's stream wrapper as far as the adapter reads it: the chunks, then the upstream's own ``stop``."""
+
+    def __init__(self, *texts: str) -> None:
+        from types import SimpleNamespace
+
+        def chunk(content=None, finish=None):
+            delta = SimpleNamespace(content=content, tool_calls=None, reasoning_content=None)
+            return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish)], usage=None)
+
+        self._chunks = iter([*(chunk(text) for text in texts), chunk(finish="stop")])
+        self.received_finish_reason = "stop"
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+    async def aclose(self):
+        return None
+
+
+class _SpineStack(_Stack):
+    """The stub stack, except that ``turn.subscribe`` and ``turn.send`` are the real handlers over a real spine."""
+
+    def __init__(self, emitter, scheduler, turn_ids) -> None:
+        self._emitter, self._scheduler, self._turn_ids = emitter, scheduler, turn_ids
+        super().__init__()
+
+    async def _subscribe(self, params: dict) -> dict:
+        from raven.rpc.methods.turn import turn_subscribe
+
+        self.calls.append(("turn.subscribe", params))
+        return await turn_subscribe(params, emitter=self._emitter)
+
+    async def _send(self, params: dict) -> dict:
+        from raven.rpc.methods.turn import turn_send
+
+        self.calls.append(("turn.send", params))
+        return await turn_send(
+            params,
+            emitter=self._emitter,
+            scheduler=self._scheduler,
+            turn_ids=self._turn_ids,
+            default_channel="acp",
+        )
+
+
+class TestSilentTurn:
+    """A turn the model ends on a silence marker, over the real loop, spine, outlet and translator.
+
+    The prompt must still be answered ``end_turn``, no chunk of the answer may carry any of the
+    marker, and the response meta a hook filed has to be read back off the marker row -- the only
+    assistant row this turn has."""
+
+    @pytest.fixture
+    async def silent_rig(self, tmp_path, monkeypatch):
+        from raven.agent.hook import AgentHook, HookDecision
+        from raven.agent.loop import AgentLoop
+        from raven.agent.loop.bundles import HostWiring, ToolWiring, TurnPolicy
+        from raven.config import load_config
+        from raven.providers.litellm_provider import LiteLLMProvider
+        from raven.rpc.methods import turn as turn_methods
+        from raven.rpc.spine import build_rpc_spine
+        from raven.rpc.subscriptions import SubscriptionEmitter
+
+        config = load_config()
+        monkeypatch.setattr(type(config), "workspace_path", property(lambda self: tmp_path / "ws"))
+        monkeypatch.setattr("raven.acp.methods.load_config", lambda: config, raising=False)
+        turn_methods._active_turns.clear()
+        (tmp_path / "project").mkdir()
+
+        class _FilesMeta(AgentHook):
+            """What an engine's hook does at the send: stash a response meta for the ACP client."""
+
+            @property
+            def name(self) -> str:
+                return "FilesMeta"
+
+            async def after_send(self, ctx):
+                ctx.metadata.setdefault("observers", {})["acp_meta"] = {"vendor.x": {"sent": ctx.outbound_content}}
+                return HookDecision()
+
+        scripts: list[_ScriptedStream] = []
+
+        async def acompletion(**_kwargs):
+            return scripts.pop(0)
+
+        monkeypatch.setattr("raven.providers.litellm_provider.acompletion", acompletion)
+        agent = AgentLoop(
+            provider=LiteLLMProvider(api_key=None, default_model="stub"),
+            workspace=tmp_path / "ws",
+            model="stub",
+            policy=TurnPolicy(max_iterations=4),
+            host=HostWiring(hooks=[_FilesMeta()]),
+            tools=ToolWiring(restrict_to_workspace=True),
+        )
+
+        async def _noop(**_kw) -> None:
+            return None
+
+        agent._start_executor = _noop
+        agent._connect_mcp = _noop
+
+        written: list[dict] = []
+        translator = UpdateTranslator(emit=written.append)
+        emitter = SubscriptionEmitter(send_frame=translator.send_frame)
+        scheduler, _hub, turn_ids, teardown = build_rpc_spine(
+            agent, emitter, channel="acp", on_turn_end=turn_methods.clear_active
+        )
+        stack = _SpineStack(emitter, scheduler, turn_ids)
+        methods = AcpMethods(dispatcher=stack.dispatcher, translator=translator, emit=written.append, agent_loop=agent)
+        rig = SimpleRig(
+            methods=methods,
+            stack=stack,
+            translator=translator,
+            written=written,
+            tmp_path=tmp_path,
+            engine=agent,
+            scripts=scripts,
+        )
+        try:
+            yield rig
+        finally:
+            await teardown()
+            turn_methods._active_turns.clear()
+
+    async def _ask(self, rig, session_id: str, text: str) -> dict:
+        response = await asyncio.wait_for(
+            rig.call("session/prompt", {"sessionId": session_id, "prompt": [{"type": "text", "text": text}]}), 10
+        )
+        assert "result" in response, response
+        return response["result"]
+
+    async def test_an_acp_silent_turn_ends_end_turn_with_its_meta(self, silent_rig):
+        rig = silent_rig
+        await rig.handshake()
+        session_id = await rig.new_session()
+        rig.scripts.extend([_ScriptedStream("[SIL", "ENT]"), _ScriptedStream("all quiet")])
+
+        silent = await self._ask(rig, session_id, "anything new?")
+
+        assert silent["stopReason"] == "end_turn"
+        assert silent["_meta"] == {"vendor.x": {"sent": None}}, "the hook ran, and was told there was nothing to send"
+        validate_def("PromptResponse", silent)
+        chunks = [u for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
+        assert not any(ch in u["content"]["text"] for u in chunks for ch in "[SILENT]"), chunks
+        marker = [m for m in rig.engine.sessions.get_or_create(session_id).messages if m["role"] == "assistant"]
+        assert [(m["content"], m.get("silent")) for m in marker] == [("[SILENT]", True)]
+        assert marker[0]["observers"]["acp_meta"] == silent["_meta"], "read off the marker row"
+
+        # The control: this stack does carry an ordinary reply as chunks, so the absence above is the gate's.
+        spoken = await self._ask(rig, session_id, "and now?")
+
+        assert spoken["stopReason"] == "end_turn" and spoken["_meta"] == {"vendor.x": {"sent": "all quiet"}}
+        chunks = [u for u in rig.updates() if u.get("sessionUpdate") == "agent_message_chunk"]
+        assert [u["content"]["text"] for u in chunks] == ["all quiet"]
+
+
 async def test_prompt_usage_owner_is_persisted_per_session(rig):
     await rig.handshake()
     first, second = await rig.new_session(), await rig.new_session()
@@ -1959,6 +2262,59 @@ class TestHeldTurn:
         await asyncio.sleep(0.05)
         assert len(rig.updates()) == before, "the heartbeat stops with the wait"
 
+    async def test_a_beat_inside_the_wake_report_leaves_raven_s_own_client_the_whole_report(self, rig, monkeypatch):
+        """Raven's own acp client reads this stream: a dag node or spawn running
+        raven-oncall hands its caller the last message its collector saw. A beat
+        lands on the wait call while that call is open, so it can fall
+        mid-sentence in the wake turn's report, and the collector has to read it
+        as a call still running rather than as a step that ends the message.
+        Replayed through the real collector, so either half of that agreement
+        changing alone turns this red."""
+        from raven.acp import methods as methods_mod
+        from raven.acp_client.acp_agent import _TurnCollector
+
+        monkeypatch.setattr(methods_mod, "HOLD_HEARTBEAT_S", 0.01)
+        await rig.handshake()
+        sid = await rig.new_session()
+        sub = rig.translator.get(sid).subscription_id
+        record = rig.engine.sessions.get_or_create(sid)
+
+        async def say(text: str) -> None:
+            event = {"type": "token.delta", "payload": {"text": text}}
+            await rig.translator.send_frame(
+                {"jsonrpc": "2.0", "method": "event", "params": {"subscription_id": sub, "event": event}}
+            )
+
+        def beats() -> int:
+            # Told apart by the beat's own mark rather than by its status, which
+            # is the field the collector reads.
+            return sum(1 for u in rig.updates() if "raven.heldS" in (u.get("_meta") or {}))
+
+        async def next_beat() -> None:
+            seen = beats()
+            for _ in range(400):
+                await asyncio.sleep(0.005)
+                if beats() > seen:
+                    return
+            raise AssertionError("no beat landed")
+
+        task = await self._start(rig, sid)
+        await say("Filed job 7.")
+        self._held(record)
+        rig.translator.settle_turn(sid, "end_turn")
+        await next_beat()
+        await say("Round 2: loss converged, ")
+        await next_beat()
+        await say("killed job 7.")
+        record.messages.append(self._assistant("Round 2: loss converged, killed job 7."))
+        rig.translator.settle_turn(sid, "end_turn")
+        await asyncio.wait_for(task, 2)
+
+        collector = _TurnCollector(prompt="watch it")
+        for update in rig.updates():
+            await collector("session/update", {"update": update})
+        assert collector.reply == "Round 2: loss converged, killed job 7."
+
     async def test_a_cancel_while_held_answers_cancelled(self, rig):
         await rig.handshake()
         sid = await rig.new_session()
@@ -1985,6 +2341,47 @@ class TestHeldTurn:
 
         response = await asyncio.wait_for(task, 2)
         assert response["result"]["stopReason"] == "refusal", "only a turn that ended normally can be a wait"
+
+
+class TestResidentWork:
+    """``_raven/residentWork``: what the agent holds that runs with nobody asking.
+
+    A raven client asks it right before closing the agent for idleness: an armed
+    cron job of this agent's partition fires only from this process, and a
+    plugin service lives only as long as the process does.
+    """
+
+    async def test_it_is_advertised(self, rig):
+        response = await rig.handshake()
+        validate_def("InitializeResponse", response["result"])
+        assert response["result"]["agentCapabilities"]["_meta"]["raven.residentWork"] is True
+
+    async def test_an_armed_job_of_its_partition_or_a_running_service_is_resident(self, rig, tmp_path):
+        from raven.proactive_engine.schedulers.cron.service import CronService
+        from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+        async def answer() -> dict:
+            response = await rig.call("_raven/residentWork", {})
+            assert "result" in response, response
+            return response["result"]
+
+        await rig.handshake()
+        assert await answer() == {"resident": False, "cronJobs": 0, "services": 0}
+
+        cron = CronService(tmp_path / "jobs.json", allowed_channels={"acp"})
+        rig.engine.cron_service = cron
+        cron.add_job("elsewhere", CronSchedule(kind="every", every_ms=60_000), "for feishu", channel="feishu")
+        await cron.start()
+        try:
+            assert (await answer())["resident"] is False, "another partition's job is not this process's to fire"
+            cron.add_job("mine", CronSchedule(kind="every", every_ms=60_000), "remind me", channel="acp")
+            assert await answer() == {"resident": True, "cronJobs": 1, "services": 0}
+        finally:
+            cron.stop()
+        assert (await answer())["resident"] is False, "a stopped scheduler fires nothing"
+
+        rig.engine.running_plugin_services = (object(),)
+        assert await answer() == {"resident": True, "cronJobs": 0, "services": 1}
 
 
 class TestSteer:
@@ -2159,6 +2556,33 @@ def test_a_more_specific_stop_reason_is_never_overwritten_by_the_ceiling():
     sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"output_limit_turn_at": 0})
     for stop in ("cancelled", "refusal"):
         assert AcpMethods._stop_reason(stop, sessions, "k", 0) == stop
+
+
+def test_a_turn_cut_by_its_own_budget_is_reported_as_max_turn_requests():
+    """The loop's tool, clock or stalled-tool budget ended the turn and a wrap-up
+    answered for it. ``end_turn`` would claim the turn finished; the schema's own
+    word for a turn its budget ended is ``max_turn_requests``."""
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 0) == "max_turn_requests"
+
+
+def test_a_budget_stop_left_by_an_earlier_turn_does_not_answer_this_prompt():
+    messages = [{"role": "user", "content": str(n)} for n in range(6)]
+    sessions = _MetaSessions(messages, {"budget_stop_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 5) == "end_turn"
+
+
+def test_a_more_specific_stop_reason_is_never_overwritten_by_the_budget():
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0})
+    for stop in ("cancelled", "refusal"):
+        assert AcpMethods._stop_reason(stop, sessions, "k", 0) == stop
+
+
+def test_a_budget_stop_whose_wrap_up_was_also_cut_reports_the_budget():
+    """The budget is what ended the turn; the wrap-up being cut as well does not
+    make the turn any less over budget."""
+    sessions = _MetaSessions([{"role": "user", "content": "hi"}], {"budget_stop_turn_at": 0, "output_limit_turn_at": 0})
+    assert AcpMethods._stop_reason("end_turn", sessions, "k", 0) == "max_turn_requests"
 
 
 def test_turn_meta_reads_only_what_hooks_filed():

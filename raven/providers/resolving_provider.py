@@ -167,8 +167,9 @@ class ResolvingProvider(LLMProvider):
 
     def reasoning_wire_keys(self, model: str | None, reasoning_effort: str | None) -> Any:
         """Forwarded for ``request_generation``'s reason: the streamed call's span
-        and the empty-response retry both see this router rather than the adapter,
-        and only the adapter knows which efforts its wire sends as one request."""
+        and the thinking-only step-down both see this router rather than the
+        adapter, and only the adapter knows which efforts its wire sends as one
+        request."""
         return self._pick(model).reasoning_wire_keys(model, reasoning_effort)
 
     def request_generation(self, **asked: Any) -> dict[str, Any]:

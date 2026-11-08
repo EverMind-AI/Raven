@@ -26,9 +26,12 @@ and there would be no enforcement at all.
 
 Delivery is the one part the port reshapes (D4, and D3 for the conclusion):
 the fork reached the owner by taking the host's message tool off the registry
-and sending itself; the trunk hands a plugin no registry, so an ALLOWED ask --
-and a filed report -- come back to the model as the exact text to send with
-the message tool, which the product deliberately keeps enabled. What the guard
+and sending itself; the trunk hands a plugin no registry. An ALLOWED ask goes
+out through the host's question grant (``direct_ask``) as a question of its
+own -- over ACP an ``elicitation/create`` the host puts in front of the owner
+-- and the tool returns without waiting for the answer. Where no grant is lent
+it comes back as the exact text to send with the message tool, as does a filed
+report. What the guard
 guarantees is unchanged and is the half that matters: a REFUSED ask never
 reaches anyone, because the refusal happens in the tool. The guard mechanics
 themselves (load/save, the question trail) live in ``oncall_flow.escalation``
@@ -37,17 +40,30 @@ since part 2a; this file is the two faces over them.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
+
+from loguru import logger
 
 from oncall_flow import wakes
 from oncall_flow.escalation import (
     anything_running as _anything_running,
 )
 from oncall_flow.escalation import (
+    append_note as _append_note,
+)
+from oncall_flow.escalation import (
+    decided_without_owner as _decided_without_owner,
+)
+from oncall_flow.escalation import (
     load_guard as _load_guard,
+)
+from oncall_flow.escalation import (
+    open_question as _open_question,
 )
 from oncall_flow.escalation import (
     save_guard as _save_guard,
@@ -148,16 +164,51 @@ def _expected_baseline(cdir: Path) -> dict[str, Any]:
 # private spellings so every call site below reads unchanged.
 
 
+# The question each campaign has in front of its owner right now, by campaign
+# directory: its ask id and the task awaiting the answer. One per campaign,
+# because only the latest question is open (escalation.open_question).
+_ASKING: dict[str, tuple[str, "asyncio.Task[None]"]] = {}
+
+
+def withdraw_question(cdir: Path, reason: str) -> bool:
+    """Take a question still in front of the owner back down; False when none is.
+
+    Recorded before the cancel, so the trail says why the form went away even
+    though the cancelled wait itself only sees that nobody answered.
+    """
+    from oncall_flow.instrument import log_event
+
+    entry = _ASKING.pop(str(cdir), None)
+    if entry is None:
+        return False
+    ask_id, task = entry
+    if task.done():
+        return False
+    log_event(cdir, "ask_withdrawn", ask_id=ask_id, reason=reason)
+    task.cancel()
+    return True
+
+
+def _owner_prompt(campaign: str, question: str, if_unanswered: str) -> str:
+    text = f"[ops campaign '{campaign}'] {question.strip()}"
+    if if_unanswered.strip():
+        text += f"\nIf there is no answer: {if_unanswered.strip()}"
+    return text
+
+
 class OpsAskOwnerTool(_OpsScheduler):
     """Contact the job's owner, through the campaign's interruption contract.
 
-    Delivery is model-mediated (D4): the trunk hands a plugin no tool registry,
-    so an ALLOWED ask comes back as the exact text to send with the message
-    tool -- the guard still sits in front of the only door, because a REFUSED
-    ask returns nothing sendable and says nobody has seen it. What the fork's
-    in-tool delivery additionally guaranteed -- that an allowed ask cannot be
-    silently dropped by the model -- is the optional messenger grant the
-    verdict lists (section two), not something this face can promise today.
+    An ALLOWED ask is put to the owner by the tool itself, through the host's
+    ``direct_ask`` grant, on a task of its own: the call returns at once and the
+    loop carries on, which is the point of asking without stopping. Over ACP
+    the question reaches the host as ``elicitation/create`` -- not as a message
+    inside the turn, which the host gathers into the run's transcript where
+    nobody is reading. The answer, when one comes, is written to the notes as
+    the owner's and pulls the campaign's wake to now. A host that lends no
+    grant gets the model-mediated delivery (D4): the exact text to send with
+    the message tool. Either way the guard sits in front of the only door -- a
+    REFUSED ask returns nothing sendable and says nobody has seen it.
 
     The safety wake (a question outstanding, nothing running -> come back in
     ten minutes) rides the scheduling base: the fork armed it through the cron
@@ -167,6 +218,14 @@ class OpsAskOwnerTool(_OpsScheduler):
     delivery has no context to carry any more, so ``set_context`` is the one
     face left, and the broker's inline wait went with the registry grant.
     """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._direct_ask: Any = None
+
+    def bind_runtime(self, handles: Any) -> None:
+        super().bind_runtime(handles)
+        self._direct_ask = getattr(handles, "direct_ask", None)
 
     @property
     def name(self) -> str:
@@ -190,7 +249,12 @@ class OpsAskOwnerTool(_OpsScheduler):
             "one the answer could make wrong, which is usually anything that spends compute you "
             "may not be authorised to spend. Blocking does NOT mean sitting still: reading logs, "
             "reading the case and writing down what you found cost nothing and stay open to you. "
-            "What it stops is submitting more trials."
+            "What it stops is submitting more trials.\n"
+            "Ask about goals and standards, not about how to do the work. Write the question so "
+            "someone who does not know the method can answer it, in the owner's language: give "
+            "the choices in options, each saying what it costs, and say which you recommend. "
+            "if_unanswered says what you will do if nobody answers -- you carry on that way "
+            "rather than stop."
         )
 
     @property
@@ -209,9 +273,19 @@ class OpsAskOwnerTool(_OpsScheduler):
                     "description": "True when nothing useful is left to do until this is answered; "
                     "false when another branch is worth doing under either answer.",
                 },
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The choices the owner picks from, two or more, each with its cost. "
+                    "The owner can always type an answer of their own instead.",
+                },
+                "if_unanswered": {
+                    "type": "string",
+                    "description": "What you will do if nobody answers.",
+                },
                 "ledger": {"type": "string", "description": "Ledger path if known (locates the campaign dir)."},
             },
-            "required": ["campaign", "question", "expected_loss_minutes", "blocks_progress"],
+            "required": ["campaign", "question", "expected_loss_minutes", "blocks_progress", "if_unanswered"],
         }
 
     async def execute(
@@ -221,6 +295,8 @@ class OpsAskOwnerTool(_OpsScheduler):
         expected_loss_minutes: int,
         blocks_progress: bool = False,
         ledger: str | None = None,
+        options: list[str] | None = None,
+        if_unanswered: str = "",
         **kwargs: Any,
     ) -> str:
         from oncall_flow.instrument import log_event
@@ -239,14 +315,19 @@ class OpsAskOwnerTool(_OpsScheduler):
         decision = guard.check(at_ms=at_ms, expected_loss_ms=estimate)
         _save_guard(cdir, guard)
 
+        ask_id = uuid4().hex[:8]
+        choices = [str(o).strip() for o in (options or []) if str(o).strip()]
         log_event(
             cdir,
             "ask_owner",
+            ask_id=ask_id,
             allowed=decision.allowed,
             estimated=decision.estimated,
             expected_loss_minutes=expected_loss_minutes,
             reason=decision.reason,
             question=question[:400],
+            options=choices,
+            if_unanswered=if_unanswered[:400],
             blocks_progress=bool(blocks_progress),
         )
         # The returns say what happened to the message and what now follows from
@@ -293,17 +374,14 @@ class OpsAskOwnerTool(_OpsScheduler):
                     f"  ops_finish -- the work is done, or the answer can no longer change "
                     f"the result. Say in the report which decision was never made. "
                     f"If ops_finish refuses over the unanswered question, record with "
-                    f"ops_note why the answer no longer matters, then finish.\n"
+                    f"ops_note and settles_question=true why the answer no longer matters, "
+                    f"then finish.\n"
                     f"(An answer left by some other route -- another window, ops_note from "
                     f"the CLI -- would show in ops_tune_status. Worth one look, not a wait.)"
                 ),
                 eta_seconds=_ASK_WAKE_MINUTES * 60,
             )
-        # Model-mediated delivery: the allowed text goes back to the model
-        # with the sending named as its next act. The trail records that the
-        # contract allowed the ask; whether it was then sent is the message
-        # tool's record, not this one's to invent.
-        log_event(cdir, "ask_owner_delivery", sent=False, detail="model-mediated (D4)")
+        prompt = _owner_prompt(campaign, question, if_unanswered)
         note = "" if decision.estimated else " (recorded as an interruption you could not price)"
         follows = (
             "You called this blocking, so no more trials go out until it is answered. Looking "
@@ -312,15 +390,81 @@ class OpsAskOwnerTool(_OpsScheduler):
             else "You called this non-blocking, so carry on with whatever does not depend on the "
             "answer -- that was the reading that made it non-blocking."
         )
+        settle = (
+            "If you later carry on with what you said you would do without an answer, record that "
+            "with ops_note and settles_question=true."
+        )
+        if self._direct_ask is not None and self._session_key:
+            withdraw_question(cdir, "superseded by a new question")
+            task = asyncio.create_task(
+                self._await_answer(cdir, campaign, ask_id, prompt, choices, self._session_key),
+                name=f"oncall-ask:{campaign}:{ask_id}",
+            )
+            _ASKING[str(cdir)] = (ask_id, task)
+            log_event(cdir, "ask_owner_delivery", ask_id=ask_id, sent=True, detail="question")
+            return (
+                (woke + "\n" if woke else "")
+                + f"ALLOWED by the campaign's contract{note}, and put to the owner as a question "
+                f"(ask {ask_id}). Do not send it again with the message tool. Their answer, if "
+                "one comes, is written to the campaign's notes and wakes you to read it. They may "
+                "take a long time to reply, or never reply.\n"
+                f"{follows} {settle} Do not close the campaign over silence -- that is the one "
+                "step that cannot be undone."
+            )
+        # Model-mediated delivery: the allowed text goes back to the model
+        # with the sending named as its next act. The trail records that the
+        # contract allowed the ask; whether it was then sent is the message
+        # tool's record, not this one's to invent.
+        log_event(cdir, "ask_owner_delivery", ask_id=ask_id, sent=False, detail="model-mediated (D4)")
         return (
             (woke + "\n" if woke else "")
             + f"ALLOWED by the campaign's contract{note}. Send exactly this to the owner with "
             f"the message tool now, and nothing else:\n"
-            f"  [ops campaign '{campaign}'] {question}\n"
+            f"  {prompt}\n"
             "They may take a long time to reply, or never reply.\n"
-            f"{follows} Do not close the campaign over silence -- that is the one step that "
-            "cannot be undone."
+            f"{follows} {settle} Do not close the campaign over silence -- that is the one "
+            "step that cannot be undone."
         )
+
+    async def _await_answer(
+        self, cdir: Path, campaign: str, ask_id: str, prompt: str, choices: list[str], conversation_id: str
+    ) -> None:
+        """Wait out one question on its own task, and file what came back.
+
+        The host shows the question for its own while and then closes it; an
+        empty answer is that closing (or the owner dismissing it), and leaves
+        the question open -- the wake the ask armed is what follows up on it.
+        """
+        from oncall_flow.instrument import log_event
+
+        try:
+            answer = await self._direct_ask(prompt, choices or None, conversation_id, None)
+        except Exception:  # noqa: BLE001 -- a failed ask is recorded, never raised into a turn that has moved on
+            logger.warning("oncall-flow: asking the owner failed for {}", campaign, exc_info=True)
+            log_event(cdir, "ask_owner_unanswered", ask_id=ask_id, reason="the question could not be put")
+            return
+        finally:
+            current = _ASKING.get(str(cdir))
+            if current is not None and current[0] == ask_id:
+                _ASKING.pop(str(cdir), None)
+        task = asyncio.current_task()
+        if task is not None and task.cancelling():
+            return
+        if answer is None:
+            log_event(cdir, "ask_owner_unanswered", ask_id=ask_id, reason="no channel to the owner")
+            return
+        if not answer.strip():
+            log_event(cdir, "ask_owner_unanswered", ask_id=ask_id, reason="closed without an answer")
+            return
+        still_open = (_open_question(cdir) or {}).get("ask_id") == ask_id
+        _append_note(cdir, answer.strip()[:2000], source="owner", ask_id=ask_id)
+        if not still_open:
+            log_event(cdir, "owner_answered_late", ask_id=ask_id)
+            return
+        woke = wakes.pending_look(self._scheduler, campaign) is not None
+        log_event(cdir, "owner_answered", ask_id=ask_id, via="question", woke=woke)
+        if woke:
+            wakes.advance_look(self._scheduler, campaign)
 
 
 def _finish_summary(
@@ -626,8 +770,9 @@ class OpsFinishTool(_OpsScheduler):
                 "cleared, and what is left of the budget goes with them. Waiting costs nothing "
                 "by comparison: the campaign stays open and one sentence from the owner starts "
                 "it again.\n"
-                "If the answer no longer changes anything, say so with ops_note and finish "
-                "again. Otherwise keep going on whatever does not depend on it, or wait."
+                "If the answer no longer changes anything, say so with ops_note and "
+                "settles_question=true, then finish again. Otherwise keep going on whatever "
+                "does not depend on it, or wait."
             )
 
         seen = self._seen_keys(cdir)
@@ -703,6 +848,7 @@ class OpsFinishTool(_OpsScheduler):
         # is one cancel. The watcher's concluded sweep is the backstop for a
         # host that lent no scheduler here.
         removed = 1 if wakes.cancel_look(self._scheduler, campaign) else 0
+        withdraw_question(cdir, "campaign closed")
         # Counted before the report is written, so the figure in the report and
         # the figure in the trail are the same reading.
         watch = _watch_kept(cdir)
@@ -714,8 +860,15 @@ class OpsFinishTool(_OpsScheduler):
         # no unverified content. Handed back AFTER the close, as the text to
         # send with the message tool: the close never waits on a
         # channel, which is the failure the fork's two-call shape kept hitting.
-        md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative, watch)
-        summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative, watch)
+        # Read out with the report, not left in the trail: the owner was asked
+        # these and never answered, so what was done instead is theirs to see.
+        undecided = "\n".join(
+            f"decided without the owner: {d['question'][:300]} -- {d['reason'][:300]}"
+            for d in _decided_without_owner(cdir)
+        )
+        shown = "\n".join(part for part in (watch, undecided) if part)
+        md = _write_report_md(cdir, campaign, subject, outcome, observed, baseline, narrative, shown)
+        summary = _finish_summary(campaign, subject, outcome, observed, baseline, narrative, shown)
         if md is not None:
             summary += f"\n\nWritten to {md}"
         log_event(cdir, "report_delivery", sent=False, detail="model-mediated (D3/D4)", dedupe_key=dedupe_key)

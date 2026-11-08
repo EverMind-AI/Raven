@@ -102,6 +102,28 @@ def test_tool_calls_and_results_rendered():
     assert "the file body" in out
 
 
+def test_a_silent_row_keeps_its_text_under_a_heading_that_says_it_was_not_delivered():
+    """The model's silence marker went to nobody, so under a bare "Assistant" the
+    export would say a reader got it as an answer. Its text stays: this file is the
+    record. The last row is the control, an ordinary reply under the plain heading."""
+    s = _session()
+    s.add_message("user", "anything new on the feed?")
+    s.add_message("assistant", "Checked the feed, nothing new since 09:00.\n[SILENT]", silent=True)
+    s.add_message("user", "and now?")
+    s.add_message("assistant", "One new post at 10:12.")
+
+    out = render_transcript(s)
+
+    headings = [line for line in out.splitlines() if line.startswith("## ")]
+    assert headings == [
+        "## 🧑 User",
+        "## 🤖 Assistant (silence marker, not delivered)",
+        "## 🧑 User",
+        "## 🤖 Assistant",
+    ]
+    assert "Checked the feed, nothing new since 09:00.\n[SILENT]" in out
+
+
 def test_empty_session_renders_header_only():
     s = _session()
     out = render_transcript(s)

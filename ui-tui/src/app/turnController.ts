@@ -167,6 +167,7 @@ class TurnController {
   toolTokenAcc = 0
   turnTools: string[] = []
   private turnNotice = ''
+  private turnSilent = false
 
   private activeTools: ActiveTool[] = []
   private activeReasoningText = ''
@@ -218,6 +219,7 @@ class TurnController {
     this.episodes = []
     this.lastEpisodeStartMs = 0
     this.turnNotice = ''
+    this.turnSilent = false
 
     patchTurnState(state => ({
       ...state,
@@ -545,6 +547,38 @@ class TurnController {
     patchTurnState({ notice: line })
   }
 
+  /**
+   * The model ended the turn on its silence marker: nothing is delivered, and
+   * the turn reads as the one muted line `recordNotice` carries.
+   *
+   * The reply streams through `bufRef` and the live `streaming` text until the
+   * turn lands. `shown` is what the server says that reply had already streamed
+   * (a think block it inlined ahead of the marker), the end of the buffer, so
+   * that is taken back here and the commit in `recordMessageComplete` writes
+   * none of it. On a view that joined part-way, all the buffer holds may be the
+   * end of it. What the buffer held before it was said on the way -- narration
+   * a call with no `tool.start` left there, as one whose only tool was a
+   * message that went nowhere does -- and moves to the segments, as a flush
+   * when a tool call starts moves it: it stays, and it is not the reply.
+   */
+  recordSilentTurn(shown: string) {
+    if (this.interrupted) {
+      return
+    }
+
+    this.turnSilent = true
+    this.streamTimer = clear(this.streamTimer)
+    const buf = this.bufRef
+    this.bufRef = buf.endsWith(shown) ? buf.slice(0, buf.length - shown.length) : shown.endsWith(buf) ? '' : buf
+
+    if (this.bufRef.trim()) {
+      this.flushStreamingSegment()
+    }
+
+    this.bufRef = ''
+    patchTurnState({ streaming: '' })
+  }
+
   recordTodos(value: unknown) {
     if (this.interrupted) {
       return
@@ -656,13 +690,17 @@ class TurnController {
     this.closeReasoningSegment()
     this.stampLastEpisodeDuration()
 
+    // A silent turn's text is its marker, which is never drawn: neither the
+    // buffer nor a payload that carries it becomes an answer.
+    const silent = this.turnSilent
+
     // Ink renders markdown via <Md>; the gateway's Rich-rendered ANSI
     // (`payload.rendered`) is for terminals that can't.  Prioritising
     // `rendered` here garbles output whenever a user opts into
     // `display.final_response_markdown: render` because raw ANSI escapes
     // pass through into the React tree.  Prefer raw text and fall back
     // only when the gateway elected not to send any (#16391).
-    const rawText = (payload.text ?? payload.rendered ?? this.bufRef).trimStart()
+    const rawText = silent ? '' : (payload.text ?? payload.rendered ?? this.bufRef).trimStart()
     const split = splitReasoning(rawText)
     const finalText = finalTail(split.text, this.segmentMessages)
     const existingReasoning = this.reasoningText.trim() || String(payload.reasoning ?? '').trim()
@@ -777,7 +815,7 @@ class TurnController {
     this.interrupted = false
     patchTurnState({ activity: [], outcome: '' })
 
-    return { finalMessages, finalText, wasInterrupted }
+    return { finalMessages, finalText, silent, wasInterrupted }
   }
 
   recordMessageDelta({ text }: { rendered?: string; text?: string }) {
@@ -1156,6 +1194,7 @@ class TurnController {
     this.toolTokenAcc = 0
     this.interrupted = false
     this.turnNotice = ''
+    this.turnSilent = false
     this.persistedToolLabels.clear()
     patchUiState({ busy: true })
     patchTurnState({

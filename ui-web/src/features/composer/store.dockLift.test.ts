@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { dockLift } from './store'
 
@@ -24,6 +24,7 @@ function box(el: Element, top: number, height: number): void {
 }
 
 const lift = (): string => (document.querySelector('.chat') as HTMLElement).style.getPropertyValue('--lift')
+const restLift = (): string => (document.querySelector('.chat') as HTMLElement).style.getPropertyValue('--lift-rest')
 
 beforeEach(() => {
   document.body.innerHTML =
@@ -59,10 +60,67 @@ describe('the dock lift', () => {
     expect(lift()).toBe('200px')
   })
 
+  it('writes nothing when nothing moved, since it also runs on every scroll event', () => {
+    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.sheets')!, 0, 0)
+    dockLift()
+    const chat = document.querySelector('.chat') as HTMLElement
+    const writes = vi.spyOn(chat.style, 'setProperty')
+    dockLift()
+    expect(writes).not.toHaveBeenCalled()
+    box(document.querySelector('.dock-in')!, 480, 120)
+    dockLift()
+    expect(writes).toHaveBeenCalledWith('--lift', '120px')
+  })
+
   it('ignores a docked thing with no height, which is how an empty sheet rack reads', () => {
     box(document.querySelector('.tkruns')!, 0, 0)
     box(document.querySelector('.sheets')!, 0, 0)
     dockLift()
     expect(lift()).toBe('100px')
+  })
+
+  it('lifts nothing when the dock is not drawn, as on an imported conversation', () => {
+    const dock = document.querySelector('.dock') as HTMLElement
+    box(dock, 0, 0)
+    dock.getClientRects = () => ({ length: 0, item: () => null, [Symbol.iterator]: [][Symbol.iterator] }) as unknown as DOMRectList
+    dockLift()
+    expect(lift()).toBe('0px')
+    expect(restLift()).toBe('0px')
+  })
+})
+
+/* The resting lift is the same distance with the field at its resting height:
+ * what the turn nav stands on (features/transcript/styles.css), so a field
+ * that grows -- dragged taller, or filled with text -- moves the transcript's
+ * edge and leaves the nav where it was. Everything else docked still counts.
+ */
+describe('the resting lift', () => {
+  it('takes the field\'s growth out of the lift and nothing else', () => {
+    const card = document.querySelector('.dock-in') as HTMLElement
+    card.innerHTML = '<div class="field"><textarea id="ta"></textarea></div>'
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    ta.style.minHeight = '52px'
+    box(ta, 420, 152)
+    box(card, 400, 200)
+    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.sheets')!, 300, 60)
+    dockLift()
+    expect(lift()).toBe('300px')
+    expect(restLift()).toBe('200px')
+  })
+
+  it('counts a field that is not drawn as grown by nothing, as in the trajectory view', () => {
+    const card = document.querySelector('.dock-in') as HTMLElement
+    card.innerHTML = '<div class="field"><textarea id="ta"></textarea></div>'
+    const ta = document.getElementById('ta') as HTMLTextAreaElement
+    ta.style.minHeight = '52px'
+    box(ta, 0, 0)
+    box(card, 0, 0)
+    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.sheets')!, 300, 60)
+    dockLift()
+    expect(lift()).toBe('300px')
+    expect(restLift()).toBe('300px')
   })
 })

@@ -16,12 +16,15 @@ import pytest
 from raven.agent.subagent.charter import (
     Charter,
     CheckRule,
+    bind_charter_for_turn,
     charter_scope,
     current_charter,
     judge,
     narrowed_timeout,
     narrowed_tools,
     parse,
+    prior_calls,
+    record_call,
 )
 from raven.agent.subagent.charter_code import (
     CharterCodeError,
@@ -209,6 +212,30 @@ def test_a_judgement_about_one_call_compiles_and_runs() -> None:
     assert run_judge(fn, "write_file", {"path": "./out/a"}, []) == ["read it first"]
     assert run_judge(fn, "write_file", {"path": "./out/a"}, [("read_file", {"path": "./out/a"})]) == []
     assert run_judge(fn, "grep", {}, []) == []
+
+
+def test_safe_numeric_signs_compile_and_run() -> None:
+    fn = compile_judge(
+        "def judge(name, params, prior):\n"
+        '    delta = -1 if params.get("late") else +1\n'
+        '    return ["late"] if delta < 0 else []'
+    )
+
+    assert run_judge(fn, "remind", {"late": True}, []) == ["late"]
+    assert run_judge(fn, "remind", {"late": False}, []) == []
+
+
+def test_safe_type_checks_compile_and_run() -> None:
+    fn = compile_judge(
+        "def judge(name, params, prior):\n"
+        '    amount = params.get("amount")\n'
+        "    if not isinstance(amount, (int, float)):\n"
+        '        return ["amount must be numeric"]\n'
+        "    return []"
+    )
+
+    assert run_judge(fn, "book", {"amount": "2800"}, []) == ["amount must be numeric"]
+    assert run_judge(fn, "book", {"amount": 2800.0}, []) == []
 
 
 @pytest.mark.parametrize(
@@ -509,6 +536,30 @@ def test_a_participant_that_says_nothing_lets_the_next_one_speak() -> None:
             "write under ./out/",
             "read it first",
         ]
+
+
+def test_a_charter_bound_mid_turn_replaces_the_one_the_scope_opened_with() -> None:
+    with charter_scope(Charter(prompt="the dispatch brief")):
+        bind_charter_for_turn(Charter(prompt="the persona just loaded"))
+        assert current_charter().prompt == "the persona just loaded"
+    assert current_charter() is None
+
+
+def test_a_charter_bound_into_a_charterless_turn_still_gets_a_call_log() -> None:
+    """``charter_scope(None)`` opens no log, and a judge with none sees no history."""
+    with charter_scope(None):
+        record_call("write_file", {"path": "out/a.md"})
+        assert prior_calls() == ()
+        bind_charter_for_turn(Charter(prompt="the persona just loaded"))
+        record_call("write_file", {"path": "out/b.md"})
+        assert [name for name, _ in prior_calls()] == ["write_file"]
+        assert prior_calls()[0][1]["path"] == "out/b.md"
+
+
+def test_binding_nothing_mid_turn_clears_the_scope_charter() -> None:
+    with charter_scope(Charter(prompt="the dispatch brief")):
+        bind_charter_for_turn(None)
+        assert current_charter() is None
 
 
 # --------------------------------------------------------------------------- #

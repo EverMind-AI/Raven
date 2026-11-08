@@ -169,6 +169,75 @@ def test_parser_leaves_non_paths_alone(text):
     assert tsan.sanitize_text(text) == text
 
 
+def test_parser_stops_at_the_requested_number_of_spans():
+    text = "see /a and /b and /c"
+    assert len(tsan.find_absolute_paths(text)) == 3
+    assert tsan.find_absolute_paths(text, limit=2) == tsan.find_absolute_paths(text)[:2]
+    assert tsan.find_absolute_paths(text, limit=0) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "text_level_hits"),
+    [
+        ("problem: \\n- step one \\n- step two", True),
+        ("problem:\n- step one", False),
+        ("matches \\d+ digits", True),
+        ("\\d+ at start", True),
+        ("a\\nb", False),
+    ],
+    ids=["literal-newline", "real-newline", "regex", "leading-backslash", "unbounded-backslash"],
+)
+def test_json_scan_ignores_escape_artifacts(value, text_level_hits):
+    document = {"problem": {"steps": value}}
+    assert tsan.find_absolute_paths_in_json(document) == []
+    assert bool(tsan.find_absolute_paths(json.dumps(document))) is text_level_hits
+    assert tsan.find_absolute_paths_in_json(json.loads(json.dumps(document))) == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_json_scan_reports_the_field_path(path):
+    value = {
+        "problem": {"steps": f"see {path} here"},
+        "contents": [{"path": "bugreport.json"}, {"path": path}],
+    }
+    hits = tsan.find_absolute_paths_in_json(value)
+    assert ("problem.steps", path) in hits
+    assert ("contents[1].path", path) in hits
+    assert all(where != "contents[0].path" for where, _ in hits)
+
+
+def test_json_scan_finds_a_known_root_glued_to_text():
+    value = "prefixC:\\Users\\alice\\file.txt"
+    roots = ["C:\\Users\\alice"]
+    assert tsan.find_absolute_paths(value) == []
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": value}}, roots) == [
+        ("problem.steps", "C:\\Users\\alice")
+    ]
+
+
+def test_json_scan_checks_object_keys():
+    hits = tsan.find_absolute_paths_in_json({"problem": {"/etc/shadow": "x"}})
+    assert hits == [("problem./etc/shadow (key)", "/etc/shadow")]
+
+
+def test_json_scan_walks_nesting_the_decoder_accepts():
+    """The decoder admits nesting close to the recursion limit; the walk must not overflow on it."""
+    depth = 900
+    document = json.loads("[" * depth + '"/etc/shadow"' + "]" * depth)
+    hits = tsan.find_absolute_paths_in_json({"problem": {"steps": document}})
+    assert hits == [("problem.steps" + "[0]" * depth, "/etc/shadow")]
+    assert tsan.find_absolute_paths_in_json({"problem": {"steps": document}}, limit=0) == []
+
+
+def test_json_scan_keeps_document_order():
+    value = {"a": {"k /x": "/one"}, "b": ["/two", {"c": "/three"}]}
+    assert [sample for _, sample in tsan.find_absolute_paths_in_json(value)] == ["/x", "/one", "/two", "/three"]
+
+
 def test_a_path_glued_to_a_url_does_not_ride_out_in_an_export(tmp_path):
     """The export's own no-local-paths assertion cannot catch this one.
 
@@ -463,6 +532,18 @@ def _damage(payload, spec):
                 "sources": [{"source": "the span log", "count": -1}],
             }
         ]
+    elif spec == "bad-upload-state":
+        payload["upload"]["state"] = "queued"
+    elif spec == "upload-error-type":
+        payload["upload"]["error"] = 1
+    elif spec == "upload-uploaded-no-receipt":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": ""}
+    elif spec == "upload-failed-no-error":
+        payload.update(_valid_payload(payload["report_id"], status="local_ready"))
+        payload["upload"] = {"state": "failed", "issue_url": "", "receipt": ""}
+    elif spec == "upload-before-ready":
+        payload["upload"] = {"state": "uploaded", "issue_url": "", "receipt": "rc-000000000000"}
     return payload
 
 
@@ -498,6 +579,11 @@ _DAMAGE_SPECS = [
     "decision-missing-id",
     "decision-bad-masked-token",
     "decision-bad-source-count",
+    "bad-upload-state",
+    "upload-error-type",
+    "upload-uploaded-no-receipt",
+    "upload-failed-no-error",
+    "upload-before-ready",
 ]
 
 
@@ -507,6 +593,38 @@ def test_every_legal_status_loads(tmp_path, status):
     record_dir.mkdir()
     breport.save_record(record_dir, _valid_payload(status=status))
     assert breport.load_record(record_dir)["status"] == status
+
+
+@pytest.mark.parametrize(
+    "upload",
+    [
+        {"state": "uploaded", "issue_url": "", "receipt": "rc-5f3c2a9d1e70", "uploaded_at": "2026-10-12T06:40:11Z"},
+        {"state": "failed", "issue_url": "", "receipt": "", "error": "connection refused"},
+        {"state": "", "issue_url": "", "receipt": ""},
+    ],
+)
+def test_upload_fields_are_optional_and_validated(tmp_path, upload):
+    record_dir = tmp_path / "br-20260904-abcdef"
+    record_dir.mkdir()
+    payload = _valid_payload(status="local_ready")
+    payload["upload"] = upload
+    breport.save_record(record_dir, payload)
+    assert breport.load_record(record_dir)["upload"] == upload
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("br-20260904-abcdef", True),
+        ("br-20260904-ABCDEF", False),
+        ("br-20260904", False),
+        ("br-2026090-abcdef", False),
+        (None, False),
+        (b"br-20260904-abcdef", False),
+    ],
+)
+def test_is_report_id(value, expected):
+    assert breport.is_report_id(value) is expected
 
 
 @pytest.mark.parametrize("spec", _DAMAGE_SPECS)
@@ -707,6 +825,44 @@ def test_archive_headers_carry_no_local_identity(state, workspace, tmp_path):
         assert members
         for member in members:
             assert (member.uid, member.gid, member.uname, member.gname) == (0, 0, "", "")
+
+
+def test_backslashes_in_problem_fields_ship_verbatim(state, workspace):
+    fields = {
+        "description": "problem: \\n- step one \\n- step two",
+        "steps": "matches \\d+ digits",
+        "expected": "\\d+ at start",
+    }
+    _record_dir, record = _full_flow(state, workspace, **fields)
+    assert record["status"] == "local_ready"
+    with tarfile.open(record["package"]["path"]) as tar:
+        meta = json.loads(tar.extractfile(f"{record['report_id']}/bugreport.json").read().decode("utf-8"))
+    assert {name: meta["problem"][name] for name in fields} == fields
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/raven/license.key", "C:\\Users\\alice\\key.txt", "\\\\server\\share\\key.txt"],
+    ids=["posix", "drive", "unc"],
+)
+def test_export_gate_reads_the_metadata_on_disk(state, workspace, monkeypatch, path):
+    """The gate must stop a path that reached the written file, not the dict."""
+    real_gate = breport._assert_export_ready
+
+    def tampered_gate(prep, metadata):
+        target = prep.export_dir / "bugreport.json"
+        on_disk = json.loads(target.read_text(encoding="utf-8"))
+        on_disk["problem"]["steps"] = path
+        target.write_text(json.dumps(on_disk, ensure_ascii=False, indent=2), encoding="utf-8")
+        real_gate(prep, metadata)
+
+    monkeypatch.setattr(breport, "_assert_export_ready", tampered_gate)
+    prep = _prepared(state, workspace)
+    with pytest.raises(breport.ExportLeakError, match=r"bugreport\.json problem\.steps"):
+        breport.freeze_export(prep, description="it broke", steps="harmless", decide=_decide_all())
+
+    assert not (breport.bugreports_root(state) / prep.report_id).exists()
+    assert not (prep.staging_dir / "record.json").exists()
 
 
 @pytest.mark.parametrize("damage", ["modify", "add", "symlink"], ids=["modified", "added-file", "symlink-injected"])
@@ -994,6 +1150,27 @@ def test_environment_summary_lands_in_package(state, workspace, tmp_path):
     assert env["bundle_format_version"] == 1
     assert env["record_schema_version"] == 1 and env["package_schema_version"] == 1
     assert record["completeness"]["status"] in ("complete", "degraded", "unreplayable")
+
+
+@pytest.mark.parametrize("source", ["attempt", "selection"])
+def test_completeness_is_written_into_the_record_and_the_package(state, workspace, source):
+    """The verdict and its reasons travel in both JSON files whichever way the
+    report was made: the command line's attempt or the web page's selection."""
+    if source == "attempt":
+        _log_simple(state)
+        prep = breport.prepare_trajectory("trace-1", workspace=workspace, state_dir=state)
+    else:
+        _selection_world(state, workspace)
+        prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="it broke", decide=_decide_all())
+    record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+
+    on_disk = json.loads((record_dir / "record.json").read_text(encoding="utf-8"))["completeness"]
+    with tarfile.open(record["package"]["path"]) as tar:
+        packaged = json.loads(tar.extractfile(f"{record['report_id']}/{breport.PACKAGE_METADATA_FILE}").read())
+    assert on_disk == packaged["completeness"] == {"status": prep.completeness[0], "reasons": prep.completeness[1]}
+    assert on_disk["status"] in ("complete", "degraded", "unreplayable", "unknown")
+    assert isinstance(on_disk["reasons"], list)
 
 
 def test_unreadable_config_degrades_environment_and_classification(state, workspace, tmp_path):
@@ -1439,3 +1616,296 @@ def test_reports_order_by_creation_time_not_directory_name(tmp_path):
     listed = breport.list_reports(tmp_path / "traces")
 
     assert [record["report_id"] for _dir, record in listed] == ["br-20260905-000000", "br-20260905-ffffff"]
+
+
+# ── staging and finishing apart ────────────────────────────────────────
+
+_INNER = "Hj5tR8uE3iO7pA1sD4fGk9lZ"
+_OUTER = _INNER + "W6xC2v"
+
+
+def test_stage_review_offers_the_items_freeze_export_would_ask_about(state, workspace, tmp_path):
+    asked: list[list[str]] = []
+
+    def record(items, reasons):
+        asked.append([item.id for item in items])
+        return _decide_all()(items, reasons)
+
+    prep = _prepared(state, workspace)
+    breport.freeze_export(prep, description=f"token {_ENTROPY_TOKEN}", decide=record)
+    prep.cleanup()
+
+    staged = _prepared(state, workspace)
+    stage = breport.stage_review(staged, description=f"token {_ENTROPY_TOKEN}")
+    assert [item.id for item in stage.items] == asked[0] and stage.items
+    assert stage.reasons == staged.reasons and stage.raw_fields["description"] == f"token {_ENTROPY_TOKEN}"
+    decisions = _decide_all(treview.ACTION_REDACTED)(stage.items, stage.reasons)
+    finished = breport.finish_export(staged, stage, decisions)
+    recorded = {entry["id"]: entry["action"] for entry in finished.package_metadata["redaction"]["user_decisions"]}
+    assert recorded == {decision.item_id: decision.action for decision in decisions}
+    assert _ENTROPY_TOKEN not in json.dumps(finished.package_metadata)
+    staged.cleanup()
+
+
+def test_a_preparation_is_staged_once(state, workspace):
+    prep = _prepared(state, workspace)
+    breport.stage_review(prep, description="first")
+    with pytest.raises(breport.BugReportError, match="already been staged"):
+        breport.stage_review(prep, description="again")
+    prep.cleanup()
+
+
+def test_finishing_refuses_decisions_for_a_report_without_items(state, workspace):
+    prep = _prepared(state, workspace)
+    stage = breport.stage_review(prep, description="plain words only")
+    assert stage.items == []
+    with pytest.raises(breport.BugReportError, match="without review items"):
+        breport.finish_export(prep, stage, [treview.ReviewDecision("x", treview.ACTION_KEPT)])
+    assert breport.finish_export(prep, stage, []).package_metadata is not None
+    prep.cleanup()
+
+
+def test_conflicting_linked_decisions_freeze_nothing(state, workspace):
+    prep = _prepared(state, workspace)
+    stage = breport.stage_review(prep, description=f"{_INNER} then {_OUTER}")
+    by_token = {item.token: item for item in stage.items}
+    decisions = [
+        treview.ReviewDecision(by_token[_INNER].id, treview.ACTION_KEPT),
+        treview.ReviewDecision(by_token[_OUTER].id, treview.ACTION_REDACTED),
+    ] + [
+        treview.ReviewDecision(item.id, treview.ACTION_KEPT)
+        for item in stage.items
+        if item.token not in (_INNER, _OUTER)
+    ]
+    with pytest.raises(treview.ReviewConflictError):
+        breport.finish_export(prep, stage, decisions)
+    assert not prep.export_dir.exists()
+    prep.cleanup()
+
+
+# ── a report built from selected turns ─────────────────────────────────
+
+_SEL_SESSION = "cli:sel"
+
+
+def _turn_span(trace_id, minute, *, dispatched_in=None, session_key=_SEL_SESSION):
+    attrs = {"turn.in_progress": False, "turn.input_preview": trace_id}
+    if dispatched_in:
+        attrs["trace.dispatched_in_trace_id"] = dispatched_in
+    span = _span(trace_id, session_key=session_key, attrs=attrs)
+    span["startTime"] = f"2026-08-20T10:{minute:02d}:00+00:00"
+    span["endTime"] = f"2026-08-20T10:{minute:02d}:30+00:00"
+    return span
+
+
+def _selection_world(state, workspace):
+    from raven.session.manager import SessionManager
+
+    _write_log(
+        state / "logs" / "audit-spans.log",
+        [
+            _turn_span("trace-a", 1),
+            _span("trace-a", session_key=_SEL_SESSION, name="llm.call", span_id="span-a-llm"),
+            _turn_span("trace-sub", 2, dispatched_in="trace-a", session_key="subagent:x"),
+            _turn_span("trace-b", 3),
+        ],
+    )
+    path = SessionManager(workspace).session_path(_SEL_SESSION)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"_type": "metadata", "key": _SEL_SESSION, "metadata": {"title": "t"}, "last_consolidated": 0},
+        {"role": "user", "content": "first", "timestamp": "2026-08-20T10:01:00", "trace_id": "trace-a"},
+        {"role": "assistant", "content": "answer one", "timestamp": "2026-08-20T10:01:20"},
+        {"role": "user", "content": "second", "timestamp": "2026-08-20T10:03:00", "trace_id": "trace-b"},
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    return path
+
+
+def _plan(state, *trace_ids):
+    from raven.trajectory import selection as tsel
+
+    return tsel.plan_selection(_SEL_SESSION, list(trace_ids), answering=False, state_dir=state)
+
+
+def test_the_synthetic_attempt_id_is_stable_for_a_set_of_turns():
+    assert re.fullmatch(r"sel-[0-9a-f]{12}", breport.selection_attempt_id(["trace-b", "trace-a"]))
+    assert breport.selection_attempt_id(["trace-b", "trace-a"]) == breport.selection_attempt_id(["trace-a", "trace-b"])
+    assert breport.selection_attempt_id(["trace-a"]) != breport.selection_attempt_id(["trace-a", "trace-b"])
+
+
+def test_prepare_selection_bundles_the_turns_and_their_dispatched_traces(state, workspace):
+    _selection_world(state, workspace)
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    try:
+        assert prep.attempt_id == breport.selection_attempt_id(["trace-a"])
+        assert prep.member_traces == ("trace-a", "trace-sub")
+        assert prep.selected_traces == ("trace-a",)
+        assert prep.merged_definition is False and prep.session_key == _SEL_SESSION
+        bundle = prep.snapshot_dir / "bundle" / prep.attempt_id
+        rows = [json.loads(line) for line in (bundle / "session.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [r.get("content") for r in rows[1:]] == ["first", "answer one"]
+        assert prep.manifest["session_key"] == _SEL_SESSION and prep.manifest["session_included"] is True
+        assert sorted(p.name for p in state.iterdir()) == ["bugreports", "logs"], "nothing pinned or defined"
+    finally:
+        prep.cleanup()
+
+
+def test_a_selection_bundle_has_the_same_manifest_keys_as_an_attempt_bundle(state, workspace):
+    _selection_world(state, workspace)
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    attempt = breport.prepare_trajectory("trace-b", workspace=workspace, state_dir=state)
+    try:
+        assert set(prep.manifest) == set(attempt.manifest)
+    finally:
+        prep.cleanup()
+        attempt.cleanup()
+
+
+def test_a_selection_without_a_session_record_says_so(state, workspace):
+    _selection_world(state, workspace).unlink()
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    try:
+        assert prep.manifest["session_included"] is False
+        assert not (prep.snapshot_dir / "bundle" / prep.attempt_id / "session.jsonl").exists()
+    finally:
+        prep.cleanup()
+
+
+def test_prepare_selection_takes_only_a_plan(state, workspace):
+    with pytest.raises(TypeError):
+        breport.prepare_selection(["trace-a"], workspace=workspace, state_dir=state)  # type: ignore[arg-type]
+
+
+def test_a_turn_purged_after_planning_is_stale_and_leaves_no_staging(state, workspace):
+    _selection_world(state, workspace)
+    plan = _plan(state, "trace-a")
+    _write_log(state / "logs" / "audit-spans.log", [_turn_span("trace-b", 3)])
+    with pytest.raises(breport.StaleAttemptError):
+        breport.prepare_selection(plan, workspace=workspace, state_dir=state)
+    assert list((breport.bugreports_root(state) / breport.STAGING_DIR).iterdir()) == []
+
+
+def test_a_selection_report_lands_and_passes_the_receivers_check(state, workspace):
+    from raven.trajectory.package_check import inspect_package
+
+    _selection_world(state, workspace)
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="the reply was wrong", decide=_decide_all())
+    record_dir, record = breport.confirm_and_package(prep, state_dir=state)
+    assert record["status"] == breport.STATUS_LOCAL_READY
+    assert breport.load_record(record_dir)["attempt"]["attempt_id"] == prep.attempt_id
+    summary = inspect_package(Path(record["package"]["path"]), expected_report_id=record["report_id"])
+    assert summary.metadata["attempt"]["member_traces"] == ["trace-a", "trace-sub"]
+    found = breport.reports_for_attempt("att-unrelated", ("trace-a",), state_dir=state)
+    assert [r["report_id"] for _d, r in found] == [record["report_id"]]
+
+
+def test_a_selection_report_whose_turn_vanished_does_not_land(state, workspace):
+    _selection_world(state, workspace)
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    prep = breport.freeze_export(prep, description="the reply was wrong", decide=_decide_all())
+    _write_log(state / "logs" / "audit-spans.log", [_turn_span("trace-b", 3)])
+    with pytest.raises(breport.StaleAttemptError):
+        breport.confirm_and_package(prep, state_dir=state)
+    assert prep.staging_dir.is_dir() and not (breport.bugreports_root(state) / prep.report_id).exists()
+    prep.cleanup()
+
+
+def _store(state):
+    return state / "logs" / "audit-artifacts"
+
+
+def _put(state, rel, text):
+    path = _store(state) / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _bounded_world(state, workspace, tmp_path):
+    """A selected turn whose spans point at every kind of out-of-bounds or non-regular file."""
+    from raven.tracing import artifact_v2
+
+    _selection_world(state, workspace)
+    outside = tmp_path / "outside-store"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("OUTSIDE-BYTES-artifact", encoding="utf-8")
+    (outside / "blob.json").write_text('{"role": "user", "content": "OUTSIDE-BYTES-blob"}', encoding="utf-8")
+
+    good = {"role": "user", "content": "inside the store"}
+    good_sha = artifact_v2.message_sha1(good)
+    _put(state, f"_messages/{good_sha[:2]}/{good_sha}.json", artifact_v2.message_text(good))
+    linked_sha = "a" * 40
+    link = _store(state) / "_messages" / "aa" / f"{linked_sha}.json"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside / "blob.json")
+    shard_sha = "b" * 40
+    (outside / "shard").mkdir()
+    (outside / "shard" / f"{shard_sha}.json").write_text('{"content": "OUTSIDE-BYTES-shard"}', encoding="utf-8")
+    (_store(state) / "_messages" / "bb").symlink_to(outside / "shard", target_is_directory=True)
+    dir_sha = "c" * 40
+    (_store(state) / "_messages" / "cc" / f"{dir_sha}.json").mkdir(parents=True)
+    fifo_sha = "d" * 40
+    (_store(state) / "_messages" / "dd").mkdir()
+    os.mkfifo(_store(state) / "_messages" / "dd" / f"{fifo_sha}.json")
+    shell = _put(
+        state,
+        "llm.input/2026-08-20/shell.json",
+        json.dumps(
+            {
+                "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
+                "messages": [artifact_v2.make_ref(s) for s in (good_sha, linked_sha, shard_sha, dir_sha, fifo_sha)],
+            }
+        ),
+    )
+    linked_artifact = _store(state) / "tool.output" / "2026-08-20" / "linked.txt"
+    linked_artifact.parent.mkdir(parents=True, exist_ok=True)
+    linked_artifact.symlink_to(outside / "secret.txt")
+    fifo_artifact = _store(state) / "tool.output" / "2026-08-20" / "fifo.txt"
+    os.mkfifo(fifo_artifact)
+    spans = [json.loads(line) for line in (state / "logs" / "audit-spans.log").read_text().splitlines()]
+    spans.append(
+        _span(
+            "trace-a",
+            session_key=_SEL_SESSION,
+            name="tool.call",
+            span_id="span-a-tool",
+            attrs={
+                "llm.input.artifact_path": str(shell),
+                "tool.outside.artifact_path": str(outside / "secret.txt"),
+                "tool.linked.artifact_path": str(linked_artifact),
+                "tool.fifo.artifact_path": str(fifo_artifact),
+            },
+        )
+    )
+    _write_log(state / "logs" / "audit-spans.log", spans)
+    return {
+        "good_sha": good_sha,
+        "bad_shas": {linked_sha, shard_sha, dir_sha, fifo_sha},
+        "bad_artifacts": {str(outside / "secret.txt"), str(linked_artifact), str(fifo_artifact)},
+    }
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_selection_report_reads_only_regular_files_inside_the_store(state, workspace, tmp_path):
+    import time
+
+    world = _bounded_world(state, workspace, tmp_path)
+    started = time.monotonic()
+    prep = breport.prepare_selection(_plan(state, "trace-a"), workspace=workspace, state_dir=state)
+    try:
+        assert time.monotonic() - started < 5, "a FIFO must not hang the preparation"
+        bundle = prep.snapshot_dir / "bundle" / prep.attempt_id
+        packed = b"".join(p.read_bytes() for p in bundle.rglob("*") if p.is_file())
+        assert b"OUTSIDE-BYTES" not in packed
+        assert world["bad_artifacts"] <= set(prep.manifest["missing_artifacts"])
+        assert world["bad_shas"] <= set(prep.manifest["missing_messages"])
+        shell = next(p for p in (bundle / "artifacts").iterdir() if p.name.endswith("shell.json"))
+        messages = json.loads(shell.read_text(encoding="utf-8"))["messages"]
+        assert messages[0] == {"role": "user", "content": "inside the store"}, "a legal shell still resolves to v1"
+        from raven.tracing import artifact_v2
+
+        assert messages[1:] == [artifact_v2.placeholder(s) for s in ("a" * 40, "b" * 40, "c" * 40, "d" * 40)]
+    finally:
+        prep.cleanup()

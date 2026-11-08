@@ -37,7 +37,6 @@ empty panel for a run that is on disk.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -46,10 +45,18 @@ from loguru import logger
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent.dag_live import live_run_ids
-from raven.agent.subagent.dag_store import REGISTRY_FILENAME
-from raven.agent.subagent.history import dag_root, nodes_root, session_history_root, spawn_live_key
+from raven.agent.subagent.dag_reader import current_assignment
+from raven.agent.subagent.history import dag_root, nodes_root, spawn_live_key
 from raven.agent.subagent.instances import get_registry
+from raven.agent.subagent.task_rows import (
+    _label_from_prompt,
+    _NodeFiles,
+    _read_json,
+    _read_meta,
+    _spawn_node_ids,
+)
 from raven.agent.subagent.tool_vocabulary import normalize_row
+from raven.config.agent_names import canonical_agent_name
 from raven.config.loader import load_config
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.session import _map_to_wire, _safe_invoke_factory
@@ -83,64 +90,13 @@ def _iso(ms: Any) -> str | None:
         return None
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    """One JSON object off disk, or an empty one. Absent, unreadable and
-    malformed are the same answer here: every caller renders a row either way."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-@dataclass(frozen=True)
-class _NodeFiles:
-    """One node's artifacts, wherever the flat namespace put them.
-
-    A node used to own a directory and now owns a filename prefix, so what a
-    reader is handed is no longer a path it can join onto. Every read goes
-    through :meth:`path` for the reason the writer has one namer: the prefix
-    convention lives in one place.
-    """
-
-    root: Path
-    node_id: str
-
-    def path(self, name: str) -> Path:
-        return self.root / f"{self.node_id}.{name}"
-
-
-def _spawn_node_ids(session_dir: Path) -> list[str]:
-    """Node ids this session's spawns claimed, oldest first.
-
-    Ordered by the registry's own clock rather than by the id: an id the model
-    chose carries no time, where the minted call id it replaced sorted
-    chronologically for free. Sorting the names would shuffle the panel.
-    """
-    registry = _read_json(session_history_root(session_dir) / REGISTRY_FILENAME)
-    nodes = registry.get("nodes")
-    if not isinstance(nodes, dict):
-        return []
-    spawned = [
-        (int(entry.get("started_at_ms") or 0), node_id)
-        for node_id, entry in nodes.items()
-        if isinstance(entry, dict) and entry.get("kind") == "spawn" and isinstance(node_id, str)
-    ]
-    return [node_id for _at, node_id in sorted(spawned)]
-
-
-def _read_meta(files: _NodeFiles) -> dict[str, Any]:
-    return _read_json(files.path("meta.json"))
-
-
 def _outcome(files: _NodeFiles) -> tuple[str | None, bool]:
     """The answer this call produced, and whether it produced one at all.
 
     ``error.md`` and ``out.md`` are written by the same ``finish``, never both,
     so whichever exists is the outcome. ``closing.md``, when the lane left one
-    beside ``out.md``, is what the run said after its last step and stands in
-    for the whole reply as the answer row: the whole reply repeats the
-    narration already drawn on the steps (CONTEXT.md, Closing Message).
+    beside ``out.md``, is what the run said after its last step, and it is the
+    answer row whenever it is there (CONTEXT.md, Closing Message).
     """
     for name in ("closing.md", "out.md", "error.md"):
         path = files.path(name)
@@ -195,19 +151,6 @@ def _row(files: _NodeFiles) -> dict[str, Any]:
     }
 
 
-def _label_from_prompt(files: _NodeFiles) -> str:
-    """First line of the prompt, for a call whose meta carries no summary.
-
-    Read only in that case: one extra file per row would otherwise be paid on
-    every poll of a panel that is polling every few seconds.
-    """
-    try:
-        with files.path("prompt.md").open(encoding="utf-8", errors="replace") as fh:
-            return fh.readline().strip()[:80]
-    except OSError:
-        return ""
-
-
 def _call_dir(root: Path, call_id: str) -> _NodeFiles | None:
     """Resolve one node id under ``root``, or None if it names nothing there.
 
@@ -241,7 +184,9 @@ def _root_for(session_id: str, agent_loop_factory: "AgentLoopFactory | None") ->
 
 # `manifest.json` statuses, on the left, and what a client renders on the right.
 # A node that never ran reads as queued rather than as running: the graph knows
-# the difference and so should the list.
+# the difference and so should the list. `not_executed` has no entry on purpose:
+# `_dag_rows` drops its row before this table is consulted, so an unmapped value
+# -- which would read as `run` -- is never reached.
 _DAG_WIRE_STATUS = {
     "pending": "queued",
     "running": "run",
@@ -307,6 +252,7 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             nid = node["id"]
             entry = manifest.get(nid) if isinstance(manifest.get(nid), dict) else {}
             status = str(entry.get("status") or "pending")
+            reg = None
             if not finalized:
                 reg = by_run_node.get((run.name, nid))
                 if reg is not None:
@@ -323,31 +269,44 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             # clock -- a row for it pads the list with entries that open onto
             # nothing. The graph view still shows it, where "skipped because
             # its upstream failed" is legible structure rather than noise. A
-            # cancelled node is the opposite case: it ran, so its row opens
-            # onto a real transcript and stays.
-            if status == "skipped":
+            # not-executed node is the same: a branch that was not taken never
+            # called a sub-agent, and the stamps it carries only date the
+            # moment that was decided. A cancelled node is the opposite case:
+            # it ran, so its row opens onto a real transcript and stays.
+            if status in ("skipped", "not_executed"):
                 continue
             tools = entry.get("tool_calls")
-            rows.append(
-                {
-                    # Not addressable by `id` alone -- a node id is unique inside
-                    # its run and nowhere else -- so the pair travels and the id
-                    # is only ever a label for the row.
-                    "id": f"{run.name}/{nid}",
-                    "kind": "dag",
-                    "run_id": run.name,
-                    "node": nid,
-                    "label": str(node.get("node_summary") or "") or nid,
-                    "status": _DAG_WIRE_STATUS.get(status, "run"),
-                    "agent": entry.get("subagent") or node.get("subagent"),
-                    "instance": entry.get("instance", node.get("instance")),
-                    "started_at": _iso(entry.get("started_at")),
-                    "ended_at": _iso(entry.get("ended_at")),
-                    "message_count": 2 if entry.get("output_file") else 1,
-                    "tokens": _tokens(entry),
-                    "tool_call_count": len(tools) if isinstance(tools, list) else None,
-                }
+            # One resolver for every reader: the registry row records who is
+            # running the node while the run is in flight, the manifest once it
+            # lands, and the graph is the fallback for a node that never moved.
+            assignment = current_assignment(entry, reg, node)
+            attempt = (
+                {"attempt_agents": list(assignment.attempt_agents)} if assignment.attempt_agents is not None else {}
             )
+            row: dict[str, Any] = {
+                # Not addressable by `id` alone -- a node id is unique inside
+                # its run and nowhere else -- so the pair travels and the id
+                # is only ever a label for the row.
+                "id": f"{run.name}/{nid}",
+                "kind": "dag",
+                "run_id": run.name,
+                "node": nid,
+                "label": str(node.get("node_summary") or "") or nid,
+                "status": _DAG_WIRE_STATUS.get(status, "run"),
+                "agent": canonical_agent_name(assignment.agent)
+                if isinstance(assignment.agent, str)
+                else assignment.agent,
+                "instance": assignment.instance,
+                "started_at": _iso(entry.get("started_at")),
+                "ended_at": _iso(entry.get("ended_at")),
+                "message_count": 2 if entry.get("output_file") else 1,
+                "tokens": _tokens(entry),
+                "tool_call_count": len(tools) if isinstance(tools, list) else None,
+                **attempt,
+            }
+            if attempt:
+                row["instance_auto"] = bool(assignment.instance_auto)
+            rows.append(row)
     return rows
 
 

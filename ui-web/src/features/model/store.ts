@@ -11,7 +11,6 @@ import { t } from '../../i18n/t'
 import { ds } from '../../state/sources'
 import { sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
-import { remember } from './recent'
 import { KIND_ORDER, offered, sameModel, statedTags, withCurrent } from './types'
 
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
@@ -27,11 +26,12 @@ export interface OpenAt {
      button is already on the settings page. */
   footer: boolean
   /* Which switch the opener meant: the composer chip changes THIS conversation
-     ('session'), the settings default-model control changes what new ones start
-     on ('default'). The backend needs it explicitly -- a model id alone does not
-     say -- and inferring it from whether a conversation happens to be open is
-     exactly the bug that let the settings control change one session. */
-  scope: 'session' | 'default'
+     and the default new ones start on ('both'), the settings default-model
+     control changes only what new ones start on ('default'). The backend needs
+     it explicitly -- a model id alone does not say -- and inferring it from
+     whether a conversation happens to be open is exactly the bug that let the
+     settings control change one session. */
+  scope: 'session' | 'default' | 'both'
   /* Which model the picker marks, when it is not the one the chip shows. The
      chip and the picker share one `current` (the open conversation's model), so
      the settings control -- which edits the default, a different value -- passes
@@ -42,15 +42,17 @@ export interface OpenAt {
   offer: Offer
 }
 
-/* Text models, every connected provider, a pick switches this conversation:
-   the composer chip's opening, and what any caller that names nothing gets. */
+/* Text models, every connected provider: the composer chip's opening, and what
+   any caller that names nothing gets. */
 const DEFAULT_OFFER: Offer = { kind: 'text' }
 
 const CLOSED: OpenAt = { host: null, after: null, footer: false, scope: 'session', marked: null, offer: DEFAULT_OFFER }
 
 let at: OpenAt = CLOSED
 let epoch = 0
-let selected = 'minimax-m3'
+let selected = ''
+let status: 'loading' | 'ready' | 'empty' | 'error' = 'loading'
+let selectionRead = 0
 /* The account the conversation is on. A pick names one, and two accounts can
    list the same id, so the model alone cannot say which row is the one in
    force. Empty means nothing has said -- the served frame, and a page that has
@@ -89,6 +91,20 @@ export const isOpen = (): boolean => !!at.host
    control. */
 export const openedFrom = (el: Element | null): boolean => !!el && at.host === el
 export const current = (): string => selected
+export const loadStatus = (): typeof status => status
+export const loadToken = (): number => selectionRead
+
+export function beginLoad(preserveReady = false): number {
+  selectionRead += 1
+  if (!preserveReady || status !== 'ready') status = 'loading'
+  announce()
+  return selectionRead
+}
+
+export function failLoad(): void {
+  status = 'error'
+  announce()
+}
 
 /** The account serving `current`, or '' while nothing has said which. */
 export const currentProvider = (): string => selectedAt
@@ -98,9 +114,13 @@ export const currentProvider = (): string => selectedAt
    marking the account the reader just left. An omitted account is "not known"
    rather than "unchanged", so a caller that has one always states it. */
 export function setCurrent(model: string, provider = ''): void {
-  if (selected === model && selectedAt === provider) return
+  // A local pick also supersedes a pending read of the same model.
+  selectionRead += 1
+  const next = model ? 'ready' : 'empty'
+  if (selected === model && selectedAt === provider && status === next) return
   selected = model
   selectedAt = provider
+  status = next
   announce()
 }
 
@@ -108,6 +128,10 @@ export function setCurrent(model: string, provider = ''): void {
    settings button can both be reached while a picker is up. */
 export function open(anchor?: HTMLElement | null, after?: () => void, marked?: string, offer: Offer = DEFAULT_OFFER): void {
   if (!installed()) return
+  if (!anchor && source().loading?.()) {
+    toast(t('gui.model.provider_catalogue_loading'))
+    return
+  }
   const rows = listed(offer)
   if (!rows.length) {
     /* Nothing to open onto is now one dead end, not two: a provider connected
@@ -128,10 +152,10 @@ export function open(anchor?: HTMLElement | null, after?: () => void, marked?: s
   }
   const host = anchor || document.getElementById('modelChip')
   if (!host) return
-  /* The composer chip opens with no anchor and means this conversation; the
-     settings control passes its button and means the default, and marks the
-     default model rather than the chip's. */
-  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'session', marked: marked || null, offer }
+  /* The composer chip opens with no anchor and means this conversation plus the
+     default a new one starts on; the settings control passes its button and
+     means only the default, and marks the default model rather than the chip's. */
+  at = { host, after: after || null, footer: !anchor, scope: anchor ? 'default' : 'both', marked: marked || null, offer }
   announce()
 }
 
@@ -246,18 +270,15 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
       return
     }
   }
-  /* A session switch is optimistic: the chip -- which reads the same `current`
-     -- says the new model before the round trip, and rolls back if it is
-     refused. A default switch must not touch the chip (a different value), so it
-     commits nothing locally and only reflects the settled default through
-     `after` once the write lands. */
-  if (scope === 'session') {
+  /* A switch that includes this conversation is optimistic: the chip -- which
+     reads the same `current` -- says the new model before the round trip, and
+     rolls back if it is refused. A default switch must not touch the chip (a
+     different value), so it commits nothing locally and only reflects the
+     settled default through `after` once the write lands. */
+  const switchesSession = scope !== 'default'
+  if (switchesSession) {
     setCurrent(m, provider)
     after?.()
-    /* Remembered on the pick rather than on the acknowledgement: a model the
-       reader reached for belongs at the head of the list whether or not this
-       one write lands. */
-    remember(m, provider)
   }
   try {
     const settled = await src.persist(m, provider, scope)
@@ -269,7 +290,7 @@ export async function choose(m: string, provider: string, typed = false, kind?: 
       ? t('gui.model.pick_staged', { name: short(m) })
       : t('gui.model.pick_switched', { name: short(m) }))
   } catch (e) {
-    if (scope === 'session') {
+    if (switchesSession) {
       setCurrent(prev, prevAt)
       after?.()
     }
@@ -289,7 +310,9 @@ const detail = (e: unknown): string => {
 export function _resetForTests(): void {
   at = CLOSED
   epoch = 0
-  selected = 'minimax-m3'
+  selected = ''
   selectedAt = ''
+  status = 'loading'
+  selectionRead = 0
   subs.clear()
 }

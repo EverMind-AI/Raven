@@ -42,6 +42,8 @@ pytestmark = pytest.mark.skipif(
 _ROOT = Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "ui-web" / "scripts" / "check-css.mjs"
 _CSS = _ROOT / "ui-web" / "src" / "styles" / "page.css"
+# Every other sheet the gate reads, copied as it stands into each probe tree.
+_SHEETS = [Path("src") / "features" / "trajectory" / "styles.css"]
 
 # (name, rule appended to the stylesheet, is it supposed to pass)
 _CASES = [
@@ -92,16 +94,26 @@ _CASES = [
 ]
 
 
-def _run_gate_over(tmp_path: Path, extra_rule: str) -> int:
-    """Run the gate against a copy of the tree with ``extra_rule`` appended."""
+def _gate_tree(tmp_path: Path, page_css: str) -> Path:
+    """A copy of the gate and every sheet it reads, with ``page_css`` as page.css."""
     ui = tmp_path / "ui"
     (ui / "scripts").mkdir(parents=True)
     (ui / "src" / "styles").mkdir(parents=True)
     shutil.copy(_SCRIPT, ui / "scripts" / "check-css.mjs")
-    (ui / "src" / "styles" / "page.css").write_text(
-        _CSS.read_text(encoding="utf-8") + "\n" + extra_rule + "\n", encoding="utf-8"
-    )
+    (ui / "src" / "styles" / "page.css").write_text(page_css, encoding="utf-8")
+    for sheet in _SHEETS:
+        (ui / sheet).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(_ROOT / "ui-web" / sheet, ui / sheet)
+    return ui
+
+
+def _run_gate(ui: Path) -> int:
     return subprocess.run(["node", str(ui / "scripts" / "check-css.mjs")], capture_output=True).returncode
+
+
+def _run_gate_over(tmp_path: Path, extra_rule: str) -> int:
+    """Run the gate against a copy of the tree with ``extra_rule`` appended."""
+    return _run_gate(_gate_tree(tmp_path, _CSS.read_text(encoding="utf-8") + "\n" + extra_rule + "\n"))
 
 
 def test_the_stylesheet_as_it_stands_passes() -> None:
@@ -127,12 +139,7 @@ def test_the_verdict_does_not_depend_on_where_the_rule_sits(
     The gate once exempted everything above the first ordinary rule, which
     made it answer for position rather than for content.
     """
-    ui = tmp_path / "ui"
-    (ui / "scripts").mkdir(parents=True)
-    (ui / "src" / "styles").mkdir(parents=True)
-    shutil.copy(_SCRIPT, ui / "scripts" / "check-css.mjs")
-    (ui / "src" / "styles" / "page.css").write_text(rule + "\n" + _CSS.read_text(encoding="utf-8"), encoding="utf-8")
-    code = subprocess.run(["node", str(ui / "scripts" / "check-css.mjs")], capture_output=True).returncode
+    code = _run_gate(_gate_tree(tmp_path, rule + "\n" + _CSS.read_text(encoding="utf-8")))
     assert (code == 0) is allowed, f"verdict changed with position: {name}"
 
 
@@ -150,3 +157,12 @@ def test_the_verdict_does_not_depend_on_the_declaration_before_it(
     ahead = ":root { --probe-ahead: #ffffff; }\n.probe-ahead { mask-image: linear-gradient(#000, transparent); }\n"
     code = _run_gate_over(tmp_path, ahead + rule)
     assert (code == 0) is allowed, f"verdict changed with an exempt declaration ahead of it: {name}"
+
+
+def test_the_gate_reads_the_trajectory_sheet_as_well(tmp_path: Path) -> None:
+    """A domain sheet that sets its own colors is held to the same contract:
+    one that hard-coded a light-theme ink was invisible in the dark theme."""
+    ui = _gate_tree(tmp_path, _CSS.read_text(encoding="utf-8"))
+    sheet = ui / _SHEETS[0]
+    sheet.write_text(sheet.read_text(encoding="utf-8") + "\n.probe { color: #1f2328; }\n", encoding="utf-8")
+    assert _run_gate(ui) != 0

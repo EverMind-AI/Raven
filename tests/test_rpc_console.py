@@ -8,17 +8,21 @@ those, so the property it pins is one somebody already proved was unguarded.
 from __future__ import annotations
 
 import asyncio
+import shutil
+import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
 
+import raven.agent.subagent.backends.env as backend_env
 import raven.home as raven_home_module
 from raven.config import update_tools
 from raven.config.env_file import MIRRORED_KEYS
 from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.contracts.tool import Tool
+from raven.rpc import folder_dialog
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods import console as console_module
 from raven.rpc.methods.console import _SETTINGS_SIMPLE_KEYS, _hub_marker_name
@@ -50,12 +54,32 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "tools.web.fetch.provider",
         *(
             f"tools.web.providers.{vendor}.apiKey"
-            for vendor in ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+            for vendor in (
+                "serper",
+                "anysearch",
+                "serpapi",
+                "jina",
+                "tavily",
+                "exa",
+                "brave",
+                "firecrawl",
+                "serply",
+                "keenable",
+                "deepseek",
+            )
         ),
         "tools.media.image.apiKey",
         "tools.media.image.model",
         "tools.media.image.quality",
         "tools.media.image",
+        # Which configured provider the image tool runs on. The same reach as the
+        # pins below: the tool moves to an address and key the operator already
+        # configured for that provider, and the name is checked against the ones
+        # whose image API the tool can call. It names no address and carries no key.
+        "tools.media.image.provider",
+        # The video tool's, on the same terms, checked against the providers whose
+        # video API the tool can call.
+        "tools.media.video.provider",
         "channels.sendProgress",
         "channels.sendToolHints",
         "memory.memoryTopK",
@@ -76,6 +100,8 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "translate.provider",
         "embedding.model",
         "embedding.provider",
+        "vision.model",
+        "vision.provider",
         # The pair keys. No new reach over the six leaves above: each delegates
         # to their validators and writes the same two fields. What it adds is
         # that both land in one transaction, which is what a settings surface
@@ -83,6 +109,7 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         "sessionTitle",
         "translate",
         "embedding",
+        "vision",
         # No new reach: the same key has been writable through config.set (the
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
@@ -339,6 +366,11 @@ async def test_cron_save_creates_a_job(tmp_path: Path) -> None:
 
     assert r["job"]["name"] == "hourly"
     assert r["job"]["id"]
+    job = loop.cron_service.list_jobs()[0]
+    assert job.payload.channel == "tui"
+    assert job.payload.to == "default"
+    assert job.payload.topic_tag is None
+    assert job.payload.fire_missed is False
     assert [j["name"] for j in (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]] == [
         "hourly"
     ]
@@ -372,6 +404,86 @@ async def test_cron_save_edits_in_place_and_keeps_the_id(tmp_path: Path) -> None
     jobs = (await console_module.cron_list({}, agent_loop_factory=lambda: loop))["jobs"]
     assert len(jobs) == 1
     assert jobs[0]["name"] == "two-hourly"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel,to",
+    [("telegram", "chat-a"), ("feishu", "chat-b"), ("tui", "direct"), ("tui", "default"), (None, None)],
+)
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_cron_save_preserves_delivery_and_metadata(
+    tmp_path: Path, channel: str | None, to: str | None, enabled: bool
+) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.add_job(
+        "summary",
+        CronSchedule(kind="every", every_ms=3_600_000),
+        "Summarize the project",
+        channel=channel,
+        to=to,
+        topic_tag="project-summary",
+    )
+    service.enable_job(original.id, enabled)
+
+    result = await console_module.cron_save(
+        {"id": original.id, "kind": "every", "every_seconds": 7200, "name": "updated", "message": "New summary"},
+        agent_loop_factory=lambda: loop,
+    )
+
+    stored = CronService(service.store_path).list_jobs(include_disabled=True)
+    assert len(stored) == 1
+    edited = stored[0]
+    assert edited.id == result["job"]["id"] == original.id
+    assert edited.payload.channel == channel
+    assert edited.payload.to == to
+    assert edited.payload.topic_tag == "project-summary"
+    assert edited.enabled is enabled
+    assert edited.created_at_ms == original.created_at_ms
+    assert edited.name == "updated"
+    assert edited.payload.message == "New summary"
+    assert edited.schedule.every_ms == 7_200_000
+
+
+@pytest.mark.asyncio
+async def test_cron_save_preserves_a_keyed_wakes_direct_target_and_missed_fire_policy(tmp_path: Path) -> None:
+    from raven.proactive_engine.schedulers.cron.service import CronService
+
+    loop = _cron_loop(tmp_path)
+    service = loop.cron_service
+    original = service.schedule_wake(
+        "ops:campaign",
+        service._now_ms() + 60_000,
+        "Check the campaign",
+        channel="tui",
+        to="campaign-chat",
+        direct_agent="operator",
+        direct_handle="campaign",
+    )
+
+    await console_module.cron_save(
+        {
+            "id": original.id,
+            "kind": "at",
+            "at_iso": "2099-01-01T12:00:00+00:00",
+            "name": "wake",
+            "message": "Check again",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+
+    edited = CronService(service.store_path).pending_wakes()[0]
+    assert edited.id == original.id
+    assert edited.payload.channel == "tui"
+    assert edited.payload.to == "campaign-chat"
+    assert edited.payload.direct_agent == "operator"
+    assert edited.payload.direct_handle == "campaign"
+    assert edited.payload.fire_missed is True
+    assert edited.delete_after_run is True
 
 
 @pytest.mark.asyncio
@@ -498,6 +610,36 @@ async def test_cron_runs_still_reads_a_delivered_run_as_ok(tmp_path: Path, monke
     runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
 
     assert [(r["ok"], r["preview"]) for r in runs] == [(True, "reminder delivered")]
+
+
+@pytest.mark.asyncio
+async def test_cron_runs_reads_a_silent_run_as_ok_with_no_reply_to_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run that ended on the model's silence marker succeeded and delivered
+    nothing, so neither the marker with its note nor the narration before the
+    tool call is a reply to show. The later run is the control: the same shape
+    without the flag previews its answer."""
+    loop = _cron_loop(tmp_path)
+    job = _cron_job(loop)
+    calls = [{"id": "c1", "type": "function", "function": {"name": "web_fetch", "arguments": "{}"}}]
+    _cron_session(
+        monkeypatch,
+        [
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T09:00:00"},
+            {"role": "assistant", "content": "Checking the feed.", "tool_calls": calls},
+            {"role": "tool", "content": "no new posts", "tool_call_id": "c1", "name": "web_fetch"},
+            {"role": "assistant", "content": "Nothing new since 08:00.\n[SILENT]", "silent": True},
+            {"role": "user", "content": "ping", "timestamp": "2026-09-22T10:00:00"},
+            {"role": "assistant", "content": "Checking the feed.", "tool_calls": calls},
+            {"role": "tool", "content": "one new post", "tool_call_id": "c1", "name": "web_fetch"},
+            {"role": "assistant", "content": "One new post at 09:12."},
+        ],
+    )
+
+    runs = (await console_module.cron_runs({"id": job.id}, agent_loop_factory=lambda: loop))["runs"]
+
+    assert [(r["ok"], r["preview"]) for r in runs] == [(True, "One new post at 09:12."), (True, "")]
 
 
 # ---------------------------------------------------------------------------
@@ -823,10 +965,11 @@ def _agent_home(monkeypatch, home: Path):
 
 
 async def test_fs_upload_lands_in_agent_home_not_the_session_workdir(tmp_path: Path, monkeypatch) -> None:
-    """The relative path this returns rides back to ``turn.send``, which resolves
-    an attachment against agent home and fences it there. Deposited in the
-    session's working directory instead, the file exists and the turn still drops
-    it, so the reader hands over an attachment the model never sees."""
+    """Agent home is the one root always writable: a session's working
+    directory is wherever the engine was launched from, and an engine the
+    desktop shell started inherits ``/``, where ``uploads/`` cannot be created.
+    ``turn.send`` admits agent home whatever the session's root, with
+    ``tools.restrict_to_workspace`` on as well."""
     import base64
 
     home = tmp_path / "home"
@@ -869,6 +1012,42 @@ async def test_fs_upload_survives_a_session_workdir_that_takes_no_files(tmp_path
     assert r["path"] == "uploads/image.png"
 
 
+async def test_fs_upload_survives_a_session_root_it_may_not_read(tmp_path: Path, monkeypatch) -> None:
+    """The name check reads the session's own ``uploads/`` as well, and a pinned
+    folder the engine may not read -- one macOS keeps from it, another user's
+    directory -- answers with EACCES, which ``Path.exists`` raises instead of
+    answering False. Agent home can still name the upload, so the check gives
+    way rather than failing it as -32603. Denied by a stub: root reads through
+    any mode, so a chmod would prove nothing on the box that runs this."""
+    import base64
+
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "project"
+    (project / "uploads").mkdir(parents=True)
+    _agent_home(monkeypatch, home)
+    denied = project.resolve()
+    refused: list[str] = []
+    real_exists = Path.exists
+
+    def exists(self: Path, *args, **kwargs) -> bool:
+        if Path(self).is_relative_to(denied):
+            refused.append(Path(self).name)
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+
+    r = await console_module.fs_upload(
+        {"name": "image.png", "content_b64": base64.b64encode(b"bytes").decode(), "session": "web:1"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({}, project)),
+    )
+
+    assert refused == ["image.png"], "the session's folder was asked, and refused"
+    assert r["path"] == "uploads/image.png"
+    assert (home / "uploads" / "image.png").read_bytes() == b"bytes"
+
+
 async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path, monkeypatch) -> None:
     """An unwritable agent home is a real configuration, and the page can only
     report what the error carries: unguarded, ``mkdir`` escaped as -32603 with
@@ -888,6 +1067,105 @@ async def test_fs_upload_names_the_directory_it_could_not_create(tmp_path: Path,
         )
 
     assert "uploads" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("context", ["draft_launch", "draft_gateway", "draft_pinned", "draft_process", "session"])
+async def test_attachment_deposits_keep_relative_paths_unambiguous(
+    tmp_path: Path, monkeypatch, method, context
+) -> None:
+    import base64
+
+    from raven.agent.workdir import WorkdirPolicy, WorkdirResolver
+    from raven.rpc.files import viewer_root
+
+    home = tmp_path / "home"
+    launch = tmp_path / "launch"
+    channels = tmp_path / "channels"
+    pinned = tmp_path / "pinned"
+    policy = WorkdirPolicy.LAUNCH_DIR if context == "draft_launch" else WorkdirPolicy.PER_CHANNEL
+    resolver = WorkdirResolver(
+        policy,
+        agent_home=home,
+        launch_dir=launch,
+        session_root=channels,
+        explicit_workdir=launch if context == "draft_process" else None,
+    )
+    session = "tui:existing" if context == "session" else "tui:"
+    project = pinned if context in {"draft_pinned", "session"} else resolver.resolve(session, create=False)
+    loop = SimpleNamespace(peek_session_workdir=lambda key: resolver.resolve(key, create=False))
+    if context == "session":
+        loop = _WorkdirLoop({session: project}, resolver.resolve("", create=False))
+    _agent_home(monkeypatch, home)
+    (home / "uploads").mkdir(parents=True)
+    (project / "uploads").mkdir(parents=True)
+    (project / "uploads" / "amber.pptx").write_bytes(b"project original")
+    (home / "uploads" / "amber-1.pptx").write_bytes(b"previous upload")
+    (project / "uploads" / "amber-2.pptx").write_bytes(b"project second")
+    params = {"name": "amber.pptx", "session": session}
+    if context in {"draft_pinned", "draft_process"}:
+        params["workdir"] = str(pinned)
+    if context == "draft_pinned":
+        loop = _WorkdirLoop({}, channels / "tui")
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"new attachment").decode()
+        expected = b"new attachment"
+    else:
+        _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+        expected = b"PKamber"
+
+    handler = getattr(console_module, method)
+    for suffix in (3, 4):
+        result = await handler(params, agent_loop_factory=_loop_factory(loop))
+        assert result["path"] == f"uploads/amber-{suffix}.pptx"
+        relative = Path(result["path"])
+        resolved = viewer_root(project, relative, home) / relative
+        assert resolved == Path(result["abs_path"])
+        assert resolved.read_bytes() == expected
+    assert (project / "uploads" / "amber.pptx").read_bytes() == b"project original"
+    assert (project / "uploads" / "amber-2.pptx").read_bytes() == b"project second"
+    assert (home / "uploads" / "amber-1.pptx").read_bytes() == b"previous upload"
+
+
+@pytest.mark.parametrize("method", ["fs_upload", "deck_templates_pick"])
+@pytest.mark.parametrize("workdir", ["relative", "home", "parent", "memory"])
+async def test_attachment_deposits_validate_draft_workdirs(tmp_path: Path, monkeypatch, method, workdir) -> None:
+    import base64
+
+    home = tmp_path / "home"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    paths = {"relative": "project", "home": str(home), "parent": str(tmp_path), "memory": str(home / "user_memory")}
+    params = {"name": "amber.pptx", "session": "tui:", "workdir": paths[workdir]}
+    if method == "fs_upload":
+        params["content_b64"] = base64.b64encode(b"attachment").decode()
+
+    with pytest.raises(ConfigValidationError, match="working directory"):
+        await getattr(console_module, method)(params, agent_loop_factory=_loop_factory(None))
+    assert not (home / "uploads" / "amber.pptx").exists()
+
+
+async def test_deck_templates_pick_survives_an_unreadable_session_root(tmp_path: Path, monkeypatch) -> None:
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    _agent_home(monkeypatch, home)
+    _bundled_templates(monkeypatch, tmp_path / "templates", ("amber",))
+    real_exists = Path.exists
+    refused = []
+
+    def exists(path: Path, *args, **kwargs) -> bool:
+        if path.is_relative_to(project):
+            refused.append(path)
+            raise PermissionError("session directory is unreadable")
+        return real_exists(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    result = await console_module.deck_templates_pick(
+        {"name": "amber", "session": "tui:pinned"},
+        agent_loop_factory=_loop_factory(_WorkdirLoop({"tui:pinned": project}, tmp_path / "default")),
+    )
+    assert refused == [project / "uploads" / "amber.pptx"]
+    assert Path(result["abs_path"]).read_bytes() == b"PKamber"
 
 
 async def test_fs_root_survives_a_loop_without_the_resolver(tmp_path: Path) -> None:
@@ -929,7 +1207,7 @@ async def test_fs_reveal_selects_the_file_in_the_host_file_manager(
 
 async def test_fs_reveal_finds_an_uploaded_attachment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The page sends one string to two surfaces. A panel row is relative to the
-    session's working directory; an attachment chip carries ``uploads/<name>``,
+    session's working directory; an attachment chip can carry ``uploads/<name>``,
     which only agent home holds -- so rooting at the workdir alone made Reveal
     fail on the very file the viewer had just rendered from that same string."""
     home = tmp_path / "raven-home"
@@ -1617,6 +1895,23 @@ def test_the_mirror_cases_cover_every_mirrored_key() -> None:
     assert [key for key, _ in _MIRRORED_KEY_ENV_VARS] == list(MIRRORED_KEYS)
 
 
+@pytest.fixture
+def retaken(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Each time a write takes the login-shell capture again, recorded rather than run.
+
+    The real one runs the login shell of whoever started pytest.
+    """
+    calls: list[bool] = []
+
+    def refresh() -> bool:
+        calls.append(True)
+        return True
+
+    monkeypatch.setattr(backend_env, "refresh_login_shell_env", refresh)
+    return calls
+
+
+@pytest.mark.usefixtures("retaken")
 @pytest.mark.parametrize(("key", "env_var"), _MIRRORED_KEY_ENV_VARS)
 async def test_settings_set_refreshes_the_shell_env_mirror(
     settings_cfg: Path, tmp_path: Path, key: str, env_var: str
@@ -1643,6 +1938,58 @@ async def test_settings_set_of_an_unrelated_key_does_not_create_the_mirror(setti
     await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
 
     assert not (tmp_path / ".raven" / "env").exists()
+
+
+@pytest.mark.parametrize("key", MIRRORED_KEYS)
+async def test_a_mirrored_key_write_takes_the_login_shell_capture_again(
+    settings_cfg: Path, retaken: list[bool], key: str
+) -> None:
+    """A sub-agent reads the mirror through that capture, and a running raven keeps the one it took."""
+    await console_module.settings_set({"key": key, "value": "rotated"})
+
+    assert retaken == [True]
+
+
+async def test_an_unrelated_key_write_leaves_the_login_shell_capture_alone(
+    settings_cfg: Path, retaken: list[bool]
+) -> None:
+    await console_module.settings_set({"key": "tools.exec.timeout", "value": 42})
+
+    assert retaken == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the mirror is a POSIX shell file")
+async def test_a_rotated_key_reaches_the_capture_the_next_spawn_reads(
+    settings_cfg: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rewriting the mirror alone left every later spawn on the key it replaced until a restart.
+
+    The login shell is a real bash that sources the mirror and nothing else, so
+    the test reads neither the host's profile nor its login shell.
+    """
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("needs bash to source the mirror")
+    mirror = tmp_path / ".raven" / "env"
+    real_run = subprocess.run
+
+    def run(argv, *args, **kwargs):
+        if list(argv[1:]) == ["-lic", "env -0"]:
+            argv = [bash, "--noprofile", "--norc", "-c", f'. "{mirror}"; env -0']
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV", None)
+    monkeypatch.setattr(backend_env, "_LOGIN_ENV_FAILED", False)
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setattr(subprocess, "run", run)
+    key = "tools.web.providers.tavily.apiKey"
+
+    await console_module.settings_set({"key": key, "value": "tvly-first"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-first"
+
+    await console_module.settings_set({"key": key, "value": "tvly-second"})
+    assert backend_env.login_shell_env()["TAVILY_API_KEY"] == "tvly-second"
 
 
 async def test_settings_set_writes_the_config_in_the_shared_formatting(settings_cfg: Path) -> None:
@@ -1937,6 +2284,79 @@ async def test_image_selection_saves_both_fields_and_preserves_credentials(setti
     assert result == {"applied": True, "previous": {"model": "old", "quality": "low"}}
 
 
+async def test_image_selection_saves_the_provider_it_names(settings_cfg):
+    """The image role may run on a provider other than OpenRouter; the empty name is
+    the OpenRouter default, which is how a pick moves back to it."""
+    import json
+
+    image = {"apiKey": "secret", "model": "old", "quality": "low"}
+    settings_cfg.write_text(json.dumps({"tools": {"media": {"image": image}}}))
+    await console_module.settings_set(
+        {"key": "tools.media.image", "value": {"model": "gpt-image-2", "quality": "", "provider": "openai"}}
+    )
+    actual = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert actual == {**image, "model": "gpt-image-2", "quality": "", "provider": "openai"}
+
+    await console_module.settings_set(
+        {"key": "tools.media.image", "value": {"model": "openai/gpt-image-2", "quality": "", "provider": ""}}
+    )
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["image"]["provider"] == ""
+
+
+async def test_the_image_role_may_run_on_volcengine(settings_cfg):
+    """VolcEngine's address is Volces Ark, whose Images dialect the image tool
+    speaks, so the roles card's pick of it is saved like any other provider's."""
+    import json
+
+    selection = {"model": "doubao-seedream-5-0-pro", "quality": "", "provider": "volcengine"}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("doubao-seedream-5-0-pro", "volcengine")
+
+
+@pytest.mark.parametrize("provider", ["minimax", "minimax_cn_api"])
+async def test_the_image_role_may_run_on_minimax(settings_cfg, provider):
+    """MiniMax's image route is one the image tool speaks, so either of its API-key
+    sections is a provider the roles card may save for the image role."""
+    import json
+
+    selection = {"model": "image-01", "quality": "", "provider": provider}
+    await console_module.settings_set({"key": "tools.media.image", "value": selection})
+    image = json.loads(settings_cfg.read_text())["tools"]["media"]["image"]
+    assert (image["model"], image["provider"]) == ("image-01", provider)
+
+
+async def test_the_video_role_may_run_on_minimax(settings_cfg):
+    """MiniMax's video API is one the video tool speaks, so the roles card's pick of
+    it is saved with the selection; an OpenRouter pick names no provider."""
+    import json
+
+    selection = {"model": "MiniMax-Hailuo-2.3", "quality": "", "provider": "minimax"}
+    await console_module.settings_set({"key": "tools.media.video", "value": selection})
+    video = json.loads(settings_cfg.read_text())["tools"]["media"]["video"]
+    assert (video["model"], video["provider"]) == ("MiniMax-Hailuo-2.3", "minimax")
+
+    back = {"model": "kwaivgi/kling-v3.0-std", "quality": "", "provider": ""}
+    await console_module.settings_set({"key": "tools.media.video", "value": back})
+    assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == ""
+
+
+@pytest.mark.parametrize(
+    ("value", "saved"), [("minimax", True), ("minimax_cn_api", True), ("openai", False), ("anthropic", False)]
+)
+async def test_the_video_provider_takes_only_a_provider_the_video_tool_runs_on(settings_cfg, value, saved):
+    import json
+
+    before = settings_cfg.read_bytes()
+    if saved:
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+        assert json.loads(settings_cfg.read_text())["tools"]["media"]["video"]["provider"] == value
+        return
+    with pytest.raises(console_module.ConfigValidationError):
+        await console_module.settings_set({"key": "tools.media.video.provider", "value": value})
+    assert settings_cfg.read_bytes() == before
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -1947,6 +2367,14 @@ async def test_image_selection_saves_both_fields_and_preserves_credentials(setti
         ("tools.media.image", {"model": "new", "quality": "ultra"}),
         ("tools.media.image", {"model": "new"}),
         ("tools.media.image", {"model": "new", "quality": "", "apiBase": "https://other.test"}),
+        # A provider the image tool cannot call, and one that does not exist.
+        ("tools.media.image", {"model": "new", "quality": "", "provider": "anthropic"}),
+        ("tools.media.image", {"model": "new", "quality": "", "provider": "no-such-vendor"}),
+        ("tools.media.image.provider", "anthropic"),
+        ("tools.media.image.provider", 7),
+        # Speech keeps to OpenRouter, video to the providers it has a request path for.
+        ("tools.media.speech", {"model": "new", "quality": "", "provider": "openai"}),
+        ("tools.media.video", {"model": "new", "quality": "", "provider": "openai"}),
     ],
 )
 async def test_invalid_image_selection_leaves_config_untouched(settings_cfg, key, value):
@@ -1956,7 +2384,7 @@ async def test_invalid_image_selection_leaves_config_untouched(settings_cfg, key
     assert settings_cfg.read_bytes() == before
 
 
-@pytest.mark.parametrize("key,value", [("model", "vendor/custom-image"), ("quality", "medium")])
+@pytest.mark.parametrize("key,value", [("model", "vendor/custom-image"), ("quality", "medium"), ("provider", "openai")])
 async def test_image_selection_leaves_are_writable(settings_cfg, key, value):
     import json
 
@@ -2030,6 +2458,92 @@ async def test_fs_dirs_marks_the_listed_directory_itself(tmp_path: Path, monkeyp
     assert beside["ok"] is True
 
 
+async def test_fs_dirs_hands_back_a_non_ascii_folder_unchanged(tmp_path: Path, monkeypatch) -> None:
+    """The walk is the whole Windows path now, so a folder whose name is not
+    ASCII has to survive it exactly. The native dialog read its answer off a
+    console stream whose code page the gateway did not share, and a name
+    outside ASCII came back as replacement characters that matched no
+    directory. Escapes, not literals, so this file stays English source."""
+    outer, inner = "\u9879\u76ee", "\u5de5\u4f5c"
+    (tmp_path / outer / inner).mkdir(parents=True)
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    entry = next(e for e in r["entries"] if e["name"] == outer)
+    assert entry["path"] == str((tmp_path / outer).resolve())
+    assert entry["ok"] is True
+    inside = await console_module.fs_dirs({"path": entry["path"]})
+    assert inside["path"] == entry["path"]
+    assert [e["name"] for e in inside["entries"]] == [inner]
+
+
+async def test_fs_dirs_at_a_root_offers_the_way_to_every_other_root(tmp_path: Path, monkeypatch) -> None:
+    """A root has no parent, so the upward walk stops there and every other
+    filesystem is unreachable: a project on D: cannot be picked by a browser
+    that started under C:. The other roots are offered as rows instead, and
+    only at a root -- further down they are siblings of nothing. A host with
+    one root (the POSIX ones) offers none: its parent walk reaches that root
+    already."""
+    _agent_home(monkeypatch, tmp_path / ".raven" / "workspace")
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+
+    r = await console_module.fs_dirs({"path": str(Path(tmp_path.anchor))})
+    assert r["parent"] is None
+    assert r["roots"] == []
+
+    below = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert below["roots"] == []
+
+
+def test_fs_dirs_lists_the_drives_of_a_windows_host(monkeypatch) -> None:
+    """Every drive by its own name, while the browser stands on a root: a
+    project on another drive is reachable only from this list, since no folder
+    has it as a child. Empty anywhere below a root. Windows paths whatever host
+    runs the suite: on a POSIX one `Path("C:/")` is a relative path."""
+    monkeypatch.setattr(console_module.sys, "platform", "win32")
+    monkeypatch.setattr(console_module, "_windows_drives", lambda: ["C:\\", "D:\\", "E:\\"])
+
+    assert console_module._roots_at(PureWindowsPath("C:/")) == ["C:\\", "D:\\", "E:\\"]
+    assert console_module._roots_at(PureWindowsPath("D:/projects")) == []
+    monkeypatch.setattr(console_module.sys, "platform", "linux")
+    assert console_module._roots_at(PurePosixPath("/")) == []
+
+
+def test_windows_drives_reads_the_system_list_and_survives_its_absence(monkeypatch) -> None:
+    """The one call the drive list rests on, driven on any host: a Windows
+    interpreter answers with `os.listdrives`, and one that lacks it or fails
+    leaves the browser without the list rather than failing the listing."""
+    monkeypatch.setattr(console_module.os, "listdrives", lambda: ["C:\\", "D:\\"], raising=False)
+    assert console_module._windows_drives() == ["C:\\", "D:\\"]
+
+    def refuse() -> list[str]:
+        raise OSError("the drive table could not be read")
+
+    monkeypatch.setattr(console_module.os, "listdrives", refuse, raising=False)
+    assert console_module._windows_drives() == []
+    monkeypatch.delattr(console_module.os, "listdrives", raising=False)
+    assert console_module._windows_drives() == []
+
+
+async def test_fs_dirs_judges_every_root_it_offers(tmp_path: Path, monkeypatch) -> None:
+    """A root row carries the same `ok` as a folder row. The drive holding the
+    agent's own data is an ancestor of agent home, which `session.create`
+    refuses, so its row is greyed like any other ancestor -- and still a way
+    in, since its other folders may be fine working directories."""
+    home = tmp_path / "raven-drive" / ".raven" / "workspace"
+    home.mkdir(parents=True)
+    (tmp_path / "other-drive").mkdir()
+    _agent_home(monkeypatch, home)
+    held, other = str(tmp_path / "raven-drive"), str(tmp_path / "other-drive")
+    monkeypatch.setattr(console_module, "_roots_at", lambda target: [held, other])
+
+    r = await console_module.fs_dirs({"path": str(tmp_path)})
+    assert r["roots"] == [
+        {"name": held, "path": held, "ok": False},
+        {"name": other, "path": other, "ok": True},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # fs.pick_dir -- the host's own folder dialog
 # ---------------------------------------------------------------------------
@@ -2040,7 +2554,7 @@ def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
 
     The command itself is stood in for as well, because which one a host has is
     not what these cases are about: a headless runner has neither zenity nor
-    kdialog, and without this they failed at `_pick_dir_argv` before reaching
+    kdialog, and without this they failed at `pick_dir_argv` before reaching
     the answer they were written to pin.
     """
     asked: list[list[str]] = []
@@ -2049,7 +2563,7 @@ def _dialog_answers(monkeypatch, answer: str | None) -> list[list[str]]:
         asked.append(argv)
         return answer
 
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: ["dialog"])
     monkeypatch.setattr(console_module, "_run_pick_dir", run)
     return asked
 
@@ -2086,7 +2600,7 @@ async def test_fs_pick_dir_reads_a_dismissed_dialog_as_no_folder(monkeypatch) ->
 
 
 async def test_fs_pick_dir_refuses_a_host_with_no_dialog(monkeypatch) -> None:
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: None)
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: None)
     with pytest.raises(ConfigValidationError, match="no folder dialog"):
         await console_module.fs_pick_dir({})
 
@@ -2119,23 +2633,58 @@ async def test_fs_pick_dir_reports_a_dialog_that_would_not_start(monkeypatch) ->
     async def boom(argv: list[str]) -> str | None:
         raise OSError("dialog: not executable")
 
-    monkeypatch.setattr(console_module, "_pick_dir_argv", lambda: ["dialog"])
+    monkeypatch.setattr(console_module, "pick_dir_argv", lambda: ["dialog"])
     monkeypatch.setattr(console_module, "_run_pick_dir", boom)
     with pytest.raises(ConfigValidationError, match="folder dialog failed"):
         await console_module.fs_pick_dir({})
 
 
 def test_fs_pick_dir_knows_a_dialog_for_each_desktop(monkeypatch) -> None:
-    """One command per platform, the Linux one only where a tool is on PATH."""
-    monkeypatch.setattr(console_module.sys, "platform", "darwin")
-    assert console_module._pick_dir_argv()[0] == "osascript"
-    monkeypatch.setattr(console_module.sys, "platform", "win32")
-    assert console_module._pick_dir_argv()[0] == "powershell"
-    monkeypatch.setattr(console_module.sys, "platform", "linux")
-    monkeypatch.setattr(console_module.shutil, "which", lambda name: name == "kdialog")
-    assert console_module._pick_dir_argv()[0] == "kdialog"
-    monkeypatch.setattr(console_module.shutil, "which", lambda name: False)
-    assert console_module._pick_dir_argv() is None
+    """One command per desktop, the Linux one only where a tool is on PATH and
+    there is a display to show it on (see the next case). Windows has a dialog
+    to offer -- FolderBrowserDialog -- but it opens behind the browser, so it
+    answers None like a headless host: see the case below."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "darwin")
+    assert folder_dialog.pick_dir_argv()[0] == "osascript"
+    monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
+    assert folder_dialog.pick_dir_argv() is None
+    monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: name == "kdialog")
+    assert folder_dialog.pick_dir_argv()[0] == "kdialog"
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: False)
+    assert folder_dialog.pick_dir_argv() is None
+
+
+def test_fs_pick_dir_finds_no_dialog_on_windows(monkeypatch) -> None:
+    """Windows ships a folder dialog, but a gateway is a background process and
+    Windows will not let one take the foreground: the dialog is created behind
+    the browser and the click reads as nothing happening. So the host answers
+    as a hostless one does and the page walks the folders instead -- the
+    failure this replaces, measured with the gateway's own spawn on
+    2026-10-22. A display variable, which a Windows
+    host does not set, must not reach the Linux tools either."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "win32")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: True)
+    assert folder_dialog.pick_dir_argv() is None
+    assert folder_dialog.folder_dialog_available() is False
+
+
+def test_fs_pick_dir_finds_no_dialog_on_a_linux_host_with_no_display(monkeypatch) -> None:
+    """A tool on PATH is no dialog without a display to put it on: neither one
+    can start without, and a dialog that exits having printed nothing reads as
+    a dismissal, so the page's click would do nothing at all. Wayland alone is
+    a display."""
+    monkeypatch.setattr(folder_dialog.sys, "platform", "linux")
+    monkeypatch.setattr(folder_dialog.shutil, "which", lambda name: True)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert folder_dialog.pick_dir_argv() is None
+    assert folder_dialog.folder_dialog_available() is False
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert folder_dialog.pick_dir_argv()[0] == "zenity"
+    assert folder_dialog.folder_dialog_available() is True
 
 
 async def test_fs_dirs_refuses_a_relative_path_and_a_file(tmp_path: Path, monkeypatch) -> None:
@@ -2166,7 +2715,7 @@ async def test_fs_dirs_reports_a_directory_it_cannot_read(tmp_path: Path, monkey
 async def test_fs_dirs_finds_a_directory_that_sorts_past_the_files(tmp_path: Path, monkeypatch) -> None:
     """The cap counts directories found, so the files a folder sits behind
     cannot hide it. Bounding the names examined instead would answer "no
-    subfolders" here, and the picker has no typed path to reach it by."""
+    subfolders" for a folder that plainly has one."""
     _agent_home(monkeypatch, tmp_path / "home")
     root = tmp_path / "root"
     root.mkdir()
@@ -2578,7 +3127,7 @@ async def test_deck_templates_pick_says_why_when_the_copy_cannot_land(tmp_path: 
     _agent_home(monkeypatch, home)
     _bundled_templates(monkeypatch, tmp_path / "tpl", ("mint_memphis_thesis_defense",))
 
-    def full_disk(template, uploads, *_):
+    def full_disk(template, uploads, *_, **kwargs):
         raise OSError(28, "No space left on device")
 
     monkeypatch.setattr(deck_templates, "deposit", full_disk)
@@ -2699,3 +3248,83 @@ def test_viewer_root_leaves_every_other_path_with_the_session(tmp_path: Path, mo
 
     assert console_module.viewer_root(session, Path("notes/secret.md")) == session
     assert console_module.viewer_root(session, Path("uploads/absent.png")) == session
+
+
+def test_viewer_root_tells_an_upload_by_where_its_path_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upload is a path that lands in agent home's ``uploads/``, in either spelling.
+
+    The first segment is not the test: ``uploads/../notes/secret.md`` starts like
+    an upload and lands beside it, and a link left under ``uploads/`` can point
+    anywhere, so read by its spelling either reached past the one ambiguity this
+    is for. The absolute spelling of a real upload is an upload too, and it is
+    what the composer stages.
+    """
+    session = tmp_path / "project"
+    session.mkdir()
+    home = tmp_path / "agent-home"
+    (home / "notes").mkdir(parents=True)
+    secret = home / "notes" / "secret.md"
+    secret.write_text("not this session's")
+    (home / "uploads").mkdir()
+    shot = home / "uploads" / "shot.png"
+    shot.write_bytes(b"the picture")
+    (home / "uploads" / "link.md").symlink_to(secret)
+    monkeypatch.setattr(console_module, "_upload_root", lambda: home)
+
+    assert console_module.viewer_root(session, Path("uploads/../notes/secret.md")) == session
+    assert console_module.viewer_root(session, Path("uploads/link.md")) == session
+    assert console_module.viewer_root(session, home / "uploads" / "link.md") == session
+    assert console_module.viewer_root(session, secret) == session
+    assert console_module.viewer_root(session, shot) == home
+
+
+def test_viewer_root_follows_a_linked_agent_home(tmp_path: Path) -> None:
+    """``workspace_path`` is agent home as configured, not resolved, so it can be
+    reached through a link (``turn.send`` hands it over as is): an upload under
+    it is still an upload, in either spelling."""
+    from raven.rpc.files import viewer_root
+
+    session = tmp_path / "project"
+    session.mkdir()
+    real = tmp_path / "agent-home"
+    (real / "uploads").mkdir(parents=True)
+    (real / "uploads" / "shot.png").write_bytes(b"the picture")
+    linked = tmp_path / "linked-home"
+    linked.symlink_to(real)
+
+    assert viewer_root(session, Path("uploads/shot.png"), linked) == linked
+    assert viewer_root(session, real / "uploads" / "shot.png", linked) == linked
+
+
+@pytest.mark.asyncio
+async def test_cron_save_reports_what_happened(tmp_path: Path) -> None:
+    """The response carries the outcome beside the job (issue #1060): a save
+    that landed on an existing job, or stored nothing, does not read as a
+    creation."""
+    loop = _cron_loop(tmp_path)
+    created = await console_module.cron_save(
+        {"kind": "every", "every_seconds": 3600, "name": "hourly", "message": "ping"},
+        agent_loop_factory=lambda: loop,
+    )
+    assert created["outcome"] == "created"
+
+    edited = await console_module.cron_save(
+        {
+            "id": created["job"]["id"],
+            "kind": "every",
+            "every_seconds": 7200,
+            "name": "hourly",
+            "message": "ping louder",
+        },
+        agent_loop_factory=lambda: loop,
+    )
+    assert edited["outcome"] == "updated"
+    assert edited["job"]["id"] == created["job"]["id"]
+
+    again = await console_module.cron_save(
+        {"kind": "every", "every_seconds": 7200, "name": "hourly again", "message": "ping louder"},
+        agent_loop_factory=lambda: loop,
+    )
+    assert again["outcome"] == "skipped"
+    assert again["job"]["id"] == created["job"]["id"], "the matching existing job is returned"
+    assert [j.name for j in loop.cron_service.list_jobs()] == ["hourly"], "nothing new was stored"

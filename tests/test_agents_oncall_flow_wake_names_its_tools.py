@@ -77,7 +77,7 @@ class _Cron:
         self.advanced.append(key)
         return any(j["key"] == key for j in self.jobs)
 
-    def pending_wakes(self, prefix=""):
+    def pending_wakes(self, prefix="", *, include_running=True):
         return [SimpleNamespace(id=f"oncall-flow:{j['key']}") for j in self.jobs if j["key"].startswith(prefix)]
 
     def cancel_wake(self, key):

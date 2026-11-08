@@ -38,7 +38,9 @@ from raven.memory_engine.consolidate.behaviors import (
     BehaviorEvent,
     render_append_block,
 )
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.session.manager import SessionManager
+from raven.session.refs import tool_result_view
 
 if TYPE_CHECKING:
     from raven.config.raven import BehaviorsExtractConfig
@@ -424,15 +426,16 @@ class BehaviorsExtractor:
                 "content": (f"Session: {session_key}\n\nMessages:\n{rendered}"),
             },
         ]
-        response = await self.provider.chat_with_retry(
-            messages=messages,
-            tools=build_extract_tool(),
-            model=self.model or None,
-            tool_choice={
-                "type": "function",
-                "function": {"name": _EXTRACT_TOOL_NAME},
-            },
-        )
+        with _llm_purpose("memory_extract"):
+            response = await self.provider.chat_with_retry(
+                messages=messages,
+                tools=build_extract_tool(),
+                model=self.model or None,
+                tool_choice={
+                    "type": "function",
+                    "function": {"name": _EXTRACT_TOOL_NAME},
+                },
+            )
         if not response.has_tool_calls:
             return []
         args = response.tool_calls[0].arguments
@@ -553,6 +556,10 @@ def _render_chunk_for_llm(chunk: list[dict[str, Any]]) -> str:
         if isinstance(content, list):
             text_parts = [blk.get("text", "") for blk in content if isinstance(blk, dict) and blk.get("type") == "text"]
             content_text = " ".join(t for t in text_parts if t)
+        elif role == "tool" and isinstance(content, str):
+            # Filed whole for ``context_retrieve``; the extractor reads the view
+            # every copy that leaves the session gets.
+            content_text = tool_result_view(content)
         else:
             content_text = str(content or "")
         content_text = _TS_NOISE_RE.sub(" ", content_text).strip()

@@ -133,6 +133,31 @@ class RavenRuntime:
         return None
 
 
+def _package_mcp_servers(ec_config: Any, *, reserved_names: Any = ()) -> tuple[dict, list[str]]:
+    """The MCP servers the portable Agent Plugin packages contribute.
+
+    A package's server is a process on this machine, so only the packages
+    the operator opted into (``agentPlugins.mcpPackages``) contribute one.
+    The rest are parsed and reported, so a broken configuration is visible
+    without being run. *reserved_names* are the host's own server names,
+    which a package may not replace.
+    """
+    from raven.agent_plugins.mcp import package_mcp_layer
+    from raven.config.paths import get_package_data_root
+
+    agent_plugins = getattr(ec_config, "agent_plugins", None)
+    if agent_plugins is None:
+        return {}, []
+    servers, notes = package_mcp_layer(
+        agent_plugins.packages,
+        allowed=agent_plugins.mcp_packages,
+        disabled=agent_plugins.disabled,
+        plugin_data_root=get_package_data_root(),
+        reserved_names=reserved_names,
+    )
+    return servers, notes
+
+
 def build_runtime(
     config: Any,
     ec_config: Any,
@@ -163,6 +188,13 @@ def build_runtime(
     frozen ``RavenRuntime`` this returns is FREEZE.
     """
     from raven.agent.tools.deliverables import DeliverableStore
+    from raven.node.client import get_node_pool
+    from raven.ops.remote_path import use_nodes
+
+    # A file call on a registered machine is answered by that machine's Raven
+    # node. The tools reach the pool through the registry's package, because
+    # the node package imports the tools and the reverse would close a cycle.
+    use_nodes(get_node_pool)
     from raven.config.paths import get_deliverables_path
 
     if provider_pool is None:
@@ -174,6 +206,16 @@ def build_runtime(
         provider_pool = ProviderPool(lambda: load_runtime_config(None, None))
     notify = host.notify if host is not None else None
     plugin_registry = plugin_stack.build_plugin_registry(ec_config, notify=notify)
+    # ``dict(... or {})`` rather than ``**``: a stub config in a test may carry
+    # a list where the typed field is a mapping, and the merge must not turn
+    # that into a startup failure.
+    initial_mcp_servers = dict(config.tools.mcp_servers or {})
+    package_mcp_servers, package_mcp_notes = _package_mcp_servers(ec_config, reserved_names=initial_mcp_servers.keys())
+    for note in package_mcp_notes:
+        logger.warning("Agent Plugin package MCP: {}", note)
+    # The host's own servers were composed first and keep their names: a
+    # package entry that would collide was already dropped and reported.
+    initial_mcp_servers.update(package_mcp_servers)
     backend = plugin_stack.maybe_build_memory_backend(
         config.workspace_path, ec_config, registry=plugin_registry, notify=notify
     )
@@ -231,14 +273,15 @@ def build_runtime(
         router=router,
         sandbox_config=config.tools.sandbox,
         executor=executor,
-        mcp_servers=config.tools.mcp_servers,
+        mcp_servers=initial_mcp_servers,
+        package_mcp_servers=package_mcp_servers,
         tools=ToolWiring(
             search_api_key=config.tools.web.vendor_key("serper") or None,
             jina_api_key=config.tools.web.vendor_key("jina") or None,
             web_proxy=config.tools.web.proxy or None,
             web_search_provider=config.tools.web.search.provider,
             web_fetch_provider=config.tools.web.fetch.provider,
-            web_provider_keys=config.tools.web.vendor_keys(),
+            web_provider_keys=config.effective_web_vendor_keys(),
             image_search=config.tools.web.search.images,
             connection_add=config.tools.connection_add,
             media_config=config.effective_media_config(),
@@ -263,6 +306,7 @@ def build_runtime(
             strategies=strategies,
             context_window_tokens=config.agents.defaults.context_window_tokens,
             compaction_config=config.agents.defaults.compaction,
+            task_board_config=config.agents.defaults.task_board,
             playbook_config=config.playbooks,
             skill_forge_config=ec_config.skill_forge,
             skill_forge_router_config=ec_config.skill_forge.router,

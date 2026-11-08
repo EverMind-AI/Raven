@@ -213,6 +213,11 @@ const LEGACY_LOCAL = {
      Up to 26 the same way: `.h` was shared with the workspace's binary-file
      note, which is prefixed in features/workspace/styles.css now. */
   browser: 26,
+  /* Zero, and new: the knowledge domain was written after this rule, so every
+     class it introduces already carries its prefix. The entry exists because
+     the check pins every domain rather than only the ones with debt -- a
+     domain absent from this table is one nobody has measured. */
+  knowledge: 0,
   /* Up from 9, and none of the three is new code: an earlier branch deleted
      the old settings page, which also named `.icb`, `.other`, `.srow` and
      `.what`, so what the check read as two domains' it now reads as
@@ -261,7 +266,9 @@ const LEGACY_LOCAL = {
      with `.pmhero` gone: the page's title is the connections hub's shared
      header now (components/HubHead.tsx). */
   extAgents: 0,
+  export: 0,
   importSync: 0,
+  imported: 0,
   installed: 0,
   /* Down from 14 with the memory section: the page's hero, its own list and
      row classes and the shared drawer's head went with the two-pane frame
@@ -305,6 +312,7 @@ const LEGACY_LOCAL = {
      Up to 71 with the dag renderer's default node box gone: `.tm` was
      shared with it, and the timestamp on a folded turn's own head is this
      domain's alone now. */
+  trajectory: 0,
   transcript: 60,
   /* Up from 37 with the playbooks page gone: `.t` was shared with it. Down
      to 33 with the binary-file note's rules moved into its own sheet. */
@@ -319,6 +327,9 @@ const LEGACY_LOCAL = {
 // debt. A name in both places is counted once, by LEGACY_LOCAL.
 const LEGACY_EXPR = {
   browser: 2,
+  /* Zero, for the same reason the table above has it at zero: the domain
+     was written after the rule, expressions included. */
+  knowledge: 0,
   composer: 3,
   connections: 2,
   cron: 0,
@@ -327,8 +338,10 @@ const LEGACY_EXPR = {
      left with it. */
   dag: 2,
   desk: 2,
+  export: 0,
   extAgents: 0,
   importSync: 0,
+  imported: 0,
   installed: 0,
   /* Down from 1 with the initial tile gone: `.pmtile`, written only from
      inside a `className={...}` expression, left with it. */
@@ -343,6 +356,7 @@ const LEGACY_EXPR = {
   subagents: 6,
   /* Down from 24 with the node panel: `.tpl`, written only from inside a
      `className={...}` expression, left with it. */
+  trajectory: 0,
   transcript: 20,
   workspace: 7,
 }

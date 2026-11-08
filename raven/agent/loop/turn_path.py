@@ -5,10 +5,13 @@ persistence.
 from __future__ import annotations
 
 import contextlib
+import functools
 from typing import TYPE_CHECKING
 
+from raven.agent.context.silence import is_silence, reads_loose_silence, teaches_silence
 from raven.agent.loop._shared import (
     _ABORTED_ACTION_REPLY,
+    _CONTEXT_USED_KEY,
     _DELEGATED_KEY,
     _HOOK_INJECTED_KEY,
     _MAX_ITER_STATIC_FALLBACK,
@@ -17,6 +20,8 @@ from raven.agent.loop._shared import (
     _NOTICE_KEY,
     _ORIGIN_KEY,
     _REASONING_MS_KEY,
+    _REPLIED_VIA_TOOL_KEY,
+    _SILENT_KEY,
     _SKIP_AFTER_SEND_ORIGINS,
     _SKIP_USER_INBOUND_ORIGINS,
     _STALLED_STATIC_FALLBACK,
@@ -25,7 +30,6 @@ from raven.agent.loop._shared import (
     _TOOL_METADATA_KEY,
     _TOOL_PREVIEW_MAX_CHARS,
     _WALL_CLOCK_STATIC_FALLBACK,
-    OUTPUT_LIMIT_NUDGE,
     POST_TOOL_NUDGE,
     SKIPPED_AFTER_BLOCKED_CALL,
     Any,
@@ -45,18 +49,21 @@ from raven.agent.loop._shared import (
     Session,
     TurnSynthesisPolicy,
     _appended_by_hook,
+    _call_window,
     _display_label,
     _file_change_payload,
+    _file_composed_reply,
     _file_removed_payload,
     _file_written_payload,
     _first_line,
     _runtime_origin,
+    _stamp_context_used,
     _stamp_reasoning_ms,
+    _stamp_replied_via_tool,
     _strip_inline_images,
     append_hook_note,
     asyncio,
     autofill_resolver,
-    classify_empty_response,
     current_autofill,
     failure_class,
     is_hard_tool_failure,
@@ -69,7 +76,6 @@ from raven.agent.loop._shared import (
     replace,
     resolve_context_window,
     semconv,
-    session_of,
     stream_llm_call,
     strip_think_blocks,
     time,
@@ -82,23 +88,67 @@ from raven.agent.loop._shared import (
     workdir,
 )
 from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
+from raven.agent.loop.failure_text import attach_full_detail, full_failure_text, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
-from raven.agent.loop.recovery import ContinuationGate, DraftGate, cut_reasoning_head, lower_reasoning_effort
+from raven.agent.loop.recovery import (
+    EMPTY_REPLY_FAILURE,
+    MAX_CONTINUATIONS,
+    NETWORK_CUT_CONTINUATION,
+    OUTPUT_LIMIT_CONTINUATION,
+    PARTIAL_STREAM_NOTE,
+    REFUSAL_EXPLANATION,
+    REFUSAL_FAILURE,
+    REFUSAL_NO_EXPLANATION,
+    THINKING_ONLY_FAILURE,
+    THINKING_ONLY_UNRETRIED_FAILURE,
+    TRUNCATED_FAILURE,
+    TRUNCATED_UNCONTINUED_FAILURE,
+    ContinuationGate,
+    DraftGate,
+    EmptyAttempt,
+    RecoveryState,
+    ReplyKind,
+    SilenceGate,
+    cut_reasoning_head,
+    decide,
+    empty_retry_delay,
+    has_thinking_to_refeed,
+    leaves_think_block_open,
+    next_step_down,
+    reasoning_excerpt,
+    reply_kind,
+    resend_budget,
+)
+from raven.agent.session_effort import of as session_effort_of
 from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
-from raven.contracts.harness import ActionRequest, CapabilityRequest, PlanningRequest, WindowPressure, WindowState
+from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
+from raven.contracts.harness import (
+    ActionRequest,
+    CapabilityRequest,
+    PlanningRequest,
+    ShrinkResult,
+    WindowPressure,
+    WindowState,
+)
 from raven.contracts.loop_hooks import HookDecision
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.permissions.turn import set_current_tool_call_id
 from raven.providers import usage_record
 from raven.providers.base import bound_llm_detail, canonical_llm_error, llm_error_summary, parse_llm_error
 from raven.providers.first_byte import first_byte_budget
 from raven.providers.tool_calls import openai_tool_call
+from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
+from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
+from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
+from raven.tracing import config as tracing_config
+from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -111,8 +161,8 @@ if TYPE_CHECKING:
     from raven.spine.turn import TurnRequest
 
 
-def _scrubbed_result(arguments: Any, text: str) -> str:
-    """A tool result with the credentials it could carry taken out.
+def _scrubbed_result(arguments: Any, text: str, *, agent_output: bool = False) -> str:
+    """Preserve agent content and scrub credentials from local tool results.
 
     A read of a dotfile config under home loses its key values, and any value
     Raven itself holds is replaced by where it is kept. Applied where the result
@@ -121,14 +171,14 @@ def _scrubbed_result(arguments: Any, text: str) -> str:
     """
     from raven.config.held_secrets import scrub_tool_output
 
-    return scrub_tool_output(arguments, text)
+    return text if agent_output else scrub_tool_output(arguments, text)
 
 
-def _scrubbed_blocks(arguments: Any, blocks: Any) -> Any:
+def _scrubbed_blocks(arguments: Any, blocks: Any, *, agent_output: bool = False) -> Any:
     """The image-bearing form of a result, its text parts scrubbed like :func:`_scrubbed_result`."""
     from raven.config.held_secrets import scrub_tool_blocks
 
-    return scrub_tool_blocks(arguments, blocks)
+    return blocks if agent_output else scrub_tool_blocks(arguments, blocks)
 
 
 def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None) -> str:
@@ -151,6 +201,42 @@ def _llm_failure_detail(content: str | None, verdict: ErrorClassification | None
     return canonical_llm_error(category, None, "the provider gave no detail")
 
 
+def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str | None, spent: RecoveryState) -> str:
+    """What a turn is failed with when recovery could not mend a reply of ``kind``, at full length.
+
+    Scrubbed here, ahead of the bounded copy the lane carries, because two of
+    the four texts quote the model: its reasoning, or its own refusal.
+    ``spent`` is what recovery tried, which the words must not overstate: they
+    count only what was asked again about this reply -- its step's asks, of its
+    kind -- and not what the turn tried for other replies.
+    """
+    asked = spent.step_asks[kind]
+    if kind is ReplyKind.THINKING_ONLY:
+        head = THINKING_ONLY_FAILURE if asked else THINKING_ONLY_UNRETRIED_FAILURE
+        excerpt = reasoning_excerpt(response)
+        # Hermes appends the excerpt only when the reasoning left text; without
+        # it the sentence would end on a colon that leads nowhere.
+        text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
+    elif kind is ReplyKind.TRUNCATED:
+        text = (
+            TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s") if asked else TRUNCATED_UNCONTINUED_FAILURE
+        )
+    elif kind is ReplyKind.REFUSAL:
+        explanation = visible or reasoning_excerpt(response)
+        text = REFUSAL_FAILURE + (
+            REFUSAL_EXPLANATION.format(text=explanation) if explanation else REFUSAL_NO_EXPLANATION
+        )
+    else:
+        text = EMPTY_REPLY_FAILURE
+    return full_failure_text(text)
+
+
+def _drop_trailing_prefills(messages: list[dict[str, Any]]) -> None:
+    """Take the prefill rows a step left at the end of ``messages`` back off."""
+    while messages and messages[-1].get("role") == "assistant" and messages[-1].get("_recovery_synthetic"):
+        messages.pop()
+
+
 def _marker_failure(reason: str | None) -> str:
     """How a broken turn's marker tells the MODEL the turn failed.
 
@@ -165,6 +251,81 @@ def _marker_failure(reason: str | None) -> str:
         category, provider, _detail = parsed
         return llm_error_summary(category, provider)
     return reason or "unknown error"
+
+
+def _first_turns_within(messages: list[dict[str, Any]], budget: int) -> tuple[list[dict[str, Any]], bool]:
+    """The leading whole turns of ``messages`` that fit in ``budget`` tokens.
+
+    The path this step replaces bounded its input by a token budget; without
+    one a declined annotation is retried next turn with the tail one turn
+    longer, so a tail that was refused for its size is refused larger every
+    time and the log stops being written for that session. A tool result
+    reaches the annotator as at most a 16k-character view
+    (``tool_result_view``), and is counted here as that view, so a handful of
+    tool-heavy turns reaches that point.
+
+    Cuts only where a turn ends -- the next ``role == "user"`` -- so the
+    annotator still sees whole exchanges. A first turn that alone exceeds the
+    budget is still returned whole, because sending nothing would stall the
+    cursor on it forever; the second return value says so, and the caller
+    needs it. Nothing else records that such a turn was sent, so a refusal
+    would otherwise rebuild the same tail and send the same oversized prompt
+    on every qualifying turn after it.
+    """
+    if budget <= 0 or not messages:
+        return messages, False
+    spent = 0
+    cut = 0
+    for i, m in enumerate(messages):
+        if i and m.get("role") == "user":
+            if spent > budget:
+                return (messages[:cut], False) if cut else (messages[:i], True)
+            cut = i
+        if m.get("role") == "tool" and isinstance(m.get("content"), str):
+            spent += estimate_message_tokens({**m, "content": tool_result_view(m["content"])})
+        else:
+            spent += estimate_message_tokens(m)
+    if spent <= budget:
+        return messages, False
+    return (messages[:cut], False) if cut else (messages, True)
+
+
+def _turns_a_person_opened(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``messages`` without the turns the runtime opened for itself.
+
+    The origin mark rides on the one message that opens a turn -- the user
+    entry (``initial_messages[-1]`` at the stamp site) -- and nothing else in
+    that turn carries it: the reply the model writes, its tool calls and their
+    results are all saved unmarked. Deciding message by message would drop a
+    Sentinel turn's question and keep its answer, which is the half that ends
+    up in ``episodes.md``, which two Sentinel producers read.
+
+    So the turn decides. A ``role == "user"`` entry opens one and its mark
+    rules until the next opens; anything before the first user entry is the
+    tail of a turn this slice does not contain, and is kept, because the slice
+    starts where the last annotation stopped.
+    """
+    out: list[dict[str, Any]] = []
+    keep = True
+    for m in messages:
+        if m.get("role") == "user":
+            keep = not m.get("origin")
+        if keep:
+            out.append(m)
+    return out
+
+
+def _without_scratch(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The turn as the after-turn pipeline should read it: its envelope without
+    the recall the assembler appended, which is this turn's input, not its record."""
+    from raven.context_engine.scratch import TURN_SCRATCH_KEY, strip_turn_scratch
+
+    out = []
+    for m in messages:
+        if m.get(TURN_SCRATCH_KEY):
+            m = {k: v for k, v in m.items() if k != TURN_SCRATCH_KEY} | {"content": strip_turn_scratch(m) or ""}
+        out.append(m)
+    return out
 
 
 def _stamp_turn_observers(messages: list[dict[str, Any]], metadata: dict[str, Any] | None, turn_base: int) -> None:
@@ -200,10 +361,66 @@ _SAID_LOG_MAX_CHARS = 2000
 _TURN_TRANSIENT_KEYS = ("_recovery_synthetic", ATTACHED_IMAGE_KEY)
 
 
+def _stamp_context_used_on_kept(messages: list[dict[str, Any]], response: Any) -> None:
+    """Put the reading of a call whose reply is not filed on the newest row that is.
+
+    An empty reply never becomes a row of its own in the session: recovery
+    stands scaffolding in for it, the loop gives up on it, or it is filed empty
+    and dropped on save. Nor does a provider's error, which is never filed. The
+    live gauge still showed that call's window, and the window it measured ends
+    at the newest row the turn keeps, so the reading goes there. When that row
+    is the turn's question it is already on disk and the stamp never reaches
+    it: the turn either files a row of its own later, which takes a newer
+    reading, or ends on the marker ``_save_broken_turn`` files, which carries
+    it.
+    """
+    used = _call_window(response)
+    if used <= 0:
+        return
+    for message in reversed(messages):
+        if not any(message.get(key) for key in _TURN_TRANSIENT_KEYS):
+            message[_CONTEXT_USED_KEY] = used
+            return
+
+
 # How a turn reports the model saying nothing with no recovery behind it. The
-# exhausted-recovery exit words its own sentence from the budgets it spent;
-# this one has no counts to give, and says why there are none.
+# texts recovery fails a turn with say what it tried; nothing was tried here,
+# and this says why.
 _NO_CONTENT_UNRECOVERED = "The model returned no content, and this turn's empty-response recovery is switched off."
+
+# The moves a turn that the message tool has already answered does not take: the three backed-off
+# re-asks of the same step, and the failure that follows them.
+_GIVEN_UP_ONCE_ANSWERED = frozenset(
+    {RecoveryAction.RETRY, RecoveryAction.STEP_DOWN, RecoveryAction.FALLBACK, RecoveryAction.FAIL}
+)
+
+# The moves that ask the model again about the reply in hand, counted per step and kind for the failure texts.
+_ASKS_AGAIN = frozenset(
+    {
+        RecoveryAction.PREFILL,
+        RecoveryAction.NUDGE,
+        RecoveryAction.RETRY,
+        RecoveryAction.STEP_DOWN,
+        RecoveryAction.CONTINUE,
+        RecoveryAction.FALLBACK,
+    }
+)
+
+
+async def _settle_silence(gate: SilenceGate | None, *, silent: bool, dropped_marker: bool = False) -> None:
+    """End the hold on a kept reply's start: dropped when the reply was a marker, shown otherwise.
+
+    ``dropped_marker`` is a continuation that was a marker the reply leaves out: only what the cut
+    call before it carried is shown.
+    """
+    if gate is None:
+        return
+    if silent:
+        gate.discard()
+    elif dropped_marker:
+        await gate.keep_carried()
+    else:
+        await gate.release()
 
 
 def _log_what_the_model_said(response: Any) -> None:
@@ -236,10 +453,10 @@ def _reasoning_wire_keys(provider: Any, model: str | None) -> Any:
     """The provider's "what would this effort send" answer, or None.
 
     None when the provider cannot say -- a test double, or an adapter from
-    before the method existed -- and the retry descent then reads the labels on
-    their own, which is what it did before. Never allowed to be the thing that
-    fails: this is asked while recovering a turn that has already produced
-    nothing, and an exception here would replace an empty answer with an error.
+    before the method existed -- and the step-down of a thinking-only reply then
+    reads the labels on their own, which is what it did before. Never allowed to
+    be the thing that fails: this is asked while recovering a reply that brought
+    no answer, and an exception here would replace that reply with an error.
     """
     ask = getattr(provider, "reasoning_wire_keys", None)
     if not callable(ask):
@@ -272,6 +489,67 @@ def _file_unanswered(messages: list[dict]) -> None:
             return
     text, notice = filing
     messages.append({"role": "assistant", "content": text, _NOTICE_KEY: notice})
+
+
+def _delivered_files(turn_rows: list[dict]) -> bool:
+    """Whether a tool handed the reader files this turn: a call that left a delivery manifest with files."""
+    for row in turn_rows:
+        metadata = row.get(_TOOL_METADATA_KEY)
+        delivery = metadata.get("raven_delivery") if isinstance(metadata, dict) else None
+        if isinstance(delivery, dict) and delivery.get("files"):
+            return True
+    return False
+
+
+def _taken_back_whole(messages: list[dict], skip: int) -> bool:
+    """Whether the session list and the ACP replay will take back the row that closes this turn.
+
+    Asked of the rule they read a transcript with (``TakeBack``), over the rows as ``_save_turn``
+    will store them: a recovery nudge is never stored, and the turn's own rows carry their marks
+    under the live names. ``skip`` is where the turn's new rows start; the row that opened it may be
+    older, filed by the opening write.
+    """
+    # Every user row sets the rule's state afresh, so reading from the last one before the turn's new
+    # rows reads what the whole transcript would, without walking a long session on every save.
+    start = next(
+        (
+            i
+            for i in range(skip - 1, -1, -1)
+            if messages[i].get("role") == "user" and not messages[i].get("_recovery_synthetic")
+        ),
+        0,
+    )
+    take_back = TakeBack()
+    taken = False
+    for index, row in enumerate(messages[start:], start):
+        if row.get("_recovery_synthetic"):
+            continue
+        step = take_back.read(
+            {
+                "role": row.get("role"),
+                "origin": row.get(_ORIGIN_KEY) or row.get("origin"),
+                "silent": row.get(_SILENT_KEY) or row.get("silent"),
+                REPLIED_VIA_TOOL: row.get(_REPLIED_VIA_TOOL_KEY) or row.get(REPLIED_VIA_TOOL),
+            }
+        )
+        if index >= skip and row.get("role") == "assistant":
+            taken = step is TakeBackStep.TAKES_BACK
+    return taken
+
+
+def _turn_trace_id() -> str | None:
+    """The trace id of the ``session.turn`` span this code runs directly inside.
+
+    With tracing off, ``instrument`` calls the turn without opening a span or
+    touching the current-span slot, so the slot may still hold the span of
+    the turn that dispatched this one; the switch is checked first for that.
+    """
+    if not tracing_config.enabled():
+        return None
+    span = trace.current_span()
+    if isinstance(span, trace.Span) and span.name == "session.turn" and span.trace_id:
+        return span.trace_id
+    return None
 
 
 class TurnPathMixin:
@@ -442,6 +720,21 @@ class TurnPathMixin:
         usage.pop("total_tokens")
         return UsageSnapshot(model=model, session_key=session_key or None, **usage)
 
+    def _reply_room(self, messages: list[dict], tools: list[dict] | None, model: str | None) -> int | None:
+        """The ``max_tokens`` this request carries, or None to send it as before.
+
+        None while the model's whole output ceiling still fits beside the
+        prompt; see ``headroom.request_max_tokens`` for the arithmetic.
+        """
+        from raven.context_engine.headroom import request_max_tokens
+
+        return request_max_tokens(
+            window=self.context_window_tokens,
+            prompt_tokens=estimate_prompt_tokens(messages, tools),
+            ceiling=self._wire_output_ceiling(model),
+            floor=self.context_config.headroom.min_tokens,
+        )
+
     @trace.instrument("llm.call", extract=semconv.llm_call_stream)
     async def _llm_call_stream(
         self,
@@ -450,6 +743,8 @@ class TurnPathMixin:
         model: str | None,
         on_token_delta: Callable[[str], Awaitable[None]] | None = None,
         on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
+        *,
+        hand_back_partial: bool = False,
         **generation: Any,
     ) -> LLMResponse:
         """Stream LLM response via ``provider.chat_stream`` + accumulate to LLMResponse.
@@ -459,6 +754,15 @@ class TurnPathMixin:
         ``raven.providers.streaming`` — a sub-agent backend answering a direct
         chat drives the same call and must not drift from it. This method stays
         as the loop's own entry point (its span, its reconnect budget).
+
+        ``hand_back_partial`` is asked for by the one call that can ask the model
+        to go on from a cut answer: the loop's answering call, made through the
+        Action role in ``_run_agent_loop``. The other calls that come through
+        here -- the wrap-up an exhausted turn asks for, the watch-work judgement
+        -- have no continuation behind them and would deliver the fragment as
+        their whole reply, so for them a stream that died after its words fails as
+        it always did. A named parameter and not part of ``generation``, which
+        reaches ``chat_stream`` unchanged.
 
         Generation parameters travel only as the turn's ``gen_overrides``: the
         session's pinned reasoning effort under a hook's rollback override.
@@ -477,6 +781,7 @@ class TurnPathMixin:
             max_reconnects=self._MAX_STREAM_RECONNECTS,
             retry_delays=tuple(limits.llm_error_retry_delays),
             retry_after_output=bool(limits.llm_retry_after_output),
+            hand_back_partial=hand_back_partial,
             **generation,
         )
 
@@ -498,7 +803,9 @@ class TurnPathMixin:
         it accomplished and deliver its best partial answer. Tools are withheld
         (``tools=None``) so it cannot start another tool call — or an
         ``ask_user`` — at the cliff edge. Falls back to a static message if the
-        call errors or comes back empty, so the turn is never left silent.
+        call errors or comes back empty, so the turn never ends with nothing.
+        A Silence Marker is a reply the model wrote, and comes back as written
+        for the caller to read as one.
 
         A product may add its own guidance and request one format repair. Those
         calls are buffered until a final text is chosen so the streamed reply
@@ -516,20 +823,30 @@ class TurnPathMixin:
         """
         if synthesis_policy is not None:
             prompt = f"{prompt}\n\n{synthesis_policy.guidance}"
+        # The turn's own conversation plus one instruction: the main line, not a
+        # side question, so its input reads as a continuation and its output as
+        # the turn's last word.
         synth_messages = messages + [{"role": "user", "content": prompt}]
         # The wrap-up is a model call of the same turn, so it pays the turn's
-        # effort; absent, the provider's configured default stands.
-        effort_kwargs: dict[str, str] = {} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}
+        # effort, sent the way the turn's other calls send it: None included,
+        # which is the provider's own default rather than the copy it took at
+        # boot (``gen_overrides`` in ``_run_agent_loop`` says why).
+        effort_kwargs: dict[str, Any] = {"reasoning_effort": reasoning_effort}
+        # The wrap-up is asked for at the cliff edge, where the transcript is
+        # longest, so it is sized to the room beside it like any other call.
+        if reply_room := self._reply_room(synth_messages, None, model):
+            effort_kwargs["max_tokens"] = reply_room
         if synthesis_policy is not None:
 
             async def _call(rows: list[dict]) -> str:
-                response = await self.provider.chat_with_retry(
-                    messages=rows,
-                    tools=None,
-                    model=model,
-                    fallback_models=fallback_models,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self.provider.chat_with_retry(
+                        messages=rows,
+                        tools=None,
+                        model=model,
+                        fallback_models=fallback_models,
+                        **effort_kwargs,
+                    )
                 return (self._strip_think(response.content) or "") if response.finish_reason != "error" else ""
 
             try:
@@ -561,22 +878,24 @@ class TurnPathMixin:
             return text
         try:
             if on_token_delta is not None or on_reasoning_delta is not None:
-                response = await self._llm_call_stream(
-                    messages=synth_messages,
-                    tools=None,
-                    model=model,
-                    on_token_delta=on_token_delta,
-                    on_reasoning_delta=on_reasoning_delta,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self._llm_call_stream(
+                        messages=synth_messages,
+                        tools=None,
+                        model=model,
+                        on_token_delta=on_token_delta,
+                        on_reasoning_delta=on_reasoning_delta,
+                        **effort_kwargs,
+                    )
             else:
-                response = await self.provider.chat_with_retry(
-                    messages=synth_messages,
-                    tools=None,
-                    model=model,
-                    fallback_models=fallback_models,
-                    **effort_kwargs,
-                )
+                with _llm_purpose("main"):
+                    response = await self.provider.chat_with_retry(
+                        messages=synth_messages,
+                        tools=None,
+                        model=model,
+                        fallback_models=fallback_models,
+                        **effort_kwargs,
+                    )
             text = self._strip_think(response.content)
             if response.finish_reason != "error" and text:
                 return text
@@ -639,6 +958,18 @@ class TurnPathMixin:
             )
             self.context.add_tool_result(messages, call_id, autofill_resolver.TOOL_NAME, row.get("summary", ""))
 
+    def _answered_by_tool(self, turn_rows: list[dict]) -> bool:
+        """Whether this turn's tools already handed the reader its answer.
+
+        Two tools answer for the model: the message tool's send and ``deliver_files``' manifest. Both
+        are live verdicts for this turn, so every reader of "already answered" asks this one question
+        -- the give-up escape, the answerless exit, and the ``replied_via_tool`` mark filed below.
+        """
+        message_tool = self.tools.get("message")
+        if isinstance(message_tool, MessageTool) and message_tool.sent_in_turn:
+            return True
+        return _delivered_files(turn_rows)
+
     async def _run_agent_loop(  # noqa: C901 (cc 100: pre-existing, above the ceiling)
         self,
         initial_messages: list[dict],
@@ -661,12 +992,25 @@ class TurnPathMixin:
         attempt: int = 1,
         rerun_pending: "Callable[[str | None, list[dict], str], bool] | None" = None,
         spend: TurnSpend | None = None,
+        turn_log: TurnLog | None = None,
+        rungs_used: set[str] | None = None,
+        reply_awaited: bool = False,
+        window_reading: dict[str, int] | None = None,
+        silence_taught: bool = False,
+        turn_start_idx: int = 0,
+        session_effort: str | None = None,
+        surface: str | None = None,
     ) -> tuple[str | None, list[str], list[dict], LoopOutcome]:
         """Run the agent iteration loop.
 
         ``origin`` is the turn's: the watch-work judgement reads the owner's
         request off the messages, and a turn the runtime re-injected has none
-        to read (``watch_work.asked_for``).
+        to read (``watch_work.asked_for``). With ``silence_taught``, whether
+        the turn's prompt taught the marker, it also picks the silence rule a
+        reply is read by -- unless ``reply_awaited`` says the caller waits on
+        the turn's text, as an inbound A2A call's peer does: such a turn takes
+        no part in the silence protocol, so nothing is held back for a marker
+        and a marker comes back as the text it is.
 
         ``drain``, when wired, is called at the top of each iteration to pull
         any user messages injected mid-turn (BusyPolicy.INJECT) and merge them
@@ -680,6 +1024,10 @@ class TurnPathMixin:
         ``session_history`` is the filed record of the session this turn
         persists into -- still ending with the previous turn -- stamped once
         onto the iteration hook context. The caller owns which record that is.
+
+        ``surface`` is the front end the turn's request declared; the note after
+        a dispatch receipt reads it, since the terminal and the page share a
+        channel and only the page draws the board.
 
         ``turn_started_at`` is when the caller's turn began, on the clock
         :func:`monotonic` reads. A caller that may run this loop more than once
@@ -704,12 +1052,38 @@ class TurnPathMixin:
         clock above does: a rerun is a second attempt at one turn and bills
         into the same scope. A caller that opened no scope gets one for this
         loop alone, which bills its own calls and takes no delegated ones.
+
+        ``turn_log`` is the record the caller persists this attempt from. The
+        returned list is the window as the last call saw it, which the window
+        passes may have summarised or elided; the log follows every list they
+        hand back and keeps what the turn actually said. A caller that passes
+        none gets one opened here, so the rerun question below is still asked of
+        the turn rather than of the window.
+
+        ``rungs_used`` is the reasoning efforts this turn has already stepped a
+        thinking-only reply down to, each asked for once. A caller that may run
+        the loop again for one turn hands every run the same set; omitted, this
+        run keeps a set of its own.
+
+        ``window_reading``, when given, is kept at ``context_used`` with the
+        newest window a call of this loop measured. It outlives the loop the way
+        ``spend`` does: a turn that fails or is stopped files it on its marker,
+        which can be the only row the turn adds.
+
+        ``session_effort`` is the reasoning effort the session picked for its
+        own model calls (``raven.agent.session_effort``), read off its record
+        by the caller the way the model is. It outranks a mode's effort and
+        the configured default; a hook's rollback override still outranks it.
         """
         spend = spend if spend is not None else TurnSpend(session_key)
         messages = initial_messages
+        log = turn_log if turn_log is not None else TurnLog(initial_messages, len(initial_messages))
         iteration = 0
         final_content = None
         tools_used: list[str] = []
+        last_tool_defs: list[dict] | None = None
+        last_model: str | None = None
+        last_effort: str | None = None
         effective_model = model or self.model
 
         # Track whether the turn was a normal exit or a max-iter interruption.
@@ -721,6 +1095,26 @@ class TurnPathMixin:
         # caller that knows whether a tool has already delivered one.
         status = "completed"
         error_detail: str | None = None
+        error_full: str | None = None
+        # Set with the failure when the model produced nothing at all, which is
+        # what tells a caller an empty run from one that failed in some other way.
+        no_output = False
+        # Set when the loop ended a turn the message tool had already answered, on a
+        # reply with nothing in it: that is not running out of budget, so the wrap-up
+        # that fills a turn which did is not asked for this one.
+        ended_answered = False
+        # Set when the turn's last reply is a silence marker: the model's own choice to say
+        # nothing, which the caller does not deliver.
+        silent = False
+        # What the silence gates have put in front of the reader in the step drawn now: one model
+        # call with its cut answer's continuations, or the wrap-up. A reply read as the marker
+        # reports it (``LoopOutcome.shown``), for a client to take back that much and no more.
+        step_shown: list[str] = []
+
+        async def _shown(delta: str) -> None:
+            step_shown.append(delta)
+            if on_token_delta is not None:
+                await on_token_delta(delta)
 
         # The turn's window bookkeeping: the last billed context size, the retry
         # budgets every shrink draws on, and the picture window. Held here and
@@ -731,7 +1125,18 @@ class TurnPathMixin:
         window = WindowState(
             image_window=shrink.IMAGE_WINDOW_RECENT_MESSAGES,
             image_budget=self._recovery_limits.image_window_budget_bytes or None,
+            session_key=session_key or "",
         )
+
+        async def _shrink(pressure: WindowPressure, at_model: str | None) -> ShrinkResult:
+            # The log reads the list on both sides of the pass: before, so the
+            # pass's copies of this turn's messages carry the log's stamp; after,
+            # so the list it hands back is the one the log follows.
+            log.follow(messages)
+            result = await self.harness.memory.shrink(messages, pressure=pressure, state=window, model=at_model)
+            log.follow(result.messages)
+            return result
+
         # Retryable model errors that outlasted the provider's own ladder: how many
         # of the loop's longer waits this turn has spent.
         error_waits = 0
@@ -770,20 +1175,36 @@ class TurnPathMixin:
         # long-lived singleton shared across sessions, so per-instance counters
         # would leak across turns; resetting here gives clean per-turn budgets.
         prev_had_tool_calls = False
-        post_tool_nudges = 0
-        prefill_retries = 0
+        recovery = RecoveryState(rungs_used=set() if rungs_used is None else rungs_used)
         # Set when a prefill re-feeds reasoning the ceiling cut: the next call
         # continues mid-thought, and its opening fragment is not content.
         cut_continuation = False
-        empty_retries = 0
-        # Sticky across a turn's empty retries: once the descent reaches a rung,
-        # a later retry must not read the turn's own effort again and hand back
-        # the value that already came up empty.
-        empty_retry_effort: str | None = None
-        # Said once per turn, not once per retry: three identical copies
-        # of it in one transcript are noise, and the escalation for advice
-        # that did not work is `loop_break_nudge`, not repetition.
-        output_limit_told = False
+        # Set when a stream cut mid-answer is about to be continued: the next call
+        # carries on the step the cut one opened rather than starting another.
+        merge_episode = False
+        # The silence gate of the call a cut answer is being continued from: what it held is not
+        # shown at the cut, because the reply the turn ends on may still be a marker.
+        carried_gate: SilenceGate | None = None
+        # The first resend of an empty streamed reply asks without streaming (``unstreamed_next``),
+        # once a turn (``unstreamed_spent``): a stream can come back empty where the same call made
+        # plainly would not -- a stream wrapper that drops a chunk whose only payload is a refusal, a
+        # gateway whose streams fail while its plain calls work.
+        unstreamed_next = False
+        unstreamed_spent = False
+        # Sticky across a turn's step-downs: once the descent reaches a rung, the
+        # next one must not read the turn's own effort again and hand back the
+        # value that already came up thinking and nothing else.
+        step_down_effort: str | None = None
+        # Whether the call goes through the stream path. Mirrors the test the
+        # Action role applies: that is the path with no fallback chain of its own
+        # and the only one a reply can be cut mid-answer on.
+        streamed_call = on_token_delta is not None or on_reasoning_delta is not None
+        # The model the turn is on and the fallbacks it has not tried. A switch is
+        # for the rest of the turn -- every later call asks the model that last
+        # answered -- and the chain handed to the provider is what is left, so it
+        # never walks back onto a model the loop has already given up.
+        active_model = effective_model
+        fallbacks_left = list(fallback_models or [])
         # The watch-work judgement's state, owned by this turn: the loop is a
         # singleton and turns from other sessions run concurrently, so anything
         # on `self` here would let one session's dispatch silence another's
@@ -796,6 +1217,14 @@ class TurnPathMixin:
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
         iteration_cap = policy.max_iterations or self.max_iterations
+        # The effort this turn's own calls run at, short of a hook's rollback
+        # override: the session's own pick over its mode's word over the
+        # configured default as the file has it now -- ``session_effort.in_force``,
+        # the one rule ``session.info`` reports from too. The clamp is against
+        # ``model``, the id this loop will actually call: a router can hand the
+        # turn a model other than the session's binding, and that is the model
+        # whose declaration bounds the word.
+        turn_effort = self.session_reasoning_effort(session_key, session_effort, model)
         # The other bound on this turn, and the only one a product supplies rather
         # than the loop: whatever a hook left under ``TURN_BUDGETS_KEY``. Read here
         # for the same reason the cap is, and defaulting to unbounded, so an agent
@@ -848,6 +1277,29 @@ class TurnPathMixin:
         )
         iter_msg_base = 0
         pending_gen_overrides: dict[str, Any] | None = None
+        # The overrides an output-limit continuation set, compared by identity: an unchanged
+        # resend carries the same dict on, and a hook's rollback brings a dict of its own.
+        continuation_overrides: dict[str, Any] | None = None
+
+        async def _announce_wait(detail: str) -> None:
+            """Say the loop is waiting before it asks the model again, as the status line the next output replaces.
+
+            Only a category or a fixed word, never the vendor's own body: that can carry
+            a masked key and an account URL, and this text is read by everyone watching
+            the turn. Staged like the episode boundary: a bounded outlet queue with a
+            wedged worker behind it would park the turn here for the whole wait, and
+            the notice is a status hint -- losing one is a silent wait, not a turn lost.
+            """
+            if on_notice is None:
+                return
+            from raven.spine.events import NoticeKind as _NoticeKind
+
+            await first_call.stage(
+                "the retry-notice emit",
+                on_notice(_NoticeKind.LLM_RETRY, detail),
+                iteration=iteration,
+                fallback=None,
+            )
 
         def _land_hook_note(decision) -> None:
             """Honor a hook's ``append_note``: the note joins the last message
@@ -881,9 +1333,13 @@ class TurnPathMixin:
                 # turn boundary (ask_user) needs to know the iteration number it
                 # sees is a re-sample, and only the loop knows that.
                 hook_ctx.metadata["hook_rollbacks"] = hook_rollbacks
+            log.drop(messages[iter_msg_base:])
             del messages[iter_msg_base:]
             for m in decision.rollback_inject or ():
                 entry = dict(m)
+                # A hook may hand back a copy of a message this turn already
+                # wrote; it is a new message, not a rewrite of that one.
+                entry.pop(TURN_LOG_KEY, None)
                 entry.setdefault("timestamp", self._now_fn().isoformat())
                 entry[_HOOK_INJECTED_KEY] = True
                 messages.append(entry)
@@ -896,6 +1352,53 @@ class TurnPathMixin:
                 sorted(overrides) or None,
             )
             return True
+
+        def _switch_to_next_model() -> str | None:
+            """Put the rest of the turn on its next fallback model, and return the model it leaves.
+
+            The prefill rows at the end of ``messages`` come off: they are the thought of the model
+            being left, and a request ending on one is what a prefill-refusing model rejects. The
+            rest of the recovery scaffolding stays, so a nudge or a ceiling continuation written
+            for the model being left still reaches the new one, ending the request on a user row.
+            Whatever the reason for the switch -- an empty reply's FALLBACK or a streamed error --
+            the same holds.
+            """
+            nonlocal active_model
+            previous, active_model = active_model, fallbacks_left.pop(0)
+            recovery.fallbacks_used += 1
+            _drop_trailing_prefills(messages)
+            return previous
+
+        async def _end_on_the_partial(last: LLMResponse) -> str:
+            """End the turn on a cut answer no continuation will finish, and return what it ends on.
+
+            The continuation failed, or the turn has no iteration or time left to ask for it. What
+            streamed is the answer, the note says it is not the whole of it, and the turn is
+            ``interrupted``. Nothing more is asked for: a wrap-up would stream onto the partial and be
+            all the record kept. When what streamed is the model's marker, the turn ends silent as any
+            marker does: nothing shown, no note. The reply carries the window ``last``, the turn's
+            newest call, measured, as every reply does.
+            """
+            nonlocal messages, status, silent
+            final = self._strip_think("".join(recovery.parts)) or ""
+            held = carried_gate.handed_over() if carried_gate is not None else None
+            silent = not reply_awaited and is_silence(final, origin, taught=silence_taught)
+            if silent:
+                if held is not None:
+                    held.discard()
+            else:
+                note = "\n\n" + PARTIAL_STREAM_NOTE
+                final = final + note if final else PARTIAL_STREAM_NOTE
+                status = "interrupted"
+                if held is not None:
+                    await held.release()
+                if on_token_delta is not None:
+                    await on_token_delta(note)
+            messages = self.context.add_assistant_message(messages, final)
+            if silent:
+                messages[-1][_SILENT_KEY] = True
+            _stamp_context_used(messages, last)
+            return final
 
         while iteration < iteration_cap:
             # Checked here and not mid-generation: cancelling a call in flight
@@ -916,12 +1419,16 @@ class TurnPathMixin:
                 "Iteration {}/{} model={}",
                 iteration,
                 iteration_cap,
-                effective_model,
+                active_model,
             )
 
             # Mark the episode boundary (one per model call) so an outlet can
-            # group this call's reasoning + text + tools into a single step.
-            if on_episode_start is not None:
+            # group this call's reasoning + text + tools into a single step. Not
+            # for the continuation of a cut answer: a boundary there would show
+            # the reader one answer as two steps.
+            if not merge_episode:
+                step_shown.clear()
+            if on_episode_start is not None and not merge_episode:
                 # A bounded per-outlet queue with a wedged worker behind it parks
                 # here forever; the boundary is a grouping hint, so losing one is
                 # a step drawn wrong, not a turn lost.
@@ -931,6 +1438,7 @@ class TurnPathMixin:
                     iteration=iteration,
                     fallback=None,
                 )
+            merge_episode = False
 
             # Take any INJECT-ed user messages (BusyPolicy.INJECT) into this
             # iteration before its LLM call. Media-carrying injects keep their
@@ -974,15 +1482,11 @@ class TurnPathMixin:
             # Compaction rebinds ``messages``, which is why it sits above the
             # autofill publish: a snapshot published before the rebind would go
             # quietly stale.
-            ahead = await self.harness.memory.shrink(
-                messages, pressure=WindowPressure.PROACTIVE, state=window, model=effective_model
-            )
+            ahead = await _shrink(WindowPressure.PROACTIVE, active_model)
             messages = ahead.messages
             # The standing image window: the notes it writes are the transcript
             # from here on rather than a per-request rewrite.
-            standing = await self.harness.memory.shrink(
-                messages, pressure=WindowPressure.STANDING, state=window, model=effective_model
-            )
+            standing = await _shrink(WindowPressure.STANDING, active_model)
             messages = standing.messages
 
             # Same seam and the same reason as the drain above: only the loop's
@@ -1046,48 +1550,75 @@ class TurnPathMixin:
 
             # TokenWise before-hook: strategies may rewrite messages, tools,
             # or model (e.g. CacheOptimizer marks cache_control blocks).
-            # The session's pinned effort first, a hook's rollback override on
-            # top: a mode that asks for more thinking sets the turn's default,
-            # and a gate re-sampling one call may still move that one call.
+            # The session's effort first, a hook's rollback override on top: a
+            # mode that asks for more thinking, or the session's own pick, sets
+            # the turn's default, and a gate re-sampling one call may still
+            # move that one call.
             gen_overrides = {
-                # The configured default underneath, the session's pin over it,
-                # a hook's rollback override on top. The default is here rather
-                # than left to the provider because the provider's copy is
-                # frozen at construction (see ``default_reasoning_effort``).
-                **({"reasoning_effort": self.default_reasoning_effort} if self.default_reasoning_effort else {}),
-                **({"reasoning_effort": policy.reasoning_effort} if policy.reasoning_effort else {}),
+                # The effort in force (``turn_effort``), a hook's rollback
+                # override on top. Always sent, None included: the provider's
+                # own copy of the key is frozen at construction (see
+                # ``default_reasoning_effort``), so a key left out of the call
+                # let a default cleared on a running gateway keep running at
+                # the word the gateway booted with. An explicit None is the
+                # provider's own default, nothing on the wire.
+                "reasoning_effort": turn_effort,
                 **(pending_gen_overrides or {}),
             }
+            # Kept for an unchanged resend: it asks again with whatever rode this call.
+            call_overrides = pending_gen_overrides
             pending_gen_overrides = None
             call_reasoning_effort = gen_overrides.get("reasoning_effort")
+            last_tool_defs, last_model, last_effort = tool_defs, active_model, call_reasoning_effort
             call_messages, call_tools, call_model = await first_call.stage(
                 "the before_llm_call strategies",
                 self.strategies.before_llm_call(
                     messages,
                     tool_defs,
-                    effective_model,
+                    active_model,
                 ),
                 iteration=iteration,
-                fallback=(messages, tool_defs, effective_model),
+                fallback=(messages, tool_defs, active_model),
             )
             # Last, and on the payload only: the strategies above decide against
             # the shape the messages arrived in, and the prompt-cache prefix
             # stays stable because the same arrivals always fold the same way.
             call_messages = merge_mid_turn(call_messages)
+            # Sized to the prompt it goes out beside, which is the room the
+            # history strategy's trigger holds back: near that line the model's
+            # whole ceiling no longer fits, and a provider that checks
+            # ``prompt + max_tokens <= window`` refuses the request outright. A
+            # hook's own ``max_tokens`` override stands; the doubled ceiling of an
+            # output-limit continuation does not, since the same refusal awaits it.
+            # Nor may that doubled ceiling pass the model's own: not every provider
+            # clamps what it is asked for.
+            continuing = call_overrides is not None and call_overrides is continuation_overrides
+            if continuing:
+                gen_overrides["max_tokens"] = self._wire_output_ceiling(call_model, pinned=gen_overrides["max_tokens"])
+            if "max_tokens" not in gen_overrides or continuing:
+                if reply_room := self._reply_room(call_messages, call_tools, call_model):
+                    gen_overrides["max_tokens"] = min(gen_overrides.get("max_tokens", reply_room), reply_room)
+            # A reply that is a silence marker is shown to no one, so the start of one is
+            # held until the loop has read the reply. A turn that reads the loose rule holds the
+            # whole call, because its marker may close a report and only the end of the call
+            # shows that. The gates below deliver into this one.
+            if on_token_delta is None or reply_awaited:
+                silence_gate = None
+            elif carried_gate is not None:
+                silence_gate = carried_gate.handed_over()
+            else:
+                silence_gate = SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
+            downstream = silence_gate or on_token_delta
             # A hook can send this whole response back, and a rollback pops the
             # history the stream has already left -- so where hooks are installed
             # the deltas are held until something keeps the response. The draft
             # gate owns the continuation head cut in that case: holding the whole
             # text cuts it exactly, so the two gates never stack.
             draft = (
-                DraftGate(on_token_delta, cut_head=cut_continuation)
-                if on_token_delta is not None and holds_drafts
-                else None
+                DraftGate(downstream, cut_head=cut_continuation) if downstream is not None and holds_drafts else None
             )
             gate = (
-                ContinuationGate(on_token_delta)
-                if draft is None and cut_continuation and on_token_delta is not None
-                else None
+                ContinuationGate(downstream) if draft is None and cut_continuation and downstream is not None else None
             )
             # Every provider call ``decide`` makes reaches the provider seam, and
             # an Action may make more than one (best-of-n, a critic pass: see
@@ -1101,29 +1632,68 @@ class TurnPathMixin:
                 usage_record.bind(self.strategies),
                 usage_context.bind(session_key) if session_key else contextlib.nullcontext(),
             ):
-                response = await self.harness.action.decide(
-                    ActionRequest(
-                        provider=self.provider,
-                        messages=call_messages,
-                        tools=call_tools,
-                        model=call_model,
-                        fallback_models=fallback_models,
-                        stream_call=self._llm_call_stream,
-                        # Spliced here rather than inside the module: both gates are
-                        # the shell's own, and which sink a delta reaches is not a
-                        # strategy decision. The module reads the field it is handed,
-                        # so the stream/retry branch stays exactly the one the loop
-                        # took -- neither gate is built unless ``on_token_delta``
-                        # already is, so the spliced value is None on exactly the
-                        # turns the raw sink was, and a reasoning sink alone still
-                        # streams.
-                        on_token_delta=draft or gate or on_token_delta,
-                        on_reasoning_delta=on_reasoning_delta,
-                        generation_overrides=gen_overrides,
+                unstreamed, unstreamed_next = unstreamed_next, False
+                continuing = bool(recovery.parts)
+                try:
+                    response = await self.harness.action.decide(
+                        ActionRequest(
+                            provider=self.provider,
+                            messages=call_messages,
+                            tools=call_tools,
+                            model=call_model,
+                            # An unstreamed resend is still the streamed turn's call: the provider's
+                            # own chain is not walked, and a model switch stays the loop's to make.
+                            fallback_models=[] if unstreamed else list(fallbacks_left),
+                            # The one streaming call that asks for a cut answer back: a
+                            # continuation (``ReplyKind.NETWORK_CUT``) follows it. The
+                            # wrap-up and the watch-work judgement call the same method
+                            # and have nothing to follow them.
+                            stream_call=functools.partial(self._llm_call_stream, hand_back_partial=True),
+                            # Spliced here rather than inside the module: the gates are
+                            # the shell's own, and which sink a delta reaches is not a
+                            # strategy decision. The module reads the field it is handed,
+                            # so the stream/retry branch stays exactly the one the loop
+                            # took -- no gate is built unless ``on_token_delta``
+                            # already is, so the spliced value is None on exactly the
+                            # turns the raw sink was, and a reasoning sink alone still
+                            # streams.
+                            on_token_delta=None if unstreamed else (draft or gate or downstream),
+                            on_reasoning_delta=None if unstreamed else on_reasoning_delta,
+                            generation_overrides=gen_overrides,
+                        )
                     )
-                )
+                except Exception as exc:
+                    if not continuing:
+                        raise
+                    # A continuation can fail by raising rather than by answering with an error
+                    # (``LiteLLMProvider.chat_stream`` raises its HTTP errors), once the stream's
+                    # own reconnects are spent. The reader holds the answer so far either way, so
+                    # either way the turn ends on it, as a continuation that errored does.
+                    logger.warning(
+                        "empty-recovery: the continuation of a cut answer raised; ending the turn on the "
+                        "{} chars that streamed: {}",
+                        sum(len(part) for part in recovery.parts),
+                        exc,
+                    )
+                    final_content = await _end_on_the_partial(response)
+                    break
                 # Read inside the bind: the count belongs to it and ends with it.
                 recorded_at_seam = usage_record.recorded_inbound()
+            if unstreamed and response.finish_reason != "error":
+                # What the stream would have shown, shown once the whole reply is in and through the
+                # same sinks: the thought first, then the words, which pass the gates a streamed
+                # delta passes, so a marker is still held and a reply still reaches the reader once.
+                if on_reasoning_delta is not None and response.reasoning_content:
+                    await on_reasoning_delta(response.reasoning_content)
+                if (sink := draft or gate or downstream) is not None and response.content:
+                    await sink(response.content)
+            if response.finish_reason != "error" and (note := getattr(self.context_engine, "note_request", None)):
+                # What went out and was answered, for a history strategy that
+                # summarises by replaying it (its prefix is what is cached).
+                try:
+                    note(session_key or "", call_messages, model=call_model or effective_model, tools=call_tools)
+                except Exception:
+                    logger.opt(exception=True).error("the context engine failed to note a request")
             # Assigned, not latched: the fact this carries is that the turn's
             # own last word was cut, so a call that recovers clears it. Latching
             # would report a cut to a reader whose question is what the turn
@@ -1138,10 +1708,14 @@ class TurnPathMixin:
                 if gate is not None:
                     await gate.finish()
                 response.content = cut_reasoning_head(response.content)
-            if draft is not None and response.tool_calls:
+            if response.tool_calls:
                 # A preamble beside tool calls is not the answer a hook holds back
-                # as final, and holding it would park it for the whole tool run.
-                await draft.release()
+                # as final, nor a reply a marker could be, and holding it would
+                # park it for the whole tool run.
+                if draft is not None:
+                    await draft.release()
+                if silence_gate is not None:
+                    await silence_gate.release()
             _log_what_the_model_said(response)
             # TokenWise after-hook: strategies observe the response for
             # usage tracking, budget enforcement, etc. Errors are swallowed.
@@ -1167,25 +1741,29 @@ class TurnPathMixin:
             if response.usage:
                 prompt_tokens = int(response.usage.get("prompt_tokens", 0) or 0)
                 completion_tokens = int(response.usage.get("completion_tokens", 0) or 0)
-                # One reading for both consumers: the sink gauge below and the
+                # One reading for every consumer: the sink gauge below, the
                 # proactive compaction trigger at the top of the next
-                # iteration. They differ in their thresholds, not in what
-                # they measure -- and what they measure is how full the window
-                # is, which is not what the prompt was billed as. A provider
-                # that reports cache reads apart from ``prompt_tokens``
-                # (``prompt_tokens_include_cache`` false, the Anthropic
-                # Messages shape) bills a fraction of a warm prompt while all
-                # of it still occupies the window, so the cached counts are
-                # added back here. Same add-back, for the same reason, as
-                # ``transport_failure.never_processed``.
-                context_used = prompt_tokens + completion_tokens
-                if not response.usage.get("prompt_tokens_include_cache", True):
-                    context_used += int(response.usage.get("cache_read_input_tokens", 0) or 0) + int(
-                        response.usage.get("cache_creation_input_tokens", 0) or 0
-                    )
+                # iteration, and the reply that stands for this call, which
+                # keeps it for a resume (``_stamp_context_used``). They differ
+                # in their thresholds, not in what they measure -- and what
+                # they measure is how full the window is, which is not what
+                # the prompt was billed as (see ``_window_reading``), and a
+                # call can give none (see ``_call_window``).
+                context_used = _call_window(response)
                 if context_used > 0:
                     window.last_context_used = context_used
-            if usage_sink is not None and response.usage:
+                    if window_reading is not None:
+                        window_reading["context_used"] = context_used
+            if usage_sink is not None and response.usage and context_used <= 0 and usage_sink.get("context_used"):
+                # No reading -- a block of zeros, or an account ``_call_window``
+                # does not take as one -- so the gauge stays on the call before
+                # it, as the reading the turn files does (``window_reading``
+                # above moves on the same terms). The cost is the turn's, a
+                # flow, and moves on regardless. With no reading to keep, the
+                # branch below fills the sink: an answered turn sends it whole.
+                usage_sink["cost_usd"] = spend.cost_usd
+                usage_sink["cost_missing_calls"] = spend.cost_missing_calls
+            elif usage_sink is not None and response.usage:
                 # An explicitly configured window always wins over the live
                 # table -- that is what setting it means. Otherwise the live
                 # window from the model's provider table (e.g. OpenRouter,
@@ -1225,19 +1803,15 @@ class TurnPathMixin:
             # a call that did no work.
             cls_ = response.error_classification
             refused = response.finish_reason == "error" and cls_ is not None
-            retry_model = call_model or effective_model
+            retry_model = call_model or active_model
             if refused and cls_.should_compress:
-                shrunk = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.OVERFLOW, state=window, model=retry_model
-                )
+                shrunk = await _shrink(WindowPressure.OVERFLOW, retry_model)
                 messages = shrunk.messages
                 if shrunk.changed:
                     iteration -= 1
                     continue
             if refused and cls_.should_drop_tool_images:
-                demoted = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.TOOL_IMAGES_REFUSED, state=window, model=retry_model
-                )
+                demoted = await _shrink(WindowPressure.TOOL_IMAGES_REFUSED, retry_model)
                 messages = demoted.messages
                 if demoted.changed:
                     # Cached so the rest of the process stops paying for the
@@ -1247,15 +1821,26 @@ class TurnPathMixin:
                     iteration -= 1
                     continue
             if refused and cls_.strip_images:
-                withdrawn = await self.harness.memory.shrink(
-                    messages, pressure=WindowPressure.IMAGES_TOO_LARGE, state=window, model=retry_model
-                )
+                withdrawn = await _shrink(WindowPressure.IMAGES_TOO_LARGE, retry_model)
                 messages = withdrawn.messages
                 if withdrawn.changed:
                     iteration -= 1
                     continue
 
             if response.has_tool_calls:
+                # A reply that does something ends the run of empty ones, and a
+                # cut answer the model went on to act on is no longer the start of
+                # the one it gives after the tools, which starts with no
+                # continuation of its own. It is what this step said beside its
+                # call, which the reader saw, so the call's row keeps it, as it came:
+                # joined, it is what one uncut call would have said.
+                said_beside = (
+                    ("".join(recovery.parts) + (response.content or "")) if recovery.parts else response.content
+                )
+                recovery.empty_streak.clear()
+                recovery.parts.clear()
+                carried_gate = None
+                recovery.step_asks.clear()
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
                     hook_ctx.response = response
@@ -1269,6 +1854,7 @@ class TurnPathMixin:
                         # leaves dangling calls that strict providers reject.
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
+                        _stamp_context_used(messages, response)
                         break
                 # Blocking a call is handled where the call is: the
                 # branch below refuses it and cancels the siblings the
@@ -1303,12 +1889,13 @@ class TurnPathMixin:
                 tool_call_dicts = [openai_tool_call(tc) for tc in response.tool_calls]
                 messages = self.context.add_assistant_message(
                     messages,
-                    response.content,
+                    said_beside,
                     tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
+                _stamp_context_used(messages, response)
 
                 for tool_call_index, tool_call in enumerate(response.tool_calls):
                     tools_used.append(tool_call.name)
@@ -1374,6 +1961,9 @@ class TurnPathMixin:
                         if stalled_verdict is NoProgressAction.END_TURN:
                             stalled_tool = tool_call.name
                     else:
+                        from raven.agent.subagent.delegate import current_delegate
+
+                        table_before = current_delegate()
                         result = await self.tools.execute(
                             tool_call.name, tool_call.arguments, run_meta=tool_call.run_meta
                         )
@@ -1386,20 +1976,44 @@ class TurnPathMixin:
                             watch_state,
                             tool_call.name,
                             tool_call.arguments,
-                            _scrubbed_result(tool_call.arguments, str(result)),
+                            _scrubbed_result(
+                                tool_call.arguments, str(result), agent_output=getattr(result, "agent_output", False)
+                            ),
                             watch_request,
-                            reasoning_effort=policy.reasoning_effort,
+                            reasoning_effort=turn_effort,
                         )
+                        # A call that bound a Worker Table (load_playbook) moved the
+                        # dispatch enums under an identity assembled before it.
+                        if (table := current_delegate()) and table is not table_before:
+                            from raven.context_engine.segments import render
+
+                            watch_note += render.worker_table_note(
+                                render.live_dispatch_tools(self.tools.get_definitions)
+                            )
+                        from raven.context_engine.segments import render
+
+                        # Read off the tool the call reached, as take_metadata is: through
+                        # tool_call, the only route to a run_subagent_dag the fold hides,
+                        # a dispatch's receipt comes back under tool_call's name.
+                        called = self.tools.get(tool_call.name)
+                        reached = called.metadata_owner(tool_call.arguments or {}) if called is not None else None
+                        if reached is not None and reached.name in render.DISPATCH_TOOLS:
+                            channel = (session_key or "").partition(":")[0]
+                            watch_note += render.reply_rules_note(
+                                board_shown=render.board_on_page(self._task_board_config.enabled, channel, surface)
+                            )
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
                     # model text; the UI preview prefers the display string.
-                    # Scrubbed before anything reads it -- the log line, the UI
-                    # event and the model message alike -- so a key a command
-                    # printed reaches none of them.
-                    model_text = _scrubbed_result(tool_call.arguments, str(result))
+                    agent_output = getattr(result, "agent_output", False)
+                    model_text = _scrubbed_result(tool_call.arguments, str(result), agent_output=agent_output)
                     display_text = getattr(result, "display_text", None)
-                    display_src = _scrubbed_result(tool_call.arguments, display_text) if display_text else model_text
+                    display_src = (
+                        _scrubbed_result(tool_call.arguments, display_text, agent_output=agent_output)
+                        if display_text
+                        else model_text
+                    )
                     # The log stays one line; the UI event keeps newlines so a
                     # tool that reports several items (e.g. ask_user's
                     # question -> answer pairs) renders one row each.
@@ -1410,13 +2024,24 @@ class TurnPathMixin:
                     # reader to guess the rest. The cap is what a card can show
                     # without becoming a file viewer, not what a row can.
                     preview = display_src[:_TOOL_PREVIEW_MAX_CHARS]
-                    logger.info(
+                    logger.bind(agent_output=agent_output).info(
                         "Tool result: {} duration={}ms result={}",
                         tool_call.name,
                         duration_ms,
                         preview.replace("\n", " ")[:200],
                     )
                     tool_metadata = self.tools.take_metadata(tool_call.name, tool_call.arguments)
+                    if agent_output:
+                        # Overwritten, not merged: the key is derived from the
+                        # result's own provenance and the spec it ran under, and
+                        # a tool answering its own ``take_metadata`` with a
+                        # different value is answering about the payload it
+                        # hands the UI, not about whose words the result holds.
+                        # Merging would let a tool's own dict unscrub the
+                        # preview; the derivation stays the only writer.
+                        tool_metadata = {**(tool_metadata or {}), "agent_output": True}
+                    elif isinstance(tool_metadata, dict) and "agent_output" in tool_metadata:
+                        tool_metadata = {key: value for key, value in tool_metadata.items() if key != "agent_output"}
                     # What the tool saw go, plus what this turn wrote and can no
                     # longer find. Settled before this call's own write is noted,
                     # so the file it just wrote is not stat'ed to say it exists.
@@ -1455,17 +2080,26 @@ class TurnPathMixin:
                     # misses the whole class (builtin guides in particular).
                     if tool_call.name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
                         await self._report_skill_read(session_key or "", tool_call.name, tool_call.arguments)
-                    result_blocks = _scrubbed_blocks(tool_call.arguments, getattr(result, "blocks", None))
+                    result_blocks = _scrubbed_blocks(
+                        tool_call.arguments, getattr(result, "blocks", None), agent_output=agent_output
+                    )
                     model_text, blocks, attach_blocks = self._route_result_images(
-                        model_text, result_blocks, call_model or effective_model
+                        model_text, result_blocks, call_model or active_model
                     )
                     # Provenance for the pictures, taken here where the tool, the
                     # round and the captions are all still in one place. The
                     # window reads it back when it withdraws them.
                     sources = image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
+                    provenance = {"agent_output": True} if agent_output else {}
                     if blocks:
                         messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, blocks, trusted_note=watch_note
+                            messages,
+                            tool_call.id,
+                            tool_call.name,
+                            model_text,
+                            blocks,
+                            trusted_note=watch_note,
+                            **provenance,
                         )
                         if sources:
                             messages[-1][IMAGE_SOURCES_KEY] = sources
@@ -1473,7 +2107,7 @@ class TurnPathMixin:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
                         messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, trusted_note=watch_note
+                            messages, tool_call.id, tool_call.name, model_text, trusted_note=watch_note, **provenance
                         )
                     if messages:
                         # Dispatch to result, on the entry that answers the call.
@@ -1658,6 +2292,18 @@ class TurnPathMixin:
                 # Don't persist error responses to session history — they can
                 # poison the context and cause permanent 400 loops.
                 if response.finish_reason == "error":
+                    if recovery.parts:
+                        # The continuation of a cut answer failed. The reader holds the answer so far, and a
+                        # wait or another model would only ask for more of it again, so the turn ends here as
+                        # an exhausted continuation does: what streamed, said to be partial, and no failure.
+                        logger.warning(
+                            "empty-recovery: the continuation of a cut answer failed; ending the turn on the "
+                            "{} chars that streamed: {}",
+                            sum(len(part) for part in recovery.parts),
+                            (clean or "")[:160],
+                        )
+                        final_content = await _end_on_the_partial(response)
+                        break
                     # The provider's ladder is seconds long and has already run. A
                     # gateway serving error pages for a few minutes outlasts it, and
                     # ending the turn here threw away an hour of work on a 40-second
@@ -1667,6 +2313,28 @@ class TurnPathMixin:
                     verdict = response.error_classification
                     if verdict is None and (classify := getattr(self.provider, "classify_error", None)) is not None:
                         verdict = classify(content=clean or None)
+                    # A streamed call whose error came back as a response goes to the
+                    # next fallback model before the turn waits. That is every failure
+                    # that arrives without an exception, and a raised one whose recovery
+                    # is the caller's and that came before any output -- a stall (a
+                    # first-byte or idle timeout) or a ``strip_images`` verdict
+                    # (``stream_llm_call``). Any other error the provider raises never
+                    # reaches here: the stream reconnects and waits out this same ladder
+                    # itself (``retry_delays``), then the error fails the turn with no
+                    # fallback model tried. A plain call walks ``[model, *fallbacks]``
+                    # inside the provider's own retry layer, and has already been
+                    # through it by the time it comes back an error.
+                    if streamed_call and fallbacks_left and verdict is not None and verdict.should_fallback:
+                        previous = _switch_to_next_model()
+                        logger.warning(
+                            "LLM error [{}] on {}; trying fallback model {}: {}",
+                            verdict.category,
+                            previous,
+                            active_model,
+                            (clean or "")[:160],
+                        )
+                        iteration -= 1  # the failed call did no work; don't bill it
+                        continue
                     ladder = self._recovery_limits.llm_error_retry_delays
                     if verdict is not None and verdict.retryable and error_waits < len(ladder):
                         delay = ladder[error_waits]
@@ -1679,23 +2347,7 @@ class TurnPathMixin:
                             len(ladder),
                             (clean or "")[:160],
                         )
-                        if on_notice is not None:
-                            # Only the category: the vendor's own body can carry
-                            # a masked key and an account URL, and this text is
-                            # read by everyone watching the turn.
-                            from raven.spine.events import NoticeKind as _NoticeKind
-
-                            # Staged like the episode boundary: a bounded outlet
-                            # queue with a wedged worker behind it would park the
-                            # turn here for the whole ladder, and the notice is a
-                            # status hint -- losing one is a silent wait, not a
-                            # turn lost.
-                            await first_call.stage(
-                                "the retry-notice emit",
-                                on_notice(_NoticeKind.LLM_RETRY, verdict.category),
-                                iteration=iteration,
-                                fallback=None,
-                            )
+                        await _announce_wait(verdict.category)
                         iteration -= 1  # the failed call did no work; don't bill it
                         await asyncio.sleep(delay)
                         continue
@@ -1703,33 +2355,99 @@ class TurnPathMixin:
                     final_content = clean or "Sorry, I encountered an error calling the AI model."
                     status = "error"
                     error_detail = _llm_failure_detail(clean, verdict)
+                    error_full = response_failure_text(clean, response.call_record)
+                    _stamp_context_used_on_kept(messages, response)
                     break
 
-                # Empty-response recovery: an empty assistant turn would
-                # otherwise end here as a turn with no answer, which fails.
-                # Try to recover before giving up. Synthetic scaffolding is
-                # marked ``_recovery_synthetic`` and stripped before persistence
-                # / extraction so it can't poison future context.
+                if recovery.parts:
+                    # A cut answer that, joined to what continued it, says nothing but a thought is
+                    # the reply an uncut stream would have given: it is read as that one -- the
+                    # thinking-only moves, then the failure -- rather than as an answer with no text.
+                    so_far = "".join(recovery.parts)
+                    joins = leaves_think_block_open(so_far) or clean
+                    whole = (so_far + (response.content or "")) if joins else so_far
+                    if not self._strip_think(whole):
+                        response = replace(response, content=whole)
+                        clean = None
+                        recovery.parts.clear()
+                        carried_gate = None
+
+                if not (clean or "").strip():
+                    _stamp_context_used_on_kept(messages, response)
+
+                # Empty-response recovery. A reply with no tool call is read for
+                # what it is (``reply_kind``) and ``decide`` names the move; an
+                # empty assistant turn would otherwise end here as a turn with no
+                # answer, which fails. Synthetic scaffolding is marked
+                # ``_recovery_synthetic`` and stripped before persistence /
+                # extraction so it can't poison future context.
+                limits = self._recovery_limits
+                kind = reply_kind(
+                    response,
+                    clean,
+                    origin=origin,
+                    prev_had_tool_calls=prev_had_tool_calls,
+                    streamed=streamed_call,
+                    reply_awaited=reply_awaited,
+                    silence_taught=silence_taught,
+                )
+                if kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY):
+                    recovery.empty_streak.append(EmptyAttempt.of(response, call_model))
+                else:
+                    recovery.empty_streak.clear()
                 # Asked of the provider for the model this call went to: a
                 # prefill-refusing vendor (Anthropic with thinking on) must never
                 # be handed a request ending on an assistant message.
                 supports_prefill = getattr(self.provider, "supports_assistant_prefill", None)
-                action = classify_empty_response(
-                    response,
-                    clean,
-                    prev_had_tool_calls=prev_had_tool_calls,
-                    nudges_done=post_tool_nudges,
-                    prefill_retries=prefill_retries,
-                    empty_retries=empty_retries,
-                    limits=self._recovery_limits,
-                    prefill_supported=supports_prefill is None or supports_prefill(call_model),
+                resends_allowed = resend_budget(response, limits)
+                # Asked of the provider, not of the ladder: two labels can be one
+                # request. ``reasoning_wire_keys`` says what a rung would actually
+                # send, so a rung the wire cannot tell apart from the one that
+                # just came back thinking is skipped instead of paid for again.
+                next_rung = (
+                    next_step_down(
+                        step_down_effort or call_reasoning_effort,
+                        _reasoning_wire_keys(self.provider, call_model),
+                        used=recovery.rungs_used,
+                    )
+                    if kind is ReplyKind.THINKING_ONLY
+                    else None
                 )
+                action = decide(
+                    kind,
+                    recovery,
+                    limits,
+                    prefill_supported=supports_prefill is None or supports_prefill(call_model),
+                    thinking_to_refeed=has_thinking_to_refeed(response),
+                    next_rung=next_rung,
+                    fallback_left=bool(fallbacks_left),
+                    resend_budget=resends_allowed,
+                )
+                answered_by_tool = False
+                if action in _GIVEN_UP_ONCE_ANSWERED:
+                    turn_rows = turn_log.messages() if turn_log is not None else messages
+                    answered_by_tool = self._answered_by_tool(turn_rows[turn_start_idx:])
+                if answered_by_tool:
+                    # The reader already has the answer, sent or delivered by a tool. A
+                    # reply the instant moves (prefill, nudge, continuation) did not
+                    # mend is not worth a backed-off re-ask of the same step, a model
+                    # switch, or a verdict on a turn that answered: it ends answered,
+                    # with no text of its own, as it did before recovery could tell
+                    # the difference.
+                    logger.info(
+                        "empty-recovery: a tool already answered this turn; ending it on a {} reply instead of {}",
+                        kind.name,
+                        action.name,
+                    )
+                    action = RecoveryAction.COMPLETE
+                if action in _ASKS_AGAIN:
+                    recovery.step_asks[kind] += 1
                 if action is RecoveryAction.PREFILL:
-                    prefill_retries += 1
+                    recovery.prefills += 1
                     logger.warning(
                         "empty-recovery: thinking-only prefill {}/{}",
-                        prefill_retries,
-                        self._recovery_limits.thinking_prefill_max_retries,
+                        recovery.prefills,
+                        limits.thinking_prefill_max_retries,
                     )
                     # Re-feed the model its own reasoning (not stripped) so it
                     # continues into the body. Marked synthetic → dropped before
@@ -1748,7 +2466,7 @@ class TurnPathMixin:
                     cut_continuation = response.finish_reason == "length"
                     continue
                 if action is RecoveryAction.NUDGE:
-                    post_tool_nudges += 1
+                    recovery.nudges += 1
                     logger.warning("empty-recovery: post-tool empty nudge")
                     # The (empty) assistant must sit between the tool result and
                     # the nudge — a bare tool→user sequence is a 400 on most APIs.
@@ -1758,69 +2476,120 @@ class TurnPathMixin:
                     prev_had_tool_calls = False
                     continue
                 if action is RecoveryAction.RETRY:
-                    # Re-sent unchanged, this was the same bytes, so each retry
-                    # was a guaranteed repeat: measured, three of them behind
-                    # three truncations at exactly the output ceiling. An empty
-                    # body with reasoning behind it is a call whose thinking
-                    # spent the ceiling before the answer began, so what has to
-                    # change is how much of the ceiling thinking may take. The
-                    # descent rides the loop's existing per-call override lane
-                    # (``pending_gen_overrides``, which a hook rollback uses to
-                    # re-sample one call) rather than a second mechanism beside
-                    # it, and it is spent on the retry only -- a call that
-                    # answers leaves the turn's own effort standing.
-                    # Asked of the provider, not of the ladder: two labels can
-                    # be one request. ``reasoning_wire_keys`` says what a rung
-                    # would actually send, so a rung the wire cannot tell apart
-                    # from this one is skipped instead of paid for again.
-                    lowered = lower_reasoning_effort(
-                        empty_retry_effort or call_reasoning_effort,
-                        _reasoning_wire_keys(self.provider, effective_model),
+                    # Nothing in a plain empty reply says what to change, and each
+                    # guess made here once -- a lower effort, down to a `minimal`
+                    # that Codex refuses with a 400 -- was a request some provider
+                    # rejected or repeated at full price. The request goes back as
+                    # it was, after a wait: a backend that answered nothing is
+                    # given a moment, and this is not a fresh step, so no
+                    # iteration is billed.
+                    recovery.resends += 1
+                    delay = empty_retry_delay(recovery.resends)
+                    logger.warning(
+                        "empty-recovery: resending the request unchanged {}/{} in {:.1f}s",
+                        recovery.resends,
+                        resends_allowed,
+                        delay,
                     )
-                    if lowered is None:
-                        # The budget is not the only bound: a retry with nothing
-                        # left to change is the failure again at full price. Ending
-                        # here takes the FAIL exit below rather than falling into
-                        # the completion path -- running out of rungs is the same
-                        # outcome as running out of budget, and the completion path
-                        # is what filed a dead turn as a finished one.
-                        logger.warning(
-                            "empty-recovery: not retrying at reasoning_effort {} -- no rung left to change",
-                            empty_retry_effort or call_reasoning_effort or "unstated",
-                        )
-                        action = RecoveryAction.FAIL
-                    else:
-                        empty_retries += 1
-                        empty_retry_effort = lowered
-                        pending_gen_overrides = {"reasoning_effort": lowered}
-                        logger.warning(
-                            "empty-recovery: plain empty retry {}/{} (reasoning_effort {} -> {})",
-                            empty_retries,
-                            self._recovery_limits.empty_content_max_retries,
-                            call_reasoning_effort or "unstated",
-                            lowered,
-                        )
-                        if response.truncated and not output_limit_told:
-                            # The descent above changes how much thinking the next
-                            # call may buy, which is nothing to a model that does no
-                            # reasoning and nothing to a write whose payload is the
-                            # thing that overran. Neither case leaves a tool call for
-                            # `Tool.truncation_hint` to ride, so this is the only
-                            # channel that reaches the model at all.
-                            # Read off `response.truncated`, not `finish_reason`: the
-                            # contract has one field for "stopped at the ceiling" and
-                            # says an upstream may claim success instead.
-                            # Same assistant-then-user shape as the nudge above, for
-                            # the same reason: a bare tool->user pair is a 400 on most
-                            # APIs, and the prefill may have left an assistant last.
-                            output_limit_told = True
-                            messages = self.context.add_assistant_message(messages, "(empty)")
-                            messages[-1]["_recovery_synthetic"] = True
-                            messages.append(
-                                {"role": "user", "content": OUTPUT_LIMIT_NUDGE, "_recovery_synthetic": True}
-                            )
-                        prev_had_tool_calls = False
-                        continue
+                    pending_gen_overrides = call_overrides
+                    if streamed_call and kind is ReplyKind.EMPTY and not unstreamed_spent:
+                        unstreamed_next = unstreamed_spent = True
+                    await _announce_wait("empty_reply")
+                    iteration -= 1
+                    await asyncio.sleep(delay)
+                    continue
+                if action is RecoveryAction.STEP_DOWN:
+                    # A thinking-only reply is a call whose thinking spent the output
+                    # ceiling before the answer began (measured: five in a row, each
+                    # cut at exactly the ceiling), so the request that has to change
+                    # is the one saying how much of it thinking may take. The descent
+                    # rides the loop's per-call override lane (``pending_gen_overrides``,
+                    # which a hook rollback uses to re-sample one call) and is spent on
+                    # this re-ask only -- a call that answers leaves the turn's own
+                    # effort standing. Each rung is asked for once.
+                    recovery.rungs_used.add(next_rung)
+                    step_down_effort = next_rung
+                    delay = empty_retry_delay(len(recovery.rungs_used))
+                    logger.warning(
+                        "empty-recovery: thinking-only reply, asking again at reasoning_effort {} (was {}) in {:.1f}s",
+                        next_rung,
+                        call_reasoning_effort or "unstated",
+                        delay,
+                    )
+                    # The prefills were the continuation of a thought that is being
+                    # given up: left in, the request would end on an assistant
+                    # message, which a prefill-refusing provider rejects.
+                    _drop_trailing_prefills(messages)
+                    pending_gen_overrides = {"reasoning_effort": next_rung}
+                    await _announce_wait("thinking_only")
+                    iteration -= 1
+                    await asyncio.sleep(delay)
+                    continue
+                if action is RecoveryAction.FALLBACK:
+                    # The same step asked again, of the next model, so no iteration is billed.
+                    previous = _switch_to_next_model()
+                    # A refusal is switched on once: the next model's own refusal is
+                    # the upstream's verdict again, and ends the turn.
+                    recovery.refusal_fell_back = recovery.refusal_fell_back or kind is ReplyKind.REFUSAL
+                    logger.warning(
+                        "empty-recovery: {} reply on {}; trying fallback model {}", kind.name, previous, active_model
+                    )
+                    iteration -= 1
+                    continue
+                if action is RecoveryAction.CONTINUE and kind is ReplyKind.NETWORK_CUT:
+                    # The stream broke mid-answer. What arrived is kept and the model
+                    # is asked to go on from it. Kept as it came, think tags and the
+                    # space at the cut included: a cut can split a think block or two
+                    # words, and the reply is read once, whole.
+                    recovery.continuations += 1
+                    recovery.parts.append(response.content or "")
+                    logger.warning(
+                        "empty-recovery: stream cut mid-answer after {} chars; continuation {}/{}",
+                        len(clean or ""),
+                        recovery.continuations,
+                        MAX_CONTINUATIONS,
+                    )
+                    # What streamed is the answer so far, and a reader whose deltas
+                    # were held back for a hook is shown it before the rest follows --
+                    # unless it may still be a marker: the silence gate keeps holding it,
+                    # and the continuation's deltas join it there, until the reply the
+                    # turn ends on is read.
+                    if draft is not None:
+                        await draft.release()
+                    if silence_gate is not None:
+                        silence_gate.carry()
+                        carried_gate = silence_gate
+                    messages = self.context.add_assistant_message(messages, clean)
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": NETWORK_CUT_CONTINUATION, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    merge_episode = True
+                    continue
+                if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
+                    # Cut at the ceiling with nothing in it: the model is told so
+                    # and given more room. Effort is left alone -- there was no
+                    # reasoning to blame. The ceiling doubles per continuation from
+                    # the one the first cut call carried; the call holds it to the
+                    # model's own output ceiling and to the room its prompt leaves
+                    # in the window.
+                    recovery.continuations += 1
+                    if recovery.max_tokens_base is None:
+                        recovery.max_tokens_base = response.max_tokens
+                    if recovery.max_tokens_base:
+                        pending_gen_overrides = {"max_tokens": recovery.max_tokens_base * 2**recovery.continuations}
+                        continuation_overrides = pending_gen_overrides
+                    logger.warning(
+                        "empty-recovery: reply cut at the output ceiling with nothing in it; continuation {}/{} (max_tokens {})",
+                        recovery.continuations,
+                        MAX_CONTINUATIONS,
+                        (pending_gen_overrides or {}).get("max_tokens", "unchanged"),
+                    )
+                    # Same assistant-then-user shape as the nudge, for the same reason.
+                    messages = self.context.add_assistant_message(messages, "(empty)")
+                    messages[-1]["_recovery_synthetic"] = True
+                    messages.append({"role": "user", "content": OUTPUT_LIMIT_CONTINUATION, "_recovery_synthetic": True})
+                    prev_had_tool_calls = False
+                    continue
                 if action is RecoveryAction.FAIL:
                     # Same shape as the provider-error exit above, because it is
                     # the same kind of outcome: the turn produced nothing and the
@@ -1831,41 +2600,69 @@ class TurnPathMixin:
                     # failure a cron record and a trajectory reader keep. It is
                     # not about ACP's stop reason: that answers ``end_turn`` with
                     # the failure as text for every failed turn by design.
-                    # The counts go into the detail, because the reader who has
-                    # to decide whether to ask again is a person or a judging
-                    # model, and neither can see this log line.
-                    attempts = 1 + prefill_retries + post_tool_nudges + empty_retries
+                    # The words are per kind, because the reader who has to
+                    # decide what to do next is a person or a judging model, and
+                    # neither can see this log line.
                     logger.error(
-                        "empty-recovery: no content after {} attempt(s) "
-                        "(prefill {}, nudge {}, retry {}); ending the turn as an error",
-                        attempts,
-                        prefill_retries,
-                        post_tool_nudges,
-                        empty_retries,
+                        "empty-recovery: {} reply after {} prefill(s), {} nudge(s), {} resend(s), "
+                        "{} continuation(s); ending the turn as an error",
+                        kind.name,
+                        recovery.prefills,
+                        recovery.nudges,
+                        recovery.resends,
+                        recovery.continuations,
                     )
-                    error_detail = (
-                        f"The model returned no content on {attempts} attempt(s) "
-                        f"(prefill {prefill_retries}, post-tool nudge {post_tool_nudges}, "
-                        f"plain retry {empty_retries})."
-                    )
-                    # Kept, and read only where a tool has already answered: the
-                    # caller fails an unanswered turn on ``error`` above instead
-                    # of delivering this.
-                    final_content = (
-                        f"{error_detail} This turn's empty-response recovery is spent; "
-                        "the turn produced no answer of its own."
-                    )
+                    error_full = _recovery_failure_text(kind, response, clean, recovery)
+                    error_detail = bound_failure_text(error_full)
+                    no_output = kind in (ReplyKind.EMPTY, ReplyKind.POST_TOOL_EMPTY)
+                    # Kept as the returned content too. Nothing delivers it: the caller fails
+                    # the turn on ``error``, and a turn the message tool had answered never
+                    # reaches this branch.
+                    final_content = error_detail
                     status = "error"
                     break
+
+                # A continuation that came back a marker on its own has nothing to add.
+                own_marker = action is RecoveryAction.SILENT
+                if recovery.parts:
+                    # The answer is what streamed across every call, joined, read as a reply with
+                    # no cut is: closed think blocks out of the whole, since a cut can split one,
+                    # and one never closed left in as text. A
+                    # continuation inside a block the cut left open is read only that way, as the
+                    # rest of a thought and not a reply of its own. Otherwise one that came back
+                    # empty, as think-tag debris or as a marker leaves the partial as it was.
+                    so_far = "".join(recovery.parts)
+                    in_a_thought = leaves_think_block_open(so_far)
+                    own_marker = own_marker and not in_a_thought
+                    adds = (response.content or "") if (in_a_thought or clean) and not own_marker else ""
+                    clean = self._strip_think(so_far + adds) or ""
+                # The reply the turn ends on is read for silence once it is whole: a cut is
+                # continued rather than judged on its fragment, so after one -- or when one can
+                # no longer be continued -- the joined text is what may be the marker.
+                if recovery.parts or kind is ReplyKind.NETWORK_CUT:
+                    ends_silent = not reply_awaited and is_silence(clean, origin, taught=silence_taught)
+                    if own_marker and not ends_silent and not reply_awaited:
+                        # Dropping a continuation that is only the marker rests on the reader already
+                        # holding what streamed, which a turn holding its whole call never showed. So
+                        # the marker is read with what came before it, on its own line, as the same
+                        # reply uncut would be; only the loose rule can find it there.
+                        with_marker = clean + "\n" + (response.content or "").strip()
+                        if is_silence(with_marker, origin, taught=silence_taught):
+                            clean, ends_silent = with_marker, True
+                else:
+                    ends_silent = action is RecoveryAction.SILENT
+                dropped_marker = own_marker and not ends_silent
 
                 # Before the text is persisted, so a short-circuit replaces it
                 # without leaving the replaced draft in history and a rollback
                 # discards-and-re-samples it. The stream is held to match: a
                 # rollback pops history, and only the draft gate can keep the
-                # reader from having seen what history no longer has.
+                # reader from having seen what history no longer has. The hooks
+                # read the reply the turn keeps: after a continuation, the whole
+                # answer rather than the last call's fragment of it.
                 if hook_ctx is not None:
                     hook_ctx.messages = messages
-                    hook_ctx.response = response
+                    hook_ctx.response = replace(response, content=clean) if recovery.parts else response
                     decision = await self.hooks.after_iteration(hook_ctx)
                     if _hook_rollback(decision):
                         if draft is not None:
@@ -1873,12 +2670,28 @@ class TurnPathMixin:
                         continue
                     if draft is not None:
                         await draft.release()
+                    await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
                     _land_hook_note(decision)
                     if decision.short_circuit_result is not None:
                         final_content = str(decision.short_circuit_result)
                         messages = self.context.add_assistant_message(messages, final_content)
+                        _stamp_context_used(messages, response)
                         break
+                else:
+                    await _settle_silence(silence_gate, silent=ends_silent, dropped_marker=dropped_marker)
 
+                if kind is ReplyKind.NETWORK_CUT and action is RecoveryAction.COMPLETE and not ends_silent:
+                    # Cut, and nothing will ask the model to go on: the continuations are
+                    # spent, or recovery is switched off, which is the same with none made.
+                    # The reader gets what there is, and the note says it is not the whole
+                    # of it. Pushed after the hooks above, so a rolled-back reply never
+                    # carries it.
+                    note = "\n\n" + PARTIAL_STREAM_NOTE
+                    clean += note
+                    status = "interrupted"
+                    sink = draft or on_token_delta
+                    if sink is not None:
+                        await sink(note)
                 messages = self.context.add_assistant_message(
                     messages,
                     clean,
@@ -1886,7 +2699,17 @@ class TurnPathMixin:
                     thinking_blocks=response.thinking_blocks,
                 )
                 _stamp_reasoning_ms(messages, response)
+                _stamp_context_used(messages, response)
+                # Kept in the history, as the row it is, and filed as a marker so a
+                # reload does not read it as an answer.
+                silent = ends_silent
+                if silent:
+                    messages[-1][_SILENT_KEY] = True
                 final_content = clean
+                # Reachable with no text only when recovery is switched off, or
+                # when the message tool had already answered.
+                no_output = not clean
+                ended_answered = answered_by_tool
                 break
 
         # A row recorded while a tool ran rides the next iteration's flush,
@@ -1898,9 +2721,27 @@ class TurnPathMixin:
         if leftover is not None and (lost := leftover.pending_rows()):
             logger.info("question autofill: {} row(s) ended the turn unwritten", len(lost))
 
-        if final_content is None and (
-            stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock"
-        ):
+        exhausted = (
+            final_content is None
+            and not ended_answered
+            and (stalled_tool is not None or iteration >= iteration_cap or stopped_by == "wall_clock")
+        )
+        # Assigned, not latched, as ``output_limited`` is: a rerun's own run decides.
+        if hook_metadata is not None:
+            hook_metadata["budget_stopped"] = exhausted
+        if exhausted and recovery.parts:
+            # The turn ran out -- of iterations or of time -- with a cut answer waiting on its
+            # continuation, which there is no room left to ask for. A wrap-up would stream onto
+            # the partial the reader already holds, so the partial is the answer.
+            stopped_by = "stalled_tool" if stalled_tool is not None else stopped_by or "iteration_cap"
+            logger.warning(
+                "Turn stopped ({}) with a cut answer awaiting its continuation; ending on what streamed", stopped_by
+            )
+            final_content = await _end_on_the_partial(response)
+            # The budget stopped it, so it is interrupted even when its reply is the marker,
+            # as a wrap-up that is one is.
+            status = "interrupted"
+        elif exhausted:
             if stalled_tool is not None:
                 stopped_by = "stalled_tool"
                 logger.warning("Turn stopped on a repeating `{}`; synthesizing final answer", stalled_tool)
@@ -1917,15 +2758,25 @@ class TurnPathMixin:
             #      or not, synthesize a best-effort wrap-up with tools disabled
             #      (and one format repair if requested) instead of a
             #      canned apology. Synthesis falls back to a static message
-            #      internally if the call fails, so the turn is never silent.
+            #      internally if the call fails, so the turn never ends empty.
             status = "interrupted"
+            # The wrap-up is the turn's last reply, so it may be a Silence Marker as an
+            # answer may: its stream is held back as the answering call's is, and a
+            # marker ends the turn silent.
+            # The wrap-up streams into the last call's step, after the narration that step keeps.
+            step_shown.clear()
+            wrap_up_gate = (
+                SilenceGate(_shown, hold_all=reads_loose_silence(origin, taught=silence_taught))
+                if on_token_delta is not None and not reply_awaited
+                else None
+            )
             final_content = await self._synthesize_final_on_exhaustion(
                 messages,
-                effective_model,
-                fallback_models,
-                on_token_delta=on_token_delta,
+                active_model,
+                list(fallbacks_left),
+                on_token_delta=wrap_up_gate or on_token_delta,
                 on_reasoning_delta=on_reasoning_delta,
-                reasoning_effort=policy.reasoning_effort,
+                reasoning_effort=turn_effort,
                 prompt=_MAX_ITER_SYNTHESIS_PROMPT if stalled_tool is None else _STALLED_SYNTHESIS_PROMPT,
                 fallback=(
                     _STALLED_STATIC_FALLBACK.format(tool=stalled_tool)
@@ -1936,6 +2787,8 @@ class TurnPathMixin:
                 ),
                 synthesis_policy=turn_synthesis(turn_meta),
             )
+            silent = not reply_awaited and is_silence(final_content, origin, taught=silence_taught)
+            await _settle_silence(wrap_up_gate, silent=silent)
             # Persist the wrap-up into history like any normal final reply.
             # Persistence downstream reads only the returned ``messages`` list,
             # so without this the synthesized answer reaches the user via the
@@ -1945,6 +2798,8 @@ class TurnPathMixin:
             # reply lands here.
             if final_content:
                 messages = self.context.add_assistant_message(messages, final_content)
+                if silent:
+                    messages[-1][_SILENT_KEY] = True
 
         # Drop transient empty-recovery scaffolding before persistence /
         # extraction / return: empty recovery marks synthetic nudge/prefill
@@ -1994,7 +2849,7 @@ class TurnPathMixin:
         # can come back differently the second time -- the checkpoint and the persist
         # between here and there are seconds a clock can cross. A loop nobody
         # budgeted a rerun for asks no one and salvages as it always did.
-        rerun_coming = rerun_pending is not None and rerun_pending(final_content, messages, status)
+        rerun_coming = rerun_pending is not None and rerun_pending(final_content, log.messages(), status)
         if hook_ctx is not None and answerless and not rerun_coming:
             hook_ctx.messages = messages
             hook_ctx.response = None
@@ -2004,6 +2859,8 @@ class TurnPathMixin:
                 messages = self.context.add_assistant_message(messages, final_content)
                 hook_ctx.metadata["turn_end"]["salvaged"] = True
                 error_detail = None
+                error_full = None
+                no_output = False
 
         if any(any(m.get(k) for k in _TURN_TRANSIENT_KEYS) for m in messages):
             messages = [m for m in messages if not any(m.get(k) for k in _TURN_TRANSIENT_KEYS)]
@@ -2013,7 +2870,17 @@ class TurnPathMixin:
         # run from ``_process_message``); ``outcome.status`` is surfaced so that
         # pipeline can gate on completion.
 
-        outcome = LoopOutcome(status=status, error=error_detail)
+        outcome = LoopOutcome(
+            status=status,
+            error=error_detail,
+            error_full=error_full,
+            no_output=no_output,
+            silent=silent,
+            shown="".join(step_shown) if silent else "",
+            last_tools=last_tool_defs,
+            last_model=last_model,
+            last_effort=last_effort,
+        )
         checkpoint = self._turn_checkpoint()
         if checkpoint is not None:
             # Per-turn snapshot: one commit covering all of this turn's edits,
@@ -2053,16 +2920,27 @@ class TurnPathMixin:
         origin: Origin | None = None,
         drain: Drain | None = None,
         hook_sink: dict[str, str] | None = None,
+        silence: dict[str, bool | str] | None = None,
+        reply_awaited: bool = False,
     ) -> tuple[str | None, list[str]] | None:
         """Process a single turn request and return its reply.
 
         Returns ``(reply_content, media_paths)`` for a turn that produced an
-        outbound reply, or ``None`` for a silent turn (the message tool already
-        sent, or a hook short-circuit chose to return None). ``origin`` is the
+        outbound reply, or ``None`` when there is nothing to send (the message
+        tool already sent, a hook short-circuit chose to return None, or the
+        model ended the turn on a silence marker). ``origin`` is the
         spine TurnRequest's origin. ``hook_sink``, when given, receives under
         ``"appended"`` whatever the ``after_send`` chain added to the end of the
         reply: a streamed reply has already left as deltas by then, so the
-        caller has to send that tail itself.
+        caller has to send that tail itself. ``silence``, when given, receives
+        ``"silent": True`` for the last of those: a turn the model ended on a
+        marker, and that nothing replaced with a reply of its own -- and, when
+        that reply had streamed anything first, ``"shown"`` (``LoopOutcome.shown``).
+        It receives ``"delivered_files": True`` for a turn a tool handed the
+        reader files in: those went out with the call, so such a turn answered
+        whatever it ends on, and is never a Silent Turn.
+        ``reply_awaited`` keeps a turn whose caller waits on its text out of
+        the silence protocol (``_run_agent_loop``).
         """
         from raven.agent.hook import AgentHookContext
 
@@ -2072,6 +2950,9 @@ class TurnPathMixin:
         # stamped at turn END, so without this the whole turn shares one clock
         # read and a restored transcript cannot say how long the turn took.
         turn_received_at = self._now_fn().isoformat()
+        # Taken before any awaited work: this is the turn's own span, which the
+        # opening user entry is stored against.
+        turn_trace_id = _turn_trace_id()
 
         channel = req.source.channel
         sender_id = req.source.sender_id
@@ -2172,6 +3053,9 @@ class TurnPathMixin:
             session.clear()
             self.sessions.save(session)
             self.sessions.invalidate(session.key)
+            from raven.agent.task_board.service import reset_for
+
+            await reset_for(self.task_board, session.key, self.sessions.session_dir(session.key))
             return ("New session started.", [])
         if cmd == "/help":
             lines = [
@@ -2222,7 +3106,7 @@ class TurnPathMixin:
                     )
                     if _question:
                         _ts = _dt.now().isoformat()
-                        self._record_inbound(session, content, origin, _ts)
+                        self._record_inbound(session, content, origin, _ts, trace_id=turn_trace_id)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
                         session.pending_clarification = {
                             "original_message": content,
@@ -2270,7 +3154,7 @@ class TurnPathMixin:
                     if _question:
                         # Write the original request and the clarifying question into history to keep the conversation coherent.
                         _ts = _dt.now().isoformat()
-                        self._record_inbound(session, content, origin, _ts)
+                        self._record_inbound(session, content, origin, _ts, trace_id=turn_trace_id)
                         session.record({"role": "assistant", "content": _question, "timestamp": _ts})
 
                         # Save the pending state so the next message can resume it.
@@ -2286,7 +3170,9 @@ class TurnPathMixin:
                     # generate_question failed: skip silently and proceed
         # ── End personalization flow ─────────────────────────────────────────
 
-        self._set_tool_context(channel, chat_id, metadata.get("message_id"), session_key=key)
+        self._set_tool_context(
+            channel, chat_id, metadata.get("message_id"), session_key=key, surface=req.source.surface
+        )
         if message_tool := self.tools.get("message"):
             if isinstance(message_tool, MessageTool):
                 message_tool.start_turn()
@@ -2302,7 +3188,7 @@ class TurnPathMixin:
         # least context made the most expensive call. All that remains per turn is
         # telling the tool what the turn is about, so its listing can be ranked.
         if self._playbooks is not None:
-            self._playbooks.set_context(channel=channel, chat_id=chat_id, session_key=key)
+            self._playbooks.set_context(channel=channel, chat_id=chat_id, session_key=key, surface=req.source.surface)
             if (pb_tool := self.tools.get("load_playbook")) is not None and hasattr(pb_tool, "set_turn_message"):
                 pb_tool.set_turn_message(content)
 
@@ -2388,17 +3274,31 @@ class TurnPathMixin:
         # A session whose first turn is still running had nothing on disk at
         # all, so it was absent from every listing, and a reader who left the
         # page could not find their way back to the turn still running in it.
-        # Read prev_len first: everything below that slices "what this turn
-        # added" off the session counts from before this write.
-        prev_len = len(session.messages)
+        # Everything below that slices "what this turn added" off the session
+        # counts from this turn's own first entry. Counted after the save, not
+        # before it: a save can merge another writer's messages in ahead of the
+        # question, which it leaves last.
+        question_at = len(session.messages)
         self._save_turn(
             session,
             initial_messages,
             turn_start_idx,
             received_at=turn_received_at,
             inbound_original=inbound_original,
+            trace_id=turn_trace_id,
         )
+        question = session.messages[question_at:]
         self.sessions.save(session)
+        prev_len = len(session.messages) - len(question)
+
+        def _turn_start() -> int:
+            """Where this turn's entries start now; a later save may have merged more in ahead of them."""
+            if question:
+                for index in range(len(session.messages) - 1, -1, -1):
+                    if session.messages[index] is question[0]:
+                        return index
+            return min(prev_len, len(session.messages))
+
         # Where the three writes that close the turn start from. The question is
         # already filed, and filing it again would both double it and stamp the
         # turn's arrival clock onto the first message injected mid-turn.
@@ -2443,14 +3343,25 @@ class TurnPathMixin:
         # every attempt is this turn spending, and so is every sub-agent it
         # dispatches, which bills in from its own session by this key.
         spend = TurnSpend(key)
+        # The step-down rungs are asked for once a turn, and a rerun is the same
+        # turn: a set per attempt would pay for ``high`` and ``low`` again.
+        rungs_used: set[str] = set()
+
+        # The newest window a call of this turn measured, held across attempts.
+        # A turn that fails or is stopped after calls that each came back empty
+        # or as an error has filed no row of its own, and the question it would
+        # otherwise end on is already on disk, so its marker carries the reading.
+        reading: dict[str, int] = {}
 
         async def _attempt(seed: list[dict], attempt: int):
             pending.update(rerun=False, reasons=[])
-            # The list this attempt appends to, for the rescue paths below. A rerun
-            # runs on a list of its own, and a turn cancelled during one used to be
-            # saved from the first attempt's -- so a tool the reader watched run in
-            # the rerun, and its result, were not in what the cancel filed.
-            live["messages"] = seed
+            # The record this attempt persists from, for the rescue paths below as
+            # well as the healthy one. A rerun keeps a record of its own, and a turn
+            # cancelled during one used to be saved from the first attempt's -- so a
+            # tool the reader watched run in the rerun, and its result, were not in
+            # what the cancel filed. A record rather than the list the attempt
+            # appends to, because the window passes replace that list mid-turn.
+            live["log"] = TurnLog(seed, persist_from)
             return await self._run_agent_loop(
                 seed,
                 on_progress=on_progress,
@@ -2466,12 +3377,22 @@ class TurnPathMixin:
                 usage_sink=usage_sink,
                 drain=drain,
                 hook_metadata=turn_hook_meta,
-                session_history=session.messages[:prev_len],
+                session_history=session.messages[: _turn_start()],
                 origin=req.origin,
                 turn_started_at=turn_t0,
                 attempt=attempt,
                 rerun_pending=_rerun_pending,
                 spend=spend,
+                turn_log=live["log"],
+                rungs_used=rungs_used,
+                reply_awaited=reply_awaited,
+                window_reading=reading,
+                silence_taught=teaches_silence(content),
+                turn_start_idx=turn_start_idx,
+                # Read here, beside the model, because this is where the
+                # session is: the loop below is handed a key, not a record.
+                session_effort=session_effort_of(session.metadata),
+                surface=req.source.surface,
             )
 
         # Taken BEFORE the first attempt, because the loop appends to the list it is
@@ -2484,7 +3405,7 @@ class TurnPathMixin:
         retry_seed = [dict(m) for m in initial_messages] if retries_left else None
         turn_t0 = monotonic()
         pending: dict[str, Any] = {"rerun": False, "reasons": []}
-        live: dict[str, list[dict]] = {"messages": initial_messages}
+        live: dict[str, TurnLog] = {"log": TurnLog(initial_messages, persist_from)}
 
         def _seed_for_the_rerun(msgs: list[dict]) -> list[dict]:
             """The question again, plus whatever the reader said while the attempt ran.
@@ -2492,9 +3413,9 @@ class TurnPathMixin:
             The rerun exists to discard an attempt's research, and a correction typed
             mid-turn is not research: the loop took it off the inject queue, which will
             not offer it twice, so a seed rebuilt from the question alone silently
-            un-asks it. Read off the whole finished list rather than its tail, because
-            compaction may have moved the tail, and rebuilt from the untouched snapshot
-            each time, so carrying one forward twice cannot double it.
+            un-asks it. Read off the attempt's record rather than its window, because
+            compaction may have summarised the correction away, and rebuilt from the
+            untouched snapshot each time, so carrying one forward twice cannot double it.
             """
             return [dict(m) for m in retry_seed] + [dict(m) for m in msgs if m.get(_MID_TURN_USER_KEY)]
 
@@ -2529,6 +3450,7 @@ class TurnPathMixin:
             pending.update(rerun=bool(retries_left) and bool(reasons) and not spent, reasons=reasons)
             return pending["rerun"]
 
+        turn_window: list[dict] = []
         try:
             # The tier this turn dispatches sub-agents at, frozen here for the
             # same reason the iteration cap is read once: a switch arriving mid-turn
@@ -2537,7 +3459,7 @@ class TurnPathMixin:
             # file the user attached is handing it over, one that names any other
             # .pptx is not, and only the turn knows which is which.
             with turn_tier(self.session_tier(key)), turn_attachments(req.media), spend.collecting():
-                final_content, _, all_msgs, outcome = await _attempt(initial_messages, attempt_no)
+                final_content, _, turn_window, outcome = await _attempt(initial_messages, attempt_no)
                 # The conditional rerun. A dead turn has no answer to damage -- "empty
                 # implies wrong" is a scoring rule, so the count of right answers among
                 # dead turns starts at zero and a second attempt can only raise it. It
@@ -2563,7 +3485,9 @@ class TurnPathMixin:
                         # attempt this is: the loop serves every agent, and the
                         # budget allows more reruns than the one.
                         await on_progress("That attempt produced no answer; running the turn again.")
-                    final_content, _, all_msgs, outcome = await _attempt(_seed_for_the_rerun(all_msgs), attempt_no)
+                    final_content, _, turn_window, outcome = await _attempt(
+                        _seed_for_the_rerun(live["log"].messages()), attempt_no
+                    )
                 # Session-level because this turn may persist no assistant row at
                 # all -- a turn whose whole budget went to reasoning has no
                 # message to hang a record on. Stamped with the index this turn's
@@ -2586,53 +3510,75 @@ class TurnPathMixin:
                 # standing -- which is exactly the reading ACP's ``max_tokens``
                 # refinement makes.
                 if turn_hook_meta.get("output_limited"):
-                    session.metadata["output_limit_turn_at"] = prev_len
+                    session.metadata[OUTPUT_LIMIT_TURN_AT] = _turn_start()
                 else:
                     # None rather than dropping the key: a save merges its
                     # metadata over the record on disk, so a key left unsaid is
                     # kept rather than cleared (SessionManager._metadata_to_write).
                     # The reader asks whether this is an int, which None is not.
-                    session.metadata["output_limit_turn_at"] = None
+                    session.metadata[OUTPUT_LIMIT_TURN_AT] = None
+                # The same slot for a turn its own budget ended -- the tool cap, the
+                # wall clock or a stalled tool. Its wrap-up reads as an ordinary
+                # answer, so a surface that reports the turn (ACP's stop reason) has
+                # only this to tell it from one that finished. Not every
+                # ``interrupted`` turn: one that ends on a cut stream's partial is
+                # interrupted too, and no budget of its was spent. Written or
+                # cleared on the same terms as above.
+                budget_stopped = outcome.status == "interrupted" and bool(turn_hook_meta.get("budget_stopped"))
+                session.metadata[BUDGET_STOP_TURN_AT] = _turn_start() if budget_stopped else None
                 # The loop gave up on the model. Its ladder, its rerun and its
                 # salvage have all had their say, so what is left is a turn with
                 # no answer: the failure the handler below files and the lane
                 # reports, not a reply for the outlets to deliver.
-                mt = self.tools.get("message")
-                answered = isinstance(mt, MessageTool) and mt.sent_in_turn
+                answered = self._answered_by_tool(live["log"].messages()[turn_start_idx:])
                 if not answered:
                     if outcome.error:
-                        raise AnswerlessTurnError(outcome.error)
+                        raise AnswerlessTurnError(
+                            outcome.error, full_detail=outcome.error_full, no_output=outcome.no_output
+                        )
                     if final_content is None:
                         # The other way a turn arrives here with nothing: recovery
                         # switched off, so the empty response was taken at its word
                         # and no budget was ever spent. Same fact as the exit above
                         # -- the model said nothing -- so it is reported the same
                         # way rather than dressed as a reply.
-                        raise AnswerlessTurnError(_NO_CONTENT_UNRECOVERED)
+                        raise AnswerlessTurnError(_NO_CONTENT_UNRECOVERED, no_output=True)
         except asyncio.CancelledError:
             # A stop is not a failure, but it is also not amnesia: what already
             # streamed is work the reader saw, so it lands in the session with a
             # note saying a person ended the turn. Then the cancel proceeds.
             self._save_broken_turn(
                 session,
-                live["messages"],
+                live["log"].messages(),
                 persist_from,
                 None,
                 streamed,
                 status="cancelled",
+                context_used=reading.get("context_used"),
             )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         except AnswerlessTurnError as exc:
-            # The attempt's own list rather than `live["messages"]`: a window pass
-            # that rebound `messages` mid-turn leaves `live` on the seed, and the
-            # marker would then be filed with none of this turn's work between the
-            # question and itself. `all_msgs` is what the healthy path persists.
-            self._save_broken_turn(session, all_msgs, persist_from, None, streamed, status="failed", reason=str(exc))
+            # The attempt's record, which follows every list a window pass rebound
+            # `messages` to, so the marker is filed after this turn's work rather
+            # than straight after the question.
+            self._save_broken_turn(
+                session,
+                live["log"].messages(),
+                persist_from,
+                None,
+                streamed,
+                status="failed",
+                reason=str(exc),
+                full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
+            )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         except Exception as exc:
             self._save_broken_turn(
                 session,
-                live["messages"],
+                live["log"].messages(),
                 persist_from,
                 None,
                 streamed,
@@ -2641,9 +3587,15 @@ class TurnPathMixin:
                 # an arbitrary exception message is filed in a session a reader
                 # and a model both read back.
                 reason=bound_failure_text(str(exc)),
+                full_detail=attach_full_detail(exc),
+                context_used=reading.get("context_used"),
             )
+            self._park_task_board(key, live["log"].added(), turn_received_at, req.turn_id)
             raise
         self._stash_recovery(key, outcome)
+        # The model's last reply is a marker: nothing is sent for it, though the turn is filed
+        # and the send chain below still runs. Cleared if a hook composes a reply in its place.
+        silent = outcome.silent
 
         if final_content is None:
             # Only a turn a tool already answered reaches this now: the guard
@@ -2656,41 +3608,68 @@ class TurnPathMixin:
         # for system-originated turns (Sentinel / subagent) so their reply
         # doesn't get a nudge layered on. A menu pick is USER (its reply IS the
         # user's intent — runs after_send); the Sentinel supersede notice is
-        # SENTINEL and a subagent result is SUBAGENT (both skip).
+        # SENTINEL and a subagent result is SUBAGENT (both skip). A silent turn
+        # runs it like any other: what a hook composes there, a deck built this
+        # turn, is still this turn's to deliver.
         skip_after_send = origin in _SKIP_AFTER_SEND_ORIGINS
         if len(self.hooks) > 0 and not skip_after_send:
             from raven.agent.hook import AgentHookContext
 
             _send_ctx = AgentHookContext(
                 session_key=key,
-                outbound_content=final_content,
-                session_history=session.messages[:prev_len],
+                # None for a marker: the chain keeps the turn's books on a silent turn
+                # too, but there is no reply for a hook to modify or append to.
+                outbound_content=None if silent else final_content,
+                session_history=session.messages[: _turn_start()],
                 metadata=turn_hook_meta,
             )
             _send_decision = await self.hooks.after_send(_send_ctx)
-            if _send_decision.modified_content is not None:
+            composed = _send_decision.modified_content
+            if composed is not None and (not silent or composed.strip()):
                 if hook_sink is not None:
-                    hook_sink["appended"] = _appended_by_hook(final_content, _send_decision.modified_content)
-                final_content = _send_decision.modified_content
+                    hook_sink["appended"] = _appended_by_hook(None if silent else final_content, composed)
+                # With no reply of the model's own, the separator a hook put in front of
+                # its text separates nothing. The tail handed to a streaming caller keeps
+                # it: words the model said beside a tool call may be on screen already.
+                final_content = composed.lstrip() if silent else composed
+                silent = False
 
         # A hook chain's per-turn observer record files onto the turn's last
         # substantive assistant message at persist time -- after the send fire,
         # so a stash from any phase, ``after_send`` included, reaches the filed
         # record. Per turn, on the turn -- not a session-wide last write.
+        # The record, not the window the last call saw: a summary, an elided
+        # body or a dropped stretch of the turn is the window's business, and
+        # filing it would replay it to every later turn as what happened.
+        turn_msgs = live["log"].messages(_TURN_TRANSIENT_KEYS)
+        message_tool = self.tools.get("message")
+        sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        if outcome.silent and not silent and not sent_by_tool:
+            # A hook composed the reply the reader is sent in place of the marker. A turn the
+            # message tool answered sends no reply of its own, so its marker row stays.
+            _file_composed_reply(turn_msgs, final_content)
+        delivered_files = _delivered_files(turn_msgs[turn_start_idx:])
+        answered_by_tool = self._answered_by_tool(turn_msgs[turn_start_idx:])
+        if answered_by_tool:
+            _stamp_replied_via_tool(turn_msgs, turn_start_idx)
+        if delivered_files and silence is not None:
+            silence["delivered_files"] = True
         if len(self.hooks) > 0:
-            _stamp_turn_observers(all_msgs, turn_hook_meta, turn_start_idx)
+            _stamp_turn_observers(turn_msgs, turn_hook_meta, turn_start_idx)
 
-        self._save_turn(session, all_msgs, persist_from)
+        self._save_turn(session, turn_msgs, persist_from)
+        # Taken before the save, which may merge another writer's messages in.
+        turn_entries = session.messages[_turn_start() :]
         self.sessions.save(session)
         await self.harness.memory.after_turn(
             key,
             {
                 "final_content": final_content,
-                "messages": all_msgs[turn_start_idx:],
+                "messages": _without_scratch(turn_msgs[turn_start_idx:]),
             },
         )
         # Plugin-side indexing (third peer step in the after-turn pipeline).
-        self._dispatch_backend_store(key, session.messages[prev_len:])
+        self._dispatch_backend_store(key, turn_entries)
         # Forward source-qualified skill-usage feedback. Only
         # ``everos/`` prefix is forwarded to the plugin; static-library
         # sources (``local`` / ``mass``) have no feedback channel.
@@ -2704,7 +3683,7 @@ class TurnPathMixin:
         # ── Step 4: post-action learning (background, non-blocking) ─────────────
         # Skip for a subagent result re-injection (see the pre-turn flow above):
         # its content is a system-generated announce, not user input to learn from.
-        if self.personalization_enabled and origin is not Origin.SUBAGENT:
+        if self.personalization_enabled and origin is not Origin.SUBAGENT and not silent:
             from raven.agent.personalizer import Personalizer
 
             _p4 = Personalizer(MemoryStore(self.workspace), self.provider, self.model)
@@ -2717,7 +3696,30 @@ class TurnPathMixin:
             _t4.add_done_callback(self._consolidation_tasks.discard)
         # ── End Step 4 ──────────────────────────────────────────────────────
 
-        if (mt := self.tools.get("message")) and isinstance(mt, MessageTool) and mt.sent_in_turn:
+        # ── Step 5: the host's task board (background, after the reply) ──────
+        # Scheduled, never awaited: the reply is already the caller's, and the
+        # board settles a few seconds after it.
+        if self.task_board is not None:
+            shown = await self.task_board.ack_turn_notes(key)
+            self._schedule_task_board(
+                key,
+                turn_window,
+                outcome,
+                live["log"].added(),
+                turn_received_at,
+                req.turn_id,
+                fallback_models,
+                delegated=req.delegated,
+                moved_on=[n.group for n in shown if n.kind == "move_on" and n.group],
+                # The turn's own verdict rather than the marker: a turn a tool answered is not a
+                # Silent Turn whatever it ended on, and a hook's reply has cleared ``silent``.
+                silent=silent and not answered_by_tool,
+            )
+
+        if origin is Origin.USER:
+            self._maybe_annotate_tail(session, _turn_start())
+
+        if sent_by_tool:
             # Defensive fingerprint. A silent return None would leave no
             # trace when the agent replied via the message tool, making
             # stochastic dud-turn bugs invisible to grep. Log
@@ -2733,9 +3735,134 @@ class TurnPathMixin:
                 )
             return None
 
+        if delivered_files and outcome.no_output:
+            # The files reached the reader with the call that delivered them, and the model gave no
+            # words of its own: there is nothing left to send. The fallback text is the record's, not
+            # a reply, and a turn the message tool answered returns None on the same terms.
+            logger.info("Turn for {}:{} delivered files and gave no reply of its own", channel, sender_id)
+            return None
+
+        if silent and delivered_files:
+            # The files reached the reader with the call that delivered them, so the turn answered,
+            # by the verdict filed above: not a Silent Turn, and the marker is no reply to send.
+            logger.info("Turn for {}:{} delivered files and ended on the silence marker", channel, sender_id)
+            return None
+
+        if silent:
+            logger.info("Silent turn for {}:{}: the model chose not to reply", channel, sender_id)
+            if silence is not None:
+                silence["silent"] = True
+                if outcome.shown:
+                    silence["shown"] = outcome.shown
+            return None
+
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info("Response to {}:{}: {}", channel, sender_id, preview)
         return (final_content, [])
+
+    def _park_task_board(self, key: str, turn_added: list[dict], turn_at: str, turn_id: str | None) -> None:
+        """Park what a turn that failed or was stopped dispatched (``park_dispatches``): the
+        board makes no call after it, and the next update places the work."""
+        from raven.agent.task_board.dispatches import turn_dispatches
+        from raven.agent.task_board.runner import park_dispatches
+
+        board = self.task_board
+        dispatches = turn_dispatches(turn_added)
+        if board is None or not dispatches:
+            return
+        task = asyncio.create_task(
+            park_dispatches(
+                board,
+                session_key=key,
+                dispatches=dispatches,
+                turn_at=turn_at,
+                turn_id=turn_id,
+                generation=board.generation(key),
+            )
+        )
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
+    def _schedule_task_board(
+        self,
+        key: str,
+        window: list[dict],
+        outcome: LoopOutcome | None,
+        turn_added: list[dict],
+        turn_at: str,
+        turn_id: str | None,
+        fallback_models: list[str] | None,
+        *,
+        delegated: dict[str, Any] | None,
+        moved_on: list[str],
+        silent: bool,
+    ) -> None:
+        """Start the host's post-turn task board call for the turn that just ended.
+
+        It sends the tools array, model, effort and tool choice the turn's last call
+        carried, through the same strategies, so it runs at the main model's settings
+        and shares that call's cached prefix up to the reply; only the instruction
+        after it is new. Nothing forces the tool: a forced choice voids Anthropic's
+        cached messages and several providers refuse one outright. The dispatches
+        come from what the turn added -- a spawn still in the history belongs to the
+        turn that made it. ``delegated`` (the request's mark of the result that
+        opened the turn) and ``moved_on`` (the groups the notes it was shown named)
+        say what the turn is about, when anything does.
+        """
+        from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
+        from raven.agent.task_board.runner import run_post_turn, should_run
+
+        board = self.task_board
+        if board is None or outcome is None:
+            return
+        if outcome.status != "completed":
+            # A turn whose provider failed after a tool had answered returns rather than
+            # raises, and so does one cut short; neither makes the call, and what it
+            # dispatched waits in unassigned as the exits that raise park it.
+            self._park_task_board(key, turn_added, turn_at, turn_id)
+            return
+        dispatches = turn_dispatches(turn_added)
+        if outcome.last_tools is None or not window:
+            return
+        if not should_run(outcome.status, dispatches, silent=silent):
+            return
+        tools, model = outcome.last_tools, outcome.last_model or self.model
+        # The turn's own effort, None included, as the turn sends it: a key left out
+        # lets the provider fill it from the copy frozen at its construction.
+        effort = outcome.last_effort
+        # A turn whose array lacked the tool -- withheld by a deploy's disabledTools --
+        # leaves the model nothing to answer the instruction with.
+        if not any((t.get("function") or {}).get("name") == "task_board" for t in tools):
+            return
+
+        async def call(rows: list[dict]) -> LLMResponse:
+            with _llm_purpose("task_board"), usage_context.bind(key):
+                call_messages, call_tools, call_model = await self.strategies.before_llm_call(rows, tools, model)
+                return await self.provider.chat_with_retry(
+                    messages=merge_mid_turn(call_messages),
+                    tools=call_tools,
+                    model=call_model,
+                    fallback_models=fallback_models,
+                    reasoning_effort=effort,
+                )
+
+        task = asyncio.create_task(
+            run_post_turn(
+                board,
+                session_key=key,
+                call=call,
+                window=list(window),
+                dispatches=dispatches,
+                turn_at=turn_at,
+                turn_id=turn_id,
+                now_ms=board.now_ms,
+                generation=board.generation(key),
+                delegated=[handle] if (handle := delegated_handle(delegated)) else [],
+                moved_on=moved_on,
+            )
+        )
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
 
     def _save_broken_turn(
         self,
@@ -2747,7 +3874,9 @@ class TurnPathMixin:
         *,
         status: str,
         reason: str | None = None,
+        full_detail: str | None = None,
         inbound_original: str | None = None,
+        context_used: int | None = None,
     ) -> None:
         """Persist what a cancelled or failed turn got as far as producing.
 
@@ -2766,6 +3895,11 @@ class TurnPathMixin:
           the provider's account for the person diagnosing it, while the text
           the model reads back names the category only (see
           ``_marker_failure``).
+          ``turn_ended.full_detail`` is the long account beside the bounded
+          ``reason``, filed only when there is more to it.
+          ``context_used`` is the newest window the turn measured, filed on the
+          marker because it is the newest row: a resume reads the window from
+          there, and a turn whose calls left no row of their own has no other.
 
         ``received_at`` and ``inbound_original`` describe the turn's question,
         which ``_process_message`` files before the attempt starts and hands
@@ -2804,8 +3938,15 @@ class TurnPathMixin:
                     }
                 )
             text = (streamed.get("text") or "").strip()
+            # A recovery row does not count as committed: it is scaffolding that is
+            # dropped below, and the partial of a cut answer is one -- a continuation
+            # that died before saying anything leaves the reader's words as exactly
+            # that row's text.
             if text and not any(
-                m.get("role") == "assistant" and str(m.get("content") or "").strip() == text for m in tail
+                m.get("role") == "assistant"
+                and not m.get("_recovery_synthetic")
+                and str(m.get("content") or "").strip() == text
+                for m in tail
             ):
                 partial: dict[str, Any] = {"role": "assistant", "content": streamed["text"]}
                 if (thought := (streamed.get("thought") or "").strip()) and not any(
@@ -2817,15 +3958,29 @@ class TurnPathMixin:
             marker: dict[str, Any] = {
                 "role": "assistant",
                 "content": f"(turn {word})",
-                "turn_ended": {"status": status, **({"reason": reason} if reason else {})},
+                "turn_ended": {
+                    "status": status,
+                    **({"reason": reason} if reason else {}),
+                    **({"full_detail": full_detail} if full_detail else {}),
+                },
             }
+            if context_used:
+                marker[_CONTEXT_USED_KEY] = context_used
             tail.append(marker)
             self._save_turn(session, tail, 0, received_at=received_at, inbound_original=inbound_original)
             self.sessions.save(session)
         except Exception:  # noqa: BLE001 - see docstring
             logger.opt(exception=True).warning("could not persist the broken turn for {}", session.key)
 
-    def _record_inbound(self, session: Session, content: str, origin: "Origin | None", timestamp: str) -> None:
+    def _record_inbound(
+        self,
+        session: Session,
+        content: str,
+        origin: "Origin | None",
+        timestamp: str,
+        *,
+        trace_id: str | None = None,
+    ) -> None:
         """Persist the inbound entry of a turn that answers before ``_save_turn``.
 
         The personalization flow can reply with a clarifying question and return,
@@ -2841,7 +3996,117 @@ class TurnPathMixin:
         entry: dict[str, Any] = {"role": "user", "content": content, "timestamp": timestamp}
         if mark := _runtime_origin(origin):
             entry["origin"] = mark
+        if trace_id:
+            entry["trace_id"] = trace_id
         session.record(entry)
+
+    def _maybe_annotate_tail(self, session: Session, prev_len: int) -> None:
+        """Hand the unannotated tail to the consolidator once enough user turns piled up.
+
+        Detached from the turn, under the consolidator's per-session lock so it
+        cannot interleave with the ``/new`` path. The tail is sliced inside the
+        lock: a task that waited re-reads the cursor the holder wrote and finds
+        nothing left to do. Its cursor is ``annotated_through`` in the session's
+        metadata, patched rather than saved so a task that lands mid-turn cannot
+        drop keys the turn wrote in between. A session seen for the first time is
+        seeded at ``prev_len``, the message count before the turn that just
+        ended: history is never back-filled, so an upgraded install or a fork
+        does not hand its past to one call, while a new session counts from its
+        first turn. Truncation (``clear``, ``undo_last_turn``) moves the cursor
+        itself; the clamp here only covers a file edited by hand.
+        """
+        every = self.memory_config.annotate_every_turns
+        if every <= 0:
+            return
+        # Read here, not in the task: this is the end of a turn, so it is a turn
+        # boundary. A task that waited for the lock would otherwise slice to a
+        # length the next turn has already grown, ending the tail on a user
+        # message whose answer has not arrived.
+        end = len(session.messages)
+        # Both read here, for the same reason: a task can sit queued behind
+        # another annotation on the same session, and a truncation that lands
+        # while it waits has already moved the counter by the time it takes
+        # the lock. Read together, they describe one moment -- the end of this
+        # turn -- and disagree with the session if anything cut it since.
+        before = session.truncations
+
+        async def _run() -> None:
+            try:
+                async with self.memory_consolidator.get_lock(session.key):
+                    stored = session.metadata.get("annotated_through")
+                    if stored is None:
+                        stored = prev_len
+                        self._set_annotated_through(session, min(prev_len, len(session.messages)))
+                    start = min(int(stored), end, len(session.messages))
+                    if start >= end or session.truncations != before:
+                        return
+                    tail = _turns_a_person_opened(session.messages[start:end])
+                    if sum(1 for m in tail if m.get("role") == "user") < every:
+                        return
+                    # Half the window, the share the token path consolidated
+                    # down to. What is left over rides the next qualifying
+                    # turn, so the cursor keeps moving and a tail refused for
+                    # its size is not retried larger.
+                    capped, oversized = _first_turns_within(tail, self.memory_consolidator.context_window_tokens // 2)
+                    if len(capped) != len(tail):
+                        # Located by identity, not equality: two messages in
+                        # one slice can be equal down to the timestamp, and a
+                        # search by value would answer with the earlier one,
+                        # leaving the cursor short of what was sent.
+                        sent = session.messages[start:end]
+                        last = next(i for i, m in enumerate(sent) if m is capped[-1]) + 1
+                        end_for_this_pass = start + last
+                        logger.info(
+                            "episodic annotate for {}: tail trimmed to {} of {} messages for this pass",
+                            session.key,
+                            len(capped),
+                            len(tail),
+                        )
+                    else:
+                        end_for_this_pass = end
+                    tail = capped
+                    wrote = await self.memory_consolidator.consolidate_messages(tail)
+                    if not wrote and not oversized:
+                        logger.warning("episodic annotate for {} declined; cursor kept at {}", session.key, start)
+                        return
+                    # The reader may undo or clear while the annotator runs,
+                    # and both leave the indices this task sliced against
+                    # pointing at other messages. The cursor's value cannot
+                    # carry that: a cut below it leaves it alone, and turns
+                    # arriving after the cut take the length back past where it
+                    # was. The counter moves on every truncation, so it can.
+                    if session.truncations != before:
+                        logger.info(
+                            "episodic annotate for {}: truncated while it ran; cursor left at {}",
+                            session.key,
+                            session.metadata.get("annotated_through"),
+                        )
+                        return
+                    self._set_annotated_through(session, min(end_for_this_pass, len(session.messages)))
+                    if not wrote:
+                        # The one refusal the cursor has to absorb: this turn
+                        # is larger than the whole budget, so every later pass
+                        # would build the same tail and send the same prompt
+                        # again. Keeping the cursor here repeats the call
+                        # rather than retrying it.
+                        logger.warning(
+                            "episodic annotate for {} declined a turn larger than the bound; cursor moved past it to {}",
+                            session.key,
+                            end_for_this_pass,
+                        )
+                        return
+                    await self.memory_consolidator.maybe_refresh_hot_tags()
+            except Exception:
+                logger.exception("episodic annotate for {} failed", session.key)
+
+        task = asyncio.create_task(_run())
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
+    def _set_annotated_through(self, session: Session, n: int) -> None:
+        session.metadata["annotated_through"] = n
+        if not self.sessions.append_metadata_patch(session.key, {"annotated_through": n}):
+            logger.debug("episodic cursor for {} not persisted: no session file yet", session.key)
 
     def _save_turn(
         self,
@@ -2851,6 +4116,7 @@ class TurnPathMixin:
         *,
         inbound_original: str | None = None,
         received_at: str | None = None,
+        trace_id: str | None = None,
     ) -> None:
         """Save new-turn messages into session, truncating large tool results.
 
@@ -2859,12 +4125,19 @@ class TurnPathMixin:
         writes run after work that took time, so stamping every entry "now"
         would give the user message and the final answer the same timestamp --
         and a restored transcript reads the gap between those two as the turn's
-        duration.
+        duration. ``trace_id`` travels with it and marks the same entry, so a
+        selection of turns can find each turn's messages in the record.
         """
+        # Deferred: ``raven.context_engine`` imports back out of this tier.
+        from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
+
         # Both exits that persist a turn come through here, so a question noted
         # on the turn is filed once whichever exit runs. The early inbound write
-        # also comes through, before any question, and files nothing.
-        _file_unanswered(messages)
+        # also comes through, before any question, and files nothing. A turn the
+        # session list and the ACP replay take back whole files none: a notice
+        # after its marker would outlive the take-back as an orphan.
+        if not _taken_back_whole(messages, skip):
+            _file_unanswered(messages)
         first_user_pending = received_at is not None
         # The turn's first user entry is the inbound message; hooks may have
         # rewritten what the model saw (a memo prepended, a reminder appended),
@@ -2877,7 +4150,21 @@ class TurnPathMixin:
             role, content = entry.get("role"), entry.get("content")
             if first_user_pending and role == "user":
                 entry.setdefault("timestamp", received_at)
+                if trace_id:
+                    entry["trace_id"] = trace_id
                 first_user_pending = False
+            entry.pop(TURN_LOG_KEY, None)
+            if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
+                # The turn scratch (recalled memory, routed skills) is rebuilt
+                # from the query every turn. Recording it would turn the log
+                # from append-only into rewritten -- next turn's request would
+                # carry this turn's recall in its history -- and the recalled
+                # text would pile up in history forever. Cut before the rewrites
+                # below, which compare against the exact text that was appended.
+                content = cut_turn_scratch(content, scratch)
+                if content is None:
+                    continue
+                entry["content"] = content
             if entry.get("_recovery_synthetic"):
                 continue  # #1a synthetic recovery nudge — never persist scaffolding
             if entry.get(ATTACHED_IMAGE_KEY):
@@ -2907,6 +4194,14 @@ class TurnPathMixin:
                 # so the live view and the restored one disagree about who
                 # spoke.
                 entry["notice"] = notice
+            if entry.pop(_SILENT_KEY, None):
+                # Same rename as the notice above, for the same reason: without
+                # it a reload cannot tell a marker the model wrote from an answer.
+                entry["silent"] = True
+            if entry.pop(_REPLIED_VIA_TOOL_KEY, None):
+                # Same rename again: a stored reader asks whether the message tool
+                # answered the turn, and only the live turn could tell.
+                entry["replied_via_tool"] = True
             if tool_diff := entry.pop("_diff", None):
                 # Renamed for storage: the private spelling kept it out of the
                 # live provider payload, the plain one is what session.resume
@@ -2940,10 +4235,12 @@ class TurnPathMixin:
             for private_key, stored_key in (
                 (_REASONING_MS_KEY, "reasoning_ms"),
                 (_TOOL_DURATION_MS_KEY, "duration_ms"),
+                (_CONTEXT_USED_KEY, "context_used"),
             ):
-                # Renamed for the same reason as the diff above. A duration is a
-                # property of the part it measures, so it is written down with
-                # it: a clock started when a page loads can only ever guess.
+                # Renamed for the same reason as the diff above. A duration or a
+                # window reading is a property of the part it measures, so it is
+                # written down with it: a clock started when a page loads, or a
+                # count of the stored log, can only ever guess.
                 if (took := entry.pop(private_key, None)) is not None:
                     entry[stored_key] = took
             if role == "tool" and isinstance(content, list):
@@ -2954,8 +4251,11 @@ class TurnPathMixin:
                 # it either — it guards `str` content only.
                 content = _strip_inline_images(content)
                 entry["content"] = content
-            if role == "tool" and isinstance(content, str) and len(content) > self._TOOL_RESULT_MAX_CHARS:
-                entry["content"] = content[: self._TOOL_RESULT_MAX_CHARS] + "\n... (truncated)"
+            cap = self._TOOL_RESULT_MAX_CHARS
+            if role == "tool" and isinstance(content, str) and cap and len(content) > cap:
+                # The marker is what retrieval reads to say a span was cut on the
+                # way to disk rather than pass a prefix off as the whole.
+                entry["content"] = content[:cap] + TOOL_RESULT_TRUNCATION_MARKER
             elif role == "user":
                 if isinstance(content, str) and content.startswith(ContextBuilder._RUNTIME_CONTEXT_TAG):
                     # Strip the runtime-context prefix, keep only the user text.
@@ -2995,6 +4295,7 @@ class TurnPathMixin:
         stream: bool = True,
         usage_sink: dict[str, Any] | None = None,
         text_sink: dict[str, Any] | None = None,
+        reply_awaited: bool = False,
     ) -> "TurnOutcome":
         """Spine-native turn entry: consume a TurnRequest, fan the agent's output
         onto the single ``emit``, return a TurnOutcome. Collapses the legacy
@@ -3028,6 +4329,11 @@ class TurnPathMixin:
 
         ``drain`` pulls user messages injected mid-turn (BusyPolicy.INJECT); it
         is threaded into the agent loop and consumed at the top of each iteration.
+
+        ``reply_awaited`` is for a caller that waits on the reply's text, as an
+        inbound A2A call's peer does: the turn takes no part in the silence
+        protocol, so a Silence Marker is delivered as the text it is, whatever
+        the request's origin.
         """
         from raven.agent.subagent.direct_chat import DirectChatError
         from raven.proactive_engine.schedulers.cron.tool import CronTool
@@ -3061,8 +4367,10 @@ class TurnPathMixin:
             # the instance registry and the handoff are the *session's* though --
             # keyed by the lane they would scatter one instance's history into a
             # directory of its own and land the handoff on a conversation nobody
-            # reads. See ``raven.spine.turn.session_of``.
-            session_key = session_of(cid)
+            # reads. The request retains that original session independently.
+            from raven.spine import session_key_for
+
+            session_key = session_key_for(req)
             streamed_direct = False
 
             async def on_direct_delta(text: str) -> None:
@@ -3123,8 +4431,9 @@ class TurnPathMixin:
             msg = {"role": "assistant", "content": req.deliver_text}
             prev_len = len(session.messages)
             self._save_turn(session, [msg], 0)
+            added = session.messages[prev_len:]
             self.sessions.save(session)
-            self._dispatch_backend_store(cid, session.messages[prev_len:])
+            self._dispatch_backend_store(cid, added)
             await emit(Text(content=req.deliver_text))
             return TurnOutcome(
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
@@ -3141,6 +4450,7 @@ class TurnPathMixin:
 
         streamed = False
         hook_sink: dict[str, str] = {}
+        silence: dict[str, bool | str] = {}
 
         async def on_token(text: str) -> None:
             nonlocal streamed
@@ -3287,6 +4597,8 @@ class TurnPathMixin:
                         origin=req.origin,
                         drain=drain,
                         hook_sink=hook_sink,
+                        silence=silence,
+                        reply_awaited=reply_awaited,
                     )
                 except AnswerlessTurnError:
                     # A turn the loop gave up on is not a crash: the executor and
@@ -3321,6 +4633,11 @@ class TurnPathMixin:
                 await emit(StreamDelta(delta=hook_sink["appended"]))
             if text_sink is not None and reply_content:
                 text_sink["text"] = reply_content
+        silent = silence.get("silent", False) is True
+        if silent:
+            # Named so a client that drew the reply's think block takes back that and no more.
+            shown = silence.get("shown")
+            await emit(Notice(kind=NoticeKind.SILENT_TURN, detail=shown if isinstance(shown, str) and shown else None))
 
         usage = Usage(
             prompt_tokens=int(usage_sink.get("prompt_tokens", 0) or 0),
@@ -3328,6 +4645,7 @@ class TurnPathMixin:
             total_tokens=int(usage_sink.get("total_tokens", 0) or 0),
         )
         # A message-tool reply returns None from _process_message but did reply,
-        # so it counts as an explicit reply too.
-        replied_via_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
-        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool)
+        # so it counts as an explicit reply too, and so do files a tool delivered.
+        sent_by_tool = isinstance(message_tool, MessageTool) and message_tool.sent_in_turn
+        replied_via_tool = sent_by_tool or silence.get("delivered_files") is True
+        return TurnOutcome(usage=usage, explicit_reply=out is not None or replied_via_tool, silent=silent)

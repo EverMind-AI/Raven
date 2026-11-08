@@ -18,9 +18,13 @@ Two verdicts, asked in that order. The client library keeps a copy of the value
 it renamed (``provider_specific_fields["native_finish_reason"]``, written in
 ``Choices.__init__``), so wherever a response was assembled through that
 constructor the upstream's own word is still readable and nothing has to be
-inferred. Where it was not -- several vendors map the reason and assign it to an
-already-built choice, destroying the original -- the accounting evidence is all
-there is.
+inferred. OpenRouter puts the same field in every choice of its own body -- its
+backend's reason, rename or not -- and the library's dict conversion passes
+every non-standard choice field through, so from that gateway a plain ``stop``
+arrives under this name as well; the allow list below names it, so an empty
+reply from there reads as the model's own and not as a failure. Where no
+copy exists -- several vendors map the reason and assign it to an already-built
+choice, destroying the original -- the accounting evidence is all there is.
 
 Either way a response that delivered something is left alone: the invariant is
 that a failure must be *visible*, not that a usable answer be thrown away.
@@ -34,7 +38,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from raven.contracts.llm_provider import ErrorClassification, LLMResponse
+
 if TYPE_CHECKING:
+    from raven.contracts.llm_provider import CallRecord
     from raven.providers.base import ToolCallRequest
 
 #: Sentinels an upstream can leak in place of content. They mean the same as
@@ -43,13 +50,17 @@ if TYPE_CHECKING:
 _UPSTREAM_SENTINELS = ("<|endoftext|>", "<|im_end|>", "<|eot_id|>")
 
 #: Upstream spellings of a normal end that the client library renames to
-#: ``stop``. Any *other* value it renamed to ``stop`` did not say this call
-#: ended normally. An allow list rather than a list of failures, because the
-#: spellings of "finished" are finite and stable across vendors while the
-#: dialects for "failed" are invented per gateway -- so an unrecognised value
-#: has to land on the side that keeps the failure visible.
+#: ``stop`` -- and ``stop`` itself, because OpenRouter reports its backend's
+#: reason as ``native_finish_reason`` on every choice, rename or not, and the
+#: library passes that field through, so a plain ``stop`` reaches the verdict
+#: under this name from there. Any *other* value renamed to ``stop`` did not
+#: say this call ended normally. An allow list rather than a list of failures,
+#: because the spellings of "finished" are finite and stable across vendors
+#: while the dialects for "failed" are invented per gateway -- so an
+#: unrecognised value has to land on the side that keeps the failure visible.
 _NORMAL_STOP_ALIASES = frozenset(
     {
+        "stop",
         "stop_sequence",
         "end_turn",
         "COMPLETE",
@@ -65,8 +76,8 @@ _NORMAL_STOP_ALIASES = frozenset(
 #: allow list is for -- so it is here to be *said*, not to decide. A rename this
 #: does not name is either a new failure dialect or the one thing the allow list
 #: gets wrong: a normal end spelled in a way nothing has mapped, reported as a
-#: failure when the loop's own silence recovery should have had it. Naming the
-#: two apart in the log is the only signal that case has.
+#: failure when the loop's own empty-response recovery should have had it.
+#: Naming the two apart in the log is the only signal that case has.
 _OBSERVED_FAILURE_REASONS = frozenset(
     {
         "error",
@@ -123,11 +134,14 @@ def prompt_chars(messages: list[dict[str, Any]]) -> int:
 
 
 def native_finish_reason(choice: Any) -> str | None:
-    """The finish reason the upstream sent, where the library kept a copy of it.
+    """The finish reason the upstream sent, where a copy of it was kept.
 
-    Read defensively on purpose: the field is written only when the mapping
-    actually renamed something, so on an ordinary ``stop`` the attribute is
-    absent from the choice altogether and reaching for it raises.
+    Read defensively on purpose: the library writes the field only when its
+    mapping actually renamed something, so on an ordinary ``stop`` from most
+    vendors the attribute is absent from the choice altogether and reaching for
+    it raises. OpenRouter is the exception -- its body carries the field on
+    every choice and the library passes it through -- which is why a value of
+    ``stop`` can come back from here.
     """
     fields = getattr(choice, "provider_specific_fields", None) or {}
     value = fields.get("native_finish_reason") if isinstance(fields, dict) else None
@@ -140,6 +154,41 @@ def _stripped(text: str | None) -> str:
     for sentinel in _UPSTREAM_SENTINELS:
         out = out.replace(sentinel, "")
     return out.strip()
+
+
+def without_sentinels(content: str | None) -> str | None:
+    """``content`` with a reply that is nothing but sentinels folded to nothing.
+
+    The loop's own emptiness test reads visible text, and a bare ``<|im_end|>``
+    is visible text to it: with the verdict rightly stepping aside for a native
+    ``stop``, such a reply was delivered to the user as the answer, where the
+    same reply with a space in it took the empty-response recovery. Folded at
+    both response exits, so the loop is handed an empty reply either way and
+    runs the recovery it has for one. A sentinel beside a real answer is left
+    exactly as it came: that is an answer, and this is not editing.
+    """
+    if content is None:
+        return None
+    return content if _stripped(content) else ""
+
+
+def may_fold_to_nothing(streamed: str) -> bool:
+    """Whether a reply that has streamed ``streamed`` so far can still be one
+    ``without_sentinels`` folds to nothing.
+
+    The streaming exit holds a reply back from the watcher while this is true,
+    so a reply that is only a sentinel is never shown and then taken away. A
+    sentinel can arrive split across deltas, and ``<|im_`` read on its own is
+    text, so the tail that begins a sentinel without completing it is set aside
+    before the rest is tested: only the next delta can say whether it was one.
+    """
+    pending = 0
+    for sentinel in _UPSTREAM_SENTINELS:
+        for size in range(len(sentinel) - 1, pending, -1):
+            if streamed.endswith(sentinel[:size]):
+                pending = size
+                break
+    return not _stripped(streamed[: len(streamed) - pending])
 
 
 def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bool:
@@ -167,12 +216,13 @@ def said_nothing(content: str | None, tool_calls: list["ToolCallRequest"]) -> bo
 def _accounting_is_absurd(usage: dict[str, Any] | None, sent_chars: int | None) -> str | None:
     """Whether the prompt was billed at a size the request cannot have been.
 
-    This is the whole verdict, not a decoration on it. Silence on its own does
-    not distinguish a request that was never processed from a model that simply
-    said nothing, and the second is common enough to have its own recovery
-    (``raven.agent.loop.recovery``: prefill, a post-tool nudge, a plain retry).
-    Claiming transport failure without transport evidence takes that recovery
-    out of service and tells the reader something false about their own system.
+    This is the whole verdict, not a decoration on it. An empty reply on its own
+    does not distinguish a request that was never processed from a model that
+    simply returned nothing, and the second is common enough to have its own
+    recovery (``raven.agent.loop.recovery``: prefill, a post-tool nudge, a plain
+    retry). Claiming transport failure without transport evidence takes that
+    recovery out of service and tells the reader something false about their
+    own system.
 
     Cached tokens are added back before comparing: a cache hit legitimately
     bills a fraction of the prompt, and reading ``prompt_tokens`` alone would
@@ -225,11 +275,13 @@ def flag_transport_failure(
     request cannot have been. That second signal needs the emptiness beside it,
     because either one alone is a different fault with a different owner:
 
-    * Silence with honest usage is a model that said nothing. The agent loop
-      recovers that by changing the request (a prefill, a post-tool nudge) or
-      retrying it, and none of that is reachable once a response is reported as
-      an error. Retrying the identical request, which is all this verdict can
-      ask for, is also the one thing that does not help there.
+    * An empty reply with honest usage is a model that returned nothing. The
+      agent loop recovers that by changing the request (a prefill, a post-tool
+      nudge, a lower reasoning effort) or by resending it unchanged, and none
+      of that is reachable once a response is reported as an error. Resending
+      the identical request, all this verdict can ask for, was long held not
+      to help there; the loop does it anyway for a plain empty reply because,
+      as Hermes reads one, it is usually a transient fault upstream.
     * An answer with strange accounting is an answer. Gateways under-report
       usage, and a verdict that overrode a real reply would trade this fault
       for a worse one.
@@ -240,8 +292,8 @@ def flag_transport_failure(
     reasoned about.
 
     So a laundered failure whose accounting looks ordinary is not caught here.
-    That is deliberate: locally it is indistinguishable from a silent model,
-    and the loop already has a recovery for exactly that shape.
+    That is deliberate: locally it is indistinguishable from a model's empty
+    reply, and the loop already has a recovery for exactly that shape.
 
     ``finish_reason`` must be the value the upstream actually sent, not one
     synthesised when it sent none. A stream that yields no terminal delta at
@@ -258,8 +310,9 @@ def flag_transport_failure(
     if native_finish_reason and native_finish_reason not in _NORMAL_STOP_ALIASES:
         # No corroboration asked for, and none needed: this is not an inference
         # about what the upstream meant, it is what the upstream said. The
-        # accounting below exists to tell a failed request apart from a silent
-        # model, and a model that stayed silent does not send one of these.
+        # accounting below exists to tell a failed request apart from a model's
+        # empty reply, and a model that returned nothing does not send one of
+        # these.
         seen = "" if native_finish_reason in _OBSERVED_FAILURE_REASONS else ", a spelling not seen before"
         return f"the upstream reported finish_reason={native_finish_reason!r}{seen}, renamed to 'stop' in transit"
     accounting = _accounting_is_absurd(usage, sent_chars)
@@ -271,7 +324,7 @@ def flag_transport_failure(
 def transport_failure_message(evidence: str) -> str:
     """What the caller is told, worded so the blame lands where the fault is.
 
-    An empty well-formed response reads as the model choosing silence, which
+    An empty well-formed response reads as the model's own empty reply, which
     sends the agent off repairing its own prompt -- a dimension unrelated to the
     fault. Naming the upstream, and the evidence, is what stops that.
     """
@@ -281,4 +334,34 @@ def transport_failure_message(evidence: str) -> str:
     )
 
 
-__all__ = ["flag_transport_failure", "prompt_chars", "said_nothing", "transport_failure_message"]
+def transport_failure_response(evidence: str, *, usage: dict[str, Any], call_record: CallRecord | None) -> LLMResponse:
+    """The failed call both response exits hand back once the verdict stands.
+
+    Built in one place so the two exits cannot drift: the same fault read as
+    retryable on one path and final on the other would be the split this module
+    exists to prevent. Retried before anything else is tried, because the control
+    experiment healed on a retry that landed on another backend, and there is no
+    partial work to repeat.
+    """
+    return LLMResponse(
+        content=transport_failure_message(evidence),
+        finish_reason="error",
+        usage=usage,
+        error_classification=ErrorClassification(
+            category="upstream_transport_failure",
+            retryable=True,
+            should_fallback=True,
+        ),
+        call_record=call_record,
+    )
+
+
+__all__ = [
+    "flag_transport_failure",
+    "may_fold_to_nothing",
+    "prompt_chars",
+    "said_nothing",
+    "transport_failure_message",
+    "transport_failure_response",
+    "without_sentinels",
+]

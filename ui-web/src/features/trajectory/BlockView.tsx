@@ -1,0 +1,561 @@
+/* One block's body, drawn from what the details store holds for it, and the
+ * renderers every block and every overview preview go through.
+ *
+ * Six renderers for six shapes the wire names: text as it was written, JSON
+ * as a tree that folds, a message sequence in its order, key-value rows,
+ * a plain list, and a list of references. Every value is rendered as text
+ * through React -- nothing here writes markup -- and every placeholder the
+ * gateway may leave in a body (`$oversize`, `$depth_truncated`, `$omitted`,
+ * `$more_keys`) is drawn as a sentence rather than as a key.
+ *
+ * The tab asks for its first page when it is shown and for the next when
+ * the reader asks; what it copies is what it holds, and when that is less
+ * than the whole -- cut by the gateway, pages still to come, or earlier
+ * pages let go to stay in the window -- it says so before and after.
+ */
+
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+
+import { t } from '../../i18n/t'
+import { copy } from '../../lib/clipboard'
+import { formatDuration } from '../../lib/duration'
+import { RELATION_LINKS, availabilityKey, basisKey, integrityKey, reasonKey, timingLabelKey, usageLabelKey } from './blocks'
+import * as details from './detailStore'
+import { FilesView } from './Files'
+import { MessagesView } from './Messages'
+import * as list from './store'
+
+import type { JsonValue, TrajectoryBlockDescriptor } from './types'
+import type { JSX } from 'react'
+
+type Obj = Record<string, unknown>
+
+const isObj = (v: unknown): v is Obj => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+/* ── scalars and placeholders ─────────────────────────────────────────── */
+
+/** A scalar as the reader should see it: the empty string and `false` named, never blank. */
+function Scalar({ value }: { value: unknown }): JSX.Element {
+  if (value === '') return <span className="trajectory-v trajectory-v-none">{t('gui.trajectory.details.empty_string')}</span>
+  if (value === null) return <span className="trajectory-v trajectory-v-none">null</span>
+  if (value === undefined) return <span className="trajectory-v trajectory-v-none">undefined</span>
+  if (typeof value === 'boolean') return <span className="trajectory-v trajectory-v-bool">{String(value)}</span>
+  if (typeof value === 'number') return <span className="trajectory-v trajectory-v-num">{String(value)}</span>
+  return <span className="trajectory-v">{String(value)}</span>
+}
+
+/* The gateway's placeholders, each one sentence. */
+function Placeholder({ value }: { value: Obj }): JSX.Element | null {
+  if (value.$oversize === true) {
+    return <span className="trajectory-ph">{t('gui.trajectory.details.oversize', { bytes: typeof value.bytes === 'number' ? value.bytes : '?' })}</span>
+  }
+  if (value.$depth_truncated === true) return <span className="trajectory-ph">{t('gui.trajectory.details.depth_truncated')}</span>
+  return null
+}
+
+const isPlaceholder = (v: unknown): v is Obj => isObj(v) && (v.$oversize === true || v.$depth_truncated === true)
+
+/* ── JSON ─────────────────────────────────────────────────────────────── */
+
+/** How deep a tree opens on its own before a node needs a click. */
+export const JSON_OPEN_DEPTH = 2
+/** How many children a node draws at a time: a flat array near the read cap
+    holds hundreds of thousands, and drawing them all would stall the page. */
+export const JSON_CHILDREN = 200
+
+function JsonNode({ name, value, depth }: { name: string | null; value: unknown; depth: number }): JSX.Element {
+  const [open, setOpen] = useState(depth < JSON_OPEN_DEPTH)
+  const [shown, setShown] = useState(JSON_CHILDREN)
+  const label = name === null ? null : <span className="trajectory-json-k">{name}</span>
+  if (isPlaceholder(value)) {
+    return <div className="trajectory-json-row">{label}<Placeholder value={value} /></div>
+  }
+  if (Array.isArray(value) || isObj(value)) {
+    const all: Array<[string, unknown]> | null = Array.isArray(value)
+      ? null
+      : Object.entries(value).filter(([k]) => k !== '$more_keys')
+    const count = all ? all.length : (value as unknown[]).length
+    const entries: Array<[string, unknown]> = all
+      ? all.slice(0, shown)
+      : (value as unknown[]).slice(0, shown).map((v, i) => [String(i), v])
+    const rest = count - entries.length
+    const more = isObj(value) && typeof value.$more_keys === 'number' ? value.$more_keys : 0
+    const shape = Array.isArray(value) ? `[${count}]` : `{${count}}`
+    return (
+      <div className="trajectory-json-row">
+        <button className="trajectory-json-fold" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span className="trajectory-json-caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+          {label}
+          <span className="trajectory-json-shape">{shape}</span>
+        </button>
+        {open ? (
+          <div className="trajectory-json-kids">
+            {entries.map(([k, v]) => <JsonNode key={k} name={k} value={v} depth={depth + 1} />)}
+            {rest > 0 ? (
+              <button className="trajectory-link trajectory-json-more" onClick={() => setShown((n) => n + JSON_CHILDREN)}>
+                {t('gui.trajectory.details.more_children', { n: Math.min(JSON_CHILDREN, rest), rest })}
+              </button>
+            ) : null}
+            {more > 0 ? <div className="trajectory-ph">{t('gui.trajectory.details.more_keys', { n: more })}</div> : null}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+  return <div className="trajectory-json-row">{label}<Scalar value={value} /></div>
+}
+
+export function JsonView({ value }: { value: unknown }): JSX.Element {
+  return <div className="trajectory-json"><JsonNode name={null} value={value} depth={0} /></div>
+}
+
+/* ── text ─────────────────────────────────────────────────────────────── */
+
+export function TextView({ text }: { text: string }): JSX.Element {
+  if (text === '') return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_string')}</p>
+  return <pre className="trajectory-text-body">{text}</pre>
+}
+
+/* ── key-values ───────────────────────────────────────────────────────── */
+
+interface KvItem { key: string; value: unknown; source?: string }
+
+const SOURCE_KEYS: Record<string, string> = {
+  derived: 'gui.trajectory.details.source_derived',
+  attribute: 'gui.trajectory.details.source_attribute',
+  artifact: 'gui.trajectory.details.source_artifact',
+}
+
+function KvValue({ item, blockId }: { item: KvItem; blockId: string }): JSX.Element {
+  const v = item.value
+  if (isPlaceholder(v)) return <Placeholder value={v} />
+  if (blockId === 'timing' && (item.key === 'duration_ms' || item.key === 'charged_ms') && typeof v === 'number') {
+    return <span className="trajectory-v trajectory-v-num">{v} ms ({formatDuration(v)})</span>
+  }
+  if (blockId === 'timing' && item.key === 'timing_basis' && typeof v === 'string') {
+    const key = basisKey(v)
+    return <span className="trajectory-v">{v}{key ? <span className="trajectory-kv-note">{t(key)}</span> : null}</span>
+  }
+  if (Array.isArray(v) || isObj(v)) return <JsonView value={v} />
+  return <Scalar value={v} />
+}
+
+/* A relation's value as a link to the row it names, when the list has that
+   row: an entry id as it stands; a span id looked up in the entry's own trace;
+   the dispatching span looked up in the trace named beside it. A target the
+   list does not hold stays plain text. */
+function RelationLink({ id, text }: { id: string | null; text: string }): JSX.Element {
+  if (id === null || list.entry(id) === null) return <span className="trajectory-v trajectory-rel-off">{text}</span>
+  return (
+    <button className="trajectory-link trajectory-rel" onClick={() => { list.select(id, { source: 'link' }) }}>{text}</button>
+  )
+}
+
+function RelationValue({ item, rows }: { item: KvItem; rows: KvItem[] }): JSX.Element {
+  const how = RELATION_LINKS[item.key]
+  const str = (key: string): string | null => {
+    const found = rows.find((r) => r.key === key)?.value
+    return typeof found === 'string' ? found : null
+  }
+  if (how === 'entry' && Array.isArray(item.value)) {
+    return (
+      <span className="trajectory-rel-list">
+        {item.value.map((v, i) => (typeof v === 'string' ? <RelationLink key={`${v}-${i}`} id={v} text={v} /> : <Scalar key={i} value={v} />))}
+      </span>
+    )
+  }
+  if ((how === 'span' || how === 'dispatched') && typeof item.value === 'string') {
+    const trace = how === 'span' ? str('trace_id') : str('trace.dispatched_in_trace_id')
+    const target = trace !== null ? list.entryOfSpan(trace, item.value) : null
+    return <RelationLink id={target} text={item.value} />
+  }
+  return <KvValue item={item} blockId="relations" />
+}
+
+export function KeyValuesView({ items, blockId }: { items: unknown[]; blockId: string }): JSX.Element {
+  const rows = items.filter(isObj) as unknown as KvItem[]
+  if (!rows.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
+  return (
+    <dl className="trajectory-kv">
+      {rows.map((item, i) => {
+        if (item.key === '$omitted') {
+          return <div key={`omitted-${i}`} className="trajectory-ph">{t('gui.trajectory.details.omitted_n', { n: typeof item.value === 'number' ? item.value : '?' })}</div>
+        }
+        const label = blockId === 'timing' ? timingLabelKey(item.key) : null
+        const source = typeof item.source === 'string' ? SOURCE_KEYS[item.source] : undefined
+        return (
+          <div key={`${item.key}-${i}`} className="trajectory-kv-row">
+            <dt className="trajectory-kv-k" title={item.key}>{label ? t(label) : item.key}</dt>
+            <dd className="trajectory-kv-v">
+              {blockId === 'relations' ? <RelationValue item={item} rows={rows} /> : <KvValue item={item} blockId={blockId} />}
+              {source ? <span className="trajectory-kv-src">{t(source)}</span> : null}
+            </dd>
+          </div>
+        )
+      })}
+    </dl>
+  )
+}
+
+/* ── usage ────────────────────────────────────────────────────────────── */
+
+/* The normalized counters read back as the reader thinks of them. The
+   recorded prompt count is the fresh input plus whatever cache counts the
+   provider reported, which is how the normalizer took it apart; so the input
+   total is put back together only when the fresh count is known, and a cache
+   count the provider never reported is said to be unrecorded, not zero. The
+   total and the cost are shown as recorded or not at all. */
+export interface UsageRows {
+  /** The recorded total, or null for none recorded. */
+  total: number | null
+  /** The fresh input plus the recorded cache counts, or null while the fresh count is unknown. */
+  input: number | null
+  /** A cache count the provider reported; undefined where it reported none. */
+  cacheRead: number | undefined
+  cacheWrite: number | undefined
+  output: number | null
+  reasoning: number | null
+  cost: number | null
+}
+
+export function usageRows(items: unknown[]): UsageRows {
+  const value = (key: string): number | undefined => {
+    const item = (items.filter(isObj) as unknown as KvItem[]).find((r) => r.key === key)
+    return item && typeof item.value === 'number' ? item.value : undefined
+  }
+  const fresh = value('input_tokens')
+  const read = value('cache_read_tokens')
+  const write = value('cache_write_tokens')
+  return {
+    total: value('total_tokens') ?? null,
+    input: fresh === undefined ? null : fresh + (read ?? 0) + (write ?? 0),
+    cacheRead: read,
+    cacheWrite: write,
+    output: value('output_tokens') ?? null,
+    reasoning: value('reasoning_tokens') ?? null,
+    cost: value('cost_total') ?? null,
+  }
+}
+
+function UsageView({ items }: { items: unknown[] }): JSX.Element {
+  const rows = usageRows(items)
+  const label = (row: string): string => { const key = usageLabelKey(row); return key ? t(key) : row }
+  const count = (n: number | undefined): string => (n === undefined ? label('not_recorded') : String(n))
+  const lines: Array<[string, string]> = [
+    ['total', rows.total === null ? label('unknown') : String(rows.total)],
+    ['input', rows.input === null ? label('unknown') : String(rows.input)],
+    ['cache_read', count(rows.cacheRead)],
+    ['cache_write', count(rows.cacheWrite)],
+    ['output', rows.output === null ? label('unknown') : rows.reasoning ? `${rows.output} (${label('reasoning')} ${rows.reasoning})` : String(rows.output)],
+    ['cost', rows.cost === null ? '\u2014' : `$${rows.cost}`],
+  ]
+  return (
+    <dl className="trajectory-kv trajectory-usage">
+      {lines.map(([row, text]) => (
+        <div key={row} className="trajectory-kv-row">
+          <dt className="trajectory-kv-k">{label(row)}</dt>
+          <dd className="trajectory-kv-v"><span className="trajectory-v trajectory-v-num">{text}</span></dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+/* ── skills a turn was given, and which it used ───────────────────────── */
+
+function SkillUseView({ items }: { items: unknown[] }): JSX.Element {
+  const rows = items.filter(isObj) as Array<{ id?: unknown; name?: unknown; used?: unknown }>
+  if (!rows.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
+  return (
+    <ul className="trajectory-items trajectory-skill-use">
+      {rows.map((row, i) => (
+        <li key={`${String(row.id)}-${i}`} className={row.used === true ? 'trajectory-item trajectory-skill-used' : 'trajectory-item trajectory-skill-unused'}>
+          <span className="trajectory-item-head" title={typeof row.name === 'string' && row.name ? String(row.id) : undefined}>
+            {typeof row.name === 'string' && row.name ? row.name : typeof row.id === 'string' ? row.id : String(row.id)}
+          </span>
+          <span className="trajectory-skill-mark">{t(row.used === true ? 'gui.trajectory.details.skill_used' : 'gui.trajectory.details.skill_unused')}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/* ── messages, items, references ──────────────────────────────────────── */
+
+/* One message of a sequence: its metadata in a line, then its content as
+   text or as a tree when the content is structured. */
+function Message({ item }: { item: unknown }): JSX.Element {
+  if (isPlaceholder(item)) return <div className="trajectory-msg"><Placeholder value={item} /></div>
+  if (!isObj(item)) return <div className="trajectory-msg"><Scalar value={item} /></div>
+  const meta: string[] = []
+  for (const k of ['role', 'name', 'tool_call_id', 'id']) if (typeof item[k] === 'string') meta.push(`${k}: ${item[k] as string}`)
+  const content = item.content
+  const rest = Object.fromEntries(Object.entries(item).filter(([k]) => !['role', 'name', 'tool_call_id', 'id', 'content'].includes(k)))
+  return (
+    <div className="trajectory-msg">
+      <div className="trajectory-msg-meta">{meta.join(' · ')}</div>
+      {typeof content === 'string' ? <TextView text={content} /> : content !== undefined ? <JsonView value={content} /> : null}
+      {Object.keys(rest).length ? <JsonView value={rest} /> : null}
+    </div>
+  )
+}
+
+function itemHead(item: unknown): string | null {
+  if (!isObj(item)) return null
+  for (const k of ['name', 'title', 'id', 'key']) if (typeof item[k] === 'string') return item[k] as string
+  return null
+}
+
+function Item({ item }: { item: unknown }): JSX.Element {
+  if (isPlaceholder(item)) return <li className="trajectory-item"><Placeholder value={item} /></li>
+  if (!isObj(item) && !Array.isArray(item)) return <li className="trajectory-item"><Scalar value={item} /></li>
+  const head = itemHead(item)
+  return (
+    <li className="trajectory-item">
+      {head ? <div className="trajectory-item-head">{head}</div> : null}
+      <JsonView value={item} />
+    </li>
+  )
+}
+
+function Reference({ item }: { item: unknown }): JSX.Element {
+  if (!isObj(item)) return <li className="trajectory-item"><Scalar value={item} /></li>
+  return (
+    <li className="trajectory-item trajectory-ref">
+      <span className="trajectory-ref-k">{typeof item.key === 'string' ? item.key : ''}</span>
+      <span className="trajectory-ref-v">{typeof item.ref === 'string' || typeof item.ref === 'number' ? String(item.ref) : ''}</span>
+      <span className="trajectory-ref-kind">{typeof item.kind === 'string' ? item.kind : ''}</span>
+    </li>
+  )
+}
+
+/* A list that may have let its earliest pages go: the surviving first item
+   carries its offset, so the pane can put it back under the eye after the
+   window slid (see `useWindowAnchor`). */
+export function ListView({ renderer, items, offset }: {
+  renderer: 'messages' | 'items' | 'references'; items: unknown[]; offset: number
+}): JSX.Element {
+  if (!items.length) return <p className="trajectory-v-none">{t('gui.trajectory.details.empty_list')}</p>
+  if (renderer === 'messages') {
+    return (
+      <div className="trajectory-msgs">
+        {items.map((item, i) => <div key={offset + i} data-offset={offset + i}><Message item={item} /></div>)}
+      </div>
+    )
+  }
+  return (
+    <ul className="trajectory-items">
+      {items.map((item, i) => (
+        <div key={offset + i} data-offset={offset + i}>
+          {renderer === 'references' ? <Reference item={item} /> : <Item item={item} />}
+        </div>
+      ))}
+    </ul>
+  )
+}
+
+/* ── previews, for the overview ───────────────────────────────────────── */
+
+/** A block's preview, in the same renderer its body uses. */
+export function PreviewView({ block }: { block: TrajectoryBlockDescriptor }): JSX.Element | null {
+  const p = block.preview
+  if (p === undefined || p === null || block.id === 'outline') return null
+  switch (block.renderer) {
+    case 'text':
+      return <TextView text={typeof p === 'string' ? p : JSON.stringify(p)} />
+    case 'json':
+      return <JsonView value={p} />
+    case 'key_values':
+      return <KeyValuesView items={Array.isArray(p) ? p : []} blockId={block.id} />
+    case 'messages':
+    case 'items':
+    case 'references':
+      return <ListView renderer={block.renderer} items={Array.isArray(p) ? p : []} offset={0} />
+    default:
+      return null
+  }
+}
+
+/* ── the body of one tab ──────────────────────────────────────────────── */
+
+/* After the window slid, the item that is now first goes back under the
+   eye: the pane scrolls so that item's top is at its own top, rather than
+   keeping a scroll offset that now points into content that is gone. */
+function useWindowAnchor(firstHeld: number, box: HTMLElement | null): void {
+  const seen = useRef(firstHeld)
+  useLayoutEffect(() => {
+    if (firstHeld <= seen.current) { seen.current = firstHeld; return }
+    seen.current = firstHeld
+    if (!box) return
+    const pane = box.closest<HTMLElement>('.trajectory-pane')
+    const first = box.querySelector<HTMLElement>(`[data-offset="${firstHeld}"]`)
+    if (pane && first) pane.scrollTop = first.offsetTop - pane.offsetTop
+  }, [firstHeld, box])
+}
+
+/** The lowest offset among a record's pages: where a list read page by page now begins. */
+const firstHeldOffset = (record: details.BlockRecord | null): number =>
+  record && record.pages.length ? Math.min(...record.pages.map((p) => p.offset)) : 0
+
+function joinedItems(record: details.BlockRecord): unknown[] {
+  const out: unknown[] = []
+  for (const page of record.pages) {
+    const data = page.data
+    if (isObj(data) && Array.isArray(data.items)) out.push(...(data.items as unknown[]))
+  }
+  return out
+}
+
+/** What the copy button puts on the clipboard: the text the pane holds, as text. */
+export function copyText(record: details.BlockRecord): string {
+  const first = record.pages[0]?.data
+  switch (record.renderer) {
+    case 'text':
+      return isObj(first) && typeof first.text === 'string' ? first.text : ''
+    case 'json':
+      return JSON.stringify(isObj(first) ? first.value : first, null, 2)
+    case 'key_values':
+      return JSON.stringify(isObj(first) && Array.isArray(first.items) ? first.items : [], null, 2)
+    default:
+      return JSON.stringify(joinedItems(record), null, 2)
+  }
+}
+
+function Toolbar({ block, record }: { block: TrajectoryBlockDescriptor; record: details.BlockRecord | null }): JSX.Element | null {
+  const lines: JSX.Element[] = []
+  const first = record?.pages[0]
+  const availability = first?.availability ?? block.availability
+  const reason = first?.reason ?? block.reason ?? null
+  if (availability !== 'available') {
+    const key = (reason && reasonKey(reason)) || availabilityKey(availability)
+    lines.push(<span key="avail" className="trajectory-tool-note">{key ? t(key) : (reason ?? availability)}</span>)
+  }
+  const partial = record ? details.isPartial(record) : false
+  if (partial) lines.push(<span key="partial" className="trajectory-tool-note trajectory-tool-warn">{t('gui.trajectory.details.partial')}</span>)
+  if (record && record.letGo > 0) {
+    lines.push(
+      <span key="dropped" className="trajectory-tool-note">
+        {t('gui.trajectory.details.earlier_unloaded', { n: record.letGo })}
+        {' '}
+        <button className="trajectory-link" onClick={() => { void details.reloadBlock(block.id) }}>{t('gui.trajectory.details.reload_from_start')}</button>
+      </span>,
+    )
+  }
+  const codes = record ? [...new Set(record.pages.flatMap((p) => p.integrity))] : []
+  for (const code of codes) {
+    const key = integrityKey(code)
+    lines.push(<span key={`i-${code}`} className="trajectory-tool-note">{key ? t(key) : code}</span>)
+  }
+  if (block.related_operation) {
+    lines.push(<span key="from" className="trajectory-tool-note">{t('gui.trajectory.details.from_operation', { op: block.related_operation })}</span>)
+  }
+  if (block.id === 'frames') lines.push(<span key="frames" className="trajectory-tool-note">{t('gui.trajectory.details.frames_body_unavailable')}</span>)
+  const canCopy = record !== null && record.pages.some((p) => p.data !== null)
+  return (
+    <div className="trajectory-toolbar">
+      <div className="trajectory-tool-notes">{lines}</div>
+      {canCopy ? (
+        <button
+          className="trajectory-copy"
+          onClick={() => copy(copyText(record), t(partial ? 'gui.trajectory.details.copied_partial' : 'gui.trajectory.details.copied'))}
+        >
+          {t('gui.trajectory.details.copy')}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function Skeleton(): JSX.Element {
+  return (
+    <div className="trajectory-skel" aria-busy="true" aria-label={t('gui.trajectory.details.loading')}>
+      <div className="trajectory-skel-line" /><div className="trajectory-skel-line" /><div className="trajectory-skel-line trajectory-skel-short" />
+    </div>
+  )
+}
+
+export function BlockView({ block }: { block: TrajectoryBlockDescriptor }): JSX.Element {
+  const s = useSyncExternalStore(details.subscribe, details.get)
+  const record = details.block(block.id, s)
+  const loading = details.isLoading({ blockId: block.id }, s)
+  const more = details.isLoading({ blockId: block.id, more: true }, s)
+  const fault = details.fault({ blockId: block.id }, s)
+  const moreFault = details.fault({ blockId: block.id, more: true }, s)
+  const [box, setBox] = useState<HTMLDivElement | null>(null)
+  useWindowAnchor(firstHeldOffset(record), box)
+
+  const identityKey = s.current ? details.descriptorKey(s.current) : null
+  const permitted = details.mayRead(s)
+  const messages = block.renderer === 'messages'
+  useEffect(() => {
+    if (messages) return
+    if (!record && !loading && !fault && identityKey !== null && permitted) void details.loadBlock(block.id)
+  }, [record, loading, fault, identityKey, permitted, block.id, messages])
+  const entryId = s.current?.entryId ?? list.get().selectedId ?? ''
+
+  let body: JSX.Element | null = null
+  if (record) {
+    const first = record.pages[0]
+    const data = first?.data
+    switch (record.renderer) {
+      case 'text':
+        body = isObj(data) && typeof data.text === 'string' ? <TextView text={data.text} /> : null
+        break
+      case 'json':
+        body = isObj(data) ? <JsonView value={data.value} /> : null
+        break
+      case 'key_values':
+        body = isObj(data) && Array.isArray(data.items)
+          ? block.id === 'usage'
+            ? <UsageView items={data.items as unknown[]} />
+            : <KeyValuesView items={data.items as unknown[]} blockId={block.id} />
+          : null
+        break
+      case 'messages':
+        body = null
+        break
+      case 'items':
+      case 'references':
+        body = block.id === 'injected' || block.id === 'used'
+          ? <SkillUseView items={joinedItems(record)} />
+          : <ListView renderer={record.renderer} items={joinedItems(record)} offset={firstHeldOffset(record)} />
+        break
+      default:
+        body = data === undefined || data === null ? null : <JsonView value={data} />
+    }
+  }
+
+  return (
+    <div className="trajectory-block" ref={setBox}>
+      <Toolbar block={block} record={record} />
+      {fault && !messages ? (
+        <p className="trajectory-fault" role="alert">
+          {t('gui.trajectory.details.failed', { detail: fault })}
+          {' '}
+          <button className="trajectory-link" onClick={() => { void details.reloadBlock(block.id) }}>{t('gui.trajectory.details.retry')}</button>
+        </p>
+      ) : null}
+      {messages
+        ? <MessagesView block={block} entryId={entryId} render={(message) => <Message item={message} />} />
+        : !record && loading ? <Skeleton /> : body}
+      {/* Under the raw record, the files it names, each with its content. */}
+      {block.id === 'raw' && details.descriptor(s)?.blocks.some((b) => b.id === 'files')
+        ? <FilesView settled={record !== null} renderJson={(value) => <JsonView value={value} />} renderText={(text) => <TextView text={text} />} />
+        : null}
+      {!messages && record && record.nextCursor !== null ? (
+        <div className="trajectory-more">
+          {moreFault ? <span className="trajectory-fault">{t('gui.trajectory.details.failed', { detail: moreFault })}</span> : null}
+          <button className="trajectory-link" disabled={more} onClick={() => { void details.loadMore(block.id) }}>
+            {more ? t('gui.trajectory.details.loading') : t('gui.trajectory.details.load_more')}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** The scalar renderer, exported for the overview's info rows. */
+export { Scalar }
+
+/** A value the gateway may hand back, for callers that only know it is JSON. */
+export type Json = JsonValue

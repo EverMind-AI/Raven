@@ -19,12 +19,39 @@
  * (src/features/rail/).
  */
 
-/** Served standing: page.html carries no data-rail, and the boot applies open. */
+/** Served standing: page.html carries no data-rail, and the boot applies `stands()`. */
 let open = true
 
 /** Whether the rail stands. */
 export function get(): boolean {
   return open
+}
+
+/* The width below which the rail cannot share the window with the content.
+   The same number as the `@media` block in src/styles/page.css that folds the
+   shell there: one column, the rail an overlay over it when it stands, and no
+   floor under the body -- so the two have to move together. 640 is where the
+   content beside a rail at its narrowest (190px) stops being usable. */
+export const FOLDS = '(max-width: 639px)'
+
+/** The state the boot applies: standing, unless the window folds the shell. */
+export function stands(): boolean {
+  return !matchMedia(FOLDS).matches
+}
+
+/* Shrinking the window under the fold takes a standing rail down, so the
+   content is what the reader keeps. The same shape as the workspace pane's
+   split point (state/ws.ts, `watchNarrow`): what a match does is this module's,
+   the moment it is watched from is src/main.tsx's. No initial check -- the
+   boot asks `stands()` for the first paint -- and nothing on the way back up:
+   a rail the window took down comes back by the twin, like one the reader
+   took down. The query is handed back for the caller to hold. */
+export function watchNarrow(): MediaQueryList {
+  const query = matchMedia(FOLDS)
+  query.addEventListener('change', (e) => {
+    if (e.matches && open) set(false)
+  })
+  return query
 }
 
 /* The writes setRail made, in setRail's order. Unguarded, as it was: every one

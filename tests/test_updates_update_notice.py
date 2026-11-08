@@ -220,13 +220,20 @@ class _FakeUpgrade:
 
 
 def test_upgrade_command_works_follows_the_install_kind(monkeypatch) -> None:
-    """It delegates to the uv-tool probe, so editable installs are not nudged."""
+    """The uv-tool probe alone is not enough: an editable uv-tool install --
+    a source checkout under ./install.sh -- is refused by `raven upgrade` too,
+    so it must not be nudged at a command that always exits 1."""
     import raven.updates.upgrade as upgrade
 
+    monkeypatch.setattr(upgrade, "_is_editable_install", lambda: False)
     monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: True)
     assert un._upgrade_command_works() is True
 
     monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: False)
+    assert un._upgrade_command_works() is False
+
+    monkeypatch.setattr(upgrade, "_is_uv_tool_install", lambda: True)
+    monkeypatch.setattr(upgrade, "_is_editable_install", lambda: True)
     assert un._upgrade_command_works() is False
 
 

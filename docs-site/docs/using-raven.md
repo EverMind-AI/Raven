@@ -15,7 +15,7 @@ be prefixed with `uv run` in a source checkout.
 | Delegate to a specialist | A configured agent in the roster | [Agent Integrations](agent-integrations.md) |
 | Follow up with a specialist | Its stateful instance | [Working with sub-agents](agent-collaboration.md) |
 | Operate a shared browser | Browser tools and the WebUI panel | [Browser collaboration](browser-collaboration.md) |
-| Retrieve document passages | Knowledge library or RPC client | [Knowledge bases](knowledge.md) |
+| Retrieve document passages | WebUI Knowledge page and the conversation's base selection; library/RPC for integrations | [Knowledge bases](knowledge.md) |
 | Run and watch a long job | Raven-Oncall with a declared campaign | [Long-running work (Oncall)](oncall.md) |
 | Integrate an editor or remote peer | ACP or A2A | [Agent Protocols](agent-protocols.md) |
 
@@ -34,9 +34,13 @@ raven agent --workspace /absolute/path/to/project -m "Read the README and summar
 ```
 
 This executes a model turn and can incur provider charges. For changes, state
-which files may be edited and how to verify the result. Parallel coding agents
-do not automatically receive separate worktrees: divide file ownership or give
-them separate working copies.
+which files may be edited and how to verify the result. For parallel coding
+tasks in a Git project, the host's `multi-agent-coding` skill instructs each
+coding agent to create a separate worktree and report its path and branch.
+Check those reports before coordinating concurrent edits. See
+[Working with sub-agents](agent-collaboration.md#models-modes-and-shared-files)
+for this workflow and [DAG orchestration](orchestration.md) for manually
+constructed graphs.
 
 ## Continue a conversation
 
@@ -52,6 +56,47 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 Use the UI's conversation picker for interactive sessions. A sub-agent
 `instance` continues that child's conversation; it is not the host session id
 or a DAG node id. See [DAG Orchestration](orchestration.md).
+
+## Set the reasoning effort
+
+The reasoning effort is how much the model thinks before each answer. The words
+a conversation may pick are the ones its model declares: `minimal`, `low`,
+`medium` and `high` on most models, `xhigh` or `max` where the provider
+publishes them, and whatever narrower ladder an API actually takes (DeepSeek
+offers `low`, `high` and `max`, folding `minimal` onto `low` and `medium` onto
+`high`). The ladder follows the provider that serves the request, not only the
+model's name: the same model reached through a gateway takes the gateway's
+words. A model that declares none offers no row at all. Each provider
+maps the words to its own request (Anthropic's adaptive effort and thinking
+budgets, the `reasoning_effort` field of OpenAI-style APIs), and a model with no
+thinking to move ignores them. Left unset, the provider's own default applies.
+
+Two places set it:
+
+- **For every conversation**: in the WebUI, open Settings, then *Parameters* on
+  the *Chat* row, then *Reasoning effort*; or set
+  `agents.defaults.reasoningEffort` in `~/.raven/config.json`. The first rung,
+  *Provider default*, clears the key.
+- **For one conversation**: the *Reasoning effort* row of the model picker in
+  the WebUI (open it from the model chip beside the composer), or `/effort
+  <word>` in the TUI. `/effort` alone reports the effort in force, and
+  `/effort default` returns the conversation to the global setting. Inside a
+  direct chat with a sub-agent instance the command is refused: the pick is
+  the main conversation's, and an instance has none of its own.
+
+A model's words can also be declared in the provider's
+`model_overlay.reasoningEfforts` (Settings, then *Advanced* on the provider,
+*Add* under display names). A non-empty declaration outranks LiteLLM's table
+for that model, including a route the table marks as not reasoning; leave it
+blank to fall back to the table.
+
+A pick made for one conversation outranks the global setting and the
+conversation's mode. It is kept on the conversation's own record, so it survives
+a gateway restart and comes back when the conversation is resumed, and it lands
+on the next turn. A pick the current model does not declare is not sent: the
+conversation's mode word or the global setting runs instead, and the pick stays
+saved for a model that declares it. It moves Raven's own model calls only;
+sub-agents keep the configured default.
 
 ## Add capability deliberately
 

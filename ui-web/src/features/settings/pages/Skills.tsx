@@ -4,16 +4,18 @@
 import { t } from '../../../i18n/t'
 import { md } from '../../../lib/prose'
 import * as confirm from '../../../state/confirm'
-import { Card, Crumb, Empty, GLYPH, Grow, IconBtn, Search, Switch, Tag } from '../Fields'
+import { Card, Crumb, Empty, GLYPH, Grow, IconBtn, Row, Search, Switch, Tag } from '../Fields'
 import { SkillDetailWait } from '../Skeletons'
+import { dig } from '../source'
 import * as store from '../store'
 
 import type { SkillDetail, SkillRow } from '../types'
 import type { JSX } from 'react'
 
+/* The block as the file spells it: `dig` reads `skillForge` or `skill_forge`. */
 export function blocklist(raw: Record<string, unknown>): string[] {
-  const forge = raw.skillForge as { blocklist?: string[] } | undefined
-  return (forge && forge.blocklist) || []
+  const block = dig(raw, 'skillForge') as { blocklist?: string[] } | undefined
+  return (block && block.blocklist) || []
 }
 
 /* Hub-installed skills live under the workspace whichever route put them
@@ -23,6 +25,22 @@ const MAIN_FILE = 'SKILL.md'
 
 /* `inspect` answers the SKILL.md path; the uninstall removes its directory. */
 const skillDir = (path: unknown): string => String(path || '').replace(/[\\/]SKILL\.md$/, '')
+
+const HUB_SWITCH = 'skillForge.router.hub.enabled'
+
+/* The switch draws settings.get's answer, not the raw file: the runtime reads
+   the file through the loader's migrations (a legacy top-level router, retired
+   keys) and its boolean rules, and a page-side copy of either drifts. */
+function HubCard({ on, awaitingReload }: { on: boolean; awaitingReload: boolean }): JSX.Element {
+  const label = t('gui.settings.skills.hub_title')
+  return (
+    <Card title={t('gui.settings.skills.hub_card')}>
+      <Row label={label} sub={t(awaitingReload ? 'gui.settings.skills.hub_sub_reload' : 'gui.settings.skills.hub_sub')}>
+        <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next)} />
+      </Row>
+    </Card>
+  )
+}
 
 /* SKILL.md opens with a YAML block the registry reads; the person reads the
    prose under it. */
@@ -59,7 +77,17 @@ function SkillList(): JSX.Element {
   const groups = all.filter(([, rows]) => rows.length)
   return (
     <>
-      <Search id="skq" value={s.skq} placeholder={t('gui.settings.skills.search')} onChange={(v) => store.set({ skq: v })} />
+      {/* The search and the add button on one line. Installing is not this
+          page's: use_skill fetches a Skill Hub bundle on Raven's own judgment,
+          which no row here can do, so the button leads into the chat with the
+          request half written (store.addInChat says how it gets there). */}
+      <div className="settings-crumb">
+        <Search id="skq" value={s.skq} placeholder={t('gui.settings.skills.search')} onChange={(v) => store.set({ skq: v })} />
+        <button type="button" className="mini" onClick={() => store.addInChat(t('gui.settings.skills.add_prompt'))}>
+          {t('gui.settings.skills.add')}
+        </button>
+      </div>
+      <HubCard on={s.snap.skillHub.on} awaitingReload={s.snap.skillHub.awaitingReload} />
       {groups.map(([label, rows]) => {
         const onN = rows.filter((r) => !blocked.has(r.name)).length
         const count = onN === rows.length ? String(rows.length) : t('gui.settings.skills.on_of', { on: onN, total: rows.length })

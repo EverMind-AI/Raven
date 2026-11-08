@@ -160,10 +160,24 @@ function probeText(p: ConnectProbe): string {
     case 'rate_limited': return t('gui.settings.providers.probe_rate_limited')
     case 'network_error': return t('gui.settings.providers.probe_unreachable')
     case 'proxy_unreachable': return t('gui.settings.providers.probe_proxy')
+    case 'certificate_untrusted': return t('gui.settings.providers.probe_certificate')
     case 'no_probe_endpoint': return t('gui.settings.providers.probe_no_endpoint')
     case 'key_unchecked': return t('gui.settings.providers.probe_unchecked')
     default: return t('gui.settings.providers.probe_unknown', { status: p.status })
   }
+}
+
+/* A row's chip. "Connected" -- unless the vendor itself refused the stored
+   key, where "Connected" beside "the provider rejects the saved key" was two
+   answers to one question, and the chip now says which. Read off `refused`,
+   the backend's own verdict, not off `invalid_key`: a 403 maps to that status
+   too, and a 403 can mean a region, a plan or a proxy -- a key that may well
+   be fine. Any other failed test keeps "Connected" in the warning colour. */
+function rowChip(slug: string): { state: 'on' | 'warn'; text: string } {
+  const probe = store.get().probes[slug]
+  if (store.isBusy(`probe:${slug}`) || !probe) return { state: 'on', text: t('gui.settings.providers.connected') }
+  if (probe.refused) return { state: 'warn', text: t('gui.settings.providers.key_rejected') }
+  return { state: probeTone(probe) === 'warn' ? 'warn' : 'on', text: t('gui.settings.providers.connected') }
 }
 
 /* A connected provider's test: "testing" while it runs, then its verdict,
@@ -303,7 +317,7 @@ export function Providers({ setup }: { setup?: boolean }): JSX.Element {
       {!on.length && s.provAdd === null && <div className="settings-rows"><Row><Rov>{t('gui.settings.providers.none')}</Rov></Row></div>}
       {on.map((p) => (
         <div key={p.id} className="settings-prow2">
-          <Chip state={!store.isBusy(`probe:${p.id}`) && probeTone(s.probes[p.id]) === 'warn' ? 'warn' : 'on'}>{t('gui.settings.providers.connected')}</Chip>
+          <Chip state={rowChip(p.id).state}>{rowChip(p.id).text}</Chip>
           <span className="settings-pn2">{p.name}</span>
           {kindOf(p) === 'oauth' && <Tag>{t('gui.settings.providers.subscription')}</Tag>}
           {(p.configured || []).length > 0 && <span className="settings-kk">{t('gui.settings.providers.n_models', { n: (p.configured || []).length })}</span>}

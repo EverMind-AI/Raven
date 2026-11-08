@@ -5,9 +5,11 @@ import * as page from '../../state/page'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
+import { familyOf } from './catalogue'
+import * as machines from './machines'
 import { isFound, remedyOf, runsAgent, sectionOf, stageOf } from './source'
 
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, PresetChoice, Remedy } from './types'
 
 /* Page state, outside React on purpose: two of the callers that drive this page
  * are not React. The rail opens it (chrome/Rail.tsx) and Esc closes it
@@ -47,6 +49,10 @@ export const disconnects = (p: Pending): boolean => p.op === 'toggle' && p.args.
 
 export interface ExtAgentsState {
   rows: ExtAgentRow[]
+  /* Which of the page's two modules is drawn: the agents, or the machines
+     they may run on. Both live here because they share the cards, the
+     sheets and the drawer; the hub's header switches between them. */
+  module: 'agents' | 'machines'
   /* The one flag only the page can answer: which card is open. It is about what
      is drawn, so it does not belong to whichever source is answering. */
   sheet: string | null
@@ -76,6 +82,13 @@ export interface ExtAgentsState {
      a toast that is gone before the reader looks up. Cleared by the next
      write on the same row, whichever way that one goes. */
   failed: Record<string, Failure>
+  /* The model-menu re-reads in flight, by row name, and the last that failed
+     with the server's reason. A read, not a write the reader asked for: it
+     patches the one row's menu in place instead of replacing the roster from a
+     listing, because the picker waiting on it is open inside a sheet a fresh
+     `epoch` would remount and close. */
+  menusBusy: string[]
+  menusFailed: Record<string, string>
   /* What the reader typed into a preset's description before connecting it.
      A preset has no row to write until `subagents.add`, so the text waits
      here and travels with the add. */
@@ -84,21 +97,130 @@ export interface ExtAgentsState {
      say "still not found" rather than nothing. Cleared when the row leaves
      the missing section. */
   stillMissing: string[]
+  /* The machine card open in the shared drawer -- a registry id, or `new` for
+     the register form -- and the agent sheet's twin: at most one of the two
+     is set. */
+  msheet: string | null
+  /* Where the reader wants a preset to run, picked in its sheet before the
+     connect: a machine id (empty for this computer) and, for an acp or cli
+     row, the working directory there. Held like `drafts`, until the add. */
+  wheres: Record<string, { machine: string; remote_cwd: string }>
+  /* The family whose picker is open, or null. Deliberately NOT `sheet`: that
+     one holds a row name and is resolved by looking it up in `rows`, so a
+     group key written there opens an empty drawer -- and `run` closes the
+     drawer whenever the open name leaves the rows, which a group key never
+     enters. Unlike the sheet, the picker is not remounted per `epoch`: every
+     load bumps that, and the picker holds a choice in progress -- a model
+     picker open in it -- that a reload after another row's write must not
+     throw away. */
+  picking: string | null
+  /* The model the reader picked for an agent that is not on the roster yet, by
+     row name -- in the family picker or in the agent's own sheet. A preset has
+     no row to hold it until `subagents.add`, so -- like `drafts` -- the pick
+     waits here and travels with the add, which is what makes an agent and its
+     model one write. Here rather than in the row's component, which a reload
+     would reset to the agent's default without the reader touching it. */
+  picked: Record<string, string>
+  /* The machine whose "connect an agent on this machine" form is open in the
+     drawer, by registry id, or null: the fourth thing the one drawer draws,
+     exclusive with the other three. */
+  mconnect: string | null
+  /* What that form chooses from, read when it opens and again when an add
+     lands on its machine while it is open, the latest read being the one
+     kept; null before the answer, and the read's refusal beside it. */
+  presets: PresetChoice[] | null
+  presetsFailed: string
+  /* Each opening of that form is a generation, and the write in flight
+     carries the generation it was pressed in: the add's readiness ping can
+     take a minute, the drawer stays closable meanwhile, and a form closed or
+     replaced by then is left alone when the write ends -- its result is told
+     in a toast, not on whatever the reader is looking at now. `mconnectBusy`
+     is the generation with a write in flight, or null. */
+  mconnectGen: number
+  mconnectBusy: number | null
+  /* That form's refusal -- the agent's words when it did not answer on the
+     machine -- for the form it was pressed in. */
+  mconnectFailed: string
+  /* The adds in flight from any opening of that form, by the name each will
+     land under (`<preset>@<machine>`): the generation above says whose form
+     a write is, this says that the write is still running -- or has landed,
+     and the form open on that machine is still reading its presets again. A
+     form opened on the same machine meanwhile greys that preset instead of
+     offering a second add of it, which the server would ping and then refuse
+     as a duplicate. */
+  mconnectPending: string[]
+  /* When the write in flight was pressed, for the form to say how long it has
+     waited; null when none is. */
+  mconnectSince: number | null
+  /* How the form's last wait ended without an answer: the reader's Cancel,
+     the ceiling, or a stop that found nothing left to stop (`missed`), which
+     means the connect was past the point where it could be cancelled and may
+     have been written, or a Cancel whose stop never said it stopped the run
+     (`unconfirmed`) (`awaitRun`). None is the agent's refusal, and the form
+     says each in its own words; cleared by the next press and the next opening. */
+  mconnectStopped: '' | Stopped
+  /* Cancel pressed, and the run not yet stopped: the button says so once. */
+  mconnectCancelling: boolean
+  /* The stop answered that nothing was running, so the wait goes on for the
+     connect's own answer, and the form says it is too late to cancel. */
+  mconnectLate: boolean
 }
 
 const store = makeStore<ExtAgentsState>({
   rows: [],
+  module: 'agents',
   sheet: null,
   epoch: 0,
   testing: [],
   loading: false,
   joining: {},
   failed: {},
+  menusBusy: [],
+  menusFailed: {},
   drafts: {},
   stillMissing: [],
+  msheet: null,
+  wheres: {},
+  picking: null,
+  picked: {},
+  mconnect: null,
+  presets: null,
+  presetsFailed: '',
+  mconnectGen: 0,
+  mconnectBusy: null,
+  mconnectFailed: '',
+  mconnectPending: [],
+  mconnectSince: null,
+  mconnectStopped: '',
+  mconnectCancelling: false,
+  mconnectLate: false,
 })
 
-export const { get, subscribe, _resetForTests } = store
+export const { get, subscribe } = store
+
+/* How long the machine form waits for a connect's answer before it stops the
+   run itself, and how long it then gives the answer to arrive. The ceiling is
+   above the server's own worst case for the add -- the node launch, the
+   preset's start window and the answer, then the capability record's two
+   requests of up to that window each: 120 + 60 + 240 = 420s for the slowest
+   preset, before the link's own calls -- so a connect that is merely slow is
+   never cut short, while a wait with no end (a connection that dropped
+   without the socket saying so, seen once on 2026-10-20) ends here instead
+   of never. */
+const CONNECT_CEILING_MS = 10 * 60_000
+const STOP_GRACE_MS = 8_000
+let connectCeilingMs = CONNECT_CEILING_MS
+let stopGraceMs = STOP_GRACE_MS
+
+/* Test seam: the value back to its first, and the two waits above set short
+   for a case that cannot wait minutes. */
+export function _resetForTests(waits: { ceilingMs?: number; graceMs?: number } = {}): void {
+  store._resetForTests()
+  connectCeilingMs = waits.ceilingMs ?? CONNECT_CEILING_MS
+  stopGraceMs = waits.graceMs ?? STOP_GRACE_MS
+  freshMenus.clear()
+  reads = 0
+}
 
 /** A patch, merged into the page's state. */
 export function set(patch: Partial<ExtAgentsState>): void {
@@ -135,18 +257,77 @@ const failure = (e: unknown): string => {
    `data.remedy` when the server could name a fix. */
 const remedyFrom = (e: unknown): Remedy | null => remedyOf((e as { data?: { remedy?: unknown } } | null)?.data?.remedy)
 
+/* Whether the refusal is that the row's run was stopped -- before it
+   answered, or while its capabilities were recorded after it did
+   (`data.cancelled`): the server writes nothing then, as for any refusal, and
+   the row is left as it was rather than marked failed. */
+const cancelledFrom = (e: unknown): boolean => !!(e as { data?: { cancelled?: unknown } } | null)?.data?.cancelled
+
 /* `load(true)` re-measures availability. Opening the page is one caller --
    the section heading there is a fresh answer every time the reader arrives --
    the sheet's re-check button is another, and the wizard's agents step a third,
    on its own schedule rather than through page navigation. `rescan` is the
    re-check's alone: see `ExtAgentsSource.load`. */
-export async function load(probe: boolean, rescan = false): Promise<void> {
+export function load(probe: boolean, rescan = false): Promise<void> {
+  return read(probe, rescan, false)
+}
+
+/* The page's rows before the reader opens it: the probe-less list is config and
+   the last recorded verdicts, so it starts no agent process. The page's own
+   open still re-measures behind this; `read`'s sequence is what keeps a slow
+   preload from painting over that fresher answer. A failure here is silent --
+   there is no page to explain it on, and the open will report the same read. */
+export function warm(): Promise<void> {
+  return read(false, false, true)
+}
+
+let reads = 0
+
+/* Menus this page read itself, which a listing already in flight must not paint
+   over: one row's handshake can answer before the roster read that started
+   earlier, and that read carries the menu as it stood before. Kept with the
+   read mark it was taken under, applied to a listing that started no later than
+   the patch, and dropped once a listing that started after it lands -- that one
+   was fetched afterwards, so its menu is the server's record of the same read. */
+type FreshMenu = { atRead: number; models: ExtAgentRow['model_choices']; efforts: ExtAgentRow['effort_choices'] }
+
+const freshMenus = new Map<string, FreshMenu>()
+
+function keepingFreshMenus(rows: ExtAgentRow[], read: number): ExtAgentRow[] {
+  let patched = false
+  const kept = rows.map((row) => {
+    const fresh = freshMenus.get(row.name)
+    if (!fresh || fresh.atRead < read) return row
+    patched = true
+    return { ...row, model_choices: fresh.models, effort_choices: fresh.efforts }
+  })
+  for (const [name, fresh] of freshMenus) if (fresh.atRead < read) freshMenus.delete(name)
+  /* Untouched rows are the very objects the listing answered with: the page
+     compares them by identity to decide what to redraw. */
+  return patched ? kept : rows
+}
+
+async function read(probe: boolean, rescan: boolean, quiet: boolean): Promise<void> {
+  const seq = ++reads
   set({ loading: true })
   try {
     const rows = await source().load(probe, rescan)
-    set({ rows, epoch: get().epoch + 1, loading: false })
+    /* A read that started earlier and landed after a newer one is stale: its
+       rows are the roster as it stood before that newer answer. The newer read
+       owns the table, and it is the one that clears `loading`. */
+    if (seq !== reads) return
+    /* A probe re-measures every row, so a menu note left by an earlier read is
+       news about a measurement this listing has just replaced. */
+    set({
+      rows: keepingFreshMenus(rows, seq),
+      epoch: get().epoch + 1,
+      loading: false,
+      ...(probe ? { menusFailed: {} } : {}),
+    })
   } catch (e) {
+    if (seq !== reads) return
     set({ loading: false })
+    if (quiet) return
     /* Through `failure` like every other rejection here: the rpc client rejects
        with the error frame verbatim, and `String()` on that object is
        "[object Object]" -- not a hard-to-read reason but no reason at all. */
@@ -155,10 +336,21 @@ export async function load(probe: boolean, rescan = false): Promise<void> {
 }
 
 export function open(): void {
+  set({ module: 'agents' })
+  hub.visited('agents')
   page.show('extAgentsPage')
   void load(true)
 }
 hub.onOpen('agents', open)
+
+/** The page's other module: the registered machines, their links and nodes. */
+export function openMachines(): void {
+  set({ module: 'machines' })
+  hub.visited('machines')
+  page.show('extAgentsPage')
+  void machines.load()
+}
+hub.onOpen('machines', openMachines)
 
 export function close(): void {
   page.show(null)
@@ -175,6 +367,13 @@ export function close(): void {
 let started = 0
 let landed = 0
 
+/* A write the server refused, as `run` reports it: the server's sentence,
+   the fix it named, and whether the refusal is that the run was stopped
+   (`cancelled`) -- the reader's Stop or the machine form's Cancel reaching
+   the one real prompt a connect proves the row with, which is no failure of
+   the row. */
+export type Refused = Pick<Failure, 'detail' | 'remedy'> & { cancelled?: boolean }
+
 /* Every write goes through here: one place that repaints from whatever the
    source answered, so no caller has to remember to. A failure is toasted
    unless the caller says it will show it itself; either way it is returned,
@@ -184,9 +383,15 @@ export async function run(
   row?: ExtAgentRow,
   args?: ExtAgentActArgs,
   opts: { quiet?: boolean } = {},
-): Promise<Pick<Failure, 'detail' | 'remedy'> | null> {
+): Promise<Refused | null> {
   let rows = get().rows
-  let failedWith: Pick<Failure, 'detail' | 'remedy'> | null = null
+  /* This write's listing is newer than anything a read started before it can
+     answer with, and it is a probe, so those reads are stale the moment it
+     lands. The same mark orders the menus this page read itself (see
+     `freshMenus`): a handshake that answered before this started is not fresher
+     than the listing fetched after it. */
+  const seq = ++reads
+  let failedWith: Refused | null = null
   /* A rename moves the open sheet, but only once the rows that carry the new
      name are here: the sheet is resolved by looking the name up in rows, so
      moving it any earlier resolves to nothing, and the shared drawer -- which
@@ -201,6 +406,7 @@ export async function run(
   } catch (e) {
     const remedy = remedyFrom(e)
     failedWith = remedy ? { detail: failure(e), remedy } : { detail: failure(e) }
+    if (cancelledFrom(e)) failedWith.cancelled = true
     /* A refusal repaints from the listing as it is now, never from the rows
        held when this write started: writes run side by side (five Connects
        pressed at once), and a slow one that fails would otherwise put back the
@@ -215,8 +421,23 @@ export async function run(
     rows = await source().load(true).catch(() => get().rows)
   }
   landed = gen
-  const next: Partial<ExtAgentsState> = { rows, epoch: get().epoch + 1 }
+  const next: Partial<ExtAgentsState> = { rows: keepingFreshMenus(rows, seq), epoch: get().epoch + 1 }
   if (renamed && get().sheet === row?.name) next.sheet = renamed
+  /* The row now holds the model, so the waiting pick has done its job. Left
+     behind, it came back when the member was disconnected and folded into the
+     card again, long after the row had moved off that model. */
+  if (!failedWith && op === 'connect' && row && get().picked[row.name]) next.picked = without(get().picked, row.name)
+  /* Every write ends on a probe listing, and a Test is that measurement: the
+     menu note from an earlier failed read is about a row this has just
+     re-measured, so it goes with it. Only on success -- a refused write says
+     nothing about the menu. */
+  if (failedWith === null && row) next.menusFailed = without(get().menusFailed, row.name)
+  /* This write took the sequence above, so a roster read already in flight
+     returns through `read`'s stale guard without clearing `loading` -- it is
+     the read that owns that flag. Nothing else would: the write's own rows are
+     here, so the page is not waiting for anything any more. A read that started
+     after this one is the newer owner and keeps the flag it set. */
+  if (seq === reads) next.loading = false
   set(next)
   if (get().sheet && !rows.some((x) => x.name === get().sheet)) closeSheet()
   watchBuilds(rows)
@@ -232,15 +453,27 @@ const without = <T>(map: Record<string, T>, name: string): Record<string, T> => 
 
 /* One row's write, held on `joining` for its length and remembered on `failed`
    when it does not land. Every verb -- the hub's and the wizard's -- comes
-   through here. */
-export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
+   through here. A run the reader stopped is returned but not remembered:
+   nothing was written and nothing failed, so the row goes back to what it
+   was, with no refusal to retry. */
+export async function attempt(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<Refused | null> {
   set({ joining: { ...get().joining, [row.name]: { op, args } }, failed: without(get().failed, row.name) })
   try {
     const refused = await run(op, row, args, { quiet: true })
-    if (refused !== null) set({ failed: { ...get().failed, [row.name]: { op, args, ...refused } } })
+    if (refused !== null && !refused.cancelled) {
+      const kept: Failure = { op, args, detail: refused.detail }
+      if (refused.remedy) kept.remedy = refused.remedy
+      set({ failed: { ...get().failed, [row.name]: kept } })
+    }
+    return refused
   } finally {
     set({ joining: without(get().joining, row.name) })
   }
+}
+
+/* The same write, for the callers that only start it and read the row after. */
+export async function act(row: ExtAgentRow, op: ExtAgentOp, args: ExtAgentActArgs = {}): Promise<void> {
+  await attempt(row, op, args)
 }
 
 /* The same write again, as it was asked for. */
@@ -254,14 +487,26 @@ export function retry(row: ExtAgentRow): void {
    one switched off has its flag put back, a stale one -- its preset moved to
    another transport -- is removed and re-added. The page confirms the stale
    case before calling this; the key case never reaches here, since the
-   credential is typed in the sheet and saved from there. */
-export function connectRow(row: ExtAgentRow): void {
+   credential is typed in the sheet and saved from there.
+
+   The model the reader picked for the agent travels with that add: a preset has
+   no row to hold it until then, and the add is the one write that lands the
+   agent and its model together. An update would be refused -- there is no row
+   of that name to update yet -- and the agent would run on its own default
+   instead of the one that was picked. */
+export function connectRow(row: ExtAgentRow): Promise<void> {
   const stage = stageOf(row)
   if (stage === 'add') {
     const description = get().drafts[row.name]
-    void act(row, 'connect', description ? { description } : {})
-  } else if (stage === 'stale') void act(row, 'migrate')
-  else void act(row, 'toggle', { enabled: true })
+    const held = get().picked[row.name]
+    /* A pick outlives a menu that has since dropped it -- the handshake is
+       re-measured behind the page -- and the add refuses a model the agent no
+       longer offers. The agent's own default is the better answer. */
+    const model = held && (row.model_choices || []).some(choice => choice.value === held) ? held : ''
+    return act(row, 'connect', { ...(description ? { description } : {}), ...(model ? { model } : {}), ...whereArgs(row.name) })
+  }
+  if (stage === 'stale') return act(row, 'migrate')
+  return act(row, 'toggle', { enabled: true })
 }
 
 /* Only marks it unavailable in the registry: the entry, the folder and the
@@ -282,10 +527,25 @@ export async function saveKey(row: ExtAgentRow, api_key: string): Promise<void> 
   if (!api_key) return
   if (!row.configured) {
     const description = get().drafts[row.name]
-    return act(row, 'connect', description ? { api_key, description } : { api_key })
+    return act(row, 'connect', { api_key, ...(description ? { description } : {}), ...whereArgs(row.name) })
   }
   await act(row, 'update', { api_key })
   if (!row.enabled && !get().failed[row.name]) await act(row, 'toggle', { enabled: true })
+}
+
+/* Where a preset will run, as the reader picked it in the sheet: travels with
+   the connect, like `drafts`. Nothing is written for this computer. */
+export const whereOf = (name: string): { machine: string; remote_cwd: string } =>
+  get().wheres[name] || { machine: '', remote_cwd: '' }
+
+export function setWhere(name: string, machine: string, remote_cwd: string): void {
+  set({ wheres: { ...get().wheres, [name]: { machine, remote_cwd } } })
+}
+
+const whereArgs = (name: string): ExtAgentActArgs => {
+  const where = get().wheres[name]
+  if (!where || !where.machine) return {}
+  return where.remote_cwd ? { machine: where.machine, remote_cwd: where.remote_cwd } : { machine: where.machine }
 }
 
 /* What this agent is good at, as the reader words it. A row that exists takes
@@ -304,6 +564,47 @@ export function setModel(row: ExtAgentRow, model: string, provider?: string): Pr
 
 export function clearModel(row: ExtAgentRow): Promise<void> {
   return act(row, 'model', { clear_model: true })
+}
+
+/* The row's reasoning effort, from the agent's own thought_level menu. Held on
+   the row like the model: a refused pick stays visible with the value to retry. */
+export function setEffort(row: ExtAgentRow, effort: string): Promise<void> {
+  return act(row, 'effort', { effort })
+}
+
+export function clearEffort(row: ExtAgentRow): Promise<void> {
+  return act(row, 'effort', { clear_effort: true })
+}
+
+/* Re-read one row's model menu from its agent's own handshake. The server opens
+   an acp session and never prompts it, so this spends no quota -- which is what
+   lets a picker opening carry it, where a Test must wait for a press.
+
+   The answer patches this one row, and only its menu. It does not go through
+   `run`: that replaces the roster from a listing and bumps `epoch`, which
+   remounts the sheet and closes the picker the reader has open. A failed read
+   leaves the recorded menu in place and is kept on the row, so the picker can
+   say why the list it shows is the old one. */
+export async function refreshMenus(row: ExtAgentRow, opts: { force?: boolean } = {}): Promise<void> {
+  const name = row.name
+  if (get().menusBusy.includes(name)) return
+  set({ menusBusy: [...get().menusBusy, name], menusFailed: without(get().menusFailed, name) })
+  try {
+    const got = await source().refreshMenus(row, !!opts.force)
+    /* The patch below stands until a listing that started after it lands; one
+       already in flight carries the menu as it stood before this answered. */
+    freshMenus.set(name, { atRead: reads, models: got.models, efforts: got.effortChoices })
+    set({
+      rows: get().rows.map((r) =>
+        r.name === name ? { ...r, model_choices: got.models, effort_choices: got.effortChoices } : r,
+      ),
+    })
+    if (!got.ok) set({ menusFailed: { ...get().menusFailed, [name]: got.detail } })
+  } catch (e) {
+    set({ menusFailed: { ...get().menusFailed, [name]: failure(e) } })
+  } finally {
+    set({ menusBusy: get().menusBusy.filter((n) => n !== name) })
+  }
 }
 
 /* What the reader typed for a preset, or nothing. */
@@ -404,10 +705,366 @@ export function detailHost(): HTMLDivElement {
 
 export function sheetOpen(row: ExtAgentRow): void {
   detail.open('extAgents')
-  set({ sheet: row.name, epoch: get().epoch + 1 })
+  /* `msheet` and `picking` go with it: all three portal into the one drawer,
+     and a sheet opened over the picker or a machine card would otherwise draw
+     beside it. */
+  set({ sheet: row.name, msheet: null, picking: null, mconnect: null, epoch: get().epoch + 1 })
+}
+
+/** The drawer on a machine card (its registry id), or on the register form (`new`). */
+export function machineSheetOpen(id: string): void {
+  detail.open('extAgents')
+  set({ msheet: id, sheet: null, picking: null, mconnect: null, epoch: get().epoch + 1 })
+}
+
+/** The drawer on a machine's "connect an agent on this machine" form; the presets are read as it opens. */
+export function machineConnectOpen(id: string): void {
+  detail.open('extAgents')
+  set({
+    mconnect: id,
+    msheet: null,
+    sheet: null,
+    picking: null,
+    presets: null,
+    presetsFailed: '',
+    mconnectGen: get().mconnectGen + 1,
+    mconnectBusy: null,
+    mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
+    mconnectLate: false,
+    epoch: get().epoch + 1
+  })
+  void loadPresets()
+}
+
+/* Reads of the presets, counted: only the latest one is written, so a read
+   started when a form opened cannot land over the one a finished add asked
+   for after it. */
+let presetsRead = 0
+
+async function loadPresets(): Promise<void> {
+  const read = ++presetsRead
+  try {
+    const presets = await source().presets()
+    if (read === presetsRead) set({ presets, presetsFailed: '' })
+  } catch (e) {
+    if (read === presetsRead) set({ presets: [], presetsFailed: failure(e) })
+  }
+}
+
+/* The add from the machine's side: the preset on that machine, under the
+   server's default name (`<preset>@<machine>`). `landed` when it was written,
+   with the `name` it landed under; the roster is read again then, with the
+   probe, so the new card arrives with its verdict. `current` says whether the
+   form it was pressed in is still the one open -- the same machine, the same
+   opening -- which is the only form a refusal is written to and the only
+   drawer the caller may put the machine's sheet back into: closed or replaced
+   meanwhile, the write's end changes nothing on screen. The busy mark is
+   cleared only when it is still this write's. */
+type Stopped = 'cancelled' | 'timeout' | 'missed' | 'unconfirmed'
+/* What the stop answered: it found the run and stopped it, it found nothing
+   running, or the call failed. Only `stopped` lets a Cancel say nothing was
+   written. */
+type StopAnswer = 'stopped' | 'nothing' | 'unknown'
+/* `answer` resolves whenever the stop answers: a wait that ended before it
+   did is corrected by it (`sayStopped`). */
+type Outcome<T> = { got: T } | { stopped: Stopped; answer: Promise<StopAnswer> }
+
+/* The end of a form's wait other than the answer, by generation: the form's
+   Cancel resolves it, and so does the ceiling's timer. */
+const stops = new Map<number, (why: Stopped) => void>()
+
+/* The form's wait on a connect's write, bounded two ways: by the reader's
+   Cancel and by the ceiling. Either way the run is stopped server-side -- the
+   call that stops a test, on the name the entry has or lands under -- and the
+   write is given a moment to answer, with the refusal that says it was
+   stopped or with an answer that was already on its way. Past that, the wait
+   is over whatever the write does later; the caller still reads a late
+   landing. Without this the form sat on one line for as long as the socket
+   stayed silent, with nothing to press.
+
+   The stop request is sent, not awaited: the transport gives a call no
+   timeout of its own, so on the socket that went silent -- the case the
+   ceiling exists for -- awaiting it would hang the wait on a second call
+   exactly as the first one hung it. The grace runs from the moment the stop
+   is sent, whatever becomes of that call.
+
+   Its answer is still read, alongside the grace: a stop that found nothing
+   running means the connect is past the point where it can be cancelled --
+   its run answered and it is writing, or its run had not started yet -- and
+   it may still land. Then the form does not say it was cancelled: it says it
+   is too late to, and goes on waiting for the connect's own answer, up to
+   the ceiling (and one more grace when the ceiling is what pressed the stop).
+   Unanswered by then, the wait ends as `missed`, which says it may have been
+   written. A Cancel whose grace ends before the stop said it stopped the run
+   -- no answer yet, or the call failed -- ends as `unconfirmed`, not
+   `cancelled`: nothing is known about the write either way. */
+async function awaitRun<T>(gen: number, name: string, write: Promise<T>): Promise<Outcome<T>> {
+  const answered = write.then((got): Outcome<T> => ({ got }))
+  const deadline = Date.now() + connectCeilingMs
+  let reason: Stopped = 'cancelled'
+  const stopped = new Promise<Stopped>((resolve) => {
+    stops.set(gen, (why) => {
+      reason = why
+      resolve(why)
+    })
+  })
+  const ceiling = setTimeout(() => stops.get(gen)?.('timeout'), connectCeilingMs)
+  const timers: ReturnType<typeof setTimeout>[] = []
+  const after = (ms: number): Promise<null> => new Promise((resolve) => timers.push(setTimeout(() => resolve(null), ms)))
+  try {
+    const first = await Promise.race([answered, stopped.then(() => null)])
+    if (first) return first
+    const heard: { answer?: StopAnswer } = {}
+    const answer = source()
+      .cancelRun(name)
+      .then(
+        (ok): StopAnswer => (ok ? 'stopped' : 'nothing'),
+        (): StopAnswer => 'unknown'
+      )
+      .then((said) => (heard.answer = said))
+    const late = Symbol('late')
+    const second = await Promise.race([answered, after(stopGraceMs), answer.then((said) => (said === 'nothing' ? late : new Promise<never>(() => {})))])
+    if (second === late) {
+      if (get().mconnectBusy === gen) set({ mconnectLate: true, mconnectCancelling: false })
+      const rest = Math.max(deadline - Date.now(), stopGraceMs)
+      return (await Promise.race([answered, after(rest)])) ?? { stopped: 'missed', answer }
+    }
+    if (second) return second
+    return { stopped: reason === 'cancelled' && heard.answer !== 'stopped' ? 'unconfirmed' : reason, answer }
+  } finally {
+    clearTimeout(ceiling)
+    for (const timer of timers) clearTimeout(timer)
+    stops.delete(gen)
+  }
+}
+
+/* Each press of the form, counted: a stop's late answer or a late landing
+   corrects the note only while it is still the note of the press it belongs
+   to, on the form that press was made in. */
+let presses = 0
+
+/* The form after a wait that ended without the connect's answer: the note
+   for how it ended, then the corrections the note may need later. A stop that
+   answers, after the grace, that nothing was running turns the note into
+   `missed`; one that answers it stopped the run turns `unconfirmed` into
+   `cancelled`, and so does the connect's own refusal as cancelled; and a
+   connect that lands after all takes the note down -- it said, or allowed,
+   that nothing was written -- and is told in a toast. */
+type Late = { name: string } | { cancelled: true } | null
+function sayStopped(
+  outcome: { stopped: Stopped; answer: Promise<StopAnswer> },
+  ours: () => boolean,
+  late: Promise<Late>,
+  machine: string
+): void {
+  if (ours()) set({ mconnectStopped: outcome.stopped })
+  void outcome.answer.then((said) => {
+    if (!ours()) return
+    const note = get().mconnectStopped
+    if (said === 'nothing' && note !== '') set({ mconnectStopped: 'missed' })
+    if (said === 'stopped' && note === 'unconfirmed') set({ mconnectStopped: 'cancelled' })
+  })
+  void late.then((got) => {
+    if (got === null) return
+    if ('cancelled' in got) {
+      if (ours() && get().mconnectStopped === 'unconfirmed') set({ mconnectStopped: 'cancelled' })
+      return
+    }
+    if (ours()) set({ mconnectStopped: '' })
+    landedLate(got.name, machine)
+  })
+}
+
+/* The form's Cancel: ends the wait of the write pressed in the form open now,
+   which stops its run (`awaitRun`). A write whose form was closed or replaced
+   is not reachable from here -- its generation is gone -- and the ceiling
+   ends it. */
+export function cancelConnect(): void {
+  const stop = stops.get(get().mconnectGen)
+  if (!stop) return
+  set({ mconnectCancelling: true })
+  stop('cancelled')
+}
+
+/* A write that landed after its form stopped waiting -- the Cancel came too
+   late, or the answer outlived the ceiling: said in a toast, and the roster
+   and the machines read again, as for a landing the form never saw. */
+function landedLate(name: string, machine: string): void {
+  toast(t('gui.machine.connected_said', { name }))
+  void load(true).then(() => {
+    if (get().mconnect === machine) void loadPresets()
+  })
+  void machines.load()
+}
+
+export async function connectOnMachine(
+  choice: PresetChoice,
+  machine: string,
+  remoteCwd: string
+): Promise<{ landed: boolean; current: boolean; name: string }> {
+  const gen = get().mconnectGen
+  /* Still the form it was pressed in, and that form still on screen: the
+     drawer's own state says whether it is open and ours, since `mconnect`
+     stays set through the close fade (`sheetDismissed` drops it after). */
+  const current = (): boolean =>
+    get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
+  const pending = `${choice.preset}@${machine}`
+  const press = ++presses
+  const ours = (): boolean => current() && presses === press
+  set({
+    mconnectBusy: gen,
+    mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
+    mconnectLate: false,
+    mconnectSince: Date.now(),
+    mconnectPending: [...get().mconnectPending, pending]
+  })
+  type Answer = { name: string } | { refused: string; cancelled?: boolean }
+  const write: Promise<Answer> = source()
+    .connectOnMachine(choice, machine, remoteCwd)
+    .catch((e): Answer => (cancelledFrom(e) ? { refused: failure(e), cancelled: true } : { refused: failure(e) }))
+  const outcome = await awaitRun(gen, pending, write)
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false, mconnectLate: false })
+  const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(name => name !== pending) })
+  if ('stopped' in outcome) {
+    /* No answer: the wait is over and the form is the reader's again, the
+       preset offered once more -- a second press while the first run still
+       goes is refused server-side, before anything is spent. */
+    settled()
+    sayStopped(outcome, ours, write.then((got): Late => ('name' in got ? { name: got.name } : got.cancelled ? { cancelled: true } : null)), machine)
+    return { landed: false, current: current(), name: pending }
+  }
+  const got = outcome.got
+  if ('name' in got) {
+    await load(true)
+    /* The preset just landed on the machine, so a form open on that machine
+       has to read its choices again -- whichever opening it is: one opened
+       while the write ran holds a copy that predates it, and would offer the
+       preset once more, which a press answers with a second add the server
+       refuses before any ping, right after a toast said connected. The
+       in-flight mark comes off only once that read is in, so the preset goes
+       from being connected to taken with no moment in between where it is
+       offered. `current()` is the wrong test here: it is about the form the
+       write was pressed in, and the reader may have reopened it since. */
+    if (get().mconnect === machine) await loadPresets()
+    settled()
+    return { landed: true, current: current(), name: got.name }
+  }
+  settled()
+  if (current()) set(got.cancelled ? { mconnectStopped: 'cancelled' } : { mconnectFailed: got.refused })
+  return { landed: false, current: current(), name: pending }
+}
+
+/* The other press the connect form has: an entry of the preset is already
+   on the machine, switched off, and Reconnect switches it back on under the
+   name it has -- the agents page's own toggle, with its proof ping, run from
+   the machine's side -- rather than adding a second one, which the server
+   would refuse. Guarded like `connectOnMachine`: the generation says whose
+   form the write is, `current()` whether that form is still on screen. */
+export async function reconnectOnMachine(
+  name: string,
+  machine: string
+): Promise<{ landed: boolean; current: boolean; name: string }> {
+  const gen = get().mconnectGen
+  const current = (): boolean =>
+    get().mconnect === machine && get().mconnectGen === gen && detail.get().open && detail.get().owner === 'extAgents'
+  const press = ++presses
+  const ours = (): boolean => current() && presses === press
+  set({
+    mconnectBusy: gen,
+    mconnectFailed: '',
+    mconnectStopped: '',
+    mconnectCancelling: false,
+    mconnectLate: false,
+    mconnectSince: Date.now(),
+    mconnectPending: [...get().mconnectPending, name]
+  })
+  /* The roster row, so the write addresses it the way the agents page does;
+     a roster that has not caught up yet still knows the name. Through `act`,
+     not the source directly: that marks the row `joining` for the length of
+     the ping, so the agents page draws it pending and cannot press its own
+     Connect meanwhile (and this form, reading `joining`, the other way
+     round), the refusal lands on the row as it would from there, and the
+     roster is read again. */
+  const row = get().rows.find(r => r.name === name) ?? ({ name, kind: 'acp', configured: true, enabled: false } as ExtAgentRow)
+  const write = attempt(row, 'toggle', { enabled: true })
+  const outcome = await awaitRun(gen, name, write)
+  if (get().mconnectBusy === gen) set({ mconnectBusy: null, mconnectCancelling: false, mconnectLate: false })
+  const settled = (): void => set({ mconnectPending: get().mconnectPending.filter(n => n !== name) })
+  if ('stopped' in outcome) {
+    settled()
+    /* The row's own pending mark goes with the wait: `act` takes it off when
+       the write answers, which a write with no answer never does. */
+    set({ joining: without(get().joining, name) })
+    sayStopped(outcome, ours, write.then((refused): Late => (refused === null ? { name } : refused.cancelled ? { cancelled: true } : null)), machine)
+    return { landed: false, current: current(), name }
+  }
+  const refused = outcome.got
+  if (refused === null) {
+    if (get().mconnect === machine) await loadPresets()
+    settled()
+    return { landed: true, current: current(), name }
+  }
+  settled()
+  if (current()) set(refused.cancelled ? { mconnectStopped: 'cancelled' } : { mconnectFailed: refused.detail })
+  return { landed: false, current: current(), name }
 }
 
 export function closeSheet(): void {
+  detail.close()
+}
+
+/* ── the family picker ───────────────────────────────────────────── */
+
+/* The group card's drawer: which family it stands for, kept apart from `sheet`
+   for the reason `ExtAgentsState.picking` gives. A separate verb pair rather
+   than a row-shaped one, because there is no row behind a group card -- the
+   nine rows it stands for each have a name, and the card has none. */
+export function pickerOpen(family: string): void {
+  detail.open('extAgents')
+  set({ picking: family, sheet: null, msheet: null, mconnect: null })
+}
+
+/* A model chosen for a member before it is connected; see `picked`. */
+export function pickModel(row: ExtAgentRow, model: string): void {
+  set({ picked: { ...get().picked, [row.name]: model } })
+}
+
+/* That pick, put back to the agent's own default. There is no row to clear it
+   from -- the agent is not on the roster yet -- so what is dropped is the pick
+   itself, and the add that follows runs the agent on its own default. */
+export function clearPicked(name: string): void {
+  const picked = { ...get().picked }
+  delete picked[name]
+  set({ picked })
+}
+
+export function pickerClose(): void {
+  detail.close()
+}
+
+/* Choosing an agent out of the group card IS connecting it. The picker picks
+   the agent and its model, presses one button, and the member stops folding
+   because `subagents.add` wrote it -- that is what makes the card that appears
+   afterwards evidence rather than a local flag. The model rides the same add,
+   so the row is never briefly connected on the wrong one.
+
+   The drawer stays up for the length of the connect, which runs the agent for
+   up to a minute: the row it was asked on is the only place that says so, since
+   the member is still folded into the card behind. It closes once the add has
+   landed, so the card it made is what the reader sees next -- unless a
+   refusal is standing on the row, the reader has closed or reopened the drawer
+   meanwhile (`gen`), or another member is still connecting in it. */
+export async function pickAndConnect(row: ExtAgentRow): Promise<void> {
+  const gen = detail.get().gen
+  const family = familyOf(row)
+  await connectRow(row)
+  const drawer = detail.get()
+  if (get().failed[row.name] || !drawer.open || drawer.gen !== gen || get().picking !== family) return
+  if (get().rows.some((other) => familyOf(other) === family && get().joining[other.name])) return
   detail.close()
 }
 
@@ -416,7 +1073,12 @@ export function closeSheet(): void {
    the drawer has finished fading, or the card is gone from inside a panel that
    is still on screen. */
 export function sheetDismissed(): void {
-  if (!get().sheet) return
+  /* A connect form's write may still be running: from this tick it is no
+     longer the form's, whatever the fade still shows -- the drop below comes
+     a fade later, and a write ending inside that window must not reopen the
+     drawer the reader just closed, nor write to the fading form. */
+  if (get().mconnect) set({ mconnectGen: get().mconnectGen + 1, mconnectBusy: null, mconnectCancelling: false })
+  if (!get().sheet && !get().msheet && !get().picking && !get().mconnect) return
   /* Which open this close belongs to. The name cannot answer that: closing a
      card and pressing the same row again inside the fade writes the same string
      back, so the pending drop read it as "still mine" and cleared the card that
@@ -424,7 +1086,7 @@ export function sheetDismissed(): void {
      which would read as a reopen and leave the closed card up. */
   const gen = detail.get().gen
   detail.dropAfterFade(
-    () => set({ sheet: null }),
+    () => set({ sheet: null, msheet: null, picking: null, mconnect: null }),
     () => detail.get().gen !== gen,
   )
 }

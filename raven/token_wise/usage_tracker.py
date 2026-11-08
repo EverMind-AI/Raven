@@ -15,6 +15,7 @@ so its ``before_llm_call`` inherits the default no-op pass-through.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from dataclasses import asdict, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -35,26 +36,24 @@ def _default_telemetry_dir() -> Path:
     return raven_home() / "telemetry"
 
 
-def read_usage_rows(path: Path) -> list[dict[str, Any]]:
-    """Parsed rows of one telemetry file.
+def read_usage_rows(path: Path) -> Iterator[dict[str, Any]]:
+    """Stream parsed rows without retaining the whole telemetry file.
 
     A line that does not parse is skipped rather than raised on: the recorder
     flushes per call, so a process killed mid-write leaves a partial line, and
     that is not a reason to fail a report about the calls that did land.
     """
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open("rb") as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    yield row
     except OSError:
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in lines:
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-    return rows
+        return
 
 
 def row_root(row: dict[str, Any]) -> Any:
@@ -127,14 +126,22 @@ async def record_delegated_usage(
     model: str,
     root: str,
     task_id: str,
+    counts_known: bool = True,
 ) -> None:
-    """Persist one in-process sub-agent call under its delegation root."""
+    """Persist one delegated call under its delegation root.
+
+    ``counts_known`` false stores the call's input and output counts as missing
+    rather than the zeros ``normalize_usage`` reads an absent count as: a zero
+    says the call read and wrote nothing.
+    """
     if not root:
         return
     from raven.providers.usage import normalize_usage
 
     normalized = normalize_usage(usage)
     normalized.pop("total_tokens")
+    if not counts_known:
+        normalized.update(input_tokens=None, output_tokens=None)
     tracker = UsageTracker()
     await tracker.after_llm_call(
         {},

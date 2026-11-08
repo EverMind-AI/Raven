@@ -78,6 +78,13 @@ listening."""
 STEER_METHOD = "_raven/session/steer"
 STEER_CAPABILITY = "raven.steer"
 
+# And what a raven agent holds that runs with nobody asking -- an armed cron job
+# of its own partition, a running plugin service. The pool asks it before it
+# closes the agent for idleness: the wire says nothing about either, and
+# closing the process would lose both. Declared the same way, by presence.
+RESIDENT_WORK_METHOD = "_raven/residentWork"
+RESIDENT_WORK_CAPABILITY = "raven.residentWork"
+
 # The other one, and a promise rather than a feature flag: a raven that declares
 # this says that ``mcpServers`` on ``session/new`` / ``session/load`` /
 # ``session/resume`` is really connected, and that the tools behind it are
@@ -96,6 +103,24 @@ STEER_CAPABILITY = "raven.steer"
 # host's socket lifetime, which needs no agreement from the far side.
 SESSION_MCP_CAPABILITY = "raven.mcp.session"
 
+#: ``session/new`` ``_meta.raven`` key an agent sets when its menus are EMPTY BECAUSE
+#: IT FAILED TO READ THEM, rather than because it offers none.
+#:
+#: The two are one shape on the wire and only one of them is a fact about the
+#: agent, so a reader that cannot tell them apart records a failed read as a
+#: measurement -- and nothing invalidates a measurement, so the empty menu
+#: outlives every restart. Declared for the same reason the capability keys
+#: above are: a caller and a server that spell it differently disagree in
+#: silence.
+MENU_UNREAD_META = "modelMenuUnread"
+
+# How long the agent asks to be given, after its stdin closes, before its process
+# tree is ended: an agent that holds work outside its own process -- a turn on a
+# host it is one client of -- needs that long to call it off. Announced under
+# ``agentCapabilities._meta`` with the seconds as its value; raven's client grants
+# it up to a cap of its own, and an agent that exits sooner ends the wait sooner.
+SHUTDOWN_GRACE_META = "raven.shutdownGraceS"
+
 
 class AcpError(Exception):
     """Base for every ACP transport failure."""
@@ -111,9 +136,12 @@ class AcpConnectionError(AcpError):
     failed with first and then prints a stack trace and a log path under it.
     """
 
-    def __init__(self, message: str, *, stderr: str | None = None) -> None:
+    def __init__(self, message: str, *, stderr: str | None = None, returncode: int | None = None) -> None:
         super().__init__(message)
         self.stderr = stderr
+        # The process's exit status when it had ended, which for an agent on a
+        # registered machine says whether ssh (255) or the far side ended it.
+        self.returncode = returncode
 
 
 class AcpTimeoutError(AcpError):

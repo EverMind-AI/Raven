@@ -93,16 +93,20 @@ def _missing_required_fields(name: str) -> list[str]:
 
 
 def _gate_open_allow_from(name: str, fields: dict) -> None:
-    """Confirm gate for an enable whose resolved ``allow_from`` contains ``'*'``.
+    """Confirm gate for an enable or set whose resolved ``allow_from`` contains ``'*'``.
 
     ``'*'`` means anyone who can reach the channel can command the agent on
     this host, so it must never be adopted silently: interactive runs confirm
     (default No), non-interactive runs demand the wildcard be passed
-    explicitly. Raises ``typer.Exit`` to block the enable; returns to allow it.
+    explicitly. Raises ``typer.Exit`` to block the write; returns to allow it.
     """
     raw = fields.get("allow_from")
     if raw is not None:
-        explicit = "*" in [item.strip() for item in str(raw).split(",") if item.strip()]
+        from raven.config.update_channels import coerce_field_value
+
+        value = coerce_field_value(name, "allow_from", raw)
+        items = value if isinstance(value, list) else [value]
+        explicit = "*" in [str(item).strip() for item in items]
         open_after = explicit
     else:
         from raven.config.update_channels import get_channel_config
@@ -120,7 +124,7 @@ def _gate_open_allow_from(name: str, fields: dict) -> None:
             f"this channel can command the agent on this host.[/yellow]"
         )
         console.print("  Restrict senders with --allow-from <id1,id2>, or confirm to keep it open.")
-        if not typer.confirm(f"Enable {name} with allow_from='*' (open to anyone)?", default=False):
+        if not typer.confirm(f"Allow anyone who can message {name} to command this agent?", default=False):
             console.print("[yellow]Aborted.[/yellow] Nothing written.")
             raise typer.Exit(1)
     elif explicit:
@@ -134,6 +138,15 @@ def _gate_open_allow_from(name: str, fields: dict) -> None:
             f"explicitly to accept, or restrict with --allow-from <id1,id2>."
         )
         raise typer.Exit(1)
+
+
+def _write_would_enable(name: str, fields: dict) -> bool:
+    """Whether this pending write resolves ``enabled`` to true."""
+    from raven.config.update_channels import coerce_field_value
+
+    if "enabled" not in fields:
+        return False
+    return coerce_field_value(name, "enabled", fields["enabled"]) is True
 
 
 def _parse_channel_flags(extra_args: list[str], channel_name: str) -> dict:
@@ -324,6 +337,8 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             _print_schema_table(name)
             console.print("  [dim]Tip: re-run with one or more --flag value pairs to update.[/dim]")
             raise typer.Exit(0)
+        if "allow_from" in fields or _write_would_enable(name, fields):
+            _gate_open_allow_from(name, fields)
         try:
             prev = set_channel_fields(name, fields)
         except KeyError as exc:
@@ -370,7 +385,7 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
 
         Prompts for confirmation by default; pass ``--yes`` for unattended runs.
         """
-        from raven.config.update_channels import get_channel_config, reset_channel
+        from raven.config.update_channels import channel_field_specs, get_channel_config, reset_channel
 
         try:
             current = get_channel_config(name, redact_secrets=False)
@@ -379,6 +394,18 @@ def _register_config_commands(channels_app: typer.Typer) -> None:
             raise typer.Exit(1)
 
         non_default = [k for k, v in current.items() if v not in (False, "", None, [], {})]
+        specs = channel_field_specs(name)
+        default_allow = specs.get("allow_from", {}).get("default") or []
+        if "*" in default_allow and specs.get("enabled", {}).get("default") is True:
+            console.print(
+                f"[yellow]⚠ Reset turns {name} on with allow_from='*': anyone who can message "
+                f"this channel can command the agent on this host.[/yellow]"
+            )
+        elif "*" in default_allow:
+            console.print(
+                f"  [dim]After reset, {name} is off and allow_from is back to '*'. Turning it on "
+                f"again will ask you to confirm that or restrict senders.[/dim]"
+            )
 
         if not yes:
             console.print(f"This will reset [cyan]{name}[/cyan] to schema defaults.")

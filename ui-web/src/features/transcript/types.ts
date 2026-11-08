@@ -156,6 +156,12 @@ export interface StepData {
   kind: 'step'
   think: string
   thinkLive: boolean
+  /* When the live thought opened, and how long it ran once it closed. Kept on
+     the step so the row can print `Thinking… (5s)` while it grows and
+     `Thought for 12s` after it stops; a thought restored from history never
+     opened live, so both stay zero and the row keeps its bare label. */
+  thinkT0: number
+  thinkMs: number
   thinkOpen: boolean
   thinkPinned: boolean
   thinkShown: boolean
@@ -191,6 +197,10 @@ export interface AskData {
   /* When it was said, in epoch ms: what the date line between two questions
      far apart is measured from. 0 when the entry carried no usable stamp. */
   at: number
+  /* The turn it opened, by the id that turn's `message.start` named: set on a
+     bubble drawn on this page, absent on one read back from history, whose
+     stored entry carries no id. */
+  turnId?: string
   expanded: boolean
   clipped: boolean
   clipOpen: boolean
@@ -212,6 +222,8 @@ export interface NoteData {
   kind: 'note'
   label: string
   detail: string
+  /* The account at length when the runner kept more than `detail` says; empty otherwise. */
+  full: string
   quiet: boolean
   retry: (() => void) | null
 }
@@ -237,15 +249,28 @@ export interface DeliveredData {
   v: number
   id: number
   kind: 'sdlv'
+  /* When the result re-entered, in epoch ms: the stored entry's stamp, or this
+     page's clock for one drawn live. The turn it opens is found by it -- a
+     task board step keyed by that turn names it the way it names a question's. */
+  at: number
+  /* The turn it opened, by the id its `turn.started` named; absent on a row
+     read back from history, as on a question. */
+  turnId?: string
   label: string
   isDag: boolean
-  status: 'ok' | 'error' | 'exception'
+  status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'
   open: () => void
   /* What was delivered, as a reader may read it: the text from inside the
      untrusted fence, with the fence and the framing the model was given left
      out. Empty when the delivery carried none -- and then the row has no fold,
-     which is also what an older session's stored entry gives. */
+     which is also what an older session's stored entry gives. A dag node's
+     report is the exception: what the node itself returned, when the server
+     sent it, rather than the brief inside the fence, which is addressed to the
+     model. */
   body: string
+  /* That `body` is a node's own output rather than the injected text. */
+  said: boolean
+  outputTruncated: boolean
   /* Whether that fold is open. */
   shown: boolean
 }
@@ -268,9 +293,10 @@ export interface FoldData {
   kind: 'fold'
   time: string | null
   open: boolean
-  /* Open because the runtime opened it, and so still the runtime's to close.
-     A fold the reader has touched is theirs from then on: `toggleFold` clears
-     this, and nothing shuts it afterwards. */
+  /* The runtime still owns this fold's open state, so it may open or shut it
+     as the turn's content changes (see `shutAutoFolds` and `collapse`). A fold
+     the reader has touched is theirs from then on: `toggleFold` clears this,
+     and nothing moves it afterwards. */
   auto: boolean
   steps: StepData[]
 }
@@ -340,6 +366,12 @@ export interface StepHandle {
   setThinkOpen(open: boolean): void
   setSay(text: string): void
   sayDelta(text: string): void
+  /* Take back `shown`, what the server says the reply it read as the silence
+     marker had already streamed (a think block it inlined ahead of the marker):
+     that reply is not an answer. Only that suffix of the step's prose goes, so
+     narration before it stays, as a reload draws it. A step left with nothing
+     else on it is removed. */
+  dropReply(shown: string): void
   tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle
   seal(): void
 }
@@ -370,14 +402,20 @@ export interface HistoryMessage {
   metadata?: Record<string, unknown>
   notice?: { kind?: string; detail?: string }
   origin?: string
-  turn_ended?: { status?: string; reason?: string }
+  turn_ended?: { status?: string; reason?: string; full_detail?: string }
   /* Present on a USER entry the runtime wrote: a delegated run's result coming
      back. The model reads `text`, a reader must not -- see the note on the
      delivery branch in history(). */
-  delegated?: { kind?: string; label?: string; status?: string; run_id?: string; node_id?: string }
+  delegated?: {
+    kind?: string; label?: string; status?: string; run_id?: string; node_id?: string; output?: string; output_truncated?: boolean | null
+  }
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */
   mid_turn?: boolean
+  /* Set on an assistant entry that is the model's own silence marker: `text` is
+     the marker, never an answer. It is drawn as one quiet line -- see the silent
+     branch in history(). */
+  silent?: boolean
 }
 
 /* The pull half of the seam. Event pushes arrive through this island's own

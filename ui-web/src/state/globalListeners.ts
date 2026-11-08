@@ -28,7 +28,7 @@ import { onVisible as probeOnVisible } from '../app/updates'
 import { onResize as reclampPanes } from '../chrome/behaviour/panes'
 import { onResize as dropBars, onScroll as barsOnScroll } from '../chrome/behaviour/scrollbars'
 import { trap as linkTrap } from '../features/browser/store'
-import { fitField, parkDraftNow } from '../features/composer/mount'
+import { fitField, onPageDragEnd, onPageDragStart, parkDraftNow } from '../features/composer/mount'
 import { composing } from '../features/composer/store'
 import { open as openSettings } from '../features/settings/store'
 import { t } from '../i18n/t'
@@ -36,6 +36,7 @@ import { isMac } from '../lib/platform'
 import { onContextMenu } from './contextMenu'
 import * as escapeOrder from './escapeOrder'
 import { toggle as toggleFind } from './find'
+import { close as closeAtMenu } from './mentions'
 import { onPointerDown as menuAway } from './menu'
 import { close as closePermPopover } from './perm'
 import { close as closePlusMenu } from './plus'
@@ -45,9 +46,10 @@ import { clamp as clampSelection } from './selection'
 import { close as closeSettings, isOpen as settingsIsOpen } from './settings'
 import { onDblClick as shellZoom, onMouseDown as shellDrag } from './shellWindow'
 import * as tip from './tooltip'
+import * as visibility from './visibility'
 import { close as closeWorkdir } from './workdir'
 
-/* The three composer popovers have no close button: a pointer landing outside
+/* The four composer popovers have no close button: a pointer landing outside
    one is one way back out, and Escape is the other (state/escapeOrder.ts).
    Capture, because the row under the pointer may stop the event.
 
@@ -57,7 +59,11 @@ function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
   if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
   if (!target.closest('#plusPop') && !target.closest('#plusBtn')) closePlusMenu()
-  if (!target.closest('#wdPop') && !target.closest('#wdChip')) closeWorkdir()
+  if (!target.closest('#atPop') && !target.closest('#atBtn')) closeAtMenu()
+  /* The folder popover hangs off the "@" button, and pressing that button is a
+     pointer outside this one: it raises the menu the row was picked from, so
+     the menu the row opened goes. */
+  if (!target.closest('#wdPop')) closeWorkdir()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here
@@ -124,9 +130,18 @@ export function installGlobalListeners(): void {
      workspace chrome -- read before the transcript can act on it. */
   document.addEventListener('click', linkTrap, true)
   /* The dock: a draft the debounce has not parked yet, and a field whose
-     height cap is a share of the window. */
+     height cap is a share of the visual viewport. */
   window.addEventListener('beforeunload', parkDraftNow)
   window.addEventListener('resize', fitField)
+  /* A soft keyboard shrinks the visual viewport without a window resize on iOS
+     Safari, so the same re-clamp follows it: the cap comes down with the
+     keyboard and goes back up when it closes. */
+  window.visualViewport?.addEventListener('resize', fitField)
+  /* Whether a drag under way began in this document, for the composer's drop
+     target: the drag itself can start anywhere in the document, so the
+     document is what listens (features/composer/mount.tsx). */
+  document.addEventListener('dragstart', onPageDragStart)
+  document.addEventListener('dragend', onPageDragEnd)
   /* The overlay scrollbars, which cover a scroller drawn at any time by
      listening in the capture phase rather than per element. */
   document.addEventListener('scroll', barsOnScroll, true)
@@ -164,4 +179,9 @@ export function installGlobalListeners(): void {
      watcher decides whether there is anything to look for; until it has
      started, this answers nothing (app/updates.ts). */
   document.addEventListener('visibilitychange', probeOnVisible)
+  /* The same two moments, spent on the one slot an island may fill
+     (state/visibility.ts): a live value an island stopped asking for while
+     nobody was looking is asked for again the moment somebody is. */
+  document.addEventListener('visibilitychange', visibility.fire)
+  window.addEventListener('focus', visibility.fire)
 }

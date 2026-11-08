@@ -35,11 +35,11 @@ type Rpc = <T extends object>(
 
 const RUNNING: DagRunState['nodes'][number]['status'] = 'running'
 
-// The four the runner records as final. A positive test on purpose: `status`
+// The five the runner records as final. A positive test on purpose: `status`
 // is null until the run writes its manifest, and the poll's first read of a
 // node lands inside that window -- a negative test would read "not running"
 // as "finished" and stop the poll before the node had said anything.
-const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['cancelled', 'completed', 'failed', 'skipped'])
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set(['cancelled', 'completed', 'failed', 'not_executed', 'skipped'])
 
 /** The live runs and their pinned copies, one entry per `runId`, live winning. */
 const mergeDagRuns = (live: readonly DagRunState[], pinned: readonly DagRunState[]): DagRunState[] => {

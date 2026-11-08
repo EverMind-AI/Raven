@@ -10,7 +10,13 @@ import pytest
     [
         "https://hub.evermind.ai",
         "http://localhost:8000",
+        "http://LOCALHOST:8000",
+        "http://localhost.:8000",
+        "http://localhost.localdomain:8000",
+        "http://LOCALHOST.LOCALDOMAIN.:8000",
         "http://127.0.0.1:8000/",
+        "http://127.0.0.2:8000/",
+        "http://127.255.255.255:8000/",
         "http://[::1]:8000",
     ],
 )
@@ -36,6 +42,12 @@ def test_a_hub_endpoint_may_be_https_or_local_plaintext(url: str) -> None:
         # resolvers say 10.0.0.1. Guessing is worse than refusing.
         "http://010.0.0.1",
         "http://2130706433",
+        "http://127.1",
+        "http://0x7f000001",
+        "http://127.0.0.1.",
+        "http://127.0.0.1.evil.example",
+        "http://[::ffff:8.8.8.8]",
+        "http://[::2]",
     ],
 )
 def test_a_hub_endpoint_may_not_be_plaintext_remote_or_non_http(url: str) -> None:

@@ -94,6 +94,66 @@ class AgentMeta(NamedTuple):
     fields up: this is a NamedTuple several callers build positionally, so a
     field inserted anywhere but the end moves one of theirs."""
 
+    machine: str = ""
+    """The registered machine this agent runs on, by id, or ``""`` for this computer.
+
+    Rendered as a tag so the model can send work to a named machine and knows
+    the files it gets back are there, not here. The tag carries the id only.
+    A file on the machine is named to a model the way scp writes it, with the
+    registry's user, address and port -- ``user@host:/abs``, or
+    ``scp://user@host:port//abs`` off port 22 (``remote.shown``) -- and never
+    by the id; what a model, a reply, a record and an RPC result never carry
+    is the key and the assembled ssh line. Read off every kind: whichever kind
+    runs there, the tag is the same. Appended last, for the reason
+    ``model_choices`` gives."""
+
+    effort_choices: tuple[Any, ...] = ()
+    """The reasoning efforts this agent offers, or ``()`` when it offers none.
+
+    ``raven.acp_client.capabilities.AcpEffortChoice`` records, measured from
+    the ``thought_level`` config option in the same session response that gives
+    the model menu. Appended after ``machine`` for the reason ``model_choices``
+    gives: this is a NamedTuple several callers build positionally."""
+
+    effort_via_modes: bool = False
+    """Whether ``effort_choices`` is the mode menu read as effort, sent through ``session/set_mode``.
+
+    Then the row's effort and an instance's mode override share one channel,
+    and the dispatch resolver has to rank them rather than send both (see
+    ``SubagentManager.session_effort_for``). Last, for the reason
+    ``effort_choices`` gives."""
+
+
+class AcpMenus(NamedTuple):
+    """The menus one acp capability snapshot offers, as every reader derives them."""
+
+    models: tuple[Any, ...]
+    efforts: tuple[Any, ...]
+    effort_via_modes: bool
+
+
+def acp_menus(snapshot: Any) -> AcpMenus:
+    """The model and reasoning-effort menus ``snapshot`` offers, and the channel the effort takes.
+
+    The one derivation behind ``agent_meta`` -- so the roster, the update
+    validator and a failed menu read -- and behind a successful
+    ``subagents.refresh_models``, which reads the snapshot it just measured
+    without the policy ``agent_meta`` also evaluates. Two spellings of it would
+    let a refreshed picker and the list that follows it disagree.
+
+    The effort is the agent's ``thought_level`` option when it has one
+    (OpenCode 1.19.4). An agent with no such option may still advertise effort
+    as its modes -- Pi, Grok, Kimi, DSH -- and ``mode_efforts`` takes those only
+    when every mode id is a level name, never a permission or editor mode.
+    """
+    models = tuple(getattr(snapshot, "model_choices", ()) or ())
+    efforts = tuple(getattr(snapshot, "effort_choices", ()) or ())
+    if efforts:
+        return AcpMenus(models, efforts, False)
+    mode_efforts = getattr(snapshot, "mode_efforts", None)
+    efforts = tuple(mode_efforts()) if callable(mode_efforts) else ()
+    return AcpMenus(models, efforts, bool(efforts))
+
 
 def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
     """The advertised capabilities of one agent config, any kind.
@@ -132,6 +192,12 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
       preset states, or the operator of a custom endpoint writes by hand; the
       declaration is the only available carrier of a fact raven cannot discover.
 
+    ``machine`` is read off every kind the same way: an entry of any kind that
+    names one runs there -- a cli one through the machine's Raven node, an
+    openai one through a tunnel to it -- and a built-in row's is cleared by its
+    schema, so the roster's tag, the registry's lane gate and the dispatch
+    never disagree about where a row runs.
+
     ``snapshot`` is the already-loaded snapshot for this config, for callers
     handling a batch. Omitted, it is read from the store -- so a caller that
     knows nothing about ACP (the spawn manager, the DAG tool) needs no change.
@@ -153,7 +219,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
             bool(getattr(cfg, "owns_watched_work", False)),
         )
     modes: tuple[Any, ...] = ()
-    model_choices: tuple[Any, ...] = ()
+    menus = AcpMenus((), (), False)
     if kind == "acp":
         if snapshot is None:
             snapshot = acp_snapshot_for(cfg)
@@ -164,18 +230,22 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         # Measured, never declared: the menu offered has to be the one the agent
         # serves, or the model is handed a mode the agent then refuses.
         modes = tuple(getattr(snapshot, "available_modes", ()) or ())
-        # Same rule, same reason: the menu offered has to be the one the agent
-        # serves, or a reader is handed a model the agent then refuses.
-        model_choices = tuple(getattr(snapshot, "model_choices", ()) or ())
+        # Same rule, same reason, for the model and effort menus: the menu
+        # offered has to be the one the agent serves, or a reader is handed a
+        # value the agent then refuses.
+        menus = acp_menus(snapshot)
     elif kind == "openai":
         stateful = bool(getattr(cfg, "stateful", True))
     else:
         stateful = bool(getattr(cfg, "resume_command", None))
+    machine = str(getattr(cfg, "machine", None) or "")
     return AgentMeta(
         getattr(cfg, "name", "") or "",
         getattr(cfg, "description", "") or "",
         stateful,
-        bool(getattr(cfg, "reads_local_files", True)),
+        # An agent on another machine reads that machine's disk, so a path here
+        # means nothing to it however its kind would otherwise answer.
+        bool(getattr(cfg, "reads_local_files", True)) and not machine,
         # Only the acp transport carries a live event stream. This is a fact about
         # the transport, not about the agent, so it is read from `kind` rather
         # than from anything the agent or the operator says.
@@ -183,7 +253,10 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
         getattr(cfg, "owns", None) or "",
         modes,
         bool(getattr(cfg, "owns_watched_work", False)),
-        model_choices,
+        menus.models,
+        machine,
+        menus.efforts,
+        menus.effort_via_modes,
     )
 
 
@@ -192,7 +265,7 @@ def agent_meta(cfg: Any, *, snapshot: Any = None) -> AgentMeta:
 _STALE_SNAPSHOT_SEEN: set[tuple[str, str]] = set()
 
 
-def session_mcp_delivered(*, session_mcp: bool, snapshot: Any) -> bool:
+def session_mcp_delivered(*, session_mcp: bool, snapshot: Any, machine: str | None = None) -> bool:
     """Whether a granted server would actually reach this agent's session.
 
     The one predicate behind two questions that must not answer differently: what
@@ -205,7 +278,9 @@ def session_mcp_delivered(*, session_mcp: bool, snapshot: Any) -> bool:
     :func:`~raven.agent.subagent.presets.session_mcp_for`; ``snapshot`` carries
     the transitional half. Both are spelled out in
     ``AcpAgentBackend._session_mcp_refused``, which is the reader for why each
-    exists and why only one of them is temporary.
+    exists and why only one of them is temporary. The host opens a Unix socket
+    or an authenticated loopback endpoint: a local row connects its bridge,
+    and a row on a ``machine`` has the node carry frames to the same endpoint.
     """
     if not session_mcp:
         return False
@@ -222,7 +297,9 @@ def session_mcp_effective(cfg: Any, *, snapshot: Any = None) -> bool:
     """
     if snapshot is None:
         snapshot = acp_snapshot_for(cfg)
-    return session_mcp_delivered(session_mcp=session_mcp_for(cfg), snapshot=snapshot)
+    return session_mcp_delivered(
+        session_mcp=session_mcp_for(cfg), snapshot=snapshot, machine=getattr(cfg, "machine", None)
+    )
 
 
 def acp_snapshot_for(cfg: Any) -> Any:
@@ -281,6 +358,7 @@ def format_agent_listing(meta: Sequence[AgentMeta]) -> str:
                 "stateful" if entry.stateful else "stateless",
                 "local-files" if entry.reads_local_files else "no-local-files",
                 "live-progress" if entry.live_progress else "no-progress",
+                *((f"on machine {entry.machine}",) if entry.machine else ()),
             )
         )
         head = f"{entry.name} [{tags}]"
@@ -351,7 +429,9 @@ def build_third_party_backend(
 ) -> SubagentBackend:
     """Build a third-party backend from a config object (duck-typed on ``kind``).
 
-    Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig.
+    Accepts ThirdPartyCliSubagentConfig / ThirdPartyOpenAISubagentConfig /
+    ThirdPartyAcpSubagentConfig; each kind takes the machine its entry names,
+    and runs there its own way.
 
     ``registry``, ``timeout`` and ``ready_timeout_ms`` override the config for one
     call and exist for the availability test in :mod:`raven.agent.subagent.probe`,
@@ -386,26 +466,34 @@ def build_third_party_backend(
             registry=registry,
             mcps=cfg.mcps,
             allow_mcp_secrets=cfg.allow_mcp_secrets,
+            machine=getattr(cfg, "machine", None),
+            remote_cwd=getattr(cfg, "remote_cwd", None),
         )
     if kind == "acp":
         from raven.acp_client.acp_agent import AcpAgentBackend
-        from raven.acp_client.capabilities import CapabilitySnapshot
+        from raven.acp_client.capabilities import CapabilitySnapshot, snapshot_fingerprint
 
         snapshot = acp_snapshot_for(cfg)
         return AcpAgentBackend(
             name=cfg.name,
             command=cfg.command,
             cwd=cfg.cwd,
-            env={**lent_key_env(cfg), **cfg.env},
+            # Nothing lent to an agent on another machine: the schema drops such
+            # a key on load, and this keeps the two from disagreeing.
+            env={**({} if getattr(cfg, "machine", None) else lent_key_env(cfg)), **cfg.env},
             ready_timeout_ms=cfg.ready_timeout_ms if ready_timeout_ms is None else ready_timeout_ms,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
             snapshot=snapshot if isinstance(snapshot, CapabilitySnapshot) else None,
+            capability_fingerprint=snapshot_fingerprint(cfg),
             registry=registry,
             mcps=cfg.mcps,
             allow_mcp_secrets=cfg.allow_mcp_secrets,
             session_mcp=session_mcp_for(cfg),
             pool=pool,
+            machine=getattr(cfg, "machine", None),
+            remote_cwd=getattr(cfg, "remote_cwd", None),
+            preset=getattr(cfg, "preset", None),
         )
     if kind == "openai":
         return OpenAIApiBackend(
@@ -418,6 +506,7 @@ def build_third_party_backend(
             max_tokens=cfg.max_tokens,
             timeout=cfg.timeout if timeout is None else timeout,
             max_output_chars=cfg.max_output_chars,
+            machine=getattr(cfg, "machine", None),
         )
     raise ValueError(f"unknown third-party subagent kind: {kind!r}")
 
@@ -425,9 +514,11 @@ def build_third_party_backend(
 __all__ = [
     "ABORTED_ACTION_RESULT",
     "IN_SUBAGENT_RUN",
+    "AcpMenus",
     "AgentMeta",
     "SubagentActionAbortedError",
     "SubagentBackend",
+    "acp_menus",
     "acp_snapshot_for",
     "agent_meta",
     "enabled_agents",

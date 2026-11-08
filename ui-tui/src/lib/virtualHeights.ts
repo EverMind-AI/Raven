@@ -8,10 +8,10 @@ import { stringWidth } from '@hermes/ink'
 import type { EpisodeTool, Msg } from '../types.js'
 
 import { EMPTY_CALL_FOLDS, type CallFolds } from '../app/foldStore.js'
-import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, segmentTurn } from '../domain/episodeSummary.js'
+import { cardDefaultOpen, detailBlockShape, foldedPreviewRows, keepsWorkOpen, segmentTurn } from '../domain/episodeSummary.js'
 import { layoutDagGraph } from './dagGraphLayout.js'
 import { dagNodeToggleKey } from './dagOpenNodes.js'
-import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows } from './dagStatus.js'
+import { dagDetailRoom, dagRowDetail, dagTraceBoxRows, dagTraceRows, hasDagRowDetail } from './dagStatus.js'
 import { transcriptBodyWidth } from './inputMetrics.js'
 import { hasMeaningfulReasoning } from './reasoning.js'
 import { spawnTraceOpen } from './spawnOpen.js'
@@ -48,7 +48,7 @@ export const messageHeightKey = (msg: Msg) => {
   // without `foldedPreviewRows` noticing, so it gets its own signature too.
   const dagSig = (dag: EpisodeTool['dag']) =>
     dag
-      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}`
+      ? `/${dag.nodes.length}.${dag.done ? 1 : 0}.${dag.dir ? 1 : 0}.${dag.nodes.filter(node => node.status === 'running').length}.${dag.nodes.reduce((n, node) => n + (node.error?.length ?? 0), 0)}.${dag.nodes.filter(node => node.status === 'not_executed' || node.selectedRoutes !== undefined).length}`
       : ''
   // A spawn panel's height moves with its run's status (the trace box grows
   // once the run settles, and its default open flips), so the status is part
@@ -145,7 +145,7 @@ const dagPanelRows = (run: NonNullable<EpisodeTool['dag']>, width: number, open:
   const details = run.nodes.reduce((rows, node) => {
     const detail = dagRowDetail(node, picture?.drawn ?? null, room)
 
-    return rows + (detail.summary || detail.deps || detail.error ? 1 : 0)
+    return rows + (hasDagRowDetail(detail) ? 1 : 0)
   }, 0)
 
   // Two border rows, the header, the two rules and the hint.
@@ -255,7 +255,9 @@ export const estimatedMsgHeight = (
     // symptom. A stretch of work is no longer one row by construction: a settled
     // card opens on its own predicate, so its block is measured here the same way
     // it is drawn, and a talk segment is its reasoning row plus its wrapped prose.
-    for (const [i, seg] of segmentTurn(msg.episodes ?? []).entries()) {
+    const segments = segmentTurn(msg.episodes ?? [])
+
+    for (const [i, seg] of segments.entries()) {
       h += i > 0 && !dense ? 1 : 0
 
       if (seg.kind === 'work') {
@@ -301,8 +303,10 @@ export const estimatedMsgHeight = (
         h += 1
 
         // Folded, a multi-call stretch is its summary row; the panels inside it
-        // still draw (WorkSegment's own defaultOpen branch).
-        if (!segIsOpen(seg.key, hasPanel && !seg.live)) {
+        // still draw (WorkSegment's own defaultOpen branch). The message rule
+        // (see `keepsWorkOpen`) opens the stretch by default, and the estimate
+        // has to agree or the virtualizer reserves the folded height.
+        if (!segIsOpen(seg.key, (hasPanel || keepsWorkOpen(segments, i)) && !seg.live)) {
           for (const tool of panelTools) {
             h += panelRows(tool, Math.max(28, panelWidth - (INDENT + STEP)))
           }

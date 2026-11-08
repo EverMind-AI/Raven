@@ -15,7 +15,40 @@ from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.lazy import LazyProvider
 from raven.token_wise import usage_context
 from raven.token_wise.registry import StrategyRegistry
-from raven.token_wise.usage_tracker import UsageTracker
+from raven.token_wise.usage_tracker import UsageTracker, read_usage_rows
+
+
+def test_usage_rows_are_read_incrementally_and_close_the_file(tmp_path, monkeypatch):
+    import io
+
+    first = b'{"model": "first"}\n'
+    stream = io.BytesIO(first + b'{"model": "second"}\n')
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: stream)
+
+    rows = iter(read_usage_rows(tmp_path / "usage.jsonl"))
+    assert next(rows) == {"model": "first"}
+    assert stream.tell() == len(first)
+    assert list(rows) == [{"model": "second"}]
+    assert stream.closed
+
+
+def test_usage_rows_skip_invalid_records_and_keep_valid_neighbors(tmp_path):
+    path = tmp_path / "usage.jsonl"
+    path.write_bytes(b'{"model": "first"}\nnot-json\nnull\n[]\n\n\xff\n{"model": "second"}\n{"cut":')
+
+    assert list(read_usage_rows(path)) == [{"model": "first"}, {"model": "second"}]
+
+
+def test_usage_rows_tolerate_a_missing_file(tmp_path):
+    assert list(read_usage_rows(tmp_path / "missing.jsonl")) == []
+
+
+def test_usage_rows_tolerate_an_unreadable_file(tmp_path, monkeypatch):
+    def refuse_open(*args, **kwargs):
+        raise PermissionError("not readable")
+
+    monkeypatch.setattr(Path, "open", refuse_open)
+    assert list(read_usage_rows(tmp_path / "usage.jsonl")) == []
 
 
 def _snap(model="anthropic/claude-sonnet-4-5", session_key="sess1", **kwargs) -> UsageSnapshot:
@@ -415,6 +448,24 @@ async def test_in_process_subagent_usage_is_written_as_delegated_usage(tmp_path:
     assert got.input_tokens == 40
     assert got.output_tokens == 5
     assert got.cost_usd == pytest.approx(0.2)
+
+
+async def test_a_delegated_call_without_counts_is_booked_with_its_cost_alone(tmp_path: Path):
+    """Its counts are stored as missing, not as the zeros ``normalize_usage``
+    fills in: a zero says the call read and wrote nothing."""
+    from datetime import datetime, timedelta, timezone
+
+    from raven.token_wise.usage_tracker import delegated_usage, record_delegated_usage
+
+    since = datetime.now(timezone.utc) - timedelta(seconds=1)
+    with usage_context.bind("cli:root", {"root_session_key": "cli:root", "telemetry_dir": str(tmp_path)}):
+        await record_delegated_usage({"cost_usd": 0.0125}, model="m", root="cli:root", task_id="t1", counts_known=False)
+
+    (row,) = [json.loads(line) for path in tmp_path.glob("usage-*.jsonl") for line in path.read_text().splitlines()]
+    assert (row["input_tokens"], row["output_tokens"], row["cost_usd"]) == (None, None, 0.0125)
+    got = delegated_usage("cli:root", since, telemetry_dir=tmp_path)
+    assert (got.calls, got.input_missing_calls, got.output_missing_calls) == (1, 1, 1)
+    assert got.cost_usd == pytest.approx(0.0125)
 
 
 def test_delegated_usage_keeps_to_its_window_and_to_reported_prices(tmp_path: Path):

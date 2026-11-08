@@ -42,6 +42,7 @@ import socket
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -148,6 +149,87 @@ def test_reads_the_active_log_and_the_archive(tmp_path):
         assert _session_ids(_get(port, "/api/data")) == {"live-session", "archived-session"}
 
 
+def test_reads_a_compressed_archive(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    archive = logs / "archive" / "2026-07-01" / "audit-spans-2026-07-01-1.log"
+    _write_spans(archive, [_span("archived-session", "span-arch")])
+    archive.write_bytes(compress_bytes(archive.read_bytes()))
+    _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])
+
+    with _viewer(tmp_path) as port:
+        assert _session_ids(_get(port, "/api/data")) == {"live-session", "archived-session"}
+
+
+def test_artifact_endpoint_resolves_a_packed_message(tmp_path):
+    from raven.tracing import artifact_v2
+    from raven.tracing.message_pack import pack_messages
+
+    logs = tmp_path / "logs"
+    artifacts = logs / "audit-artifacts"
+    message = {"role": "user", "content": "packed"}
+    sha1 = artifact_v2.message_sha1(message)
+    path = artifact_v2.message_path(artifacts, sha1)
+    path.parent.mkdir(parents=True)
+    path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+    shell = artifacts / "llm.input" / "2026-08-01" / "a.json"
+    shell.parent.mkdir(parents=True)
+    shell.write_text(
+        json.dumps(
+            {
+                "artifactFormat": artifact_v2.ARTIFACT_FORMAT,
+                "messages": [artifact_v2.make_ref(sha1)],
+                "prompt": artifact_v2.make_ref(sha1),
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert pack_messages(artifacts).packed == 1
+
+    with _viewer(tmp_path) as port:
+        found = _get(port, "/api/artifact?path=" + urllib.parse.quote(str(shell), safe=""))
+
+    assert found["parsed"]["messages"] == [message]
+    assert found["parsed"]["prompt"] == "packed"
+
+
+def test_sessions_spawn_synthesis_reads_a_compressed_artifact(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    artifacts = logs / "audit-artifacts" / "tool" / "2026-08-01"
+    artifacts.mkdir(parents=True)
+    input_artifact = artifacts / "in.json"
+    output_artifact = artifacts / "out.json"
+    input_artifact.write_bytes(
+        compress_bytes(
+            json.dumps({"params": {"runtime": "subagent", "agentId": "raven", "task": "do"}}).encode("utf-8")
+        )
+    )
+    output_artifact.write_bytes(
+        compress_bytes(json.dumps({"result": {"status": "accepted", "childSessionKey": "child"}}).encode("utf-8"))
+    )
+    span = _span("live-session", "span-spawn", name="tool.call")
+    span["attributes"].update(
+        {
+            "tool.name": "sessions_spawn",
+            "tool.call_id": "call-1",
+            "tool.args_preview": "[truncated]",
+            "tool.result_preview": "[truncated]",
+            "tool.input.artifact_path": str(input_artifact),
+            "tool.output.artifact_path": str(output_artifact),
+        }
+    )
+    _write_spans(logs / "audit-spans.log", [span])
+
+    with _viewer(tmp_path) as port:
+        payload = _get(port, "/api/data")
+
+    names = {s["name"] for session in payload["sessions"] for trace in session["traces"] for s in trace["spans"]}
+    assert "subagent.call" in names
+
+
 def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
     logs = tmp_path / "logs"
     _write_spans(logs / "audit-spans.log", [_span("live-session", "span-live")])
@@ -159,6 +241,24 @@ def test_ignores_a_log_planted_outside_the_active_and_archive_paths(tmp_path):
 
     with _viewer(tmp_path) as port:
         assert _session_ids(_get(port, "/api/data")) == {"live-session"}
+
+
+def test_artifact_endpoint_decodes_a_compressed_payload(tmp_path):
+    from raven.tracing.codec import compress_bytes
+
+    logs = tmp_path / "logs"
+    artifact = logs / "audit-artifacts" / "llm.input" / "2026-08-01" / "a.json"
+    artifact.parent.mkdir(parents=True)
+    payload = {"messages": [{"role": "user", "content": "hi" * 100}]}
+    artifact.write_bytes(compress_bytes(json.dumps(payload).encode("utf-8")))
+    span = _span("live-session", "span-live")
+    span["attributes"]["llm.input.artifact_path"] = str(artifact)
+    _write_spans(logs / "audit-spans.log", [span])
+
+    with _viewer(tmp_path) as port:
+        found = _get(port, "/api/artifact?path=" + urllib.parse.quote(str(artifact), safe=""))
+
+    assert found["parsed"] == payload
 
 
 def test_repeated_read_is_served_without_rebuilding(tmp_path):

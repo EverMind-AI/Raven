@@ -2,30 +2,24 @@
 
 Evolver is a standalone, benchmark-driven tool for improving an agent harness:
 diagnose failed tasks, design candidate edits, evaluate them, and retain useful
-changes as Git commits. It is not a production Agent rewriting itself during
-chat, memory recall, SkillForge retrieval, or a Playbook executor.
+changes as Git commits. It runs separately from the agent's conversation loop
+and uses Raven as a library during harness development.
 
 This is the onboarding and operations guide. [Design and implementation](self-evolution-map.md)
 remains the detailed methodology-to-code reference.
 
-## Status and intended audience
+## Use cases and evaluation scope { #status-and-intended-audience }
 
-The current `evolver/README.md` marks this tree for planned retirement alongside
-the vendored fork trees, pending sign-off. The implementation is still present;
-this page documents that existing tool, not a long-term support commitment.
-Confirm its lifecycle before building a new dependency on it.
-
-Use it when you maintain a subject harness, have repeatable benchmark tasks
+Run Evolver from a source checkout when you maintain a subject harness, have repeatable benchmark tasks
 and scoring, and can budget repeated evaluations in an isolated environment.
 For everyday task automation, use [Playbooks](playbooks.md); for a one-off
 graph, use [DAG orchestration](orchestration.md).
 
-The unified launcher currently registers **AppWorld only**. Other evaluation
-modules in the tree do not automatically become registered launch targets.
-The README records unit/fake-benchmark end-to-end coverage and a real AppWorld
-smoke, but not a full-scale multi-round run or real-benchmark sealed-test
-retention validation. Treat that as the documented evidence boundary, not a
-claim of production readiness.
+The unified launcher's registered benchmark is **AppWorld**. To use another
+benchmark, implement and register its adapter as described below. Recorded
+verification covers unit tests, fake-benchmark end-to-end tests, and a real
+AppWorld smoke run. Full-scale multi-round results and sealed-test retention
+on a real benchmark require their own run records.
 
 ## How an experiment works
 
@@ -266,7 +260,6 @@ Start with `docs/specs/evolve-bench-contract.md` and
 `docs/specs/self-evolution-loop-sop.md`; implementation design is in
 `evolver/orchestrator/DESIGN.md`.
 
-The [Self-Evolution Map](self-evolution-map.md) records deliberate gaps, including
-unwired borrowing, missing affinity data, and opt-in zero-hit preflight. It is
-the reference for module-level changes, not a claim that all SOP features are
-active.
+The [Self-Evolution Map](self-evolution-map.md#6-implementation-choices) describes
+the evaluation choices: full-set confirmation, anchor composition, and optional
+zero-hit preflight. Use it as the reference for module-level changes.

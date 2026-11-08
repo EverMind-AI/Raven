@@ -39,6 +39,7 @@ from typing import Any
 from raven.acp.tool_kinds import locations, title_for, tool_kind
 from raven.acp.updates import notice_text, turn_failure_text
 from raven.security import redact
+from raven.session.turn_shape import TakeBack, TakeBackStep
 
 # A replayed transcript is bounded by what a client can draw, not by what is
 # stored: a session with two thousand messages would otherwise emit two thousand
@@ -61,7 +62,9 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     """
     if not isinstance(messages, list):
         return []
-    entries = [m for m in messages if isinstance(m, dict) and m.get("role")]
+    # Before the cap, which bounds what a client draws: a turn that is never
+    # drawn takes none of that room.
+    entries = _without_silent_runtime_turns([m for m in messages if isinstance(m, dict) and m.get("role")])
     dropped = max(0, len(entries) - MAX_REPLAYED_MESSAGES)
     if dropped:
         entries = entries[-MAX_REPLAYED_MESSAGES:]
@@ -81,6 +84,33 @@ def replay(messages: Any, *, session_id: str, cwd: str | None = None) -> list[di
     for entry in entries:
         updates.extend(_replay_entry(entry, cwd=cwd))
     return updates
+
+
+def _without_silent_runtime_turns(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The transcript less every turn the runtime opened and the model closed
+    with its silence marker.
+
+    The marker is sent as no text, so such a turn replayed as the runtime's prose
+    for the model, drawn as a user message, with no answer under it. The whole
+    turn goes, the narration and tool calls on the way included. Which turns go is
+    the rule the session list and the live turn read too (``TakeBack`` in
+    ``raven/session/turn_shape.py``): only a user row carrying ``origin`` opens a
+    turn that can be taken back, so a person's own message stays when the model
+    answers it with silence, and a turn a tool answered stays as well, its reply
+    having reached the reader.
+    """
+    kept: list[dict[str, Any]] = []
+    opened_at = 0
+    take_back = TakeBack()
+    for entry in entries:
+        step = take_back.read(entry)
+        if step is TakeBackStep.OPENS:
+            opened_at = len(kept)
+        elif step is TakeBackStep.TAKES_BACK:
+            del kept[opened_at:]
+            continue
+        kept.append(entry)
+    return kept
 
 
 def _replay_entry(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]]:
@@ -111,6 +141,10 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     it (that is what ``action_blocked`` means), and the text stored beside it is
     the runtime's instruction to the model, not an answer, so the notice is
     drawn in the text's position and the text itself is not sent.
+
+    A ``silent`` entry is the model's own silence marker, and the live turn sent
+    no text for it either, so its text is not replayed: a client would draw
+    ``[SILENT]`` as the agent's reply. What the model thought before it stays.
     """
     ended = entry.get("turn_ended")
     if isinstance(ended, dict):
@@ -123,7 +157,7 @@ def _assistant(entry: dict[str, Any], *, cwd: str | None) -> list[dict[str, Any]
     if isinstance(notice, dict):
         if said := notice_text(notice):
             out.append(_chunk("agent_message_chunk", _clip(said)))
-    elif text := _text_of(entry):
+    elif entry.get("silent") is not True and (text := _text_of(entry)):
         out.append(_chunk("agent_message_chunk", text))
     for call in entry.get("tool_calls") or ():
         announced = _tool_call(call, cwd=cwd)
@@ -218,15 +252,19 @@ def _chunk(kind: str, text: str) -> dict[str, Any]:
 
 
 def _text_of(entry: dict[str, Any]) -> str:
-    """The entry's text, redacted and clipped, or empty.
+    """Clip the entry's text, retaining the sender's policy for agent content.
 
-    Redacted on the way out for the same reason a live frame is: a replayed
-    transcript is rendered in an editor and kept in its history, and a command
-    line recorded three turns ago carries whatever was on it.
+    Local content follows the same redaction policy as its live frames.
+    Agent output and delegated reports retain their sending agent's content.
     """
     text = entry.get("text")
     if not isinstance(text, str) or not text.strip():
         return ""
+    metadata = entry.get("metadata")
+    agent_output = isinstance(metadata, dict) and metadata.get("agent_output") is True
+    delegated = entry.get("delegated")
+    if agent_output or isinstance(delegated, dict) and delegated:
+        return _clip(text)
     return redact.redact(_clip(text))
 
 

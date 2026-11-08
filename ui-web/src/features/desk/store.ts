@@ -1,6 +1,7 @@
 /** State and actions for the floating workspace desk. */
 
 import { t } from '../../i18n/t'
+import { readingImported } from '../../lib/imported'
 import { slot } from '../../lib/persist'
 import { current as currentSession } from '../../lib/session'
 import { onDeskEscape } from '../../state/escapeOrder'
@@ -543,6 +544,13 @@ export function openDeskTab(tab: DeskTab): void {
    some other reason. A change is marked read where a change is actually shown
    -- `openDeskDiff`. */
 export function openDeskFile(path: string): void {
+  /* An imported conversation names files on the machine that recorded it, and
+     whatever answers to that path here is not that file. Every way of opening
+     one comes through this door, so this is the one place that says so. */
+  if (readingImported()) {
+    toast(t('gui.sess.imported_no_files'))
+    return
+  }
   /* Only a path the shelf actually carries. This door is also every other way
      of opening a file -- an attachment chip, a changed file's row, the replay a
      reload does -- and a record of having "seen" a file no tab counts is a

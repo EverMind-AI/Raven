@@ -20,18 +20,17 @@
  * the module's own answer for the settings dialog, which has been a flag in
  * state/settings.ts since C4, for the desk, and for the running turn.
  *
- * The three capture-phase handlers each open sheet registers run before this
- * table and two of them act on Escape without stopping propagation, so one
- * Escape can both deny an approval and interrupt the turn behind it. That is
- * the behaviour, not an accident of where the listener sits. The credential
- * card (features/composer/credential.ts) is the one that stops it: skipping a
- * key is not stopping the turn, which goes on to say where it can be entered.
+ * The capture-phase handlers each open sheet registers run before this table.
+ * Approval and credential cards consume Escape after denying or skipping:
+ * answering a card leaves the turn running, just as its button does. Once the
+ * card is answered, a later Escape reaches this table's normal close order.
  */
 
 import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
+import * as mentions from './mentions'
 import * as page from './page'
 import { byEscape } from './pages'
 import * as perm from './perm'
@@ -69,6 +68,12 @@ const cancels = (id: string) => (): void => { document.getElementById(id)?.click
 const CLOSERS: Record<PageId, () => void> = {
   extAgentsPage: () => extAgents.close(),
   connectionsPage: () => page.show(null),
+  /* The generic close rather than the domain's own verb. `close()` there IS
+     `page.show(null)`, and reaching for it would put an upward edge into this
+     file that scripts/gates/import-direction.test.mjs refuses -- rightly: a
+     page with nothing to tear down has no verb of its own to call. */
+  knowledgePage: () => page.show(null),
+  tasksBoardPage: () => page.show(null),
 }
 
 /* The four layers Escape reaches before any page. Two of them are raised from
@@ -78,6 +83,9 @@ const CLOSERS: Record<PageId, () => void> = {
 const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
+  /* Under the confirm sheet, which it raises before stopping an export, and
+     over the details pane it covers. Its own close button is the cancel. */
+  { id: '#exportVeil', isOpen: flagged('exportVeil'), close: cancels('exportClose') },
   { id: '#detail', isOpen: flagged('detail'), close: detail.close },
 ]
 
@@ -96,6 +104,17 @@ export function onDeskEscape(layer: EscapeLayer): void {
   deskLayer = layer
 }
 
+/* The trajectory details pane's own layer, registered the same way by
+   features/trajectory/detailStore.ts. It answers open only while the pane holds
+   the focus, so an Escape meant for a sheet or a popover above it is never
+   spent on the pane, and one pressed in the composer never closes it. */
+let trajectoryLayer: EscapeLayer | null = null
+
+/** Registers the trajectory pane's layer. features/trajectory/detailStore.ts calls this at its own module evaluation. */
+export function onTrajectoryEscape(layer: EscapeLayer): void {
+  trajectoryLayer = layer
+}
+
 /* Back to the value this module starts at, before anything has registered.
    Nothing calls it today -- a test wanting the desk's own layer back would
    have to re-trigger features/desk/store.ts's module evaluation, which
@@ -103,6 +122,7 @@ export function onDeskEscape(layer: EscapeLayer): void {
    one, the way every other module-level `let` on this page carries one. */
 export function _resetForTests(): void {
   deskLayer = null
+  trajectoryLayer = null
 }
 
 /* And what lies beneath every page: the settings dialog, which is a flag rather
@@ -115,7 +135,7 @@ const BELOW: readonly EscapeLayer[] = [
     isOpen: () => deskLayer?.isOpen() ?? false,
     close: () => deskLayer?.close(),
   },
-  /* The composer bar's three, which have no close button of their own. They sit
+  /* The composer bar's four, which have no close button of their own. They sit
      under everything above because every one of those covers the bar: --z-pop is
      15, beneath --z-page 24, --z-detail 26, --z-desk 34, --z-veil 40 and
      --z-lightbox 95. They sit above the turn because a popover standing over a
@@ -124,13 +144,22 @@ const BELOW: readonly EscapeLayer[] = [
      it from. */
   { id: '#permPop', isOpen: flagged('permPop'), close: () => perm.close() },
   { id: '#plusPop', isOpen: flagged('plusPop'), close: () => plus.close() },
+  { id: '#atPop', isOpen: flagged('atPop'), close: () => mentions.close() },
   { id: '#wdPop', isOpen: flagged('wdPop'), close: () => workdir.close() },
+  /* The trajectory details pane, under the three popovers (they stand over
+     it) and above the turn: a reader whose focus is in the pane means to
+     close the pane, not stop the work behind it. */
+  {
+    id: 'trajectory.escapeOpen()',
+    isOpen: () => trajectoryLayer?.isOpen() ?? false,
+    close: () => trajectoryLayer?.close(),
+  },
   /* The last resort: with nothing on screen to take back, Escape interrupts
      the running turn. */
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The eleven, in the order Escape reaches them. */
+/** The fifteen, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

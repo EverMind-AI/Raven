@@ -42,6 +42,14 @@
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
   --page:     #fafaf8;   /* the ground a module page is read on */
+  /* The chat header's frost ground and the halo its controls sit on. The tint
+     is deliberately weak: the transcript underneath has to stay visible as
+     colour and shape, the way a title bar shows the window behind it. The halo
+     is what keeps the name and the corner icons legible when a dark bubble
+     passes under them, so the tint does not have to. */
+  --topbar-tint: rgba(250, 250, 248, .3);
+  --topbar-halo: rgba(255, 255, 255, .75);
+  --topbar-plate: rgba(250, 250, 248, .82);
   /* One height and one radius for a row of controls, and the focus glow that
      goes with the amber edge (the control standard above input[type]). */
   --ctl-h: 32px;
@@ -52,16 +60,27 @@
      is a gradient rather than a flat fill because the column that sits on it is
      a run of white cards -- on one flat tone they read as a stack of paper on a
      desk of the same paper, and the edge of each card is the only thing saying
-     otherwise. Its last layer is --page, so it stands alone as a background. */
+     otherwise. Its last layer is a flat ramp of its own, a shade warmer than
+     --page, so it stands alone as a background. */
   --wash:
-    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
-    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
-    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
-    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
+    radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
+    linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
   --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
   --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
   --hover:    #ececea;   /* a row the pointer is on */
   --selected: #eaeae7;   /* a row that is the one open */
+  /* The trajectory's sheet. The column carries the conversation's own wash
+     behind it (--wash), so the trace is read on the same light the transcript
+     is; the glass is what separates the sheet from the rail. */
+  --traj-glass:  rgba(255, 255, 255, .85);
+  --traj-edge:   rgba(255, 255, 255, .72);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
+  --traj-line:   rgba(31, 35, 40, .09);
+  --traj-hover:  rgba(255, 255, 255, .52);
+  --traj-rule:   rgba(31, 35, 40, .12);
+  --traj-solid:  #fbfaf8;
   --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
   /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
      label, the same label on a hovered or open row, the quiet grey of a group
@@ -156,12 +175,33 @@
   --step-2:  22px;
   --step-3:  30px;
 
+  /* The conversation surface's type, in one place: the rail's rows, the
+     conversation's name, a reply and the lines folded into it, its headings,
+     a table or a listing, inline code, and the controls under the composer.
+     The body a reply is read at sets the scale -- the rail and a table sit one
+     step under it, the name one over, a heading two over -- so moving the
+     surface is moving these, not hunting its rules. Every other rule in this
+     file still spells its own size, and the agent pane puts the body back
+     (see .satx). */
+  --fs-rail:  14px;
+  --fs-title: 16px;
+  --fs-body:  15px;
+  --fs-head:  17px;
+  --fs-dense: 14px;
+  --fs-code:  13.5px;
+  --fs-ctl:   13px;
+
   /* Both panel widths are draggable, so they are variables the grip writes to.
      The bounds live in PANE next to the drag code, where they can also be
      clamped against the window. */
   --rail: 264px;
   --wsw: 420px;
   --chat-min: 430px;
+  /* The chat header's row. It floats over the transcript rather than sitting
+     above it (see .top), so the scroller's resting top inset reads this one
+     number, and the frost's range is this row. The desktop shell swaps in the
+     title bar it measured. */
+  --topbar-h: 52px;
   /* In px, not ch: a ch unit resolves against the font of whatever element
      uses it, so the banner (12.5px) and the transcript column (14.5px)
      computed different widths from the same token and their edges never
@@ -191,6 +231,10 @@
      is scoped to its own stacking context and is not part of this ladder. */
   --z-pop: 15;
   --z-page: 24;
+  /* A standing rail on a window under the fold (this sheet's fold block,
+     the width state/rail.ts folds on): over the pages, under the drawers, so
+     a drawer opened from the strip of page it leaves visible is drawn over it. */
+  --z-rail-fold: 25;
   --z-detail: 26;
   --z-rail-handle: 30;
   /* The floating desk, and a desk pane blown up to fill the window. Both sit
@@ -251,11 +295,21 @@
 
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
+    --topbar-tint: rgba(20, 20, 20, .3);
+    --topbar-halo: rgba(0, 0, 0, .65);
+    --topbar-plate: rgba(20, 20, 20, .8);
     --wash:     linear-gradient(180deg, #151515, #121212);
     --side-bg:  #333333;
     --paper:    #202020;
     --hover:    #242424;
     --selected: #2e2e2e;
+    --traj-glass:  rgba(34, 34, 34, .58);
+    --traj-edge:   rgba(255, 255, 255, .07);
+    --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
+    --traj-line:   rgba(255, 255, 255, .08);
+    --traj-hover:  rgba(255, 255, 255, .05);
+    --traj-rule:   rgba(255, 255, 255, .10);
+    --traj-solid:  #1c1c1c;
     --text-3:   #9b9b9b;
     --rail-ink:    #f7f7f7;
     --rail-ink-on: #ffffff;
@@ -321,8 +375,14 @@
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
+  --topbar-tint: rgba(20, 20, 20, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(20, 20, 20, .8);
   --side-bg: #333333; --paper: #202020; --hover: #242424;
   --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
+  --traj-line: rgba(255, 255, 255, .08);
+  --traj-hover: rgba(255, 255, 255, .05);
+  --traj-rule: rgba(255, 255, 255, .10); --traj-solid: #1c1c1c;
   --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
   --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
@@ -351,11 +411,17 @@
   --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
   --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --traj-glass: rgba(255, 255, 255, .85); --traj-edge: rgba(255, 255, 255, .72);
+  --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
+  --traj-line: rgba(31, 35, 40, .09);
+  --traj-hover: rgba(255, 255, 255, .52);
+  --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
+  --topbar-tint: rgba(250, 250, 248, .3); --topbar-halo: rgba(255, 255, 255, .75); --topbar-plate: rgba(250, 250, 248, .82);
   --wash:
-    radial-gradient(60% 55% at 85% 0%, rgba(214, 224, 242, .55), rgba(214, 224, 242, 0) 70%),
-    radial-gradient(55% 50% at 20% 100%, rgba(246, 236, 214, .75), rgba(246, 236, 214, 0) 70%),
-    radial-gradient(40% 45% at 70% 90%, rgba(242, 233, 214, .5), rgba(242, 233, 214, 0) 70%),
-    linear-gradient(180deg, #fafaf8 0%, #f7f7f5 100%);
+    radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
+    linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
   --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
   --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
   --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
@@ -383,15 +449,51 @@
 /* every display rule below would otherwise beat the hidden attribute */
 [hidden] { display: none !important; }
 html, body { height: 100%; margin: 0; }
-/* Below the floor the window scrolls sideways instead of the layout folding
-   itself away: the rail and the reading column both have a width under which
-   they simply cannot do their job. */
+/* The body's floor is the width the rail and the reading column need side by
+   side; each has a width under which it cannot do its job. A window under it
+   used to scroll sideways rather than squeeze them, which on a phone was the
+   780px shell in a 390px window. Under it the body now gives its floor up:
+   down to 640px the two columns share the window (the rail at its narrowest,
+   190px, still leaves the content usable -- state/rail.ts `FOLDS`), and
+   under 640px the shell folds to one column (the narrow-window blocks
+   below). */
 html { overflow-x: auto; overflow-y: hidden; background: var(--ink); }
 body {
   background: var(--ink); color: var(--text);
   font: 14px/1.5 var(--sans);
   -webkit-font-smoothing: antialiased; overflow: hidden;
   min-width: 780px;
+}
+/* ── narrow windows ───────────────────────────────────────────────── */
+/* Under the floor the body gives its minimum up instead of scrolling
+   sideways: the two columns share what is left down to 640px, and the next
+   block folds the shell to one column under that. The floor was the width
+   the two columns need; below it a phone was shown the 780px shell in a
+   390px window -- the rail on the left half, every module squeezed
+   into what was left (the hub's three tabs stacked, 200px cards, a drawer
+   wider than the window) and a horizontal scroll to reach any of it. */
+@media (max-width: 779px) {
+  body { min-width: 0; }
+}
+/* Below the fold (state/rail.ts, `FOLDS`: the same 640) the window holds one
+   column. The rail, when it stands, lies over the content instead of beside
+   it -- opened by its twin, closed by its own toggle -- so the conversation
+   and the pages keep the whole width; the boot starts it folded there. Its
+   width is the drag's value capped so a strip of the page stays visible,
+   and the grip has nothing to resize. */
+@media (max-width: 639px) {
+  /* `:root` for the weight, here and on `.page` below: the grid's own rule
+     and the pages' `inset` come further down the sheet at the same weight,
+     and a standing rail here is fixed -- out of the grid's flow -- so a
+     two-track grid would put the main pane in the second track beside an
+     empty first one, which is the squeeze this block is for. */
+  :root .app { grid-template-columns: 1fr; }
+  .app .rail {
+    position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
+    z-index: var(--z-rail-fold); box-shadow: var(--shadow);
+  }
+  .app .rail #railGrip { display: none; }
+  :root .page { left: 0; }
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 /* Controls are furniture, not copy: a double-click that selects a row label
@@ -514,7 +616,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    the shell, and the fallbacks match a standard macOS title bar. */
 :root[data-shell="1"] .railtop { height: var(--tl-row, 38px); padding-top: 0; padding-bottom: 0;
   padding-left: var(--tl-pad, 78px); }
-:root[data-shell="1"] .top { height: var(--tl-row, 38px); }
+:root[data-shell="1"] { --topbar-h: var(--tl-row, 38px); }
 /* In the shell this band IS the title bar: it drags the window (see the
    pointerdown handler by the popover closers), so its text must not be
    selectable or every drag attempt starts a selection instead. */
@@ -525,6 +627,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .ghost-ic {
   flex: none; color: var(--muted); width: 28px; height: 28px; border-radius: 7px;
   display: grid; place-items: center; line-height: 1;
+  background: var(--ghost-bg, transparent);
 }
 .ghost-ic:hover { color: var(--text); background: var(--hover); }
 /* The buttons written in markup size their own glyph; the ones built with ico()
@@ -671,19 +774,30 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    and `WWWW` is four times the width of `iiii`. The input is laid into the same
    cell and stretches to it. The trailing space in `content` is the caret's room.
    Bounds live here rather than in the component: never narrower than a few
-   characters, never past the row, and a long name scrolls inside itself. */
+   characters, never past the row, and a long name scrolls inside the field. */
 .sess .rensize {
   display: inline-grid; min-width: 6ch; max-width: 100%;
-  font-size: 13px; font-weight: 500;
+  font-size: var(--fs-rail); font-weight: 500;
 }
 .sess .rensize::after,
 .sess .ren {
   grid-area: 1 / 1; font: inherit; padding: 3px 6px;
   border: 1px solid transparent; border-radius: 5px;
 }
+/* The mirror sets how wide the column WANTS to be, never how wide it MUST be.
+   Unwrappable text makes its min-content its whole length, and an `auto` column
+   never shrinks below its items' minimums: `max-width` held the wrapper at the
+   row while the column, and the field stretched across it, ran on past it, to
+   be clipped by the title slot. The field was then never narrower than its own
+   text, so it had nothing to scroll and could not keep the caret in view; the
+   wrapper (a `.t span`, so clipping) scrolled instead, under no caret logic.
+   With no minimum the column stops at the row and a long name scrolls inside
+   the field, which follows its own caret. Clipped, so the text running past the
+   column adds no overflow the wrapper could scroll. */
 .sess .rensize::after {
   content: attr(data-value) ' ';
   visibility: hidden; white-space: pre; pointer-events: none;
+  min-width: 0; overflow: hidden;
 }
 .sess .ren {
   min-width: 0; width: 100%; background: var(--ink);
@@ -760,7 +874,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 }
 .rail-foot .me .av.anon svg { width: 16px; height: 16px; }
 .rail-foot .me .who { flex: 1; min-width: 0; display: grid; }
-.rail-foot .me .who .n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail-foot .me .who .n { font-size: var(--fs-rail); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-foot .me .who .s {
   font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -833,12 +947,20 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .navi, .sess {
   position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
   height: 32px; padding: 0 8px; border-radius: 8px; text-align: left; cursor: pointer;
-  font-size: 13px; color: var(--rail-ink);
+  font-size: var(--fs-rail); color: var(--rail-ink);
 }
 /* A row's label is the page's own text colour, and the glyph beside it is the
    quiet one: the list reads as a list of names, with the icons as marks against
    them rather than as a second column of equal weight. */
 .navi svg { width: 16px; height: 16px; }
+/* How many Task Groups wait on the owner, at the row's far end: the one count
+   in the strip, so it takes the accent rather than the row's quiet ink. */
+.chrome-nav-badge {
+  margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px;
+  background: var(--amber); color: var(--ink-on-accent);
+  font-size: 11px; font-weight: 600; line-height: 17px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 .navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
 /* Selected and hovered are the same move at two depths -- one flat step of
    ground, --hover then --selected -- and the weight of the label carries the
@@ -854,6 +976,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    rows looking selected at once. */
 .app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
+/* The import row names the file it is sending, and a file name can be any length. */
+#importedBtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#importedBtn:disabled { cursor: progress; }
 /* generic: it also rides on the workspace chip in the top bar */
 .bdg {
   font-family: var(--mono); font-size: 10px; font-weight: 600;
@@ -875,8 +1000,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    transcript two pixels away stood on the wash, and the join between them read
    as a seam down the middle of the window. One ground under both: the panes are
    transparent over it (`.desk-ready .ws`) and now share the gradient instead of
-   interrupting it. --page is the wash's own last layer, so this is the same
-   colour where no gradient stop reaches. */
+   interrupting it. Where no radial stop reaches, the wash's own last layer
+   shows, a shade warmer than --page; a module page, on flat --page, covers
+   this pane whole rather than meeting it at a seam. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
   background: var(--wash);
   transition: padding-right .24s ease; }
@@ -887,18 +1013,98 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    sheet; on the wash that ramp is a flat white band across a gradient, which is
    the seam it was put there to hide. The ground is continuous now, so the
    header needs nothing to blend into it.
-   `position: relative; z-index: 2` stays: the header's own popovers anchor
-   against it, and code blocks in the scroller are positioned too. */
-.top {
+
+   Out of the flow, though, because a band that ENDS where the scroller begins
+   can only clip what reaches it: a message scrolled up was cut at the header's
+   edge. Absolute over the whole column, the transcript travels underneath it
+   and is seen through the frost -- the title bar the design draws. The scroller
+   gives back the same height as top padding, so the resting frame is unchanged
+   and only a scrolled one passes under.
+
+   The frost is the row itself, and its strength falls continuously from the
+   top down: fully blurred at the top, weaker behind the lower controls, and
+   clear at the row's lower edge. A bubble that scrolls up is eaten more the
+   higher it sits under the title bar, and is sharp again below it, instead of
+   meeting a hard edge.
+
+   Two layers, because the tint and the blur have to fade independently. The
+   blur layer carries no ground: an engine that draws the element's own
+   background over the filtered backdrop -- the order the spec describes --
+   would hide the blur entirely under an opaque one, leaving only a paler sheet
+   of sharp text. With no ground, what that layer paints IS the blurred
+   transcript, and its mask walks the blur down from full (behind the controls)
+   to none at the lower edge.
+
+   The tint layer is deliberately WEAK --topbar-tint, under a third of --page,
+   fading out toward the row's lower edge. It is not there to hide the
+   transcript: the
+   point of the effect is that a bubble under the title bar is still seen as
+   colour and shape, the way a title bar shows the window behind it. Measured in
+   Chrome, a mask of 0 leaves the backdrop untouched and a mask of 1 draws the
+   full blur, so the blur layer's ramp is what makes the gradient; the tint
+   only unifies the tone over it.
+
+   The ground is a plain rgba token, not a color-mix: engines without color-mix
+   (Chrome < 111, Safari < 16.2) keep the tint, and @supports below only has to
+   answer for backdrop-filter.
+
+   Legibility over a dark bubble is the halo's job, not the tint's:
+   --topbar-halo is a soft shadow behind the name, the chip and the corner
+   glyphs, so a dark smear under the controls cannot swallow them. Raising the
+   tint instead would take the transcript's colour away, which is the effect
+   the frost is for.
+
+   `z-index: 2` stays -- the header's own popovers anchor against it, and code
+   blocks in the scroller are positioned too. Both layers sit behind the
+   controls, one and two z-steps, and a fade on .top itself would take the
+   bottom of the buttons' glyphs with it.
+
+   Where backdrop-filter is unsupported the blur layer paints nothing, and the
+   fallback below turns the tint layer into the opaque ground the page had
+   before: content is hidden down to the same lower edge the reader's jumps
+   clear, rather than shown through a blurless fade. */
+.chat > .top {
   display: flex; align-items: center; gap: 10px; padding: 0 16px 0 20px;
-  height: 52px; flex: none; position: relative; z-index: 2;
+  height: var(--topbar-h); position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  /* The corner buttons sit on the page's own colour so a dark bubble under the
+     transparent title bar cannot swallow them; :hover and the pressed toggle
+     override it at their own specificity. */
+  --ghost-bg: var(--topbar-plate);
+}
+.chat > .top::before {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
+  z-index: -2; pointer-events: none;
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .92) 30%, rgba(0, 0, 0, .8) 58%, rgba(0, 0, 0, .55) 80%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .92) 30%, rgba(0, 0, 0, .8) 58%, rgba(0, 0, 0, .55) 80%, rgba(0, 0, 0, 0) 100%);
+}
+.chat > .top::after {
+  content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
+  z-index: -1; pointer-events: none;
+  background: var(--topbar-tint);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .82) 34%, rgba(0, 0, 0, .5) 62%, rgba(0, 0, 0, .2) 84%, rgba(0, 0, 0, 0) 100%);
+  mask-image: linear-gradient(180deg, #000 0%, rgba(0, 0, 0, .82) 34%, rgba(0, 0, 0, .5) 62%, rgba(0, 0, 0, .2) 84%, rgba(0, 0, 0, 0) 100%);
+}
+/* Over a dark bubble the frost's own contrast can vanish; the halo keeps the
+   name, the chip and the corner glyphs off it without making the band opaque. */
+.chat > .top h1,
+.chat > .top .chrome-wd-tag { text-shadow: 0 0 2px var(--topbar-halo), 0 0 9px var(--topbar-halo); }
+.chat > .top .ghost-ic svg { filter: drop-shadow(0 0 3px var(--topbar-halo)); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .chat > .top::before { display: none; }
+  .chat > .top::after {
+    background: var(--page);
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
 }
 /* The name is its own rename control: a text cursor and a quiet frame on
    hover say it can be typed into, and a click swaps it for the field below.
    The frame is padding pulled back by a negative margin, so the text sits
    where it did and the tag beside it stays close. */
 .top h1 {
-  font-size: 15px; font-weight: 500; margin: 0 0 0 -6px; padding: 2px 6px; min-width: 0; max-width: 52%;
+  font-size: var(--fs-title); font-weight: 500; margin: 0 0 0 -6px; padding: 2px 6px; min-width: 0; max-width: 52%;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: text; border-radius: 6px;
   transition: background .12s;
 }
@@ -919,7 +1125,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .top .titin {
   max-width: min(420px, 52%); background: var(--ink);
   border: 1px solid var(--faint); border-radius: 6px; margin: 0 0 0 -6px; padding: 1px 5px; outline: 0;
-  font-size: 15px; font-weight: 500; color: var(--text); font-family: inherit;
+  font-size: var(--fs-title); font-weight: 500; color: var(--text); font-family: inherit;
 }
 .top .spacer { flex: 1; min-width: 0; }
 /* The workspace toggle is the rail toggle mirrored -- same icon, divider on the
@@ -1022,8 +1228,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
 
-/* The three small popovers off the bar -- the "+" menu (#plusPop), the
-   workspace (#wdPop) and the permission modes (#permPop) -- hang off their own
+/* The four small popovers off the bar -- the "+" menu (#plusPop), the "@"
+   (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
+   off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
    above the chip's top edge, left edges lined up. Names only, no heading: the
    chip already says what is being chosen, and the sentence behind a name is on
@@ -1031,22 +1238,37 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    filled band behind the row, which on a translucent panel reads as a second
    material. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
-#plusPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
+#plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
+#atPop { width: 240px; }
 #wdPop { width: 200px; }
-#wdPop[data-view="browse"] { width: 300px; }
+#wdPop[data-view="browse"], #wdPop[data-view="drives"] { width: 300px; }
 #permPop { width: 200px; }
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
-#plusPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
-#plusPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
+#plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
+#plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); }
 /* The tier with no brakes says so in its row too, in the chip's colour. */
 #permPop .prow.risk .nm { color: var(--clay); }
-#plusPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
-/* The workspace chip names a folder in the text colour, the default in the
-   bar's muted one. */
-#wdChip.chrome-wd-set { color: var(--text); }
+#plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
+/* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
+   button carries the count, because the scope of a question is worth seeing
+   while it is being typed and not only while it is being set. */
+#atBtn { font-size: 15px; font-weight: 600; }
+#atBtn.chrome-at-set { color: var(--amber); }
+.chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
+  border-radius: 999px; background: var(--amber); color: var(--ink-on-accent); font-size: 9.5px; font-weight: 600;
+  line-height: 13px; text-align: center; }
+/* A base's row: the tick, the name, and how many documents are in it. The tick
+   holds its width whether or not it is set, so a list does not shuffle as it
+   is ticked. */
+#atPop .chrome-at-row { display: flex; align-items: center; gap: 8px; }
+.chrome-at-tick { width: 11px; flex: none; color: var(--amber); font-size: 11px; }
+.chrome-at-count { margin-left: auto; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+#atPop .chrome-at-back { color: var(--muted); }
+.chrome-at-note { padding: 7px 9px; color: var(--muted); font-size: 11.5px; }
+
 #wdPop .chrome-wd-open .nm { font-weight: 500; color: var(--amber); }
 #wdPop .chrome-wd-err { color: var(--clay); }
 /* The folder browser under the menu: a path bar, a scrolling list, two buttons. */
@@ -1056,8 +1278,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-nav:hover:not(:disabled) { color: var(--text); background: var(--surface); }
 .chrome-wd-nav:disabled { opacity: .4; }
 .chrome-wd-nav svg { width: 14px; height: 14px; }
-.chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.chrome-wd-p { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text); }
+/* The path is a field: a folder the walk cannot reach can still be typed in,
+   so the bar keeps the path's look and drops the form control's. Left to
+   right, as anything typed into must be: right to left would draw C:\ as \:C
+   and move the caret against the text. Showing a long path from its end is
+   the component's job (WorkdirPopover.tsx's showEnd). */
+.chrome-wd-typed { appearance: none; border: 0; border-radius: 6px; background: none; padding: 3px 4px;
+  outline: none; }
+.chrome-wd-typed:hover { background: var(--surface); }
+.chrome-wd-typed:focus { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line); }
+.chrome-wd-typed::placeholder { color: var(--faint); direction: ltr; }
+.chrome-wd-drives { color: var(--muted); }
 .chrome-wd-list { max-height: 236px; overflow-y: auto; padding: 4px 0; }
 #wdPop .chrome-wd-list .prow { padding: 5px 9px; }
 #wdPop .chrome-wd-list .prow .pico { width: 13px; height: 13px; flex: none; color: var(--faint); }
@@ -1080,7 +1312,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The default folder is said, but said quietly: no fill, just the word. */
 .chrome-wd-tag.chrome-wd-default { background: none; color: var(--faint); padding-left: 2px; }
 
-.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable; }
+/* The header overlays this box now (see .top), so content is free to pass
+   under it. The same height of top padding keeps the first line exactly where
+   it was at rest, and because padding on a scroll container travels with its
+   content, that clearance is gone the moment the reader scrolls -- which is
+   what lets a bubble reach the frost instead of stopping at its edge.
+
+   Padding and scroll-padding are both the row's height: the frost does not
+   reach below the row, so a scrollIntoView that brings a control to the top
+   edge only has to clear the title bar. The frost's own fade is inside the
+   row, so it never needs room in the scroller. */
+.scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; scroll-behavior: smooth; scrollbar-gutter: stable;
+  padding-top: var(--topbar-h); scroll-padding-top: var(--topbar-h); }
 /* The transcript stops being painted before it reaches the composer instead of
    sliding under it. The card is opaque (see .dock-in), so a line arriving at
    its top edge was cut mid-glyph, and the 22px of gutter below the card left
@@ -1197,13 +1440,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    this column is meant to be the exchange, not the sentence. */
 .turn { display: flex; flex-direction: column; min-width: 0; }
 .turn.me { align-self: flex-end; align-items: flex-end; max-width: 70%; }
-.turn.ai { align-self: stretch; width: 100%; max-width: 760px; margin-right: auto; gap: 6px; }
+.turn.ai { align-self: stretch; width: 100%; max-width: var(--col); margin-right: auto; gap: 6px; }
 /* The design's bubble (Figma: Raven / UserMessage): #333 at a 12px radius, and
    the reply's 1.8 line so a long question reads at the same measure as its
-   answer. The inset is what keeps a one-liner at the design's 40px. */
+   answer. The inset is what keeps a one-liner at the design's 40px: it is
+   (40px - 1.8 lines of the body) / 2, worked out from --fs-body so it holds
+   at whichever size the bubble is read at. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 12px; padding: 7.4px 12px; font-size: 14px; line-height: 1.8;
+  border-radius: 12px; padding: calc((40px - 1.8 * var(--fs-body)) / 2) 12px;
+  font-size: var(--fs-body); line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
 /* A white card on the wash, flat the way the design lays it (Figma: Raven /
@@ -1214,7 +1460,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .msg.ai {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
   background: var(--ink); border-radius: 12px; padding: 16px;
-  font-size: 14px; line-height: 26px;
+  font-size: var(--fs-body); line-height: 26px;
   box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
 }
 .msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
@@ -1317,14 +1563,14 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    fit-content rows (.think, .tfh) sit in block parents, where 100% is already
    the column, which is why only this one needed it. */
 /* The design's process line (Figma: Raven / Thinking): the one quiet grey, a
-   glyph the size of the type, 4px between the parts and 8px between the lines.
-   It reads at the answer's own 14px: a reader who opens the fold is reading the
+   14px glyph, 4px between the parts and 8px between the lines. It reads at
+   the answer's own size (--fs-body): a reader who opens the fold is reading the
    trail, not glancing past it, and type below the copy it sits in made them
    lean in for the one thing they had asked to see. */
 .wrow {
   display: flex; align-items: center; gap: 4px; color: var(--chat-quiet);
   width: fit-content; max-width: 100%; min-width: 0;
-  font-size: 14px; line-height: 22px; padding: 0; margin: 0;
+  font-size: var(--fs-body); line-height: 22px; padding: 0; margin: 0;
   border-radius: 0; text-align: left;
 }
 .wrow.tog:hover .vb, .wrow.tog:hover .ar { color: var(--text); }
@@ -1353,7 +1599,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   color: var(--text); min-width: 0; display: flex; align-items: center; gap: 7px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dlg .dgr .v.err { color: var(--clay); white-space: normal; }
+/* A delegated call's detail is a reading of how it went, not an alarm: the
+   failure word and the step's own error text carry it. */
+.dlg .dgr .v.err { color: var(--muted); white-space: normal; }
 .dlg .who {
   flex: none; font-family: var(--mono); font-size: 10.5px; color: var(--muted);
   border: 1px solid var(--line); border-radius: 5px; padding: 0.5px 6px;
@@ -1361,7 +1609,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dlg .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--line); flex: none; }
 .dlg .dot.run { background: var(--gold); animation: breathe 1.5s ease-in-out infinite; }
 .dlg .dot.ok { background: var(--moss); }
-.dlg .dot.bad { background: var(--clay); }
+.dlg .dot.bad { background: var(--muted); }
 .dlg .dot.skip { background: var(--faint); }
 /* ── the dag graph ───────────────────────────────────────────────────────
    What `DagGraph` draws wherever it is mounted -- today the desk's task board,
@@ -1412,8 +1660,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
 .sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .sdlv.good .st .dot { background: var(--moss); }
-.sdlv.bad .st { color: var(--clay); }
-.sdlv.bad .st .dot { background: var(--clay); }
+.sdlv.bad .st { color: var(--muted); }
+.sdlv.bad .st .dot { background: var(--muted); }
 .sdlv.warn .st { color: var(--gold); }
 .sdlv.warn .st .dot { background: var(--gold); }
 .sdlv.dim .st { color: var(--faint); }
@@ -1432,7 +1680,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .sdbd {
   margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
   background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
-  min-width: 0; overflow-x: auto;
+  min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
 }
 .sdlv .sdbd .cap {
   font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
@@ -1521,7 +1769,6 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    glyphs beside it, and the same three states. */
 .wrow .transcript-ic { width: 14px; height: 14px; flex: none; color: var(--chat-quiet); }
 .wrow.tog:hover .transcript-ic { color: var(--muted); }
-.wrow.bad .transcript-ic { color: var(--chat-danger); }
 .wrow.run .transcript-ic { animation: breathe 1.5s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .wrow.run .transcript-ic { animation: none; opacity: .62; } }
 
@@ -1576,18 +1823,25 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: transform .16s ease, color .12s;
 }
 .open > .cv, .tfold.open > .tfh > .cv { transform: rotate(90deg); }
+/* A long-running tool's phrase, from the catalogue shared with the TUI. It is
+   the quietest thing on the row and the only part allowed to clip: the verb
+   and the clock are the facts, and the phrase is the aside. */
+.wrow .transcript-charm {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--chat-quiet); opacity: .72; font-style: italic;
+}
 /* How long a step in flight has been going. Monospace so the digits do not
    shuffle the row as they tick, and `flex: none` so a long verb clips before
    this does -- the number is the part that says the step is alive. */
-.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--chat-quiet); }
+.wrow .runms { flex: none; font-variant-numeric: tabular-nums; font-size: var(--fs-body); color: var(--chat-quiet); }
 .wrow .chip { flex: none; font-size: 12px; padding: 0 7px; border-radius: 9px; line-height: 18px; }
 /* diff counts read as plain numbers next to the path, not as a pill */
-.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: 14px; }
+.wrow .diffn { flex: none; font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
 .wrow .diffn .a { color: var(--moss); }
 .wrow .diffn .d { color: var(--clay); }
-.chip.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
-.wrow.bad .vb, .wrow.bad .ic, .wrow.bad .g { color: var(--chat-danger); }
-.wrow .err { color: var(--chat-danger); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A failed call is ordinary work: the word says so, the colour does not. */
+.chip.bad { color: var(--muted); background: var(--surface); }
+.wrow .err { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wrow.wait .vb, .wrow.wait .ic { color: var(--amber); }
 
 /* detail card: the only place raw commands, paths and output appear. A titled
@@ -1632,7 +1886,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .dtl pre .pth:hover { color: var(--amber); text-decoration: underline; text-underline-offset: 2px; }
 .dtl .exit { font-size: 10.5px; padding: 1px 6px; border-radius: 8px; }
 .dtl .exit.ok { color: var(--moss); background: color-mix(in oklab, var(--moss) 12%, transparent); }
-.dtl .exit.bad { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
+.dtl .exit.bad { color: var(--muted); background: var(--surface); }
 .dtl .dline { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 6px; margin: 0 -6px; }
 .dtl .dline.a { background: color-mix(in oklab, var(--moss) 13%, transparent); color: var(--moss); }
 .dtl .dline.d { background: color-mix(in oklab, var(--clay) 13%, transparent); color: var(--clay); }
@@ -1713,7 +1967,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    underneath, so the gap stays small enough to read as one block. */
 .tfh {
   display: flex; align-items: center; gap: 4px; width: fit-content; max-width: 100%;
-  text-align: left; color: var(--chat-quiet); font-size: 14px; line-height: 22px;
+  text-align: left; color: var(--chat-quiet); font-size: var(--fs-body); line-height: 22px;
   padding: 0; margin: 0;
   border: 0; border-radius: 0; background: none; cursor: pointer;
 }
@@ -1728,15 +1982,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    different greys, which made three lines of the same kind read as three kinds
    of thing. Declared together so they cannot drift again: change the size here
    and every line of the kind moves with it. */
-.think, .tfh, .wrow.sum { font-size: 14px; color: var(--chat-quiet); }
-.tfh .tm { color: var(--chat-quiet); font-size: 14px; font-variant-numeric: tabular-nums; }
+.think, .tfh, .wrow.sum { font-size: var(--fs-body); color: var(--chat-quiet); }
+.tfh .tm { color: var(--chat-quiet); font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
 /* An empty clock still spends its flex gap, which pushed the caret one whole
    gap further from the label on every line whose time happened to be blank --
    two folds side by side then looked like two different components. */
 .tfh .tm:empty { display: none; }
 .think:hover, .tfh:hover, .wrow.sum:hover { color: var(--text); }
 /* the phrase is a summary of the rows underneath, not a target of its own */
-.wrow.sum .ar { color: inherit; font-size: 14px; }
+.wrow.sum .ar { color: inherit; font-size: var(--fs-body); }
 .wrow.sum:hover .ar { color: var(--text); }
 
 /* the turn is never silent: a breathing dot fills the gap before events */
@@ -1760,6 +2014,21 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    held to 78% of a number it had just set, which cut it below its own content
    and wrapped a row that had room. The turn's own 70% is the bound that means
    something; what a row may be is its items' business. */
+/* What a knowledge search found, under the query it answered. Each row is a
+   press: a citation a reader cannot follow is a claim they have to take on
+   trust, and the whole point of searching their own material is that they can
+   go and look. */
+.transcript-cites { display: grid; gap: 3px; margin-bottom: 8px; }
+.transcript-cite { display: flex; align-items: baseline; gap: 7px; width: 100%; padding: 4px 7px;
+  border: 1px solid var(--line-soft); border-radius: 7px; background: var(--surface); color: var(--text);
+  font-size: 11.5px; text-align: left; cursor: pointer; }
+.transcript-cite:hover { border-color: var(--line); background: var(--hover); }
+/* The number the prose below cites, so a reader reading "[2]" knows which row
+   is the second. */
+.transcript-citen { flex: none; min-width: 13px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.transcript-cited { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transcript-citep { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+
 .transcript-arow {
   display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end;
   gap: 6px; max-width: 100%;
@@ -1837,7 +2106,8 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   transform: translate(4px, 4px);
 }
 
-/* back-to-bottom pill, shown only while the reader is scrolled up */
+/* quick-jump pills: back to the tail above the composer, and back to the last
+   question under the header. Which one is up is the composer store's. */
 /* --lift is the measured height of everything docked at the bottom (composer,
    queued rows, a clarify sheet). A constant here would be wrong the moment the
    composer grows a line, which is exactly when the pill matters. */
@@ -1861,6 +2131,10 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
 }
 .backpill[hidden] { display: none; }
+/* The up pill mirrors the other end: same circle, hung under the title bar
+   instead of above the composer. It clears the row, whose frost is the only
+   glass in the column. */
+.chrome-toppill { top: calc(var(--topbar-h) + 12px); bottom: auto; }
 
 /* mid-turn narration: what the agent said on the way, set between the process
    lines and the answer. It used to sit a step under the reply and a step over
@@ -1945,10 +2219,11 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    with an icon and a "Raven" header for runtime notices; a bare quiet line for
    a stop. The card was the bug: a dropped upload got the visual weight of an
    answer, and three failed uploads in a row buried the conversation under
-   panels. So: one line, the same metrics as a tool row, truncated at the
-   column's edge rather than wrapping, and colour as the only difference --
-   clay when something broke and the reader may have to act, faint when the
-   runtime is only reporting its own state. Same red as a failed tool row.
+   panels. So: a closed row is one line, the same metrics as a tool row,
+   truncated at the column's edge rather than wrapping, and colour as the only
+   difference -- clay when something broke and the reader may have to act, faint
+   when the runtime is only reporting its own state. Same red as a failed tool
+   row. An opened row is the grid described below.
 
    center, not baseline: an overflow:hidden child takes its bottom edge as its
    baseline, so baseline alignment padded every row with a phantom descender. */
@@ -1959,27 +2234,53 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .tnote.bad { color: var(--clay); }
 .tnote .tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The one action a failed row can offer. Plain text so the row stays a line:
+/* The actions a failed row can offer. Plain text so the row stays a line:
    a bordered button would rebuild the card one corner at a time. */
-.tnote .rt { flex: none; color: inherit; opacity: .75; text-decoration: underline; text-underline-offset: 2px; }
-.tnote .rt:hover { opacity: 1; }
+.tnote .rt, .tnote .transcript-note-more { flex: none; color: inherit; opacity: .75; text-decoration: underline; text-underline-offset: 2px; }
+.tnote .rt:hover, .tnote .transcript-note-more:hover { opacity: 1; }
+/* An opened row is a grid (text, toggle, Retry, slack), not a wrapping flex
+   line: its text is nowrap, so under flex-wrap it took a line to itself whenever
+   it and the actions did not fit, and the toggle just clicked dropped below it.
+   Here the text still shrinks to an ellipsis, the actions stay beside it, and the
+   account takes the row under them, wrapping and scrolling inside it: a body can
+   be one token thousands of characters long. */
+.tnote.open { display: grid; grid-template-columns: minmax(0, max-content) max-content max-content 1fr; }
+.tnote .transcript-note-full {
+  grid-column: 1 / -1; min-width: 0; max-height: 320px; overflow: auto;
+  margin: 2px 0 0; padding: 2px 0 2px 10px; border-left: 2px solid var(--line);
+  font: inherit; color: inherit; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+}
 
 
 /* prose */
+/* The sizes a markdown body's parts read at are its own, declared on every
+   .prose rather than inherited: the workspace, the knowledge base, a task's
+   answer and a skill's text in settings each keep them, and so does a
+   delegate's delivered text, which sits inside a reply's card and would
+   otherwise pick up the reply's. Only a reply and its narration step up to
+   the conversation surface's type (the --fs-* tokens). */
 /* break-word, not anywhere: an unbroken token longer than the line (a URL, a
    hash) wraps instead of pushing the column sideways, while normal words
    still break only at their own boundaries. */
-.prose { line-height: 1.8; overflow-wrap: break-word; }
+.prose {
+  line-height: 1.8; overflow-wrap: break-word;
+  --md-h2: 16px; --md-h3: 14px; --md-code: 12.5px; --md-dense: 13px; --md-cell-code: 12px;
+}
+.msg.ai .answer > .prose, .msg.ai .step > .say.prose {
+  --md-h2: var(--fs-head); --md-h3: var(--fs-body); --md-code: var(--fs-code);
+  --md-dense: var(--fs-dense); --md-cell-code: 13px;
+}
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
-/* A reply's own type (Figma: Raven / AssistantMessage): 14/1.8 prose with 8px
-   between paragraphs, and a 16/22 semibold heading in the same face. */
+/* A reply's own type (Figma: Raven / AssistantMessage, one step up -- see
+   --fs-body): 15/1.8 prose with 8px between paragraphs, and a 17/22 semibold
+   heading in the same face. */
 .msg.ai .prose { color: var(--chat-ink); }
 .prose h2 {
-  font-family: var(--sans); font-size: 16px; line-height: 22px; font-weight: 600;
+  font-family: var(--sans); font-size: var(--md-h2); line-height: 22px; font-weight: 600;
   letter-spacing: 0; margin: 20px 0 12px; text-wrap: balance;
 }
-.prose h3 { font-size: 14px; line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
+.prose h3 { font-size: var(--md-h3); line-height: 22px; font-weight: 600; margin: 16px 0 8px; color: inherit; }
 .prose p { margin: 8px 0; }
 .prose .brk { height: 14px; }
 .prose ul, .prose ol { margin: 8px 0; padding-left: 18px; }
@@ -2015,14 +2316,14 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 .prose strong { color: var(--text); font-weight: 650; }
 .prose code {
-  font-family: var(--mono); font-size: 12.5px; background: var(--raised);
+  font-family: var(--mono); font-size: var(--md-code); background: var(--raised);
   padding: 1px 5px; border-radius: 4px;
 }
 /* Code is content, not a caption: it reads at text weight in the design's
    listing box (Figma: Raven / AssistantMessage, the code variant) -- the table's
-   head ground, its half-pixel rule and radius, 13/1.8 mono. */
+   head ground, its half-pixel rule and radius, 14/1.8 mono in a reply (--md-dense). */
 .prose pre {
-  font-family: var(--mono); font-size: 13px; line-height: 1.8; margin: 16px 0;
+  font-family: var(--mono); font-size: var(--md-dense); line-height: 1.8; margin: 16px 0;
   background: var(--chat-head); border: .5px solid var(--chat-rule); border-radius: 12px;
   color: var(--chat-ink); padding: 10px 16px; overflow-x: auto; tab-size: 2;
 }
@@ -2067,7 +2368,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   height: 40px; padding: 0 7px 0 16px; background: var(--chat-head);
 }
 .cblang {
-  font-family: var(--mono); font-size: 13px; font-weight: 500; line-height: 26px;
+  font-family: var(--mono); font-size: var(--md-dense, 13px); font-weight: 500; line-height: 26px;
   color: var(--chat-file-ink); text-transform: uppercase;
 }
 .cblang::before { content: '< '; }
@@ -2151,12 +2452,12 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose a:hover { text-decoration-color: var(--link); }
 /* The design's table (Figma: Raven / AssistantMessage, the table variant): one
    half-pixel rule boxing it at a 12px radius and dividing every cell, a head
-   row on the page's grey, and 40px rows of 13/26 text. The cells wrap --
+   row on the page's grey, and 40px rows of 14/26 text in a reply (--md-dense). The cells wrap --
    models routinely put a whole sentence in one, and nowrap turned a table that
    fitted into one that scrolls sideways; the head row does not, so a column
    is never narrower than its own name. */
 .tw { overflow-x: auto; margin: 16px 0; border: .5px solid var(--chat-rule); border-radius: 12px; }
-.prose table { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 26px; }
+.prose table { border-collapse: collapse; width: 100%; font-size: var(--md-dense); line-height: 26px; }
 .prose th, .prose td {
   padding: 7px 16px; text-align: left; vertical-align: top;
   border: 0; border-right: .5px solid var(--chat-rule);
@@ -2171,13 +2472,13 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .prose th code {
   background: none; padding: 0; font-size: inherit; color: inherit;
 }
-/* Same reasoning inside a heading: a 12.5px filled box under a 16px heading
+/* Same reasoning inside a heading: a 13.5px filled box under a 17px heading
    sits below its cap line and reads as debris. */
 .prose h2 code, .prose h3 code { background: none; padding: 0; font-size: inherit; }
 /* In a data cell the chip is the only thing marking the value as code, so it
    stays -- just tight enough that a lone identifier sits on the same line as
    the plain text in the cell beside it. */
-.prose td code { font-size: 12px; padding: 0 4px; }
+.prose td code { font-size: var(--md-cell-code); padding: 0 4px; }
 
 .caret { display: inline-block; width: 7px; height: 14px; background: var(--amber);
   vertical-align: -2px; animation: bl 1.1s steps(2, end) infinite; }
@@ -2258,13 +2559,31 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
    the reader sees. */
 .dock-in:has(.field.drop) { box-shadow: 0 0 20px var(--composer-sh), 0 0 0 1px var(--amber); }
 
+/* The card's height seam, at its top edge: a short pill that stays quiet until
+   the pointer is on it, the restraint the pane grips show above. Laid over the
+   card's own top inset rather than given a row of its own, so the composer
+   still opens at exactly the height it did before the handle existed.
+   `touch-action` keeps a touch drag from scrolling the page instead. */
+.chrome-composer-grip {
+  position: absolute; top: 0; left: 0; right: 0; height: 12px; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  cursor: ns-resize; touch-action: none;
+}
+.chrome-composer-grip::before {
+  content: ''; width: 32px; height: 3px; border-radius: 999px;
+  background: var(--composer-line); transition: background .12s ease;
+}
+.chrome-composer-grip:hover::before, .chrome-composer-grip[data-drag="true"]::before,
+.chrome-composer-grip:focus-visible::before { background: var(--composer-ph); }
+.chrome-composer-grip:focus-visible { outline: none; }
+@media (prefers-reduced-motion: reduce) { .chrome-composer-grip::before { transition: none; } }
+
 /* ── the work indicator ───────────────────────────────────────────────────
    One glyph for "this is happening now", in every place that used to say it in
-   its own words: the turn's own row (which switched between starting / writing
-   / working), a sub-agent's row and its open transcript, a command still
-   running. Several vocabularies for one fact made them read as different kinds
-   of event; they are the same fact, and the clock beside the glyph is what
-   says how long it has been true.
+   its own words: the turn's own row, a sub-agent's row and its open transcript,
+   a command still running. Several vocabularies for one fact made them read as
+   different kinds of event; they are the same fact, and the clock beside the
+   glyph is what says how long it has been true.
 
    `currentColor`, not a fixed amber: the same three dots have to sit in an
    amber turn row and a muted panel row without a variant each.
@@ -2289,20 +2608,36 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   .wkg i { animation: none; opacity: .62; }
 }
 
-/* One appearance for the whole turn: the glyph and the clock never change. The
-   word used to (starting / writing / working) and it was the only part that did
-   -- a state the reader is not meant to act on, reading as three events. The
-   clock is what proves the stream is alive; the glyph is what says it is.
+/* One appearance for the whole turn: the glyph, the word and the clock. The
+   word rotates on a fixed cadence through the catalogue shared with the TUI
+   (ui-shared/verbs.json) instead of switching on stream state -- the phase a
+   turn is in is not something the reader acts on, while how long it has been
+   running is. The glyph says the turn is alive and the clock proves it.
+
+   The verb sits in a fixed-width slot so the clock never shifts as the
+   catalogue moves between short and long entries (`min-width` is the longest
+   entry, 9 characters, and both sides must grow together if that changes). It
+   fades in on each change rather than jumping: the TUI's cadence, in the
+   page's own motion language. Under reduced motion the fade is off and the
+   word still rotates, because the text is information and only the motion is
+   decoration.
 
    It rides the tail of the transcript, so it sits where the answer's own footer
    will sit once the turn lands -- same column, same size -- and the one reads as
    the other settling. */
+@keyframes tvfade { from { opacity: 0; } to { opacity: 1; } }
 .turnlive {
   display: flex; align-items: center; gap: 8px; margin: 9px 0 2px;
   font-family: var(--mono); font-size: 11px; color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 .turnlive .wkg { color: var(--amber); }
+.turnlive .cp-tv { display: inline-flex; align-items: baseline; gap: 6px; }
+.turnlive .cp-verb { display: inline-block; flex: none; min-width: 9ch; animation: tvfade .22s ease-out; }
+.turnlive .cp-sep { opacity: .5; }
+@media (prefers-reduced-motion: reduce) {
+  .turnlive .cp-verb { animation: none; }
+}
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
 .dock-in .queued { margin: 0; padding: 0 16px; }
@@ -2328,8 +2663,8 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
    short window, and what it eats is the tail of the transcript the reader is
-   writing about. This is the single source for the cap -- taFit() reads it back
-   rather than repeating the number. */
+   writing about. The composer's own field has its own ceiling, measured on the
+   visual viewport where its height is set (features/composer/store.ts). */
 /* Two lines at rest: an input that opens at one cramped line undersells
    itself as the main act of the page. */
 textarea {
@@ -2337,12 +2672,15 @@ textarea {
   min-height: 46px; max-height: min(200px, 24vh); padding: 2px 0; line-height: 1.6;
 }
 textarea::placeholder { color: var(--faint); }
-/* The composer's own field: the design's 14/26 body, two lines at rest and
-   about eleven before it scrolls -- still viewport-bounded, so a short window
-   keeps the transcript it is writing about. */
+/* The composer's own field: the reply's 15/26 body (--fs-body), two lines at
+   rest and up to half the visual viewport before it scrolls. Its height is
+   written by features/composer/store.ts, which owns both bounds; the min-height
+   here is the floor that file reads back. No max-height: a vh cap is measured
+   against the layout viewport, which is not the one a soft keyboard shrinks,
+   so it would be a second number that disagrees with the first. */
 .dock-in textarea {
-  font-size: 14px; line-height: 26px; padding: 0; color: var(--composer-ink);
-  min-height: 52px; max-height: min(286px, 36vh);
+  font-size: var(--fs-body); line-height: 26px; padding: 0; color: var(--composer-ink);
+  min-height: 52px; max-height: none;
 }
 .dock-in textarea::placeholder { color: var(--composer-ph); }
 /* WebKit paints its own focus ring on text controls; ours is the container
@@ -2446,7 +2784,7 @@ textarea:focus, textarea:focus-visible,
 /* Each is a 30px row that turns into a pill under the pointer (Figma: Raven /
    attachment-01): quiet grey words at rest, the secondary ink on hover. */
 .under .chip {
-  font-family: var(--sans); font-size: 12px; height: 30px; padding: 0 12px; gap: 6px;
+  font-family: var(--sans); font-size: var(--fs-ctl); height: 30px; padding: 0 12px; gap: 6px;
   border-radius: 12px; color: var(--rail-quiet);
 }
 .under .chip:hover, .under .chip[aria-expanded="true"] {
@@ -2480,9 +2818,8 @@ textarea:focus, textarea:focus-visible,
 @container dock (max-width: 480px) {
   .under .meter { visibility: hidden; width: 0; }
   .under #permName, .under #wdName { display: none; }
-  .under #permChip, .under #wdChip { padding: 0 9px; }
+  .under #permChip { padding: 0 9px; }
 }
-@container dock (max-width: 360px) { .under .chrome-anch:has(#wdChip) { display: none; } }
 @container dock (max-width: 320px) { .under #ctxChip { display: none; } }
 @container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
 
@@ -2504,7 +2841,13 @@ textarea:focus, textarea:focus-visible,
 .model-picker-search svg {width:15px; height:15px; flex:0 0 15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
 .model-picker-search input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .model-picker-search input::placeholder {color:var(--faint)}
-.model-picker-body {display:grid; grid-template-columns:170px 1fr; min-height:0; flex:1}
+/* 200px holds every heading the Mirasim agents carry on one line,
+   measured at the worst case -- selected (bold), a two-digit count and the dot:
+   the longest, "Claude Code" and "Antigravity", need 191px with the column's
+   padding. 170px wrapped them. A provider name longer than that (Raven's own
+   "MiniMax Global (OAuth)") ellipsizes, with the whole name on the row's title,
+   rather than taking a second line or the model column's room. */
+.model-picker-body {display:grid; grid-template-columns:200px 1fr; min-height:0; flex:1}
 @media(max-width:560px) {
   .model-picker-body {grid-template-columns:140px 1fr}
 }
@@ -2514,6 +2857,7 @@ textarea:focus, textarea:focus-visible,
   background:none; border:0; color:var(--text); padding:7px 10px; border-radius:8px; cursor:pointer}
 .model-picker-prov:hover {background:var(--surface)}
 .model-picker-prov[aria-current="true"] {background:var(--raised); font-weight:600}
+.model-picker-prov .model-picker-name {min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .model-picker-prov .model-picker-count {margin-left:auto; color:var(--faint); font-size:12.5px; font-variant-numeric:tabular-nums}
 .model-picker-prov .model-picker-dot {width:5px; height:5px; border-radius:99px; background:var(--amber); flex:0 0 5px}
 .model-picker-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:13px;
@@ -2580,9 +2924,10 @@ textarea:focus, textarea:focus-visible,
    the person is declaring it to be. */
 .mpick .model-typed { color: var(--amber); }
 .mpick .model-typed .nm { font-family: var(--mono); font-size: 12.5px; }
-/* The sub-agent tier, as one row of this picker: a setting of the same
-   conversation, drawn where the model is chosen rather than as a chip of its
-   own (state/tier.ts). */
+/* The sub-agent tier and the reasoning effort, as two rows of this picker:
+   settings of the same conversation, drawn where the model is chosen rather
+   than as chips of their own (state/tier.ts, state/effort.ts). The effort row
+   borrows the tier row's rules whole, so the two read as one block. */
 .mpick .model-tier { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 8px 12px 6px; border-top: 1px solid var(--line-soft); }
 .mpick .model-tier-k { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--faint); }
 .mpick .model-tier-k svg { width: 12px; height: 12px; flex: none; }
@@ -2599,6 +2944,11 @@ textarea:focus, textarea:focus-visible,
 .mpick .model-seg button { font-size: 11px; padding: 2px 9px; border-radius: 5px; color: var(--muted); }
 .mpick .model-seg button[aria-checked="true"] { background: var(--paper); color: var(--text); font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+/* The effort row's control takes the line under its label: five rungs do not
+   fit beside a label in 340px, and a label squeezed onto two lines read as two
+   rows. Stretched, so the five share the width as one control. */
+.mpick .model-effort .model-seg { flex: 1 1 100%; }
+.mpick .model-effort .model-seg button { flex: 1; text-align: center; }
 .mpick .foot { border-top: 1px solid var(--line-soft); padding: 7px 12px;
   display: flex; justify-content: space-between; align-items: center; }
 .mpick .foot button { font-size: 11.5px; color: var(--amber); }
@@ -2659,6 +3009,72 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
+/* An imported conversation (state/session/conversation.ts's readOnly): nothing
+   to type into, no folder it runs in, a name changed only on its rail row, and
+   no conversation menu -- the menu's slot kept, so the desk launcher and the
+   trajectory toggle beside it stay where they are. */
+.chat[data-readonly] .dock { display: none; }
+.chat[data-readonly] #wdTag { display: none; }
+.chat[data-readonly] #moreBtn { visibility: hidden; }
+.chat[data-readonly] .top h1 { cursor: default; }
+.chat[data-readonly] .top h1:hover { background: none; }
+/* The trajectory view (features/trajectory/). The scroller is parked, not
+   removed: out of the flow at the size it had, invisible and deaf to the
+   pointer, so its scroll position survives and the transcript keeps streaming
+   into it underneath. Inset 0 is the live box's geometry, padding included,
+   so the parked copy keeps the size and content offset the live one had.
+   The trajectory's box takes the flex space and reserves --lift below, the
+   same inset .col reserves, so its last row clears the composer the way the
+   last message does. The pill and the turn nav belong to the scroller and go
+   with it.
+
+   #trajHost is the waterfall's glass island. .top no longer takes the row out
+   of the column, so in this view the host reserves the title bar as a top
+   margin: the island has to float below the row with its own inset visible,
+   and a padding would push the rows down while the card's top edge stayed
+   under the header. */
+.scroll[data-parked] { position: absolute; inset: 0; visibility: hidden; pointer-events: none; }
+.scroll[data-parked] ~ .backpill { display: none; }
+.scroll[data-parked] ~ #turnNav { display: none; }
+#trajHost { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  padding-top: 0; padding-bottom: var(--lift, 96px); }
+#trajHost[hidden] { display: none; }
+/* The glass itself: the conversation's own wash is painted on the column and
+   the island floats on it, inset far enough that the colour reads around all
+   four edges. The same background in both views is the point -- the trace is
+   read on the light the transcript is, not a second palette. The blur samples
+   that wash and nothing else: the rows scroll inside the sheet, so a scroll
+   never re-blurs a backdrop. The composer is hidden while a trace is up,
+   which is why the lift the host used to reserve is dropped here. */
+html[data-traj] .chat { background: var(--wash) }
+html[data-traj] #trajHost {
+  position: relative;
+  /* The title bar plus the same 6px inset the sides and bottom keep, so the
+     card's top edge and rounded corners are visible below it, not under it. */
+  margin: calc(var(--topbar-h) + 6px) 14px 14px; padding-bottom: 0;
+  border: 1px solid var(--traj-edge); border-radius: 16px; overflow: hidden;
+  box-shadow: var(--traj-shadow);
+}
+/* The glass is a layer behind the island, not a filter on its ancestor. With
+   backdrop-filter on the host the rows scrolled inside the filtered subtree,
+   and the compositor reused its backdrop snapshot: a row's text ghosted into
+   the row below at the clipped edge. Behind the rows the blur sees only the
+   wash, and a scroll moves them over a surface that never changes. */
+html[data-traj] #trajHost::before {
+  content: ''; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+  background: var(--traj-glass);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: blur(22px) saturate(1.25);
+}
+html[data-traj] #trajHost > * { position: relative; z-index: 1 }
+/* A browser without backdrop-filter gets the sheet without the frosted
+   backdrop: the wash still reads around it, the sheet is just solid. */
+@supports not ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
+  html[data-traj] #trajHost::before { background: var(--traj-solid) }
+}
+/* The header's view toggle is an icon like the panel toggle beside it; the
+   pressed state is the only thing it says in colour. */
+.chrome-traj[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--hover)); }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message
@@ -2991,6 +3407,14 @@ textarea:focus, textarea:focus-visible,
    both taking the wheel is how a reader loses their place. */
 .ws-body[data-view="agents"] { display: flex; flex-direction: column; overflow: hidden; }
 .satx { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
+/* The pane is a run's record beside the conversation, not the conversation:
+   it reads at the body's size throughout. Its segments are the conversation's
+   own, but drawn without the reply's card, so the answer and its markdown stay
+   at their base sizes there while every rule that reads --fs-body unscoped --
+   the user's bubble, the trail, the composer -- would step up past them.
+   Restating the token here, rather than scoping each of those rules, keeps a
+   reader added later from stepping the pane up again. */
+.satx, .instance-dock { --fs-body: 14px; }
 /* Carrying the conversation on, below the transcript rather than inside its
    scroller: an input that scrolls away with the history is one the reader has
    to go hunting for. Reuses .agf for the field box and only reshapes it. */
@@ -3380,6 +3804,7 @@ details[open] summary { margin-bottom: 8px; }
    Both tabs keep one weight so the row does not shift when the pick moves;
    the colour and the rule under the current one are the whole difference. */
 .hub-head { display: flex; gap: 28px; margin: 10px 0 16px; border-bottom: 1px solid var(--line-soft); }
+@media (max-width: 639px) { .hub-head { gap: 18px; } }
 .hub-head-tab {
   position: relative; padding: 0 0 11px; border: 0; background: none; cursor: pointer;
   font: inherit; font-size: 16px; font-weight: 600; color: var(--muted);
@@ -3851,9 +4276,9 @@ details[open] summary { margin-bottom: 8px; }
 .detail[data-open="true"] .dpanel { transform: none; }
 /* The agent and channel sheets are fixed boxes the domain fills to its edges:
    the panel takes its size from the owner, and the body's padding is the
-   sheet's to spend. */
+   sheet's to spend. Capped to the window less a gutter, for a phone. */
 .detail[data-owner="extAgents"] .dpanel,
-.detail[data-owner="connections"] .dpanel { width: 520px; height: min(500px, 78vh); }
+.detail[data-owner="connections"] .dpanel { width: min(520px, calc(100vw - 32px)); height: min(500px, 78vh); }
 .detail[data-owner="extAgents"] .body,
 .detail[data-owner="connections"] .body { padding: 0; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* A card whose body is fetched when it opens gets a settled box instead of one
@@ -4975,6 +5400,19 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   background: var(--black); filter: brightness(1.18);
 }
 
+/* The export wizard's dialog (src/App.tsx's ExportVeil): about the settings
+   dialog's size, since the decisions page is two columns of values and their
+   contexts, a column whose middle scrolls. The wizard inside is
+   features/export/'s, styled by its own sheet. */
+.chrome-export-modal {
+  width: min(960px, 94vw); height: min(720px, 90vh); display: flex; flex-direction: column;
+  background: var(--ink); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 24px 64px -20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.12);
+  overflow: hidden; animation: up .18s ease both;
+}
+.chrome-export-modal:focus { outline: none; }
+.chrome-export-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
 /* The page behind is dimmed and blurred the way the settings dialog's is
    (.setveil), not blacked out. */
 .veil { position: fixed; inset: 0; background: var(--scrim-soft); backdrop-filter: blur(3px);
@@ -5303,23 +5741,35 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
    stranded out here by the inset.
 
    Not on `[data-fresh]`. The landing page has no transcript to keep off, and
-   the anchored panel does not reach its composer, which sits mid-screen there.
-   Its composer, wordmark and crows are placed by three rules of their own, so
-   an inset that moves only the composer leaves three different centres on one
-   screen. */
+   its composer needs no room made: an anchored palette pulled down there stops
+   short of the card (features/desk/geometry.ts's `deskBottomLimit`) rather
+   than ending beside it. Its composer, wordmark and crows are placed by three
+   rules of their own, so an inset that moves only the composer leaves three
+   different centres on one screen. */
 .chat:not([data-fresh]) .scroll > *, .chat:not([data-fresh]) .dock {
   transition: translate .19s cubic-bezier(.16, 1, .3, 1),
     max-width .19s cubic-bezier(.16, 1, .3, 1),
     padding-right .19s cubic-bezier(.16, 1, .3, 1); }
+/* Not while the corner grab is sizing the desk (DeskPalette's resize). The
+   reserve changes on every frame of that, and a transition retargeted every
+   frame restarts from where it stands, so the composer held still while the
+   palette's edge ran over it; the hand is the motion there. */
+:root[data-desk-resize] .chat:not([data-fresh]) .scroll > *, :root[data-desk-resize] .chat:not([data-fresh]) .dock {
+  transition: none; }
+/* The pill takes half the reserve too; as under reduced motion, it keeps only
+   its rise. */
+:root[data-desk-resize] .backpill { transition: bottom .18s ease; }
 /* The two centred columns: capped and slid. `.col` holds the scroller's own
    22px of side air, so neither carries a right padding to add this to.
 
-   The composer moves because the column does, not because the panel was on it:
-   the anchored panel ends well above the composer (measured, it does not reach
-   it in a 900px-tall window). But the composer is centred UNDER the column, and
-   a column that slides 162px left over a composer that does not would read as a
-   layout fault. One inset, every container. The composer's own 36px is not the
-   desk's to spend, so its padding adds to it rather than replacing it. */
+   The composer moves because the column does: it is centred UNDER the column,
+   and a column that slides 162px left over a composer that does not would read
+   as a layout fault. At its default height the anchored palette ends well above
+   the composer (measured, it does not reach it in a 900px-tall window); pulled
+   all the way down it ends level with the card's bottom edge, and the same
+   inset is then what keeps the card beside it. One inset, every container. The
+   composer's own 36px is not the desk's to spend, so its padding adds to it
+   rather than replacing it. */
 .chat:not([data-fresh]) .scroll > .col, .chat:not([data-fresh]) .scroll > .flash {
   max-width: min(calc(var(--col) + 72px), calc(100% - var(--desk-reserve, 0px)));
   translate: calc(var(--desk-reserve, 0px) / -2) 0; }
@@ -5332,7 +5782,7 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   .backpill { transition: bottom .18s ease; }
 }
 
-#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 12px;
+#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 50px;
   --desk-palette-gap: 12px; --desk-launcher-center: 27px;
   position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
 /* The desk hangs off the workspace's left edge while the workspace is a column
@@ -5386,7 +5836,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 :root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
 .desk-palette { position: fixed; display: flex; flex-direction: column; min-width: 250px; min-height: 250px;
   z-index: 2;
-  max-width: min(480px, calc(100vw - 16px)); max-height: min(480px, calc(100vh - 16px));
+  /* No height cap but the window's: the inline height is sized against the
+     composer card (features/desk/geometry.ts), and a fixed one here would clip
+     it short of what that allows. */
+  max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
   overflow: hidden; resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
   border: 1px solid var(--line); border-radius: 10px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
@@ -5438,6 +5891,18 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-tabs button .lb { display: none; font-weight: 600; }
 .desk-tabs button[aria-selected="true"] .lb { display: inline; }
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; }
+/* The Tasks tab's board paints on --surface (features/tasks/styles.css's
+   `.tkboard`). The palette's own ground is --ink, which showed through the
+   transparent drag strip and the body's 5px padding as a white band above and
+   below the board. The frame takes the ground the tab actually paints on; the
+   selected tab, the unread count and the flat list's hover move one step up
+   the same ramp so they stay distinct, and the header's rule takes the
+   stronger line the white ground used to supply. */
+.desk-palette[data-tab="tasks"] { background: var(--surface); }
+.desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
+.desk-palette[data-tab="tasks"] .desk-tabs button[aria-selected="true"] { background: var(--raised); }
+.desk-palette[data-tab="tasks"] .desk-count { border-color: var(--surface); }
+.desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
    one: the right edge is pinned under the launcher and hard against the
    window's own gutter, so a corner there is both the hardest place on screen
@@ -5515,6 +5980,17 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .desk-dlv-row.gone { opacity: .55; }
 .desk-dlv-row .dlv-gone { flex: none; padding: 0 5px; border: 1px solid var(--line); border-radius: 999px;
   color: var(--clay); font: 9px/1.6 var(--mono); font-style: normal; }
+/* The row opens the file; the link beside it hands it over as an attachment,
+   which is the one thing that reaches a reader on another machine. A sibling
+   of the button rather than a child of it: a link inside a button is not a
+   link, it is a button that navigates. So the row keeps its own click, and the
+   link is a control of its own beside it. */
+.desk-dlv { position: relative; display: block; }
+.desk-dlv:has(.desk-dl) .desk-dlv-row { padding-right: 36px; }
+.desk-dl { position: absolute; top: 50%; right: 9px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 24px; height: 24px; border-radius: 6px;
+  color: var(--muted); transition: color .12s, background .12s; }
+.desk-dl:hover { color: var(--text); background: var(--surface); }
 
 .agent-roster { padding: 0; gap: 0; }
 .agent-group { min-width: 0; }
@@ -5536,7 +6012,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    above has a guard for.
    The frame is the idea .provider-icon.fallback already uses for a provider
    with no icon, at this row's weight (--line-soft, like the kind pill beside
-   it, rather than --line): thirteen logos drawn by thirteen houses, plus this
+   it, rather than --line): sixteen logos drawn by different houses, plus this
    project's own, share no silhouette, no weight and no margin, and a common
    frame is what makes them read as one column instead of a ransom note. It
    also settles miromind.svg,
@@ -5565,8 +6041,28 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    native scrollbar and form control to one palette. Guarded by
    ui-web/scripts/gates/agent-mark-css.test.mjs. */
 .agent-mark img { color-scheme: light; }
+/* An agent reached through another one: the plate keeps the route's mark and
+   the agent's own sits on its lower-right corner, on a plate of its own so a
+   mono mark stays legible over the route's strokes. Sized off the slot rather
+   than in px, so the one rule serves every slot that resizes the mark -- the
+   card, the sheet's head, the roster row. `position` on the slot is what the
+   badge anchors to; the slot already clips (`overflow: hidden`), so the badge
+   is drawn inside its corner rather than hanging off it.
+   58% of the slot is where both marks read on the card's 32px slot: the
+   agent's comes out near the 14px the default slot draws one at, where half the
+   slot left it a coloured dot and two thirds buried the route's. The route's
+   mark moves up-left by the same kind of fraction, so the badge covers its last
+   stroke rather than its middle. */
+.agent-mark:has(> .agent-mark-badge) { position: relative; }
+.agent-mark:has(> .agent-mark-badge) > img { translate: -14% -14%; }
+.agent-mark-badge {
+  position: absolute; right: 3%; bottom: 3%; width: 58%; height: 58%;
+  display: grid; place-items: center; box-sizing: border-box;
+  border: 1px solid var(--mark-plate-line); border-radius: 28%; background: var(--mark-plate);
+}
+.agent-mark .agent-mark-badge img { width: 78%; height: 78%; }
 .agent-kind { flex: none; padding: 1px 6px; border: 1px solid var(--line-soft); border-radius: 999px;
-  background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); text-transform: lowercase; }
+  background: var(--surface); color: var(--muted); font: 8.5px/1.45 var(--mono); }
 /* Beside the mode chip in a pane header, in the tabular mono the other elapsed
    numbers use -- a proportional font makes a per-second clock jitter sideways
    as its digits change width. */
@@ -5880,6 +6376,10 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    the same 36px gutters `.dock` gives it, so the grid's edges line up with the
    input box the reader just left rather than sitting inside a narrower one. */
 #extAgentsPage .wrap, #connectionsPage .wrap { max-width: calc(var(--col) + 72px); padding-left: 36px; padding-right: 36px; }
+/* The task board is a workspace too: its columns are the content, and the
+   reading column's cap left a wide window's sides empty while they squeezed
+   into the middle. */
+#tasksBoardPage .wrap { max-width: none; }
 #kbPage .wrap {
   max-width: none; height: 100%; min-height: 0;
   display: flex; flex-direction: column; padding: 18px 22px 22px;
@@ -6599,10 +7099,9 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   display: block;
   text-decoration: none;
 }
-.sarow.task > .tkerr { margin-top: 3px; }
 /* The prototype's own three-state dot, shared with the task pane's status
-   bar: moss running, clay only for a failure or an interruption, faint grey
-   for everything else settled -- carried by `data-st` rather than a new
+   bar: moss running, a darker grey for a failure or an interruption, faint
+   grey for everything else settled -- carried by `data-st` rather than a new
    class. */
 .sarow.task[data-st="run"] .dot {
   background: var(--moss);
@@ -6610,16 +7109,16 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   animation: pulse 1.8s ease-in-out infinite;
 }
 .sarow.task[data-st="error"] .dot {
-  background: var(--clay);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--clay) 15%, transparent);
+  background: var(--muted);
+  box-shadow: none;
   animation: none;
 }
 .sarow.task[data-st="ok"] .dot { background: var(--faint); box-shadow: none; animation: none; }
 .tline { display: flex; align-items: baseline; gap: 8px; }
 .tline .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* A failed run says so in the one line it has. Colour rather than a word alone,
-   because the second line is what the eye lands on when scanning a group. */
-.sarow.task .st.fail { color: var(--clay); }
+/* A failed run says so in the one line it has: the words, in the same muted
+   register as the rest of the line, not a second colour code. */
+.sarow.task .st.fail { color: var(--muted); }
 
 /* The task view: what one delegated run is doing, step by step.
    Head, then the chips it produced, then either the node column or the card
@@ -6671,7 +7170,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .tkview > .tkchips { margin: 2px 0 4px; }
 /* Why a run stopped, at the top, where a reader looks before reading the
    steps. One line: the steps below say the rest. */
-.tkfail { font-size: 12px; line-height: 1.6; color: var(--clay);
+.tkfail { font-size: 12px; line-height: 1.6; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 8px 10px; }
 
 /* ── one node, described ───────────────────────────────────────────────
@@ -6808,14 +7307,14 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   color: var(--muted); }
 .tkans { font-size: 12.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 /* Where the answer would be, when the run stopped instead of answering. */
-.tkstop { font-size: 12px; line-height: 1.7; color: var(--clay);
+.tkstop { font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }
 .tklive { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--faint); }
 
-/* The same token the runtime uses for the same condition, carried by colour.
-   Beside the name, never instead of it. */
-.tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--clay);
-  background: color-mix(in oklab, var(--clay) 10%, var(--paper)); border-radius: 5px; padding: 1px 6px; }
+/* The same token the runtime uses for the same condition, carried by the word
+   rather than a colour. Beside the name, never instead of it. */
+.tkerr { flex: none; font-family: var(--mono); font-size: 10px; color: var(--muted);
+  background: var(--surface); border-radius: 5px; padding: 1px 6px; }
 
 
 
@@ -6839,3 +7338,12 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 .wchip svg { flex: none; width: 13px; height: 13px; color: var(--faint); }
 .tkout { margin-top: 9px; font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 10px; }
+
+/* The trajectory view owns the column: the composer card, the task strip and
+   the desk are the conversation's furniture, not the trace's, so they step
+   aside while a trace is up. The sheet rack stays: an approval, confirm or
+   clarify sheet the open conversation raised is still waiting on the reader,
+   and its keys keep listening whether or not it can be seen. ChatTop sets the
+   attribute with the view; nothing else reads it. */
+html[data-traj] .chat > .dock > :not(#sheetRack) { display: none }
+html[data-traj] #deskHost { display: none }

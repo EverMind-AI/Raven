@@ -418,3 +418,66 @@ def test_apply_conflicting_decisions_touch_nothing(tmp_path):
 
     assert (tree / "spans.jsonl").read_text(encoding="utf-8") == before
     assert not (tree / tredact.REDACTION_METADATA_FILE).exists()
+
+
+# ── display helpers shared by the CLI and the web page ─────────────────
+
+
+def _occurrence(line, token, *, label="the span log", at=None):
+    start = line.index(token) if at is None else at
+    return {
+        "file": "spans.jsonl",
+        "line_no": 1,
+        "line": line,
+        "start": start,
+        "end": start + len(token),
+        "label": label,
+    }
+
+
+def test_a_short_line_shows_whole_with_every_hit():
+    line = f"  a={TOKEN_A} b={TOKEN_A}  "
+    text, spans = treview.occurrence_display(_occurrence(line, TOKEN_A))
+    assert text == line.strip()
+    assert spans == [(2, 2 + len(TOKEN_A)), (len(TOKEN_A) + 5, 2 * len(TOKEN_A) + 5)]
+
+
+def test_a_long_line_shows_a_window_around_the_hit():
+    line = "x" * 1000 + TOKEN_A + "y" * 1000
+    text, [(start, end)] = treview.occurrence_display(_occurrence(line, TOKEN_A))
+    assert text.startswith("...") and text.endswith("...")
+    assert text[start:end] == TOKEN_A
+    assert len(text) == 2 * treview.CONTEXT_WINDOW + len(TOKEN_A) + 6
+
+
+def test_groups_merge_identical_contexts_keep_the_first_label_and_count_all():
+    line = f"value {TOKEN_A}"
+    item = treview.ReviewItem(
+        id="i",
+        kind=treview.KIND_SUSPECTED,
+        category="high-entropy",
+        token=TOKEN_A,
+        masked_sample="qT7z...3y",
+        occurrences=[
+            _occurrence(line, TOKEN_A, label="the session transcript"),
+            _occurrence(line, TOKEN_A, label="an llm.input artifact"),
+            _occurrence(f"other {TOKEN_A}", TOKEN_A),
+            _occurrence(f"third {TOKEN_A}", TOKEN_A),
+        ],
+    )
+    groups, total = treview.grouped_occurrences(item)
+    assert total == 3 and len(groups) == 3
+    assert groups[0]["label"] == "the session transcript" and len(groups[0]["occurrences"]) == 2
+    shown, total = treview.grouped_occurrences(item, limit=2)
+    assert [g["text"] for g in shown] == [g["text"] for g in groups[:2]] and total == 3
+
+
+def test_review_warnings_leave_out_what_the_items_already_show():
+    reasons = ["residual scan flagged 2 value(s)", "the original trajectory contained a key", "config unreadable"]
+    assert treview.review_warnings(reasons) == ["config unreadable"]
+
+
+def test_decision_counts_name_every_action():
+    assert treview.decision_counts([]) == {"kept": 0, "redacted": 0, "acknowledged": 0}
+    decisions = [{"action": "kept"}, {"action": "redacted"}, {"action": "kept"}, {"action": "odd"}]
+    assert treview.decision_counts(decisions) == {"kept": 2, "redacted": 1, "acknowledged": 0}

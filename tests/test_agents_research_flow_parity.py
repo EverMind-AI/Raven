@@ -283,6 +283,12 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "opened, so a settled question ships on snippets. Off by default; the product's "
         "medium turns it on, the fork never has it"
     ),
+    "final_shape.report_layout": (
+        "the report in the form a reader receives - the answer as the opening blockquote, "
+        "the body under its own headings, the limits last - with the delivered reply also "
+        "written over the report file the turn saved. Sections as a class default, so the "
+        "fork's layout is what a profile gets unless it opts in; the product ships reader"
+    ),
     "plain_first": (
         "the first-reply gate: web tools withheld for the first model call, a plain "
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "

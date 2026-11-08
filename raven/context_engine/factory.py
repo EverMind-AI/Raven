@@ -5,11 +5,16 @@ ordered list of :class:`SegmentBuilder`s, each owning one section of the
 system prompt:
 
 - **Identity / Bootstrap / ActiveSkills** — the host's own sections.
-- **Memory** — ``backend.recall(user_id=...)`` (segment 3, ``# Memory``).
+- **Memory** — ``backend.recall(user_id=...)`` (segment 4, ``# Memory``).
 - **Skills** — a :class:`SkillForgeRouter` over 1-3 sources (segment 5,
   ``# Skills``), built only under pull discovery.
-- **Curator** — manifest build, history selection and
-  ``# Curator Working State``. Owns ``*history``.
+- **History** — the strategy ``context.history.strategy`` names (see
+  :mod:`raven.context_engine.history`): ``compacting`` or the Curator.
+  Owns ``*history``.
+
+With ``context.cache.turn_scratch`` on (the default), the two sections that
+move with the query -- ``# Memory`` and ``# Skills`` -- are appended to the
+turn's user message instead of the system prompt.
 
 The SkillForgeRouter is assembled from up to three sources:
 
@@ -32,8 +37,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
+from loguru import logger
+
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_gate_pin
+from raven.config.live import LiveConfig, curator_pin, skill_gate_pin, skill_hub_enabled
+from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
@@ -43,7 +51,6 @@ from raven.context_engine.segments import (
     MemorySegmentBuilder,
     SkillsSegmentBuilder,
 )
-from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.pool import live_pin_resolver
@@ -78,6 +85,7 @@ def build_context_engine(
     get_tool_definitions: Callable[[], list[dict]],
     list_subagents: "Callable[[], list[AgentMeta]] | None" = None,
     get_tool_notices: Callable[[], list[str]] | None = None,
+    get_session_notices: Callable[[str], list[str]] | None = None,
     now_fn: Callable[[], datetime] | None = None,
     backend: "MemoryBackend | None" = None,
     memory_config: "MemoryConfig | None" = None,
@@ -86,6 +94,7 @@ def build_context_engine(
     skill_hub_client: "SkillHubClient | None" = None,
     provider_pool: "ProviderPool | None" = None,
     blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+    task_board: bool = False,
 ) -> ContextEngine:
     """Build the one :class:`ContextAssembler` from a flat SegmentBuilder list.
 
@@ -94,8 +103,9 @@ def build_context_engine(
     credential of its own and the subsystem follows the conversation's model.
 
     ``builder`` is read only for the shared ``MemoryStore`` and
-    ``LocalSkillCatalog`` it holds; nothing here dispatches on a configured
-    engine name, because there is one engine.
+    ``LocalSkillCatalog`` it holds. The one configured name read here is the
+    history strategy's, and it is resolved by the registry, which raises on a
+    name it does not know -- at startup, not at the first turn.
     """
     from raven.config.raven import (
         MemoryConfig as _MemoryConfig,
@@ -109,17 +119,19 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
+    # One reader for the pins and the Hub switch: the file is re-parsed only
+    # when its bytes change, so the subsystems asking per call cost one read
+    # between them.
+    live = LiveConfig()
+
     router = _build_router(
         builder=builder,
         backend=backend,
         memory_config=memory_config,
         skill_forge_router_config=skill_forge_router_config,
         skill_hub_client=skill_hub_client,
+        hub_enabled_reader=lambda: skill_hub_enabled(live),
     )
-
-    # One reader for both pins: the file is re-parsed only when its bytes
-    # change, so two subsystems asking per call cost one read between them.
-    live = LiveConfig()
 
     discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
     if discovery == "push":
@@ -139,7 +151,13 @@ def build_context_engine(
         rewriter, gate = None, None
 
     builders = [
-        IdentitySegmentBuilder(workspace, list_subagents=list_subagents, get_tool_definitions=get_tool_definitions),
+        IdentitySegmentBuilder(
+            workspace,
+            list_subagents=list_subagents,
+            get_tool_definitions=get_tool_definitions,
+            has_memory_backend=backend is not None,
+            task_board=task_board,
+        ),
         BootstrapSegmentBuilder(workspace),
         MemorySegmentBuilder(
             builder.memory,
@@ -171,8 +189,9 @@ def build_context_engine(
                 ),
             )
         )
+    strategy = history_strategies.resolve(config.history.strategy)
     builders.append(
-        CuratorSegmentBuilder(
+        strategy.build(
             pin_resolver=live_pin_resolver(
                 provider_pool,
                 lambda: curator_pin(live),
@@ -204,10 +223,34 @@ def build_context_engine(
             ),
         )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())
+    # The history slot's builder is named for its strategy now; ``curator`` is
+    # what a config written before the registry calls it, so either name drops
+    # it. Without it nothing mints refs, and the engine must not say otherwise.
+    history_builder = builders[-1].name
+    history_dropped = bool(dropped & {history_builder, "curator"})
+    if history_dropped:
+        dropped |= {history_builder}
     if dropped:
         builders = [b for b in builders if b.name not in dropped]
+    if strategy.name != "curator" and (
+        getattr(config, "curator_model", None) or getattr(config, "curator_provider", None)
+    ):
+        logger.warning(
+            "context.curatorModel / curatorProvider are set but context.history.strategy is {!r}: they apply "
+            "to the curator strategy only; this strategy summarises on the turn's model unless "
+            "context.history.compacting.summary.model names one",
+            strategy.name,
+        )
     engine = ContextAssembler(
-        builders, get_tool_definitions, now_fn=now_fn, get_tool_notices=get_tool_notices, scent=scent
+        builders,
+        get_tool_definitions,
+        now_fn=now_fn,
+        get_tool_notices=get_tool_notices,
+        get_session_notices=get_session_notices,
+        scent=scent,
+        owns_compaction=strategy.owns_compaction,
+        mints_source_refs=strategy.mints_source_refs and not history_dropped,
+        turn_scratch=getattr(getattr(config, "cache", None), "turn_scratch", True),
     )
     # The find_skill tool searches through the same router the engine
     # retrieves with, whichever discovery mode is active.
@@ -222,6 +265,7 @@ def _build_router(
     memory_config: "MemoryConfig",
     skill_forge_router_config: "SkillForgeRouterConfig",
     skill_hub_client: "SkillHubClient | None" = None,
+    hub_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
     """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
     from raven.memory_engine import (
@@ -257,6 +301,9 @@ def _build_router(
         sources.append(backend_source)
 
     # ── Source 3: Hub (conditional on remote endpoint) ──────────────
+    # Added while the switch is off too: the source is asked per search and
+    # gates itself on the live config, so turning the switch back on does not
+    # need the loop rebuilt. The endpoint is what cannot be added live.
     hub_cfg = skill_forge_router_config.hub
     if hub_cfg.endpoint:
         from raven.skill_hub import SkillHubClient
@@ -274,6 +321,7 @@ def _build_router(
             client,
             weight=float(weights.get("hub", 0.85)),
             min_safety=hub_cfg.min_safety,
+            enabled_reader=hub_enabled_reader,
         )
         sources.append(hub_source)
 

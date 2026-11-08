@@ -1,19 +1,22 @@
 """MCP client: connects to MCP servers and wraps their tools as native Raven tools."""
 
 import asyncio
+import os
 from collections.abc import Container
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
 from loguru import logger
 
 from raven.agent.tools import media
 from raven.agent.tools.registry import ToolRegistry
 from raven.contracts.tool import Tool, ToolResult
 from raven.mcp.naming import MCPToolRef, tool_name
+from raven.mcp.paging import walk_tools
 from raven.sandbox import SandboxInitError
+from raven.utils import mirrors
 
 if TYPE_CHECKING:
     from raven.sandbox import SandboxExecutor
@@ -37,7 +40,7 @@ class MCPToolWrapper(Tool):
         self._original_name = tool_def.name
         self._name = tool_name(server_name, tool_def.name, taken=taken)
         self._description = tool_def.description or tool_def.name
-        self._parameters = tool_def.inputSchema or {"type": "object", "properties": {}}
+        self._parameters = tool_def.input_schema or {"type": "object", "properties": {}}
         self._tool_timeout = tool_timeout
 
     @property
@@ -95,13 +98,13 @@ class MCPToolWrapper(Tool):
         # to put its entire base64 payload into the prompt as prose -- the model
         # saw gibberish instead of a picture and nothing errored. Convert per
         # content type instead, and never stringify a payload-bearing block.
-        ok = not bool(getattr(result, "isError", False))
+        ok = not bool(getattr(result, "is_error", False))
         text, blocks = media.blocks_from_mcp_content(result.content)
         if blocks:
             return ToolResult(model_text=text or "(no output)", blocks=blocks, ok=ok)
         if ok:
             return text or "(no output)"
-        # The kind of failure this describes (isError) is not an exception: its
+        # The kind of failure this describes (is_error) is not an exception: its
         # text looks like any other output, so the verdict must ride on the
         # result rather than be derived from a prefix.
         return ToolResult(model_text=text or "(no output)", ok=False)
@@ -145,7 +148,7 @@ class MCPConfigError(ValueError):
     """A server config that cannot be connected (missing/unknown transport)."""
 
 
-async def _report_redirect(response: httpx.Response) -> None:
+async def _report_redirect(response: httpx2.Response) -> None:
     """Say plainly why a redirecting MCP endpoint does not connect.
 
     The HTTP clients built below do not follow redirects, and that is the
@@ -172,12 +175,23 @@ async def _report_redirect(response: httpx.Response) -> None:
         )
 
 
+def _configured_cwd(cfg) -> str | None:
+    """The stdio server's working directory, or ``None`` for the default.
+
+    ``isinstance`` rather than truthiness: a stub configuration whose
+    ``cwd`` was never set answers with a mock, and handing that to the SDK
+    turns a test into a validation error about a field nobody configured.
+    """
+    value = getattr(cfg, "cwd", "")
+    return value if isinstance(value, str) and value else None
+
+
 @asynccontextmanager
 async def open_mcp_transport(
     cfg,
     transport_type: str,
     executor: "SandboxExecutor | None" = None,
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ):
     """One server's transport, without a session on top of it.
 
@@ -193,20 +207,40 @@ async def open_mcp_transport(
         from mcp.client.streamable_http import streamable_http_client
 
         if transport_type == "stdio":
+            # `uvx <server>` and `npx <server>` fetch the server on first start.
+            # The mirror goes into this launch only: written into the entry, it
+            # would be the choice of registry PlugHub's vetting refuses a
+            # catalogue entry (see market/vetting.py). A server the sandbox
+            # starts is fetched in there, so only its command line can carry one.
+            # The registry probe runs without the server's cwd on purpose: a
+            # package root is third-party content, and a .npmrc there must not
+            # choose the registry or the payload. The cost is that a host
+            # server's own project .npmrc is not seen either; telling the two
+            # apart needs a source marker on the config, not a looser probe.
+            sandboxed = executor is not None and executor.supports_process_spawning
+            command, *args = await mirrors.package_launch_async(
+                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
+            )
+            cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:
-                read, write = await executor.start_process(cfg.command, cfg.args, env=cfg.env or None)
+                read, write = await executor.start_process(command, args, env=cfg.env or None, cwd=cwd)
             else:
-                params = StdioServerParameters(command=cfg.command, args=cfg.args, env=cfg.env or None)
+                params = StdioServerParameters(
+                    command=command,
+                    args=args,
+                    env=cfg.env or None,
+                    cwd=cwd,
+                )
                 read, write = await stack.enter_async_context(stdio_client(params))
         elif transport_type == "sse":
 
             def httpx_client_factory(
                 headers: dict[str, str] | None = None,
-                timeout: httpx.Timeout | None = None,
-                auth: httpx.Auth | None = None,
-            ) -> httpx.AsyncClient:
+                timeout: httpx2.Timeout | None = None,
+                auth: httpx2.Auth | None = None,
+            ) -> httpx2.AsyncClient:
                 merged_headers = {**(cfg.headers or {}), **(headers or {})}
-                return httpx.AsyncClient(
+                return httpx2.AsyncClient(
                     headers=merged_headers or None,
                     follow_redirects=False,
                     event_hooks={"response": [_report_redirect]},
@@ -219,7 +253,7 @@ async def open_mcp_transport(
             )
         elif transport_type == "streamableHttp":
             http_client = await stack.enter_async_context(
-                httpx.AsyncClient(
+                httpx2.AsyncClient(
                     headers=cfg.headers or None,
                     follow_redirects=False,
                     event_hooks={"response": [_report_redirect]},
@@ -227,7 +261,7 @@ async def open_mcp_transport(
                     auth=http_auth,
                 )
             )
-            read, write, _ = await stack.enter_async_context(streamable_http_client(cfg.url, http_client=http_client))
+            read, write = await stack.enter_async_context(streamable_http_client(cfg.url, http_client=http_client))
         else:
             raise KeyError(transport_type)
         yield read, write
@@ -238,7 +272,7 @@ async def _mcp_server_connection(
     cfg,
     transport_type: str,
     executor: "SandboxExecutor | None",
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ):
     """One server's transport, session and handshake as a single lifecycle.
 
@@ -249,7 +283,7 @@ async def _mcp_server_connection(
     cancels the turn that was connecting.
     """
     async with AsyncExitStack() as stack:
-        from mcp import ClientSession, types
+        from mcp import ClientSession
 
         read, write = await stack.enter_async_context(
             open_mcp_transport(cfg, transport_type, executor, http_auth=http_auth)
@@ -258,17 +292,7 @@ async def _mcp_server_connection(
         # The handshake result is the only place a server states which primitives
         # it offers, and it is stated once -- there is no way to ask again later.
         handshake = await session.initialize()
-        tools = []
-        cursor = None
-        seen_cursors = set()
-        while True:
-            page = await session.list_tools(params=types.PaginatedRequestParams(cursor=cursor))
-            tools.extend(page.tools)
-            cursor = page.nextCursor
-            # A server that keeps returning the same cursor would page forever.
-            if not cursor or cursor in seen_cursors:
-                break
-            seen_cursors.add(cursor)
+        tools = await walk_tools(session)
         yield session, handshake, tools
 
 
@@ -278,7 +302,7 @@ async def connect_mcp_server(
     registry: ToolRegistry,
     stack: AsyncExitStack,
     executor: "SandboxExecutor | None" = None,
-    http_auth: httpx.Auth | None = None,
+    http_auth: httpx2.Auth | None = None,
 ) -> Connected:
     """Connect one MCP server, register its tools, and hand back what it offers.
 

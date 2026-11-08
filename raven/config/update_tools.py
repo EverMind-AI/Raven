@@ -21,11 +21,11 @@ from pydantic import BaseModel, ValidationError
 
 from raven.config.loader import ConfigReadError, get_config_path, read_raw_or_raise
 from raven.config.schema import (
-    MediaToolConfig,
     WebFetchConfig,
     WebProvidersConfig,
     WebSearchConfig,
     WebToolsConfig,
+    media_section_class,
 )
 from raven.utils.atomic_io import atomic_update
 
@@ -250,14 +250,14 @@ def set_media(tool: str, fields: dict[str, Any], *, config_path: Path | None = N
     Setting either ``model`` or ``api_key`` is what registers the tool at the
     next start; clearing both withdraws it again.
     """
-    return _patch_subtree(_media_path(tool), MediaToolConfig, fields, config_path, f"media.{tool}")
+    return _patch_subtree(_media_path(tool), media_section_class(tool), fields, config_path, f"media.{tool}")
 
 
 def get_media(tool: str, *, redact: bool = True, config_path: Path | None = None) -> dict[str, Any]:
     """Return ``tools.media.<tool>`` as ``{api_key, api_base, model}``."""
     keys = _media_path(tool)
     data = read_raw_or_raise(config_path or get_config_path())
-    inst = _current_subtree(data, keys, MediaToolConfig)
+    inst = _current_subtree(data, keys, media_section_class(tool))
     key = ("****set****" if inst.api_key else "(empty)") if redact else inst.api_key
     return {"api_key": key, "api_base": inst.api_base, "model": inst.model}
 

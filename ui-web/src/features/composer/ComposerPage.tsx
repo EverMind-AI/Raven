@@ -1,6 +1,7 @@
 import { Cancel01Icon, File01Icon } from '@hugeicons/core-free-icons'
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import verbSpec from '../../../../ui-shared/verbs.json'
 import { FileBadge, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as lightbox from '../../state/lightbox'
@@ -104,6 +105,7 @@ function kindMark(name: string): ReactElement {
 function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
   const isImg = !!a.url
   const size = a.uploading ? t('gui.att.uploading') : store.fmtSize(a.size)
+  const tip = size ? `${a.name} · ${size}` : a.name
   const rm = (
     <button className="rm" aria-label={t('gui.att.remove', { name: a.name })}
       onClick={(e) => { e.stopPropagation(); store.removeAtt(i) }}>
@@ -114,18 +116,18 @@ function AttChip({ a, i }: { a: Attachment; i: number }): ReactElement {
     return (
       <div className={'att img' + (a.uploading ? ' up' : '')}>
         {/* the square crops the image, so a click has to be able to show all of it */}
-        <img src={a.url as string} alt={a.name} title={`${a.name} · ${size}`}
+        <img src={a.url as string} alt={a.name} title={tip}
           onClick={() => lightbox.open(a.url as string, a.name)} />
         {rm}
       </div>
     )
   }
-  /* The name and the badge are the chip; a finished file's size goes to the
-     tooltip, and only an upload in flight says so in words. The
+  /* The name and the badge are the chip; a finished file's size, where one is
+     known, goes to the tooltip, and only an upload in flight says so in words. The
      remove button takes the badge's slot on hover, the way the design draws it,
      so the chip keeps its width. */
   return (
-    <div className={'att' + (a.uploading ? ' up' : '')} title={`${a.name} · ${size}`}>
+    <div className={'att' + (a.uploading ? ' up' : '')} title={tip}>
       <span className="cp-ik">{kindMark(a.name)}{rm}</span>
       <span className="nm">{a.name}</span>
       {a.uploading ? <span className="sz">{size}</span> : null}
@@ -165,21 +167,44 @@ function WorkGlyph(): ReactElement {
   return <span className="wkg" aria-hidden="true"><i /><i /><i /></span>
 }
 
-/* The clock, and nothing else. It used to switch between three words
-   (starting / writing / working) for a distinction the reader cannot act on:
-   whether the stream has produced a token yet does not change what to do next,
-   and the glyph already says the turn is alive. The word survives as the row's
-   accessible name, where a reader who gets the row as text still needs it. */
+/* The ticker's vocabularies, read from the same catalogue the TUI rotates in
+   ui-shared/verbs.json: one edit moves both front ends. The word cycles every
+   `rotationMs`, and the shared list is what keeps the two aligned. */
+const VERBS = verbSpec.verbs
+const VERB_ROTATION_MS = verbSpec.rotationMs
+
+/* The clock and the rotating word. The word used to be fixed (starting /
+   writing / working) for a distinction the reader cannot act on: whether the
+   stream has produced a token yet does not change what to do next, and the
+   glyph already says the turn is alive. It rotates again, now from the shared
+   catalogue and on a fixed cadence rather than by state, because a turn's
+   duration says more than which of three phases it is in -- and the same words
+   the TUI ticks through are the ones the page shows.
+
+   The word starts at a random offset, as the TUI's does, so two turns do not
+   open with the same one; it is decoration, not the row's accessible name. The
+   row still reads as one sentence built from `gui.live.busy`, and a word that
+   changes every 2.5s must not be announced. */
 export function TurnLive({ afterPaint }: { afterPaint?: () => void }): ReactElement | null {
   useComposer()
   const live = store.get().live
+  const [seed, setSeed] = useState(() => Math.floor(Math.random() * VERBS.length))
   useEffect(() => { if (afterPaint) afterPaint() })
+  useEffect(() => {
+    if (live) setSeed(Math.floor(Math.random() * VERBS.length))
+  }, [live])
   if (!live) return null
-  const clock = store.durText(store.liveMs())
+  const ms = store.liveMs()
+  const verb = VERBS[(seed + Math.floor(ms / VERB_ROTATION_MS)) % VERBS.length] ?? ''
+  const clock = store.durText(ms)
   return (
     <div className="turnlive" aria-live="off" aria-label={t('gui.live.busy', { t: clock })}>
       <WorkGlyph />
-      <span className="lb">{clock}</span>
+      <span className="cp-tv">
+        <span className="cp-verb" key={verb} aria-hidden="true">{verb}</span>
+        <span className="cp-sep" aria-hidden="true">·</span>
+        <span className="lb">{clock}</span>
+      </span>
     </div>
   )
 }

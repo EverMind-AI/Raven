@@ -31,6 +31,23 @@ from raven.contracts.assembled import TokenBudget
 from raven.contracts.memory import Memory
 from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
+
+def _full_prompt(ac) -> str:
+    """System slot plus the turn's user content.
+
+    ``# Memory`` and ``# Skills`` ride in the user message's turn-scratch tail
+    rather than the system prompt, so an assertion about "the prompt" has to
+    read both slots to keep meaning what it used to.
+    """
+    parts = [ac.messages[0]["content"]]
+    content = ac.messages[-1]["content"]
+    if isinstance(content, str):
+        parts.append(content)
+    else:
+        parts.extend(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return "\n\n".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
@@ -311,11 +328,11 @@ class TestRendering:
         )
         eng = _engine(builder, router=SkillForgeRouter([]), backend=backend)
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        sys_msg = ac.messages[0]
-        assert sys_msg["role"] == "system"
-        assert "# Memory" in sys_msg["content"]
-        assert "# Recalled memory" not in sys_msg["content"]
-        assert "user likes espresso" in sys_msg["content"]
+        prompt = _full_prompt(ac)
+        assert ac.messages[0]["role"] == "system"
+        assert "# Memory" in prompt
+        assert "# Recalled memory" not in prompt
+        assert "user likes espresso" in prompt
 
     async def test_router_skills_in_skills_segment(
         self,
@@ -332,15 +349,15 @@ class TestRendering:
         source = _StubSource("local", hits=hits)
         eng = _engine(builder, router=SkillForgeRouter([source]), backend=_StubBackend())
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        sys_content = ac.messages[0]["content"]
+        prompt = _full_prompt(ac)
         # No addendum channel and no "# Retrieved skills" heading — the
         # router body lands in segment 5 (# Skills).
         assert ac.system_prompt_addition is None
-        assert "# Retrieved skills" not in sys_content
-        assert "# Skills" in sys_content
-        assert "git-resolver" in sys_content
-        assert "[local/git-resolver]" in sys_content
-        assert "resolves git refs" in sys_content
+        assert "# Retrieved skills" not in prompt
+        assert "# Skills" in prompt
+        assert "git-resolver" in prompt
+        assert "[local/git-resolver]" in prompt
+        assert "resolves git refs" in prompt
 
     async def test_no_skills_addition_when_empty(
         self,
@@ -360,7 +377,7 @@ class TestRendering:
             backend=_StubBackend(recall_response=[]),
         )
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
-        assert "# Recalled memory" not in ac.messages[0]["content"]
+        assert "# Recalled memory" not in _full_prompt(ac)
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +405,7 @@ class TestNoBackendDegrade:
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
         assert ac.metadata["memory_hits"] == 0
         assert "local/x" in ac.metadata["injected_skill_ids"]
-        assert "# Skills" in ac.messages[0]["content"]
+        assert "# Skills" in _full_prompt(ac)
 
 
 # ---------------------------------------------------------------------------

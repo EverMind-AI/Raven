@@ -194,6 +194,10 @@ never asked for in chat. `get` reports only `set` / `not set`.
   done.
 - A key the user pasted into the chat is refused outright. Do not retry it;
   tell them to rotate it and enter the new one on the card or in Settings.
+- A machine that takes only a password: `ops_connection_add` takes a key only,
+  so point the user at the Agent Hub's Machines tab (**Login: Password**) or at
+  `raven ops connection add --auth password --password-stdin --non-interactive`
+  in a terminal. The password is typed there and never passes through you.
 
 ## Security-sensitive settings
 

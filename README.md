@@ -5,8 +5,8 @@
 <p align="center">
   <a href="https://x.com/evermind"><img src="https://img.shields.io/badge/EverMind-000000?labelColor=gray&style=for-the-badge&logo=x&logoColor=white" alt="X"></a>
   <a href="https://arxiv.org/abs/2609.33439"><img src="https://img.shields.io/badge/arXiv-2609.33439-B31B1B?labelColor=gray&style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
-  <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-Paper-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face"></a>
-  <a href="https://discord.gg/gYep5nQRZJ"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FgYep5nQRZJ%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://huggingface.co/papers/2609.33439"><img src="https://img.shields.io/badge/HuggingFace-%231%20Paper%20of%20the%20Day-F5C842?labelColor=gray&style=for-the-badge&logo=huggingface&logoColor=white" alt="Hugging Face #1 Paper of the Day"></a>
+  <a href="https://discord.gg/QHQ2YYp7cH"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Fv10%2Finvites%2FQHQ2YYp7cH%3Fwith_counts%3Dtrue&query=%24.approximate_presence_count&suffix=%20online&label=Discord&color=404EED&labelColor=gray&style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="https://github.com/EverMind-AI/EverOS/discussions/67"><img src="https://img.shields.io/badge/WeCom-EverMind_Community-07C160?labelColor=gray&style=for-the-badge&logo=wechat&logoColor=white" alt="WeCom"></a>
 </p>
 
@@ -15,6 +15,14 @@
 </div>
 
 <br>
+
+## ❯❯ What's New
+
+### ❯ Multi-Agent Trajectory Observability
+
+**Every agent, every turn, every step — on one timeline.** Raven's new trajectory view renders a running multi-agent session as a live waterfall, from the whole run down to a single step.
+
+https://github.com/user-attachments/assets/abb0a5e9-1c37-48bd-9be0-1c9267293337
 
 # What is Raven
 
@@ -27,8 +35,6 @@
 Raven is **the harness of harnesses, built for recursive self-improvement (RSI).** As a **Host Agent**, it brings built-in and third-party agents together to carry out complex tasks. Its modular architecture supports iterative improvement of Raven's own harness: proposing changes to how agents plan and act, evaluating those changes, and adopting improvements that pass validation. Powered by [EverOS](https://github.com/EverMind-AI/EverOS), Raven carries memory and context across sessions to support this process.
 
 **Built-in Agents: Raven-Research**, **Raven-Code**, **Raven-Design**, and **Raven-Oncall** support research, coding, visual design, and unattended workflow automation.
-
-> Raven is pre-alpha. Interfaces and configuration may change quickly.
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f"><img src="https://github.com/user-attachments/assets/1756ab94-706d-4c07-b8b3-3ef6dd8a147f" alt="Multi-Agent Orchestration Benchmark: Node F1, Edge F1, Partial Order Accuracy, and Exact Match Rate" width="100%"></a>
@@ -203,6 +209,14 @@ Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible A
   <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
 </p>
 
+## ❯❯ News
+
+- 📣 **2026-09-30** — Raven's technical report reached [**#1 on Hugging Face Daily Papers**](https://huggingface.co/papers/2609.33439) — daily (2026-09-30), weekly (2026-10-04) and monthly (2026-10-10).
+
+<p align="center">
+  <a href="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b"><img src="https://github.com/user-attachments/assets/c8e7c7f6-e435-4dda-a54c-ce3340ca547b" alt="Three Crowns on Hugging Face: Raven's technical report ranked #1 on the daily, weekly and monthly Hugging Face Daily Papers boards" width="100%"></a>
+</p>
+
 ## ❯❯ Quick Start
 
 ### 🤖 Install with Your Agent
@@ -336,7 +350,7 @@ integrations into one open-source ecosystem.
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/Raven">Raven</a></strong></td>
-<td>A memory-first, self-improving agent harness with proactivity, context control, and skill evolution.</td>
+<td>A memory-first, self-improving agent harness with proactivity, context control, and reusable skill retrieval.</td>
 </tr>
 <tr>
 <td><strong><a href="https://github.com/EverMind-AI/EverMe">EverMe (CLI)</a></strong></td>
@@ -424,3 +438,11 @@ If you use Raven in your research, please cite the [technical report](https://ar
   url           = {https://arxiv.org/abs/2609.33439}
 }
 ```
+
+## ❯❯ Contributors
+
+Thanks to everyone who has helped make Raven better.
+
+<a href="https://github.com/EverMind-AI/Raven/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=EverMind-AI/Raven&max=500&columns=20&anon=1" alt="Raven contributors" />
+</a>

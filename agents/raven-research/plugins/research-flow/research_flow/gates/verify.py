@@ -168,6 +168,16 @@ _VERDICT_TOOL = {
 }
 _VERDICT_TOOL_CHOICE = {"type": "function", "function": {"name": _VERDICT_TOOL_NAME}}
 
+
+def _refuses_forced_choice(response) -> bool:
+    """A provider that rejects a named ``tool_choice`` outright, e.g. DeepSeek in
+    thinking mode ("Thinking mode does not support this tool_choice"). Every review
+    on such a provider failed open as ``no_content`` until the gate stopped forcing."""
+    return getattr(response, "finish_reason", "") == "error" and "tool_choice" in str(
+        getattr(response, "content", None) or ""
+    )
+
+
 _REVISION_PROMPT = (
     "A reviewer rejected the draft above. Fix exactly the listed issues and "
     "produce the corrected final answer. Do not restart the research; reuse "
@@ -234,6 +244,7 @@ class DraftReviewerGate(Gate):
         self._evidence_item_chars = evidence_item_chars
         self._max_tokens = max_tokens
         self._reasoning_effort = reasoning_effort
+        self._verdict_tool_choice: dict | str = _VERDICT_TOOL_CHOICE
         self._strict_reject_only = strict_reject_only
         self._fail_open_on_elided_evidence = fail_open_on_elided_evidence
         self._evidence_round = evidence_round
@@ -526,13 +537,19 @@ class DraftReviewerGate(Gate):
                         ],
                         model=self._model,
                         tools=[_VERDICT_TOOL],
-                        tool_choice=_VERDICT_TOOL_CHOICE,
+                        tool_choice=self._verdict_tool_choice,
                         max_tokens=self._max_tokens,
                         temperature=0.0,
                         **effort_kwargs,
                     ),
                     timeout=min(self._attempt_timeout_seconds, remaining),
                 )
+                # Offered rather than forced from here on: the tool still arrives
+                # parsed when the model calls it, and a text verdict still parses.
+                if self._verdict_tool_choice != "auto" and _refuses_forced_choice(response):
+                    logger.warning("verify-gate: provider refuses a forced tool_choice; retrying with tool_choice=auto")
+                    self._verdict_tool_choice = "auto"
+                    continue
                 break
             except asyncio.TimeoutError:
                 ledger_append(

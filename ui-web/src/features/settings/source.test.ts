@@ -33,12 +33,14 @@ async function load(answers: Record<string, unknown> = {}): Promise<Source> {
       'src/features/rail/source': { loadSessions: async () => { railReloads.push(1) }, SESS_CHANNELS: ['tui', 'cron'] },
       'src/state/banner': { draw: () => {} },
       'src/state/perm': { setFromConfig: (v: string) => { permWrites.push(v) } },
-      'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick }) },
+      'src/state/session/staging': { staging: () => ({ model: null, tier: null, perm: stagedPick, effort: null }) },
       'src/lib/session': { current: () => sessionId },
       'src/features/model/source': { showModel: (m: string) => { chipWrites.push(m) } },
       'src/i18n/t': { t: (key: string, vars?: Record<string, unknown>) => (vars ? `${key} ${JSON.stringify(vars)}` : key) },
     },
   }) as Source
+  const { absorb } = await import('../../rpc/capabilities')
+  absorb(['model.options.selection_only'])
   await fakeGateway(async (method: string, params: unknown) => {
     seen.push([method, params])
     if (method in answers) return answers[method]
@@ -71,6 +73,23 @@ describe('settings source', () => {
       ['model.fetch_models', { slug: 'openrouter', verify: true }],
       ['model.fetch_models', { slug: 'openrouter' }],
     ])
+  })
+
+  it('asks check_key about a key before it is stored, with the fields the form sent', async () => {
+    const mod = await load({ 'model.check_key': { ok: false, status: 'invalid_key', http_status: 401, refused: true } })
+    const verdict = await mod.settingsSource.checkKey('openrouter', { api_key: 'sk-or-never-issued' })
+    expect(verdict.refused).toBe(true)
+    expect(seen).toEqual([['model.check_key', { slug: 'openrouter', api_key: 'sk-or-never-issued' }]])
+    expect(toasts).toEqual([])
+  })
+
+  it('reads one provider\'s saved key back on request, and null when it keeps none', async () => {
+    const mod = await load({ 'model.reveal_key': { api_key: 'sk-or-saved' } })
+    expect(await mod.settingsSource.revealKey('openrouter')).toBe('sk-or-saved')
+    expect(seen).toEqual([['model.reveal_key', { slug: 'openrouter' }]])
+
+    const none = await load({ 'model.reveal_key': { api_key: null } })
+    expect(await none.settingsSource.revealKey('openrouter')).toBeNull()
   })
 
   it('a settings write reloads the config and leaves the provider catalogue alone', async () => {
@@ -125,6 +144,29 @@ describe('settings source', () => {
     await mod.loadSettings()
     expect(mod.settingsSnapshot().model).toBe('deepseek/pro')
     expect(chipWrites).toEqual([])
+  })
+
+  it('the Skill Hub state is the server answer, not a reading of the raw file', async () => {
+    /* The raw file names no Hub here, yet the loader nests a legacy top-level
+       router under skillForge, so the runtime searches it: only the server can
+       say so, and the snapshot carries its word. */
+    const settings = { skillRouter: { hub: { endpoint: 'https://hub.internal.test' } } }
+    const on = await load({
+      'settings.get': { settings, config_path: '/c.json', skill_hub_on: true, skill_hub_awaiting_reload: true },
+    })
+    await on.loadSettings()
+    expect(on.settingsSnapshot().skillHub).toEqual({ on: true, awaitingReload: true })
+
+    const off = await load({
+      'settings.get': {
+        settings: { skillForge: { router: { hub: { endpoint: 'https://h.test' } } } },
+        config_path: '/c.json',
+        skill_hub_on: false,
+        skill_hub_awaiting_reload: false,
+      },
+    })
+    await off.loadSettings()
+    expect(off.settingsSnapshot().skillHub).toEqual({ on: false, awaitingReload: false })
   })
 
   it('a draft that picked a mode keeps it when the chip is re-read', async () => {
@@ -198,10 +240,12 @@ describe('settings source', () => {
     expect(seen.filter(([m]) => m.startsWith('model.') || m === 'settings.get')).toEqual([
       ['model.set_fields', { slug: 'openrouter', fields: { extra_headers: { 'X-Title': 'raven' } } }],
       ['settings.get', {}],
+      ['model.options', { include_providers: false }],
       ['model.options', {}],
       ['model.options', {}],
       ['model.add_models', { slug: 'openrouter', models: ['a', 'b'] }],
       ['settings.get', {}],
+      ['model.options', { include_providers: false }],
       ['model.options', {}],
       ['model.options', {}],
     ])
@@ -218,9 +262,10 @@ describe('settings source', () => {
     await mod.settingsSource.addModels('deepseek', ['deepseek/deepseek-v9-pro'])
 
     const scopes = seen.filter(([m]) => m === 'model.options').map(([, params]) => params)
-    expect(scopes).toHaveLength(2)
+    expect(scopes).toHaveLength(3)
     expect(scopes).toContainEqual({})
     expect(scopes).toContainEqual({ session_id: 's1' })
+    expect(scopes).toContainEqual({ session_id: 's1', include_providers: false })
   })
 
   it('inspectSkill and openSkillFile speak skills.manage with the action and the file', async () => {
@@ -259,5 +304,26 @@ describe('settings source', () => {
     expect(snap.skills[0]!.always).toBe(true)
     expect(snap.mcp[0]!.auth).toBe('oauth')
     expect(snap.configPath).toBe('/c.json')
+  })
+})
+
+describe('the cloud memory card', () => {
+  it('loads settings.everosCloud beside settings.everos and probes again after its key is saved', async () => {
+    const cloud = {
+      available: true, selected: true, api_key_set: false, key_source: null, base_url: 'http://fake', status: 'missing', hint: 'no API key',
+    }
+    const mod = await load({ 'settings.everosCloud': cloud, 'settings.set': { applied: true, previous: null } })
+    const first = await mod.settingsSource.load()
+    /* The probe is not awaited by load (a slow service must not hold the page): the
+       snapshot load hands back does not carry it yet; everosCloud() resolves when it lands. */
+    expect(first.everosCloud ?? null).toBe(null)
+    expect(await mod.settingsSource.everosCloud()).toEqual(cloud)
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(1)
+
+    await mod.settingsSource.set('plugins.config.everos-cloud-memory.api_key', 'ecm-key-rot8')
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
+
+    await mod.settingsSource.set('cron.defaultTimezone', 'UTC')
+    expect(seen.filter(([m]) => m === 'settings.everosCloud').length).toBe(2)
   })
 })

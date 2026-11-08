@@ -32,6 +32,36 @@ interface CatalogueEntry {
 
 const OWN_BY = 'gui.agent.by_raven'
 
+/* A Mirasim row is the agent of the same name run through Mirasim: its maker is
+   that agent's, and what an absent one lacks is Mirasim itself, which installs
+   from Mirasim's own site rather than by one command. DSH names no maker it can
+   be held to, so it gets none. */
+const MIRASIM_SHORT = 'gui.agent.short_mirasim'
+const MIRASIM_SITE = 'mirasim.ai/download'
+
+/* The nine presets that reach an agent through Mirasim, named by the prefix
+   they share. A family rather than a table of its own: the roster is the
+   server's, and a family spelled here would be a second place for it to
+   drift -- this one only has to answer which card a row folds into.
+   Derived from the preset and never from the name: a preset survives a
+   rename, and `mirasim_` is what the server's own presets are keyed by. */
+export const MIRASIM_FAMILY = 'mirasim'
+
+/* Two, not one: a card standing for a single agent hides the very thing the
+   reader came for, and a family that has come down to one visible member is
+   better drawn as that member. */
+export const MIN_FAMILY = 2
+
+export function familyOf(row: ExtAgentRow): string | null {
+  return row.preset && row.preset.startsWith(`${MIRASIM_FAMILY}_`) ? MIRASIM_FAMILY : null
+}
+
+/* An agent catalogue key that belongs to a family, by the same prefix test the rows
+   are folded by, so the skeleton and the grid cannot disagree about which
+   entries collapse. */
+const familyOfKey = (key: string): string | null =>
+  key.startsWith(`${MIRASIM_FAMILY}_`) ? MIRASIM_FAMILY : null
+
 const CATALOGUE: Record<string, CatalogueEntry> = {
   Raven: { short: 'gui.agent.short_raven', by: OWN_BY },
   'Raven-Code': { short: 'gui.agent.short_raven_code', by: OWN_BY },
@@ -91,6 +121,15 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     cmd: 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
   },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
+  mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },
+  mirasim_codex: { short: MIRASIM_SHORT, brand: 'OpenAI', site: MIRASIM_SITE },
+  mirasim_kimi: { short: MIRASIM_SHORT, by: 'gui.agent.by_kimi_code', site: MIRASIM_SITE },
+  mirasim_antigravity: { short: MIRASIM_SHORT, brand: 'Google', site: MIRASIM_SITE },
+  mirasim_qwen: { short: MIRASIM_SHORT, by: 'gui.agent.by_qwen_code', site: MIRASIM_SITE },
+  mirasim_grok: { short: MIRASIM_SHORT, brand: 'xAI', site: MIRASIM_SITE },
+  mirasim_dsh: { short: MIRASIM_SHORT, site: MIRASIM_SITE },
+  mirasim_pi: { short: MIRASIM_SHORT, brand: 'Pi', site: MIRASIM_SITE },
+  mirasim_zcode: { short: MIRASIM_SHORT, brand: 'Z.ai', site: MIRASIM_SITE },
 }
 
 function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
@@ -100,6 +139,24 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
   return Object.hasOwn(CATALOGUE, row.name) ? CATALOGUE[row.name] : undefined
 }
 
+/* How many CARDS the agent catalogue makes, which is what the grid's skeleton
+   draws so the first frame lands where the real one will instead of jumping
+   when a family folds. Every preset and every one of Raven's own agents is
+   listed there whether or not it is installed, so only a hand-written agent
+   makes the real grid larger. Counted here rather than written down, because a
+   number beside the table is the one thing that goes stale in silence. */
+export const catalogueCards = (): number => {
+  const families = new Map<string, number>()
+  let cards = 0
+  for (const key of Object.keys(CATALOGUE)) {
+    const family = familyOfKey(key)
+    if (family) families.set(family, (families.get(family) ?? 0) + 1)
+    else cards += 1
+  }
+  for (const count of families.values()) cards += count < MIN_FAMILY ? count : 1
+  return cards
+}
+
 /* One of Raven's own, whichever way this install registered it. The wire says
    so for a built-in row, a folder discovered under `agents/`, and a configured
    acp row whose handshake named Raven (`own`) -- the last is the server's to
@@ -107,11 +164,6 @@ function entryOf(row: ExtAgentRow): CatalogueEntry | undefined {
    server that predates `own`: an install that registered a shipped product as
    a config row (its `install.py` does that) carries no flag there, and the row
    is still Raven's. */
-/* How many rows a roster has before the server has said: the catalogue is
-   the roster on every machine -- Raven's own agents and every preset, whether
-   or not it is installed -- and only a hand-written agent adds to it. */
-export const catalogueSize = (): number => Object.keys(CATALOGUE).length
-
 export function isOwnRow(row: ExtAgentRow): boolean {
   return !!row.own || !!row.builtin || !!row.vendored || entryOf(row)?.by === OWN_BY
 }

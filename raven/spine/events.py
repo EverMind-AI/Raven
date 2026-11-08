@@ -30,10 +30,15 @@ class NoticeKind(StrEnum):
     # this one replaces the answer rather than accompanying it, so an outlet
     # that renders nothing else should still render this.
     ACTION_BLOCKED = "action_blocked"
-    # A model call failed and the Model-Error Ladder is waiting before asking
-    # again. The turn is still running: the detail is the error category, never
-    # the vendor's own body.
+    # The loop is waiting before it asks the model again: after a call that
+    # failed (the Model-Error Ladder), or after a reply that said nothing
+    # (Empty-Response Recovery's resend and step-down). The turn is still
+    # running: the detail is the error category, or `empty_reply` /
+    # `thinking_only`, never the vendor's own body.
     LLM_RETRY = "llm_retry"
+    # The turn ended on a silence marker: an outlet draws one faint line, a channel sends nothing.
+    # The detail, when set, is what that reply had streamed anyway, for a client to take back.
+    SILENT_TURN = "silent_turn"
 
 
 # Which notices pass with the turn and which stand in for its answer. An outlet
@@ -77,7 +82,7 @@ class TurnStarted:
     """
 
     origin: Origin | None = None
-    delegated: dict[str, str] | None = None
+    delegated: dict[str, Any] | None = None
     content: str | None = None
     conversation_id: str | None = None
     turn_id: str = ""
@@ -116,6 +121,11 @@ class TurnFailed:
     wire frame stays one ``error``, and the distinction exists so a consumer
     deciding what to show a stranger (the gateway's channel reply) can quote a
     report and refuse to quote a crash.
+
+    ``full_detail`` is the failure's long account, for a client that lets a
+    reader expand the row: built, scrubbed and capped by the runner, which sets
+    it on the exception it lets out. None when the runner set none. ``error``
+    stays the bounded text every other consumer reads.
     """
 
     error: str
@@ -123,6 +133,11 @@ class TurnFailed:
     conversation_id: str | None = None
     turn_id: str = ""
     reported: bool = False
+    full_detail: str | None = None
+    # The last reply had no text, no tool call and nothing else to show (no reasoning, refusal or cut at the
+    # output ceiling) once recovery was spent; with recovery off, no text at all, a refusal excepted, which
+    # fails as a refusal either way. Earlier attempts are not covered.
+    no_output: bool = False
 
 
 @dataclass(frozen=True)

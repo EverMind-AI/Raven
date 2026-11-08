@@ -14,6 +14,9 @@ import asyncio
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from raven.rpc import bootstrap
 from raven.rpc.subscriptions import COALESCE_WINDOW_S
@@ -63,6 +66,16 @@ class _FakeAskUser:
         self.broker = broker
 
 
+class _FakeBoard:
+    """The host's task board service: only its event sink is wired by the stack."""
+
+    def __init__(self) -> None:
+        self.sink = None
+
+    def set_sink(self, fn) -> None:
+        self.sink = fn
+
+
 class _FakeLoop:
     """The AgentLoop surface build_rpc_stack touches, each hook recorded."""
 
@@ -70,6 +83,7 @@ class _FakeLoop:
         self.tools: dict = {"ask_user": _FakeAskUser()}
         self.order: list[str] = []
         self.subagents = _FakeSubagents(self.order)
+        self.task_board = _FakeBoard()
         self.mcp_closed = 0
         self.cron_service = cron
         self.backend = None
@@ -168,6 +182,37 @@ async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> No
         await stack.teardown()
 
 
+async def test_the_spine_and_turn_cancel_share_one_map_of_what_running_turns_measured(monkeypatch) -> None:
+    """A stopped turn's cancel reports what the turn measured, read from the map
+    the spine's runner fills: two maps would leave every stop with nothing to
+    report."""
+    loop = _FakeLoop(_FakeCron())
+    import raven.rpc.methods as methods_module
+    import raven.rpc.spine as spine_module
+
+    seen: dict = {}
+    real_spine = spine_module.build_rpc_spine
+    real_register = methods_module.register_turn_methods
+
+    def spy_spine(*args, **kwargs):
+        seen["spine"] = kwargs.get("live_usages")
+        return real_spine(*args, **kwargs)
+
+    def spy_register(*args, **kwargs):
+        seen["cancel"] = kwargs.get("live_usages")
+        return real_register(*args, **kwargs)
+
+    monkeypatch.setattr(spine_module, "build_rpc_spine", spy_spine)
+    # The name the aligned registration calls, so the map is followed through it.
+    monkeypatch.setattr(methods_module, "register_turn_methods", spy_register)
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
+    try:
+        assert isinstance(seen["spine"], dict)
+        assert seen["cancel"] is seen["spine"]
+    finally:
+        await stack.teardown()
+
+
 def test_the_turn_pools_come_from_the_gateway_section_and_zero_is_allowed(tmp_path, monkeypatch) -> None:
     path = tmp_path / "config.json"
     monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
@@ -206,6 +251,7 @@ async def test_a_shared_loop_is_used_not_rebuilt(monkeypatch) -> None:
         assert loop.dag_sink is not None
         assert loop.mcp_sink is not None
         assert loop.subagents.delivery_sink is not None
+        assert loop.task_board.sink is not None
         # The engine is the host's and the host's ``run()`` already connected
         # it; a second prewarm here would re-walk every server it attached.
         assert loop.prewarms == 0
@@ -533,6 +579,47 @@ async def test_a_mounted_stack_does_not_close_its_host_s_mcp(monkeypatch) -> Non
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=loop)
     await stack.teardown()
     assert loop.mcp_closed == 0
+
+
+@pytest.mark.parametrize("owns_loop", [True, False])
+async def test_teardown_stops_only_the_owned_skill_watcher(tmp_path, monkeypatch, owns_loop) -> None:
+    from raven.memory_engine.skill_local.watcher import SkillFileWatcher
+
+    watcher = SkillFileWatcher([tmp_path], lambda _: None, lambda _: None)
+    loop = _FakeLoop()
+    loop.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=watcher.stop))
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    assert watcher.start()
+    thread = watcher._thread
+    assert thread is not None and thread.is_alive()
+    try:
+        stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None if owns_loop else loop)
+        await stack.teardown()
+        assert thread.is_alive() is not owns_loop
+        await stack.teardown()
+        assert thread.is_alive() is not owns_loop
+    finally:
+        watcher.stop()
+
+
+async def test_a_failed_watcher_stop_does_not_strand_the_owned_stores(monkeypatch) -> None:
+    loop = _FakeLoop()
+
+    def fail():
+        loop.order.append("watcher")
+        raise RuntimeError("watcher stop failed")
+
+    async def drain():
+        loop.order.append("drain")
+
+    loop.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=fail))
+    loop.backend = _RecordingBackend(loop.order)
+    loop.drain_backend_stores = drain
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+    stack = await bootstrap.build_rpc_stack(_sink)
+    await stack.teardown()
+
+    assert loop.order == ["cancel_all", "watcher", "drain", "stop", "close_mcp"]
 
 
 async def test_the_owning_path_builds_the_engine_for_the_channel_it_serves(monkeypatch) -> None:

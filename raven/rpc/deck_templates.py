@@ -37,6 +37,8 @@ from typing import Any
 
 from loguru import logger
 
+from raven.rpc.files import upload_target
+
 COVER_WIDTH_PX = 480
 COVER_JPEG_QUALITY = 78
 #: The pages a reader flips through before picking: wide enough to read the
@@ -614,7 +616,13 @@ def stop_warming() -> None:
         logger.info("deck templates: stopped {} conversion(s) still running", stopped)
 
 
-def deposit(template: Template, uploads: Path, language: str = SOURCE_LANGUAGE) -> Path:
+def deposit(
+    template: Template,
+    uploads: Path,
+    language: str = SOURCE_LANGUAGE,
+    *,
+    shadow_dirs: tuple[Path, ...] = (),
+) -> Path:
     """Copy the template under ``uploads`` as an attachment would land, never overwriting.
 
     The reader's copy rather than the shipped one. A deck is built by cloning the
@@ -624,11 +632,7 @@ def deposit(template: Template, uploads: Path, language: str = SOURCE_LANGUAGE) 
     rather than as the wrong language.
     """
     uploads.mkdir(parents=True, exist_ok=True)
-    target = uploads / f"{template.name}.pptx"
-    n = 1
-    while target.exists():
-        target = uploads / f"{template.name}-{n}.pptx"
-        n += 1
+    target = upload_target(uploads, f"{template.name}.pptx", shadow_dirs)
     shutil.copyfile(source_for(template, language), target)
     return target
 

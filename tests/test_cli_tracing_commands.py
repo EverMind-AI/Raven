@@ -12,6 +12,7 @@ reaping is left to integration/manual checks — Popen is monkeypatched here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -21,6 +22,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
@@ -205,68 +207,96 @@ def test_pid_is_viewer_rejects_foreign_process():
     assert tc._pid_is_viewer(os.getpid()) is False
 
 
-class _FakeCompleted:
-    def __init__(self, stdout: str):
-        self.stdout = stdout
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ("node /opt/raven/cli/tracing_viewer/server.js", True),
+        ("nodejs /opt/raven/cli/tracing_viewer/server.js", True),
+        ("node22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/node-v22.16.0 /opt/raven/cli/tracing_viewer/server.js", True),
+        (r'"C:\Node\nodejs.exe" "C:\Raven\tracing_viewer\server.js"', True),
+        ('"C:\\Program Files\\nodejs\\node.exe" "C:\\Raven\\tracing_viewer\\server.js"', True),
+        ('"/opt/node runtime/node" /opt/raven/cli/tracing_viewer/server.js', True),
+        ("/Users/x/Raven copy/.venv/bin/node /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/Users/x/node copy/bin/node22 /opt/raven/cli/tracing_viewer/server.js", True),
+        ("/usr/bin/python /opt/node server.js", False),
+        ("python /opt/node server.js", False),
+        (None, None),
+        ("", None),
+        ("node.exe unrelated.js", False),
+        ("python server.js", False),
+        ("notnode server.js", False),
+    ],
+)
+def test_pid_is_viewer_uses_the_shared_command_line_reader(monkeypatch, line, expected):
+    from raven.utils import processes
+
+    seen: list[int] = []
+
+    def read(pid):
+        seen.append(pid)
+        return line
+
+    monkeypatch.setattr(processes, "command_line", read)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
+    assert tc._pid_is_viewer(4242) is expected
+    assert seen == [4242]
 
 
-def _windows_run(calls: list, tasklist_stdout: str):
-    """subprocess.run stand-in for a native Windows host: ps.exe does not
-    exist (FileNotFoundError), tasklist answers with the given output."""
+@pytest.mark.parametrize("action", [[], ["stop"]])
+def test_tracing_keeps_an_unreadable_live_viewer_record(tmp_path, monkeypatch, action):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    entry = {"pid": 4242, "port": 4318}
+    pidfile.write_text(json.dumps(entry), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: True)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled an unverified viewer"))
+    monkeypatch.setattr(tc, "_resolve_node", lambda: pytest.fail("started beside an unverified viewer"))
+    monkeypatch.setattr(tc, "_port_live", lambda _port: False)
 
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        if argv[0] == "ps":
-            raise FileNotFoundError("ps")
-        assert argv[0] == "tasklist"
-        return _FakeCompleted(tasklist_stdout)
+    result = runner.invoke(app, ["tracing", *action])
 
-    return run
-
-
-def test_pid_is_viewer_windows_detects_node_via_tasklist(monkeypatch):
-    """On win32 the check must not shell out to the missing ps.exe (whose
-    FileNotFoundError used to be swallowed into a blanket False): tasklist
-    filters the pid and a node image means the viewer is alive."""
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
-    monkeypatch.setattr(tc.subprocess, "run", _windows_run(calls, "node.exe                     4242 Console"))
-    assert tc._pid_is_viewer(4242) is True
-    assert calls == [["tasklist", "/FI", "PID eq 4242"]]
+    assert result.exit_code == 1
+    assert "cannot verify" in result.output.lower()
+    assert "viewer.pid" in result.output.replace("\n", "")
+    assert "after confirming the record is stale" in " ".join(result.output.split())
+    assert "stop it manually" not in result.output
+    assert json.loads(pidfile.read_text(encoding="utf-8")) == entry
 
 
-def test_pid_is_viewer_windows_no_node_match_is_false(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "win32")
+def test_tracing_stops_a_viewer_with_an_unquoted_spaced_node_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
     monkeypatch.setattr(
-        tc.subprocess,
-        "run",
-        _windows_run(calls, "INFO: No tasks are running which match the specified criteria."),
+        "raven.utils.processes.command_line",
+        lambda _pid: "/Users/x/Raven copy/.venv/bin/node /opt/raven/cli/tracing_viewer/server.js",
     )
-    assert tc._pid_is_viewer(4242) is False
+    killed = []
+    monkeypatch.setattr(tc.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    result = runner.invoke(app, ["tracing", "stop"])
+
+    assert result.exit_code == 0
+    assert killed == [(4242, signal.SIGTERM)]
+    assert not pidfile.exists()
 
 
-def test_pid_is_viewer_windows_tasklist_missing_is_false(monkeypatch):
-    monkeypatch.setattr("sys.platform", "win32")
+def test_an_unreadable_dead_viewer_record_can_be_cleared(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    pidfile = tmp_path / "viewer.pid"
+    pidfile.write_text(json.dumps({"pid": 4242, "port": 4318}), encoding="utf-8")
+    monkeypatch.setattr("raven.utils.processes.command_line", lambda _pid: None)
+    monkeypatch.setattr("raven.utils.pid.pid_alive", lambda _pid: False)
+    monkeypatch.setattr(tc.os, "kill", lambda *_args: pytest.fail("signalled a dead viewer"))
 
-    def raise_missing(argv, **kwargs):
-        raise FileNotFoundError(argv[0])
+    result = runner.invoke(app, ["tracing", "stop"])
 
-    monkeypatch.setattr(tc.subprocess, "run", raise_missing)
-    assert tc._pid_is_viewer(4242) is False
-
-
-def test_pid_is_viewer_posix_keeps_ps_command_check(monkeypatch):
-    calls: list = []
-    monkeypatch.setattr("sys.platform", "linux")
-
-    def run(argv, **kwargs):
-        calls.append(list(argv))
-        return _FakeCompleted("node /opt/raven/cli/tracing_viewer/server.js\n")
-
-    monkeypatch.setattr(tc.subprocess, "run", run)
-    assert tc._pid_is_viewer(4242) is True
-    assert calls and calls[0][0] == "ps"
+    assert result.exit_code == 0
+    assert "stale pid file" in result.output
+    assert not pidfile.exists()
 
 
 def _aged_artifact(state_dir: Path, name: str, text: str) -> Path:
@@ -364,12 +394,128 @@ def test_tracing_rejects_an_unknown_action_with_bracketed_markup(tmp_path, monke
 
 def test_a_below_minimum_node_is_refused(monkeypatch):
     """find_node deliberately returns the best node it saw even below the
-    minimum; the viewer used to discard the version and run on it anyway."""
+    minimum; the viewer reads zstd-compressed payloads, whose decoder landed
+    in Node's zlib in 22.15."""
     import pytest
     import typer
 
     import raven.cli.tracing_commands as tc
 
-    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda: ("/usr/bin/node", (20, 0, 0)))
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 14, 0)))
     with pytest.raises(typer.Exit):
         tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (22, 15, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
+
+
+def test_node_23_before_23_8_is_refused(monkeypatch):
+    """zstd landed in Node 22.15 and 23.8, so a 23.x below 23.8 cannot decode."""
+    import pytest
+    import typer
+
+    import raven.cli.tracing_commands as tc
+
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 0, 0)))
+    with pytest.raises(typer.Exit):
+        tc._resolve_node()
+    monkeypatch.setattr("raven.cli.tui_commands.find_node", lambda *_accept: ("/usr/bin/node", (23, 8, 0)))
+    assert tc._resolve_node() == "/usr/bin/node"
+
+
+def test_a_zstd_node_behind_an_older_node_on_path_is_chosen(tmp_path, monkeypatch):
+    """find_node stops at the first node the TUI accepts (22.0); a PATH node
+    without zstd must not hide the installer's newer private runtime."""
+    import subprocess
+
+    from raven.cli import tui_commands
+
+    exe = "node.exe" if tui_commands._is_windows() else "node"
+    on_path = tmp_path / "bin" / exe
+    runtime_dir = tmp_path / "home" / "runtime" / "node-v22.20.0"
+    managed = runtime_dir / exe if tui_commands._is_windows() else runtime_dir / "bin" / exe
+    for binary in (on_path, managed):
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text("")
+    versions = {str(on_path): "v22.12.0", str(managed): "v22.20.0"}
+
+    def fake_run(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=f"{versions[argv[0]]}\n", stderr="")
+
+    monkeypatch.setattr(tui_commands.subprocess, "run", fake_run)
+    monkeypatch.delenv("RAVEN_NODE", raising=False)
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path / "home"))
+
+    assert tc._resolve_node() == str(managed)
+
+
+def _plain_blob_with_link(state_dir: Path, text: str) -> tuple[Path, Path]:
+    sha1 = hashlib.sha1(text.encode("utf-8")).hexdigest()
+    blob = state_dir / "logs" / "audit-artifacts" / "_blobs" / sha1[:2] / f"{sha1}.json"
+    blob.parent.mkdir(parents=True)
+    blob.write_text(text, encoding="utf-8")
+    artifact = _aged_artifact(state_dir, "a.json", text)
+    artifact.unlink()
+    os.link(blob, artifact)
+    stamp = time.time() - 3600
+    os.utime(blob, (stamp, stamp))
+    os.utime(artifact, (stamp, stamp))
+    return artifact, blob
+
+
+def test_tracing_compress_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, _ = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "compressed 1" in r.output
+    assert "saved" in r.output
+    assert artifact.read_bytes() == text.encode("utf-8")
+
+
+def test_tracing_compress_rewrites_the_blob_and_keeps_the_link(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    text = '{"m":"same"}'
+    artifact, blob = _plain_blob_with_link(tmp_path, text)
+
+    r = runner.invoke(app, ["tracing", "compress"])
+
+    assert r.exit_code == 0
+    assert artifact.read_bytes().startswith(b"\x28\xb5\x2f\xfd")
+    assert artifact.stat().st_ino == blob.stat().st_ino
+
+
+def test_tracing_compress_logs_dry_run_reports_and_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    archive = tmp_path / "logs" / "archive" / "2026-01-01" / "audit-spans-2026-01-01-1.log"
+    archive.parent.mkdir(parents=True)
+    archive.write_text('{"spanId": "s"}\n', encoding="utf-8")
+    os.utime(archive, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    archive.with_name("audit-spans-2026-01-01-2.log").write_text('{"spanId": "t"}\n', encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "compress", "--logs", "--dry-run"])
+
+    assert r.exit_code == 0
+    assert "logs 2: compressed 1, already 0, left for the next rotation 1" in r.output
+    assert archive.read_text(encoding="utf-8") == '{"spanId": "s"}\n'
+
+
+def test_tracing_pack_messages_packs_the_message_store(tmp_path, monkeypatch):
+    from raven.tracing import artifact_v2
+
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    message = {"role": "user", "content": "hi"}
+    sha1 = artifact_v2.message_sha1(message)
+    path = artifact_v2.message_path(tmp_path / "logs" / "audit-artifacts", sha1)
+    path.parent.mkdir(parents=True)
+    path.write_text(artifact_v2.message_text(message), encoding="utf-8")
+
+    r = runner.invoke(app, ["tracing", "pack-messages"])
+
+    assert r.exit_code == 0
+    assert "packed 1" in r.output
+    assert not path.exists()

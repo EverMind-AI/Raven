@@ -23,12 +23,28 @@ import type {
   TaskStatus,
   TasksListParams,
   TasksListResult,
+  TaskBoard,
+  TaskGroup,
+  TaskGroupStatus,
+  TaskLinkRef,
+  ProgressStep,
+  TasksBoardResult,
+  TasksBoardsResult,
+  TaskBoardCard,
+  TasksBoardUpdatedEvent,
+  TasksSetGroupStatusResult,
+  TasksIgnoreQuestionResult,
 } from '../../rpc/generated'
 
 export type {
   SubagentRow, TaskCounts, TaskFile, TaskKind, TaskNode, TaskReplan, TaskRow, TaskStatus,
   TasksListParams, TasksListResult,
+  TaskBoard, TaskGroup, TaskGroupStatus, TaskLinkRef, ProgressStep, TasksBoardResult, TasksSetGroupStatusResult,
+  TaskBoardCard, TasksBoardsResult, TasksIgnoreQuestionResult,
 }
+
+/* The live event's payload: a conversation's board after a write. */
+export type TasksBoardUpdatedPayload = TasksBoardUpdatedEvent['payload']
 
 /* The row's own address: a spawn's id and a dag's run id are unique only
    inside their own kind's namespace, so a pane, a seen-mark or a live update
@@ -89,4 +105,14 @@ export interface TasksSource {
   onRunCompleted?: (p: DagRunCompletedEvent['payload']) => void
   onRunReplanned?: (p: DagRunReplannedEvent['payload']) => void
   onSubagentStatus?: (p: SubagentStatusEvent['payload']) => void
+  /* The host's Task Board: read for one conversation, and the reader's two
+     actions on a group. Optional so a stand-in source with no board reads as
+     a conversation with no board. */
+  board?: (sessionKey: string) => Promise<TasksBoardResult>
+  /* Every host conversation's cards, for the Task Board page. */
+  boards?: (includeCompleted: boolean) => Promise<TasksBoardsResult>
+  setGroupStatus?: (sessionKey: string, groupId: string, status: 'completed' | 'idle') => Promise<TasksSetGroupStatusResult>
+  /* One question the reader sets aside; a group asking nothing more goes idle. */
+  ignoreQuestion?: (sessionKey: string, groupId: string, stepId: string, question: string) => Promise<TasksIgnoreQuestionResult>
+  onBoardUpdated?: (p: TasksBoardUpdatedPayload) => void
 }

@@ -45,9 +45,10 @@ output, so a detach that was not refused is still not a detach.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shlex
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 # Long enough to tail a large log or hash a directory; far short of any solver
@@ -102,6 +103,31 @@ def machines_registered() -> bool:
 # does to the command. A separator ends it, so the words after one belong to the
 # next command and not to this ssh.
 _COMMAND_SEPARATORS = frozenset({";", "&", "&&", "|", "||", "|&", "(", ")"})
+#: On a Windows host the shell that runs a command reads a backslash as a path's
+#: own, not as an escape: the words are read that way too, so ``C:\...\ssh.exe``
+#: keeps its name.
+_WINDOWS = os.name == "nt"
+
+
+def _words(command: str) -> list[str]:
+    """The command's words as the shell that runs it reads them; none for a line it cannot read.
+
+    POSIX quoting here. On a Windows host the quotes come off the same way
+    -- around a word or inside it, a quoted piece and a bare one next to it
+    making one word, as that shell's argv has them (``"root@"host``,
+    ``"587"17``) -- but a backslash is a path's own and
+    is kept, never an escape. An unbalanced quote is not a line this can
+    read; the shell rejects it too, so nothing reaches a machine either way.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        if _WINDOWS:
+            lexer.escape = ""
+        return list(lexer)
+    except ValueError:
+        return []
+
 
 # A redirection does not end the command: `ssh 2>/dev/null -p 58717 root@host`
 # is a single ssh. Reading one as a terminator -- or, worse, reading `&>` as a
@@ -155,8 +181,38 @@ def _read_option_group(word: str, tokens: list[str], index: int) -> tuple[int, s
     return index, None
 
 
+#: What Windows appends to an executable's name, which names the same program.
+_EXE_SUFFIXES = (".exe", ".cmd", ".bat")
+
+
+def _program(word: str) -> str:
+    """The program a command word runs, as the refusal names one: ``ssh``.
+
+    Written ``ssh``, ``/usr/bin/ssh`` or ``\\ssh`` (a backslash suppresses alias
+    lookup and still runs the client), and on Windows ``ssh.exe``, ``SSH.EXE``
+    or ``C:\\Windows\\System32\\OpenSSH\\ssh.exe``, all of which reach the far
+    side: the directory, the case and the suffix are taken off.
+    """
+    name = PureWindowsPath(PurePosixPath(word.strip("\"'").lstrip("\\")).name).name.lower()
+    for suffix in _EXE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+
 def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     """Every host and port an ``ssh`` word in a shell command would connect to.
+
+    The pairs of :func:`_ssh_targets`, for callers that do not ask whether the
+    port was written.
+    """
+    return [(host, port) for host, port, _ in _ssh_targets(command)]
+
+
+def _ssh_targets(command: str) -> list[tuple[str, int, bool]]:
+    """Every host and port an ``ssh`` word in a shell command would connect to,
+    and whether the line gave that port: an ssh config's ``Port`` applies only
+    when it did not, and ``-p 22`` written out is not the default it equals.
 
     Empty when no token runs the ssh client, or when the line cannot be
     tokenised at all. Every ssh in the line is collected, not the first: a
@@ -183,19 +239,14 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
     not an option (``ssh root@h -p 58717 true`` is port 58717, ``ssh root@h
     true -p 58717`` is 22) or a ``--``.
     """
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        # An unbalanced quote is not a shell line this can read; the shell will
-        # reject it too, so nothing reaches a machine either way.
+    tokens = _words(command)
+    if not tokens:
         return []
 
-    found: list[tuple[str, int]] = []
+    found: list[tuple[str, int, bool]] = []
     index = 0
     while index < len(tokens):
-        if PurePosixPath(tokens[index].lstrip("\\")).name != "ssh":
+        if _program(tokens[index]) != "ssh":
             index += 1
             continue
         index += 1
@@ -206,7 +257,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
         options_ended = False
         while index < len(tokens):
             word = tokens[index]
-            if word in _COMMAND_SEPARATORS or PurePosixPath(word.lstrip("\\")).name == "ssh":
+            if word in _COMMAND_SEPARATORS or _program(word) == "ssh":
                 # The command ended, or the next one began; either way this
                 # ssh's arguments are over and the token is left for the outer
                 # loop to read.
@@ -268,7 +319,7 @@ def _ssh_destinations(command: str) -> list[tuple[str, int]]:
             # true -p 58717` prints 22.
             options_open = False
         if destination:
-            found.append((destination, port))
+            found.append((destination, port, port_set))
     return found
 
 
@@ -291,7 +342,7 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
     and the ledger never saw the runs. Only ssh is matched -- ``scp`` and
     ``rsync`` move files and start nothing on the far side.
     """
-    destinations = _ssh_destinations(command)
+    destinations = _ssh_targets(command)
     if not destinations:
         return None
     try:
@@ -300,17 +351,43 @@ def raw_ssh_target(command: str) -> dict[str, Any] | None:
         rows = load()
     except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
         return None
-    for host, port in destinations:
-        for row in rows:
-            row_host = str(row.get("host") or "").strip().lower()
-            if not row_host or row_host != host:
-                continue
-            try:
-                row_port = int(row.get("port") or 22)
-            except (TypeError, ValueError):
-                row_port = 22
-            if row_port == port:
-                return row
+    for host, port, _ in destinations:
+        if (row := _row_at(rows, host, port)) is not None:
+            return row
+    # An alias in the owner's ssh config reaches a registered machine under a
+    # name the registry does not hold -- the owner's own ``Host gpu-a800``, or
+    # the ``Host <id>`` block registration writes. Measured 2026-11-03: a model
+    # that read ~/.ssh/config typed ``ssh <alias> ...`` in 3 of 18 runs and was
+    # never stopped. ssh -G says where a destination goes without connecting;
+    # a port the line gives, 22 included, wins over the config's Port, as it
+    # does for ssh. It is a subprocess, so async callers run this off the loop.
+    from raven.ops.transport import resolve_with_ssh
+
+    for host, port, port_set in destinations:
+        resolved = resolve_with_ssh(["ssh", host])
+        named = resolved.first("hostname").lower()
+        if resolved.failure or not named:
+            continue
+        try:
+            via = port if port_set else int(resolved.first("port") or 22)
+        except ValueError:
+            via = port
+        if (named, via) != (host, port) and (row := _row_at(rows, named, via)) is not None:
+            return row
+    return None
+
+
+def _row_at(rows: list[dict[str, Any]], host: str, port: int) -> dict[str, Any] | None:
+    for row in rows:
+        row_host = str(row.get("host") or "").strip().lower()
+        if not row_host or row_host != host:
+            continue
+        try:
+            row_port = int(row.get("port") or 22)
+        except (TypeError, ValueError):
+            row_port = 22
+        if row_port == port:
+            return row
     return None
 
 
@@ -320,7 +397,7 @@ def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
     Returns ``(None, message)`` when the id is unknown or unreachable, so the
     caller can hand the reason back rather than a traceback.
     """
-    from raven.ops.connections import load, shown
+    from raven.ops.connections import load, match, shown
 
     # Looked up here rather than through a registry-side ``get``: main keeps
     # the registry's readers to what the CLI and this lane need (0fd38ef8),
@@ -334,8 +411,26 @@ def _runner_for_connection(conn_id: str, *, cap_seconds: float | None = None):
             + "".join(f"   {k} {v}" for k, v in shown(r).items() if k not in ("id", "display_name"))
             for r in rows
         )
+        found = match(wanted, rows)
+        if len(found) == 1:
+            hit = found[0]
+            guess = (
+                f"{conn_id!r} is {hit.row.get('display_name') or hit.row['id']} (matched by {hit.reason}); "
+                f"run it again with machine={hit.row['id']!r}.\n"
+            )
+        elif found:
+            guess = (
+                f"{conn_id!r} could be any of: "
+                + ", ".join(f"{m.row['id']!r} ({m.reason})" for m in found)
+                + ". Do not ask the owner yet: run a read-only look on each of these for what "
+                "the task names (the path, the file, the case) and use the one that has it. Ask "
+                "only if that still leaves more than one, and name the candidates when you do.\n"
+            )
+        else:
+            guess = ""
         return None, (
             f"No connection with id {conn_id!r}.\n"
+            + guess
             + (f"Connections this instance can run on:\n{listing}" if rows else "No connection is registered.")
         )
     from raven.ops.transport import TransportError, runner_from
@@ -416,10 +511,24 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
 
     # The runner's own cap is a backstop behind the wrapper's: the wrapper
     # fires first, keeps the output and reports 124; the runner's group kill is
-    # for a wrapper that could not run at all (a machine with no bash).
-    runner, row = _runner_for_connection(connection, cap_seconds=_TIMEOUT_S + 15)
+    # for a wrapper that could not run at all (a machine with no bash). Built
+    # off the loop, like the run below: a password machine's runner asks a
+    # local ``ssh -G`` which host its prompt will name (``transport.ssh_env``).
+    runner, row = await asyncio.to_thread(_runner_for_connection, connection, cap_seconds=_TIMEOUT_S + 15)
     if runner is None:
         return row  # the message explaining why not
+    if (
+        str(row.get("transport") or "") == "local"
+        and (other := await asyncio.to_thread(raw_ssh_target, command)) is not None
+    ):
+        # The local connection is this computer, so an ssh typed there is the
+        # same registry bypass the plain shell refuses: measured 2026-11-03, 2
+        # of 18 runs reached a registered machine this way.
+        other_id = str(other.get("id") or "")
+        return (
+            f"Error: this command reaches {_where(other)} over raw ssh, and that machine is registered "
+            f"as {other_id!r}. Run the command itself with machine={other_id!r} instead. Nothing was run."
+        )
 
     where = (cwd or ".").rstrip("/") or "/"
     # bash, not sh: /bin/sh is dash on these hosts, and shell gets written the
@@ -449,6 +558,49 @@ async def run_on_machine(command: str, *, connection: str, cwd: str | None = Non
             f"belongs to the on-call agent's ops_submit.\n{text}"
         )
     return f"{head}\n{text}" if text.strip() else f"{head}, no output"
+
+
+def missing_here_note(paths: list[str], *, command: str = "") -> str:
+    """What to add to a local call that missed paths this computer lacks.
+
+    Run with no 'machine', a command meant for a registered machine fails here
+    with "No such file or directory" and nothing in that says why. Measured
+    2026-11-03: asked to look at /home/cfd/work "on my dev box", 2 of 18 runs
+    ran ``ls`` on this computer, read the error and reported the directory
+    absent; another model did the same with list_dir. The note names the
+    registered machines so the next call can pick one; it says nothing when
+    every named path is here, none is registered, or the command ran ssh (the
+    miss was on the far side, not here).
+    """
+    if command and _ssh_destinations(command):
+        return ""
+    gone = []
+    for raw in paths:
+        if "$" in raw or not raw.startswith(("/", "~")):
+            continue
+        # A pattern is checked up to its first wild segment: /home/cfd/work/*/
+        # names /home/cfd/work.
+        parts = raw.split("/")
+        wild = next((i for i, seg in enumerate(parts) if any(c in seg for c in "*?[")), len(parts))
+        path = "/".join(parts[:wild]).rstrip("/)`") or "/"
+        if not os.path.exists(os.path.expanduser(path)) and path not in gone:
+            gone.append(path)
+    if not gone:
+        return ""
+    try:
+        from raven.ops.connections import load
+
+        rows = load()
+    except Exception:  # noqa: BLE001 -- a malformed registry must leave the plain shell working
+        return ""
+    if not rows:
+        return ""
+    names = ", ".join(f"{r.get('display_name') or r.get('id')} (id {r.get('id')})" for r in rows)
+    again = "look there with exec(machine=<id>) -- the owner's own words for the machine work there too"
+    return (
+        f"\nNote: this looked on THIS computer, which has no {', '.join(gone[:3])}. Registered machines: "
+        f"{names}. If the owner meant one of them, {again}."
+    )
 
 
 def _where(row: dict[str, Any]) -> str:

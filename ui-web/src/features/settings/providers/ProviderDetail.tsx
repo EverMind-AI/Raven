@@ -75,7 +75,32 @@ function AddressRow({ p, label, sub, placeholder }: {
 
 function Connection({ p }: { p: ProviderRow }): JSX.Element {
   const [key, setKey] = useState('')
-  const [base, setBase] = useState(p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || '')
+  /* The saved key the eye put in the field, while it is still there as it came:
+     shut, the field empties again rather than holding a "new" key that is the
+     old one. Edited, it is the reader's own and stays. A read that fails has
+     already said so (the source's toast), and the eye opens on the field as it
+     is. */
+  const [revealed, setRevealed] = useState('')
+  /* Which read is the current one. Typing, or pressing the eye again, retires
+     the one in flight: its answer arriving after a reader started typing a
+     replacement would overwrite what they typed with the key they are
+     replacing. */
+  const asked = useRef(0)
+  const peek = async (shown: boolean): Promise<void> => {
+    const ask = ++asked.current
+    if (!shown) {
+      if (revealed && key === revealed) setKey('')
+      setRevealed('')
+      return
+    }
+    if (key) return
+    const saved = await store.source().revealKey(p.id)
+    if (ask !== asked.current || !saved) return
+    setKey(saved)
+    setRevealed(saved)
+  }
+  const shownBase = p.apiBase || rawStr(store.get().snap.raw, p.id, 'apiBase') || p.defaultApiBase || ''
+  const [base, setBase] = useState(shownBase)
   const kind = kindOf(p)
   const checking = store.isBusy(busy(p.id))
   /* Where this block draws the address field, if anywhere: above the key for a
@@ -88,14 +113,35 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
      field for, and sending it stored an address nobody typed. */
   const basePlace = kind === 'oauth' ? null : !needsKey(p) && takesBase(p) ? 'above' : !takesKey(p) ? 'alone' : null
   const save = (): void => {
-    const k = key.trim()
+    /* A key the eye put there, unedited, is the stored one: saving it again
+       would rewrite the config (and restart EverOS when one of its roles runs
+       here) for no change, so it goes as an empty field does. */
+    const k = key === revealed ? '' : key.trim()
     const b = base.trim()
-    if (needsKey(p) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
+    /* A key-shaped provider, or an endpoint (custom, Azure), connects by its
+       key: `model.save_key` refuses such a save without one -- all but
+       Bedrock's, which takes an ambient credential, accepts it and changes
+       nothing. */
+    const endpointKey = p.kind === 'endpoint' && takesKey(p)
+    if ((needsKey(p) || endpointKey) && !k && !p.on) { store.refuse(t('gui.settings.providers.key_first')); return }
     if (takesBase(p) && !b) { store.refuse(t('gui.settings.providers.base_first')); return }
+    if (!k && (endpointKey || (needsKey(p) && !(b && basePlace)))) {
+      /* An endpoint's edited address with no new key goes on its own, the way
+         any other field does (`model.set_fields`, as AddressRow sends it):
+         `model.save_key` would demand the key again. */
+      if (endpointKey && b !== shownBase.trim()) {
+        void store.run(busy(p.id), () => store.source().setFields(p.id, { api_base: b }))
+        return
+      }
+      /* Nothing new to send: the save could only be refused, in English, or
+         change nothing, so the page says what pressing it would have needed. */
+      store.refuse(t('gui.settings.providers.key_unchanged', { button: t('gui.settings.update') }))
+      return
+    }
     const params: Record<string, unknown> = { slug: p.id }
     if (k) params.api_key = k
     if (b && basePlace) params.api_base = b
-    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) setKey('') })
+    void store.connect(busy(p.id), p.id, params).then((ok) => { if (ok) { setKey(''); setRevealed('') } })
   }
   const btn = p.on ? t('gui.settings.update') : t('gui.settings.providers.connect')
   const tested = !!store.get().probes[p.id] || store.isBusy(`probe:${p.id}`)
@@ -130,7 +176,9 @@ function Connection({ p }: { p: ProviderRow }): JSX.Element {
           <span className="settings-taglist">
             <KeyInput className="settings-tbox" value={key} aria-label={t('gui.settings.providers.api_key')}
               placeholder={p.on ? t('gui.settings.key_set_ph') : t('gui.settings.providers.paste_key')}
-              onChange={(e) => setKey(e.currentTarget.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
+              onPeek={p.on ? peek : undefined}
+              onChange={(e) => { asked.current++; setKey(e.currentTarget.value) }}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !checking) save() }} />
             {needsKey(p) && <button type="button" className="mini" disabled={checking} onClick={save}>{btn}</button>}
             {!needsKey(p) && <button type="button" className="mini ghost" disabled={checking} onClick={save}>{t('gui.settings.update')}</button>}
           </span>
@@ -258,10 +306,10 @@ function KvForm({ fields, onSave, onCancel, saveLabel }: {
 /* What the person stated about a model, from the config section itself:
    `labels` folds these into the registry's own names, so it cannot tell a
    name somebody chose from one the catalogue ships. */
-function statedOverlays(raw: Record<string, unknown>, slug: string): Array<[string, { label?: string; description?: string }]> {
-  const providers = raw.providers as Record<string, { modelOverlay?: Record<string, { label?: string; description?: string }> }> | undefined
+function statedOverlays(raw: Record<string, unknown>, slug: string): Array<[string, { label?: string; description?: string; reasoningEfforts?: string[] }]> {
+  const providers = raw.providers as Record<string, { modelOverlay?: Record<string, { label?: string; description?: string; reasoningEfforts?: string[] }> }> | undefined
   const overlay = (providers && providers[slug] && providers[slug].modelOverlay) || {}
-  return Object.entries(overlay).filter(([, v]) => v && (v.label || v.description))
+  return Object.entries(overlay).filter(([, v]) => v && (v.label || v.description || v.reasoningEfforts?.length))
 }
 
 function Advanced({ p }: { p: ProviderRow }): JSX.Element {
@@ -286,10 +334,11 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
     if (!v.model) { store.refuse(t('gui.settings.providers.model_first')); return }
     if (!v.label) { store.refuse(t('gui.settings.providers.label_first')); return }
     store.set({ ovlAdd: null })
-    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model: v.model, label: v.label, description: v.description || '' }))
+    const reasoning_efforts = (v.effort || '').split(',').map((word) => word.trim()).filter(Boolean)
+    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model: v.model, label: v.label, description: v.description || '', reasoning_efforts }))
   }
   const clearOverlay = (model: string): void => {
-    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model, label: '', description: '' }))
+    void store.run(busy(p.id), () => store.source().provider('add_model', { slug: p.id, model, label: '', description: '', reasoning_efforts: [] }))
   }
   return (
     <Fold open={s.adv === p.id} label={t('gui.settings.providers.advanced')}
@@ -329,7 +378,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
               {overlays.map(([model, v]) => (
                 <div key={model} className="settings-kvrow">
                   <span className="settings-kvn">{model}</span>
-                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label || model}{v.description ? ` · ${v.description}` : ''}</span>
+                  <span className="settings-kvv" style={{ color: 'var(--text)' }}>{v.label || model}{v.description ? ` · ${v.description}` : ''}{v.reasoningEfforts?.length ? ` · ${v.reasoningEfforts.join(', ')}` : ''}</span>
                   <IconBtn glyph="x" label={t('gui.settings.providers.remove_label', { model })} onClick={() => clearOverlay(model)} />
                 </div>
               ))}
@@ -341,6 +390,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
                 listed.length ? { id: 'model', placeholder: t('gui.settings.providers.model_id'), options: listed } : { id: 'model', placeholder: t('gui.settings.providers.model_id') },
                 { id: 'label', placeholder: t('gui.settings.providers.label_ph') },
                 { id: 'description', placeholder: t('gui.settings.providers.description_ph') },
+                { id: 'effort', placeholder: t('gui.settings.providers.effort_ph') },
               ]}
               onSave={saveOverlay} onCancel={() => store.set({ ovlAdd: null })} saveLabel={t('gui.add')}
             />
@@ -360,7 +410,7 @@ function Advanced({ p }: { p: ProviderRow }): JSX.Element {
    it -- on a two-column page there is nothing to go back to. */
 function Head({ p }: { p: ProviderRow }): JSX.Element {
   const state = p.on
-    ? t('gui.settings.providers.connected')
+    ? t(store.get().probes[p.id]?.refused ? 'gui.settings.providers.key_rejected' : 'gui.settings.providers.connected')
     : t(kindOf(p) === 'oauth' ? 'gui.settings.providers.needs_auth' : kindOf(p) === 'local' ? 'gui.settings.providers.needs_base' : 'gui.settings.providers.needs_key')
   /* One way out of the page, not two. The name's arrow was `keyUrl ||
      homepage`, so on any provider with a key page it opened the same page as

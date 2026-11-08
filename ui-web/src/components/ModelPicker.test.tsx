@@ -53,6 +53,18 @@ describe('model picker', () => {
     }
   })
 
+  /* A heading stays on one line and gives way at its end rather than wrapping
+     (page.css, `.model-picker-name`, pinned by
+     scripts/gates/model-picker-css.test.mjs): so the name is its own element for
+     that rule to reach, and the row carries the whole name for the case where it
+     does give way. */
+  it('names each provider in an element of its own, with the whole name on the row', () => {
+    draw({ providers: [{ id: 'minimax_oauth', name: 'MiniMax Global (OAuth)', models: ['MiniMax-M3'] }] })
+    const row = document.querySelector<HTMLElement>('.model-picker-prov')!
+    expect(row.querySelector('.model-picker-name')!.textContent).toBe('MiniMax Global (OAuth)')
+    expect(row.title).toBe('MiniMax Global (OAuth)')
+  })
+
   it('opens on the current provider, shows its models with names and windows, and marks the current one', () => {
     setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
     draw()
@@ -74,6 +86,50 @@ describe('model picker', () => {
     fireEvent.change(box, { target: { value: 'brand-new-model' } })
     fireEvent.click(screen.getByText('gui.model.pick_use {"id":"brand-new-model"}'))
     expect(picks).toEqual([['openai/gpt-4o', 'openrouter', false], ['brand-new-model', 'anthropic', true]])
+  })
+
+  /* The document owns Escape too: its escape table closes the drawer the
+     picker hangs in, so a picker that let its Escape through took the drawer
+     with it. From the search field and from a row the reader moved to alike. */
+  it('closes on Escape and does not let it reach the document', () => {
+    const { closes } = draw()
+    let reached = 0
+    const sentinel = (): void => {
+      reached += 1
+    }
+    document.addEventListener('keydown', sentinel)
+    try {
+      fireEvent.keyDown(document.querySelector('.model-picker-search input')!, { key: 'Escape' })
+      fireEvent.keyDown(document.querySelector('.model-picker-prov')!, { key: 'Escape' })
+      expect(closes.length).toBe(2)
+      expect(reached).toBe(0)
+      /* Only Escape is kept: any other key still reaches the document. */
+      fireEvent.keyDown(document.querySelector('.model-picker-search input')!, { key: 'a' })
+      expect(reached).toBe(1)
+    } finally {
+      document.removeEventListener('keydown', sentinel)
+    }
+  })
+
+  /* The field takes focus once the picker is placed, and without a scroll: an
+     autoFocus fired while the picker was still in the flow, the drawer's scroller
+     jumped to show it, and the row the picker was then placed under had moved. */
+  it('takes focus after it is placed, without scrolling anything to reach it', () => {
+    const seen: Array<{ preventScroll?: boolean; placed: string }> = []
+    const focus = HTMLInputElement.prototype.focus
+    HTMLInputElement.prototype.focus = function (this: HTMLInputElement, opts?: FocusOptions) {
+      seen.push({ preventScroll: opts?.preventScroll, placed: this.closest<HTMLElement>('.model-picker')?.style.position ?? '' })
+      return focus.call(this, opts)
+    }
+    try {
+      const anchor = document.createElement('div')
+      document.body.appendChild(anchor)
+      draw({ anchor })
+      expect(seen).toEqual([{ preventScroll: true, placed: 'fixed' }])
+      expect(document.activeElement).toBe(document.querySelector('.model-picker-search input'))
+    } finally {
+      HTMLInputElement.prototype.focus = focus
+    }
   })
 
   it('Enter takes the first match, Escape closes, and an exact typed id is not offered twice', () => {
@@ -179,6 +235,26 @@ describe('the picker floats against the row that opened it', () => {
     const { closes } = draw({ anchor: row })
     document.dispatchEvent(new Event('scroll', { bubbles: true }))
     expect(closes, 'a scroll that did not move the row is not a reason to close').toEqual([])
+    top = 120
+    document.dispatchEvent(new Event('scroll', { bubbles: true }))
+    expect(closes).toEqual([1])
+  })
+
+  it('stays open when the scroll comes from inside the panel, though the row shifts with it', () => {
+    sized()
+    windowed()
+    let top = 200
+    const row = anchored(top)
+    row.getBoundingClientRect = () => ({ top, bottom: top + 30, left: 700, right: 900, width: 200, height: 30, x: 700, y: top, toJSON: () => ({}) }) as DOMRect
+    const { closes } = draw({ anchor: row })
+    /* The panel's own model list is a scroller, and the listener is on the
+       document in capture phase, so sliding it reaches the listener -- and the
+       enclosing dialog re-centring under the panel moves the row's top. The
+       shift alone cannot tell that scroll from the row leaving; the target can. */
+    top = 160
+    fireEvent.scroll(document.querySelector('.model-picker-right')!)
+    expect(closes, 'the panel\'s own list scrolled, not the list under it').toEqual([])
+    /* A scroll the panel did not originate still closes it. */
     top = 120
     document.dispatchEvent(new Event('scroll', { bubbles: true }))
     expect(closes).toEqual([1])

@@ -33,7 +33,6 @@ whose only content is a description is a label the table lends false authority t
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -56,7 +55,9 @@ from raven.config.agent_names import (
 from raven.config.agent_names import (
     is_builtin_agent_name as is_builtin_agent_name,
 )
+from raven.config.agent_names import other_names_of_agent
 from raven.config.loader import get_config_path
+from raven.utils.commands import command_quote
 
 if TYPE_CHECKING:
     from raven.config.schema import BuiltinAgentConfig
@@ -135,25 +136,31 @@ def _overrides(cfg: Any) -> dict[str, Any]:
 
 
 def _without_shadowed_aliases(configs: list[Any]) -> list[Any]:
-    """Config rows with any legacy-named row dropped whose current name is also written.
+    """Keep the newest declared spelling of each built-in identity.
 
-    Two spellings of one seed are the ambiguity ``SubagentsConfig._dedupe_names``
-    removes for two rows of one name, and it cannot see this pair because the
-    strings differ. Resolved here rather than by order of appearance, so which
-    override wins does not depend on where in the file the rows sit.
+    The current name wins, then former names newest first. Losing rows are
+    dropped wholesale before seed overrides are applied, so their non-default
+    fields cannot leak into the winning row. Same-name duplicates remain the
+    responsibility of ``SubagentsConfig._dedupe_names``.
     """
     written = {getattr(cfg, "name", None) for cfg in configs}
     kept: list[Any] = []
     for cfg in configs:
         name = getattr(cfg, "name", None)
         canonical = canonical_agent_name(name) if name else None
-        if canonical is not None and canonical != name and canonical in written:
+        winner = name
+        if canonical is not None and canonical != name:
+            winner = next(
+                (candidate for candidate in (canonical, *other_names_of_agent(canonical)) if candidate in written),
+                name,
+            )
+        if winner != name:
             logger.warning(
-                "sub-agent {!r} is the former name of built-in agent {!r}, and config declares both; "
+                "sub-agent {!r} is the former name of built-in agent {!r}, and config declares multiple spellings; "
                 "the entry under {!r} wins and this one is ignored -- delete it to silence this",
                 name,
                 canonical,
-                canonical,
+                winner,
             )
             continue
         kept.append(cfg)
@@ -180,8 +187,9 @@ def merge_builtin_seeds(configs: list[Any] | None) -> list[Any]:
     config, which is the case no UI guard can reach.
 
     A row naming a seed the way it used to be named is that seed's override too
-    (see :data:`LEGACY_AGENT_ALIASES`); if config declares both spellings, the
-    current one wins and the legacy row is dropped with a warning.
+    (see :data:`LEGACY_AGENT_ALIASES`); if config declares several spellings,
+    the current one wins, then former names newest first. Other spellings are
+    dropped wholesale with a warning before any overrides are applied.
 
     A cli / openai row that claims a seed's name does not take the slot, with a
     warning: two rows of one name is the ambiguity ``SubagentsConfig._dedupe_names``
@@ -250,15 +258,15 @@ def host_raven_acp_command() -> str:
     The console script beside the running interpreter wins -- an editable
     checkout's ``.venv/bin/raven`` -- with ``$PATH`` as the fallback, so an acp
     redeclaration of a seed row names the raven build that is actually running,
-    not whichever ``raven`` comes first on the login shell's PATH. ``shlex.quote``
-    keeps a path with a space one argv token.
+    not whichever ``raven`` comes first on the login shell's PATH. Platform
+    quoting keeps the executable path one argv token for the launch parser.
     """
     exe = "raven.exe" if os.name == "nt" else "raven"
     candidate = Path(sys.executable).with_name(exe)
     if candidate.is_file():
-        return f"{shlex.quote(str(candidate))} acp"
+        return f"{command_quote(str(candidate))} acp"
     found = shutil.which(exe)
-    return f"{shlex.quote(found)} acp" if found else ""
+    return f"{command_quote(found)} acp" if found else ""
 
 
 _ACP_HOST_DESCRIPTION = (
@@ -307,7 +315,7 @@ def _acp_host_override(cfg: Any, *, name: str) -> Any:
                 name,
             )
         elif not row_named_its_own_home and (config_path := get_config_path()) != home / CONFIG_FILENAME:
-            command = f"{command} --config {shlex.quote(str(config_path))}"
+            command = f"{command} --config {command_quote(str(config_path))}"
     description = str(getattr(cfg, "description", "") or "").strip()
     if not description:
         description = _ACP_HOST_DESCRIPTION

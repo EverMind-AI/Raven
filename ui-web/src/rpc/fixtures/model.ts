@@ -30,6 +30,10 @@ interface Entry {
   key_url?: string
   /** Resells other vendors' models; the catalogue page filters on it. */
   gateway?: boolean
+  /** The image tool can run here; the roles card offers the image role these. */
+  image_api?: boolean
+  /** The video tool can run here; the roles card offers the video role these. */
+  video_api?: boolean
   /** The kind per model id, where it is not text. The live reply carries one
       for every described model; offline, only the rows a page filters on need
       to differ, and text is what a missing label means. */
@@ -56,7 +60,7 @@ const PROVIDERS: Entry[] = [
   { slug: 'anthropic', name: 'Anthropic', homepage: 'https://anthropic.com/', key_url: 'https://console.anthropic.com/settings/keys',
     models: ['claude-opus-4-5', 'claude-sonnet-4-6'], authenticated: true, auth_type: 'key' },
   { slug: 'openai', name: 'OpenAI', homepage: 'https://openai.com/', key_url: 'https://platform.openai.com/api-keys',
-    models: ['gpt-5.1', 'gpt-5-mini'], authenticated: false, auth_type: 'key' },
+    models: ['gpt-5.1', 'gpt-5-mini'], authenticated: false, auth_type: 'key', image_api: true },
   { slug: 'deepseek', name: 'DeepSeek', homepage: 'https://deepseek.com/', key_url: 'https://platform.deepseek.com/api_keys',
     models: ['deepseek-v3.2'], authenticated: false, auth_type: 'key' },
   { slug: 'nvidia_nim', name: 'NVIDIA', homepage: 'https://build.nvidia.com/explore/discover',
@@ -68,7 +72,8 @@ const PROVIDERS: Entry[] = [
   /* A gateway with one model of each kind a role slot filters on, so the
      offline page can open every slot's picker and show the filter working. */
   { slug: 'openrouter', name: 'OpenRouter', homepage: 'https://openrouter.ai/',
-    key_url: 'https://openrouter.ai/keys', gateway: true, authenticated: true, auth_type: 'key',
+    key_url: 'https://openrouter.ai/keys', gateway: true, image_api: true, video_api: true, authenticated: true,
+    auth_type: 'key',
     models: ['anthropic/claude-sonnet-4-5', 'openai/text-embedding-3-small', 'BAAI/bge-reranker-v2-m3', 'google/gemini-2.5-flash-image'],
     kinds: {
       'openai/text-embedding-3-small': 'embedding',
@@ -113,6 +118,8 @@ const wire = (e: Entry, current: string): Provider => ({
   key_url: e.key_url ?? null,
   extra_headers: {},
   gateway: !!e.gateway,
+  image_api: !!e.image_api,
+  video_api: !!e.video_api,
   /* The prefixes this provider answers to. Canned rows are named once and
      never renamed, so that is the slug itself. */
   route_names: [e.slug],
@@ -123,6 +130,17 @@ const wire = (e: Entry, current: string): Provider => ({
   ),
   ...(e.default_api_base ? { default_api_base: e.default_api_base } : {}),
 })
+
+/* The vendor's answer to a key before it is stored. A key spelled `bad` (or
+   `sk-bad...`) is refused the way a vendor refuses one it never issued;
+   anything else is confirmed against the row's own list. */
+const keyCheck = (row: Entry | undefined, key?: string): ResultOf<'model.check_key'> => {
+  if (key && /^(sk-)?bad/.test(key)) {
+    return { ok: false, status: 'invalid_key', http_status: 401, models_count: 0, error: 'HTTP 401', refused: true }
+  }
+  if (!row) return { ok: false, status: 'unknown_provider', refused: false }
+  return { ok: true, status: 'valid', http_status: 200, models_count: row.models.length, refused: false }
+}
 
 export interface ModelFixture {
   fixtures: Fixtures
@@ -136,7 +154,8 @@ export function createModel(_env: FixtureEnv): ModelFixture {
 
   return {
     fixtures: {
-      'model.options': () => ({ model, provider, providers: rows.map((p) => wire(p, provider)) }),
+      'model.options': (p) => ({ model, provider, providers: p.include_providers === false ? [] : rows.map((p) => wire(p, provider)) }),
+      'model.check_key': (p) => keyCheck(find(p.slug), p.api_key),
       'model.save_key': (p) => {
         const row = find(p.slug)
         if (row) row.authenticated = true
@@ -146,6 +165,11 @@ export function createModel(_env: FixtureEnv): ModelFixture {
         const row = find(p.slug)
         if (row) row.authenticated = false
         return { disconnected: true }
+      },
+      /* A made-up key per connected row, so the eye has something to show. */
+      'model.reveal_key': (p) => {
+        const row = find(p.slug)
+        return { api_key: row && row.authenticated ? `sk-fixture-${row.slug}-0000` : null }
       },
       'model.add_model': (p) => {
         const params = p as { slug: string; model: string }
@@ -176,6 +200,7 @@ export function createModel(_env: FixtureEnv): ModelFixture {
             added: !!row && row.models.includes(id),
           })),
           status: 'ok',
+          refused: false,
         }
       },
       'model.add_models': (p) => {
@@ -213,7 +238,10 @@ export function onboardDemoOverrides(schedule: (ms: number, fn: () => void) => v
   const current = (): string => picked?.provider ?? ''
 
   return {
-    'model.options': () => wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
+    'model.options': (p) => p.include_providers === false
+      ? { model: picked?.model ?? '', provider: current(), providers: [] }
+      : wait({ model: picked?.model ?? '', provider: current(), providers: rows.map((p) => wire(p, current())) }),
+    'model.check_key': (p) => wait(keyCheck(rows.find((x) => x.slug === p.slug), p.api_key)),
     'model.save_key': (p) => {
       const row = rows.find((x) => x.slug === p.slug)
       /* The contract's answer is a provider, so a slug this library does not

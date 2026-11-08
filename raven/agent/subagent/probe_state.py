@@ -24,8 +24,6 @@ from typing import Any, Literal, get_args
 
 from loguru import logger
 
-from raven.config.held_secrets import scrub_held_secrets
-
 _FILENAME = "subagent_test_state.json"
 
 # Only the fields that decide how the agent runs. `name`, `description`, `preset`
@@ -105,7 +103,9 @@ class Remedy:
     one without a reason: the agent kept working past the connect's wait and
     said nothing, and ``command`` is what makes it say why. ``upgrade`` is an
     agent too old to know its own ACP flag; ``exited`` is one that quit and
-    left its reason on stderr, which the English detail already carries.
+    left its reason on stderr, which the English detail already carries, and
+    whose ``command``, when it has one, clears what that reason names: npm's
+    own command for an npx cache entry a cut-off download left incomplete.
 
     Two are about the agent's own account rather than a provider's answer:
     ``plan`` is an account signed in whose plan does not include the agent, with
@@ -197,6 +197,10 @@ def fingerprint(cfg: Any) -> str:
         # set, so every verdict recorded before the field existed holds.
         if getattr(cfg, "lend_keys", None):
             payload["lend_keys"] = list(cfg.lend_keys)
+        # The machine a row of any kind runs on, by the same only-when-set rule.
+        for field in ("machine", "remote_cwd"):
+            if getattr(cfg, field, None):
+                payload[field] = getattr(cfg, field)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -249,9 +253,7 @@ class TestStateStore:
                 "source": source,
                 "name": name,
                 "ok": bool(ok),
-                # The agent's stderr tail, shown on the settings page: an agent
-                # started with Raven's key can print it there.
-                "detail": scrub_held_secrets(detail),
+                "detail": detail,
                 "fingerprint": fingerprint(cfg),
                 "testedAtMs": int(tested_at_ms),
                 **({"remedy": remedy.to_wire()} if remedy is not None else {}),

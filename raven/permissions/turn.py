@@ -83,6 +83,11 @@ class PermissionTurn:
     #: on the same terms: only where a person is there to type it.
     credentials: CredentialAsker | None = None
     conversation_id: str = ""
+    # The conversation this turn belongs to, when the entrance knows it is not
+    # ``conversation_id``: a direct chat runs on the instance's lane, and the
+    # conversation is that lane's session. Empty for every other turn, whose
+    # conversation_id already is the conversation -- see ``session_key``.
+    session: str = ""
     turn_id: str = ""
     # Who this turn speaks for, as the approval prompt names it: the request's
     # origin ("user", "subagent", ...) and, for a sub-agent, the agent's name.
@@ -96,6 +101,28 @@ class PermissionTurn:
     # looking at this" instead of an unexplained pause. Never load-bearing --
     # the gate swallows its errors and decides identically without it.
     on_review: Callable[[str, str], Awaitable[None]] | None = None
+
+    @property
+    def session_key(self) -> str:
+        """The conversation this turn belongs to: the entrance's answer, else its own id.
+
+        A direct chat runs on the instance's lane, ``<session>#<agent>/<handle>``
+        (``raven.spine.turn.direct_lane``), and everything a *conversation*
+        settles -- its permission mode, its session grants -- is settled per
+        conversation and written under the bare session key. Keyed by the lane,
+        the two id spaces meet nothing: the conversation's mode never reached
+        its direct chats, and a grant made in one of them never reached the
+        conversation.
+
+        Only the entrance knows a turn is direct (``req.direct_target``), so it
+        is the entrance that hands the session over, the way
+        ``raven.rpc.spine`` does with ``session_key_for(req)``. Nothing is split
+        here: a person may name a conversation whose key contains the lane
+        separator -- ``raven agent --session cli:issue#42`` keeps it as typed --
+        and splitting it would merge two conversations into one permission
+        scope.
+        """
+        return self.session or self.conversation_id
 
 
 _TURN: ContextVar[PermissionTurn | None] = ContextVar("permission_turn", default=None)
@@ -112,6 +139,7 @@ def start_permission_turn(
     *,
     conversation_id: str,
     turn_id: str,
+    session: str = "",
     on_review: Callable[[str, str], Awaitable[None]] | None = None,
     origin: str = "",
     origin_name: str = "",
@@ -129,6 +157,7 @@ def start_permission_turn(
         responder=responder,
         credentials=credentials,
         conversation_id=conversation_id,
+        session=session,
         turn_id=turn_id,
         origin=origin,
         origin_name=origin_name,
