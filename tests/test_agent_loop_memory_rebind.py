@@ -70,6 +70,8 @@ def _loop(*, builders: list, router: SkillForgeRouter | None) -> AgentLoop:
     loop._turns_idle = asyncio.Event()
     loop._turns_idle.set()
     loop._memory_rebind_lock = asyncio.Lock()
+    loop._queued_memory_switch = None
+    loop._queued_switch_task = None
     loop._backend_stop_tasks = {}
     loop._store_pipeline = StorePipeline(
         lambda: loop.backend,
@@ -605,3 +607,60 @@ async def test_dispose_retires_a_backend_a_switch_to_off_replaced() -> None:
     assert old.stops == 1, "disposal must retire a backend a switch to off replaced"
     old.gate.set()
     await loop._store_pipeline.drain(0.2)
+
+
+@pytest.mark.asyncio
+async def test_a_switch_asked_for_during_a_turn_is_queued_and_lands_when_it_ends() -> None:
+    """A write made from inside a turn cannot wait for that turn.
+
+    The turn is waiting for the write, so a switch that waited for the turn
+    would wait for ever. It waits for the turn instead, and lands when the
+    turn ends -- which is what the section's confirmation promises.
+    """
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    loop._enter_turn()
+
+    state = await loop.apply_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+
+    assert state == "queued"
+    assert loop.backend is old
+    assert new.starts == 0, "the switch must not land under the running turn"
+
+    loop._exit_turn()
+    await loop._queued_switch_task
+
+    assert loop.backend is new
+    assert new.starts == 1 and old.stops == 1
+
+
+@pytest.mark.asyncio
+async def test_a_queued_switch_does_not_land_after_the_generation_is_retired() -> None:
+    """The teardown that would have retired the switched-to backend has
+    already run by the time a queued switch could land, so landing it would
+    install a backend nothing retires."""
+    old, new = _Backend(), _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    loop._enter_turn()
+
+    state = await loop.apply_memory_backend(
+        new,
+        name="everos-cloud",
+        user_id="u",
+        agent_id="a",
+        memory_top_k=5,
+    )
+    assert state == "queued"
+
+    await loop.retire_pending_backends()
+
+    assert loop.backend is old
+    assert new.starts == 0

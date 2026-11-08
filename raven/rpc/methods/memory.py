@@ -516,6 +516,20 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
     down brings it up here rather than showing a start button afterwards.
     """
     del params
+    applied = await apply_configured_backend(agent_loop_factory=agent_loop_factory)
+    return {"ok": applied["ok"], "backend": applied["backend"], "detail": applied["detail"]}
+
+
+async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
+    """Point the running loop at the backend the config file names.
+
+    ``{"ok": bool, "backend": str | None, "detail": str | None,
+    "state": "applied" | "queued"}``. ``"queued"`` means a turn was running:
+    the switch waits for it rather than swapping under it, and lands when
+    that turn ends. A write made from inside a turn cannot wait for that
+    turn to finish -- the turn is waiting for the write -- so this is the
+    only way a switch asked for mid-turn can happen at all.
+    """
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
     from raven.core.plugin_stack import maybe_build_memory_backend
@@ -523,9 +537,9 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
     try:
         loop = agent_loop_factory() if agent_loop_factory is not None else None
     except Exception as e:  # noqa: BLE001 - the section shows the detail
-        return {"ok": False, "backend": None, "detail": f"the running loop is not available: {e}"}
+        return {"ok": False, "backend": None, "detail": f"the running loop is not available: {e}", "state": "applied"}
     if loop is None:
-        return {"ok": False, "backend": None, "detail": "no running agent loop answered"}
+        return {"ok": False, "backend": None, "detail": "no running agent loop answered", "state": "applied"}
 
     try:
         cfg = load_raven_config()
@@ -552,8 +566,9 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
                 "ok": False,
                 "backend": cfg.memory.backend,
                 "detail": f"the {cfg.memory.backend} backend could not be built",
+                "state": "applied",
             }
-        await loop.rebind_memory_backend(
+        state = await loop.apply_memory_backend(
             backend,
             name=cfg.memory.backend,
             user_id=cfg.memory.user_id,
@@ -561,8 +576,8 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
             memory_top_k=cfg.memory.memory_top_k,
         )
     except Exception as e:  # noqa: BLE001 - the section shows the detail
-        return {"ok": False, "backend": None, "detail": str(e)}
-    return {"ok": True, "backend": cfg.memory.backend, "detail": None}
+        return {"ok": False, "backend": None, "detail": str(e), "state": "applied"}
+    return {"ok": True, "backend": cfg.memory.backend, "detail": None, "state": state}
 
 
 def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any = None) -> None:
@@ -580,6 +595,7 @@ def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any
 
 
 __all__ = [
+    "apply_configured_backend",
     "memory_apply_runtime",
     "memory_list",
     "memory_start_local",

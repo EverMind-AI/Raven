@@ -689,6 +689,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # One switch at a time; the section guards its own click, but two
         # clients can still call memory.applyRuntime concurrently.
         self._memory_rebind_lock = asyncio.Lock()
+        # A switch asked for while a turn was running, and the task that
+        # landed it. A write made from inside a turn cannot wait for that
+        # turn to finish -- the turn is waiting for the write -- so the
+        # switch waits for the turn instead, and lands when it ends.
+        self._queued_memory_switch: tuple | None = None
+        self._queued_switch_task: asyncio.Task | None = None
         # Replaced backends, keyed by the task that drains and stops each. The
         # generation's teardown waits on these (or force-stops their backend);
         # the value is the backend because a cancelled task never stops it.
@@ -951,6 +957,62 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             if old is not None and old is not backend:
                 self._schedule_retire_backend(old)
 
+    async def apply_memory_backend(
+        self,
+        backend: "MemoryBackend | None",
+        *,
+        name: str | None,
+        user_id: str,
+        agent_id: str,
+        memory_top_k: int,
+    ) -> str:
+        """Point this running loop at a new memory backend, or queue the switch.
+
+        ``"applied"`` when the swap happened before this returned, and
+        ``"queued"`` when a turn was running. A write made from inside a turn
+        cannot wait for that turn to finish -- the turn is waiting for the
+        write -- so the switch waits for the turn instead, and lands when the
+        last turn ends. That is the promise the section's confirmation makes
+        the reader: the switch lands when the running turn finishes.
+
+        :meth:`rebind_memory_backend` is the swap itself, and it waits for the
+        turns; this is the door above it, which knows when waiting is safe.
+        """
+        if self._active_turns:
+            self._queued_memory_switch = (backend, name, user_id, agent_id, memory_top_k)
+            return "queued"
+        await self.rebind_memory_backend(
+            backend,
+            name=name,
+            user_id=user_id,
+            agent_id=agent_id,
+            memory_top_k=memory_top_k,
+        )
+        return "applied"
+
+    def _land_queued_switch(self) -> None:
+        """Apply the switch that was asked for while a turn was running.
+
+        Called when the last turn ends, so the swap happens at the boundary
+        the wait was for -- and off the turn's own stack, which is what lets
+        the turn finish first.
+        """
+        pending = self._queued_memory_switch
+        if pending is None:
+            return
+        self._queued_memory_switch = None
+        backend, name, user_id, agent_id, memory_top_k = pending
+        task = asyncio.get_running_loop().create_task(
+            self.rebind_memory_backend(
+                backend,
+                name=name,
+                user_id=user_id,
+                agent_id=agent_id,
+                memory_top_k=memory_top_k,
+            )
+        )
+        self._queued_switch_task = task
+
     def _schedule_retire_backend(self, backend: "MemoryBackend") -> None:
         """Retire a replaced backend without holding the switch on its writes.
 
@@ -984,7 +1046,17 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         A task still waiting past ``timeout`` is waiting on a write this
         teardown has already cut; stopping the backend anyway is the lesser
         leak (its client would otherwise outlive the process/generation).
+
+        A switch queued behind a turn is dropped: landing it now would
+        install a backend nothing here retires, because the teardown that
+        would have retired it has already run.
         """
+        self._queued_memory_switch = None
+        queued = self._queued_switch_task
+        if queued is not None and not queued.done():
+            queued.cancel()
+            await asyncio.gather(queued, return_exceptions=True)
+        self._queued_switch_task = None
         pending = {task: backend for task, backend in self._backend_stop_tasks.items() if not task.done()}
         if not pending:
             return
@@ -1055,6 +1127,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._active_turns -= 1
         if self._active_turns == 0:
             self._turns_idle.set()
+            # A switch asked for while that turn was running lands now, on
+            # its own task: the turn is finishing, and the swap must not
+            # happen on the turn's stack.
+            self._land_queued_switch()
 
     def notify_turn_complete(self) -> None:
         """Fire the turn-complete callbacks: the seam a host sink signals through."""

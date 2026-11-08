@@ -616,6 +616,11 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 
 
 _SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
+# A memory-backend switch asked for while a turn is running waits for that
+# turn: swapping under it would move the references the turn reads. The
+# section's confirmation promises the reader exactly this, so the write says
+# it too.
+_MEMORY_SWITCH_QUEUED = "Saved. A turn is running; the memory backend switches when that turn finishes."
 # Finishing the web wizard turns the source on, and no screen on the way says
 # what that sends; the page shows the answer as a toast.
 _SKILL_HUB_ON_NOTICE = (
@@ -830,10 +835,20 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import set_memory_backend
 
         previous = set_memory_backend(value)
-        # The memory page follows the file per read; the loop serving chat
-        # memory is pointed at it by memory.applyRuntime, which the page calls
-        # after this write. Nothing here needs a restart.
-        return {"applied": True, "previous": previous}
+        # The write is the whole change: the running loop is pointed at the
+        # file in place, so a reader sees the new backend without a reload.
+        # What the write cannot promise is the moment -- a switch asked for
+        # while a turn is running waits for that turn, and the reply says so.
+        from raven.i18n import t
+        from raven.rpc.methods.memory import apply_configured_backend
+
+        applied = await apply_configured_backend(agent_loop_factory=agent_loop_factory)
+        result: dict[str, Any] = {"applied": True, "previous": previous}
+        if not applied["ok"]:
+            result["warning"] = applied["detail"]
+        elif applied["state"] == "queued":
+            result["warning"] = t(_MEMORY_SWITCH_QUEUED)
+        return result
 
     checker = _SETTINGS_SIMPLE_KEYS.get(key)
     if checker is not None:

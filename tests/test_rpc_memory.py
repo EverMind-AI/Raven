@@ -527,7 +527,7 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
     class _Loop:
         context = SimpleNamespace(workspace="LOOP-WS")
 
-        async def rebind_memory_backend(self, backend, *, name, user_id, agent_id, memory_top_k):
+        async def apply_memory_backend(self, backend, *, name, user_id, agent_id, memory_top_k):
             seen.update(
                 backend=backend,
                 name=name,
@@ -535,6 +535,7 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
                 agent_id=agent_id,
                 memory_top_k=memory_top_k,
             )
+            return "applied"
 
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
@@ -668,7 +669,7 @@ async def test_apply_runtime_reports_a_failed_rebind(monkeypatch):
     monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c, **_kwargs: "BACKEND")
 
     class _Loop:
-        async def rebind_memory_backend(self, *_args, **_kwargs):
+        async def apply_memory_backend(self, *_args, **_kwargs):
             raise RuntimeError("swap refused")
 
     out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
@@ -719,8 +720,8 @@ async def test_apply_runtime_builds_with_the_generations_assembly(monkeypatch):
         context = SimpleNamespace(workspace="LOOP-WS")
         memory_assembly = MemoryAssembly(registry="REGISTRY", notify="NOTIFY")
 
-        async def rebind_memory_backend(self, *_args, **_kwargs):
-            pass
+        async def apply_memory_backend(self, *_args, **_kwargs):
+            return "applied"
 
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
