@@ -21,13 +21,17 @@ same in every turn whoever started it:
 2. Everything else follows the mode the owner set on the host, captured at
    launch: ``full`` passes, ``smart`` asks the reviewer and, when it
    escalates or cannot answer, hands the call to the owner, ``ask`` hands
-   every such call to the owner.
+   every such call to the owner. A change to a setting the catalog marks
+   sensitive never goes to the reviewer, in smart mode either: that one stays
+   with the user, as it does in the trunk.
 3. Handing to the owner never stops the on-call. The call is filed as pending
-   and refused for now; ``ops_ask_owner`` carries every pending item in one
-   question, through the campaign's interruption contract (quiet hours wait
-   for morning); the owner's answer approves or refuses them -- a fixed choice,
-   or their own words read by the lent model -- and an approved call passes
-   when the on-call sends it again.
+   and refused for now; ``ops_ask_owner`` carries the pending items of the
+   campaign it was asked about in one question, through the campaign's
+   interruption contract (quiet hours wait for morning); the owner's answer
+   approves or refuses them -- a fixed choice, or their own words read by the
+   lent model -- and an approved call passes when the on-call sends it again.
+   An item of another campaign is asked with its own campaign, so one answer
+   covers the work it was asked about and not every campaign at once.
 
 State is one file beside the campaigns (``approvals.json``), so an approval
 survives a restart. A call is keyed by its tool, every argument and the
@@ -104,6 +108,22 @@ def _held_off(call: Callable[[], T]) -> T:
         except PermissionError:
             time.sleep(_PAUSE_S)
     return call()
+
+
+def _touches_sensitive(name: str, params: Mapping[str, Any]) -> bool:
+    """Whether this call changes a setting the catalog marks sensitive.
+
+    The trunk's smart mode keeps those with the user: the reviewer never sees
+    them (``raven/permissions/gate.py``). This gate is the product's whole
+    policy now, so it carries the same rule.
+    """
+    from raven.permissions.rules import SELF_CONFIG_TOOL
+
+    if name != SELF_CONFIG_TOOL:
+        return False
+    from raven.config.self_surface import touches_sensitive
+
+    return touches_sensitive(dict(params))
 
 
 def _decisions(raw: Any) -> dict[str, dict[str, Any]]:
@@ -460,15 +480,39 @@ def pending_block(items: list[dict[str, Any]]) -> str:
     lines = [f"{len(items)} action(s) are waiting for your approval:"]
     for item in items:
         campaign = str(item.get("campaign") or "")
-        # The action text of an ops call already names its campaign (plain repr
-        # for a declaration, JSON for the full renderers); a core tool (exec)
-        # carries it only here, and the owner is deciding which campaign's work
-        # they are allowing.
-        named = f"campaign={campaign!r}" in item["action"] or f'"campaign": "{campaign}"' in item["action"]
-        label = f"[campaign: {campaign}] " if campaign and not named else ""
-        lines.append(f"  {item['n']}. {label}{item['action']}")
+        label = f"[campaign: {campaign}] " if campaign else ""
+        lines.append(f"  {item['n']}. {label}{_under(item['action'])}")
     lines.append(f'Choose "{APPROVE_ALL}" or "{REFUSE_ALL}", or say which numbers you approve and which you do not.')
     return "\n".join(lines)
+
+
+def _under(action: str) -> str:
+    """The action under its number: the first line after it, the rest below it.
+
+    A machine call is shown as JSON, so without this the block's list breaks
+    apart -- the owner's numbered list runs into a block at the left margin
+    that belongs to no number.
+    """
+    head, *rest = str(action).splitlines() or [""]
+    if not rest:
+        return head
+    return head + "\n" + "\n".join(f"    {line}" for line in rest)
+
+
+def covers_campaign(item: Mapping[str, Any], asking: str) -> bool:
+    """Whether this question may settle the item: its own campaign, or one that names none.
+
+    An item filed under a campaign of its own belongs to that campaign's
+    question: one owner's answer covers the work it was asked about, not every
+    campaign at once. An item that names no campaign (``exec``) takes the
+    campaign that asks, which is where its approval expires too.
+    """
+    own = str(item.get("campaign") or "").strip()
+    if not own:
+        return True
+    from oncall_flow.instrument import campaign_slug
+
+    return campaign_slug(own) == campaign_slug(asking)
 
 
 def _decision_schema() -> list[dict[str, Any]]:
@@ -632,10 +676,13 @@ class OncallApprovalGate:
             )
         why = "the owner's mode is ask"
         if self._mode == "smart" and state != "pending":
-            outcome = await self._review(name, args)
-            if outcome is not None and outcome.allow:
-                return None
-            why = (outcome.reason if outcome is not None else "") or "the reviewer escalated it"
+            if _touches_sensitive(name, args):
+                why = "the setting is one the catalog keeps with the user"
+            else:
+                outcome = await self._review(name, args)
+                if outcome is not None and outcome.allow:
+                    return None
+                why = (outcome.reason if outcome is not None else "") or "the reviewer escalated it"
         action = describe(name, args, session_workdir)
         if len(action) > MAX_ACTION_CHARS:
             return (
@@ -649,11 +696,12 @@ class OncallApprovalGate:
         logger.info("oncall approval: {} filed as pending #{} ({})", name, n, why)
         return (
             f"NOT RUN: this action needs the owner's approval ({why}). It is filed as pending "
-            f"item {n}. Call ops_ask_owner for the campaign -- every pending item is attached to "
-            "the question for you, so do not list them yourself -- and carry on with work that "
-            "does not need it. Once the owner approves, send exactly the same call again and it "
-            "will run. If the interruption contract does not deliver the question now (quiet "
-            "hours), ask again on a later wake; keep scheduling wakes with ops_check_later."
+            f"item {n}. Call ops_ask_owner for the campaign -- every pending item of that "
+            "campaign is attached to the question for you, so do not list them yourself -- and "
+            "carry on with work that does not need it. Once the owner approves, send exactly "
+            "the same call again and it will run. If the interruption contract does not deliver "
+            "the question now (quiet hours), ask again on a later wake; keep scheduling wakes "
+            "with ops_check_later."
         )
 
     async def _read_kept_answers(self, store: ApprovalStore) -> None:
@@ -767,6 +815,7 @@ __all__ = [
     "apply_answer",
     "make_approval_gate",
     "pending_block",
+    "covers_campaign",
     "read_answer",
     "describe",
     "review_timeout",

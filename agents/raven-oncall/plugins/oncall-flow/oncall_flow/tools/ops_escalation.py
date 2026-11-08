@@ -322,9 +322,22 @@ class OpsAskOwnerTool(_OpsScheduler):
         except approval.ApprovalStoreUnreadableError as exc:
             logger.warning("oncall-flow: pending approvals not attached: {}", exc)
             waiting = []
-        if waiting:
-            question = f"{question.strip()}\n\n{approval.pending_block(waiting)}".strip()
+        # Only a question whose answer can land an approval carries one. The
+        # model-mediated delivery has no door for the answer back, so offering
+        # the approvals there would ask the owner for something nothing could
+        # record. And one question settles the campaign it was asked about: an
+        # item of another campaign is asked with its own campaign.
+        can_settle = self._direct_ask is not None and bool(self._session_key)
+        carried = [item for item in waiting if approval.covers_campaign(item, campaign)] if can_settle else []
+        if carried:
+            question = f"{question.strip()}\n\n{approval.pending_block(carried)}".strip()
             choices = choices + [c for c in approval.CHOICES if c not in choices]
+        others = len(waiting) - len(carried)
+        if others and can_settle:
+            question = (
+                f"{question.strip()}\n\n{others} approval(s) from other campaigns are still waiting. "
+                "They are not part of this question: each is asked with its own campaign."
+            ).strip()
         log_event(
             cdir,
             "ask_owner",
@@ -404,14 +417,14 @@ class OpsAskOwnerTool(_OpsScheduler):
         )
         if self._direct_ask is not None and self._session_key:
             withdraw_question(cdir, "superseded by a new question")
-            if waiting:
+            if carried:
                 try:
-                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in waiting], str(cdir), campaign)
+                    approval.ApprovalStore(ops_home()).scope([int(i["n"]) for i in carried], str(cdir), campaign)
                 except (approval.ApprovalStoreUnreadableError, OSError) as exc:
                     logger.warning("oncall-flow: pending approvals not tied to {}: {}", campaign, exc)
             task = asyncio.create_task(
                 self._await_answer(
-                    cdir, campaign, ask_id, prompt, choices, self._session_key, [int(i["n"]) for i in waiting]
+                    cdir, campaign, ask_id, prompt, choices, self._session_key, [int(i["n"]) for i in carried]
                 ),
                 name=f"oncall-ask:{campaign}:{ask_id}",
             )
@@ -431,8 +444,16 @@ class OpsAskOwnerTool(_OpsScheduler):
         # contract allowed the ask; whether it was then sent is the message
         # tool's record, not this one's to invent.
         log_event(cdir, "ask_owner_delivery", ask_id=ask_id, sent=False, detail="model-mediated (D4)")
+        waiting_note = (
+            f"\n{len(waiting)} approval(s) are waiting and are not on this question: this turn "
+            "cannot put the owner's answer back, so an approval could not be settled here. They "
+            "stay pending, and the next question that can ask carries them."
+            if waiting
+            else ""
+        )
         return (
             (woke + "\n" if woke else "")
+            + waiting_note
             + f"ALLOWED by the campaign's contract{note}. Send exactly this to the owner with "
             f"the message tool now, and nothing else:\n"
             f"  {prompt}\n"

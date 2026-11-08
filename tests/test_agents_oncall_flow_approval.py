@@ -662,3 +662,83 @@ async def test_the_approval_choices_ride_alongside_the_models_own_options(tmp_pa
     await _settle()
     assert owner.asked[0]["choices"] == ["seed 1", "seed 2", APPROVE_ALL, REFUSE_ALL]
     assert ApprovalStore(home).pending()[0]["scope"] == str(cdir)
+
+
+# --- what a question may settle, and what it says ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_question_that_cannot_settle_does_not_offer_the_approvals(tmp_path):
+    """The model-mediated delivery has no door for the answer back, so it must not ask for one."""
+    home = tmp_path / "ops"
+    tools_base.set_home(home)
+    gate = _gate(home, "ask")
+    await _ask(gate, "ops_submit", SUBMIT)
+    owner = _Owner()
+    tool = OpsAskOwnerTool()
+    tool.bind_runtime(RuntimeHandles(direct_ask=owner))
+    cdir = _campaign(tmp_path)
+    out = await tool.execute(
+        campaign="c", question="One step needs you.", expected_loss_minutes=60, ledger=str(cdir / "ledger.json")
+    )
+    await _settle()
+    assert "waiting for your approval" not in out, "a question that cannot settle must not ask for the approval"
+    assert "pending" in out.lower(), "the model is told the approvals stay pending"
+    assert ApprovalStore(home).pending(), "the approval is not dropped"
+    assert (await _ask(gate, "ops_submit", SUBMIT) or "").startswith("NOT RUN")
+
+
+@pytest.mark.asyncio
+async def test_a_question_settles_only_the_campaign_it_was_asked_under(tmp_path):
+    """One owner's answer covers the campaign it was asked about, not every campaign at once."""
+    home = tmp_path / "ops"
+    tools_base.set_home(home)
+    gate = _gate(home, "ask")
+    await _ask(gate, "ops_submit", dict(SUBMIT, campaign="alpha"))
+    await _ask(gate, "ops_submit", dict(SUBMIT, campaign="beta"))
+    owner = _Owner()
+    tool = OpsAskOwnerTool()
+    tool.bind_runtime(RuntimeHandles(direct_ask=owner))
+    tool.set_context("acp", "s1", session_key="acp:s1")
+    cdir = _campaign(tmp_path)
+    await tool.execute(
+        campaign="alpha",
+        question="One step needs you.",
+        expected_loss_minutes=60,
+        ledger=str(cdir / "ledger.json"),
+    )
+    await _settle()
+    assert "beta" not in owner.asked[0]["prompt"], "another campaign's approval is not on this question"
+    owner.answers[0].set_result(APPROVE_ALL)
+    await _settle()
+    assert await _ask(gate, "ops_submit", dict(SUBMIT, campaign="alpha")) is None
+    assert (await _ask(gate, "ops_submit", dict(SUBMIT, campaign="beta")) or "").startswith("NOT RUN")
+
+
+@pytest.mark.asyncio
+async def test_the_block_keeps_its_shape_and_names_the_campaign(tmp_path):
+    """The owner reads a list: every action stays under its number, and the number says whose."""
+    home = tmp_path / "ops"
+    tools_base.set_home(home)
+    gate = _gate(home, "ask")
+    await _ask(gate, "ops_submit", dict(SUBMIT, campaign="alpha"))
+    await _ask(gate, "exec", REMOTE_WRITE)
+    lines = pending_block(ApprovalStore(home).pending()).splitlines()
+    assert lines[1].startswith("  1. [campaign: alpha]"), lines[1]
+    for line in lines[2:]:
+        if line.strip().startswith("2."):
+            break
+        assert line.startswith("    "), f"the action stays under its item: {line!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_sensitive_setting_change_is_not_left_to_the_reviewer(tmp_path):
+    """The trunk keeps a sensitive setting with the user; the gate carries the same rule."""
+    provider = _Provider("report_permission_review", {"decision": "allow", "reason": "ordinary"})
+    out = await _ask(
+        _gate(tmp_path, "smart", provider),
+        "raven_config",
+        {"action": "set", "path": "tools.restrictToWorkspace", "value": False},
+    )
+    assert out is not None and out.startswith("NOT RUN")
+    assert provider.calls == 0, "the reviewer never sees a change to a sensitive setting"
