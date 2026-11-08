@@ -1395,9 +1395,11 @@ def _instance_followers(node: DagNodeSpec, state: ReassignmentState, status: Map
 
 
 # The judge is asked for the shortest quote that shows the problem, so a cap loses
-# nothing it was asked for. The quote is sub-agent text reaching the main agent's
-# context, so it is fenced like the judge request fences it, and bounded here where
-# it enters the report -- the same cap the route quote is bounded at where it enters.
+# nothing it was asked for. The quote is sub-agent text, and this report is read
+# beyond the announcer that fences it for the main agent: a stint files it as an
+# unanswered question and renders it into the next round's prompt. So it is fenced
+# here, where it enters the report string, and bounded at the same 500-character cap
+# the route quote is bounded at where it enters.
 _EVIDENCE_REPORT_MAX = 500
 
 
@@ -1438,7 +1440,17 @@ def _exception_report(
         f"what is missing: {verdict.what_is_missing or '(the judge did not say)'}",
     ]
     if verdict.evidence:
-        quote = verdict.evidence
+        # `extract_verdict` copies the provider's tool argument without checking that
+        # it is text, and a provider can break its own schema. Normalize before
+        # measuring: the f-string this replaced stringified whatever arrived, and
+        # `len()` on an int turned a malformed verdict into a TypeError that the
+        # node's own failure handler never saw.
+        quote = verdict.evidence if isinstance(verdict.evidence, str) else str(verdict.evidence)
+        # An unpaired JSON escape decodes to a lone surrogate, which no UTF-8 writer
+        # accepts -- and this report is persisted in a stint's question record. It is
+        # kept as the escape it was written with, before the cut since that lengthens
+        # it: the same normalization `_route_quote` applies.
+        quote = quote.encode("utf-8", "backslashreplace").decode("utf-8")
         if len(quote) > _EVIDENCE_REPORT_MAX:
             quote = quote[: _EVIDENCE_REPORT_MAX - 3].rstrip() + "..."
         lines.append("evidence:\n" + wrap_untrusted(quote, source="subagent"))
