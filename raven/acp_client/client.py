@@ -346,6 +346,10 @@ class _ProcessEndpoint:
     def ended(self) -> str | None:
         return None
 
+    def end_now(self) -> bool:
+        """End the group this endpoint launched, from a thread without its loop."""
+        return leftovers.end_group(self._pgid)
+
     def release(self) -> None:
         """Close the subprocess transport while there is still a loop to close it on.
 
@@ -751,11 +755,18 @@ class AcpClient:
         launched: a number that has gone to another process is left alone,
         the same care the launch-record sweep takes. On Windows the tree ends
         with the job object this connection holds, which is kill-on-close.
+        Each endpoint ends its own way: a local child through its launch
+        record, a forked child by the group it leads, and a remote agent by
+        asking its node over the link, which belongs to a loop of its own.
         """
         endpoint = self._endpoint
-        pgid = getattr(endpoint, "_pgid", None)
-        if pgid is not None:
-            leftovers.end_group(pgid)
+        end_now = getattr(endpoint, "end_now", None)
+        if callable(end_now):
+            end_now()
+        else:
+            pgid = getattr(endpoint, "_pgid", None)
+            if pgid is not None:
+                leftovers.end_group(pgid)
         self._closed = True
         try:
             self._let_go()

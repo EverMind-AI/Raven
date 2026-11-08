@@ -295,3 +295,53 @@ async def test_a_task_a_cancelled_close_leaves_behind_has_its_outcome_read():
     acp_client._retrieved(failed)
     acp_client._retrieved(cancelled)
     assert not failed._log_traceback
+
+
+class _AbortableEndpoint:
+    """An endpoint that can end itself from a thread that no longer has its loop."""
+
+    pid = None
+
+    def __init__(self) -> None:
+        self.ended = 0
+        self.released = 0
+
+    def end_now(self) -> bool:
+        self.ended += 1
+        return True
+
+    def release(self) -> None:
+        self.released += 1
+
+
+async def test_an_abort_asks_its_endpoint_to_end_without_the_loop() -> None:
+    endpoint = _AbortableEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
+
+
+async def test_a_forked_agent_names_the_group_it_leads() -> None:
+    """``abort`` reaches a forked child by the same group ``end`` kills."""
+    from raven.acp_client.fork_template import ForkedEndpoint
+
+    class _Stream:
+        def close(self) -> None: ...
+
+    control = asyncio.StreamReader()
+    control.feed_eof()
+    endpoint = ForkedEndpoint(
+        4242,
+        stdin=_Stream(),  # type: ignore[arg-type]
+        stdout=_Stream(),  # type: ignore[arg-type]
+        stderr=_Stream(),  # type: ignore[arg-type]
+        control=(control, _Stream()),  # type: ignore[arg-type]
+        template=SimpleNamespace(forget=lambda child: None),  # type: ignore[arg-type]
+    )
+    try:
+        assert endpoint._pgid == endpoint.pid == 4242
+    finally:
+        endpoint.release()
+        await asyncio.sleep(0)

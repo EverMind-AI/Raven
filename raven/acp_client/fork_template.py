@@ -118,6 +118,9 @@ class ForkedEndpoint:
         template: ForkTemplate,
     ) -> None:
         self.pid = pid
+        self._pgid = pid
+        """The group the child leads (it starts a session of its own), so a thread
+        without this loop can end it by the same number ``end`` kills."""
         self.grace: float | None = None
         self._stdin = stdin
         self._stdout = stdout
@@ -180,6 +183,17 @@ class ForkedEndpoint:
 
     def ended(self) -> str | None:
         return None
+
+    def end_now(self) -> bool:
+        """End the forked agent from a thread without its loop.
+
+        The launch record written when the template forked the agent is what
+        makes the kill safe: the group is ended only while it is still the one
+        this host launched.
+        """
+        from raven.acp_client import leftovers
+
+        return leftovers.end_group(self._pgid)
 
     def release(self) -> None:
         from raven.acp_client import leftovers
