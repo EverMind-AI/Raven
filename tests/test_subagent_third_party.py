@@ -3033,6 +3033,26 @@ def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes()
     assert sign_in["zh"]
 
 
+def test_the_minimax_install_note_says_what_older_npm_does_with_the_approval() -> None:
+    """The command carries a flag npm 12 needs and npm 11 does not know.
+
+    npm 12 blocks install-time scripts, so the vendor's approval is what
+    builds `better-sqlite3`'s binding; npm 11 and older run the scripts
+    anyway and only warn that they do not know the flag. A reader on an
+    older npm should be told that the warning is expected.
+    """
+    import json
+    from pathlib import Path
+
+    catalogue = json.loads(
+        (Path(__file__).resolve().parents[1] / "i18n" / "messages.json").read_text(encoding="utf-8")
+    )["ui"]
+    install = catalogue["gui.agent.minimax_cli_note"]
+    assert "npm 12" in install["en"]
+    assert "npm 11" in install["en"]
+    assert install["zh"]
+
+
 def test_every_shim_requirement_names_a_shim_launched_row() -> None:
     """The executable a fetched command needs is only a question for a fetched command.
 
