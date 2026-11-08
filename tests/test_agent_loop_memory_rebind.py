@@ -779,3 +779,52 @@ async def test_a_second_cancellation_does_not_skip_the_failed_start_cleanup() ->
     assert backend.stop_calls == 2, "the retirement task ran the cleanup again"
     assert backend.stops == 1
     assert loop.backend is old
+
+
+class _GatedStartBackend(_Backend):
+    """A backend whose start blocks until the test opens its gate."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.start_entered = asyncio.Event()
+        self.gate = asyncio.Event()
+
+    async def start(self) -> None:
+        self.starts += 1
+        self.start_entered.set()
+        await self.gate.wait()
+
+
+@pytest.mark.asyncio
+async def test_a_teardown_that_closes_the_door_while_the_start_is_in_flight_refuses_the_swap() -> None:
+    """The door is read with no await between the check and the swap.
+
+    A settings write can pass the closed check and then spend seconds inside
+    ``backend.start()``; a teardown that runs while it waits must not leave
+    the new backend installed with nothing to retire it.
+    """
+    old = _Backend()
+    loop = _loop(builders=[], router=None)
+    loop.backend = old
+    backend = _GatedStartBackend()
+
+    task = asyncio.create_task(
+        loop.apply_memory_backend(
+            backend,
+            name="everos-cloud",
+            user_id="u",
+            agent_id="a",
+            memory_top_k=5,
+        )
+    )
+    await backend.start_entered.wait()
+
+    await loop.retire_pending_backends()
+    backend.gate.set()
+
+    state = await task
+
+    assert state == "closed"
+    assert loop.memory_switch_closed is True
+    assert loop.backend is old, "the retired generation must not gain a backend"
+    assert backend.stops == 1, "the refused swap stops the start it opened"

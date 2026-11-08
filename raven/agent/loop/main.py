@@ -863,8 +863,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         user_id: str,
         agent_id: str,
         memory_top_k: int,
-    ) -> None:
+    ) -> bool:
         """Point this running loop at a new memory backend, in place.
+
+        Returns True when the swap happened, and False when the generation was
+        retired while the new backend was starting: the swap is refused and
+        whatever the start opened is stopped, because nothing would retire a
+        backend installed into a generation that is gone.
 
         A generation swap rebuilds the whole runtime and closes the document's
         RPC socket -- what the settings switch used to do on every click, which
@@ -904,6 +909,16 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     await backend.start()
                 while self._active_turns:
                     await self._turns_idle.wait()
+                if self._memory_switch_closed:
+                    # The teardown ran while this start was in flight; the
+                    # generation is gone, so installing the backend now would
+                    # leave it running with nothing to retire it. Refuse the
+                    # swap and stop what the start opened. No await sits
+                    # between this check and the swap below, so a teardown
+                    # cannot close the door after the check and before it.
+                    if backend is not None and backend is not old:
+                        await self._stop_backend(backend)
+                    return False
             except (asyncio.CancelledError, Exception):
                 # The start failed, or the request went away before the swap
                 # -- a page reload is one way. Either way the backend was
@@ -967,6 +982,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                     router.add_source(source)
             if old is not None and old is not backend:
                 self._schedule_retire_backend(old)
+            return True
 
     async def apply_memory_backend(
         self,
@@ -998,14 +1014,14 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         if self._active_turns:
             self._queued_memory_switch = (backend, name, user_id, agent_id, memory_top_k)
             return "queued"
-        await self.rebind_memory_backend(
+        applied = await self.rebind_memory_backend(
             backend,
             name=name,
             user_id=user_id,
             agent_id=agent_id,
             memory_top_k=memory_top_k,
         )
-        return "applied"
+        return "applied" if applied else "closed"
 
     def _land_queued_switch(self) -> None:
         """Apply the switch that was asked for while a turn was running.
