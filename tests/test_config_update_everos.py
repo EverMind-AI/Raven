@@ -18,24 +18,22 @@ import pytest
 from everos.entrypoints.cli.commands.init_cmd import _EVEROS_TEMPLATE
 
 from raven_everos import config as ue
+from tests._everos_env import forget_everos_binding
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_embedding_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Take the operator's documented override out of the ambient shell.
+def _no_ambient_everos_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start every case with no role exported and no provenance remembered.
 
-    ``EVEROS_EMBEDDING__*`` is a real input to ``role_is_env_managed``,
-    so a developer who exports it turns every case here that assumes no
-    override into a different case -- silently, and only on their machine. A
-    case that reads one answer on one machine and another elsewhere is not
-    pinning anything. Cases that are about the override set it themselves,
+    ``EVEROS_<ROLE>__*`` is a real input to ``role_is_env_managed``, for all
+    four roles: a developer who exports one, or a test elsewhere that bound
+    them and did not put the process back, turns every case here that assumes
+    no override into a different case -- silently, and only on that machine or
+    in that shard. A case that reads one answer there and another elsewhere is
+    not pinning anything. Cases that are about the override set it themselves,
     after this has run.
     """
-    for name in ("MODEL", "BASE_URL", "API_KEY", "DIMENSIONS"):
-        monkeypatch.delenv(f"EVEROS_EMBEDDING__{name}", raising=False)
-    # Provenance is process-global; a case that bound the host endpoint would
-    # otherwise tell the next one that raven had already written those.
-    ue._BOUND_HERE.clear()
+    forget_everos_binding(monkeypatch)
 
 
 @pytest.fixture

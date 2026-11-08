@@ -6,6 +6,1018 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- Delivered files carry a download link in the tile, the desk's deliverables
+  shelf, and the viewer header; a missing delivery draws no control.
+
+### Changed
+
+- LiteLLM moves to 1.108.0 and the MCP client to 2.3.0; `TIKTOKEN_CACHE_DIR`
+  now defaults to the tokenizer files bundled in the LiteLLM wheel, so a cold
+  offline estimator counts with cl100k without a download.
+
+### Fixed
+
+- The *Mode* row of the WebUI's model picker (the sub-agent tier) read the
+  conversation being left rather than the one being opened: a switch asked
+  before the page's current session had moved over, so opening B from A
+  painted A's rung on B, and picking that rung on B was taken as already in
+  force. The row now reads the opened conversation under its own switch, and
+  an answer overtaken by a later switch is dropped rather than painted, as the
+  *Reasoning effort* row and the permission chip already do. The re-read after
+  a draft's staged rung is written to the conversation its first message
+  minted runs under that promotion's switch as well, so leaving for another
+  conversation while the write is in flight no longer paints the rung there.
+  A pick whose reply lands after the reader has opened another conversation is
+  dropped the same way, so a rung chosen on one is not echoed onto the other.
+
+- The permission chip's re-read after a draft's staged mode is written to the
+  conversation its first message minted now carries that promotion's switch as
+  well, as the tier and effort writes do: opening another conversation while
+  the write is in flight no longer paints the minted session's mode over the
+  view the reader moved to.
+
+- Azure OpenAI usage keeps its prompt-cache counts:
+  `prompt_tokens_details.cached_tokens` and `cache_write_tokens` map to
+  `cache_read_input_tokens` / `cache_creation_input_tokens`, so cached input is
+  no longer billed as fresh input and the usage view shows the cache reads and
+  writes.
+
+- A Task Board group that is still `needs_you` keeps its open questions when a
+  turn updates it: the update asks the model to carry the earlier step's questions
+  onto the newest step instead of letting them vanish when the new step has none.
+
+- Ark image generation asks for `response_format: "b64_json"` and reads
+  `output_format`, so a picture is not lost to a `data[].url` behind a fake-IP
+  resolver such as Clash or Surge in TUN mode.
+
+- A dragged composer height is kept as the field height instead of being treated
+  as a cap on the content, and the turn nav no longer moves with the drag; a
+  field that was never dragged still fits its content.
+
+- The Mirasim adapter finds a host on whatever port its
+  `run/local-<port>.token` names, instead of only 4939 and 4970, so a service
+  whose default port was taken is reachable again.
+
+## v0.2.7 - 2026-11-03
+
+Raven 0.2.7 is a patch release. Each conversation now keeps a Task Board of the matters it is pushing, with a Task Board page across conversations; the trajectory page is redrawn as an agent waterfall that shows an external agent's own steps and can replay a session from its first instant; a stuck DAG node can be handed to another sub-agent mid-run; Raven's own product agents share memory with their host, so five of them cost about half of what they did; and the trace store compresses what it writes. Also in this release: a conversation can ask for more or less reasoning than the configured default, DeepSeek joins the web search and fetch vendors, Skill Hub retrieval is on for onboarded installs with a switch, a self-signed model gateway can be reached with a per-section `tls_verify` opt-out, and an owner can name a registered machine by address, port or nickname.
+
+### Added
+
+- Each conversation keeps a **Task Board** of the matters it is pushing: task
+  groups with a title and a summary of where each stands, the sub-agents and DAG
+  runs a turn started for them, and a status of `needs_you`, `running`, `idle`
+  or `completed`. The model reads and updates it with the `task_board` tool; the
+  web UI draws it in the conversation's tasks tab and on a new **Task Board**
+  page across conversations. The board is rewritten by one extra model call after
+  every host turn that answered or dispatched, on the turn's cached prefix, and
+  the `task_board` tool stays visible on every host call. `CONTRACTS_VERSION`
+  moves to 40.
+
+- A self-signed model gateway can be reached: `tls_verify: false` on one provider
+  section (`tlsVerify` is accepted too) skips certificate verification for that
+  section's calls and its model-list checks only, across every client shape Raven
+  builds (LiteLLM, Anthropic messages, OpenAI responses, Azure). The default stays
+  `true`, and importing the root remains the preferred path.
+
+- An owner can name a registered machine by what they know -- an address
+  fragment, a port, or a nickname -- and `exec` with such a `machine` answers
+  which machine the words name, or the candidates when several do; rows take an
+  optional `aliases` list, and the on-call `ops_connections` tool takes a `hint`.
+  A local `exec`, `list_dir` or `read_file` that misses an absolute path this
+  computer does not have ends with the registered machines and how to look on
+  them. The model still never sees an address, user or key.
+
+- DeepSeek joins the `web_search` and `web_fetch` vendors:
+  `tools.web.search.provider: deepseek` and `tools.web.fetch.provider:
+  deepseek`. Its first-party endpoints run on the account its chat API uses,
+  so `tools.web.providers.deepseek.apiKey` is optional: an empty slot borrows
+  `providers.deepseek.apiKey`, and only while that section resolves to
+  `api.deepseek.com` -- a gateway or another host lends nothing, and an
+  endpoint's own key replaces the flat one it supersedes. Search sends the
+  query and count and renders the vendor's `summary`; a query over DeepSeek's
+  128-character limit is refused before the request with the limit and the
+  query's length. The research product, the deck launcher, the sub-agent fetch
+  lane and the onboarding wizard resolve the same borrowed key.
+
+- The reasoning effort can be set **per conversation**: the *Reasoning
+  effort* row of the WebUI's model picker, beside the sub-agent tier, and
+  `/effort <word>` in the TUI (`/effort` alone reports, `default` returns to
+  the global setting; the words are the ones the current model declares). The
+  pick outranks
+  `agents.defaults.reasoningEffort` and the conversation's mode, is kept on the
+  conversation's own record so it survives a gateway restart and comes back on
+  resume, lands on the next turn, and moves Raven's own model calls only.
+  New RPC `session.set_effort` (report, set or clear; every answer names what
+  the default is on this install and the words), and `session.info` carries
+  `reasoning_effort` for the status bar. The using-raven guide has a section on
+  it. Clearing `agents.defaults.reasoningEffort` (*Provider default*) reaches a
+  running gateway's next turn as well: the turn sends the effort in force on
+  every call, the provider's own default included, instead of leaving a
+  cleared key to the copy the provider took at boot. A fork keeps its
+  parent's pick with its model; the agent's own `raven_config` door accepts
+  null for `agents.defaults.reasoningEffort` as the settings page does; and
+  inside a TUI direct chat with an instance `/effort` is refused rather than
+  moving the main conversation while saying "this conversation".
+
+- A DAG node that cannot do its job can be **reassigned** to another agent on
+  the roster instead of being continued, abandoned or replanned:
+  `resolve_dag_node` takes `decision: "reassign"` with the target `agent` and a
+  `message`, keeps the node's id, task, dependencies and place in the graph, and
+  spends one continuation like `continue` (the attempt budget is not reset). The
+  new agent opens on a **handover** of the visible conversation so far -- the
+  node's task and the answers, without the old agent's tool calls, tool output or
+  private context -- so the message has to say what went wrong. A node on an
+  `instance` takes the instance's other unfinished nodes in that run with it,
+  which requires a `[stateful]` target when the instance was shared; a named
+  instance the new agent already holds is refused, and a `confirm: true` run asks
+  the user again. When either agent runs on a registered machine, the result says
+  the earlier attempts' files stay where they were made. Not supported on a stint
+  round, whose roles the role table fixes. The exception report now names the
+  agent that dispatched the attempt that just ended, lists every earlier attempt
+  with a bounded reason, and teaches the four decisions with a copyable
+  `reassign` invocation; the TUI's DAG panel and the web task pane show each
+  node's attempt history.
+
+### Changed
+
+- **Skill Hub retrieval** is on for onboarded installs: a config with the
+  endpoint queries `skillhub.evermind.ai` on qualifying turns, and
+  `skillForge.router.hub.enabled` (default true) or the **Skills** page switch
+  turns it off without discarding a custom endpoint; the switch applies live in
+  both directions. A config written by the switch carries
+  `skillForge.router.hub.enabled`, which an older build refuses.
+
+- **The trace store compresses:** every new artifact and content-addressed
+  message is written as a zstd frame under its old path, and
+  `raven tracing compress` migrates an existing store in place (`--logs` adds
+  rotated span and event logs, `--dry-run` reports the saving);
+  `raven tracing pack-messages` packs message blobs into indexed packs. A
+  measured 1.36 GB store saved about 60 percent. Readers tell the encoding from
+  the frame, so plain and half-migrated stores read; the bundled viewer needs
+  Node 22.15 or newer, and ACP frame journals stay plaintext.
+
+- Raven's own product agents share memory with their host instead of each
+  keeping a separate store, so the five shipped agents cost about half of what
+  they did.
+
+- The trajectory page is an **agent waterfall**: every entry on one time axis,
+  grouped by agent, then turn, then span, with idle stretches over 60 s folded,
+  a header of six figures, an activity strip and a clock ruler; fit, 3h, 1h and
+  15m windows, drag-to-window, Ctrl/Cmd + wheel to zoom, Shift + wheel to pan, a
+  keyboard tree of rows, and a details pane that floats as a card. The duration
+  threshold, hidden-entries switch, toolbar and reset button, now line, dispatch
+  rules and scope tab strip are gone.
+
+- A conversation's reasoning-effort choices now come from the model it runs on:
+  LiteLLM's declaration first, a provider-scoped
+  `model_overlay.reasoningEfforts` that outranks the table when stated, the
+  Codex account catalogue's own `supported_reasoning_levels` for its models
+  (read from the cache by the turn and reports, refreshed by an explicit set
+  off the event loop, with an expired answer kept as last-good), and no control
+  at all for a model that declares none. The turn and the status bar clamp a
+  stored pick to the current model, so switching models cannot send a level the
+  new model does not accept; the pick itself is kept and applies again if a
+  later model declares it, and the conversation's mode word or the global
+  setting runs meanwhile. A fallback hop re-clamps the word for the model it
+  actually calls. The global `agents.defaults.reasoningEffort` is
+  unchanged.
+
+- Empty and abnormal model replies are handled the way Hermes Agent handles
+  them. A reply that is only the silence marker `[SILENT]` ends the turn with
+  nothing sent; a scheduled run, a sub-agent's report or a Sentinel notice
+  may also spell it `SILENT`, `NO_REPLY` or `NO REPLY` and wrap it in a note,
+  but a reply to a person that is only "No reply." reaches them as written.
+  An A2A peer, which waits on the text, still gets the reply as written, and
+  the TUI and web UI draw one muted line, "Raven chose not to reply."; every
+  cron reminder teaches the marker, and a silent run counts as a success. An
+  empty reply is recovered by its kind: a plain one is resent unchanged up to
+  three times after a backoff (once when the call cost at least
+  `agents.defaults.emptyRetryCostThresholdUsd`, default 0.25 USD); one that
+  only thought is asked again and then at a lower reasoning effort; one cut
+  at the output limit is continued with more room; a refusal is never resent
+  but goes to a fallback model or fails with the model's explanation (one an
+  OpenAI-compatible model streams, which litellm drops from the stream, comes
+  back as an empty reply, and the first resend of an empty streamed reply asks
+  without streaming, where the refusal is read); and a turn left with nothing
+  fails in words that name what happened. A streamed answer whose connection
+  dies is continued where it stopped, then delivered marked as partial if it
+  stays cut. A compaction summary asks for reasoning effort `low` instead of
+  `minimal`, which Codex refuses.
+
+- The research agent's `high` mode closes a dry search streak as soon as
+  `medium` and `max` do: its overlay sets `search.saturation.k` to 5 instead
+  of 10, so each rung of the saturation ladder (widen the result list, open
+  the next page, close search) fires after five consecutive searches that
+  surface nothing new rather than ten.
+
+- A streamed answer whose model call failed after it had produced output now
+  hands back the words that streamed: with empty-response recovery on the turn
+  continues them (see the entry on empty and abnormal replies above), and with
+  it off they are delivered as they stand with a note that the reply is partial.
+  A sub-agent run and the turn's other model calls, such as the wrap-up of a
+  turn that ran out of steps, still treat the cut as before.
+
+### Fixed
+
+- A key the vendor refuses is no longer called connected. The settings page
+  and the first-run wizard ask the vendor about a key before storing it
+  (`model.check_key`): a key answered with 401, or named invalid, is refused
+  with the reason in the form and nothing is written, where before it was
+  stored, marked **Connected** and reported as rejected on the same row. A
+  stored key the vendor refuses when it is checked again (the row's Check or
+  Retry, or a connect) reads **Key rejected** on its row.
+  `raven onboard` and `raven provider test` confirm the key itself at the
+  vendor's key endpoint where the model list answers anyone (OpenRouter),
+  instead of reporting "Connected! (468 models available)" for a key the
+  vendor has never issued; a list that cannot confirm a key says so instead
+  of claiming it valid.
+
+- A job the on-call agent hands off on Windows now outlives the Raven host that
+  launched the agent. The host starts the handed-off relay itself, outside the
+  kill-on-close job object around the agent, instead of letting that job object
+  admit breakaway: Git for Windows adds `CREATE_BREAKAWAY_FROM_JOB` to every
+  native program it starts when the job allows it, so ordinary Bash tool
+  commands would have outlived the host too. With no host channel, the job
+  starts inside the job object and its log says a Windows job object holds it.
+
+- The settings page showed the reasoning effort as **Low** when the key was
+  not set at all, while the provider's own default was what ran. The unset
+  state is now its own rung, *Provider default*, which also clears the key
+  (`agents.defaults.reasoningEffort` accepts null) rather than leaving a word
+  the install never chose.
+
+- The web UI's shell folds under 640px instead of scrolling sideways. A phone
+  was shown the 780px shell in a 390px window: the rail on the left half, every
+  module squeezed into what was left (the Agent Hub's three tabs stacked, 200px
+  cards, a drawer wider than the window) and a horizontal scroll to reach any
+  of it. Below 780px the body has no width floor; below 640px the window holds
+  one column, the boot starts the rail folded, a rail opened from its twin lies
+  over the content (under a drawer opened beside it) and folds again when a
+  row in it is picked by pointer or keyboard, shrinking a
+  window under 640px folds a standing rail, the agent, machine and channel
+  drawers are capped to the window less a gutter, and the agent and machine
+  drawer's action bar wraps. The first-run wizard drops its own 780px floor
+  below 780px too, so its Next stays inside a phone's window, its provider
+  form and model role rows put each label over its control instead of running
+  past the edge, and its step labels other than the current one end in an
+  ellipsis rather than run under the language button -- or, with too little
+  room for one, leave their numbered dot alone rather than half a letter.
+
+## v0.2.6 - 2026-10-27
+
+Raven 0.2.6 is a patch release. This release changes how a long conversation stays inside the model's context window: the new `compacting` history strategy is the default, and the previous Curator is one setting away. It also reads portable Agent Plugins packages, strengthens multi-task management, ships the EverOS Cloud memory plugin with Raven, and falls back to mirrors when a download host cannot be reached. MiniMax image and video, Keenable as a keyless web search and the Opper gateway join the model and provider choices.
+
+### Added
+
+- The settings dialog's **Skills** and **Plugins** pages have an **Add**
+  button. Neither page can install anything -- a skill is fetched from Skill
+  Hub by `use_skill` and an MCP server is connected from the PlugHub catalogue
+  by the `plugin` tool, both in the chat -- so the button closes the dialog,
+  returns to the open conversation and puts a lead-in in the composer (*Help
+  me find a skill on Skill Hub and install it. My requirements are as
+  follows:*), the cursor on the line under it for the reader's own
+  requirement, sent by nobody but the reader; what was already typed stays,
+  with the lead-in after it. The Plugins page says under the button that
+  a server the catalogue does not list goes into `tools.mcpServers` in the
+  config file by hand, naming the file the gateway reported.
+
+- The history slot is filled by a **history strategy**, `context.history.strategy`:
+  `compacting` (the new default) or `curator` (the previous behaviour, one
+  setting away). Compacting keeps the conversation verbatim until the window
+  nears a trigger that scales with its size, then replaces large tool results
+  with a one-line record and a `[[ref ...]]` the model can read back with the
+  new `context_retrieve` tool, folds what it drops, and past that writes an
+  eight-section checkpoint that survives a restart. An opt-in
+  `context.cache.compactionBreakpoint` (off by default) marks, on a
+  breakpoint-style prompt cache (Anthropic), where the next summary is expected
+  to end; it costs a cache write of the history on every turn past the target
+  (1.07x to 2.0x the cost in review), so it stays off. Memory and routed skills
+  move from the system prompt to the end of the turn's user message
+  (`context.cache.turnScratch`), tool results are filed up to
+  `context.toolResultMaxChars` (1,000,000 characters) instead of 16,000, and a
+  request near the window asks for no more reply than fits beside its prompt.
+  Sessions carry a revision (`log_id` and generation) so a ref minted before an
+  undo or `/new` never names another message. A turn is now filed from its own
+  record, so an in-turn summary or an elided tool body no longer reaches the
+  session file. `CONTRACTS_VERSION` moves to 39.
+
+- The password-machine rules around ssh aliases are refined: a password answers
+  the registered account's own password prompt at the address as ssh resolves
+  it, so a `Host` alias from the owner's ssh config works, but not one Raven
+  wrote for another machine that sends ssh elsewhere -- such a pair is refused
+  at registration in either order and again on connecting. A key machine whose
+  alias names its own id as the address (`gpu1` at `gpu1`) leaves a password
+  machine at `gpu1` free to register, and a password connection never
+  canonicalizes the host.
+
+- The Machines tab's connect form can be waited on and stopped. Its line
+  counts the seconds, the hint says what the wait is for and its limit, and
+  **Cancel** stops the run on the machine and writes nothing:
+  `subagents.test_cancel` now reaches the proof prompt a `subagents.add`,
+  `subagents.toggle` or `subagents.update` sends, under the entry's name --
+  and the capability record an acp row is measured with once it answers --
+  and that call then refuses with `cancelled: true` in its error data. A
+  Cancel that finds nothing left to stop is not said as a cancel: the form
+  says it is too late to cancel and waits for the connect's own answer, and
+  one whose stop gives no answer is said as not confirmed, since only the
+  stop's answer says whether anything was written. While the
+  proof runs the row reports `test_running`, a Test on it is refused as a
+  second test is, and a connect pressed during a Test is refused the same
+  way, before anything is spent. A wait with no answer ends after ten
+  minutes -- above the server's own worst case, the capability record
+  included -- with the run asked to stop and the
+  Agents page named as where to look, instead of one line that never changed
+  (seen once on 2026-10-20, after the socket dropped without saying so). A
+  machine nobody has reached yet reads *Not connected; the link opens when
+  work is sent* instead of *No link*, which read as a fault on every card
+  when the tab opened.
+
+- Keenable joins the `web_search` and `web_fetch` vendors:
+  `tools.web.search.provider: keenable` and `tools.web.fetch.provider:
+  keenable`, with an optional key under `tools.web.providers.keenable.apiKey`
+  (or `KEENABLE_API_KEY`). It is the one search vendor that answers without a
+  key, at a lower rate limit, so `web_search` on it is offered keyless the way
+  `web_fetch` on Jina is; a key moves both requests to the keyed endpoints and
+  lifts the limit. Its snippets are page text, collapsed and cut to 300
+  characters. The research sub-agent's two tools route through it too, and its
+  launcher starts with Keenable selected and no key. The defaults are
+  unchanged.
+
+- The image and video roles run on MiniMax. Settings > Model offers MiniMax's
+  two API-key providers (`minimax`, `minimax_cn_api`) for both roles, and a
+  section naming one takes that provider's address and key and calls
+  MiniMax's own APIs: `/v1/image_generation`, where an input image is the
+  character to keep, and the video APIs, text-to-video or from a
+  `first_frame_image`. The video section takes a `provider` as the image
+  section does; one written there by hand was ignored before and is honoured
+  now. Raven-PPT's pinned image settings keep the provider they run on, and
+  `PPT_IMAGE_PROVIDER` puts a deck's pictures on a provider of its own. See
+  `docs/minimax-media.md`.
+
+- Raven reads the **portable Agent Plugins 1.0** package format: a directory
+  whose root holds a `plugin.json` that validates against the official
+  manifest schema, with optional `skills/` and `mcp.json`. It is not the
+  Raven plugin (`raven-plugin.toml`, Python factories running inside the
+  host) -- a package is data only. `raven agent-plugins list | inspect |
+  import | remove | check` reads them; an import copies the package's skills
+  into the workspace skill tree under `<workspace>/skills/<package name>/`,
+  one directory per package, so the pool mints one source label per package
+  and two packages may ship the same skill name without either shadowing
+  the other. The copy is recorded in a ledger (`<home>/agent-plugins.json`),
+  so `remove` only ever deletes directories the ledger claims and `check`
+  reports a package that changed since the import. A package cannot put text
+  into every turn: the `always` flag is dropped from the imported copy. A
+  skill on `skillForge.blocklist`, or one whose body points at another
+  product's home directory, is refused, and a target directory the ledger
+  does not claim is never written into. See
+  `docs/specs/2026-10-25-agent-plugins-loader-design.md`.
+
+- A portable Agent Plugin package can now ship **MCP servers** in its
+  `mcp.json`, and Raven reads and runs them. Every entry is validated
+  against the format's closed variants (stdio, Streamable HTTP, legacy
+  HTTP+SSE) and one bad entry never takes the others down: it is skipped
+  and reported. The servers are named `<package>__<server>` so they cannot
+  collide with the host's own `tools.mcpServers`, they run with the
+  package root as their working directory, and they get `PLUGIN_ROOT` and
+  `PLUGIN_DATA` in their environment, with the format's two placeholders
+  expanded in their arguments, environment and working directory. A
+  package's server is a process on the operator's machine, so it starts
+  only when the package is named in `agentPlugins.mcpPackages`; by default
+  the configuration is parsed, validated and reported only.
+  `MCPServerConfig` gained `cwd`, which the stdio transport passes to the
+  MCP SDK, and `SandboxExecutor.start_process` gained an optional `cwd` so
+  a sandboxed server runs in the directory it names instead of being
+  refused; the boxlite executor translates the command, arguments and
+  environment to their guest mounts too, and a package's data root is
+  mounted at `/plugin-data` so `PLUGIN_DATA` is reachable inside the VM. A
+  package server never replaces an operator-configured one: a name
+  collision is reported and the host's entry wins. Re-importing a package
+  also removes the skills it no longer ships, keeping the ledger's claim on
+  a copy whose deletion failed, so the workspace converges on the package. `raven agent-plugins list` and `inspect` show
+  a package's servers and their problems without starting anything.
+
+### Changed
+
+- A complete install now carries the `everos-cloud-memory` plugin, so the
+  hosted EverOS is a memory backend a user can pick rather than a wheel
+  attached to the release with no install path: the one-line installer,
+  `raven upgrade`, the beta channel and the Docker image all name it beside
+  the local `everos-memory`, and the rung that drops the product engines when
+  a native build refuses keeps both memory backends rather than only the local
+  one. Installed is not selected -- `memory.backend` still decides, and an
+  install that never picks the cloud behaves exactly as before, except that
+  `raven onboard` now asks which memory backend to use instead of taking the
+  only one installed.
+
+### Fixed
+
+- On native Windows a DAG node can read files by reference: `{{ ref:... }}`,
+  `{{ ref_path:... }}` and a `{"file": ...}` input naming a file in the
+  session's working directory or its sub-agent history. They were resolved by
+  POSIX path rules, so every one was refused as outside those directories, a
+  relative `notes.md` included; they now resolve by the host's rules. An
+  `@nodes/` reference that leaves this session's node artifacts by Windows
+  rules -- through `..\` or a drive -- is refused on every host: on Windows it
+  was accepted, and the read returned the file it named. On Python 3.12 a path
+  rooted without a drive (`\notes.md`) is read on the drive it was checked
+  against, not on the process's current one.
+
+- A sub-agent of the in-process or OpenAI-API kind whose model ends its turn
+  with nothing visible -- the one-space
+  reply OpenRouter hands back for an empty turn, or the empty reply of a
+  vendor that keeps no native finish reason -- no longer completes with that
+  as its answer. The in-process backend read only a missing reply as no
+  answer, so a blank one was recorded completed, a spawn told the parent it
+  returned, and a DAG node was left to its judge with nothing to judge. A
+  blank reply now gets the one wrap-up call a run out of rounds gets, worded
+  for what happened, and a run that answers nothing twice fails with
+  `SubagentNoAnswerError` saying so, rather than that it used all its rounds.
+  The OpenAI-API backend handed a blank reply back as the answer too; it now
+  fails the run as one with no answer. A cli entry's answer is what it
+  printed, and is not changed here.
+  In a direct chat an answer the backend waited for rather than streamed --
+  the wrap-up's, on either path, or the one it asks for again after a cut
+  stream -- now streams like any other reply: once anything had streamed
+  before it, the turn sent no closing text, and the answer was recorded but
+  never shown.
+
+- In the TUI on native Windows, typing with a Chinese IME no longer duplicates
+  characters. The console was told to re-encode keys through Kitty keyboard /
+  modifyOtherKeys, which doubles IME commits before they reach Raven's input
+  parser; native Windows now leaves input in the terminal's raw encoding.
+  Shift+Enter no longer inserts a newline on native Windows, because the
+  console no longer reports the modifier; Alt+Enter, Ctrl+Enter and Ctrl+J
+  still do.
+
+- Leaving the TUI with Ctrl+C on Windows conpty restores the primary screen
+  once. The final frame no longer overlaps the shell prompt because the Ink
+  instance and React's unmount cleanup now share one idempotent alternate-screen
+  exit, ordered before the remaining terminal resets.
+
+- Installing the Raven node on a machine whose package index crawls there no
+  longer stalls the install. The index pip is configured with (else PyPI) is
+  timed from the machine first; when it cannot be reached there, or serves
+  slower than 256 KB/s, the packages come from the faster of two PyPI mirrors
+  in mainland China (Tsinghua's TUNA, Alibaba Cloud's), with the machine's own
+  index tried after it, and the plan says so; `RAVEN_NO_MIRROR=1` keeps every
+  install on the machine's index. The **Machines** tab now waits for as long as
+  an install runs, where a fifteen-minute deadline of its own gave up just before
+  the gateway reported a step out of time and left the card spinning; such a
+  step now names itself and the index it was downloading from instead of
+  saying the machine did not answer; a half-made Raven node left by a step
+  given up on no longer fails the next attempt; and the optional search package
+  running out of time no longer fails the install.
+
+- A turn's sub-agent marking in the trajectory view, and whether the export
+  and bug-report turn picker lists it, now depend on that turn alone. A
+  message sent after a sub-agent had reported into an idle session was
+  recorded as dispatched by that sub-agent -- drawn as a sub-agent turn and
+  missing from the picker -- and a second report queued behind the first was
+  attributed to the first sub-agent, while a report that arrived during a
+  running turn carried no attribution at all. Each report now names the run
+  that sent it, or the call that dispatched its graph, whether the session
+  was idle or busy, so a report that arrives during a running turn is now
+  exported with the turn that dispatched it instead of being listed on its
+  own. A report turn no longer acts in the finished sub-agent's browser tab
+  either. Turns recorded before this keep the attribution they were recorded
+  with.
+
+- A playbook's route conditions are filled the way its prompts are. A
+  `${params.<key>}` in a decision node's condition reached the judge as
+  written, and one naming no declared param passed validation; now it reaches
+  the judge as its value, a secret param in one is withheld as it is from a
+  prompt, and a reference to no declared param is refused when the playbook is
+  saved or loaded.
+
+- A hand-written playbook whose decision node names a route `yes`, `no`, `on`,
+  `off`, `true`, `false` or a bare number loads. YAML 1.1 read such a key as a
+  boolean or a number, the playbook failed to load, and the runtime dropped it
+  from the library; every key in the spec block is now read as the text it is
+  written as. Values keep their YAML types. A spec block that is not a mapping
+  is a finding, and `raven playbook validate` answers a YAML syntax error as one
+  instead of a traceback.
+
+- Generating a dag playbook can produce a branch. The generator's instructions
+  for dag mode called `dependsOn` the whole graph language and never named
+  `routes`, `select` or `when`, though the schema it fills offers them; they
+  now describe a decision node and the rule that a node depending on one names
+  it in its `when`.
+
+- In the web UI, the **What came back** fold of a DAG node that stopped on
+  a decision no longer opens onto the brief written for the model -- the
+  `resolve_dag_node` calls it may make and that tool's whole schema, all in
+  one paragraph. It shows what the node itself returned on that attempt (its
+  error, when it crashed), under the caption *What the node returned*. The
+  model's text is unchanged: the node's output travels beside it as `output`
+  on the delivery mark (`subagent.delivered`, `turn.started`, and a stored
+  entry's `delegated`), cut at 20,000 characters with a separate
+  `output_truncated` flag. The web fold shows the truncation notice outside
+  the node's words and limits its height, with keyboard-accessible scrolling.
+  A node that has already
+  failed is marked `error` and reads **Failed** instead of **Waiting on a
+  decision**; a stall notice about a node still running reads **Still
+  running**, and a cancelled run **Stopped**, where both used to read
+  **Finished**. The TUI also labels a stall notice **Still running** in live
+  and replayed rows. Conversations stored before this keep the fold they had.
+
+- The trajectory view shows a spawned sub-agent while it runs. Its entry
+  appears as running as soon as the run starts -- including the time it
+  waits behind the concurrency gate -- instead of only once it has ended,
+  and the steps it has already taken carry the number of the turn that
+  dispatched it instead of being marked as belonging to no known turn. A
+  finished run's entry now says how it ended: a run that failed, or that
+  stopped on a terminal safety decision, is an error and gets the failure
+  dot; a cancelled run reads cancelled; a run left going on its registered
+  machine when the process stopped reads unknown. Every run used to read as
+  successful. The `subagent.run` span carries `subagent.agent`,
+  `subagent.instance`, `subagent.handle`, `subagent.dispatch`,
+  `subagent.in_progress` and `subagent.outcome`; runs recorded before this
+  keep the entries they had. A checkpoint read after the view trimmed the
+  finished record of its turn or run no longer turns it back into running.
+
+- The trajectory view gives each attempt of a DAG node an entry of its own,
+  as it does a spawned sub-agent. The node's model and tool calls, its
+  external agent's run and its judge's model calls nest under that entry,
+  where they used to sit as siblings under the graph's tool call and the
+  steps of nodes running side by side could not be told apart. The entry
+  reads running as soon as the node starts and then says how the attempt
+  ended: completed; failed, waiting on a decision, or sent back by its judge
+  with a follow-up -- each an error, with the reason -- or cancelled. A node
+  continued or sent back gets an entry per attempt, and a node that never
+  ran gets none. The tool schema of a node's tool call, which could not be
+  traced while another node's model calls overlapped its own, now names the
+  model call that made it. A report a node sends -- one that needs a
+  decision, or a stall notice -- starts a turn that links to the attempt
+  that sent it rather than to the call that dispatched the graph; a graph
+  dispatched outside any turn still reports with no link. The attempt's
+  `subagent.run` span carries `subagent.dispatch` (`dag`),
+  `subagent.dag_run_id`, `subagent.node_id` and `subagent.attempt`; graphs
+  recorded before this keep the entries they had.
+
+- The trajectory view knows which sub-agent each entry belongs to. Every
+  entry names its Sub-agent Scope (`subagent_scope`): the `subagent.run` of
+  the spawned run or DAG node attempt it nests under or, for a graph recorded
+  before node attempts had spans of their own, the `run_subagent_dag` or
+  `resolve_dag_node` call it ran under; null for the main session. A run's
+  entry, and a graph call's while its scope holds steps, names the scope it
+  opens (`opens_subagent_scope`), and a turn a sub-agent's report started
+  names the scope that sent it (`dispatched_by_subagent_scope`) while staying
+  a turn of the main session. Attribution follows the span tree alone, so a
+  run still working through later turns keeps its steps, and they keep their
+  scope when the view trims the run's own entry. What a model input adds is
+  measured within its own scope: a report turn's first input continues the
+  main session rather than reading as a first call, and a busy sub-agent no
+  longer pushes the main session's previous input out of reach. A turn's end
+  is compared only with the main session's last model output, so a sub-agent
+  answering after the turn ended no longer keeps a repeated reply from being
+  hidden. A DAG node attempt's entry also carries `dag_run_id`, `node_id` and
+  `attempt`, and the detail's relations block lists the three fields;
+  `origin` is unchanged and still says only whether a trace was dispatched.
+
+- The trajectory view on the web page gives each sub-agent run a tab of its
+  own. The main session's tab no longer interleaves the steps of runs working
+  in the background: a run's entry stays where it was dispatched, says how the
+  run stands and for how long, and opens the run's tab on a double click, on
+  Enter, or from **Open trajectory** in the details head; the first row of a
+  turn a sub-agent's report started opens the run that sent it. A run's tab
+  lists and charges that run's steps alone, names the agent, the task, the
+  state and the turn that dispatched it, and leads back to the run's entry with
+  **Show in main**; the tab is marked while the run is running, has failed or
+  was cancelled, and the mark follows the run live. An external agent's tab
+  opens on its transcript, or on its frames for an ACP agent. Every tab keeps
+  its own selection, place, zoom and details pane, a link in the details moves
+  to the tab its entry is in, and another conversation starts on the main
+  session's tab alone.
+
+- A decision node's card on the tasks board cuts its first selected route
+  last. The agent line gave the selection all of its overflow, so a long agent
+  name and a tool count cut it down to its arrow; now the instance handle and
+  any further routes give way first, then the agent's name down to its first
+  few letters, and only then the route, which ends in an ellipsis inside the
+  card.
+
+- An empty reply from a model behind OpenRouter (`content: " "`,
+  `finish_reason: stop`) is no longer reported as an upstream transport
+  failure and retried for minutes before the verdict's own sentence is
+  delivered as the answer. OpenRouter names its backend's reason
+  (`native_finish_reason`) on every choice, `stop` included, and the verdict
+  now reads that plain `stop` as the normal end it is, so the turn goes to
+  the loop's empty-response recovery (prefill, nudge, retry) instead. A reply
+  that is nothing but an upstream sentinel (`<|im_end|>`) reaches the loop
+  empty on both response paths and takes the same recovery, rather than being
+  delivered as the answer. A streamed reply no longer shows the sentinel on
+  screen first: the opening of a reply is held back while it could still be
+  only a sentinel, even one split across chunks, and goes out unchanged the
+  moment it cannot.
+
+- The TUI no longer loses or scrambles the rest of a line after an emoji
+  made of several code points, such as the black bird (U+1F426 U+200D
+  U+2B1B) the assistant signs with, a skin-tone modifier or a flag. The
+  layout gives such a glyph two columns, but Terminal.app walks its code
+  points and advances five for the bird (eight for a three-person family),
+  xterm.js and pyte four, so every cell the renderer wrote after it on that
+  row landed that far to the right: a Chinese reply showed whole spans
+  missing or replaced by stale thinking text, while a reply without the
+  emoji was fine. The renderer now pins the cursor to the column after any
+  multi-code-point glyph, the way it already did for new emoji and VS16
+  sequences, and writes the glyph with auto-wrap off so a terminal that
+  overruns near the right margin clamps on the same row instead of wrapping
+  the rest of the frame one row down. Terminals that size the glyph
+  correctly see no change.
+
+- A continued DAG node is judged against what it was told after an attempt
+  fell short, not only against its first prompt. The judge read the task as
+  first given and nothing else, so when the user answered a stuck node by
+  choosing another deliverable through `resolve_dag_node` -- a replacement
+  pull request instead of a push to the original, say -- every attempt that
+  delivered it was judged not accomplished until the node ran out of
+  continuations and failed. Each continue message is now recorded beside the
+  node's prompt, oldest first (`<node>.follow_ups.json`), and the judge reads
+  them as part of the task, the later one standing where two disagree. A node
+  without a conversation of its own is sent every continue message so far on a
+  retry, not only the latest, so it works to the task its judge holds it to. A
+  node that was never continued is judged exactly as before.
+
+- The `<agent>-Mirasim` presets reach the Mirasim host again. The adapter sent
+  the host's access token in a header, which a Mirasim host from 0.0.571 on
+  answers with 401 (measured against 0.0.571, 0.0.576 and 0.0.585; the hosts
+  the adapter was written against, 0.0.537 to 0.0.558, read the header), so
+  every row's Test ended in a refusal the roster read as the agent needing a
+  sign-in. The token now travels in the upgrade request's query, where the
+  host reads it and where Mirasim's own clients send it, and in the header as
+  well; the one URL that carries it is never logged or quoted, a refused
+  upgrade is worded from its status, and a host that turns the token away is
+  told apart from one that is not running, in words the roster does not read
+  as a sign-in.
+
+- The `<agent>-Mirasim` presets no longer read as *Not installed on this
+  computer* on a computer that has Mirasim. The probe asked after a `mirasim`
+  executable on the login shell's PATH, which Mirasim's installer never puts
+  there (its CLI lives under `~/.mirasim/bin`), and the adapter runs no such
+  executable anyway. The rows now ask after Mirasim itself: a host to reach --
+  the desktop app's port with its token written and something listening, a
+  host named in `RAVEN_MIRASIM_HOST`, or a server Mirasim runs on this computer
+  over ssh whose socket answers -- counts as running; the launcher under
+  Mirasim's home, `mirasim` on the PATH or a server Mirasim installed here
+  over ssh counts as installed, and such a row says to open the Mirasim app or
+  to let the app on another computer reach this one again; neither is still
+  *Not installed*, with the download link. A killed host leaves its token file
+  or its socket behind, so neither alone counts as a running host, and a blank
+  token file is no token, as the adapter reads it.
+
+- A password machine at the name of a key machine whose ssh alias names that
+  same address (key machine `gpu1` at `gpu1`, password machine `gpu1-shared`
+  at `gpu1`) registers and logs in. The check that keeps a `Host` alias Raven
+  wrote from taking another machine's password refused every such pair by
+  name; it now refuses only an alias that would send ssh elsewhere (another
+  `HostName`, a keyword Raven does not write, a block cut short), and its
+  refusal suggests the machine's IP address or full domain name rather than
+  the address it already had. The Oncall event watcher builds a password
+  machine's backend off the event loop as the ops tools do, so the `ssh -G`
+  that build runs no longer holds up the rest of Raven, for up to 10 seconds
+  on each pass.
+
+## v0.2.5 - 2026-10-20
+
+Raven 0.2.5 is a patch release. This release strengthens multi-agent coding, adds remote agent execution on registered machines, introduces conditional branches in DAG workflows, and improves native Windows support. Raven can delegate tasks to connected agents on any registered machine, using each agent's capabilities and working environment. Multi-agent coding can use this capability to coordinate local and remote coding agents. Document support is also expanded.
+
+### Added
+
+- The Agent Hub has a **Machines** tab: the registered machines with the state
+  of each one's link and Raven node, a form that registers one (it reaches the
+  machine first, like `raven ops connection add`, and explains a refusal by
+  its kind), **Install node** / **Update node** run in the background with the
+  card reporting the end, and **Remove machine**. A preset's sheet picks where
+  it runs (*Runs on*) among the machines with this Raven's node, with the
+  working directory there. `raven ops connection remove <id>` is the command
+  behind the removal, and `install-node` now records the node it put on the
+  machine (`node_install` on the row), which is how the tab says a machine has
+  the node before any link is up. The form, and `raven ops connection add
+  --non-interactive --auth password --password-stdin`, register a machine by
+  password as well: the password (at least six characters, or the scrubber
+  would pass it as ordinary text) is kept on this computer for Raven's own
+  logins (`~/.raven/keys/<id>.password`, readable by the owner alone), handed
+  to ssh on every connection through its askpass hook, and never on a command
+  line, in a log or in an answer; such a machine gets no ssh alias and no jump
+  host, its password answers the registered account's own password prompt and
+  no other, Oncall campaigns run on it as Raven's own connections do and at
+  the registered address alone, and the mode is not offered on Windows. A failed
+  or cancelled registration preserves the password written by another pending
+  registration of the same machine, including when both passwords are identical.
+  New RPC group `machines.{list,add,install_node,doctor,remove}`.
+
+- The Machines tab says what to do next. A card names the agent entries
+  connected on the machine (*No agent connected here yet* until one is; the
+  state line now reads *Link up, no agent running*), and a machine whose node
+  is up has **Connect an agent on this machine** in its sheet: pick the agent
+  and its working directory there, and **Connect** adds `<preset>@<machine id>`
+  with one proof prompt run on the machine. The list has every preset a node
+  can start, including one already connected on this computer. `subagents.add`
+  now refuses a preset the machine already has when no name is given, naming
+  the entry there, so the page and a chat cannot add the same agent on one
+  machine twice between them; a named add is still a second entry. A preset
+  that is not installed on this computer can be connected onto a machine from
+  its own sheet (*Runs on*); a row that already exists, switched off, connects
+  by its own button as before. While an add is still running on a machine, a
+  form opened again on that machine greys the preset rather than adding it
+  twice. The register form fills the private-key path with the key ssh would
+  try first (`id_rsa` before `id_ed25519`) instead of a placeholder. New read-only RPCs
+  `subagents.presets` and `machines.local_keys`; `machines.list` rows carry
+  `agents_here`.
+
+- A machine's switched-off agent entries are shown, not counted nowhere. A
+  card that listed only connected entries read *No agent connected here yet*
+  beside a connect form that greyed the preset as *already connected on this
+  machine*, because the entry still holds the machine for the add. The card,
+  the sheet and the form now show such an entry marked *switched off* (the
+  card line reads *N on this machine*, not *connected here*); in the
+  form each such entry is a choice of its own, by name, with **Reconnect**,
+  which switches that entry back on (with the same proof prompt) instead of
+  adding a second one. `machines.list` rows carry `agents_off_here`; `subagents.presets`
+  lists `on_machines` (connected) apart from `off_on_machines` (switched off,
+  with the entry's name).
+
+- The bug report review remembers your redaction decisions. Every keep or
+  replace answer is stored in `redaction_history.json` under the Raven home
+  (hashes and masked samples only), and the next `report-bug` or browser
+  *Report a bug* replays it: values you already decided are listed instead of
+  asked, and a run without a TTY no longer needs `--keep-findings` /
+  `--redact-findings` for them. `--review-all` asks again, `raven trajectory
+  redaction-history list|forget|clear` inspects and edits what is remembered,
+  and `RAVEN_BUGREPORT_REDACTION_HISTORY=off` turns it off.
+
+- Bug Report Packages can be sent to a Bug Report Receiver. `raven trajectory
+  receiver --save-dir DIR` runs the receiver: it checks each package in a
+  stream without extracting it, stores the original bytes by UTC day next to
+  a receipt sidecar, and answers the same package with the same receipt. It
+  takes only uploads that answer its Upload Challenge -- a shallow gate that
+  keeps out HTTP clients that are not Raven, built on a constant published
+  with the source, not a credential -- and bounds abuse with per-address rate
+  limits, daily budgets, a free-disk reserve and timeouts. `report-bug` and
+  the browser's *Report a bug* upload the package as soon as it lands when
+  `RAVEN_BUGREPORT_URL` names a receiver, and `raven trajectory
+  upload-bug-report` sends a filed report again. Before a report starts,
+  `report-bug`, the browser and the WebUI's *Report a problem* ask the
+  receiver's `/v1/hello` and say so when it does not answer: an interactive
+  run asks whether to go on (the WebUI offers *Continue anyway*), and
+  `report-bug --yes` goes on and keeps the package if the upload fails. A
+  proxy in front of the receiver must forward all of `/v1/`.
+
+- A DAG graph can decide where it goes next in one run. A node that declares
+  `routes` is a decision node: the verdict call then also picks, from the
+  node's answer and the conditions the graph's author wrote, the route it
+  selects -- for `select: many`, any number of routes, none included. A
+  downstream node carries `when`, a guard over `<node>.<route>` and
+  `<node>.done` atoms with `not`, `and`, `or` and parentheses, evaluated once
+  its dependencies settle. A node a branch left out ends `not_executed` with
+  its reason and is never dispatched; a node of the same graph that reads one
+  gets a fixed sentence in place of the missing output and a note naming the
+  inputs that may be missing, and a file reference to such a node's files,
+  however its path is spelled, is refused. A decision node whose route cannot be determined fails rather than
+  guessing. Playbooks carry the same three fields, and the TUI's DAG panel and
+  the web tasks list show what each node's branch did.
+
+### Changed
+
+- Memory runs on EverOS 1.4.2, which fixes what a memory server that stays up
+  for days ran into: a LanceDB index reader leaked file descriptors until
+  searches took seconds, an interactive search queued behind the cascade's
+  background embedding (vector search p50 46 s under three concurrent
+  writers, 0.60 s now), and a cascade pass sent one embedding request per
+  entry instead of one per file. The derived index also repairs itself on the
+  first start after the upgrade: EverOS re-reconciles every indexed markdown
+  file against the index once, re-embedding only the rows that are missing,
+  and a healthy index pays one read pass and no embedding. Markdown is the
+  source either way and was never affected. A server left running from the
+  older version is restarted, as it has been since the pin moved to 1.4.1.
+
+- Research reports are written for a reader rather than for a grader. The
+  report opens with the answer as a blockquote, with no label or bold lead-in
+  before it, stated first and then why it
+  holds and what it means, then anything the brief asks the report to open
+  with (a retrieval date, the kinds of sources), and any delivery facts the
+  brief asks back (file path, counts) as its last line - a line the chat reply
+  keeps and the saved file leaves out; the body follows under its own `##`
+  headings - the brief's own section names, numbering included, when it gives
+  them - and the last section names what could not be verified
+  (`## Limitations` in English, with no English word in the heading
+  otherwise; the shape gate reads the last `##` section as the limits when
+  no word it knows names them, or only the first heading has one with no
+  body above it, as in a body heading on export limits). A length the brief
+  sets bounds the body: every markdown file the turn writes or edits gets a `[report length: ...]`
+  line on its tool result - CJK characters and other words, a total with
+  prose and tables apart, by `##` section, link targets not counted - and
+  the report checks its length
+  and states any count from that line rather than from an estimate. Unless
+  the brief says otherwise, a length covers prose and tables alike and leaves
+  out only a link-check table. The same line counts the distinct URLs the
+  report cites, read the way the research trail reads them, which is the
+  number of sources the report states and the number of rows a link-check
+  table has. Prose cites through markdown links on the words a source supports
+  instead of bare URLs mid-sentence, with no fetch status or HTTP code beside
+  a link (a brief that asks for link checks gets one table of every cited
+  URL as fetched with its status, marked blocked where the site blocked the
+  fetch, before the limits), and the report is told to carry its
+  argument in prose, define terms the question does not already use, ground
+  abstract points in a concrete case and drop filler. When the turn also saved
+  the report with `write_file`, the delivered reply is written over that
+  file, so the chat reply and the file are the same report, and the file
+  keeps its `#` title when the reply opens without one. Only a file whose
+  `##` headings are mostly the reply's counts as the report, so a notes
+  file or a source index saved beside it is left alone; of several such
+  files the reply's named one is synced, and none when it names none or
+  several. A file appended to or edited is synced only when the turn wrote
+  it whole first, or it still holds exactly what an earlier turn of the
+  session left in it: a log the user keeps, or a report the user changed
+  between turns, holds their text, and the reply would erase it. A later
+  turn that only edits a report nobody else touched syncs it.
+  The file is left as the model wrote it when the reply is not a report, and
+  when the reply is under 80% of the file's length - a brief that asks for a
+  summary reply gets that summary, and it must not replace the report. The
+  research trail stays on the reply only, and its query, page and open-point
+  listings are plain labelled lists instead of `<details>` folds, which a
+  terminal shows as raw tags. The shape gate, the clarify exemption and
+  `scripts/research_report_audit.py` read the new layout, and the old
+  three-heading layout stays the class default (`finalShape.reportLayout`).
+  An install that has already run Raven-Research moves to the new layout at
+  its next launch, since the contract in its workspace
+  (`agent_memory/profile/agent.md`) is now regenerated on every launch (see
+  Fixed); the gate still accepts three-heading replies.
+  The identity no longer carries the measured-guidance block, whose short-run
+  and one-answer numbers came from a short-answer benchmark
+  (`measuredGuidance` off). The product label moves to
+  `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high-reader`.
+
+- Node judgement is always on. `subagentDag.verdictEnabled` no longer exists,
+  and a load-time migration removes it from the config file and says so once;
+  set again later, by an older build sharing the config, it is dropped on every
+  load. A config that turned judgement off now has every finished node judged:
+  one more model call per node, and a node judged not to have accomplished its
+  task can suspend as `exception` and report, as it does wherever judgement was
+  on. `raven playbook run` judges its nodes too, on the same `subagentDag`
+  settings; with nobody there to answer, a node judged not to have accomplished
+  its task fails on the judge's reason. A host with no model to judge with
+  refuses a graph that declares routes.
+
+### Fixed
+
+- What an agent on a registered machine writes on stderr reaches Raven even
+  when no link held the agent at the time. The node kept those lines but, when
+  a link attached, replayed only the agent's output: a run picked up after a
+  restart was reported as `exited 3` without the reason after it, a CLI that
+  names its session only on stderr (hermes) could not be bound to it by the
+  pick-up, so its next turn opened a new session, and what was written while a
+  link was down was lost the same way. The node now numbers stderr lines as it
+  numbers output lines and replays the ones the link has not seen. An ACP
+  agent is one task across every prompt its process is sent, so its pick-up
+  asks the replay from the line its record kept as the prompt went out, not
+  from the agent's first line; a CLI pick-up, whose task is the command's
+  own, reads from the first line.
+
+- The research, code, oncall and ppt agents follow an upgrade or a config
+  change into the prompt files they keep in their workspace (`soul.md`,
+  `agent.md`, `TOOLS.md`). Those files were written only when absent, so the
+  model kept reading the text of the first launch while the gates enforced
+  the current release: a research contract seeded before the reader layout
+  still asked for the three-heading report. They are now rewritten on every
+  launch. Your own lines go in the sibling `*.local.md` file
+  (`agent_memory/profile/agent.local.md`, for example) and are appended after
+  the product text; a `*.local.md` must be UTF-8, and one that is not stops
+  the launch with the file named. A file edited in place, or left by an older
+  release, is saved as `<name>.bak-<time>-<pid>` before it is replaced, never
+  readable by more accounts than the file was, and the launcher log names the
+  backup. The ppt engine, whose plugin can be granted a host's or another
+  product's home, replaces only a file it can show it wrote: in Raven-PPT's
+  own home a seat edited before this release stays until it is deleted.
+
+- A file Raven saves by replacing it -- `config.json`, an agent's prompt
+  files, state files -- keeps its own access rights from the first byte of the
+  new text. On Windows the replacement took its folder's inherited ACL, so a
+  file kept private in a folder other accounts may read came back readable by
+  them; on POSIX the new text sat in a umask-default temp file until the
+  target's mode was copied over. On Windows a save refused by a read-only
+  target also left a read-only temp file that failed every later save, even
+  after the target was made writable again.
+
+- A task on a registered machine ends the way it ended, whatever happened on
+  either side. A Raven node killed outright (`kill -9`) used to leave its
+  agents running with nobody reading them and the host reading a bare
+  `exit -1`; the next daemon now ends what was left, records why, and the host
+  hands that sentence on (on Linux the agent also goes with the daemon). A
+  failed remote run whose announce the draining scheduler refused used to
+  vanish; its record now stays, like a reply's, for the next start to report.
+  A cli run picked up after a restart now binds its instance to the session
+  id in its output, so the next turn resumes it; a stateless run binds
+  nothing, and a binding a dispatch made while the pick-up waited is kept,
+  for a minted id as for one read off the output, without the pick-up
+  waiting for that turn, and the reply picked up finishes that dispatch's
+  own record, not a newer turn's to the same instance. A cancel while the machine's
+  link is down no longer waits out the settle budget. An openai row's tunnel
+  gives a local port that was taken in between up for another instead of
+  sending the request to whoever took it. A run record that is not JSON, or not
+  UTF-8, is set aside once instead of being warned about at every start, and
+  never stops the other records from being read.
+
+- A backslash typed into a bug report's description or steps (a literal
+  `\n` standing in for a line break, or a regular expression such as `\d+`)
+  no longer stops `raven trajectory report-bug` and the browser's
+  `Report a bug` with "absolute path leaked into the export". The export
+  gate now checks the metadata values rather than their JSON-escaped text;
+  a real absolute path is still refused.
+
+- The research trail no longer says a cited link "appears nowhere in this
+  run" when a search returned it with a click-tracking parameter
+  (`srsltid`, `utm_*`, `gclid`, `fbclid`, `msclkid`) that the citation left
+  off; such a link is reported as listed but not opened.
+
+- The research fetch tool reports the status the target site returned and
+  marks a CAPTCHA wall as blocked, instead of the reader service's own 200;
+  the research trail counts such pages as refused by the site, not as read.
+  When a thin page is re-read at another address, each address keeps its
+  own status in the trail.
+
+- The file tools refuse a path that carries a line break or other control
+  character. They echo the path into their result lines, and the research
+  report sync reads a file back out of those lines, so such a path could
+  name a second file that no call wrote. The sync also reads only the
+  first line of a `write_file` result.
+
+- `write_file` reports the bytes it wrote. Its success line said "N bytes"
+  and counted characters, so a model sizing a Chinese report off it read
+  about a third of the report's real length.
+
+- When an agent cannot inherit the host's model, its launcher now names
+  what is missing -- for example the OpenAI Codex sign-in, with the
+  command that adds it -- instead of reporting that the host has no
+  provider key, which was untrue when the host's key sits on a provider
+  other than the one its selected model uses.
+
+- The research reviewer runs on providers that refuse a forced tool call.
+  DeepSeek in thinking mode, served through LiteLLM and so outside the
+  Anthropic transport's own retry, answers a named `tool_choice` with HTTP
+  400, so every review on it failed open and the report shipped marked
+  unreviewed; the reviewer now asks again with `tool_choice=auto` and keeps
+  doing so.
+
+## v0.2.4 - 2026-10-03
+
+Raven 0.2.4 is a patch release. Raven can now read and change its own configuration from the conversation: a new `raven_config` tool reads any setting without asking, asks before every write, and never takes a key through the chat. Four things behave differently once you upgrade. The approval sheet on the page no longer answers to 1, 2 and 3: Esc denies, Cmd+Enter (Ctrl+Enter) allows once, and Shift+Cmd+Enter gives the broader grant. Channels have left the Settings dialog: the rail row that was Agent Connector is now Connectors, with Agents and Channels as its two tabs. Every turn the gateway runs (the page, chat apps, cron) now takes the per-turn workspace checkpoint, a shadow git repository at `.raven/shadow.git` in the workspace, which is what lets a file an `exec` command wrote open as a diff; `runtime.checkpoint.policy: "never"` turns it off. And the main agent answers in plainer, shorter prose, using headers, bullet menus and emoji only when you ask for them. No command, flag or config key is removed or renamed.
+
+### Added
+
+- Raven can read and change its own configuration from the conversation: the
+  `raven_config` tool reads any setting without asking, asks before every write,
+  and never takes a key through the chat.
+
+### Changed
+
+- The approval sheet on the page answers to Esc (deny), Cmd+Enter or Ctrl+Enter
+  (allow once), and Shift+Cmd+Enter (the broader grant), instead of 1, 2 and 3.
+
+### Fixed
+
+- `raven doctor` warns when `permissions.mode` is `full` and when
+  `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
+  and commands run on the host with no isolation. The exit code stays 0.
+  The identity prompt tells the agent to install a package into the project's
+  virtual environment, or a temporary one, and to leave the global environment
+  alone.
+
+## v0.2.3 - 2026-09-27
+
+Raven 0.2.3 is a patch release with two things worth reading before you upgrade. Bare `raven` now opens the browser page, the way `raven web` does, and falls back to the terminal UI only where no browser can be opened; `raven tui` still opens the TUI outright. And the page's own update row now works on a normal `raven web` install and shows the download's progress, but only once the page is served by this release: a page served by 0.2.2 or earlier still refuses it, so this one upgrade goes through the command line as before. No command, flag or config key is removed or renamed. Two smaller removals on the page: the file viewer no longer offers a download button, and HTML previews run their scripts by default instead of asking.
+
+### Changed
+
+- Bare `raven` now opens the browser page, the way `raven web` does, and
+  falls back to the terminal UI only where no browser can be opened; `raven tui`
+  still opens the TUI outright.
+
+- The page's own update row works on a normal `raven web` install and shows the
+  download's progress, once the page is served by this release; a page served by
+  0.2.2 or earlier still refuses it.
+
+- Recall on the `agent_case` and `agent_skill` tracks (the Cases and
+  Know-how tabs) searches by vector when no reranker is configured,
+  instead of asking for an LLM rerank that the four-second recall budget
+  can never wait out.
+
+### Fixed
+
+- An unattended turn that asks a question now leaves a record of it. A one-shot
+  run lists those questions after the reply, beside the refused calls, and a
+  session opened later shows the same questions as their own notice. Previously
+  the only trace was the line the model was told ("the user did not answer;
+  proceed with best judgment"), and a sub-agent turn with no page subscribed
+  to the session never wrote even that into the session.
+
+## v0.2.2 - 2026-09-25
+
+Raven 0.2.2 is a patch release with one thing worth reading before you upgrade: memory runs on native Windows now. No command, flag or config key is removed or renamed, and no configured default changes. The memory plugin's EverOS pin moves from 1.2.3 to 1.4.1, which runs on Windows without WSL, so the platform gate that made memory unavailable there is gone. Two guards found while verifying against a copy of a real 1.2.x store come with it: an embedding model narrower than the memory index is refused rather than left to answer 500 on every store and search, and an upgrade no longer leaves the old server answering on the port.
+
+### Added
+
 - Memory runs on native Windows. EverOS 1.4.0 runs there without WSL, so
   the memory plugin's pin moves to `everos[multimodal]==1.4.1` and the
   platform gate that made memory unavailable on Windows is gone, together
@@ -26,6 +1038,23 @@ All notable changes to Raven are documented here.
   cannot reach the provider is not a verdict: the pin is written and a
   warning logged.
 
+### Changed
+
+- A running EverOS whose version no longer matches the installed one is
+  replaced rather than reused, through the same precheck, stop and spawn
+  chain a rotated credential takes. An upgrade used to leave the old server
+  answering until something unrelated restarted it. A root the user manages
+  is never touched. A gateway that finds nothing listening and no lock held
+  starts the server again, at most once every thirty seconds, so a server
+  that goes away no longer leaves that gateway without memory until it is
+  restarted by hand.
+
+## v0.2.1 - 2026-09-24
+
+Raven 0.2.1 is a patch release: no command, flag or config key is removed or renamed and no configured default changes, but three behaviour changes are worth reading before you upgrade. The web first-run wizard now asks only for a model and, optionally, a search tool; its agents and data-sync steps are held back until they are ready, so a first run no longer offers to connect local agents, and until the step returns an import runs from `raven import` on the CLI. `exec` on this computer now refuses a typed `ssh` to a machine the connection registry knows and names the two paths meant for it, while `scp` and `rsync` are untouched and an unreadable registry refuses nothing. And a `permissions.tools` deny rule now stops the program it names however the command runs it, so `bash -c`, `env`, `sudo`, `xargs`, `find -exec`, a `$(...)` substitution or a redirection no longer walk past it. The rest of the release is the agent connector (what a refused connect says, and where it is drawn), a round of web page fixes, and a `-P` guard that keeps a source checkout off the engine's `sys.path`.
+
+### Added
+
 - `ops_connection_add` is a trunk tool, served on `tools.connectionAdd`
   (on in raven-code and raven-oncall, off elsewhere). It writes the machine
   an owner described into their connection registry after reaching it, with
@@ -37,6 +1066,45 @@ All notable changes to Raven are documented here.
   rule for when to leave this computer at all: write here, verify where the
   software is, and ask the owner for a machine only when installing the
   software here would be wrong or heavy.
+
+### Changed
+
+- The web first-run wizard asks only for a model and, optionally, a search tool;
+  its agents and data-sync steps are held back until they are ready, so a first
+  run no longer offers to connect local agents, and an import runs from
+  `raven import` on the CLI meanwhile.
+
+- A sub-agent reads the connection registry in the owner's home
+  (`raven_home()/connections.json`), which the host hands it as `RAVEN_HOME`;
+  any other instance reads the one beside its config first, so a `--config`
+  host keeps its own file. A first write lands in the home. A sub-agent runs on a rendered
+  config in a state directory of its own and is handed `RAVEN_HOME`, not a
+  copy of the file; resolved beside the config alone, Raven-Code read an
+  empty directory while the owner's machines sat one level up, and reached
+  for the raw ssh address instead. The on-call plugin's `connections` module
+  now imports trunk's reader rather than mirroring it.
+
+### Fixed
+
+- A `permissions.tools` deny rule stops the program it names however the command
+  runs it, instead of only when the denied name is the command's first word.
+
+- `exec` on this computer refuses a typed `ssh` to a machine the connection
+  registry knows, and names the two paths that exist for it: `machine=<id>`
+  for a look (capped at 60 s, nothing left running) and the on-call agent's
+  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
+  machine's address in the task statement, and the coding nodes started GPU
+  work over raw ssh from the local shell 58 times, past the cap, the sweep
+  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
+  that cannot be read refuses nothing. Options are read the way ssh reads
+  them -- a bundled group like `-vp 58717`, and options written after the
+  host -- so a spelling ssh honours does not read as port 22.
+
+## v0.2.0 - 2026-09-23
+
+Raven 0.2.0 is the first minor release since 0.1.13, and much of what it carries is new to a 0.1.13 install: a Web UI that `raven web` serves in the browser (rail, composer, transcript, settings dialog, Agent Connector and a desk with file, agent and task panes), permission modes at the tool-dispatch door, four built-in agents under `agents/`, the playbook engine, the ACP and A2A surfaces, the three plugin wheels the release publishes, and a `Dockerfile` with a Compose file that run the whole of it in one container. It also retires and moves several things. The built-in `deep_research` tool goes, with its `raven deep-research` command group and `tools.deepResearch` config section, in favour of the research agents; the tracing module's `begin_attempt` / `end_attempt` / `current_attempt` functions go with the span-level `attempt.id`, attempts now being grouped after recording with `raven trajectory merge`; and the installers finish by opening Raven in the browser and holding the terminal on `raven web --foreground` (export `RAVEN_NO_LAUNCH=1` before a non-interactive install to exit as before). Conversations are gated by a new permission mode, `smart` by default; a turn the model loop gives up on now fails instead of answering and `raven agent -m` exits 3 when an action needed an approval nobody could give; a streamed model call that fails before any reply text is retried on a new ladder (`agents.defaults.llmErrorRetryDelays`, default 15/30/60 s) where 0.1.13 answered with the first failure, and one that fails after output is retried only where `agents.defaults.llmRetryAfterOutput` says so; the sub-agent memory block, the EverOS role settings and the retired embedding shape move, most of them with load-time migrations, and `tools.toolSearch.enabled` is now on by default. On the page, a four-step wizard and a cold-start import replace the terminal first run; the frontend follows the Figma design, with a settings dialog that absorbs skills, plugins, schedules, channels and memory, an Agent Connector, a desk task pane, a composer that starts a conversation in a folder of your choosing and sends a message into a running turn, and typeset mathematics. The provider catalogue grows from 21 to 55, Raven speaks Agent2Agent 1.0, the model can drive the shared browser, playbooks include a many-round stint mode, WhatsApp and WeChat pair from Settings > Channels, `raven trajectory` gets an interactive browser and a bug-report flow, and a bilingual documentation site takes over the README's reference sections.
+
+### Added
 
 - Serply joins the `web_search` vendors: `tools.web.search.provider: serply`
   with the key under `tools.web.providers.serply.apiKey` (or `SERPLY_API_KEY`).
@@ -52,31 +1120,331 @@ All notable changes to Raven are documented here.
   style outright: it takes one when the request asks for dark, black, night or
   a technology register.
 
+- Raven-PPT runs with the host's context compaction on (`compaction.enabled`,
+  `triggerRatio` 0.85, every other threshold the host's default) and the
+  ppt-engine plugin appends a deck ledger under each compaction summary: the
+  user's own messages and `ask_user` answers verbatim (journaled as the running
+  turn sees them, since the filed record ends with the previous turn), and the deck's state as
+  the tools left it on disk (brief, template, sources, figure catalogue, outline
+  pages, the reader's open findings, published and refused records). Replayed on
+  a recorded 34-page deck session, the host's summary alone lost the page limit,
+  the language and style requirements, both `ask_user` answers and the source
+  path; the ledger carries them.
+
+- Raven-PPT declares the host's three effort tiers: `medium` runs the author at
+  low reasoning effort and caps a deck at ten whole-deck builds and three
+  readings, `high` (the default) keeps the effort and the caps, `max` is the
+  uncapped run the product shipped with. At the build cap the deck is delivered
+  as it stands and the reply names what would have held it back; at the reading
+  cap the second reader stops. The tier reaches the deck tools through
+  `.deck-mode.json` in the session's deck folder, written by the plugin hook
+  from the session's mode overlay.
+
+- A slide deck opens in the WebUI file viewer as a PDF. Clicking a `.pptx`
+  asks the file route for `render=pdf`: the deck's own published `<stem>.pdf`
+  is served when it is beside the deck and current, otherwise LibreOffice
+  renders one into a cache under raven's state directory keyed by path, size
+  and mtime, one render at a time per deck. The viewer says it is rendering
+  until the frame loads, offers the PDF in a tab and the deck itself as a
+  download, and falls back to the open-with note with the gateway's words when
+  the host has no LibreOffice, the render times out, or nothing is produced.
+
+- The deck engine's `ppt_generate_image` rides the host's `image_generate`
+  transport: whichever image model, base and key the deployment configured under
+  `tools.media.image` serves the deck (gpt-image behind OpenRouter, a chat-routed
+  model such as Nano Banana, an OpenAI-compatible gateway), the spend is recorded
+  where the host records it, and a Settings edit lands on the next call. The tool
+  takes `references` (figure ids, source files or paths, up to six) to match or
+  vary, the host's eight aspect ratios, and reports the `width` and `height` that
+  came back; it is withheld while the host's section names neither a key nor a
+  model, and follows the section live in both directions. The PNG's name is the
+  caller's stem plus a digest of the effective inputs -- the model, the quality
+  the host actually sends (Settings' value where one is set), the ratio, the
+  references and the prompt -- so the same ask lands on the same name and the
+  page that already places that file needs no edit; nothing is answered from
+  disk, and every call generates over what the last ask left there. `quality` has
+  no default of the deck tool's own: unset, the host resolves it exactly as it
+  does for its own `image_generate`, which sends the
+  default model no quality at all; naming one on the call still overrules that. Plugins get three new `ServiceLocator` grants (`media_config`,
+  `media_proxy`, `web_config`), one `RuntimeHandles` grant (`usage_recorder`),
+  and may declare `configured()` on a contributed tool (checked at admission,
+  dispensed on the `ToolSpec`) to be withheld and offered on the same live lane
+  as the built-in media tools. The Raven-PPT launcher
+  inherits the host's whole image section and follows it live (`selectionConfig`),
+  with `PPT_IMAGE_API_KEY`, `PPT_IMAGE_API_BASE` and `PPT_IMAGE_MODEL` as the
+  product's own overrides; the ppt-engine slice's `webProxy` and
+  `imageSearch.apiKey` become overrides of the host's `tools.web`.
+  The ppt-engine slice's `image` key is an override of that grant, not the
+  channel it is read through. `CONTRACTS_VERSION` moves to 16. The default image model is now
+  `openai/gpt-image-2.5-sunburst` (Settings presets follow), and a chat-routed
+  image model (Nano Banana and its kind) is asked for the requested frame through
+  OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
+  frame whatever ratio the caller asked for.
+
+- `mode: stint`: a playbook that takes many rounds instead of one. It declares
+  roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
+  run is thirty graphs on the shared dispatch path -- each validated and charged
+  to the same hourly dispatch budget an ordinary graph is, approved once at the
+  start, and resumable by any process because the stint is a file. Roles hand over
+  through files in the project, not through a conversation: each opens a fresh one
+  every round.
+
+  What a role may write is declared in the playbook (`owns`, `appends`), rendered
+  into its prompt, and undone afterwards, with the file it
+  wrote kept under `violations/`. The undo reads the stage's own commits as well
+  as the worktree, so a role that commits a stray write is caught too.
+
+  `verify[]` runs real commands -- a build, a test run -- and a failure goes back
+  to the role that caused it with the failure text, up to `maxHandbacks`. Once
+  that budget is spent the round moves on with the failure on the record -- a
+  failed node would skip every role downstream, and a reviewer has to see a
+  failed build -- and the next round's prompt carries it.
+
+  A stint runs in a checkout of its own, cut from the project's head, so hours of
+  its commits do not collide with the conversation that started it.
+  `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
+  end a stint early by reporting a marker on a line of its own. A round the
+  dispatch budget turns down pauses the stint rather than ending it, and says so.
+  A person can watch, extend, pause, stop, resume and answer questions from
+  `raven playbook stints ...`, the RPC surface and the page.
+
+- `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
+  a guard file per role, the shared prose, a link to the project's own
+  specification), and work the backlog its roles share (`task`, `ask`, `confirm`).
+
+- `raven agent --message-file` reads the turn's message from a file instead of
+  argv, and `raven agent --permission-mode ask|smart|full` binds the turn's
+  reading of the ask tier. Both are what an unattended driver needs: a prompt on
+  the command line is readable by every process on the box, and a one-shot has
+  nobody to ask when a tool call routes to approval.
+
+- The research agent's three modes are three stop rules rather than three sizes
+  of one budget. `medium` may answer a settled general-knowledge question
+  without searching: the first model call has the web tools withheld and a
+  `request_research` tool offered, a plain draft is put to an independent judge,
+  and an accepted one ships saying no sources were consulted (`plainFirst`,
+  medium and high). `high` terminates on the reviewer, with three revisions and an
+  evidence round on a rejection. `max` adds an evidence floor: a draft resting on
+  fewer than 18 readable pages from 8 sites is sent back to research, at most
+  twice (`evidenceFloor`). The reviewer asks for its verdict as a forced tool
+  call, runs one uninterrupted attempt with 16384 tokens, and records why it
+  failed open. The sufficiency judge can release a turn from the search listing
+  before any page is opened (`sufficiency.judgeListing`). The product label
+  moves to `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high`.
+
+- `web_search` and `web_fetch` route through a vendor the deployment picks:
+  Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
+  search, Jina Reader, AnySearch, Tavily, Exa or Firecrawl for pages. Keys are
+  held once per vendor under `tools.web.providers.<vendor>.apiKey`, so a
+  vendor that serves both tools is pasted once; the pre-vendor
+  `tools.web.search.apiKey` and `tools.web.jinaApiKey` still count. The
+  onboarding wizard's web step asks for the vendor before the key (also
+  `--search-provider` / `--fetch-provider` / `--search-api-key` /
+  `--fetch-api-key`), the settings page and `settings.set` accept the new
+  keys, `raven doctor` names the selected vendor's slot, and `~/.raven/env`
+  mirrors every vendor key. A page reader selected without its key falls back
+  to Jina, and the log says so. The vendored research checkout's launcher
+  inherits the host's vendor choice and keys when its own config names none and
+  the key resolves for it; the in-repo research plugin keeps its own separate
+  search key.
+
+- The deck engine delivers to the path the user named. `ppt_build` takes a
+  `deliver_to` -- an absolute `.pptx` path, or a directory ending in `/` that
+  keeps the deck's own name -- states it once for the deck's life
+  (`deck/state/delivery.json`), and every build that publishes then writes
+  `out/` as before and copies the same bytes there, first delivery and every
+  revision after; a refused build leaves the last good deck standing there.
+  The deck's PDF preview is written beside it under the same stem, but only
+  where nothing holds that `.pdf` name already: a file there is the user's own
+  and nothing here replaces it, the preview stays under `out/`, and the reply
+  says so for the author to pass on. The copy is recorded in `published.json`
+  with `role: "delivery"`, the build reply tells the author the delivered
+  path and slide count in words to repeat to the user, and the turn hook
+  verifies a `MEDIA:` line naming that path by its digest while a copy made
+  with `exec` at any other path is named as not the deliverable and answered
+  with the argument that writes it there.
+
+- A top-level `agents/` directory holds product definitions built on the
+  installed runtime. A wheel carries that tree and installs it to the raven
+  home on first use, so a `pip` / `uv tool install` has the agents without a
+  source checkout. The first product, Raven-Research (transition name
+  Raven-Research-NG), rebuilds the vendored research agent's whole flow as a
+  plugin (`agents/raven-research/plugins/research-flow`) on public seams alone;
+  an import-linter contract keeps the runtime from importing the products back.
+
+- Plugins can contribute agent hooks (`[[plugin.contributes.hooks]]`) beside
+  memory backends and tools; a config may name extra plugin roots
+  (`plugins.dirs`); a contributed tool that needs what only the assembled
+  loop owns declares `bind_runtime(handles)` and receives the frozen
+  `RuntimeHandles` grants. A factory may decline by returning `None`, a
+  binder by raising `BindDeclinedError` -- both leave the built-in serving.
+
+- The agent-hook surface is at version 3: `ctx.session_history` is populated
+  at every phase (the iteration phases included, post-consolidation), the
+  iteration context carries the turn's `max_iterations` and
+  `context_window_tokens` -- the cap the loop actually enforces and the
+  active binding's window, so a budget-shaped hook needs no config mirror --
+  `CompositeHook` chains every child's diagnostic `notes`, and a hook's
+  `observers` stash is filed at persist time, after the send fire.
+
+- The generation freeze law is written where its machine already stood:
+  FREEZE seals member identity, and exactly three declared doors reconcile a
+  member's data plane mid-generation after the durable truth is written --
+  the agents table (`apply_agents`), the MCP server set (`apply_mcp_config`)
+  and the default binding (`set_default_binding`). A door-roster guard pins
+  who may spell those reaches (the `getattr`/`hasattr` string forms
+  included), the plugin market holds the loop through the new `McpHost`
+  paper instead of `Any`, and the Generation glossary body now carries the
+  identity-vs-interior distinction its own carve-out already implied.
+
+- ACP session modes: `acp.modes` in a product's config becomes a client's
+  mode picker (`session/set_mode`), each mode a per-session overlay over the
+  base configuration. The mode entry alone carries `maxToolIterations`; the
+  overlay ships no copy, since the loop hands its hooks the enforced cap
+  directly (`ctx.max_iterations`).
+
+- `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`
+  already recorded every node: one directory per call under
+  `<agent home>/sessions/<group>/<chat_id>/subagents/spawn/`, holding
+  the prompt, the result (or the error), and a small `meta.json`. Previously a
+  `spawn` left no file at all -- its reply went straight into the conversation
+  and nothing else -- so the two ways of delegating are now equally
+  inspectable. Failed, aborted and cancelled calls are recorded too, and the
+  prompt is written before dispatch, so a call that never returns still shows
+  what was asked. The directory is append-only: there is no expiry or size cap,
+  and reclaiming it means deleting the session, which removes its metadata
+  directory too. DAG runs dominate the volume, because a node's rendered prompt
+  inlines its dependencies' full output.
+
+- A `run_subagent_dag` graph can read an earlier run's output from the same
+  conversation. A completed node is named by its id alone (`{{ <id>.output }}` /
+  `{{ <id>.output_path }}`, or an `inputs` entry of the form `{"node": "<id>"}`), needing no
+  `depends_on` -- there is nothing left to order. `depends_on` may name it anyway, which
+  records the dependency without ordering anything. Previously nothing carried across runs:
+  the outputs sit under the session's metadata directory, which no working directory can
+  be aimed at, so no relative path reached them. A node with no output to read --
+  failed, skipped, cancelled, or in a run still in flight -- keeps its id but is
+  refused, naming which case it is. Node ids are unique per conversation for this to
+  work (see Breaking Changes).
+
+- A DAG file reference (`{{ ref: }}` / `{{ ref_path: }}` / an `inputs` `{"file": ...}`)
+  resolves inside two roots now, the session working directory and this conversation's
+  sub-agent history (`<session_dir>/subagents/`, so the `spawn` records beside the DAG runs
+  are reachable too), and `@nodes/<node_id>...` addresses this session's own node artifacts
+  by path -- which is what reaches a node's own prompt file, since the short
+  `{{ <node_id>.output }}` form cannot. The second root stops at that directory rather than
+  at agent home: agent home also holds user memory, installed skills, and every *other*
+  conversation's transcript and sub-agent history, which `workdir.py` already keeps off the
+  agent's file surface, and a DAG graph is LLM-authored and auto-run.
+  Every `_path` form is now checked to exist before its sub-agent is dispatched.
+
+- A DAG run stopped by `/stop` or a gateway shutdown now records each unfinished node by
+  the stage it was in: one still running when the stop arrived is recorded `cancelled`, and
+  one still pending stays `skipped`, in the session index on the way out. Those routes
+  cancel the run task, which skipped the finalizer, so the ids the run had claimed stayed
+  readable as "still being written" forever -- a later graph could then neither reuse them
+  nor read them, and the two refusals it got contradicted each other. The id-reuse refusal
+  also stops advising a reference to a node that has no output to reference.
+
+- Sessions started by `raven tui` / `raven agent` record the directory they were
+  launched in as `Session.metadata["project_dir"]`. The group directory name is
+  a lossy slug, so this is what identifies the project.
+
+- A DAG node stopped mid-flight is now recorded `cancelled` rather than `skipped`, in the
+  session index, the manifest, and both the TUI and web frontends, and it stays on the
+  instance list, where a `skipped` node is filtered out on the grounds that it has no
+  transcript, no cost, and no clock -- untrue of a node that ran.
+
+- Cancelling a sub-agent on the ACP transport now actually stops the turn on the agent:
+  raven sends the protocol's `session/cancel` and waits up to 5 seconds for
+  `stopReason: "cancelled"`. Previously it only abandoned its own wait, so the agent ran
+  the turn to completion and answered a request nobody was listening for -- and for a
+  stateful agent the half-finished turn stayed in its session. If the wait expires the
+  session binding is dropped, so the next dispatch opens a fresh session instead of
+  colliding with a turn that is still running.
+
+- The gateway now closes the ACP connection pool on the way out. Those adapter servers
+  are launched with `start_new_session=True` and receive none of the gateway's signals,
+  so every gateway exit used to orphan them.
+
+- Setup now offers the agents that ship with raven. Step 6 of the wizard lists
+  each folder under `agents/` and asks whether to run it on the model it is
+  tuned for, on this raven's LLM, or not at all. The tuned model leads the menu
+  because it is the one a key of its own buys: inheritance copies the host's
+  `agents.defaults.model` too, so a folder without a key stops running the model
+  it was built around. Every folder is tuned for models served through
+  OpenRouter, so a raven that already has an OpenRouter key is not asked for a
+  second copy of it -- that reuse reads `providers.openrouter` alone, never a key
+  parked in `custom`. A product whose launcher or engine wheel is missing is
+  reported and skipped. Registration is not this step's job: the folder itself
+  puts the agent on the roster, and a stale config row that shadows it is pruned
+  after a backup. It replaces the deep_research step.
+
+- A delegated run's record now keeps the tool name the transport itself used, and the
+  mapping into Raven's own names (`exec`, `read_file`, ...) happens when those rows go to
+  a client rather than when they are written. A record that stored `exec` could never be
+  read back for whether the agent ran a shell command or wrote a todo list, and the record
+  is what a later reader has. Every front end keeps the one vocabulary its verb table is
+  keyed by, so nothing a user sees changes, with two deliberate exceptions: a
+  claude-agent-acp `Grep` carrying both a pattern and a path scope used to arrive with the
+  pattern destroyed and now arrives whole, and a claude tool outside the twelve the old
+  table listed -- `TodoWrite`, `ExitPlanMode`, `MultiEdit`, `SlashCommand`, every `mcp__*`
+  tool -- used to be reported as `tool_call` or as `exec` and now arrives under its own
+  name. The second cannot be mapped back, because the coarse `kind` it was derived from is
+  not stored; a todo-list write labelled `exec` was wrong, and an unlisted name is rendered
+  from the name itself.
+
+- An `openai`-backed sub-agent's conversation now holds the middle of its run, not just the
+  question and the answer. An endpoint that reports its own steps -- a deep-research model
+  sending `reasoning_steps` -- has those searches, fetches and thoughts written into the
+  instance log as tool calls and their results, and its token cost recorded, where before
+  the backend published none of it and a call left two rows and no cost. Measured on one
+  captured research call: two rows became nine. Each step keeps the endpoint's own name for
+  what it did and its own argument keys, so `fetch_url_content` is not reported as Raven's
+  `web_fetch` -- it fetches and then runs an extraction, which is a different tool. Buffered
+  and streamed responses differ in shape, a streamed thought arriving as token fragments,
+  and both produce the same rows; a streamed run republishes on every step, so a panel
+  watching it sees the run progress rather than only its result.
+
+- `spawn` now takes a `prompt_template` and the same placeholder grammar `run_subagent_dag`
+  already had: `{{ ref:<path> }}` / `{{ ref_path:<path> }}` inline a file's contents or its
+  path, and an `inputs` mapping fills `{{ inputs.<key> }}` / `{{ inputs.<key>.path }}`. Paths
+  resolve inside the same two roots as a DAG node's -- the working directory and this
+  conversation's sub-agent history (`<session_dir>/subagents/`) -- so an earlier spawn's own
+  `Record:` directory is reachable without restating its output, and the `_path` forms are
+  refused for a sub-agent the roster tags `[no-local-files]`. The parameter was `task`, a
+  literal string with no such grammar; renamed to `prompt_template` (see Breaking Changes).
+  The completion announcement always shows the template as written, never the rendered prompt;
+  the `Record:` line beside it only names where the rendered version, with any `{{ ref: }}`
+  file inlined, is written on disk.
+
+- A prompt template's `{{ ... }}` text that matches none of the six placeholder shapes
+  (`ref`, `ref_path`, `input`/`inputs.<key>`, `input_path`, `output`, `output_path`) is
+  ordinary text now, on both `spawn` and `run_subagent_dag`. A stray `{{ }}` in an example, or
+  a note that happens to use double braces, used to be refused outright as `unrecognized
+  placeholder '...'`; the grammar now only claims a body actually shaped like one of the six,
+  and leaves everything else untouched.
+
+- Three more products join `agents/`: `raven-oncall`, `raven-code` and
+  `raven-design` rebuild their vendored twins on public seams (flow plugins
+  `oncall-flow` and `code-flow`; the design engine ships as its own wheel), and
+  `raven-ppt` ships beside them as a hidden engine that `raven-design` routes
+  `.pptx` work to. Their migrations are recorded in closure records
+  (oncall-closure-0901, code-closure-0902, ppt-closure-0902).
+
+- Plugins can contribute three more kinds beside memory backends, tools and
+  hooks: background services (`[[plugin.contributes.services]]`), per-call
+  tool gates (`tool_gates`) and session observers (`session_observers`).
+  The papers are `raven/contracts/services.py`,
+  `raven/contracts/tool_gate.py` and `raven/contracts/session_events.py`;
+  `CONTRACTS_VERSION` moves to 5.
+
+- The ppt deck-building engine ships as its own distribution
+  (`plugins-dist/ppt-engine`, plugin id `ppt-engine`): eleven deck tools
+  and a staging hook on the `raven.plugins` entry-point group, with the
+  deck skill corpus and templates as package data.
+
 ### Changed
-
-- A running EverOS whose version no longer matches the installed one is
-  replaced rather than reused, through the same precheck, stop and spawn
-  chain a rotated credential takes. An upgrade used to leave the old server
-  answering until something unrelated restarted it. A root the user manages
-  is never touched. A gateway that finds nothing listening and no lock held
-  starts the server again, at most once every thirty seconds, so a server
-  that goes away no longer leaves that gateway without memory until it is
-  restarted by hand.
-
-- Recall on the `agent_case` and `agent_skill` tracks (the Cases and
-  Know-how tabs) searches by vector when no reranker is configured,
-  instead of asking for an LLM rerank that the four-second recall budget
-  can never wait out.
-
-- A sub-agent reads the connection registry in the owner's home
-  (`raven_home()/connections.json`), which the host hands it as `RAVEN_HOME`;
-  any other instance reads the one beside its config first, so a `--config`
-  host keeps its own file. A first write lands in the home. A sub-agent runs on a rendered
-  config in a state directory of its own and is handed `RAVEN_HOME`, not a
-  copy of the file; resolved beside the config alone, Raven-Code read an
-  empty directory while the owner's machines sat one level up, and reached
-  for the raw ssh address instead. The on-call plugin's `connections` module
-  now imports trunk's reader rather than mirroring it.
 
 - Progressive tool disclosure ships on (`tools.toolSearch.enabled`). Below
   `compactionThreshold` (50) nothing changes: the strategy drops `tool_search`
@@ -97,20 +1465,6 @@ All notable changes to Raven are documented here.
   handed back the picture the author had just rejected. A call generates; the
   file name is unchanged so the new picture arrives without the page being
   edited.
-
-### Removed
-
-- The built-in `deep_research` tool is gone, along with the stand-in that
-  took its name when no key was configured and the `raven deep-research`
-  command that configured it. The settings page no longer carries its row,
-  and `tools.deepResearch` is no longer read: a load-time migration drops
-  that section. A `deep_research` entry in `tools.disabledTools` is left as
-  written, since that denylist also governs a plugin tool of the same name.
-  Reports written under `<workspace>/deep_research/` stay on disk; nothing
-  writes there any more. The capability moved to the agent surface -- the
-  first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
-
-### Changed
 
 - A Raven-PPT turn that changes nothing about an already published deck no
   longer arrives carrying "compile the deck under out/ and end your final
@@ -136,6 +1490,7 @@ All notable changes to Raven are documented here.
   share are untouched. Every gate message, `ppt_template` reply and skill line
   that spelled `texts=`, `items=`, `drop=`, `keep=` or `pictures=` now names a
   call that exists.
+
 - The Raven-PPT launcher sizes the run's context window from the endpoint
   that will serve the model instead of a shipped number capped by the host
   catalog: OpenRouter is asked for the providers serving the model and the
@@ -149,49 +1504,345 @@ All notable changes to Raven are documented here.
   and then the host catalog are asked, but a catalog may only lower the number
   in `config.json`, never raise it. `PPT_CONTEXT_WINDOW` pins it by hand.
 
-### Added
+- The research agent's sufficiency judge no longer passes a transport timeout
+  the provider rejects; before this every judge call failed open before it was
+  sent, so `medium` never actually stopped early.
 
-- Raven-PPT runs with the host's context compaction on (`compaction.enabled`,
-  `triggerRatio` 0.85, every other threshold the host's default) and the
-  ppt-engine plugin appends a deck ledger under each compaction summary: the
-  user's own messages and `ask_user` answers verbatim (journaled as the running
-  turn sees them, since the filed record ends with the previous turn), and the deck's state as
-  the tools left it on disk (brief, template, sources, figure catalogue, outline
-  pages, the reader's open findings, published and refused records). Replayed on
-  a recorded 34-page deck session, the host's summary alone lost the page limit,
-  the language and style requirements, both `ask_user` answers and the source
-  path; the ledger carries them.
+- The ppt engine (`plugins-dist/ppt-engine`) carries the fork's layout work:
+  eight bundled templates instead of twelve (four dropped for looks), a curated
+  set of reference pages any deck may borrow across templates, `add_unit` /
+  `remove_unit` / `clone_shape` / `swap_icon` for growing, shrinking and
+  re-drawing a template's repeated units, fill in reading order with the
+  numbered-tile rule, and measurements that read a tinted card as a card
+  (`is_filled`) and report a body nothing divides (`undivided_body`). A build
+  that succeeds still hands its stderr back as warnings, and a shape placed at
+  more than twice its box's proportion warns instead of refusing. `backdrop`
+  lays a generated picture behind everything on a page, cover-cropped and
+  washed to an `alpha` of its own, and `layout_pictures` reaches the
+  photographs a template keeps on its layouts -- which `ppt_template` now
+  lists and a new `layout_picture` warning names, since `pictures={...}` on a
+  cloned page never touched them.
 
-- Raven-PPT declares the host's three effort tiers: `medium` runs the author at
-  low reasoning effort and caps a deck at ten whole-deck builds and three
-  readings, `high` (the default) keeps the effort and the caps, `max` is the
-  uncapped run the product shipped with. At the build cap the deck is delivered
-  as it stands and the reply names what would have held it back; at the reading
-  cap the second reader stops. The tier reaches the deck tools through
-  `.deck-mode.json` in the session's deck folder, written by the plugin hook
-  from the session's mode overlay.
+- A card's plane is now told apart from its ground by colour difference rather
+  than luminance ratio, and pushed towards the accent until it is (the beige
+  template's cards sat at a dE of 7 on its own ground and were cards only to the
+  file); the soft tile is deepened so it still leads the plane. A picture frame
+  with its own outline is filled with `cover` instead of shrunk inside it. A
+  tinted-header table's emphasised row takes a tint a step deeper than the
+  header's, and every mark a table says as a glyph is set in one symbol face at
+  1.3x the copy, so a scale's full and half steps come out one size. The image
+  tool asks for a photographic manner for any subject with a face in the world
+  and the template's manner only for a concept.
+
+- The deck engine's replies to the author are slimmer: `ppt_template` states a
+  reply budget instead of letting the host cut a five-page reference in half
+  (pages that do not fit are named in `pages_not_read`), folds a run of
+  custom-drawn decoration into one line (a Bauhaus contents page went from
+  12,800 to 4,000 characters), states the imports once per reply and a run's
+  type on one line; `ppt_build` repeats a page's plan only when that page has
+  something to fix.
+
+- The deck engine's second reader is bounded: one reading stops at 240 s and
+  names the pages it did not get to, a deck's readings together stop at 15 min,
+  a reading is recorded at the version of the pixels it read (the build's own
+  render of the page) rather than the code that drew it, so a revision re-reads
+  only the pages whose render changed, the reader answers in one call with room
+  for a reasoning model's thinking (no doubled-budget retry), and it reads the
+  build's renders instead of rendering the deck again. Measured on a 20-page
+  run, 18 whole-deck builds had each re-read the pages the last revision
+  touched, 136 of the run's 327 minutes. The deck launcher keeps a configured
+  context window that is under the catalog's ceiling as a cap.
+
+- `setup.status` now reads the config file `RAVEN_HOME` points at, like every
+  other reader; it used to answer for `~/.raven/config.json` regardless.
+
+- `raven channels *` and the gateway no longer warn that `channels.sendProgress`
+  / `channels.sendToolHints` "is not a table": section-wide settings are not
+  channels whose cargo failed to parse.
+
+- The bundled EverOS plugin declares the keys the onboarding wizard records
+  (`root`, `owned`, `agent_id`, `user_id`), so a boot no longer warns about
+  each of them; an invalid type now fails loudly at activation instead.
+
+- A context builder that runs after the prefix is assembled (the Curator)
+  now degrades like the others: its segment is dropped and named, the turn
+  runs on. Chat channels render that one notice as its own short line, so an
+  answer produced without long-term memory says so.
+
+- `raven sentinel tick` builds the same Sentinel stack the gateway runs
+  (shared state store, pending decisions, routines), so a CLI tick reads and
+  writes the quotas a live gateway would instead of a private copy.
+
+- **Architecture, v0.2.0.** The runtime is now layered by binding time and the
+  boundaries are machine-enforced: a kernel closed to drive-by edits
+  (`raven/spine`), the papers
+  (`raven/contracts`, every interface a shelf implements), the assembly root
+  (`raven/core`, where config becomes a running agent through one door,
+  `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
+  and the entrances (`cli`, `rpc`, `acp`). Ten import-linter contracts run
+  in CI: inner layers never import an entrance (with no allowlisted
+  exceptions), the twelve channel adapters are mutually independent, the
+  kernel imports nothing else at module level, with no exception named at
+  all, the skill hub client never imports the plugin market, the cargo under
+  `raven/agent` never
+  imports the loop shell it is consumed by, the runtime never imports the
+  repo-level `evolver/` tool that drives it, it never imports the
+  `agents/` product definitions built on top of it, it never imports the
+  development trees, and the surfaces law
+  holds: the served surfaces (`rpc`, `acp`) never import the launcher and
+  rpc never imports acp -- what a served surface needs from the cli arrives
+  by registration, and acp reaches rpc only through the bootstrap facade. The papers hold shapes only (machinery such as provider retry
+  and tool-argument validation lives with the code that runs it, and a ledger
+  test keeps it there). `CONTEXT.md` records every package's seat.
+
+- The EverOS memory backend leaves the wheel: it is its own distribution
+  (`plugins-dist/everos-memory`), discovered through the `raven.plugins`
+  entry-point group like any third-party plugin. The default configuration is
+  unchanged; an install without the plugin keeps booting and says loudly that
+  the configured backend is missing.
+
+- The ACP client family (the client, the `acp_agent` sub-agent backend, the
+  `acp_dialects` translators) moves from `raven/agent` to the top-level
+  `raven/acp_client` package -- an address change only; `raven/acp` remains
+  the server side.
+
+- The playbook entry tools (`create_playbook`, `load_playbook`) are bundled
+  plugin cargo now (`raven/plugins/bundled/playbook`) and bind the
+  loop-assembled runtime late; `playbooks.enabled: false` behaves exactly as
+  before.
+
+- A running gateway's composition is sealed per generation: `RavenRuntime` is
+  frozen, and a composition change is the next generation through the swap
+  path (`raven gateway reload`), never an in-place mutation.
+
+- `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
+  module was sitting on pytest's collection pattern.
+
+- **The second read of every module.** Each package was read against a
+  nine-item checklist (module docstring, prose in the present tense, no
+  cross-package reach into a private name, no import of a surface, no symbol
+  without a reader, no public seam without a test, glossary terms, no CJK
+  outside the catalog, test naming) and each finding verified independently:
+  617 findings, 423 confirmed. What landed from it: every cross-package reach
+  into a private name became a public seam (`SessionManager.session_path`,
+  `update_providers.oauth_credentials_present`, `schema.section_has_credentials`,
+  `ImportState.path`, `EverOSBackend.state`, `BehaviorsExtractor.extract_session`,
+  `AgentLoop.notify_turn_complete`, `dag_graph.REQUIRED_NON_BLANK`); symbols with
+  no reader are gone (two `raven.auth` placeholders, two MCP inventory views,
+  three ops helpers, the playbook trigger expansion the generator supersedes, an
+  fd-level terminal redirect, an ISO timestamp helper, a duplicated JSON parser,
+  an unread `memory_dir`, an ignored `llm_provider` parameter, three unfilled
+  `SkillMeta` fields, a method alias, a no-op validator, two dead config paths);
+  three untested seams got tests (the message splitter three channel adapters
+  share, the WhatsApp bridge's progress hook, and the control-plane client behind
+  `raven gateway status|reload|stop`, driven against a real control plane); five
+  channel adapters that wrote their description after a statement -- so the class
+  had no docstring at all -- have one; the memory store's lock is named for what
+  it is (portable, not fcntl, not a no-op on Windows); and three generated
+  benchmark reports, a 97 KB routing sample and two PLAN.md files left the
+  package. Throughout, prose that narrated the change which produced a rule now
+  states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
+  or incident retellings.
+
+- The last two organs get instance sockets on the door: `build_runtime` takes
+  `context_engine=` (riding `EngineWiring`, where that organ's config already
+  rides) and `executor=` (beside `sandbox_config`, its config twin), and the
+  shell binds a handed instance instead of building its own. With provider,
+  session, routing, pool, memory and token_wise, all seven decision points are
+  now substitutable through the one door, and `tests/test_core_runtime_swap.py`
+  pins each one.
+
+- **The audit's second pass.** The confirmations above were written before
+  those passes landed, so the remainder was re-read against the tip and verified
+  again: 32 were already fixed, 3 were not defects, 67 stood. What that pass
+  found and fixed, beyond more of the same: `dry_query` in the repo-level
+  `evolver/` tree raised `TypeError` on every call, because a parameter removal
+  a few commits earlier had grepped `raven/` and `tests/` and the evolver is
+  neither -- it now has tests, so a signature change in `raven/` that breaks it
+  fails the suite. `MemoryStore` had two copies of the same compare-and-set
+  write; there is one, and the live caller is on it. `connect_mcp_servers` had
+  no caller and eight tests pinning its error policy while the connection
+  manager's own policy went unpinned; the function is gone and the tests drive
+  the live path (one of them had been passing against a handshake that never
+  completed). Four cross-package seams that only one caller crossed got tests,
+  and so did the personalizer, which nothing had constructed.
+
+- Two vocabularies the glossary had already ruled out are gone from the code.
+  `credential_kind` and the `CRED_*` constants are `auth_shape` and `SHAPE_*`
+  (CONTEXT.md gains the **Auth Shape** entry that separates what the wizard asks
+  for from what makes a connection valid), and the rates ladder no longer calls
+  itself pricing, which names the arithmetic on top of it.
+
+- **User-visible:** compaction stops calling itself archiving, because
+  `session.archive` is a different feature -- it hides a session and moves no
+  message. `session.compress` now answers `compacted N messages` where it said
+  `archived N messages`, and a `/new` that cannot fold the tail says "Memory
+  consolidation failed". The wire fields are unchanged: `session.compress` still
+  answers `removed`, and `session.archive` still takes `archived`.
+
+- The span vocabulary moves out of the kernel to `raven/observability/`.
+  Deciding what a raven span *means* -- that an LLM span carries its routing
+  backend, that a usage block prices out at a number -- needs the provider
+  registry and the token ledger, so the kernel was reaching into two shelves for
+  it. The machinery it keeps: context, suppression, the `instrument` decorator,
+  the store. Instrumented call sites pass their extractor as an argument, so
+  nothing moved but eighteen imports.
+
+- `RAVEN_HOME` and the config path resolve in `raven/home.py`, a kernel module
+  that imports nothing: the kernel has to find its own settings, and a core that
+  needed the config shelf to locate `config.json` would not be the closure the
+  raven-core wheel claims. `config/loader.py` re-exports the three names, so
+  every caller reads them where it always did. With that, **all ten
+  import-linter contracts carry no exceptions at all** -- the last three
+  `ignore_imports` entries in the tree are gone.
+
+- `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
+  surface, and the kernel may not import it. The glossary records what it is
+  and what `zh_lexicon` is not.
+
+- The sentinel planner's and the daily planner's system prompts are
+  per-language templates (`raven/templates/prompts/{en,zh}/`) loaded by
+  `raven.i18n.prompt`; their context blocks render through `t()`. An `en`
+  user's sentinel used to be prompted in Chinese.
+
+- Security: the three URL policies (egress fetch, market trust, browser
+  navigation) read one address vocabulary, `raven/security/hosts.py`
+  (canonical and browser-legacy spellings, UTS-46 mapping, IPv4 embedded in
+  IPv6, the names that mean this machine); the market's public-address check
+  and the browser's link-local check see through every spelling now.
+
+- Security: a base URL or redirect host the WeChat login exchange hands back
+  is adopted only over https and within the configured operator's domain;
+  a Discord `resume_gateway_url` outside the configured gateway's operator
+  is ignored in favour of the configured gateway. Both carry the bot token.
+
+- The evolver moves out of the `raven` package to the repo-level `evolver/`
+  tool (`python -m evolver run --config <yaml>`): it drives raven as a
+  library, ships in no wheel, and a fifth import-linter contract keeps the
+  runtime from importing it back.
+
+- Security: a market catalogue entry may name a remote MCP server only at a
+  public https address (a local or private one is refused before it is
+  written to the config); a redirect hop whose host does not resolve is
+  refused instead of waved through; an input image the model names by local
+  path honours `tools.restrictToWorkspace` like every file read.
+
+- The sentinel's replies and menus, the TUI launcher's errors, the WeChat
+  quote marker and the importers' preambles render in the user's language
+  through `raven.i18n` (English by default, Chinese when `language` is
+  `zh`); every `raven` command sets the language from the saved config.
+
+- The attention.md daily fire plan section is headed `## Today's fire plan`;
+  files written with the Chinese heading keep parsing through the legacy
+  alias table, which now lives with the other Chinese language data in
+  `raven/i18n/zh_lexicon.py` (cue words, punctuation classes, date counters).
+
+- `raven.i18n` translates user-facing text by its English source (`t("Back")`),
+  with the Chinese catalog in `raven/i18n/zh.py`; the onboarding wizard and
+  the CLI screens that carried `(en, zh)` pairs speak through it, and a test
+  keeps Chinese literals out of every other module (the files still carrying
+  them are listed, and the list only shrinks).
+
+- `AgentLoop` takes its five wiring bundles and nothing else: the flat
+  keyword shim that folded legacy names into them (used by tests only) is
+  gone, and the tests construct the bundles they mean.
+
+- `raven.memory_engine` is a package face: the store, the consolidator, the
+  skill catalog and router, the attention and behaviors parsers resolve as
+  names on the package (lazily), and nothing outside the engine imports its
+  submodules; a test keeps it so.
+
+- Modules that only type against the provider shapes (`LLMProvider`,
+  `LLMResponse`, `ToolCallRequest`, ...) import them from the paper,
+  `raven.contracts.llm_provider`; `raven.providers.base` is imported by the
+  adapters and fakes that subclass its machinery.
+
+- `settings.everosSet` is the RPC method's name; `settings.everos_set` remains
+  registered as its deprecated snake_case alias and is declared in the OpenRPC
+  document. The `-32012` error class is `NotSupportedError`; its wire message
+  keeps the `not_supported_in_v01` spelling for the same reason.
+
+- `RpcServer` takes the connected socket and nothing else: the POSIX pipe
+  path (`request_fd` / `notify_fd`, kept for a demo runner that no longer
+  exists) is gone with the workaround comments it needed, and the tests
+  hand the accepted connection over the way `raven tui` does.
+
+- The three asking capabilities (`QuestionResponder`, `ApprovalResponder`,
+  `Asker`) are papers in `raven/contracts/asking.py`; the tools and the ACP
+  client type against them from there.
+
+- Config version floor 4 retires three legacy leaves in the file instead of
+  in the schema: `skillForge.skillsDir` becomes the first `skillForge.localDirs`
+  entry, `skillForge.massLibraryDb` and `context.engine` are removed, each
+  with a notice on the first load. The model validators and the
+  DeprecationWarning that used to paper over them are gone.
+
+- The nine terminal-dialect RPC methods that had handlers but no contract
+  entry (`clipboard.paste`, `command.dispatch`, `delegation.status/pause`,
+  `input.detect_drop`, `session.interrupt`, `shell.exec`, `skills.manage`,
+  `subagent.interrupt`) are declared in `rpc-schema/openrpc.json` and
+  `METHOD_MODELS`; the registration guard's inherited allowlist is empty.
+
+- The Eval Engine has a config table (`evalEngine`, off by default) and
+  `build_runtime` mounts its three hooks when it is on; before, the engine
+  and its stack builder existed but nothing assembled them.
+
+- Config-slice admission (`admit_slice`, `dispense_channel_config`) lives in
+  `raven/config/admission.py`: the door validates config against a cargo
+  declaration, which is config vocabulary, so the channel commands, the
+  gateway manager, the trajectory redactor and the plugin registry reach it
+  without importing the assembly root.
+
+- **Generations.** The gateway rebuilds its runtime from config and swaps it in
+  at the loop's turn boundary instead of restarting: build the candidate first,
+  stop the serving generation, dispose it in a pinned order. Channels, cron,
+  the sentinel and the control plane survive the swap.
+
+- **Channel config lives with the adapter.** Each adapter's `spec.py` declares
+  its fields, defaults, secrecy and nesting; the twelve central per-channel
+  config classes are gone, `channels.<name>` sections are dynamic, and
+  `raven channels set/show` validate through the same admission door the
+  gateway dispenses through. Existing config files load unchanged.
+
+- The gateway's web channel is retired and its endpoint becomes the gateway
+  **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
+  published in the gateway lock; for this one release the lock also carries the
+  older `web_*` spelling of that address, so a reader from the previous release
+  still finds it): six methods only -- `gateway.channels.live`,
+  `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
+  `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
+  runtime from config and swaps it in without a restart (SIGHUP stays as the
+  POSIX alias of `reload --force`). The `gateway.web` config table is removed on load with a
+  notice: proactive replies and heartbeat output that `web.enabled: true` used to
+  send to the web channel (which had no clients) now reach your IM channels and
+  the page. The control port no longer serves deliverable downloads; those routes
+  stay on the page transport behind its session guard.
+
+- A docs-governance pass caught the living records up with the tree: the
+  source-language rule and its exemption zones are written down in
+  `AGENTS.md`, the repo-layout table covers every package it names as a
+  commit scope, and the term canon (`CONTEXT.md`) records the full plugin
+  kind roster, compaction, and the product path vocabulary. Stale design
+  docs under `docs/` are stamped as dated records and the report assets
+  (rendered HTML, SVG diagrams, a market-comparison note) are removed.
+
+- A comment-rectification pass brought in-tree comments back to the
+  comment rules: English only, why over what, no edit markers.
+
+- A model call that fails with a retryable error after the provider's own
+  seconds-long ladder now waits out a second, longer one
+  (`agents.defaults.llmErrorRetryDelays`, default 15/30/60s) before the turn
+  is given up; a body that is not JSON and a wording no bucket names are both
+  retried instead of ending the turn, and an image the endpoint refuses for its
+  size -- or a text-only model refuses at all -- is taken out of the
+  conversation and the call asked again. The streaming path, which every ACP
+  hosting uses, waits out the same ladder after its one reconnect instead of
+  failing the turn on the second error. An unattended run may also ask, with
+  `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
+  it had produced output to be asked again (the deck launcher does); off, the
+  turn fails as before.
 
 ### Fixed
-
-- When an agent cannot inherit the host's model, its launcher now names
-  what is missing -- for example the OpenAI Codex sign-in, with the
-  command that adds it -- instead of reporting that the host has no
-  provider key, which was untrue when the host's key sits on a provider
-  other than the one its selected model uses.
-
-- `raven doctor` warns when `permissions.mode` is `full` and when
-  `tools.sandbox.backend` is `none`. Ask-tier calls then run without asking,
-  and commands run on the host with no isolation. The exit code stays 0.
-  The identity prompt tells the agent to install a package into the project's
-  virtual environment, or a temporary one, and to leave the global environment
-  alone.
-
-- An unattended turn that asks a question now leaves a record of it. A one-shot
-  run lists those questions after the reply, beside the refused calls, and a
-  session opened later shows the same questions as their own notice. Previously
-  the only trace was the line the model was told ("the user did not answer;
-  proceed with best judgment"), and a sub-agent turn with no page subscribed
-  to the session never wrote even that into the session.
 
 - A heartbeat on an untouched `HEARTBEAT.md` no longer costs a model call every
   interval. The shipped template promises that a file of only headers and
@@ -330,16 +1981,6 @@ All notable changes to Raven are documented here.
   inside another session's `ssh`. The command's stdin now reads EOF at once, as the
   background executor's already did.
 
-- `exec` on this computer refuses a typed `ssh` to a machine the connection
-  registry knows, and names the two paths that exist for it: `machine=<id>`
-  for a look (capped at 60 s, nothing left running) and the on-call agent's
-  `ops_submit` for anything longer. Two field runs on 2026-09-14 had put the
-  machine's address in the task statement, and the coding nodes started GPU
-  work over raw ssh from the local shell 58 times, past the cap, the sweep
-  and the ledger. `scp` and `rsync` to the machine are untouched; a registry
-  that cannot be read refuses nothing. Options are read the way ssh reads
-  them -- a bundled group like `-vp 58717`, and options written after the
-  host -- so a spelling ssh honours does not read as port 22.
 - The web file viewer opens a sub-agent's report again. `/file` anchored the
   state-directory fence on the session's working directory whenever the page
   named a session, so the fence exempted `~/.raven/tmp/<channel>` and refused
@@ -385,6 +2026,7 @@ All notable changes to Raven are documented here.
   saves halfway through no longer leaves that shorter deck as the record of
   what was drawn; taking one page back and standing in for it can no longer end
   the whole build.
+
 - A ppt-engine draft build counts against the tier's build cap, and the build
   that reaches the cap delivers the deck whether or not it asked for a draft.
   Counting only finished builds left the cap inert on the runs it was for: two
@@ -392,6 +2034,7 @@ All notable changes to Raven are documented here.
   across four runs the author passed `draft: true` on 7/7, 13/13 and 5/5 of its
   calls. A draft already costs a whole build, so there is one count rather than
   two, and every reply now says how much of it is spent.
+
 - A ppt-engine draft build says that a draft is not what delivers the deck. The
   one place that said so sat behind a check for a published path, which a draft
   never has, so on the only path that needed it the sentence never appeared.
@@ -406,12 +2049,15 @@ All notable changes to Raven are documented here.
   author's own data and placed in the same position. The pages stay on offer as
   prototypes, and the line beside each render, the page read back as code and
   `ppt_template`'s `next_step` all carry that instruction.
+
 - `ppt_outline` and `ppt_template`'s clone reply name `ppt_build`. Both told an
   author to write the program and neither said where a program goes or what
   runs it, which is the sentence the run above acted on last.
+
 - A theme id that is not in the build directory's `ppt_theme` raises a KeyError
   naming the entries that are there, and says a palette of one's own is a copy
   with fields changed rather than an edit to `themes.json`.
+
 - Four kinds of ppt-engine finding that six audited deck runs showed to churn
   without changing the deck are no longer repeated: findings about a page the
   runner stood in for (besides the failure itself), `repeated_layout` on
@@ -422,7 +2068,102 @@ All notable changes to Raven are documented here.
   the outline is not held to the outline's claims, and a reading whose quoted
   headline is not on the page it names is dropped.
 
+- A gpt-image deployment behind an OpenAI-compatible Images API is asked for one of
+  the three frames the family draws (`1536x1024`, `1024x1536`, `1024x1024`) instead
+  of a size such as `1536x864` that it refuses; other model families keep the
+  ratio table, and OpenRouter still takes `aspect_ratio`.
+
+- The research agent's `high` mode may answer a settled general-knowledge
+  question without searching, the way `medium` already could: its overlay no
+  longer turns the plain-first door off, so a question such as an emperor's
+  given name is not sent through search, fetch and a 360-second reviewer wait
+  by the host's default tier. `max` keeps researching every question. The
+  research model's reasoning effort now follows the tier as well: `medium`
+  runs at medium, `high` and `max` at high.
+  The plain-first judge is asked once more when its reply names the wrong keys
+  (`{"correct": true}` for `plain_ok` and `sound`), which on the default model
+  sent about one settled question in ten into research for a parsing miss.
+
+- A sub-agent's result relay into a page session runs on the page spine's lane
+  for that session, behind whatever the page is running there, instead of on
+  the gateway spine beside it: the two used to run at once, drawing the same
+  tool calls twice and delivering the result twice. The watch-work judgement
+  the loop pays on a turn's first look is no longer paid on a relay or a
+  sentinel notice (the runtime speaking, not the owner), and is cut after 60
+  seconds when the model does not answer; one relay turn spent 1229 seconds in
+  it.
+
+- A sub-agent instance the user is chatting with is reported to the main agent
+  as answering, with the time it began answering and a line saying it is the
+  user's conversation, instead of as an instance with no turns yet -- which the
+  main agent read as free and dispatched its own task onto. A spawn that
+  reaches an instance mid-answer stays `pending` until the instance is free,
+  and no longer takes over the instance's live view: the direct chat's steps
+  stay on screen, and the spawn's own appear once it runs.
+
+- When reasoning runs to the model's output ceiling and the loop feeds it back
+  for the model to continue, the continuation's opening clause -- the tail of
+  the cut thought -- no longer reaches the reader as the head of the answer.
+
+- A shell command the safety guard refuses is refused as a command, not as the
+  task: the tool result no longer says "stop this operation immediately", which
+  an unattended agent read as the whole job and ended a deck build on.
+
+- `read_file` handed a URL says so and names `web_fetch`, instead of a "File
+  not found" that reads as a misspelling and sends the caller retrying the
+  same URL with prefixes.
+
+- The deck engine's material scan reads every path in one prose match, so two
+  documents joined by an ideographic comma both arrive instead of the second
+  being dropped without a word.
+
+- The deck launcher (`agents/raven-ppt`) writes the host's or the environment's
+  HTTPS proxy into `tools.web.proxy`, since the engine's fetch deliberately
+  ignores the process environment; it disables `ask_user`, which an
+  unattended build cannot answer; and on the own-key branch against OpenRouter
+  it hands the same key to the image generator (`tools.media.image.apiKey`,
+  or `PPT_IMAGE_API_KEY`), so a deck can generate its backdrops.
+
+- An `inputs.<key>` placeholder naming a key the template's `inputs` never defined rendered
+  the literal text `None` into the sub-agent's prompt -- indistinguishable from a real answer
+  -- instead of being refused as the typo it almost always is. Fixed on both
+  `run_subagent_dag` and `spawn`; an explicitly null input (`{"key": null}`) is refused the
+  same way, since it carries no more of a usable value than an absent one.
+
+- A file's contents reached a sub-agent's prompt unfenced whenever the file sat outside the
+  sub-agent history root -- which is most files, and includes a repository someone checked
+  out into the working directory. The fence now follows the kind of reference instead of the
+  directory the file was found in: a `{{ ref: }}` or file-shaped `inputs.<key>` read is
+  wrapped as `file` wherever it was read from, and another node's output as `subagent`. A
+  literal `inputs.<key>` string stays verbatim, because the author typed it into the call,
+  and so does every `_path` form, which carries a path rather than any text to fence.
+
+- A `spawn` call refused before dispatch -- a stateless sub-agent given an `instance` handle,
+  an empty `prompt_template`, or a rejected file reference -- could leave a previous call's
+  completion metadata sitting uncollected if that call's `instance` handle was never picked up
+  (no tool-event sink listening on the channel), and have a later, unrelated call report the
+  stale handle as its own. The handle is now cleared at the top of every call, ahead of every
+  refusal.
+
+- A product engine served over ACP homed itself inside the host's Agent
+  home, so every dispatch to it failed before it started -- a raven engine
+  refuses a working directory that contains its own home -- while
+  capability probing still passed. Product engine homes now live under the
+  raven data directory (`product_acp_home` in
+  `raven/config/product_render.py`), checked against the configured host
+  Agent home, with a per-product `*_ACP_HOME` override that wins outright.
+
 ### Removed
+
+- The built-in `deep_research` tool is gone, along with the stand-in that
+  took its name when no key was configured and the `raven deep-research`
+  command that configured it. The settings page no longer carries its row,
+  and `tools.deepResearch` is no longer read: a load-time migration drops
+  that section. A `deep_research` entry in `tools.disabledTools` is left as
+  written, since that denylist also governs a plugin tool of the same name.
+  Reports written under `<workspace>/deep_research/` stay on disk; nothing
+  writes there any more. The capability moved to the agent surface -- the
+  first-party Raven-Research agent, and MiroThinker as a sub-agent preset.
 
 - **The vendored subagents tree.** The five product forks under `subagents/`
   leave the repository: the products live under `agents/` as thin launchers on
@@ -444,692 +2185,6 @@ All notable changes to Raven are documented here.
   transition name) are deliberately not carried: no shipped artifact knows
   that name, and addressing one answers with the explicit not-configured
   refusal.
-
-### Added
-
-- A slide deck opens in the WebUI file viewer as a PDF. Clicking a `.pptx`
-  asks the file route for `render=pdf`: the deck's own published `<stem>.pdf`
-  is served when it is beside the deck and current, otherwise LibreOffice
-  renders one into a cache under raven's state directory keyed by path, size
-  and mtime, one render at a time per deck. The viewer says it is rendering
-  until the frame loads, offers the PDF in a tab and the deck itself as a
-  download, and falls back to the open-with note with the gateway's words when
-  the host has no LibreOffice, the render times out, or nothing is produced.
-- The deck engine's `ppt_generate_image` rides the host's `image_generate`
-  transport: whichever image model, base and key the deployment configured under
-  `tools.media.image` serves the deck (gpt-image behind OpenRouter, a chat-routed
-  model such as Nano Banana, an OpenAI-compatible gateway), the spend is recorded
-  where the host records it, and a Settings edit lands on the next call. The tool
-  takes `references` (figure ids, source files or paths, up to six) to match or
-  vary, the host's eight aspect ratios, and reports the `width` and `height` that
-  came back; it is withheld while the host's section names neither a key nor a
-  model, and follows the section live in both directions. The PNG's name is the
-  caller's stem plus a digest of the effective inputs -- the model, the quality
-  the host actually sends (Settings' value where one is set), the ratio, the
-  references and the prompt -- so the same ask lands on the same name and the
-  page that already places that file needs no edit; nothing is answered from
-  disk, and every call generates over what the last ask left there. `quality` has
-  no default of the deck tool's own: unset, the host resolves it exactly as it
-  does for its own `image_generate`, which sends the
-  default model no quality at all; naming one on the call still overrules that. Plugins get three new `ServiceLocator` grants (`media_config`,
-  `media_proxy`, `web_config`), one `RuntimeHandles` grant (`usage_recorder`),
-  and may declare `configured()` on a contributed tool (checked at admission,
-  dispensed on the `ToolSpec`) to be withheld and offered on the same live lane
-  as the built-in media tools. The Raven-PPT launcher
-  inherits the host's whole image section and follows it live (`selectionConfig`),
-  with `PPT_IMAGE_API_KEY`, `PPT_IMAGE_API_BASE` and `PPT_IMAGE_MODEL` as the
-  product's own overrides; the ppt-engine slice's `webProxy` and
-  `imageSearch.apiKey` become overrides of the host's `tools.web`.
-  The ppt-engine slice's `image` key is an override of that grant, not the
-  channel it is read through. `CONTRACTS_VERSION` moves to 16. The default image model is now
-  `openai/gpt-image-2.5-sunburst` (Settings presets follow), and a chat-routed
-  image model (Nano Banana and its kind) is asked for the requested frame through
-  OpenRouter's `image_config.aspect_ratio`; before, it answered in its own default
-  frame whatever ratio the caller asked for.
-- `mode: stint`: a playbook that takes many rounds instead of one. It declares
-  roles rather than nodes, and one round is one sub-agent graph, so a thirty-round
-  run is thirty graphs on the shared dispatch path -- each validated and charged
-  to the same hourly dispatch budget an ordinary graph is, approved once at the
-  start, and resumable by any process because the stint is a file. Roles hand over
-  through files in the project, not through a conversation: each opens a fresh one
-  every round.
-
-  What a role may write is declared in the playbook (`owns`, `appends`), rendered
-  into its prompt, and undone afterwards, with the file it
-  wrote kept under `violations/`. The undo reads the stage's own commits as well
-  as the worktree, so a role that commits a stray write is caught too.
-
-  `verify[]` runs real commands -- a build, a test run -- and a failure goes back
-  to the role that caused it with the failure text, up to `maxHandbacks`. Once
-  that budget is spent the round moves on with the failure on the record -- a
-  failed node would skip every role downstream, and a reviewer has to see a
-  failed build -- and the next round's prompt carries it.
-
-  A stint runs in a checkout of its own, cut from the project's head, so hours of
-  its commits do not collide with the conversation that started it.
-  `stop.maxRounds` defaults to 10 and is capped at 99; `stop.until` lets a role
-  end a stint early by reporting a marker on a line of its own. A round the
-  dispatch budget turns down pauses the stint rather than ending it, and says so.
-  A person can watch, extend, pause, stop, resume and answer questions from
-  `raven playbook stints ...`, the RPC surface and the page.
-
-- `raven playbook stint`: lay a project out for a stint (`init` writes `.stint/`:
-  a guard file per role, the shared prose, a link to the project's own
-  specification), and work the backlog its roles share (`task`, `ask`, `confirm`).
-
-- `raven agent --message-file` reads the turn's message from a file instead of
-  argv, and `raven agent --permission-mode ask|smart|full` binds the turn's
-  reading of the ask tier. Both are what an unattended driver needs: a prompt on
-  the command line is readable by every process on the box, and a one-shot has
-  nobody to ask when a tool call routes to approval.
-
-- The research agent's three modes are three stop rules rather than three sizes
-  of one budget. `medium` may answer a settled general-knowledge question
-  without searching: the first model call has the web tools withheld and a
-  `request_research` tool offered, a plain draft is put to an independent judge,
-  and an accepted one ships saying no sources were consulted (`plainFirst`,
-  medium and high). `high` terminates on the reviewer, with three revisions and an
-  evidence round on a rejection. `max` adds an evidence floor: a draft resting on
-  fewer than 18 readable pages from 8 sites is sent back to research, at most
-  twice (`evidenceFloor`). The reviewer asks for its verdict as a forced tool
-  call, runs one uninterrupted attempt with 16384 tokens, and records why it
-  failed open. The sufficiency judge can release a turn from the search listing
-  before any page is opened (`sufficiency.judgeListing`). The product label
-  moves to `dr@3.7-filetools-askuser-derive-numeric-cite-rank-tiers-plain-high`.
-
-- `web_search` and `web_fetch` route through a vendor the deployment picks:
-  Serper, AnySearch, SerpApi, Tavily, Exa, Brave Search or Firecrawl for
-  search, Jina Reader, AnySearch, Tavily, Exa or Firecrawl for pages. Keys are
-  held once per vendor under `tools.web.providers.<vendor>.apiKey`, so a
-  vendor that serves both tools is pasted once; the pre-vendor
-  `tools.web.search.apiKey` and `tools.web.jinaApiKey` still count. The
-  onboarding wizard's web step asks for the vendor before the key (also
-  `--search-provider` / `--fetch-provider` / `--search-api-key` /
-  `--fetch-api-key`), the settings page and `settings.set` accept the new
-  keys, `raven doctor` names the selected vendor's slot, and `~/.raven/env`
-  mirrors every vendor key. A page reader selected without its key falls back
-  to Jina, and the log says so. The vendored research checkout's launcher
-  inherits the host's vendor choice and keys when its own config names none and
-  the key resolves for it; the in-repo research plugin keeps its own separate
-  search key.
-
-- The deck engine delivers to the path the user named. `ppt_build` takes a
-  `deliver_to` -- an absolute `.pptx` path, or a directory ending in `/` that
-  keeps the deck's own name -- states it once for the deck's life
-  (`deck/state/delivery.json`), and every build that publishes then writes
-  `out/` as before and copies the same bytes there, first delivery and every
-  revision after; a refused build leaves the last good deck standing there.
-  The deck's PDF preview is written beside it under the same stem, but only
-  where nothing holds that `.pdf` name already: a file there is the user's own
-  and nothing here replaces it, the preview stays under `out/`, and the reply
-  says so for the author to pass on. The copy is recorded in `published.json`
-  with `role: "delivery"`, the build reply tells the author the delivered
-  path and slide count in words to repeat to the user, and the turn hook
-  verifies a `MEDIA:` line naming that path by its digest while a copy made
-  with `exec` at any other path is named as not the deliverable and answered
-  with the argument that writes it there.
-
-### Fixed
-
-- A gpt-image deployment behind an OpenAI-compatible Images API is asked for one of
-  the three frames the family draws (`1536x1024`, `1024x1536`, `1024x1024`) instead
-  of a size such as `1536x864` that it refuses; other model families keep the
-  ratio table, and OpenRouter still takes `aspect_ratio`.
-
-### Changed
-
-- The research agent's sufficiency judge no longer passes a transport timeout
-  the provider rejects; before this every judge call failed open before it was
-  sent, so `medium` never actually stopped early.
-
-- The ppt engine (`plugins-dist/ppt-engine`) carries the fork's layout work:
-  eight bundled templates instead of twelve (four dropped for looks), a curated
-  set of reference pages any deck may borrow across templates through
-  `adapt(prs, prototype(bundled('<template>'), N), ...)`, `add_unit` /
-  `remove_unit` / `clone_shape` / `swap_icon` for growing, shrinking and
-  re-drawing a template's repeated units, fill in reading order with the
-  numbered-tile rule, and measurements that read a tinted card as a card
-  (`is_filled`) and report a body nothing divides (`undivided_body`). A build
-  that succeeds still hands its stderr back as warnings, and a shape placed at
-  more than twice its box's proportion warns instead of refusing. `backdrop`
-  lays a generated picture behind everything on a page, cover-cropped and
-  washed to an `alpha` of its own, and `layout_pictures` reaches the
-  photographs a template keeps on its layouts -- which `ppt_template` now
-  lists and a new `layout_picture` warning names, since `pictures={...}` on a
-  cloned page never touched them.
-- A card's plane is now told apart from its ground by colour difference rather
-  than luminance ratio, and pushed towards the accent until it is (the beige
-  template's cards sat at a dE of 7 on its own ground and were cards only to the
-  file); the soft tile is deepened so it still leads the plane. A picture frame
-  with its own outline is filled with `cover` instead of shrunk inside it. A
-  tinted-header table's emphasised row takes a tint a step deeper than the
-  header's, and every mark a table says as a glyph is set in one symbol face at
-  1.3x the copy, so a scale's full and half steps come out one size. The image
-  tool asks for a photographic manner for any subject with a face in the world
-  and the template's manner only for a concept.
-- The deck engine's replies to the author are slimmer: `ppt_template` states a
-  reply budget instead of letting the host cut a five-page reference in half
-  (pages that do not fit are named in `pages_not_read`), folds a run of
-  custom-drawn decoration into one line (a Bauhaus contents page went from
-  12,800 to 4,000 characters), states the imports once per reply and a run's
-  type on one line; `ppt_build` repeats a page's plan only when that page has
-  something to fix.
-- A model call that fails with a retryable error after the provider's own
-  seconds-long ladder now waits out a second, longer one
-  (`agents.defaults.llmErrorRetryDelays`, default 15/30/60s) before the turn
-  is given up; a body that is not JSON and a wording no bucket names are both
-  retried instead of ending the turn, and an image the endpoint refuses for its
-  size -- or a text-only model refuses at all -- is taken out of the
-  conversation and the call asked again. The streaming path, which every ACP
-  hosting uses, waits out the same ladder after its one reconnect instead of
-  failing the turn on the second error. An unattended run may also ask, with
-  `agents.defaults.llmRetryAfterOutput`, for a streamed call that failed after
-  it had produced output to be asked again (the deck launcher does); off, the
-  turn fails as before.
-- The deck engine's second reader is bounded: one reading stops at 240 s and
-  names the pages it did not get to, a deck's readings together stop at 15 min,
-  a reading is recorded at the version of the pixels it read (the build's own
-  render of the page) rather than the code that drew it, so a revision re-reads
-  only the pages whose render changed, the reader answers in one call with room
-  for a reasoning model's thinking (no doubled-budget retry), and it reads the
-  build's renders instead of rendering the deck again. Measured on a 20-page
-  run, 18 whole-deck builds had each re-read the pages the last revision
-  touched, 136 of the run's 327 minutes. The deck launcher keeps a configured
-  context window that is under the catalog's ceiling as a cap.
-- `setup.status` now reads the config file `RAVEN_HOME` points at, like every
-  other reader; it used to answer for `~/.raven/config.json` regardless.
-- `raven channels *` and the gateway no longer warn that `channels.sendProgress`
-  / `channels.sendToolHints` "is not a table": section-wide settings are not
-  channels whose cargo failed to parse.
-- The bundled EverOS plugin declares the keys the onboarding wizard records
-  (`root`, `owned`, `agent_id`, `user_id`), so a boot no longer warns about
-  each of them; an invalid type now fails loudly at activation instead.
-- A context builder that runs after the prefix is assembled (the Curator)
-  now degrades like the others: its segment is dropped and named, the turn
-  runs on. Chat channels render that one notice as its own short line, so an
-  answer produced without long-term memory says so.
-- `raven sentinel tick` builds the same Sentinel stack the gateway runs
-  (shared state store, pending decisions, routines), so a CLI tick reads and
-  writes the quotas a live gateway would instead of a private copy.
-- **Architecture, v0.2.0.** The runtime is now layered by binding time and the
-  boundaries are machine-enforced: a kernel closed to drive-by edits
-  (`raven/spine`), the papers
-  (`raven/contracts`, every interface a shelf implements), the assembly root
-  (`raven/core`, where config becomes a running agent through one door,
-  `build_runtime`), the shelves (channels, plugins, providers, memory, ...),
-  and the entrances (`cli`, `rpc`, `acp`). Eight import-linter contracts run
-  in CI: inner layers never import an entrance (with no allowlisted
-  exceptions), the twelve channel adapters are mutually independent, the
-  kernel imports nothing else at module level, with no exception named at
-  all, the cargo under `raven/agent` never
-  imports the loop shell it is consumed by, the runtime never imports the
-  repo-level `evolver/` tool that drives it, it never imports the
-  `agents/` product definitions built on top of it, and the surfaces law
-  holds: the served surfaces (`rpc`, `acp`) never import the launcher and
-  rpc never imports acp -- what a served surface needs from the cli arrives
-  by registration, and acp reaches rpc only through the bootstrap facade. The papers hold shapes only (machinery such as provider retry
-  and tool-argument validation lives with the code that runs it, and a ledger
-  test keeps it there). `CONTEXT.md` records every package's seat.
-- The EverOS memory backend leaves the wheel: it is its own distribution
-  (`plugins-dist/everos-memory`), discovered through the `raven.plugins`
-  entry-point group like any third-party plugin. The default configuration is
-  unchanged; an install without the plugin keeps booting and says loudly that
-  the configured backend is missing.
-- The ACP client family (the client, the `acp_agent` sub-agent backend, the
-  `acp_dialects` translators) moves from `raven/agent` to the top-level
-  `raven/acp_client` package -- an address change only; `raven/acp` remains
-  the server side.
-- The playbook entry tools (`create_playbook`, `load_playbook`) are bundled
-  plugin cargo now (`raven/plugins/bundled/playbook`) and bind the
-  loop-assembled runtime late; `playbooks.enabled: false` behaves exactly as
-  before.
-- A running gateway's composition is sealed per generation: `RavenRuntime` is
-  frozen, and a composition change is the next generation through the swap
-  path (`raven gateway reload`), never an in-place mutation.
-- `raven/agent/subagent/test_state.py` is `probe_state.py`: a production
-  module was sitting on pytest's collection pattern.
-- **The second read of every module.** Each package was read against a
-  nine-item checklist (module docstring, prose in the present tense, no
-  cross-package reach into a private name, no import of a surface, no symbol
-  without a reader, no public seam without a test, glossary terms, no CJK
-  outside the catalog, test naming) and each finding verified independently:
-  617 findings, 423 confirmed. What landed from it: every cross-package reach
-  into a private name became a public seam (`SessionManager.session_path`,
-  `update_providers.oauth_credentials_present`, `schema.section_has_credentials`,
-  `ImportState.path`, `EverOSBackend.state`, `BehaviorsExtractor.extract_session`,
-  `AgentLoop.notify_turn_complete`, `dag_graph.REQUIRED_NON_BLANK`); symbols with
-  no reader are gone (two `raven.auth` placeholders, two MCP inventory views,
-  three ops helpers, the playbook trigger expansion the generator supersedes, an
-  fd-level terminal redirect, an ISO timestamp helper, a duplicated JSON parser,
-  an unread `memory_dir`, an ignored `llm_provider` parameter, three unfilled
-  `SkillMeta` fields, a method alias, a no-op validator, two dead config paths);
-  three untested seams got tests (the message splitter three channel adapters
-  share, the WhatsApp bridge's progress hook, and the control-plane client behind
-  `raven gateway status|reload|stop`, driven against a real control plane); five
-  channel adapters that wrote their description after a statement -- so the class
-  had no docstring at all -- have one; the memory store's lock is named for what
-  it is (portable, not fcntl, not a no-op on Windows); and three generated
-  benchmark reports, a 97 KB routing sample and two PLAN.md files left the
-  package. Throughout, prose that narrated the change which produced a rule now
-  states the rule: no design-doc sections, ticket ids, commit hashes, phase codes
-  or incident retellings.
-- The last two organs get instance sockets on the door: `build_runtime` takes
-  `context_engine=` (riding `EngineWiring`, where that organ's config already
-  rides) and `executor=` (beside `sandbox_config`, its config twin), and the
-  shell binds a handed instance instead of building its own. With provider,
-  session, routing, pool, memory and token_wise, all seven decision points are
-  now substitutable through the one door, and `tests/test_core_runtime_swap.py`
-  pins each one.
-- **The audit's second pass.** The confirmations above were written before
-  those passes landed, so the remainder was re-read against the tip and verified
-  again: 32 were already fixed, 3 were not defects, 67 stood. What that pass
-  found and fixed, beyond more of the same: `dry_query` in the repo-level
-  `evolver/` tree raised `TypeError` on every call, because a parameter removal
-  a few commits earlier had grepped `raven/` and `tests/` and the evolver is
-  neither -- it now has tests, so a signature change in `raven/` that breaks it
-  fails the suite. `MemoryStore` had two copies of the same compare-and-set
-  write; there is one, and the live caller is on it. `connect_mcp_servers` had
-  no caller and eight tests pinning its error policy while the connection
-  manager's own policy went unpinned; the function is gone and the tests drive
-  the live path (one of them had been passing against a handshake that never
-  completed). Four cross-package seams that only one caller crossed got tests,
-  and so did the personalizer, which nothing had constructed.
-- Two vocabularies the glossary had already ruled out are gone from the code.
-  `credential_kind` and the `CRED_*` constants are `auth_shape` and `SHAPE_*`
-  (CONTEXT.md gains the **Auth Shape** entry that separates what the wizard asks
-  for from what makes a connection valid), and the rates ladder no longer calls
-  itself pricing, which names the arithmetic on top of it.
-- **User-visible:** compaction stops calling itself archiving, because
-  `session.archive` is a different feature -- it hides a session and moves no
-  message. `session.compress` now answers `compacted N messages` where it said
-  `archived N messages`, and a `/new` that cannot fold the tail says "Memory
-  consolidation failed". The wire fields are unchanged: `session.compress` still
-  answers `removed`, and `session.archive` still takes `archived`.
-- The tripwire that guards the surface the vendored product installers import
-  named four symbols while those trees reach for eight. It reads the surface out
-  of `subagents/*/install.py`, `install.sh` and the README now, so a rename that
-  would break a downstream install fails here instead of there.
-- The span vocabulary moves out of the kernel to `raven/observability/`.
-  Deciding what a raven span *means* -- that an LLM span carries its routing
-  backend, that a usage block prices out at a number -- needs the provider
-  registry and the token ledger, so the kernel was reaching into two shelves for
-  it. The machinery it keeps: context, suppression, the `instrument` decorator,
-  the store. Instrumented call sites pass their extractor as an argument, so
-  nothing moved but eighteen imports.
-- `RAVEN_HOME` and the config path resolve in `raven/home.py`, a kernel module
-  that imports nothing: the kernel has to find its own settings, and a core that
-  needed the config shelf to locate `config.json` would not be the closure the
-  raven-core wheel claims. `config/loader.py` re-exports the three names, so
-  every caller reads them where it always did. With that, **all five
-  import-linter contracts carry no exceptions at all** -- the last three
-  `ignore_imports` entries in the tree are gone.
-- `raven.i18n` is seated as an inner cross-cutting leaf: it may not import a
-  surface, and the kernel may not import it. The glossary records what it is
-  and what `zh_lexicon` is not.
-- The sentinel planner's and the daily planner's system prompts are
-  per-language templates (`raven/templates/prompts/{en,zh}/`) loaded by
-  `raven.i18n.prompt`; their context blocks render through `t()`. An `en`
-  user's sentinel used to be prompted in Chinese.
-- Security: the three URL policies (egress fetch, market trust, browser
-  navigation) read one address vocabulary, `raven/security/hosts.py`
-  (canonical and browser-legacy spellings, UTS-46 mapping, IPv4 embedded in
-  IPv6, the names that mean this machine); the market's public-address check
-  and the browser's link-local check see through every spelling now.
-- Security: a base URL or redirect host the WeChat login exchange hands back
-  is adopted only over https and within the configured operator's domain;
-  a Discord `resume_gateway_url` outside the configured gateway's operator
-  is ignored in favour of the configured gateway. Both carry the bot token.
-- The evolver moves out of the `raven` package to the repo-level `evolver/`
-  tool (`python -m evolver run --config <yaml>`): it drives raven as a
-  library, ships in no wheel, and a fifth import-linter contract keeps the
-  runtime from importing it back.
-- Security: a market catalogue entry may name a remote MCP server only at a
-  public https address (a local or private one is refused before it is
-  written to the config); a redirect hop whose host does not resolve is
-  refused instead of waved through; an input image the model names by local
-  path honours `tools.restrictToWorkspace` like every file read.
-- The sentinel's replies and menus, the TUI launcher's errors, the WeChat
-  quote marker and the importers' preambles render in the user's language
-  through `raven.i18n` (English by default, Chinese when `language` is
-  `zh`); every `raven` command sets the language from the saved config.
-- The attention.md daily fire plan section is headed `## Today's fire plan`;
-  files written with the Chinese heading keep parsing through the legacy
-  alias table, which now lives with the other Chinese language data in
-  `raven/i18n/zh_lexicon.py` (cue words, punctuation classes, date counters).
-- `raven.i18n` translates user-facing text by its English source (`t("Back")`),
-  with the Chinese catalog in `raven/i18n/zh.py`; the onboarding wizard and
-  the CLI screens that carried `(en, zh)` pairs speak through it, and a test
-  keeps Chinese literals out of every other module (the files still carrying
-  them are listed, and the list only shrinks).
-- `AgentLoop` takes its five wiring bundles and nothing else: the flat
-  keyword shim that folded legacy names into them (used by tests only) is
-  gone, and the tests construct the bundles they mean.
-- `raven.memory_engine` is a package face: the store, the consolidator, the
-  skill catalog and router, the attention and behaviors parsers resolve as
-  names on the package (lazily), and nothing outside the engine imports its
-  submodules; a test keeps it so.
-- Modules that only type against the provider shapes (`LLMProvider`,
-  `LLMResponse`, `ToolCallRequest`, ...) import them from the paper,
-  `raven.contracts.llm_provider`; `raven.providers.base` is imported by the
-  adapters and fakes that subclass its machinery.
-- `settings.everos_set` is the RPC method's name; `settings.everosSet` stays
-  registered and declared (marked deprecated in the OpenRPC document) until
-  the TUI reads the new one. The `-32012` error class is `NotSupportedError`;
-  its wire message keeps the `not_supported_in_v01` spelling for the same
-  reason.
-- `RpcServer` takes the connected socket and nothing else: the POSIX pipe
-  path (`request_fd` / `notify_fd`, kept for a demo runner that no longer
-  exists) is gone with the workaround comments it needed, and the tests
-  hand the accepted connection over the way `raven tui` does.
-- The three asking capabilities (`QuestionResponder`, `ApprovalResponder`,
-  `Asker`) are papers in `raven/contracts/asking.py`; the tools and the ACP
-  client type against them from there.
-- Config version floor 4 retires three legacy leaves in the file instead of
-  in the schema: `skillForge.skillsDir` becomes the first `skillForge.localDirs`
-  entry, `skillForge.massLibraryDb` and `context.engine` are removed, each
-  with a notice on the first load. The model validators and the
-  DeprecationWarning that used to paper over them are gone.
-- The nine terminal-dialect RPC methods that had handlers but no contract
-  entry (`clipboard.paste`, `command.dispatch`, `delegation.status/pause`,
-  `input.detect_drop`, `session.interrupt`, `shell.exec`, `skills.manage`,
-  `subagent.interrupt`) are declared in `rpc-schema/openrpc.json` and
-  `METHOD_MODELS`; the registration guard's inherited allowlist is empty.
-- The Eval Engine has a config table (`evalEngine`, off by default) and
-  `build_runtime` mounts its three hooks when it is on; before, the engine
-  and its stack builder existed but nothing assembled them.
-- Config-slice admission (`admit_slice`, `dispense_channel_config`) lives in
-  `raven/config/admission.py`: the door validates config against a cargo
-  declaration, which is config vocabulary, so the channel commands, the
-  gateway manager, the trajectory redactor and the plugin registry reach it
-  without importing the assembly root.
-- **Generations.** The gateway rebuilds its runtime from config and swaps it in
-  at the loop's turn boundary instead of restarting: build the candidate first,
-  stop the serving generation, dispose it in a pinned order. Channels, cron,
-  the sentinel and the control plane survive the swap.
-- **Channel config lives with the adapter.** Each adapter's `spec.py` declares
-  its fields, defaults, secrecy and nesting; the twelve central per-channel
-  config classes are gone, `channels.<name>` sections are dynamic, and
-  `raven channels set/show` validate through the same admission door the
-  gateway dispenses through. Existing config files load unchanged.
-- The gateway's web channel is retired and its endpoint becomes the gateway
-  **control plane** (`ws://127.0.0.1:<port>/ws`, loopback, per-boot token
-  published in the gateway lock; for this one release the lock also carries the
-  older `web_*` spelling of that address, so a reader from the previous release
-  still finds it): six methods only -- `gateway.channels.live`,
-  `.qr`, `.start`, `gateway.status`, `gateway.reload`, `gateway.shutdown`.
-  `raven gateway reload|status|stop` drive it from the CLI; `reload` rebuilds the
-  runtime from config and swaps it in without a restart (SIGHUP stays as the
-  POSIX alias of `reload --force`). The `gateway.web` config table is removed on load with a
-  notice: proactive replies and heartbeat output that `web.enabled: true` used to
-  send to the web channel (which had no clients) now reach your IM channels and
-  the page. The control port no longer serves deliverable downloads; those routes
-  stay on the page transport behind its session guard.
-- A docs-governance pass caught the living records up with the tree: the
-  source-language rule and its exemption zones are written down in
-  `AGENTS.md`, the repo-layout table covers every package it names as a
-  commit scope, and the term canon (`CONTEXT.md`) records the full plugin
-  kind roster, compaction, and the product path vocabulary. Stale design
-  docs under `docs/` are stamped as dated records and the report assets
-  (rendered HTML, SVG diagrams, a market-comparison note) are removed.
-- A comment-rectification pass brought in-tree comments back to the
-  comment rules: English only, why over what, no edit markers.
-
-### Added
-
-- A top-level `agents/` directory holds product definitions built on the
-  installed runtime, A/B-able against the frozen vendored `subagents/`. The
-  first product, Raven-Research (transition name Raven-Research-NG), rebuilds
-  the vendored research agent's
-  whole flow as a plugin (`agents/raven-research/plugins/research-flow`) on
-  public seams alone; the sixth import-linter contract keeps the runtime from
-  importing the products back.
-- Plugins can contribute agent hooks (`[[plugin.contributes.hooks]]`) beside
-  memory backends and tools; a config may name extra plugin roots
-  (`plugins.dirs`); a contributed tool that needs what only the assembled
-  loop owns declares `bind_runtime(handles)` and receives the frozen
-  `RuntimeHandles` grants. A factory may decline by returning `None`, a
-  binder by raising `BindDeclinedError` -- both leave the built-in serving.
-- The agent-hook surface is at version 3: `ctx.session_history` is populated
-  at every phase (the iteration phases included, post-consolidation), the
-  iteration context carries the turn's `max_iterations` and
-  `context_window_tokens` -- the cap the loop actually enforces and the
-  active binding's window, so a budget-shaped hook needs no config mirror --
-  `CompositeHook` chains every child's diagnostic `notes`, and a hook's
-  `observers` stash is filed at persist time, after the send fire.
-- The generation freeze law is written where its machine already stood:
-  FREEZE seals member identity, and exactly three declared doors reconcile a
-  member's data plane mid-generation after the durable truth is written --
-  the agents table (`apply_agents`), the MCP server set (`apply_mcp_config`)
-  and the default binding (`set_default_binding`). A door-roster guard pins
-  who may spell those reaches (the `getattr`/`hasattr` string forms
-  included), the plugin market holds the loop through the new `McpHost`
-  paper instead of `Any`, and the Generation glossary body now carries the
-  identity-vs-interior distinction its own carve-out already implied.
-- ACP session modes: `acp.modes` in a product's config becomes a client's
-  mode picker (`session/set_mode`), each mode a per-session overlay over the
-  base configuration. The mode entry alone carries `maxToolIterations`; the
-  overlay ships no copy, since the loop hands its hooks the enforced cap
-  directly (`ctx.max_iterations`).
-- `spawn` now records every sub-agent call on disk, the way `run_subagent_dag`
-  already recorded every node: one directory per call under
-  `<agent home>/sessions/<group>/<chat_id>/subagents/spawn/`, holding
-  the prompt, the result (or the error), and a small `meta.json`. Previously a
-  `spawn` left no file at all -- its reply went straight into the conversation
-  and nothing else -- so the two ways of delegating are now equally
-  inspectable. Failed, aborted and cancelled calls are recorded too, and the
-  prompt is written before dispatch, so a call that never returns still shows
-  what was asked. The directory is append-only: there is no expiry or size cap,
-  and reclaiming it means deleting the session, which removes its metadata
-  directory too. DAG runs dominate the volume, because a node's rendered prompt
-  inlines its dependencies' full output.
-- A `run_subagent_dag` graph can read an earlier run's output from the same
-  conversation. A completed node is named by its id alone (`{{ <id>.output }}` /
-  `{{ <id>.output_path }}`, or an `inputs` entry of the form `{"node": "<id>"}`), needing no
-  `depends_on` -- there is nothing left to order. `depends_on` may name it anyway, which
-  records the dependency without ordering anything. Previously nothing carried across runs:
-  the outputs sit under the session's metadata directory, which no working directory can
-  be aimed at, so no relative path reached them. A node with no output to read --
-  failed, skipped, cancelled, or in a run still in flight -- keeps its id but is
-  refused, naming which case it is. Node ids are unique per conversation for this to
-  work (see Breaking Changes).
-- A DAG file reference (`{{ ref: }}` / `{{ ref_path: }}` / an `inputs` `{"file": ...}`)
-  resolves inside two roots now, the session working directory and this conversation's
-  sub-agent history (`<session_dir>/subagents/`, so the `spawn` records beside the DAG runs
-  are reachable too), and `@nodes/<node_id>...` addresses this session's own node artifacts
-  by path -- which is what reaches a node's own prompt file, since the short
-  `{{ <node_id>.output }}` form cannot. The second root stops at that directory rather than
-  at agent home: agent home also holds user memory, installed skills, and every *other*
-  conversation's transcript and sub-agent history, which `workdir.py` already keeps off the
-  agent's file surface, and a DAG graph is LLM-authored and auto-run.
-  Every `_path` form is now checked to exist before its sub-agent is dispatched.
-- A DAG run stopped by `/stop` or a gateway shutdown now records each unfinished node by
-  the stage it was in: one still running when the stop arrived is recorded `cancelled`, and
-  one still pending stays `skipped`, in the session index on the way out. Those routes
-  cancel the run task, which skipped the finalizer, so the ids the run had claimed stayed
-  readable as "still being written" forever -- a later graph could then neither reuse them
-  nor read them, and the two refusals it got contradicted each other. The id-reuse refusal
-  also stops advising a reference to a node that has no output to reference.
-- Sessions started by `raven tui` / `raven agent` record the directory they were
-  launched in as `Session.metadata["project_dir"]`. The group directory name is
-  a lossy slug, so this is what identifies the project.
-- A DAG node stopped mid-flight is now recorded `cancelled` rather than `skipped`, in the
-  session index, the manifest, and both the TUI and web frontends, and it stays on the
-  instance list, where a `skipped` node is filtered out on the grounds that it has no
-  transcript, no cost, and no clock -- untrue of a node that ran.
-- Cancelling a sub-agent on the ACP transport now actually stops the turn on the agent:
-  raven sends the protocol's `session/cancel` and waits up to 5 seconds for
-  `stopReason: "cancelled"`. Previously it only abandoned its own wait, so the agent ran
-  the turn to completion and answered a request nobody was listening for -- and for a
-  stateful agent the half-finished turn stayed in its session. If the wait expires the
-  session binding is dropped, so the next dispatch opens a fresh session instead of
-  colliding with a turn that is still running.
-- The gateway now closes the ACP connection pool on the way out. Those adapter servers
-  are launched with `start_new_session=True` and receive none of the gateway's signals,
-  so every gateway exit used to orphan them.
-- The wheel now carries the sub-agent tree, so a `pip` / `uv tool install` has the
-  four agents without a source checkout. `subagents/` is force-included file by file
-  from git's index rather than as a directory: hatchling applies no exclude config to
-  a force-included path, and a built working copy holds each fork's filled-in `.env`
-  next to its source. That adds 67 MiB to the download and 106 MiB unpacked, half of
-  it the PPT templates. On first run the tree is copied -- not moved -- to
-  `<raven home>/subagents`, once per raven version, where an upgrade cannot take the
-  built venvs with it. The copy under site-packages stays, because the installer owns
-  it and it is what resolution falls back to when the copy-out fails, so an install
-  holds the tree twice: about 212 MiB across the two. There is no expiry or size cap,
-  and deleting the raven home copy reclaims half; the rest goes when raven itself is
-  uninstalled. An editable install is skipped -- it reads the tree beside the package
-  already. This replaces
-  the beta-only path, where `make beta` staged the tree and injected a force-include
-  line into a temporary `pyproject.toml` so the agents reached testers and no one
-  else; both mechanisms at once made every wheel build fail on a duplicate archive
-  path, and the tree now reaches stable releases and `git+` installs as well.
-- Setup now offers the sub-agents that ship with raven. Step 6 of the wizard
-  lists each folder under `subagents/` and asks whether to run it on the model it is
-  tuned for, on this raven's LLM, or not at all, then writes the roster entries. The
-  tuned model leads the menu because it is the one a key of its own buys: inheritance
-  copies the host's `agents.defaults.model` too, so a folder without a key stops running
-  the model it was built around. All three are tuned for models served through
-  OpenRouter, so a raven that already has an OpenRouter key is not asked for a second
-  copy of it - and that reuse reads `providers.openrouter` alone, never a key parked in
-  `custom`, which belongs to whichever private gateway that section names. It replaces the
-  deep_research step. Previously `subagents/install.sh` did the registering,
-  which could not work on a first install: it runs before `~/.raven/config.json` exists,
-  read that file to decide whether an agent had an LLM to fall back on, and so declined
-  to register every folder on exactly the machines that had just been set up. It now
-  builds the venvs and stops there, and its `--config` flag is gone with the write it
-  fed. A folder whose venv is not built is not offered: a name in the roster that fails
-  the moment the model picks it is worse than an absent one.
-
-- A delegated run's record now keeps the tool name the transport itself used, and the
-  mapping into Raven's own names (`exec`, `read_file`, ...) happens when those rows go to
-  a client rather than when they are written. A record that stored `exec` could never be
-  read back for whether the agent ran a shell command or wrote a todo list, and the record
-  is what a later reader has. Every front end keeps the one vocabulary its verb table is
-  keyed by, so nothing a user sees changes, with two deliberate exceptions: a
-  claude-agent-acp `Grep` carrying both a pattern and a path scope used to arrive with the
-  pattern destroyed and now arrives whole, and a claude tool outside the twelve the old
-  table listed -- `TodoWrite`, `ExitPlanMode`, `MultiEdit`, `SlashCommand`, every `mcp__*`
-  tool -- used to be reported as `tool_call` or as `exec` and now arrives under its own
-  name. The second cannot be mapped back, because the coarse `kind` it was derived from is
-  not stored; a todo-list write labelled `exec` was wrong, and an unlisted name is rendered
-  from the name itself.
-
-- An `openai`-backed sub-agent's conversation now holds the middle of its run, not just the
-  question and the answer. An endpoint that reports its own steps -- a deep-research model
-  sending `reasoning_steps` -- has those searches, fetches and thoughts written into the
-  instance log as tool calls and their results, and its token cost recorded, where before
-  the backend published none of it and a call left two rows and no cost. Measured on one
-  captured research call: two rows became nine. Each step keeps the endpoint's own name for
-  what it did and its own argument keys, so `fetch_url_content` is not reported as Raven's
-  `web_fetch` -- it fetches and then runs an extraction, which is a different tool. Buffered
-  and streamed responses differ in shape, a streamed thought arriving as token fragments,
-  and both produce the same rows; a streamed run republishes on every step, so a panel
-  watching it sees the run progress rather than only its result.
-
-- `spawn` now takes a `prompt_template` and the same placeholder grammar `run_subagent_dag`
-  already had: `{{ ref:<path> }}` / `{{ ref_path:<path> }}` inline a file's contents or its
-  path, and an `inputs` mapping fills `{{ inputs.<key> }}` / `{{ inputs.<key>.path }}`. Paths
-  resolve inside the same two roots as a DAG node's -- the working directory and this
-  conversation's sub-agent history (`<session_dir>/subagents/`) -- so an earlier spawn's own
-  `Record:` directory is reachable without restating its output, and the `_path` forms are
-  refused for a sub-agent the roster tags `[no-local-files]`. The parameter was `task`, a
-  literal string with no such grammar; renamed to `prompt_template` (see Breaking Changes).
-  The completion announcement always shows the template as written, never the rendered prompt;
-  the `Record:` line beside it only names where the rendered version, with any `{{ ref: }}`
-  file inlined, is written on disk.
-- A prompt template's `{{ ... }}` text that matches none of the six placeholder shapes
-  (`ref`, `ref_path`, `input`/`inputs.<key>`, `input_path`, `output`, `output_path`) is
-  ordinary text now, on both `spawn` and `run_subagent_dag`. A stray `{{ }}` in an example, or
-  a note that happens to use double braces, used to be refused outright as `unrecognized
-  placeholder '...'`; the grammar now only claims a body actually shaped like one of the six,
-  and leaves everything else untouched.
-- Three more products join `agents/`: `raven-oncall`, `raven-code` and
-  `raven-ppt` rebuild their vendored twins on public seams (flow plugins
-  `oncall-flow` and `code-flow`; ppt ships no product-local plugins), each
-  accepted by transport-face equivalence against the frozen `subagents/`
-  tree and recorded in a migration closure record (oncall-closure-0901,
-  code-closure-0902, ppt-closure-0902).
-- Plugins can contribute three more kinds beside memory backends, tools and
-  hooks: background services (`[[plugin.contributes.services]]`), per-call
-  tool gates (`tool_gates`) and session observers (`session_observers`).
-  The papers are `raven/contracts/services.py`,
-  `raven/contracts/tool_gate.py` and `raven/contracts/session_events.py`;
-  `CONTRACTS_VERSION` moves to 5.
-- The ppt deck-building engine ships as its own distribution
-  (`plugins-dist/ppt-engine`, plugin id `ppt-engine`): eleven deck tools
-  and a staging hook on the `raven.plugins` entry-point group, with the
-  deck skill corpus and templates as package data.
-
-### Fixed
-
-- The research agent's `high` mode may answer a settled general-knowledge
-  question without searching, the way `medium` already could: its overlay no
-  longer turns the plain-first door off, so a question such as an emperor's
-  given name is not sent through search, fetch and a 360-second reviewer wait
-  by the host's default tier. `max` keeps researching every question. The
-  research model's reasoning effort now follows the tier as well: `medium`
-  runs at medium, `high` and `max` at high.
-  The plain-first judge is asked once more when its reply names the wrong keys
-  (`{"correct": true}` for `plain_ok` and `sound`), which on the default model
-  sent about one settled question in ten into research for a parsing miss.
-- A sub-agent's result relay into a page session runs on the page spine's lane
-  for that session, behind whatever the page is running there, instead of on
-  the gateway spine beside it: the two used to run at once, drawing the same
-  tool calls twice and delivering the result twice. The watch-work judgement
-  the loop pays on a turn's first look is no longer paid on a relay or a
-  sentinel notice (the runtime speaking, not the owner), and is cut after 60
-  seconds when the model does not answer; one relay turn spent 1229 seconds in
-  it.
-- A sub-agent instance the user is chatting with is reported to the main agent
-  as answering, with the time it began answering and a line saying it is the
-  user's conversation, instead of as an instance with no turns yet -- which the
-  main agent read as free and dispatched its own task onto. A spawn that
-  reaches an instance mid-answer stays `pending` until the instance is free,
-  and no longer takes over the instance's live view: the direct chat's steps
-  stay on screen, and the spawn's own appear once it runs.
-- When reasoning runs to the model's output ceiling and the loop feeds it back
-  for the model to continue, the continuation's opening clause -- the tail of
-  the cut thought -- no longer reaches the reader as the head of the answer.
-- A shell command the safety guard refuses is refused as a command, not as the
-  task: the tool result no longer says "stop this operation immediately", which
-  an unattended agent read as the whole job and ended a deck build on.
-- `read_file` handed a URL says so and names `web_fetch`, instead of a "File
-  not found" that reads as a misspelling and sends the caller retrying the
-  same URL with prefixes.
-- The deck engine's material scan reads every path in one prose match, so two
-  documents joined by an ideographic comma both arrive instead of the second
-  being dropped without a word.
-- The deck launcher (`agents/raven-ppt`) writes the host's or the environment's
-  HTTPS proxy into `tools.web.proxy`, since the engine's fetch deliberately
-  ignores the process environment; it disables `ask_user`, which an
-  unattended build cannot answer; and on the own-key branch against OpenRouter
-  it hands the same key to the image generator (`tools.media.image.apiKey`,
-  or `PPT_IMAGE_API_KEY`), so a deck can generate its backdrops.
-- An `inputs.<key>` placeholder naming a key the template's `inputs` never defined rendered
-  the literal text `None` into the sub-agent's prompt -- indistinguishable from a real answer
-  -- instead of being refused as the typo it almost always is. Fixed on both
-  `run_subagent_dag` and `spawn`; an explicitly null input (`{"key": null}`) is refused the
-  same way, since it carries no more of a usable value than an absent one.
-- A file's contents reached a sub-agent's prompt unfenced whenever the file sat outside the
-  sub-agent history root -- which is most files, and includes a repository someone checked
-  out into the working directory. The fence now follows the kind of reference instead of the
-  directory the file was found in: a `{{ ref: }}` or file-shaped `inputs.<key>` read is
-  wrapped as `file` wherever it was read from, and another node's output as `subagent`. A
-  literal `inputs.<key>` string stays verbatim, because the author typed it into the call,
-  and so does every `_path` form, which carries a path rather than any text to fence.
-- A `spawn` call refused before dispatch -- a stateless sub-agent given an `instance` handle,
-  an empty `prompt_template`, or a rejected file reference -- could leave a previous call's
-  completion metadata sitting uncollected if that call's `instance` handle was never picked up
-  (no tool-event sink listening on the channel), and have a later, unrelated call report the
-  stale handle as its own. The handle is now cleared at the top of every call, ahead of every
-  refusal.
-- A product engine served over ACP homed itself inside the host's Agent
-  home, so every dispatch to it failed before it started -- a raven engine
-  refuses a working directory that contains its own home -- while
-  capability probing still passed. Product engine homes now live under the
-  raven data directory (`product_acp_home` in
-  `raven/config/product_render.py`), checked against the configured host
-  Agent home, with a per-product `*_ACP_HOME` override that wins outright.
 
 ### Breaking Changes
 
@@ -1154,6 +2209,7 @@ All notable changes to Raven are documented here.
   duplicate is refused before dispatch, naming what holds it. An id whose task failed, was
   skipped, was cancelled or is still running is refused with which of those it was, rather
   than resolving to whatever partial file is on disk.
+
 - A spawn's record moved out of `subagents/spawn/<call_id>/` into the flat
   `subagents/nodes/` root the DAG already used, as `<node_id>.prompt.md`,
   `<node_id>.out.md`, `<node_id>.error.md`, `<node_id>.meta.json` and
@@ -1162,9 +2218,11 @@ All notable changes to Raven are documented here.
   listing draws them and no id addresses them. The `Record:` line in a completion
   announcement names the call's output file now, not a directory. Direct chats are
   unaffected and keep a directory per call.
+
 - On the wire, `call_id` keeps its name and changes its value: it carries the node id the
   model chose rather than a minted timestamp. It is no longer time-ordered, so the
   `subagent.list` ordering reads the registry's own clock instead of sorting on the id.
+
 - A `run_subagent_dag` node id must now be unique across the whole conversation, not
   just within its own graph, and a graph that reuses one an earlier run took is refused
   before any node is dispatched. That is what makes an id an address: a later graph reads
@@ -1172,12 +2230,14 @@ All notable changes to Raven are documented here.
   a generic id (`plan`, `step1`) across runs in one conversation used to run and now need
   a fresh id each time; the refusal says which run holds the id and offers referencing it
   instead.
+
 - `@runs/<run_id>/...` no longer addresses anything: node artifacts moved to a flat,
   id-keyed layout, and the address is the node id, `@nodes/<node_id>...`, which also
   reaches a node's own prompt file -- something the short `{{ <id>.output }}` form
   cannot. A reference still spelled `@runs/...` is not specially rejected; it falls
   through to a literal workdir-relative path, which normally does not exist, so it
   fails the same not-found check as any other bad reference.
+
 - No migration ships for the registry: `nodes.json` starts empty and any
   `mas_dag/index.json` written by an earlier build is ignored. Every node id used in a
   conversation before this change becomes free again -- a conversation that used
@@ -1186,6 +2246,7 @@ All notable changes to Raven are documented here.
   way, but the reuse itself is a visible behaviour change. Its artifacts still exist
   and are still readable, by absolute path under the session's sub-agent history; with
   `@runs/` retired they need the full path, not a prefix.
+
 - DAG run directories moved from `<workdir>/.ravenx_dag/<run_id>/` to
   `<agent home>/sessions/<group>/<chat_id>/subagents/mas_dag/<run_id>/`,
   and the per-session `index.json` moved with them. The history is keyed on the
@@ -1193,6 +2254,7 @@ All notable changes to Raven are documented here.
   repointing a session's working directory no longer orphans the runs already
   recorded. Existing `.ravenx_dag/` directories are neither migrated nor read;
   move them by hand to keep them visible in the UI.
+
 - `raven agent -w <dir>` no longer starts an isolated agent instance rooted at
   `<dir>`. `-w`/`--workspace` now sets the working directory a turn reads and
   writes files in (defaulting to the process launch directory); use the new
@@ -1203,8 +2265,10 @@ All notable changes to Raven are documented here.
   the current directory) now fails outright: a working directory must be
   absolute, so the run exits with a parameter error. Both cases are fixed by
   switching the flag to `--home`.
+
 - `raven tui` and `raven agent` now default their working directory to the
   process launch directory instead of agent home.
+
 - `raven gateway` now gives each *channel* its own working directory instead of
   running every conversation in the agent-home root. Set it per channel with
   `channels.<name>.workspace`,
@@ -1212,6 +2276,7 @@ All notable changes to Raven are documented here.
   `~/.raven/tmp/<channel>`. Existing files already at the agent-home root are
   left in place. A single session can still be pinned elsewhere from the web
   UI, taking effect on the next turn.
+
 - Session transcripts on `raven tui` and `raven agent` moved from
   `sessions/<channel>/<id>.jsonl` to `sessions/<project slug>/<id>.jsonl`,
   where the slug is the launch directory flattened the way Claude Code names
@@ -1219,8 +2284,10 @@ All notable changes to Raven are documented here.
   instead of piling up under `cli/` and `tui/`. Gateway transcripts keep the
   channel as their directory. Sessions written before this keep their existing
   file and still resume by id; nothing is moved.
+
 - Each session now also has a metadata directory beside its transcript,
   `sessions/<group>/<id>/`, holding the sub-agent call history (`subagents/`).
+
 - Shadow-git checkpoints now follow the working directory instead of always
   snapshotting agent home, so launching the agent inside a real project
   directory checkpoints that project. On `raven gateway` the same rule gives
@@ -1233,6 +2300,7 @@ All notable changes to Raven are documented here.
   interrupted turn edits a project rather than a home. Run from a project
   directory, or set `runtime.checkpoint.policy` to `never`. Private keys are
   excluded everywhere else: `*.key` and `*.pem` never matched `id_ed25519`.
+
 - `raven agent --continue` and the TUI's resume-most-recent now look only at the
   project you launched in, instead of the newest session on that channel
   anywhere. Resuming across projects also corrupted what it resumed, by
@@ -1240,12 +2308,14 @@ All notable changes to Raven are documented here.
   Sessions written before project grouping carry no project attribution and
   stay reachable from any directory. Cron and sentinel delivery are unchanged:
   they still forward to whichever session is live, wherever it started.
+
 - A working directory may no longer be agent home itself, nor any directory
   containing it, on the CLI flag or the per-session override. Working at agent
   home puts `user_memory/` and `skills/` one relative path away from every
   write the agent makes; working above it (`~/.raven`, `~`) additionally puts
   `config.json` and `oauth/` inside the per-turn shadow-git snapshot. Use a
   subdirectory.
+
 - `spawn`'s `task` parameter is renamed `prompt_template`, matching the field name
   `run_subagent_dag` already used for a node's own prompt -- a literal string still works
   exactly as before, and the field additionally accepts the placeholder grammar described
@@ -1257,13 +2327,29 @@ All notable changes to Raven are documented here.
   first and fall back to `task`, so a transcript recorded before this rename keeps labeling
   its delegation rows correctly.
 
-## v0.1.0 - Public Preview - 2026-06-30
+## Earlier releases (v0.1.1 - v0.1.13)
+
+These patch releases predate the detailed entries above.
+
+| Version | Date | Summary |
+|---|---|---|
+| [v0.1.13](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.13) | 2026-08-25 | A patch release that binds the model to the conversation instead of the process, adds `raven trajectory` for turning an agent failure into a deterministic regression test, and stops one failed MCP server from cancelling the whole turn. |
+| [v0.1.12](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.12) | 2026-08-18 | A patch release that makes cron reminders fire where they were created, puts skill hub installs behind a safety policy gate, and lifts the stale 64k context window off upgraded installs, plus fixes to first run, provider auth errors, and the one-line installer. |
+| [v0.1.11](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.11) | 2026-08-10 | Endpoint failover for provider requests, image attachments for vision-capable models, and a hermes import source, plus fixes to live model switching, OAuth sign-in, and media understanding. |
+| [v0.1.10](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.10) | 2026-07-31 | A patch release that opens provider support up to everything LiteLLM routes to, adds an approval flow for protected shell commands, and reworks the TUI transcript into episodes. |
+| [v0.1.9](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.9) | 2026-07-23 | A patch release with reliability and CLI/TUI polish fixes. |
+| [v0.1.8](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.8) | 2026-07-22 | A patch release adding cold-start import from other AI tools, plus install-path and CLI/TUI reliability fixes. |
+| [v0.1.7](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.7) | 2026-07-21 | A patch release adding opt-in kNN task-level model routing and a deep-vs-regular choice for deep research, plus tracing and TUI polish. |
+| [v0.1.6](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.6) | 2026-07-19 | Adds the self-evolution stack and AppWorld benchmark entry points, plus startup and TUI responsiveness fixes. |
+| [v0.1.5](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.5) | 2026-07-16 | Adds a deep-research tool and an in-tree tracing subsystem. |
+| [v0.1.4](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.4) | 2026-07-13 | Patch release: a new `raven upgrade` command, a smoother onboard OAuth login, and plugin/dependency fixes. |
+| [v0.1.3](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.3) | 2026-07-10 | Raven 0.1.3 makes setup and TUI use more dependable with working EverOS memory, verified model onboarding, curated model choices, and stronger session reliability. |
+| [v0.1.2](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.2) | 2026-07-01 | Raven 0.1.2 is a patch release for the Windows compatibility and install/runtime fixes that landed after v0.1.1. |
+| [v0.1.1](https://github.com/EverMind-AI/Raven/releases/tag/v0.1.1) | 2026-07-01 | Raven 0.1.1 is a patch release focused on making the public install path reliable after v0.1.0, with TUI, onboarding, security dependency, and documentation updates from the June 30 to July 1 work. |
+
+## v0.1.0 - 2026-06-30
 
 Raven is now available as an Apache-2.0 open-source project.
-
-This is the first public preview release: stable enough for developers to try,
-inspect, and build around, while the CLI surface, plugin contracts, and runtime
-internals may still evolve before v1.0.
 
 ### Highlights
 
@@ -1286,14 +2372,9 @@ curl -fsSL https://raven.evermind.ai/install.sh | bash
 
 - Version: `0.1.0`
 - Tag: `v0.1.0`
-- Stability: public preview
 - License: Apache-2.0
 
 ### Notes
 
-- Raven is not yet API stable.
-- The public install endpoint and package distribution flow should be verified
-  before publishing the GitHub Release.
 - Future releases should use semantic versioning: patch releases for fixes,
-  minor releases for new capabilities, and v1.0 once the public CLI and plugin
-  contracts are stable.
+  minor releases for new capabilities, and major releases for breaking changes.

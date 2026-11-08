@@ -4,11 +4,10 @@ A knowledge base stores documents you deliberately supply and, when configured
 with embeddings, retrieves matching passages. It is separate from the memory
 backend's recollection of conversations.
 
-The current checkout provides the knowledge library and `knowledge.*` RPC
-handlers. It does **not** contain a complete mounted knowledge-management
-feature in the current WebUI source, nor a `raven knowledge` CLI. This guide
-therefore describes the verified library/RPC workflow; it does not assume
-buttons that every installation exposes.
+Manage bases and documents on the WebUI's Knowledge page. Attach bases to a
+conversation in the composer so the agent can retrieve passages with
+`knowledge_search`. For scripts and integrations, use the Python library or
+`knowledge.*` RPC methods.
 
 ## Choose documents, knowledge, or memory
 
@@ -19,9 +18,23 @@ buttons that every installation exposes.
 | Keep a set of source documents without vector search | A base created with `embedding: false` |
 | Recall user preferences or agent experience | [Memory and skills](skills-and-extensions.md) |
 
-Creating a base does not automatically add its contents to every model prompt.
-A client must search the intended bases and explicitly pass relevant passages
-to the task. Retrieved text is evidence to evaluate, not trusted instructions.
+The agent searches the bases selected for the conversation when it needs
+supporting material, and receives passages with document references. Retrieved
+text is evidence to evaluate, not trusted instructions.
+
+## Use knowledge in the WebUI
+
+1. Open **Knowledge** and create a base. Choose an embedding model for semantic
+   retrieval, or keep the base as a document collection.
+2. Add files, URLs, or notes. Check each document's indexing status and preview
+   its content before using it as a source.
+3. Select the intended bases in the conversation composer, then ask a question
+   about those documents. The `knowledge_search` tool searches that selection.
+4. Follow the returned source references to inspect the passages used in the
+   answer.
+
+The Knowledge page also provides document organization, search, previews, and
+base settings. Use the library/RPC workflow below for programmatic access.
 
 ## Configure embeddings
 
@@ -44,9 +57,11 @@ chunks, and search sends the query, to that endpoint. These operations can
 incur charges and disclose their text to that provider.
 
 The vector index is embedded/file-backed; a separate vector service is not
-required. Bases remember their embedding model and dimensions. A later
-incompatible model/width change causes a stale-base error, not silent reuse of
-incompatible vectors. Plan a new base and reindex preserved sources.
+required. Each base records its embedding provider, model, and dimensions.
+Changing the default model leaves existing bases on their recorded model.
+Use the base's settings to switch models and rebuild its index. If an indexed
+base's model is unavailable, search falls back to keyword matching and reports
+which bases used that fallback.
 
 ## A small end-to-end example
 
@@ -127,15 +142,20 @@ live filesystem subscription.
 
 ## Formats, updates, and deletion
 
-Use `knowledge.status.extensions` or `supported_extensions()` rather than an
-assumed upload list. The current default parsers are structured Markdown/HTML
-and plain-text families, including CSV/JSON/YAML. Do not assume PDF or Office
-indexing is present merely because another Raven feature previews those files.
+Use `knowledge.status.extensions` or `supported_extensions()` for the full
+upload list. The default parsers support PDF, Word (`.docx`, `.doc`), spreadsheets
+(`.xlsx`, `.xls`, `.csv`), presentations (`.pptx`, `.ppt`), images, structured
+Markdown/HTML, and plain-text formats including JSON/YAML.
+
+Legacy Office formats (`.doc`, `.xls`, `.ppt`) use LibreOffice for conversion.
+Image indexing requires a configured vision model. PDF layout and table
+analysis use the resources installed by `raven resources`; see
+[Quick Start](quick-start.md) for installation options.
 
 Notes can be revised with `knowledge.documents.update_note`, then reindexed.
 Reindexing replaces that document's vectors rather than appending duplicates.
 Changing chunk settings requires reindexing existing documents to apply them;
-changing embedding identity requires rebuilding the base.
+switching embedding models rebuilds the index from the base's stored documents.
 
 `knowledge.documents.delete` removes a document and associated stored data;
 `knowledge.bases.delete` removes the base with its documents and index.
@@ -155,14 +175,13 @@ replace the hosted RPC access checks.
 
 | Symptom | Check |
 | --- | --- |
-| No management page in WebUI | Current frontend support; use a compatible RPC client or the library |
 | Embedding not configured | Provider/model pair, endpoint capability, and credentials |
 | Indexing failed | Document error, actual parser support, and embedding endpoint |
 | Search empty | Indexed chunks, selected base ids, and whether embeddings were enabled |
-| Stale base | Original model/width versus current embedding configuration |
+| Keyword fallback or stale base | The base's recorded model, provider credentials, and dimensions; restore access or switch its model in base settings |
 | Changed source not reflected | Stored copy versus live source; update/import and index again |
-| Answer lacks evidence | Supply retrieved passages explicitly and retain their source references |
+| Answer lacks evidence | Select the intended bases in the composer, check indexed content, and ask the agent to cite retrieved passages |
 
-Implementation: `raven/knowledge/`, `raven/rpc/methods/knowledge.py`, and
-`raven/rpc/knowledge_preview.py`. Source/schema validation is different from a
-live embedding-provider compatibility test.
+Implementation: `ui-web/src/features/knowledge/`, `raven/knowledge/`,
+`raven/agent/tools/knowledge.py`, `raven/rpc/methods/knowledge.py`, and
+`raven/rpc/knowledge_preview.py`.

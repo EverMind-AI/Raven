@@ -48,15 +48,37 @@ describe('the upgrade shade writer', () => {
     const shade = open()
     shade.fail('Failed', 'disk full')
     expect(document.querySelector('.upcard')!.innerHTML).toBe(
-      '<div class="upbar" hidden=""><i></i></div><div class="t">Failed</div>'
-      + '<div class="sub">disk full\ngui.upg.manual</div>'
-      + '<div class="cmd"><code>raven upgrade</code><button>gui.dtl.copy</button></div>'
-      + '<div class="foot"><button class="btn">gui.upg.close</button></div>'
+      '<div class="upbar" hidden=""><i></i></div><div class="t">Failed</div>' +
+        '<div class="sub">disk full\ngui.upg.manual</div>' +
+        '<div class="cmd"><code>raven upgrade</code><button>gui.dtl.copy</button></div>' +
+        '<div class="foot"><button class="btn">gui.upg.close</button></div>'
     )
     ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
     expect(writeText).toHaveBeenCalledWith('raven upgrade')
+
+    /* A refusal that carries its own command: the card shows it line per line
+       and the copy button copies exactly it, not the default. */
+    shade.fail('Failed', 'source checkout', 'git pull\n./install.sh')
+    expect(document.querySelector('.cmd code')!.innerHTML).toBe('git pull<br>./install.sh')
+    ;(document.querySelector('.cmd button') as HTMLButtonElement).click()
+    expect(writeText).toHaveBeenCalledWith('git pull\n./install.sh')
+
     ;(document.querySelector('.foot button') as HTMLButtonElement).click()
     expect(document.querySelector('.upshade')).toBeNull()
+  })
+
+  it('drops the command row and the manual label when no command can work', () => {
+    wire()
+    const shade = open()
+    shade.fail('Failed', 'malformed install metadata', null)
+
+    /* The refusal proved the default cannot work, so the card offers nothing:
+       no command row, and no 'run this in a terminal instead' pointing at a
+       command that is not shown. */
+    const card = document.querySelector('.upcard')!.innerHTML
+    expect(card).toContain('malformed install metadata')
+    expect(document.querySelector('.cmd')).toBeNull()
+    expect(card).not.toContain('gui.upg.manual')
   })
 
   it('closes only the node represented by its handle', () => {

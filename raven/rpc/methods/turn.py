@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -42,30 +43,44 @@ if TYPE_CHECKING:
     from raven.providers.binding import ModelBinding
     from raven.rpc.dispatcher import Dispatcher
     from raven.rpc.methods.session import AgentLoopFactory
+    from raven.rpc.question_broker import QuestionBroker
 
 _TURN_FAILED_CODE = -32099
 
 
-def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
+def _resolve_media(paths: list[str] | None, root: Path | None = None) -> tuple[Media, ...]:
     """Turn the front end's attachment paths into ``Media`` for the spine.
 
     Resolved with the filesystem tools' own policy rather than against the
-    process cwd. A caller sends what it holds, and what it holds is a workspace
-    path (``uploads/shot.png``) -- the same spelling every file tool takes, and
-    one that resolves to nothing from wherever ``raven serve`` happens to have
-    been started. The downstream check is a bare ``is_file()`` that drops a miss
-    in silence, so a cwd-relative resolve loses the attachment with no error
+    process cwd. A caller sends what it holds: the file an upload wrote, named
+    absolutely (the web UI's composer stages ``fs.upload``'s ``abs_path``), an
+    upload's path relative to agent home (``uploads/shot.png``) from a caller
+    that keeps that answer, or the path of a file the front end attached where
+    it already was -- the spellings every file tool takes, and a relative one
+    resolves to nothing from wherever ``raven serve`` happens to have been
+    started. The downstream check is a bare ``is_file()`` that drops a miss in
+    silence, so a cwd-relative resolve loses the attachment with no error
     anywhere.
 
     The mime is left generic on purpose: ``render.build_user_content`` sniffs
     the magic bytes, and the channels' own intake does the same thing here.
     A path that does not resolve, or resolves outside the allowed directory,
     is dropped with a log line -- one bad attachment must not fail the turn.
+
+    ``root`` is the conversation's own working directory, which ``/file``
+    serves the front end's pictures from, and a picture dragged out of the
+    transcript is attached by the path the viewer drew it from. So a relative
+    path is found by the viewer's own rule (``files.viewer_root``), and with
+    ``tools.restrict_to_workspace`` on that root is admitted beside agent home:
+    a fence on agent home alone dropped such a picture while the tray showed it
+    attached, and this conversation's file tools may read that root already.
+    Without a root, agent home stands for both.
     """
     if not paths:
         return ()
     from raven.agent.tools.filesystem import resolve_path
     from raven.config import load_config
+    from raven.rpc.files import viewer_root
 
     try:
         cfg = load_config()
@@ -74,8 +89,9 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
         # ``fs.upload`` deposits through that same property. Reading the field
         # directly put a second home's attachments under the first home's
         # workspace, where nothing resolved.
-        workspace = cfg.workspace_path
-        allowed = (workspace,) if cfg.tools.restrict_to_workspace else ()
+        home = cfg.workspace_path
+        base = root if root is not None else home
+        allowed = (base, home) if cfg.tools.restrict_to_workspace else ()
     except Exception as exc:
         logger.warning("turn.send: cannot resolve the workspace ({}); attachments dropped", exc)
         return ()
@@ -85,7 +101,9 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
         if not isinstance(raw, str) or not raw.strip():
             continue
         try:
-            resolved = resolve_path(raw.strip(), workspace, allowed)
+            text = raw.strip()
+            anchor = base if Path(text).expanduser().is_absolute() else viewer_root(base, Path(text), home)
+            resolved = resolve_path(text, anchor, allowed)
             if not resolved.is_file():
                 logger.warning("turn.send: attachment {} does not resolve to a file", raw)
                 continue
@@ -99,6 +117,27 @@ def _resolve_media(paths: list[str] | None) -> tuple[Media, ...]:
             continue
         out.append(Media(path=str(resolved), mime="application/octet-stream", kind="file"))
     return tuple(out)
+
+
+def _media_root(agent_loop_factory: AgentLoopFactory | None, session_key: str) -> Path | None:
+    """The conversation's own working directory, as ``/file`` finds it, or None.
+
+    The viewer asks ``files.workspace_root`` and so does this, so the two
+    cannot disagree about which root a picture came from. With no loop there is
+    nothing to ask; a loop that cannot answer leaves agent home to stand in,
+    rather than costing the turn its attachments.
+    """
+    from raven.rpc.files import workspace_root
+    from raven.rpc.methods.session import _safe_invoke_factory
+
+    loop = _safe_invoke_factory(agent_loop_factory)
+    if loop is None:
+        return None
+    try:
+        return workspace_root(loop, session_key)
+    except Exception as exc:
+        logger.warning("turn.send: cannot read the session's working directory ({}); using agent home", exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -406,6 +445,7 @@ async def turn_send(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
 ) -> dict[str, Any]:
     """``turn.send`` — submit a turn onto the spine, return ``{turn_id, accepted}``.
 
@@ -461,13 +501,43 @@ async def turn_send(
         else parsed.session_key
     )
 
+    # Both paths below resolve the same attachments; the root is only looked
+    # up when there is something to resolve.
+    media_root = _media_root(agent_loop_factory, parsed.session_key) if parsed.media else None
+
+    # A turn blocked on an ask_user question is waiting for this very text. The
+    # page sends a message typed into the main composer as an inject whenever a
+    # turn is running, and the turn drains injects only between model calls --
+    # which it never reaches while the question waits -- so the question ran out
+    # its budget as unanswered and the agent went on with its own
+    # recommendation, the person's answer arriving after as a side note. The
+    # channel path checks the broker first (``gateway_commands``); this mirrors
+    # it: the text answers the question, and no turn or inject is made of it.
+    if (
+        parsed.busy == "inject"
+        and question_broker is not None
+        and question_broker.pending_req(lane) is not None
+        and not parsed.media
+        and question_broker.reply(lane, parsed.content, close=True)
+    ):
+        if emitter is not None:
+            # Still a message the person sent, and every window draws the
+            # sender's own bubble from this frame rather than from the call --
+            # without it the answer was nowhere on the page, only inside the
+            # asking tool's folded row.
+            await emitter.emit(
+                parsed.session_key,
+                {"type": "message.injected", "payload": _tag({"turn_id": turn_id, "content": parsed.content}, target)},
+            )
+        return {"turn_id": (turn_ids or {}).get(lane, ""), "accepted": True, "naming": False}
+
     if parsed.busy == "inject" and (is_turn_active(lane) or _lane_in_flight(scheduler, lane)):
         # Two records of "a turn is running here", and both count: this map
         # knows the turns ``turn.send`` started, the scheduler knows every turn
         # on the lane -- an armed wake is submitted to it directly
         # (``make_on_session_wake``) and never passes through here (reviewed
         # 2026-09-09: a steer during a running wake queued a second turn).
-        return await _inject_into_running(parsed, lane, scheduler=scheduler, emitter=emitter)
+        return await _inject_into_running(parsed, lane, scheduler=scheduler, emitter=emitter, media_root=media_root)
     if is_turn_active(lane):
         raise TurnInProgressError(
             f"session {parsed.session_key!r} already has an active turn",
@@ -486,7 +556,8 @@ async def turn_send(
             surface=declared_surface(),
         ),
         text=parsed.content,
-        media=_resolve_media(parsed.media),
+        playbook_mode=parsed.playbook_mode,
+        media=_resolve_media(parsed.media, media_root),
         # conversation == the lane. For the main agent that is the session key,
         # which is also the front-end subscription key; for a direct chat it is
         # that instance's lane, and ``RpcOutlet`` maps it back to the session so
@@ -495,11 +566,13 @@ async def turn_send(
         # When set, the turn skips the model entirely and runs one direct-chat
         # turn against that instance (see AgentLoop.run_turn).
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
+        parent_session=parsed.session_key if parsed.target is not None else None,
         # The id this call returns and puts on message.start, so the lane stamps
         # THIS value on the turn's lifecycle events and the client's correlation
         # key survives end to end.
         turn_id=turn_id,
     )
+    await _note_move_on(parsed, agent_loop_factory)
     try:
         handle = scheduler.submit(req)
     except SchedulerDrainingError:
@@ -560,6 +633,27 @@ async def turn_send(
     return {"turn_id": turn_id, "accepted": True, "naming": naming}
 
 
+async def _note_move_on(parsed: TurnSendParams, agent_loop_factory: "AgentLoopFactory | None") -> None:
+    """Tell the board which group the message moves on, before the turn it opens is submitted.
+
+    The note and the message arrive together, so a Stop has no window in which one has gone
+    and the other has not; the turn reads its notes when it starts. Only a message that opens
+    a turn of its own on the main agent gets here -- one merged into a running turn left
+    before. A board that cannot take the note costs the note, never the message."""
+    if not parsed.move_on or parsed.target is not None:
+        return
+    from raven.rpc.methods.session import _safe_invoke_factory
+
+    agent_loop = _safe_invoke_factory(agent_loop_factory)
+    board = getattr(agent_loop, "task_board", None) if agent_loop is not None else None
+    if board is None:
+        return
+    try:
+        await board.move_on(parsed.session_key, parsed.move_on)
+    except (KeyError, OSError) as exc:
+        logger.warning("turn.send: {} goes without its Move on of {!r}: {}", parsed.session_key, parsed.move_on, exc)
+
+
 def _lane_in_flight(scheduler: Scheduler, lane: str) -> bool:
     """Whether the scheduler has a turn running on ``lane``, whoever started it."""
     probe = getattr(scheduler, "has_inflight", None)
@@ -572,6 +666,7 @@ async def _inject_into_running(
     *,
     scheduler: Scheduler,
     emitter: SubscriptionEmitter | None,
+    media_root: Path | None = None,
 ) -> dict[str, Any]:
     """Hand ``parsed.content`` to the turn already running on ``lane``.
 
@@ -602,9 +697,10 @@ async def _inject_into_running(
             surface=declared_surface(),
         ),
         text=parsed.content,
-        media=_resolve_media(parsed.media),
+        media=_resolve_media(parsed.media, media_root),
         conversation=lane,
         direct_target=(parsed.target.agent, parsed.target.handle) if parsed.target is not None else None,
+        parent_session=parsed.session_key if parsed.target is not None else None,
         busy=BusyPolicy.INJECT,
         turn_id=turn_id,
         # The text waits for the running turn's next gap, which is minutes away
@@ -675,14 +771,19 @@ async def turn_unsubscribe(
     return {"unsubscribed": unsubscribed}
 
 
-def _cancel_payload(turn_id: str) -> dict[str, Any]:
-    """The cancelled-turn error's payload, carrying its turn when one is bound.
+def _cancel_payload(turn_id: str, usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The cancelled-turn error's payload, carrying the cancelled turn's id when there is one.
 
-    The lane's bound turn is the right source here and only here: the client
-    cancels its own session, so the turn ``turn.send`` bound to this lane is the
-    turn being cancelled. The key is omitted rather than sent empty, so that
+    The id is whatever identified the turn being cancelled: the one a named
+    cancel gave, a pending inject's own, or the turn ``turn.send`` bound to
+    this lane -- never the lane's slot read for a turn it does not hold. The
+    key is omitted rather than sent empty, so that
     "absent" has one representation on the wire -- a consumer that correlates a
     request to a turn treats both the same way, as not its own.
+
+    ``usage`` is what the stopped turn measured, in ``message.complete``'s
+    shape: the record the turn leaves carries that reading, and this event is
+    the only one its client is sent. Omitted when the turn read no window.
     """
     payload: dict[str, Any] = {
         "code": _TURN_FAILED_CODE,
@@ -691,7 +792,31 @@ def _cancel_payload(turn_id: str) -> dict[str, Any]:
     }
     if turn_id:
         payload["turn_id"] = turn_id
+    if usage:
+        payload["usage"] = usage
     return payload
+
+
+def _stopped_usage(live_usages: dict[str, dict[str, Any]] | None, turn_id: str) -> dict[str, Any] | None:
+    """The usage sink of the turn about to be stopped, while it is still there.
+
+    Read before the cancel: the turn's end takes its entry back. What it holds
+    is the reading the stopped turn files, because the loop moves this sink's
+    reading on the same terms as the one it stores.
+    """
+    return (live_usages or {}).get(turn_id) if turn_id else None
+
+
+def _refused(lane: str) -> dict[str, Any]:
+    """``turn.cancel``'s answer when it reached nothing on ``lane``.
+
+    ``busy`` says whether the lane still has a turn to run. A client waiting on
+    this answer cannot tell from the frames: the answer is written the moment
+    the handler returns, while the frame opening a turn that has just started
+    can still be waiting out the subscription's coalescing window.
+    """
+    probe = getattr(_scheduler, "is_busy", None)
+    return {"cancelled": False, "busy": bool(probe(lane)) if callable(probe) else False}
 
 
 async def turn_cancel(
@@ -700,21 +825,37 @@ async def turn_cancel(
     emitter: SubscriptionEmitter | None = None,
     direct_targets: dict[str, dict[str, str]] | None = None,
     turn_ids: dict[str, str] | None = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
     Sequence:
-      1. Look up the active turn handle; if absent → ``{cancelled: False}``.
-      2. ``await handle.cancel()``.
+      1. Find the turn to cancel. With ``turn_id``: the lane's running turn,
+         and only when it carries that id -- whether ``turn.send`` bound it or
+         the runtime opened it (a delegated result re-entering, which binds no
+         handle). Without: the active turn handle, else the oldest pending
+         inject. Neither there → ``{cancelled: False, busy: ...}``, ``busy``
+         saying whether the lane still has a turn to run (``_refused``).
+      2. Cancel what was found.
       3. ``emitter.emit(session_key, error(reason="cancelled_by_client"))`` — the
          client resets its UI off this event. This is the ONLY cancelled-turn
          error; the sink stays silent on a cancelled TurnFailed (avoiding a
          double error), so this emit is the one signal that clears the front-end
          turn slot — it must always fire.
-      4. Await the handle so the turn is provably unwound (the sink's TurnFailed
+      4. Await the turn so it is provably unwound (the sink's TurnFailed
          handler drops the active-turn slot) before returning, so the next
          ``turn.send`` cannot race a half-unwound turn into a phantom -32003.
       5. Return ``{cancelled: True}``.
+
+    A named cancel goes past pending injects to the running turn: an inject
+    already merged into it ends with it, as it does when a bound turn is
+    cancelled, and one still waiting in the lane's mailbox falls back to a turn
+    of its own once the cancelled turn unwinds -- the spine never drops it, so
+    the reader's correction runs rather than vanishing under the stop. An
+    unnamed cancel keeps its older reach on purpose: callers that send no id
+    (the terminal UI, the ACP adapter's ``session/cancel``) mean the turn they
+    started, and reaching for whatever the lane happens to be running would
+    stop a cron wake, or a delegated turn that began after the request left.
 
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
@@ -725,7 +866,14 @@ async def turn_cancel(
     turn: those are registered under ``direct_lane(...)``, never under the bare
     session key. The emit still goes to the session, which is what the client
     subscribes to; the addressee rides the payload.
+
+    ``live_usages`` is what each running turn has measured, by turn id (see
+    ``RpcTurnRunner``); a stopped turn's error carries its reading from there.
     """
+    # Function-level: the rule lives with the sink that applies it to a failed
+    # turn, and that module wires the agent loop, which this one must not import.
+    from raven.rpc.spine import reported_usage
+
     parsed = TurnCancelParams.model_validate(params)
 
     lane = (
@@ -734,10 +882,35 @@ async def turn_cancel(
         else parsed.session_key
     )
 
+    if parsed.turn_id is not None:
+        # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
+        # the seam (a test fake) has no running turn to name.
+        probe = getattr(_scheduler, "running_turn", None)
+        running = probe(lane) if callable(probe) else None
+        if running is None or running[0] != parsed.turn_id:
+            return _refused(lane)
+        handle = running[1]
+        measured = _stopped_usage(live_usages, parsed.turn_id)
+        await handle.cancel()
+        if emitter is not None:
+            await emitter.emit(
+                parsed.session_key,
+                {
+                    "type": "error",
+                    "payload": _tag(
+                        _cancel_payload(parsed.turn_id, reported_usage(measured)),
+                        (direct_targets or {}).get(lane),
+                    ),
+                },
+            )
+        await handle.result()
+        return {"cancelled": True}
+
     reach = _cancellable(lane)
     if reach is None:
-        return {"cancelled": False}
+        return _refused(lane)
     handle, inject_id = reach
+    measured = _stopped_usage(live_usages, inject_id or (turn_ids or {}).get(lane, ""))
 
     await handle.cancel()
 
@@ -752,7 +925,7 @@ async def turn_cancel(
             {
                 "type": "error",
                 "payload": _tag(
-                    _cancel_payload(inject_id or (turn_ids or {}).get(lane, "")),
+                    _cancel_payload(inject_id or (turn_ids or {}).get(lane, ""), reported_usage(measured)),
                     (direct_targets or {}).get(lane),
                 ),
             },
@@ -814,6 +987,8 @@ def register_turn_methods(
     build_error: RpcError | None = None,
     default_channel: str = "tui",
     agent_loop_factory: "AgentLoopFactory | None" = None,
+    question_broker: "QuestionBroker | None" = None,
+    live_usages: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -826,6 +1001,9 @@ def register_turn_methods(
     client omits one — and it MUST match the channel the outlet was registered
     under (the hub routes deliverables by ``source.channel``), or the reply is
     dropped. Defaults to ``"tui"``.
+
+    ``live_usages`` must be the dict ``build_rpc_spine`` was given, or a stopped
+    turn's cancel has no reading to report.
     """
 
     bind_scheduler(scheduler)
@@ -840,6 +1018,7 @@ def register_turn_methods(
             build_error=build_error,
             agent_loop_factory=agent_loop_factory,
             default_channel=default_channel,
+            question_broker=question_broker,
         )
 
     async def _subscribe(params: dict[str, Any]) -> dict[str, Any]:
@@ -849,7 +1028,9 @@ def register_turn_methods(
         return await turn_unsubscribe(params, emitter=emitter)
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
-        return await turn_cancel(params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids)
+        return await turn_cancel(
+            params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids, live_usages=live_usages
+        )
 
     dispatcher.register("turn.send", _send)
     dispatcher.register("turn.subscribe", _subscribe)

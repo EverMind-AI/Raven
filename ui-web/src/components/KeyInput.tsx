@@ -1,4 +1,6 @@
-/* An API key field: masked by default, with an eye to read back what you typed.
+/* An API key field: masked by default, with an eye to read back what you typed
+ * -- or, where the caller can fetch it, the key already saved behind an empty
+ * field (`onPeek`).
  *
  * Every key in the app goes through here rather than each page spelling out its
  * own `type="password"`. A key is pasted more often than typed and mistyped
@@ -40,9 +42,31 @@ function EyeMark({ open }: { open: boolean }): JSX.Element {
   )
 }
 
-export const KeyInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
-  function KeyInput({ className, ...rest }, ref): JSX.Element {
+type KeyInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  /* Told what the eye is turning to before it turns, and waited for: a field
+     standing in for a key saved elsewhere fills itself on the way open and
+     empties on the way shut. A refusal leaves the eye turning anyway -- what
+     it shows is then the field as it is. */
+  onPeek?: (shown: boolean) => void | Promise<void>
+}
+
+export const KeyInput = forwardRef<HTMLInputElement, KeyInputProps>(
+  function KeyInput({ className, onPeek, ...rest }, ref): JSX.Element {
     const [shown, setShown] = useState(false)
+    const turn = (): void => {
+      const next = !shown
+      if (!onPeek) {
+        setShown(next)
+        return
+      }
+      let told: void | Promise<void>
+      try {
+        told = onPeek(next)
+      } catch {
+        told = undefined
+      }
+      void Promise.resolve(told).catch(() => undefined).then(() => setShown(next))
+    }
     const label = t(shown ? 'gui.key.hide' : 'gui.key.show')
     return (
       <span className="keyfield">
@@ -63,7 +87,7 @@ export const KeyInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInp
           /* Not a tab stop: a key field is tabbed into and typed, and a control
              between it and the button that saves it interrupts that. */
           tabIndex={-1}
-          onClick={() => setShown((v) => !v)}
+          onClick={turn}
         >
           <EyeMark open={shown} />
         </button>

@@ -16,6 +16,7 @@ import pytest
 
 from raven.agent.subagent import activity as run_activity
 from raven.agent.subagent import instances as instances_mod
+from raven.config.agent_names import GENERIC_AGENT
 from raven.rpc.errors import ConfigValidationError
 from raven.rpc.methods.instances import (
     instances_create,
@@ -485,6 +486,30 @@ async def _history(session_dir: Path, agent: str, handle: str) -> list[dict[str,
         agent_loop_factory=_factory(_FakeLoop(manager)),
     )
     return out["turns"]
+
+
+@pytest.mark.parametrize("former", ["Raven", "raven"])
+@pytest.mark.parametrize("lane", ["spawn", "dag", "unfinished_dag"])
+async def test_legacy_record_history_is_visible_under_the_current_name(tmp_path, former, lane):
+    from raven.agent.subagent.instance_log import transcript_path
+
+    session_dir = tmp_path / "session"
+    if lane == "spawn":
+        _spawn(session_dir, agent=former, handle="h1", task="question", output="answer", at_ms=1)
+    else:
+        writer = _dag_run if lane == "dag" else _dead_dag_run
+        writer(
+            session_dir,
+            "run1",
+            {"n1": {"agent": former, "instance": "h1", "prompt": "question", "out": "answer", "at_ms": 1}},
+        )
+    _as_a_pre_log_conversation(session_dir)
+    assert not transcript_path(session_dir, GENERIC_AGENT, "h1").exists()
+
+    for name in (GENERIC_AGENT, "Raven", "raven"):
+        assert [turn["content"] for turn in await _history(session_dir, name, "h1")] == ["question", "answer"]
+    assert await _history(session_dir, "Other", "h1") == []
+    assert await _history(session_dir, GENERIC_AGENT, "other") == []
 
 
 async def test_history_includes_the_spawn_that_created_the_instance(tmp_path: Path) -> None:
@@ -1180,7 +1205,7 @@ async def test_instance_create_returns_the_row_the_strip_will_draw(tmp_path: Pat
     out = await instances_create({"session_key": "s1", "agent": "raven"}, agent_loop_factory=_factory(loop))
 
     row = out["instance"]
-    assert row["agent"] == "raven"
+    assert row["agent"] == GENERIC_AGENT
     assert row["status"] == "idle"
     assert row["sessionKey"] == "s1"
     assert row["handle"].startswith("raven-")
@@ -1261,7 +1286,7 @@ async def test_a_creation_is_announced_to_the_main_agent(tmp_path: Path) -> None
     assert out["pending_handoff_count"] == 1
 
     block = loop._direct_handoff.take("s1")
-    assert f"raven / {created['instance']['handle']}" in block
+    assert f"{GENERIC_AGENT} / {created['instance']['handle']}" in block
     assert "created by the user at" in block
 
 
@@ -1319,6 +1344,412 @@ async def test_a_stateful_node_is_reported_once_on_its_addressable_handle(_isola
     # through `spawn`, so nothing ever writes a status on the ordinary row.
     assert row["status"] == "completed"
     assert (row["runId"], row["nodeId"]) == ("r1", "research_a2a")
+
+
+async def test_a_stateful_decision_node_reports_its_selection_on_its_addressable_handle(
+    _isolated_registry: Any,
+) -> None:
+    """What a branch decided is on the node's ``dag-node`` row, and the pair is
+    reported on the ordinary row -- so the selection rides across with the status,
+    an empty one included, as a stateless node's own row carries it."""
+    from raven.rpc.models import SubagentsInstancesResult
+
+    await _isolated_registry.upsert_dag_node(
+        "s1", "r1", "triage", "hermes", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await _isolated_registry.link_dag_node("s1", "hermes", "triage-h", "r1", "triage")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "scan", "hermes", "completed", selected_routes=[])
+    await _isolated_registry.link_dag_node("s1", "hermes", "scan-h", "r1", "scan")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "reply", "hermes", "completed")
+    await _isolated_registry.link_dag_node("s1", "hermes", "reply-h", "r1", "reply")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    SubagentsInstancesResult.model_validate(out)
+    by_handle = {r["handle"]: r for r in out["instances"]}
+    assert set(by_handle) == {"triage-h", "scan-h", "reply-h"}
+    assert (by_handle["triage-h"]["selectedRoutes"], by_handle["triage-h"]["routeEvidence"]) == (
+        ["docs"],
+        "asks how to set it",
+    )
+    assert by_handle["scan-h"]["selectedRoutes"] == []
+    assert "routeEvidence" not in by_handle["scan-h"]
+    assert not {"reason", "selectedRoutes", "routeEvidence"} & set(by_handle["reply-h"])
+
+
+async def test_a_moved_node_is_listed_once_under_the_agent_that_ran_it_last(_isolated_registry: Any) -> None:
+    """A reassigned node leaves a link behind on the old agent -- that session did
+    work on it -- so two linked rows now answer to one ``dag-node`` row. Folding
+    both would list the node twice; the view is the current agent's row wearing
+    the node's status and the history it accumulated."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["agent"], r["handle"]) for r in out["instances"]] == [("beta", "fix-b")], (
+        "the old agent's link is kept, but it is not a second node card"
+    )
+    row = out["instances"][0]
+    assert (row["runId"], row["nodeId"], row["status"]) == ("r1", "fix", "completed")
+    assert row["attemptAgents"] == ["alpha", "beta"]
+
+
+async def test_a_node_that_returned_to_alpha_wears_the_handle_it_ended_on(_isolated_registry: Any) -> None:
+    """A->B->A on minted handles: recency alone can pick the first session.
+
+    The row's current handle is what the node last ran on; the older link with
+    the same agent is not the card.
+    """
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="beta",
+        new_agent="alpha",
+        status="completed",
+        instance="fix-c",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta", "alpha"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-c", "r1", "fix")
+    # A write on the stale link makes it the most recently updated row, which is
+    # exactly the order a recency-only choice reads.
+    await _isolated_registry.commit("s1", "alpha", "fix-a", "alpha-session")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["agent"], r["handle"]) for r in out["instances"]] == [("alpha", "fix-c")]
+
+
+async def test_a_named_source_instance_keeps_its_own_row_after_the_node_moves(
+    _isolated_registry: Any, tmp_path: Path
+) -> None:
+    """The handle the graph named predates the node's visit.
+
+    Moving the node away does not make that conversation the destination's, and
+    it does not take the source session off the list.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef12"
+
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", RUN, "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+
+    assert {(r["agent"], r["handle"]) for r in out["instances"]} == {("beta", "fix-b"), ("alpha", "shared")}
+
+
+async def test_forgetting_a_named_source_card_keeps_the_nodes_own_status(
+    _isolated_registry: Any, tmp_path: Path
+) -> None:
+    """The source card is a different row from the node's paired card.
+
+    Forgetting the source conversation must not remove the dag-node record the
+    current card wears, even when both agents happen to be the same after a hop.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef13"
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="beta",
+        new_agent="alpha",
+        status="completed",
+        instance="fix-c",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta", "alpha"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-c", RUN, "fix")
+
+    forgotten = await instances_forget(
+        {"session_key": "s1", "agent": "alpha", "handle": "shared"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+    assert forgotten["removed"] is True
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    current = next(r for r in out["instances"] if (r["agent"], r["handle"]) == ("alpha", "fix-c"))
+    assert current["status"] == "completed"
+    assert current["attemptAgents"] == ["alpha", "beta", "alpha"]
+
+
+async def test_same_handle_moves_keep_only_the_graph_named_source(_isolated_registry: Any, tmp_path: Path) -> None:
+    """alpha/shared -> beta/shared -> gamma/shared: one source card, not two.
+
+    The handle is the same at every hop, so identity has to include the agent;
+    otherwise the node-created beta/shared link masquerades as the graph-named
+    source, and forgetting either old card deletes the current status row.
+    """
+    from raven.agent.subagent.history import dag_root
+
+    RUN = "20261103T090000000000Z-abcdef14"
+    session_dir = tmp_path / "sessions" / "s1"
+    run_dir = dag_root(session_dir) / RUN
+    run_dir.mkdir(parents=True)
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "same handle",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "shared"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = _FakeManager()
+    manager.session_dirs["s1"] = session_dir
+    await _isolated_registry.upsert_dag_node("s1", RUN, "fix", "alpha", "exception")
+    await _isolated_registry.link_dag_node("s1", "alpha", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="shared",
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "beta", "shared", RUN, "fix")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id=RUN,
+        node_id="fix",
+        old_agent="beta",
+        new_agent="gamma",
+        status="completed",
+        instance="shared",
+        instance_auto=False,
+        attempt_agents=["alpha", "beta", "gamma"],
+    )
+    await _isolated_registry.link_dag_node("s1", "gamma", "shared", RUN, "fix")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    assert {(r["agent"], r["handle"]) for r in out["instances"]} == {
+        ("gamma", "shared"),
+        ("alpha", "shared"),
+    }
+
+    forgotten = await instances_forget(
+        {"session_key": "s1", "agent": "alpha", "handle": "shared"},
+        agent_loop_factory=_factory(_FakeLoop(manager)),
+    )
+    assert forgotten["removed"] is True
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(manager)))
+    current = next(r for r in out["instances"] if (r["agent"], r["handle"]) == ("gamma", "shared"))
+    assert current["status"] == "completed"
+    assert current["attemptAgents"] == ["alpha", "beta", "gamma"]
+
+
+async def test_a_moved_stateless_node_reads_back_as_one_row_of_its_new_agent(_isolated_registry: Any) -> None:
+    """With no linked row to wear, a moved node is listed as its own row -- under
+    the agent that last ran it, not the one the graph named."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "exception")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="completed",
+        instance=None,
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    (row,) = out["instances"]
+    assert (row["kind"], row["agent"], row["handle"]) == ("dag-node", "beta", "r1/fix")
+    assert row["attemptAgents"] == ["alpha", "beta"]
+
+
+async def test_the_agent_that_gave_up_can_still_read_the_attempt_it_ran(_isolated_registry: Any, tmp_path) -> None:
+    """The flat pair belongs to whichever attempt wrote it last. While the moved
+    attempt is still running that is the source agent's answer, so reading it for
+    the destination would show the source's work as the destination's own turn.
+    Each agent's history is its own archived attempt."""
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps(
+            {
+                "task_summary": "moved",
+                "nodes": [{"id": "fix", "subagent": "alpha", "instance": "fix-a"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    # The stale flat pair: the last *completed* attempt, still the source's while
+    # the moved attempt is in flight.
+    (flat / "fix.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-1.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.attempt-1.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-2.prompt.md").write_text("the destination's task", encoding="utf-8")
+    (flat / "fix.attempt-2.out.md").write_text("the destination's answer", encoding="utf-8")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+    await _isolated_registry.link_dag_node("s1", "alpha", "fix-a", "r1", "fix")
+    await _isolated_registry.link_dag_node("s1", "beta", "fix-b", "r1", "fix")
+
+    destination = await _history(session_dir, "beta", "fix-b")
+    source = await _history(session_dir, "alpha", "fix-a")
+
+    assert [turn["content"] for turn in destination] == ["the destination's task", "the destination's answer"]
+    assert [turn["content"] for turn in source] == ["the source's task", "the source's answer"]
+
+
+async def test_a_moved_attempt_still_running_shows_its_prompt_and_not_the_stale_answer(
+    _isolated_registry: Any, tmp_path
+) -> None:
+    """Before the moved attempt answers, its prompt is on disk and its output is
+    not. The destination's history says what was asked -- never the source's
+    answer, which is what the flat pair still holds."""
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps({"task_summary": "moved", "nodes": [{"id": "fix", "subagent": "alpha"}]}),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    (flat / "fix.prompt.md").write_text("the source's task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the source's answer", encoding="utf-8")
+    (flat / "fix.attempt-2.prompt.md").write_text("the destination's task", encoding="utf-8")
+    await _isolated_registry.move_dag_node(
+        "s1",
+        run_id="r1",
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance=None,
+        instance_auto=False,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    destination = await _history(session_dir, "beta", "fix")
+
+    assert [turn["content"] for turn in destination] == ["the destination's task"]
+
+
+async def test_a_node_that_never_moved_reads_its_attempts_as_it_always_did(_isolated_registry: Any, tmp_path) -> None:
+    from raven.agent.subagent.history import dag_root, nodes_root
+
+    session_dir = tmp_path / "sessions" / "s1"
+    (dag_root(session_dir) / "r1").mkdir(parents=True)
+    (dag_root(session_dir) / "r1" / "graph.json").write_text(
+        json.dumps({"task_summary": "plain", "nodes": [{"id": "fix", "subagent": "alpha", "instance": "fix-a"}]}),
+        encoding="utf-8",
+    )
+    flat = nodes_root(session_dir)
+    flat.mkdir(parents=True)
+    (flat / "fix.prompt.md").write_text("the task", encoding="utf-8")
+    (flat / "fix.out.md").write_text("the answer", encoding="utf-8")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "alpha", "completed")
+
+    assert [turn["content"] for turn in await _history(session_dir, "alpha", "fix-a")] == ["the task", "the answer"]
 
 
 async def test_a_whole_fan_out_is_one_row_per_node(_isolated_registry: Any) -> None:
@@ -1389,6 +1820,71 @@ async def test_a_cancelled_node_is_still_an_instance(_isolated_registry: Any) ->
     out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
 
     assert [r["nodeId"] for r in out["instances"]] == ["research"]
+
+
+def test_a_not_executed_dag_node_row_is_filtered_like_a_skipped_one() -> None:
+    from raven.rpc.methods.instances import _drop_nodes_that_never_ran
+
+    rows = [
+        {"kind": "dag-node", "status": "skipped"},
+        {"kind": "dag-node", "status": "not_executed"},
+        {"kind": "dag-node", "status": "cancelled"},
+        {"kind": "spawn", "status": "skipped"},
+    ]
+
+    kept = _drop_nodes_that_never_ran(rows)
+
+    assert [(row["kind"], row["status"]) for row in kept] == [("dag-node", "cancelled"), ("spawn", "skipped")]
+
+
+async def test_a_node_on_a_branch_nobody_took_is_not_an_instance(_isolated_registry: Any) -> None:
+    """The runner writes a registry row for a node it decided will not execute,
+    the same way it does for a skipped one, and it has no more of a conversation:
+    it never spoke and never held a handle."""
+    await _isolated_registry.upsert_dag_node("s1", "r1", "triage", "hermes", "completed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "hermes", "not_executed")
+    await _isolated_registry.upsert_dag_node("s1", "r1", "design", "hermes", "not_executed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [r["nodeId"] for r in out["instances"]] == ["triage"]
+
+
+async def test_a_dag_node_row_a_branch_decided_is_a_valid_instance_row(_isolated_registry: Any) -> None:
+    """`InstanceRow` is a registry record verbatim and forbids unknown keys, so the
+    outcome a branch writes onto a `dag-node` row has to be on the model: a stateless
+    decision node's row is listed as it is stored."""
+    from raven.rpc.models import InstanceRow, SubagentsInstancesResult
+
+    await _isolated_registry.upsert_dag_node(
+        "s1", "r1", "triage", "hermes", "completed", selected_routes=["docs"], route_evidence="asks how to set it"
+    )
+    await _isolated_registry.upsert_dag_node("s1", "r1", "scan", "hermes", "completed", selected_routes=[])
+    await _isolated_registry.upsert_dag_node("s1", "r1", "fix", "hermes", "not_executed", reason="when_false")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    SubagentsInstancesResult.model_validate(out)
+    by_node = {r["nodeId"]: r for r in out["instances"]}
+    assert (by_node["triage"]["selectedRoutes"], by_node["triage"]["routeEvidence"]) == (["docs"], "asks how to set it")
+    assert by_node["scan"]["selectedRoutes"] == []
+    for row in _isolated_registry.list_instances("s1"):
+        InstanceRow.model_validate(row)
+
+
+async def test_a_not_executed_node_does_not_confuse_a_legacy_handle_row(_isolated_registry: Any) -> None:
+    """The filter runs before the pairing for this status too: a not-executed
+    ``synthesize`` beside a completed one is the same second answer a skipped one
+    was, and the completed run's handle row must still pair with its node."""
+    await _isolated_registry.upsert_dag_node("s1", "r-done", "synthesize", "hermes", "completed")
+    await _isolated_registry.commit("s1", "hermes", "synthesize", "agent-1")
+    await _isolated_registry.upsert_dag_node("s1", "r-branch", "synthesize", "hermes", "not_executed")
+
+    out = await instances_list({"session_key": "s1"}, agent_loop_factory=_factory(_FakeLoop(_FakeManager())))
+
+    assert [(r["handle"], r.get("status"), r.get("runId")) for r in out["instances"]] == [
+        ("synthesize", "completed", "r-done")
+    ]
 
 
 async def test_a_node_that_committed_under_its_own_id_is_paired_too(_isolated_registry: Any) -> None:
@@ -1749,7 +2245,7 @@ class TestWhatEachRowIsCalled:
         """Three nodes of one graph is one file. The list polls every two
         seconds with the panel open, so a read per row is a read per row for as
         long as the session is open."""
-        import raven.rpc.methods.instances as mod
+        import raven.agent.subagent.task_rows as mod
 
         session_dir = tmp_path / "sessions" / "s1"
         self._graph(

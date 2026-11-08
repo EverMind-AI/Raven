@@ -40,7 +40,7 @@ def normalize_usage(usage: dict[str, Any] | None) -> dict[str, Any]:
         "cache_read_tokens": read,
         "cache_write_tokens": write,
         # Part of the output count, never added to it -- an accounting field
-        # here, and the one number that says a silent turn still thought.
+        # here, and the one number that says a reply with no text still thought.
         "reasoning_tokens": token_count(usage.get("reasoning_tokens")) or 0,
         "total_tokens": token_count(usage.get("total_tokens")) or prompt + output + (0 if includes_cache else cached),
         "cost_usd": reported_cost(usage.get("cost_usd")),

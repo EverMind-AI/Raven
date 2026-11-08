@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 /* The workspace (state/workdir.ts), as the page draws it: the chip on a
-   draft's bar (src/chrome/WorkdirChip.tsx) naming the default or the folder
+   draft's "@" menu (src/chrome/AtMenu.tsx) naming the default or the folder
    picked, the popover off it (src/chrome/WorkdirPopover.tsx) with default /
    recent folders / the host's folder dialog or the in-page walk, the tag
    beside a conversation's title
@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetTranslator, setTranslator } from '../i18n/t'
 import { _resetForTests as resetSession, setCurrent } from '../lib/session'
+import { absorb, resetCapabilities } from '../rpc/capabilities'
 import { mountPageRoot } from '../test/pageRoot'
 import { resetSources, setSources } from './sources'
 import * as wd from './workdir'
@@ -55,6 +56,7 @@ function workspace(dirs?: WorkspaceSource['dirs']): void {
 /* The gateway on this desktop, with its folder dialog: the menu's last row
    opens that instead. */
 function desktop(pickDir: WorkspaceSource['pickDir']): void {
+  absorb(['jsonrpc-2.0', 'subscriptions', 'cli-dispatch', 'folder-dialog-v1'])
   setSources({
     workspace: {
       shortPath: (p) => p,
@@ -78,14 +80,22 @@ afterEach(() => {
   wd._resetForTests()
   resetSession()
   resetSources()
+  resetCapabilities()
   resetTranslator()
   document.body.innerHTML = ''
 })
 
-const chip = (): HTMLButtonElement => document.getElementById('wdChip') as HTMLButtonElement
-/* The wrapper the chip shares with its popover, which is what hides the pair. */
-const anchor = (): HTMLElement => chip().closest('.chrome-anch') as HTMLElement
-const name = (): HTMLElement => document.getElementById('wdName')!
+/* The folder is chosen from a row of the "@" menu, which is also what names it.
+   Opened here rather than stubbed, because whether the row is offered at all is
+   half of what these cases are about. */
+const atBtn = (): HTMLButtonElement => document.getElementById('atBtn') as HTMLButtonElement
+function folderRow(): HTMLButtonElement | null {
+  if (document.getElementById('atPop')!.dataset.open !== 'true') act(() => atBtn().click())
+  const rows = [...document.querySelectorAll<HTMLButtonElement>('#atPop .prow')]
+  return rows.find((row) => row.querySelector('.nm')?.textContent === 'gui.at.folder') ?? null
+}
+/** What that row says the folder is, or '' where the row is not offered. */
+const name = (): string => folderRow()?.querySelector('.chrome-at-count')?.textContent ?? ''
 const tag = (): HTMLElement => document.getElementById('wdTag')!
 const pop = (): HTMLElement => document.getElementById('wdPop')!
 const prows = (): HTMLButtonElement[] => [...pop().querySelectorAll<HTMLButtonElement>('.prow')]
@@ -93,24 +103,20 @@ const byName = (text: string): HTMLButtonElement => prows().find((r) => r.queryS
 const settle = async (): Promise<void> => { await act(async () => { await Promise.resolve(); await Promise.resolve() }) }
 const openFolders = (): void => {
   act(() => wd.draw())
-  act(() => chip().click())
+  act(() => folderRow()!.click())
 }
 
 describe('the workspace a draft picks', () => {
   it('names the default, then the folder by its last segment once picked', () => {
     act(() => wd.draw())
-    expect(anchor().hidden).toBe(false)
-    expect(name().textContent).toBe('gui.wd.none')
-    expect(chip().className).toBe('chip')
+    expect(name()).toBe('gui.wd.none')
     expect(wd.get().paint).toMatchObject({ label: 'gui.wd.none', title: 'gui.wd.none_h', set: false, locked: false })
     expect(wd.staged()).toBeNull()
     expect(tag().hidden).toBe(true)
 
     act(() => wd.pick('/Users/me/proj/'))
     expect(wd.staged()).toBe('/Users/me/proj/')
-    expect(name().textContent).toBe('proj')
-    expect(chip().title).toBe('/Users/me/proj/')
-    expect(chip().className).toBe('chip chrome-wd-set')
+    expect(name()).toBe('proj')
     expect(wd.base('C:\\work\\thesis')).toBe('thesis')
     expect(wd.base('/')).toBe('/')
     /* Still a draft: the tag is a conversation's. */
@@ -122,7 +128,8 @@ describe('the workspace a draft picks', () => {
     setCurrent('s1')
     act(() => wd.draw())
     expect(wd.get().paint).toMatchObject({ label: 'thesis', title: '/w/thesis', set: true, locked: true })
-    expect(anchor().hidden).toBe(true)
+    /* Not offered at all: a conversation cannot change its folder. */
+    expect(folderRow()).toBeNull()
     expect(tag().hidden).toBe(false)
     expect(tag().textContent).toBe('thesis')
     expect(tag().title).toBe('/w/thesis')
@@ -137,19 +144,20 @@ describe('the workspace a draft picks', () => {
     setCurrent('s2')
     act(() => wd.draw())
     expect(wd.get().paint).toMatchObject({ label: 'gui.wd.none', title: 'gui.wd.none_h', set: false, locked: true })
-    expect(anchor().hidden).toBe(true)
+    expect(folderRow()).toBeNull()
     expect(tag().hidden).toBe(false)
     expect(tag().textContent).toBe('gui.wd.none')
     expect(tag().className).toBe('chrome-wd-tag chrome-wd-default')
   })
 
-  it('opens off the chip with the default ticked, a rule, the recent folders once each, and the browse row', () => {
+  it('opens off the at menu with the default ticked, a rule, the recent folders once each, and the browse row', () => {
     rail([row('a', '/w/alpha'), row('b', null), row('c', '/w/alpha'), row('d', '/w/beta')])
     openFolders()
     expect(pop().dataset.open).toBe('true')
     expect(pop().dataset.view).toBe('menu')
-    expect(chip().getAttribute('aria-expanded')).toBe('true')
-    expect(pop().parentElement).toBe(anchor())
+    /* In the anchor of the button the row was picked from, which is what the
+       stylesheet hangs it off. */
+    expect(pop().parentElement).toBe(atBtn().closest('.chrome-anch'))
     expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['gui.wd.none', 'alpha', 'beta', 'gui.wd.open_remote'])
     expect(byName('gui.wd.none').getAttribute('aria-checked')).toBe('true')
     /* Names only; the path is on the row's title, and the rule stands between
@@ -160,7 +168,7 @@ describe('the workspace a draft picks', () => {
 
     act(() => byName('beta').click())
     expect(wd.staged()).toBe('/w/beta')
-    expect(name().textContent).toBe('beta')
+    expect(name()).toBe('beta')
     /* A pick takes the popover down, and the chip is what says what was picked. */
     expect(pop().dataset.open).toBe('false')
 
@@ -169,7 +177,7 @@ describe('the workspace a draft picks', () => {
     expect(byName('beta').getAttribute('aria-checked')).toBe('true')
     act(() => byName('gui.wd.none').click())
     expect(wd.staged()).toBeNull()
-    expect(name().textContent).toBe('gui.wd.none')
+    expect(name()).toBe('gui.wd.none')
   })
 
   it('draws no rule when there is nothing under the default', () => {
@@ -184,7 +192,7 @@ describe('the workspace a draft picks', () => {
     expect(pop().dataset.open).toBe('true')
     act(() => wd.clearStaged())
     expect(wd.staged()).toBeNull()
-    expect(name().textContent).toBe('gui.wd.none')
+    expect(name()).toBe('gui.wd.none')
     expect(pop().dataset.open).toBe('false')
   })
 
@@ -201,15 +209,13 @@ describe('the workspace a draft picks', () => {
     expect(pop().querySelectorAll('.prow')).toHaveLength(0)
   })
 
-  it('closes on a pointer landing outside it, and stays for one on the chip or inside', async () => {
+  it('closes on a pointer landing outside it, and stays for one inside', async () => {
     const { installGlobalListeners } = await import('./globalListeners')
     installGlobalListeners()
     openFolders()
     const down = (target: Element): void => {
       act(() => { target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, composed: true })) })
     }
-    down(chip())
-    expect(pop().dataset.open).toBe('true')
     down(byName('gui.wd.open_remote'))
     expect(pop().dataset.open).toBe('true')
     down(document.getElementById('ta')!)
@@ -230,9 +236,29 @@ describe('the workspace a draft picks', () => {
     await settle()
     expect(asked).toBe(1)
     expect(wd.staged()).toBe('/w/chosen')
-    expect(name().textContent).toBe('chosen')
+    expect(name()).toBe('chosen')
     expect(pop().dataset.open).toBe('false')
     expect(wd.isPicking()).toBe(false)
+  })
+
+  it('walks the gateway\'s folders instead where the address is this desktop but the host has no dialog', async () => {
+    /* A gateway in a container, or on a headless box reached through a
+       forwarded port, is served at a loopback address all the same: only the
+       handshake can say there is no dialog to open, and asking for one anyway
+       is what used to put "no folder dialog" on the menu. */
+    let asked = 0
+    desktop(async () => { asked += 1; return { path: '/w/chosen', ok: true } })
+    absorb(['jsonrpc-2.0', 'subscriptions', 'cli-dispatch'])
+    openFolders()
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['gui.wd.none', 'gui.wd.open_remote'])
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(asked).toBe(0)
+    expect(wd.isPicking()).toBe(false)
+    expect(pop().dataset.open).toBe('true')
+    expect(pop().dataset.view).toBe('browse')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/home/me')
+    expect(pop().querySelector('.chrome-wd-err')).toBeNull()
   })
 
   it('leaves the folder alone when the dialog is dismissed, and says nothing', async () => {
@@ -337,7 +363,7 @@ describe('the workspace a draft picks', () => {
     await settle()
     act(() => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.click())
     expect(wd.staged()).toBe('/w/proj')
-    expect(name().textContent).toBe('proj')
+    expect(name()).toBe('proj')
     expect(pop().dataset.open).toBe('false')
 
     openFolders()
@@ -364,5 +390,424 @@ describe('the workspace a draft picks', () => {
     expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory"}')
     /* Still on the menu: the refusal did not replace it. */
     expect(byName('gui.wd.none')).toBeTruthy()
+  })
+
+  it('offers the other drives where the walk reached a drive root, and enters the one chosen', async () => {
+    /* A drive root has no parent, so a browser that started under C: can reach
+       no other drive by walking. The listing names them; the browser shows
+       them as a view of their own, and a click re-reads through `browse`. */
+    const asked: Array<string | undefined> = []
+    /* C: holds the agent's own data here, so its row is greyed and explained
+       like any ancestor folder -- and still a way in. */
+    const drives = [
+      { name: 'C:\\', path: 'C:\\', ok: false },
+      { name: 'D:\\', path: 'D:\\', ok: true },
+    ]
+    const listings: Record<string, DirListing> = {
+      'C:\\': { path: 'C:\\', parent: null, home: 'C:\\Users\\me', ok: true, roots: drives, entries: [] },
+      'D:\\': { path: 'D:\\', parent: null, home: 'C:\\Users\\me', ok: true, roots: drives, entries: [{ name: 'projects', path: 'D:\\projects', ok: true }] },
+      'D:\\projects': { path: 'D:\\projects', parent: 'D:\\', home: 'C:\\Users\\me', ok: true, roots: [], entries: [] },
+    }
+    workspace(async (p) => { asked.push(p ?? 'C:\\'); return listings[p ?? 'C:\\']! })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-drives')).not.toBeNull()
+    act(() => pop().querySelector<HTMLButtonElement>('.chrome-wd-drives')!.click())
+    await settle()
+    expect(wd.get().view).toBe('drives')
+    expect(pop().dataset.view).toBe('drives')
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['C:\\', 'D:\\'])
+    expect(byName('C:\\').classList.contains('chrome-wd-off')).toBe(true)
+    expect(byName('C:\\').title).toBe('gui.wd.blocked')
+    expect(byName('C:\\').disabled).toBe(false)
+    expect(byName('D:\\').classList.contains('chrome-wd-off')).toBe(false)
+    expect(byName('D:\\').title).toBe('D:\\')
+    act(() => byName('D:\\').click())
+    await settle()
+    expect(asked.at(-1)).toBe('D:\\')
+    expect(wd.get().view).toBe('browse')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('D:\\')
+    expect(prows().map((r) => r.querySelector('.nm')?.textContent)).toEqual(['projects'])
+  })
+
+  it('offers no list of drives where there is one root', async () => {
+    workspace(async () => ({ path: '/', parent: null, home: '/home/me', ok: true, roots: [], entries: [] }))
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    expect(pop().querySelector('.chrome-wd-drives')).toBeNull()
+  })
+
+  it('reads a folder path typed into the bar, and says so when it is refused', async () => {
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/nope') throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    const field = (): HTMLInputElement => pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    expect(field().value).toBe('/home/me')
+    act(() => {
+      field().value = '/home/me/undone'
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }))
+    })
+    await settle()
+    /* An IME's Enter commits its candidate. It must not read the half-composed
+       path or remount the field out from under the composition. */
+    expect(asked).toEqual([undefined])
+    expect(field().value).toBe('/home/me/undone')
+    act(() => {
+      field().value = '/srv/elsewhere'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+    })
+    await settle()
+    expect(asked.at(-1)).toBe('/srv/elsewhere')
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/srv/elsewhere')
+    expect(field().value).toBe('/srv/elsewhere')
+
+    act(() => {
+      field().value = '/nope'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await Promise.resolve()
+    })
+    await settle()
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory"}')
+    expect(wd.get().view).toBe('browse')
+    /* The refused path stays in the bar so it can be corrected, while the
+       browser stays where it stood. */
+    expect(pop().querySelector('.chrome-wd-p')?.getAttribute('title')).toBe('/srv/elsewhere')
+    expect(field().value).toBe('/srv/elsewhere')
+  })
+
+  it('uses the listed folder exactly, including a trailing space in its name', async () => {
+    /* A Windows directory reached through the extended path prefix can end in
+       a space, and the host lists it with that character. The browser's Use
+       must ask for the listed folder itself, not a trimmed sibling. */
+    const asked: Array<string | undefined> = []
+    const listed = '\\\\?\\C:\\srv\\typed '
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === 'C:/srv') {
+        return {
+          path: 'C:/srv',
+          parent: 'C:/',
+          home: 'C:/Users/me',
+          ok: true,
+          entries: [{ name: 'typed ', path: listed, ok: true }],
+        }
+      }
+      return { path: p ?? 'C:/srv', parent: 'C:/', home: 'C:/Users/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.browse(listed)
+    })
+    await settle()
+    expect(wd.get().listing?.path).toBe(listed)
+
+    await act(async () => {
+      await wd.useHere(listed)
+    })
+    await settle()
+    expect(asked.at(-1)).toBe(listed)
+    expect(wd.staged()).toBe(listed)
+  })
+
+  it('uses a path typed into the bar when Use this folder is pressed before Enter', async () => {
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    act(() => {
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.click()
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(asked.at(-1)).toBe('/srv/typed')
+    expect(wd.staged()).toBe('/srv/typed')
+    expect(pop().dataset.open).toBe('false')
+  })
+
+  it('reads a listed name ending in a space exactly, when Enter reads the bar', async () => {
+    /* The same name as the case above, entered rather than pressed: the bar's
+       Enter reads the path too, and it must read the listed folder itself.
+       Trimming it here would ask for a sibling the host never listed. */
+    const asked: Array<string | undefined> = []
+    const listed = '\\\\?\\C:\\srv\\typed '
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === 'C:/srv') {
+        return {
+          path: 'C:/srv',
+          parent: 'C:/',
+          home: 'C:/Users/me',
+          ok: true,
+          entries: [{ name: 'typed ', path: listed, ok: true }],
+        }
+      }
+      return { path: p ?? 'C:/srv', parent: 'C:/', home: 'C:/Users/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(listed)
+    })
+    await settle()
+    expect(asked).toContain(listed)
+    expect(wd.get().listing?.path).toBe(listed)
+  })
+
+  it('reads a pasted path without the whitespace around it', async () => {
+    /* A paste carries the whitespace around it -- a newline off a terminal,
+       a space off a clipboard -- and the folder it names does not. The host
+       refuses the padded path outright, so the bar reads it again without
+       the padding and stands where that read landed. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p !== undefined && p !== p.trim()) throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(' /srv/elsewhere\n')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /srv/elsewhere\n', '/srv/elsewhere'])
+    expect(wd.get().listing?.path).toBe('/srv/elsewhere')
+    expect(pop().querySelector('.chrome-wd-err')).toBeNull()
+  })
+
+  it('says the refusal of the path as typed when the unpadded one is refused too', async () => {
+    /* Both reads refused: the reader is told about the path they typed, not
+       about the one the bar tried second. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      throw { data: { detail: `not a directory: ${p}` } }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.go(' /nope ')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /nope ', '/nope'])
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.failed {"detail":"not a directory:  /nope "}')
+  })
+
+  it('uses a pasted path without the whitespace around it, when Use reads the bar', async () => {
+    /* The same padding read through the other door: Use reads the bar before
+       it picks, so the folder it stages is the one the read landed on. */
+    const asked: Array<string | undefined> = []
+    workspace(async (p) => {
+      asked.push(p)
+      if (p !== undefined && p !== p.trim()) throw { data: { detail: 'not a directory' } }
+      return { path: p ?? '/home/me', parent: '/home', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    await act(async () => {
+      await wd.useHere(' /srv/elsewhere\n')
+    })
+    await settle()
+    expect(asked).toEqual([undefined, ' /srv/elsewhere\n', '/srv/elsewhere'])
+    expect(wd.staged()).toBe('/srv/elsewhere')
+  })
+
+  it('holds the first Use while its typed read is in flight, so a double press cannot name the folder it left', async () => {
+    /* The read sets loading and bumps asked, so the path bar comes back holding
+       the folder the browser stands in while the typed path is on its way. A
+       second press in that gap must not name that older folder and stage it. */
+    const asked: Array<string | undefined> = []
+    let release: (listing: DirListing) => void = () => {}
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/srv/typed') return new Promise<DirListing>((resolve) => { release = resolve })
+      return { path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    act(() => {
+      const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+    expect(pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!.value).toBe('/srv')
+    act(() => use().click())
+    /* The disabled press raises nothing; the guard covers a press that still
+       arrives before the remount paints. */
+    await act(async () => { await wd.useHere('/srv') })
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      release({ path: '/srv/typed', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(asked).toEqual([undefined, '/srv/typed'])
+    expect(wd.staged()).toBe('/srv/typed')
+    expect(pop().dataset.open).toBe('false')
+  })
+
+  it('keeps a press guarded after an earlier press that lost the browser answers late', async () => {
+    /* A press whose read is still out when the reader goes back and walks in
+       again has lost the browser: its answer is dropped. It must not release
+       the guard the press now holding the browser owns. */
+    const pending: Array<(listing: DirListing) => void> = []
+    workspace((p) => {
+      if (p === '/srv/first' || p === '/srv/second') {
+        return new Promise<DirListing>((resolve) => { pending.push(resolve) })
+      }
+      return Promise.resolve({ path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] })
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    const type = (value: string): void => {
+      const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+      field.value = value
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    act(() => type('/srv/first'))
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+
+    act(() => wd.close())
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+    act(() => type('/srv/second'))
+    act(() => use().click())
+    expect(use().disabled).toBe(true)
+
+    await act(async () => {
+      pending[0]!({ path: '/srv/first', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(wd.staged()).toBeNull()
+
+    /* The press still standing: a third press while its read is out is held.
+       Named through the store because the button is disabled while loading. */
+    await act(async () => { await wd.useHere('/srv') })
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      pending[1]!({ path: '/srv/second', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(wd.staged()).toBe('/srv/second')
+  })
+
+  it('takes a real double click as one press of Use', async () => {
+    /* The browser delivers two clicks for a double click; the second lands while
+       the first read is out. A conversation cannot change its folder later, so
+       the folder staged has to be the typed one. */
+    const asked: Array<string | undefined> = []
+    let release: (listing: DirListing) => void = () => {}
+    workspace(async (p) => {
+      asked.push(p)
+      if (p === '/srv/typed') return new Promise<DirListing>((resolve) => { release = resolve })
+      return { path: p ?? '/srv', parent: '/', home: '/home/me', ok: true, entries: [] }
+    })
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    act(() => {
+      field.value = '/srv/typed'
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const use = (): HTMLButtonElement => pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!
+    act(() => use().click())
+    /* The second click of a double click lands on the button the remount put
+       back, whose handler reads the folder now in the bar. */
+    act(() => use().click())
+    expect(wd.staged()).toBeNull()
+
+    await act(async () => {
+      release({ path: '/srv/typed', parent: '/srv', home: '/home/me', ok: true, entries: [] })
+      await Promise.resolve()
+    })
+    await settle()
+    expect(asked).toEqual([undefined, '/srv/typed'])
+    expect(wd.staged()).toBe('/srv/typed')
+  })
+
+  it('withholds the pick when the typed path is a folder the engine would refuse', async () => {
+    /* Standing in a folder the engine takes, a drive root it would refuse is
+       named in the bar and Use is pressed: the drive is walked into and the
+       pick is withheld, as a refused row's is. */
+    const listings: Record<string, DirListing> = {
+      'D:\\projects': { path: 'D:\\projects', parent: 'D:\\', home: 'C:\\Users\\me', ok: true, roots: [], entries: [] },
+      'C:\\': { path: 'C:\\', parent: null, home: 'C:\\Users\\me', ok: false, roots: [], entries: [] },
+    }
+    workspace(async (p) => listings[p ?? 'D:\\projects']!)
+    openFolders()
+    act(() => byName('gui.wd.open_remote').click())
+    await settle()
+
+    const field = (): HTMLInputElement => pop().querySelector<HTMLInputElement>('.chrome-wd-typed')!
+    expect(field().value).toBe('D:\\projects')
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.disabled).toBe(false)
+    act(() => {
+      field().value = 'C:\\'
+      field().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.click()
+      await Promise.resolve()
+    })
+    await settle()
+
+    expect(wd.staged()).toBeNull()
+    expect(pop().dataset.open).toBe('true')
+    expect(pop().querySelector('.chrome-wd-err')?.textContent).toBe('gui.wd.blocked')
+    expect(pop().querySelector<HTMLButtonElement>('.chrome-wd-use')!.disabled).toBe(true)
   })
 })

@@ -8,7 +8,9 @@ trips a test.
 from __future__ import annotations
 
 import asyncio
+import http.server
 import json
+import re
 
 import pytest
 
@@ -23,7 +25,9 @@ from raven.providers.openai_codex_provider import (
     _convert_tool_output,
     _friendly_error,
     _iter_sse,
+    _map_finish_reason,
 )
+from tests._tls import https_endpoint, private_ca
 
 
 def test_default_url_targets_codex_responses_endpoint():
@@ -32,11 +36,18 @@ def test_default_url_targets_codex_responses_endpoint():
 
 
 def test_headers_declare_experimental_responses_beta():
-    headers = _build_headers(account_id="acct-123", token="tok-abc")
+    headers = _build_headers(account_id="acct-123", token="tok-abc", client_version="0.163.0")
     assert headers["OpenAI-Beta"] == "responses=experimental"
     assert headers["Authorization"] == "Bearer tok-abc"
     assert headers["chatgpt-account-id"] == "acct-123"
     assert headers["accept"] == "text/event-stream"
+
+
+def test_headers_name_the_client_release_where_the_cli_does():
+    """The official CLI sends its release as a `version` header on every request."""
+    headers = _build_headers(account_id="acct-123", token="tok-abc", client_version="0.163.0")
+
+    assert headers["version"] == "0.163.0"
 
 
 def test_named_function_tool_choice_is_converted_for_responses():
@@ -298,6 +309,139 @@ def test_a_failed_stream_still_reports_what_it_used(monkeypatch):
     assert resp.usage["prompt_tokens"] == 1200
 
 
+def _chat_over(monkeypatch, events: list[dict]):
+    """One Codex call answered by ``events``, as the account would stream them."""
+    _stream_codex_events(monkeypatch, events)
+    return asyncio.run(
+        OpenAICodexProvider(default_model="openai-codex/gpt-5.6-sol").chat([{"role": "user", "content": "hi"}])
+    )
+
+
+def test_a_stream_without_a_terminal_event_reads_unknown(monkeypatch):
+    """A stream that ends before ``response.completed`` never said how the response
+    ended. ``stop`` was the value the consumer started from, so a reply cut by the
+    connection read as a finished one."""
+    resp = _chat_over(monkeypatch, [{"type": "response.output_text.delta", "delta": "half an answ"}])
+
+    assert (resp.content, resp.finish_reason) == ("half an answ", "unknown")
+
+
+def test_response_incomplete_on_max_output_tokens_is_length(monkeypatch):
+    """``response.incomplete`` is its own terminal event, not a ``completed`` with a
+    status. It was ignored, so an answer cut at the output ceiling read as ``stop``
+    and was never recognised as truncated."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "cut off"},
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                    "usage": _COMPLETED_USAGE,
+                },
+            },
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("cut off", "length")
+    assert resp.usage["completion_tokens"] == 9
+
+
+def test_response_incomplete_on_content_filter_is_content_filter(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {
+                "type": "response.incomplete",
+                "response": {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+            },
+        ],
+    )
+
+    assert resp.finish_reason == "content_filter"
+
+
+def test_response_incomplete_for_any_other_reason_reads_unknown(monkeypatch):
+    """Only the two reasons the loop can act on are named; a reason nobody has seen
+    is not guessed into one of them."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "partial"},
+            {
+                "type": "response.incomplete",
+                "response": {"status": "incomplete", "incomplete_details": {"reason": "some_new_reason"}},
+            },
+        ],
+    )
+
+    assert resp.finish_reason == "unknown"
+
+
+def test_a_refusal_part_is_kept_as_a_refusal(monkeypatch):
+    """A refusal arrives as its own part, not as output text. Dropped, the reply read
+    as an empty response, with the ``completed`` that follows as its finish."""
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't help with that"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert resp.content == "I can't help with that"
+    assert resp.finish_reason == "refusal"
+
+
+def test_a_refusal_done_event_replaces_its_deltas_instead_of_repeating_them(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't "},
+            {"type": "response.refusal.delta", "delta": "help"},
+            {"type": "response.refusal.done", "refusal": "I can't help"},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("I can't help", "refusal")
+
+
+def test_a_refusal_beside_a_reply_keeps_the_reply_and_the_verdict(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.output_text.delta", "delta": "Here is what I can do."},
+            {"type": "response.refusal.delta", "delta": "I can't do the rest."},
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ],
+    )
+
+    assert (resp.content, resp.finish_reason) == ("Here is what I can do.", "refusal")
+
+
+def test_a_refusal_does_not_hide_a_failed_status(monkeypatch):
+    resp = _chat_over(
+        monkeypatch,
+        [
+            {"type": "response.refusal.delta", "delta": "I can't help with that"},
+            {"type": "response.completed", "response": {"status": "failed"}},
+        ],
+    )
+
+    assert resp.finish_reason == "error"
+
+
+def test_an_unrecognised_response_status_reads_unknown():
+    assert _map_finish_reason("completed") == "stop"
+    assert _map_finish_reason("in_progress") == "unknown"
+    # A ``response.completed`` event that names no status is still the upstream
+    # saying the response completed.
+    assert _map_finish_reason(None) == "stop"
+
+
 _TINY_PNG_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
 
 
@@ -435,6 +579,173 @@ async def test_no_instructions_means_no_cache_key(monkeypatch: pytest.MonkeyPatc
     assert "prompt_cache_key" not in bodies[0]
 
 
+#: The replayed ``function_call`` ids the Codex backend takes; it answers any
+#: other with a 400 before generating anything.
+_CODEX_TAKES_ITEM_ID = re.compile(r"fc_[A-Za-z0-9_-]{1,61}")
+
+
+async def _replay_one_call(monkeypatch: pytest.MonkeyPatch, item_id: str) -> tuple[dict, dict]:
+    """The ``function_call`` and its output, as a Codex request replays a stored call."""
+    bodies = _capture_body(monkeypatch)
+    stored = f"call_00_X7zvK6OV6d9sEe9g9NoD4128|{item_id}"
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat(
+        [
+            {"role": "user", "content": "read the skill"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": stored, "type": "function", "function": {"name": "read_skill", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": stored, "name": "read_skill", "content": "the skill"},
+        ]
+    )
+
+    [call] = [item for item in bodies[0]["input"] if item.get("type") == "function_call"]
+    [output] = [item for item in bodies[0]["input"] if item.get("type") == "function_call_output"]
+    return call, output
+
+
+@pytest.mark.parametrize(
+    "item_id",
+    [
+        pytest.param("485256fc-a47f-41be-b14f-2c4a662ddbaf", id="deepseek-uuid"),
+        pytest.param("fc3a1b2c-a47f-41be-b14f-2c4a662ddbaf", id="uuid-beginning-with-fc"),
+        pytest.param("fc_" + "a" * 62, id="longer-than-64"),
+        pytest.param("fc_abc.def", id="a-character-outside-the-set"),
+        pytest.param("FC_12", id="upper-case-prefix"),
+        pytest.param("fc_", id="nothing-after-the-prefix"),
+    ],
+)
+async def test_a_call_another_vendor_answered_is_replayed_under_an_id_codex_takes(
+    monkeypatch: pytest.MonkeyPatch, item_id: str
+) -> None:
+    """A stored call keeps the item id of the vendor that answered, and
+    DeepSeek's Responses endpoint mints UUIDs. Replayed as they were after a
+    switch to a Codex model, the backend refused every later request of the
+    session:
+
+        Invalid 'input[9].id': '485256fc-a47f-41be-b14f-2c4a662ddbaf'.
+        Expected an ID that begins with 'fc'.
+
+    Beginning with ``fc`` is not enough: one UUID in 256 does, and the
+    backend refuses that too.
+    """
+    call, output = await _replay_one_call(monkeypatch, item_id)
+
+    assert _CODEX_TAKES_ITEM_ID.fullmatch(call["id"])
+    assert call["call_id"] == output["call_id"] == "call_00_X7zvK6OV6d9sEe9g9NoD4128"
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param(
+            (
+                "call_00_X7zvK6OV6d9sEe9g9NoD4128|485256fc-a47f-41be-b14f-2c4a662ddbaf",
+                "call_01_Q2mxR8ZpL4cVn1sTy6WdE903|c9b8a7d6-e5f4-4321-8a9b-0c1d2e3f4a5b",
+            ),
+            id="deepseek",
+        ),
+        pytest.param(("call_function_nnhnqu50o85f_1", "call_function_nnhnqu50o85f_2"), id="chat-route"),
+    ],
+)
+async def test_parallel_calls_are_replayed_under_distinct_item_ids(
+    monkeypatch: pytest.MonkeyPatch, stored: tuple[str, str]
+) -> None:
+    """Parallel calls share their message's index, so a replacement built
+    from the index alone named every one of them the same. The first keeps
+    the plain form a lone call has, so a lone call's request is as it was."""
+    bodies = _capture_body(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat(
+        [
+            {"role": "user", "content": "read both files"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": stored_id, "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                    for stored_id in stored
+                ],
+            },
+            *(
+                {"role": "tool", "tool_call_id": stored_id, "name": "read_file", "content": "text"}
+                for stored_id in stored
+            ),
+        ]
+    )
+
+    calls = [item for item in bodies[0]["input"] if item.get("type") == "function_call"]
+    outputs = [item for item in bodies[0]["input"] if item.get("type") == "function_call_output"]
+    assert len({call["id"] for call in calls}) == 2
+    assert calls[0]["id"] == "fc_1"
+    assert all(_CODEX_TAKES_ITEM_ID.fullmatch(call["id"]) for call in calls)
+    assert [call["call_id"] for call in calls] == [output["call_id"] for output in outputs]
+
+
+async def test_an_item_id_openai_minted_is_replayed_as_it_came(monkeypatch: pytest.MonkeyPatch) -> None:
+    call, _ = await _replay_one_call(monkeypatch, "fc_09c4953cdc24b753016ad4d8fe2fa88191b26b197542b1c759")
+
+    assert call["id"] == "fc_09c4953cdc24b753016ad4d8fe2fa88191b26b197542b1c759"
+
+
+def _capture_headers(monkeypatch) -> list[dict[str, str]]:
+    """Run ``chat`` without a network call or a credential, keeping the headers."""
+    sent: list[dict[str, str]] = []
+
+    async def fake_request(url, headers, body, **kwargs):
+        sent.append(headers)
+
+        return "", [], "stop"
+
+    monkeypatch.setattr("raven.providers.openai_codex_provider._request_codex", fake_request)
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("token", "acct"))
+
+    return sent
+
+
+async def test_a_turn_names_the_newest_published_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend gates generation by client version too; a turn names what npm
+    calls `latest`, not a release frozen into this code."""
+    from raven.providers import codex_client_version
+
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", lambda *, timeout: "0.170.0")
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == "0.170.0"
+
+
+async def test_an_unwritable_cache_does_not_stop_a_turn(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Version bookkeeping is optional; the turn is not."""
+    from raven.providers import codex_client_version
+
+    (tmp_path / "cache").write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("RAVEN_HOME", str(tmp_path))
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", lambda *, timeout: "0.170.0")
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == "0.170.0"
+
+
+async def test_a_turn_offline_still_names_a_real_release(monkeypatch: pytest.MonkeyPatch) -> None:
+    """npm unreachable (the suite's default) is the bundled release, never `0.0.0`
+    or no version at all."""
+    from raven.providers import codex_client_version
+
+    sent = _capture_headers(monkeypatch)
+
+    await OpenAICodexProvider(default_model="openai-codex/gpt-6.1-sol").chat([{"role": "user", "content": "x"}])
+
+    assert sent[0]["version"] == codex_client_version.FALLBACK_VERSION
+
+
 def test_litellm_still_filters_out_the_cache_key() -> None:
     """The one cost of migrating that a test can see.
 
@@ -561,7 +872,7 @@ async def test_the_codex_sse_watchdog_runs_on_the_stream_idle_budget_not_the_cal
 
     seen: list[dict] = []
 
-    async def fake_request(url, headers, body, *, verify, timeout, idle_timeout=None, first_byte=None, **kwargs):
+    async def fake_request(url, headers, body, *, timeout, idle_timeout=None, first_byte=None, **kwargs):
         seen.append({"timeout": timeout, "idle_timeout": idle_timeout, "first_byte": first_byte})
         return "ok", [], "stop"
 
@@ -639,3 +950,55 @@ def test_every_replayed_assistant_message_carries_them_not_only_the_first() -> N
     parts = [c for i in items if i.get("role") == "assistant" for c in i.get("content", [])]
     assert [p["text"] for p in parts] == ["first", "second"]
     assert all(p["annotations"] == [] for p in parts)
+
+
+@pytest.fixture
+def impostor(tmp_path, monkeypatch):
+    """An HTTPS endpoint whose certificate no trust store vouches for.
+
+    It answers like Codex, so a client that carried on without verifying would
+    get an ordinary reply. What it keeps is every Authorization header that
+    reached it.
+    """
+    received: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            received.append(self.headers.get("Authorization", ""))
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            reply = (
+                b'data: {"type": "response.output_text.delta", "delta": "hello"}\n\n'
+                b'data: {"type": "response.completed", "response": {"status": "completed"}}\n\n'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(reply)))
+            self.end_headers()
+            self.wfile.write(reply)
+
+        def log_message(self, *args):
+            pass
+
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    with https_endpoint(private_ca(tmp_path / "pki").server, Handler) as origin:
+        yield f"{origin}/backend-api/codex/responses", received
+
+
+async def test_a_certificate_that_fails_verification_ends_the_call_before_the_token_leaves(
+    impostor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed verification is the answer, not a reason to try again without it.
+
+    Reconnecting with verification off hands the bearer token, and the whole
+    conversation with it, to whoever presented the certificate.
+    """
+    url, received = impostor
+    monkeypatch.setattr("raven.providers.openai_codex_provider.DEFAULT_CODEX_URL", url)
+    monkeypatch.setattr("raven.providers.chatgpt_token.access_token_and_account", lambda: ("tok-secret", "acct"))
+    provider = OpenAICodexProvider(default_model="openai-codex/gpt-5")
+
+    response = await provider.chat([{"role": "user", "content": "hi"}])
+
+    assert received == []
+    assert response.finish_reason == "error"

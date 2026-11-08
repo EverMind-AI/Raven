@@ -1,19 +1,24 @@
 /** Draggable floating navigation palette for workspace content. */
 
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Download04Icon } from '@hugeicons/core-free-icons'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 
+import { Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import * as tasksStore from '../tasks/store'
-import { TasksApp } from '../tasks/TasksPage'
+import { TasksPanel } from '../tasks/TasksPage'
 import * as deliveries from '../workspace/deliveries'
 import { fileKind } from '../workspace/store'
 import * as workspace from '../workspace/store'
 import { DeskIcon } from './DeskIcon'
 import {
+  anchoredRoom,
   clampGeometry,
   defaultGeometry,
   DESK_DRAG_THRESHOLD,
   DESK_GEOMETRY_KEY,
+  DESK_MIN_SIZE,
+  deskBottomLimit,
   deskReserve,
   magnetGeometry,
 } from './geometry'
@@ -144,27 +149,47 @@ function DeliverableRow({ row, here }: { row: DeliveryRow; here: boolean }): JSX
   const mine = row.scope === deliveries.SESSION
   const when = here || !mine || row.turn == null ? '' : t('gui.ws.dlv_turn', { n: String(row.turn) })
   const meta = [row.name, size, when].filter(Boolean).join(' \u00b7 ')
-  return (
-    <button
-      className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
-      title={row.description || row.path}
-      /* Through the workspace's own opener, not straight at the desk: that is
-         the door the transcript's delivery card uses, and it is what keeps a
-         source that cannot read files (the demo shell) answering with its own
-         note instead of a viewer that has nothing to show.
-         Left clickable on purpose when the file is gone: the viewer says so in
-         words, which is more than a dead row does. */
-      onClick={() => workspace.openDelivery(row.path)}
+  /* The row opens the file; the link beside it hands it over as an attachment,
+     which is the one thing that reaches a reader on another machine -- the
+     same control the transcript's delivery card and the viewer's header carry.
+     A sibling of the button, not a child of it: a link inside a button is not
+     a link, it is a button that navigates. A delivery that is gone offers
+     none: its token is gone with it, and the row says so already. */
+  const link = row.downloadPath && !row.missing ? (
+    <a
+      className="desk-dl"
+      href={row.downloadPath}
+      download={row.name}
+      data-tip={t('gui.arts.download')}
+      aria-label={t('gui.arts.download')}
     >
-      <span className="dlv-kind" data-kind={fileKind(row.name)}>
-        {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
-      </span>
-      <span className="desk-name">
-        <b>{row.title}</b>
-        <s>{meta}</s>
-      </span>
-      {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
-    </button>
+      <Icon icon={Download04Icon} size={14} />
+    </a>
+  ) : null
+  return (
+    <span className="desk-dlv">
+      <button
+        className={'desk-row desk-dlv-row' + (row.missing ? ' gone' : '')}
+        title={row.description || row.path}
+        /* Through the workspace's own opener, not straight at the desk: that is
+           the door the transcript's delivery card uses, and it is what keeps a
+           source that cannot read files (the demo shell) answering with its own
+           note instead of a viewer that has nothing to show.
+           Left clickable on purpose when the file is gone: the viewer says so in
+           words, which is more than a dead row does. */
+        onClick={() => workspace.openDelivery(row.path)}
+      >
+        <span className="dlv-kind" data-kind={fileKind(row.name)}>
+          {row.ext ? row.ext.slice(0, 4).toUpperCase() : t('gui.arts.file')}
+        </span>
+        <span className="desk-name">
+          <b>{row.title}</b>
+          <s>{meta}</s>
+        </span>
+        {row.missing ? <i className="dlv-gone">{t('gui.arts.missing')}</i> : null}
+      </button>
+      {link}
+    </span>
   )
 }
 
@@ -213,13 +238,17 @@ function DeliverablesNav(): JSX.Element {
    direct chat still live there. */
 function TasksNav(): JSX.Element {
   const state = useSyncExternalStore(tasksStore.subscribe, tasksStore.get)
-  useEffect(() => { void tasksStore.refresh() }, [])
+  useEffect(() => { void tasksStore.refresh(); void tasksStore.refreshBoard() }, [])
   /* Answered here rather than inside the view: in the desk, one nothing has to
-     look like the other two, and TasksApp's own note belongs to the panel. */
-  if (!state.rows.length) {
+     look like the other two, and TasksPanel's own note belongs to the panel.
+     Nothing is no Task and no group: a conversation that delegated nothing
+     still has the matters its board keeps, and the Task Board page opens them
+     here. An unread board is not an empty one -- a reconnect resets it with
+     this tab mounted, and the panel reads it back. */
+  if (!state.rows.length && state.boardLoaded && !state.board?.groups.length) {
     return <DeskEmpty kind="tasks" title={t('gui.ws.tasks_none')} />
   }
-  return <TasksApp />
+  return <TasksPanel />
 }
 
 /* Long enough to read as a movement, short enough that a reader who wanted the
@@ -310,8 +339,13 @@ export function DeskPalette(): JSX.Element | null {
      Keyed on `shown` rather than `phase`, so the column travels WITH the panel's
      190ms animation rather than after it. Cleared on unmount as well as when it
      reaches zero: a desk that stops being rendered would otherwise leave the
-     transcript narrow with nothing on screen to explain why. */
-  useEffect(() => {
+     transcript narrow with nothing on screen to explain why.
+
+     A layout effect, and declared before the height's: that measure reads the
+     card this moves, so it has to read it moved. Published after paint, a
+     palette widened onto the card measured it where it stood and was drawn
+     short of it for a frame. */
+  useLayoutEffect(() => {
     const chat = document.querySelector('.chat')
     const publish = (): void => {
       const reserve = deskReserve({
@@ -334,6 +368,35 @@ export function DeskPalette(): JSX.Element | null {
       document.documentElement.style.removeProperty('--desk-reserve')
     }
   }, [shown, geom.detached, geom.w])
+  /* How tall the anchored palette may be drawn as the composer stands now:
+     short of a card that runs under it (`anchoredRoom`). Measured rather than
+     computed once, because the card moves without this component rendering --
+     it grows upward with a long draft, and slides under the palette or out from
+     under it as the reserve comes and goes -- and kept apart from `geom`, so a
+     card in the way for a while takes nothing from the height the reader set.
+     Before paint, or a palette opened over the card would show a frame on it. */
+  const [reach, setReach] = useState(Number.POSITIVE_INFINITY)
+  const reachRef = useRef(reach)
+  useLayoutEffect(() => {
+    const measure = (): void => {
+      reachRef.current = shown && !geom.detached ? anchoredRoom(geom.w) : Number.POSITIVE_INFINITY
+      setReach(reachRef.current)
+    }
+    measure()
+    if (!shown || geom.detached) return
+    /* The dock's box changes whenever the card does -- its padding takes the
+       reserve, its height follows the card -- and the window moves the dock
+       without resizing it. */
+    const dock = document.querySelector('.chat > .dock')
+    const observer = dock ? new ResizeObserver(measure) : null
+    if (dock && observer) observer.observe(dock)
+    window.addEventListener('resize', measure)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [shown, geom.detached, geom.w])
+  const height = Math.max(DESK_MIN_SIZE, Math.min(geom.h, reach))
   useEffect(() => {
     const resize = (): void => setGeom((value) => clampGeometry(value))
     window.addEventListener('resize', resize)
@@ -422,11 +485,23 @@ export function DeskPalette(): JSX.Element | null {
     event.preventDefault()
     event.stopPropagation()
     pointerCleanup.current?.()
-    const start = { pointerX: event.clientX, pointerY: event.clientY, ...geom }
+    const start = { pointerX: event.clientX, pointerY: event.clientY, ...geom, h: height }
+    /* Only the top is ever pinned, so the height takes no more than the room
+       between that edge and the limit. Left to clampGeometry, a detached palette
+       pulled past the limit would make that room by climbing -- its top edge
+       running from a hand that is pulling down. */
+    const top = event.currentTarget.closest('.desk-palette')?.getBoundingClientRect().top ?? geom.y
+    const room = deskBottomLimit() - top
     const target = event.currentTarget
     const pointerId = event.pointerId
     const controller = new AbortController()
     target.setPointerCapture(pointerId)
+    /* The reserve follows the width on every frame of this, and the slide the
+       stylesheet gives it restarts from where it stands each time, so the card
+       never moved until the hand paused. The flag holds it still for the
+       gesture (styles/page.css), and the card keeps pace with the edge. */
+    const root = document.documentElement
+    root.dataset.deskResize = 'true'
     const move = (e: globalThis.PointerEvent): void => {
       if (e.pointerId !== pointerId) return
       setGeom((now) => clampGeometry({
@@ -436,13 +511,18 @@ export function DeskPalette(): JSX.Element | null {
            a rightward drag has to shrink it instead. Detached has no pinned
            edge, so the hand's own direction is the width's. */
         w: start.w + (start.detached ? 1 : -1) * (e.clientX - start.pointerX),
-        h: start.h + e.clientY - start.pointerY,
+        h: Math.min(start.h + e.clientY - start.pointerY, room),
       }))
     }
     const finish = (e?: globalThis.PointerEvent): void => {
       if (e && e.pointerId !== pointerId) return
       if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
       controller.abort()
+      delete root.dataset.deskResize
+      /* What the reader sees when they let go is what they set. A pull past
+         the stop above a card would otherwise leave a height the palette grows
+         back to by itself once the card moves away. */
+      setGeom((now) => ({ ...now, h: Math.max(DESK_MIN_SIZE, Math.min(now.h, reachRef.current)) }))
       if (pointerCleanup.current === cleanup) pointerCleanup.current = null
     }
     const cleanup = (): void => finish()
@@ -459,6 +539,9 @@ export function DeskPalette(): JSX.Element | null {
       role="dialog"
       aria-label={t('gui.workspace')}
       data-anchored={!geom.detached}
+      /* The tab whose ground the frame takes: the Tasks board paints on
+         `--surface`, so the chrome above and below it has to as well. */
+      data-tab={state.tab}
       /* Which way it is moving, for the stylesheet -- and genuinely inert
          while it leaves. A tab clicked on the way out would act on a desk the
          reader has already dismissed, a screen reader has no reason to be told
@@ -470,7 +553,7 @@ export function DeskPalette(): JSX.Element | null {
       style={{
         ...(geom.detached ? { left: geom.x, top: geom.y } : {}),
         width: geom.w,
-        height: geom.h,
+        height,
       } as CSSProperties}
     >
       <div

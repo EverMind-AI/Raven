@@ -79,7 +79,7 @@ def test_slug_collides_for_a_separator_and_an_underscore(tmp_path: Path) -> None
 
     # One bucket, but each session still knows which project it belongs to.
     by_key = {s["key"]: s["metadata"]["project_dir"] for s in manager.list_sessions()}
-    assert by_key == {"cli:one": "/srv/a_b", "cli:two": "/srv/a/b"}
+    assert by_key == {"cli:one": str(Path("/srv/a_b")), "cli:two": str(Path("/srv/a/b"))}
 
 
 def test_project_dir_is_not_rewritten_by_a_later_run_elsewhere(tmp_path: Path) -> None:
@@ -90,7 +90,7 @@ def test_project_dir_is_not_rewritten_by_a_later_run_elsewhere(tmp_path: Path) -
     second = SessionManager(tmp_path, project_slug="-srv-beta", project_dir=Path("/srv/beta"))
     reopened = second.get_or_create("cli:one")
 
-    assert reopened.metadata["project_dir"] == "/srv/alpha"
+    assert reopened.metadata["project_dir"] == str(Path("/srv/alpha"))
 
 
 def test_slug_never_produces_a_traversing_or_empty_segment() -> None:
@@ -234,7 +234,12 @@ def test_a_transcript_that_cannot_be_read_is_still_adopted(tmp_path: Path) -> No
     """
     (tmp_path / "sessions" / "cli").mkdir(parents=True)
     orphan = tmp_path / "sessions" / "cli" / "orphan.jsonl"
-    orphan.symlink_to(tmp_path / "sessions" / "cli" / "gone.jsonl")
+    try:
+        orphan.symlink_to(tmp_path / "sessions" / "cli" / "gone.jsonl")
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != 1314:
+            raise
+        pytest.skip("Creating symlinks requires Windows Developer Mode or elevated privileges")
 
     grouped = SessionManager(tmp_path, project_slug="-srv-alpha")
 

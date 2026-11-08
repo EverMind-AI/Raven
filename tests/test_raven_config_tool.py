@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +97,57 @@ async def test_get_reports_values_defaults_and_hides_secrets(config_file):
 
 
 @pytest.mark.asyncio
+async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
+    """``enabled`` defaults to true, but the source runs only with an endpoint:
+    the flag alone tells the model the Hub is searched when it is not."""
+    tool = RavenConfigTool()
+    path = "skillForge.router.hub.enabled"
+
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": True}}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"value": True, "in_effect": False}}
+
+    config_file.write_text(json.dumps({"skillRouter": {"hub": {"endpoint": "https://hub.internal.test"}}}))
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": True}}
+    assert f"  {path} = true (default), in effect: true [bool," in await _run(tool, action="describe")
+    config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": True}}}}))
+    assert f"  {path} = true, in effect: false [bool," in await _run(tool, action="describe")
+
+
+@pytest.mark.asyncio
+async def test_the_skill_hub_switch_is_not_reported_as_waiting_for_a_reload(config_file):
+    """Switching the source off stops the next search and switching it on is
+    live too while the endpoint is present, so the write does not owe a reload;
+    only a first enable that had to add the endpoint can wait, and the settings
+    service says so in that write's own answer."""
+    calls = Calls({"settings.set": {"applied": True, "previous": True}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="false")
+
+    assert "at once" in reply
+    assert "Pending" not in reply
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+@pytest.mark.asyncio
+async def test_a_settings_write_that_waits_for_a_reload_reaches_the_model(config_file):
+    """The switch-on that had to seed the endpoint cannot be searched with
+    until a reload. That cost arrives as the settings service's ``warning``; a
+    tool that drops it tells the model a change is already serving."""
+    warning = "Saved. Skill Hub search starts after Raven reloads."
+    calls = Calls({"settings.set": {"applied": True, "previous": False, "warning": warning}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="true")
+
+    assert warning in reply
+
+
+@pytest.mark.asyncio
 async def test_a_section_or_instance_read_expands_to_what_is_configured(config_file):
     """A wildcard entry is read once per configured instance; an empty answer reads as "none configured"."""
     tool = RavenConfigTool()
@@ -167,6 +219,69 @@ async def test_a_settings_page_setting_goes_through_the_lent_caller(config_file)
 
 
 @pytest.mark.asyncio
+async def test_the_reasoning_effort_may_be_cleared_through_the_lent_caller(config_file):
+    """``null`` hands the choice back to the provider's own default, as the
+    settings page's *Provider default* rung does; the door used to refuse it
+    while the page accepted it."""
+    calls = Calls({"settings.set": {"applied": True, "previous": "high"}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    reply = await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert calls.calls == [("settings.set", {"key": "agents.defaults.reasoningEffort", "value": None})]
+    assert "next turn" in reply
+
+
+@pytest.mark.asyncio
+async def test_a_cleared_reasoning_effort_lands_as_null_in_the_file(config_file):
+    """Through the settings service itself: the key is written as null, which
+    is what the live reader takes as the provider's own default."""
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["agents"] = {"defaults": {"reasoningEffort": "high"}}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    await _run(tool, action="set", path="agents.defaults.reasoningEffort", value="null")
+    assert json.loads(config_file.read_text())["agents"]["defaults"]["reasoningEffort"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_image_provider_may_be_set_to_volcengine(config_file):
+    """The choices are the registry's, so a provider the roles card offers the image
+    role is one a model may name here too."""
+    calls = Calls({"settings.set": {"applied": True, "previous": ""}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="tools.media.image.provider", value='"volcengine"')
+    assert calls.calls == [("settings.set", {"key": "tools.media.image.provider", "value": "volcengine"})]
+
+
+@pytest.mark.asyncio
+async def test_the_image_provider_may_be_set_to_minimax(config_file):
+    calls = Calls({"settings.set": {"applied": True, "previous": ""}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="tools.media.image.provider", value='"minimax"')
+    assert calls.calls == [("settings.set", {"key": "tools.media.image.provider", "value": "minimax"})]
+
+
+@pytest.mark.asyncio
+async def test_the_video_provider_may_be_set_to_minimax(config_file):
+    """The video section names a provider too, from the registry's list for it."""
+    calls = Calls({"settings.set": {"applied": True, "previous": ""}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+    await _run(tool, action="set", path="tools.media.video.provider", value='"minimax"')
+    assert calls.calls == [("settings.set", {"key": "tools.media.video.provider", "value": "minimax"})]
+
+
+@pytest.mark.asyncio
 async def test_without_a_caller_a_settings_page_setting_is_refused(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="tools.exec.timeout", value="120")
@@ -190,10 +305,83 @@ async def test_secrets_and_inert_settings_are_not_written(config_file):
     tool = RavenConfigTool()
     reply = await _run(tool, action="set", path="providers.openrouter.apiKey", value='"sk-new"')
     assert "never goes through a tool call" in reply
-    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"UTC"')
+    reply = await _run(tool, action="set", path="tools.web.search.maxResults", value="5")
     assert "nothing was changed" in reply
     data = json.loads(config_file.read_text())
-    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "cron" not in data
+    assert data["providers"]["openrouter"]["apiKey"] == "sk-x" and "web" not in data["tools"]
+
+
+@pytest.mark.parametrize("spelling", ["defaultTimezone", "default_timezone"])
+async def test_cron_timezone_is_written_through_settings_and_used_by_new_jobs(config_file, spelling):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {spelling: "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+    service = build_cron_service(allowed_channels=None)
+    before = service.add_job("before", CronSchedule(kind="cron", expr="0 9 * * *"), "before", to="before")
+    calls = []
+
+    async def writer(method, params):
+        calls.append((method, params))
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value='"Europe/Paris"')
+    assert calls == [("settings.set", {"key": "cron.defaultTimezone", "value": "Europe/Paris"})]
+    assert "Europe/Paris" in reply and "next turn" in reply
+    assert json.loads(config_file.read_text())["cron"] == {spelling: "Europe/Paris"}
+    after = service.add_job("after", CronSchedule(kind="cron", expr="0 9 * * *"), "after", to="after")
+    assert before.schedule.tz == "UTC" and after.schedule.tz == "Europe/Paris"
+    assert _pending(await _run(tool, action="describe")) is None
+
+
+async def test_cron_timezone_set_to_null_returns_new_jobs_to_local_time(config_file):
+    from raven.core.cron_stack import build_cron_service
+    from raven.proactive_engine.schedulers.cron.types import CronSchedule
+    from raven.rpc.methods import console as rpc_console
+
+    raw = json.loads(config_file.read_text())
+    raw["cron"] = {"defaultTimezone": "UTC"}
+    config_file.write_text(json.dumps(raw), encoding="utf-8")
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value="null")
+    assert not reply.startswith("Error:"), reply
+    job = build_cron_service(allowed_channels=None).add_job("daily", CronSchedule(kind="cron", expr="0 9 * * *"), "d")
+    assert job.schedule.tz is None
+
+
+@pytest.mark.parametrize("invalid", [7, "Not/AZone"])
+async def test_cron_timezone_rejects_invalid_tool_writes(config_file, invalid):
+    from raven.rpc.methods import console as rpc_console
+
+    async def writer(method, params):
+        assert method == "settings.set"
+        return await rpc_console.settings_set(params)
+
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(writer)
+    before = config_file.read_bytes()
+    reply = await _run(tool, action="set", path="cron.defaultTimezone", value=json.dumps(invalid))
+    assert reply.startswith("Error:"), reply
+    assert config_file.read_bytes() == before
+
+
+async def test_cron_timezone_without_a_settings_writer_is_refused(config_file):
+    before = config_file.read_bytes()
+    reply = await _run(RavenConfigTool(), action="set", path="cron.defaultTimezone", value='"UTC"')
+    assert reply.startswith("Error:") and "Settings" in reply
+    assert config_file.read_bytes() == before
 
 
 @pytest.mark.asyncio
@@ -1027,6 +1215,65 @@ async def test_an_agent_that_does_not_answer_its_test_is_reported_with_what_to_d
     )
 
 
+def _run_command(lines: list[str]) -> list[str]:
+    """The command in a "Run `...`" guidance line, split as the reader's host splits it.
+
+    The hint is built with ``command_quote``, which leaves a safe id bare on
+    POSIX and wraps it in double quotes on Windows; asserting the argv is the
+    only form both spellings satisfy.
+    """
+    line = next(line for line in lines if line.startswith("- Run `"))
+    return shlex.split(line.split("`")[1])
+
+
+def test_the_next_step_for_an_opencode_row_runs_the_model_its_row_names() -> None:
+    """``DIAGNOSE_HINTS`` is a template, and raven_config read it as a finished command.
+
+    The settings page expands the table through ``diagnose_hint_for``; this
+    reader took the raw string, so an OpenCode row that ended its turn empty
+    was told to run ``opencode run{model} hi`` -- no command at all.
+    """
+    from raven.agent.tools.raven_config import _what_it_needs
+
+    pinned = _what_it_needs(
+        "opencode",
+        {"model": "opencode/big-pickle"},
+        remedy=None,
+        detail="acp agent 'OpenCode' ended its turn with no content",
+        model="add again",
+    )
+    joined = "\n".join(pinned)
+    assert "{" not in joined
+    assert _run_command(pinned) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
+
+    plain = _what_it_needs("opencode", {}, remedy=None, detail="ended its turn with no content", model="add again")
+    assert _run_command(plain) == ["opencode", "run", "hi"]
+
+
+@pytest.mark.asyncio
+async def test_adding_an_opencode_row_with_a_model_names_that_model_in_the_next_step(config_file):
+    """The row is not in the roster yet, so the model exists only in add's params.
+
+    Dropping it told the model to run the agent's default turn -- a different
+    question from the one the failed add asked, and one whose answer can hide
+    the cause.
+    """
+    refusal = RuntimeError(
+        "sub-agent 'OpenCode' did not answer a test message, so it was not added: acp agent 'OpenCode' ended "
+        "its turn with no content; stderr tail: <empty>"
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "opencode", "model": "opencode/big-pickle"}',
+    )
+    assert "opencode run{model} hi" not in reply
+    assert _run_command(reply.splitlines()) == ["opencode", "run", "--model", "opencode/big-pickle", "hi"]
+
+
 class _Refused(RuntimeError):
     def __init__(self, text: str, remedy: dict[str, Any]) -> None:
         super().__init__(text)
@@ -1037,7 +1284,7 @@ class _Refused(RuntimeError):
     ("remedy", "raven_does", "user_does"),
     [
         ({"kind": "upgrade", "command": "npm i -g @qwen-code/qwen-code@latest"}, "Upgrade it with `npm i", None),
-        ({"kind": "download", "command": "npx -y pi-acp@0.0.33"}, "Run `npx -y pi-acp@0.0.33` once", None),
+        ({"kind": "download", "command": "npx -y pi-acp@0.0.33"}, "then retry", None),
         ({"kind": "runtime", "command": "brew upgrade node", "needs": "22", "found": "18.20"}, "needs 22", None),
         ({"kind": "model"}, "Pick another one it lists", None),
         ({"kind": "sign_in", "command": "codex login"}, None, "the user runs `codex login`"),
@@ -1283,10 +1530,11 @@ async def test_a_huge_catalog_read_without_a_filter_asks_for_one(config_file):
 
 
 @pytest.mark.asyncio
-async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(config_file):
+async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(config_file, monkeypatch):
     """ "Setting a model is enough" was written as a fixed sentence, true only
     where a usable key happened to be set; without one the model told the user
     to pick a model and nothing more."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
     with_key = line(await _run(RavenConfigTool(), action="describe", path="tools"))
     assert "a model is all it lacks" in with_key
@@ -1297,18 +1545,62 @@ async def test_what_an_unset_media_model_still_needs_follows_the_keys_on_file(co
     without = line(await _run(RavenConfigTool(), action="describe", path="tools"))
     assert "it also needs a key: tools.media.image.apiKey" in without and "all it lacks" not in without
 
+    # The tool also takes OPENROUTER_API_KEY while it calls OpenRouter.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-env")
+    from_env = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in from_env
+
 
 @pytest.mark.asyncio
-async def test_a_download_that_timed_out_names_how_to_fetch_it_even_without_a_command(config_file):
-    """A refusal whose remedy carries no launch to quote read
-    "run `its own sign-in or setup command` once" for an npx fetch."""
-    refusal = _Refused(
-        "sub-agent 'Kimi Code' did not answer a test message, so it was not added: ...", {"kind": "download"}
-    )
+async def test_what_an_unset_media_model_needs_asks_the_provider_it_would_borrow_from(config_file, monkeypatch):
+    """The OpenRouter key on file is borrowed by no section pointed elsewhere, and a
+    section on a named provider is paid by that provider's key alone."""
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    line = lambda text: next(x for x in text.splitlines() if "tools.media.image.model =" in x)  # noqa: E731
+    raw = json.loads(config_file.read_text())
+    raw["providers"] = {"openrouter": {"apiKey": "sk-or"}}
+    raw.setdefault("tools", {})["media"] = {"image": {"apiBase": "https://relay.test/v1"}}
+    config_file.write_text(json.dumps(raw))
+    elsewhere = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: tools.media.image.apiKey" in elsewhere and "all it lacks" not in elsewhere
+
+    raw["tools"]["media"] = {"image": {"provider": "openai"}}
+    config_file.write_text(json.dumps(raw))
+    unpaid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "it also needs a key: one under providers.openai" in unpaid and "all it lacks" not in unpaid
+
+    raw["providers"]["openai"] = {"apiKey": "sk-openai"}
+    config_file.write_text(json.dumps(raw))
+    paid = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in paid
+
+    # A key the provider keeps on an endpoint is the key the tool would use.
+    raw["providers"]["openai"] = {
+        "endpoints": [{"label": "main", "apiBase": "https://relay.test/v1", "apiKey": "sk-ep"}]
+    }
+    config_file.write_text(json.dumps(raw))
+    on_endpoint = line(await _run(RavenConfigTool(), action="describe", path="tools"))
+    assert "a model is all it lacks" in on_endpoint
+
+
+@pytest.mark.parametrize("remedy", [{"kind": "download", "command": "npx -y pi-acp@0.0.33"}, {"kind": "download"}])
+@pytest.mark.asyncio
+async def test_a_failed_fetch_is_retried_and_never_run_by_hand_with_exec(config_file, remedy):
+    """exec ends what it runs at its time limit with SIGKILL, and npx's own launch never exits
+    once it has fetched: a fetch run that way on a slow line was cut off half-installed, which
+    no later npx of that spec recovers from. A retry fetches it again with no time limit.
+
+    Without a command to quote, the line once fell back to "run `its own sign-in or setup
+    command` once" for an npx fetch, which is no step at all for this refusal."""
+    refusal = _Refused("sub-agent 'Kimi Code' did not answer a test message, so it was not added: ...", remedy)
     tool = RavenConfigTool()
     tool.set_rpc_caller(Calls({"subagents.add": refusal, "subagents.list": _roster()}))
     reply = await _run(tool, action="add", path="subagents", value='{"preset": "kimi_code"}')
-    assert "npx -y <package> --version" in reply and "sign-in" not in reply.split("\n")[1]
+    step = reply.split("\n")[1]
+    assert "then retry" in step
+    assert "ran out of time" in step, "a start that ran out while npx may have been fetching is this kind too"
+    assert "Run `" not in step and "npx -y" not in step
+    assert "sign-in" not in step
 
 
 @pytest.mark.asyncio
@@ -1594,6 +1886,7 @@ def test_the_card_carries_the_note_of_a_field_inside_an_object_and_names_a_bare_
     assert "Note: widening it lets more people instruct Raven" in line
     view = surface.change_view({"action": "set", "path": "channels.slack", "value": '{"dm.policy": "open"}'}, {})
     assert view["sensitive"] == "widening it lets more people instruct Raven"
+    assert view["sensitive_key"] == "channels.slack.dm.policy"
     added = surface.change_line({"action": "add", "value": '{"preset": "claude-code", "lend_key": "anthropic"}'})
     assert added.startswith("Connect sub-agent") and "started with Raven's anthropic key" in added
 
@@ -1654,3 +1947,102 @@ async def test_a_write_refused_partway_names_what_already_took(config_file):
     batch = {"agents.defaults.temperature": 0.5, "subagents.codex.enabled": False}
     reply = await _run(tool, action="set", value=json.dumps(batch))
     assert reply.startswith("Error") and "applied before it" in reply and "agents.defaults.temperature" in reply
+
+
+# --- an agent on a registered machine ----------------------------------------
+
+
+_LAB_ROW: dict[str, Any] = {
+    "name": "claude_code@ravenx2",
+    "preset": "claude_code",
+    "kind": "acp",
+    "description": "Claude Code",
+    "enabled": True,
+    "configured": True,
+    "machine": "ravenx2",
+    "probe_status": "ready",
+    "probe_detail": "runs on machine 'RavenX 2' (ravenx2); it ran and replied",
+    "model_choices": [],
+}
+
+
+@pytest.mark.asyncio
+async def test_an_add_on_a_registered_machine_passes_the_machine_through_and_says_where_it_runs(config_file):
+    calls = Calls(
+        {"subagents.add": {"added": True, "name": "claude_code@ravenx2"}, "subagents.list": {"rows": [_LAB_ROW]}}
+    )
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(
+        tool,
+        action="add",
+        path="subagents",
+        value='{"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}',
+    )
+
+    sent = next(p for m, p in calls.calls if m == "subagents.add")
+    assert sent == {"preset": "claude_code", "machine": "ravenx2", "remote_cwd": "~/raven-work"}
+    assert "Connected sub-agent claude_code@ravenx2" in reply
+    assert "runs on machine 'RavenX 2' (ravenx2)" in reply
+    assert "on machine ravenx2" in await _run(tool, action="describe", path="subagents")
+    assert '"machine": "ravenx2"' in await _run(tool, action="describe", path="subagents.claude_code@ravenx2")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_add_on_a_machine_sends_the_user_to_that_machine_and_runs_nothing_here(config_file):
+    """A refusal from a machine names no command to run here: the agent, its install and its sign-in are there."""
+    refusal = _Refused(
+        "sub-agent 'claude_code@ravenx2' did not answer a test message, so it was not added: 'claude' is not on "
+        "the login shell PATH (on machine 'ravenx2': any fix is made there)",
+        {},
+    )
+    calls = Calls({"subagents.add": refusal, "subagents.list": {"rows": [_LAB_ROW | {"configured": False}]}})
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(calls)
+
+    reply = await _run(tool, action="add", path="subagents", value='{"preset": "claude_code", "machine": "ravenx2"}')
+
+    assert reply.startswith("Not added:") and "on machine 'ravenx2': any fix is made there" in reply
+    assert "It runs on machine 'ravenx2', so the fix is made there by the user" in reply
+    # exec reaches the machine, so a look there is offered; a sign-in or an install is not.
+    assert "exec(machine='ravenx2') can look there first" in reply
+    assert "Install it with exec" not in reply and "Run it on its own with exec" not in reply
+
+
+@pytest.mark.asyncio
+async def test_describe_names_registered_machines_without_a_debug_switch(config_file, tmp_path, monkeypatch):
+    from raven.ops import connections
+
+    registry = tmp_path / "connections.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "connections": [
+                    {
+                        "id": "ravenx2",
+                        "display_name": "RavenX 2",
+                        "host": "203.0.113.8",
+                        "port": 22,
+                        "user": "root",
+                        "key": "/k",
+                    },
+                    {"id": "this-one", "transport": "local"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(connections, "store_path", lambda: registry)
+    tool = RavenConfigTool()
+    tool.set_rpc_caller(Calls({"subagents.list": {"rows": []}}))
+
+    monkeypatch.delenv("RAVEN_DEBUG_MACHINES", raising=False)
+    said = await _run(tool, action="describe", path="subagents")
+    line = next(ln for ln in said.splitlines() if ln.strip().startswith("machines a preset can be added on"))
+    assert line.split("on:", 1)[1].split("--", 1)[0].strip() == "ravenx2 (RavenX 2)", "the local row is no machine"
+    assert '"machine": "<id>"' in line and "203.0.113" not in said
+    # Every kind, each its own way: a command runs there, an endpoint is reached from there.
+    assert "an acp or cli preset runs there" in line and "openai preset's endpoint is reached from there" in line
+    # Bar the one family whose command is this host's own interpreter.
+    assert "a mirasim_* preset runs only here" in line

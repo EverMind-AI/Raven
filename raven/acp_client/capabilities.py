@@ -25,9 +25,6 @@ import asyncio
 import hashlib
 import json
 import os
-import re
-import shlex
-import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -36,16 +33,30 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import npx_fetch, protocol, remote
 from raven.acp_client.client import AcpClient
 from raven.acp_client.permissions import auto_approver
-from raven.acp_client.protocol import SESSION_MCP_CAPABILITY, STEER_CAPABILITY, AcpError, AcpRemoteError, reason_of
+from raven.acp_client.protocol import (
+    MENU_UNREAD_META,
+    RESIDENT_WORK_CAPABILITY,
+    SESSION_MCP_CAPABILITY,
+    STEER_CAPABILITY,
+    AcpConnectionError,
+    AcpError,
+    AcpRemoteError,
+    reason_of,
+)
+from raven.home import subagent_role_env
+from raven.ops import remote_path
 from raven.utils.atomic_io import atomic_update
+from raven.utils.commands import command_argv
+from raven.utils.scratch import ScratchDir
 
 _FILENAME = "subagent_acp_capabilities.json"
 
-# Teardown budget. A killpg'd process group should be reaped at once; the bound
-# exists so a wedged child can never hold a verify open indefinitely.
+# Teardown budget. A close gives the agent its grace (at most five seconds, and
+# none past the moment it exits), then ends the tree, so this bound only exists so
+# a wedged child can never hold a verify open indefinitely.
 _CLOSE_TIMEOUT_S = 10.0
 
 # The same four values as ``probe.ProbeStatus``, deliberately: the /subagents UI
@@ -56,6 +67,11 @@ _CLOSE_TIMEOUT_S = 10.0
 SnapshotStatus = Literal["ready", "attention", "missing", "unknown"]
 
 _LAUNCH_FIELDS = ("command", "cwd", "env", "ready_timeout_ms")
+
+#: Where an acp agent runs, when that is a registered machine rather than here.
+#: Folded into launch digests only when set, so a digest recorded before these
+#: fields existed still matches the row it was taken from.
+REMOTE_LAUNCH_FIELDS = ("machine", "remote_cwd")
 
 # Substrings that mark a remote error as "the operator has to authenticate",
 # which is a different action from "this thing is not reachable". Matched on the
@@ -114,6 +130,47 @@ class AcpModelChoice:
     group: str = ""
 
 
+EFFORT_MODE_IDS = frozenset({"off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "default", "none"})
+"""Mode ids that name a reasoning effort, so a mode menu made only of them can be offered as effort."""
+
+_NEUTRAL_MODE_IDS = frozenset({"default", "none"})
+"""Ids an effort menu may carry beside its levels, but which name no level on their own."""
+
+
+def mode_effort_choices(modes: tuple["AcpMode", ...]) -> tuple["AcpEffortChoice", ...]:
+    """``modes`` as reasoning-effort choices, when every mode is an effort level.
+
+    ACP has no field saying whether an agent's ``modes`` are reasoning levels or
+    editor/permission modes; the names are the only signal. So this takes a menu
+    as effort only when *every* id is a level name: one ``acceptEdits`` or
+    ``plan`` makes it a mode menu, and offering a permission mode as a reasoning
+    level is worse than offering no effort menu at all. It also needs one id
+    that is a level rather than a neutral ``default`` or ``none``: a menu of
+    those alone offers no level to pick.
+    """
+    ids = [mode.id for mode in modes]
+    if not ids or any(mode_id not in EFFORT_MODE_IDS for mode_id in ids):
+        return ()
+    if all(mode_id in _NEUTRAL_MODE_IDS for mode_id in ids):
+        return ()
+    return tuple(AcpEffortChoice(value=mode.id, name=mode.name or mode.id) for mode in modes if mode.id)
+
+
+@dataclass(frozen=True)
+class AcpEffortChoice:
+    """One reasoning effort an agent offers, from its ``thought_level`` config option.
+
+    ``value`` is what ``session/set_config_option`` takes back (``low``,
+    ``high``, ``max``, ``default`` on OpenCode 1.19.4); ``name`` is what the
+    agent asked to be shown, which is usually the same word. Carried whole for
+    the reason :class:`AcpModelChoice` is: a menu of bare ids is not what the
+    agent meant to put in front of a reader.
+    """
+
+    value: str
+    name: str = ""
+
+
 @dataclass(frozen=True)
 class CapabilitySnapshot:
     """One handshake's worth of measured facts about an acp agent."""
@@ -158,6 +215,18 @@ class CapabilitySnapshot:
 
     Measured rather than declared, for the reason ``available_modes`` gives:
     a row naming its own would drift the first time the agent's list changed."""
+    effort_choices: tuple[AcpEffortChoice, ...] = ()
+    """The reasoning efforts the agent's ``thought_level`` option offers.
+
+    A separate config option from ``model`` (``session/set_config_option`` with
+    the option's own id, ``effort`` on OpenCode 1.19.4), which is why the model
+    list no longer carries effort-suffixed ids there. Measured like the other
+    two menus, and empty for an agent that advertises none."""
+    effort_option: str = ""
+    """The config option id the effort values are set through (``effort``).
+
+    Empty with ``effort_choices``: an agent with no effort menu has no id to
+    send to, and the session's own response is what names it."""
     available_modes: tuple[AcpMode, ...] = ()
     """The profiles ``session/set_mode`` can switch a session between.
 
@@ -190,6 +259,15 @@ class CapabilitySnapshot:
     time from the row's keys and never written as a field of its own: an
     unmeasured menu is written as the key's absence, so a verdict re-recorded
     over such a row does not turn "never measured" into "measured, none"."""
+    effort_measured: bool = True
+    """Whether the reasoning-effort menu was measured, or left for a probe.
+
+    A record minted from a live session reads the menus that session reported,
+    but the effort ladder belongs to the row's own model while the session
+    opened on the agent's default, so the mint leaves it unmeasured. False is
+    persisted, and ``capabilities_wanted`` asks the next boot's backfill to
+    complete the record. Absent from rows written before the field, which all
+    came from a probe: absence means measured."""
     stale: bool = False
     """Measured against a launch config this agent no longer has.
 
@@ -202,6 +280,17 @@ class CapabilitySnapshot:
     @property
     def usable(self) -> bool:
         return self.status == "ready" and not self.stale
+
+    def mode_efforts(self) -> tuple[AcpEffortChoice, ...]:
+        """This agent's mode menu read as reasoning effort, or ``()`` when it is not one.
+
+        A real ``thought_level`` option always wins; none is guessed for raven's
+        own agents, whose modes are run-intensity tiers rather than a model's
+        reasoning effort.
+        """
+        if self.effort_choices or self.agent_name == "raven":
+            return ()
+        return mode_effort_choices(self.available_modes)
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase for the RPC layers, matching how ``ProbeResult`` does it."""
@@ -223,6 +312,8 @@ class CapabilitySnapshot:
             "promptModalities": list(self.prompt_modalities),
             "availableModels": list(self.available_models),
             "modelChoices": [{"value": c.value, "name": c.name, "group": c.group} for c in self.model_choices],
+            "effortChoices": [{"value": c.value, "name": c.name} for c in self.effort_choices],
+            "effortOption": self.effort_option,
             "availableModes": [
                 {"id": m.id, "name": m.name, "description": m.description} for m in self.available_modes
             ],
@@ -235,6 +326,7 @@ class CapabilitySnapshot:
     def to_row(self) -> dict[str, Any]:
         row = self.to_wire()
         row["fingerprint"] = self.fingerprint
+        row["effortMeasured"] = self.effort_measured
         if not self.model_menu_measured:
             del row["modelChoices"]
         return row
@@ -269,6 +361,16 @@ class CapabilitySnapshot:
                 if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
             )
 
+        def _efforts(key: str) -> tuple[AcpEffortChoice, ...]:
+            value = row.get(key)
+            if not isinstance(value, list):
+                return ()
+            return tuple(
+                AcpEffortChoice(value=c["value"], name=str(c.get("name") or ""))
+                for c in value
+                if isinstance(c, dict) and isinstance(c.get("value"), str) and c["value"]
+            )
+
         def _modes(key: str) -> tuple[AcpMode, ...]:
             value = row.get(key)
             if not isinstance(value, list):
@@ -298,12 +400,15 @@ class CapabilitySnapshot:
             prompt_modalities=_strs("promptModalities"),
             available_models=_strs("availableModels"),
             model_choices=_choices("modelChoices"),
+            effort_choices=_efforts("effortChoices"),
+            effort_option=str(row.get("effortOption") or ""),
             available_modes=_modes("availableModes"),
             auth_methods=_strs("authMethods"),
             needs_auth=bool(row.get("needsAuth")),
             unfetched=bool(row.get("unfetched")),
             elapsed_ms=int(row.get("elapsedMs") or 0),
             model_menu_measured="modelChoices" in row,
+            effort_measured=bool(row.get("effortMeasured", True)),
         )
 
 
@@ -319,6 +424,10 @@ def snapshot_fingerprint(cfg: Any) -> str:
     # Only when set, so every snapshot measured before the field existed holds.
     if getattr(cfg, "lend_keys", None):
         payload["lend_keys"] = list(cfg.lend_keys)
+    # Same rule: a row moved to another machine is another agent install.
+    for name in REMOTE_LAUNCH_FIELDS:
+        if getattr(cfg, name, None):
+            payload[name] = getattr(cfg, name)
     raw = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
@@ -376,6 +485,84 @@ class SnapshotStore:
             atomic_update(self._path, merge)
         except OSError as exc:  # a snapshot is a cache, never a dependency
             logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+
+    def record_if_absent(self, snapshot: CapabilitySnapshot) -> tuple[CapabilitySnapshot, bool] | None:
+        """Store ``snapshot`` unless this agent already has a readable row.
+
+        For evidence gathered outside a probe: the first session an agent opens
+        is newer than nothing, which is all a boot probe that failed leaves
+        behind. An existing row is the measurement that got there first -- a
+        probe's, or another session's -- so it is returned instead of being
+        overwritten, and this call writes nothing. Returns the record now
+        stored and whether this call wrote it; ``None`` when the store could
+        not be written.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None:
+                existing = CapabilitySnapshot.from_row(stored)
+                if existing is not None:
+                    return None, (
+                        replace(
+                            existing,
+                            stale=snapshot.stale or existing.fingerprint != snapshot.fingerprint,
+                        ),
+                        False,
+                    )
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(snapshot.to_row())
+            return self._dump(rows), (snapshot, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
+
+    def revise(self, snapshot: CapabilitySnapshot, **changes: Any) -> tuple[CapabilitySnapshot, bool] | None:
+        """Apply ``changes`` to the stored record ``snapshot`` was read from.
+
+        For a write that re-measured some fields of a record, so only those are
+        written, onto the row as it stands inside the lock: another holder of
+        the same record may have revised a different field since ``snapshot``
+        was read, and writing the caller's whole copy back would undo it.
+
+        Nothing is written when the stored row carries another measurement
+        stamp than ``snapshot``. A Test or the boot backfill that recorded in
+        the meantime is newer evidence about everything, the same "newest
+        measurement wins" rule the boot backfill applies to its own late
+        verdicts. With no stored row, ``snapshot`` itself is the base.
+
+        Returns the record now stored and whether this call wrote it, so a
+        caller that stood down holds the newer record and builds its next
+        revision on that stamp rather than being refused again for as long as
+        it lives. Flagged stale when it was measured under another launch
+        config than ``snapshot``, or when ``snapshot`` already was: for the
+        caller's launch it proves no more than that. ``None`` when the store
+        could not be written, or holds only a row that cannot be read back.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, tuple[CapabilitySnapshot, bool] | None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == snapshot.agent), None)
+            if stored is not None and int(stored.get("measuredAtMs") or 0) != snapshot.measured_at_ms:
+                newer = CapabilitySnapshot.from_row(stored)
+                if newer is None:
+                    return None, None
+                return None, (replace(newer, stale=snapshot.stale or newer.fingerprint != snapshot.fingerprint), False)
+            base = (CapabilitySnapshot.from_row(stored) if stored is not None else None) or snapshot
+            updated = replace(base, stale=snapshot.stale, **changes)
+            rows = [r for r in rows if r.get("agent") != snapshot.agent]
+            rows.append(updated.to_row())
+            return self._dump(rows), (updated, True)
+
+        try:
+            return atomic_update(self._path, merge)
+        except OSError as exc:  # a snapshot is a cache, never a dependency
+            logger.warning("acp capability snapshot write failed (not remembered): {}", exc)
+            return None
 
     def load(self, configs: Sequence[Any], *, allow_stale: bool = False) -> dict[str, CapabilitySnapshot]:
         """Snapshots for these configs, keyed by agent name.
@@ -435,6 +622,37 @@ class SnapshotStore:
         except OSError as exc:  # noqa: BLE001 - see record()
             logger.warning("acp capability snapshot delete failed: {}", exc)
 
+    def restore(self, agent: str, previous: "CapabilitySnapshot | None", *, only_if_stamp: int) -> None:
+        """Put ``previous`` back for ``agent``, or drop its row, unless a newer measurement landed.
+
+        For a caller whose measurement was taken for a change that then
+        refused: the row keeps the value it had, so the store has to describe
+        that value again, or the next read draws the menu of a model the row is
+        not on. ``previous`` of ``None`` means nothing was recorded before this
+        call, so the row is removed rather than replaced.
+
+        ``only_if_stamp`` is the measurement being undone. A Test or a refresh
+        that recorded in the meantime is newer evidence about the same agent
+        and is left to stand, the same rule :meth:`revise` applies. Best
+        effort, like its siblings: a store that cannot be written is a cache
+        that stays as it was, never an error for the caller.
+        """
+
+        def merge(current: str | None) -> tuple[str | None, None]:
+            rows = self._parse(current)
+            stored = next((r for r in rows if r.get("agent") == agent), None)
+            if stored is None or int(stored.get("measuredAtMs") or 0) != only_if_stamp:
+                return None, None
+            rows = [r for r in rows if r.get("agent") != agent]
+            if previous is not None:
+                rows.append(previous.to_row())
+            return self._dump(rows), None
+
+        try:
+            atomic_update(self._path, merge)
+        except OSError as exc:  # noqa: BLE001 - see record()
+            logger.warning("acp capability snapshot restore failed: {}", exc)
+
 
 @dataclass
 class _Handshake:
@@ -448,6 +666,8 @@ class _Handshake:
     can_load: bool = False
     can_delete: bool = False
     can_steer: bool = False
+    reports_resident_work: bool = False
+    """The agent answers ``_raven/residentWork``, so it can be asked before it is closed for idleness."""
     mcp_http: bool = False
     mcp_sse: bool = False
     session_mcp: bool = False
@@ -455,7 +675,11 @@ class _Handshake:
     auth_methods: tuple[str, ...] = ()
     available_models: tuple[str, ...] = ()
     model_choices: tuple["AcpModelChoice", ...] = ()
+    effort_choices: tuple["AcpEffortChoice", ...] = ()
+    effort_option: str = ""
     available_modes: tuple["AcpMode", ...] = ()
+    menu_unread: bool = False
+    """The agent answered ``session/new``, saying its menus are empty for want of a read."""
     warnings: list[str] = field(default_factory=list)
 
 
@@ -491,6 +715,7 @@ def _read_initialize(result: Any) -> _Handshake:
         # The one extension raven itself serves, announced in the schema's
         # extension carrier; a client that did not read it must not call it.
         can_steer=STEER_CAPABILITY in _dict(caps.get("_meta")),
+        reports_resident_work=RESIDENT_WORK_CAPABILITY in _dict(caps.get("_meta")),
         mcp_http=bool(mcp_caps.get("http")),
         mcp_sse=bool(mcp_caps.get("sse")),
         # The same carrier as the steer flag, and read the same way: presence,
@@ -582,6 +807,58 @@ def _read_session_model_choices(result: Any) -> tuple[AcpModelChoice, ...]:
     return tuple(choices(entry.get("options"), ""))
 
 
+def read_session_effort(result: Any) -> tuple[str, str, tuple[AcpEffortChoice, ...]]:
+    """The session's reasoning-effort option: ``(option_id, current, choices)``.
+
+    The option is the ``configOptions`` entry whose ``category`` is
+    ``thought_level`` (OpenCode 1.19.4: id ``effort``, values ``low``, ``high``,
+    ``max``, ``default``). It is a **separate** option from ``model``, which is
+    why that agent's model list is the base models only: 1.14.31 packed the
+    effort into ``model`` ids (``.../low``), and 1.19.4 moved it here.
+
+    Empty everywhere when the agent advertises no such option, which is every
+    agent measured before 1.19.4 and every one that has no reasoning effort to
+    choose. ``current`` is the value this throwaway session opened on -- the
+    agent's own default -- and is not stored on the capability snapshot for the
+    reason :func:`read_session_current_model` gives; the session that opens for
+    a real turn keeps it beside its id so a cleared override can be sent back.
+    """
+    options = _dict(result).get("configOptions")
+    if not isinstance(options, list):
+        return "", "", ()
+    for entry in options:
+        if not isinstance(entry, dict) or entry.get("category") != "thought_level":
+            continue
+        found: list[AcpEffortChoice] = []
+
+        def walk(items: Any) -> None:
+            for item in items if isinstance(items, list) else ():
+                if not isinstance(item, dict):
+                    continue
+                nested = item.get("options")
+                if isinstance(nested, list):
+                    walk(nested)
+                    continue
+                value = item.get("value")
+                if isinstance(value, str) and value:
+                    found.append(AcpEffortChoice(value=value, name=str(item.get("name") or "")))
+
+        walk(entry.get("options"))
+        return str(entry.get("id") or ""), str(entry.get("currentValue") or ""), tuple(found)
+    return "", "", ()
+
+
+def read_session_current_mode(result: Any) -> str:
+    """The session mode a response opened on, or ``""`` when it named none.
+
+    Used only for a menu that is effort: clearing a row's effort sends this
+    back, because ``session/set_mode`` takes a value and has no unset.
+    """
+    modes = _dict(_dict(result).get("modes"))
+    value = modes.get("currentModeId")
+    return value if isinstance(value, str) else ""
+
+
 def read_session_current_model(result: Any) -> str:
     """The model a session response says that session is on right now.
 
@@ -602,6 +879,28 @@ def read_session_current_model(result: Any) -> str:
     entry = next((o for o in options if isinstance(o, dict) and o.get("category") == "model"), None)
     current = _dict(entry).get("currentValue")
     return current if isinstance(current, str) else ""
+
+
+def _read_session_menu_unread(result: Any) -> bool:
+    """Whether this ``session/new`` said its menus are empty for want of a read.
+
+    An agent whose catalog read failed answers with no ``configOptions`` and no
+    ``modes`` -- byte for byte what an agent that genuinely offers neither
+    answers. Raven's own extension tells the two apart: the adapter sets
+    ``_meta.raven[MENU_UNREAD_META]`` when it could not read, and this reads it
+    back, so the snapshot records "not measured" rather than "measured, none".
+
+    The distinction is not cosmetic. Nothing invalidates a recorded
+    measurement -- staleness asks whether the launch config moved, and a failed
+    read moved nothing -- so an empty menu recorded as measured outlives every
+    restart, and the row offers no model picker for as long as the file
+    survives. An unmeasured menu is re-read at the next boot, which is what
+    makes a cold start's timeout self-healing.
+
+    Absent means measured: every agent that is not this adapter, and every
+    adapter old enough not to send the key, is taken at its word.
+    """
+    return bool(_dict(_dict(_dict(result).get("_meta")).get("raven")).get(MENU_UNREAD_META))
 
 
 def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
@@ -627,43 +926,148 @@ def _read_session_modes(result: Any) -> tuple[AcpMode, ...]:
     )
 
 
-def relearn_session_modes(
+def _mint_session_menus(
+    result: Any,
+    *,
+    agent: str,
+    fingerprint: str,
+    store: SnapshotStore | None,
+) -> CapabilitySnapshot | None:
+    """The first capability record for an agent, from the session it just opened.
+
+    A boot probe that failed writes no row, and ``relearn_session_menus`` could
+    only revise one that existed, so the menus stayed empty for the life of the
+    process. A session this agent opened is evidence the probe never got: the
+    handshake completed and the agent opened a session. Only the menus are
+    taken here -- the fields an ``initialize`` answer carries keep the probe's
+    defaults, so nothing outside the menus changes until a probe runs -- and
+    the next successful probe overwrites the row wholesale. ``effort_measured``
+    stays false so the boot backfill knows to finish the record rather than
+    skip one that looks ready.
+    """
+    if not agent or not fingerprint:
+        return None
+    session_id = _dict(result).get("sessionId")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    modes = _read_session_modes(result)
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if not modes and not choices:
+        return None
+    minted = CapabilitySnapshot(
+        agent=agent,
+        fingerprint=fingerprint,
+        status="ready",
+        detail="menus learned from a live session; no handshake probe has run",
+        measured_at_ms=int(time.time() * 1000),
+        model_choices=choices,
+        model_menu_measured=bool(choices),
+        effort_measured=False,
+        available_modes=modes,
+    )
+    revised = (store or SnapshotStore()).record_if_absent(minted)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: a capability record appeared while its first session was opening; keeping that one",
+            agent,
+        )
+        return updated
+    logger.info(
+        "acp agent {!r}: recorded {} mode(s) and {} model(s) from the first session it opened",
+        agent,
+        len(updated.available_modes),
+        len(updated.model_choices),
+    )
+    return updated
+
+
+def relearn_session_menus(
     snapshot: CapabilitySnapshot | None,
     result: Any,
     *,
     store: SnapshotStore | None = None,
+    agent: str = "",
+    fingerprint: str = "",
 ) -> CapabilitySnapshot | None:
-    """Re-record an agent's modes from a live session response, if they moved.
+    """Re-record an agent's modes and model menu from a live session response, if they moved.
 
-    The menu is measured once at probe time and cached, but the agent
-    re-advertises it on every route into a session (``_with_modes`` in the
-    fork's ACP methods), so the response a dispatch already holds is newer
+    Both menus are measured once at probe time and cached, but the agent
+    re-advertises them on its way into a session -- the modes on every route
+    (``_with_modes`` in the fork's ACP methods), the models at least on
+    ``session/new`` -- so the response a dispatch already holds is newer
     evidence than the snapshot. Without this the cache only ever moves when
-    someone presses Test: ``snapshot_fingerprint`` covers how the agent is
-    LAUNCHED, and an agent that reworded its own modes launches identically, so
-    nothing marks the stored text stale and the dispatching model goes on
-    reading a menu the agent no longer serves.
+    someone presses Test or asks for the menu again (``subagents.refresh_models``):
+    ``snapshot_fingerprint`` covers how the agent is LAUNCHED, and an agent that
+    reworded its own modes or renamed its models launches identically, so
+    nothing marks the stored menus stale -- the dispatching model goes on reading
+    modes the agent no longer serves, and the row's picker goes on offering model
+    ids it no longer takes.
 
-    The stored fingerprint is kept rather than recomputed. Only the modes were
-    re-measured here, and claiming a fresh handshake would clear a staleness
-    flag the rest of the snapshot has not earned.
+    Read with the probe's own parsers, from the response this route was sending
+    for anyway: nothing here opens a session or starts a process.
+
+    The stored fingerprint and measurement stamp are kept rather than renewed.
+    Only the menus were re-measured here, and claiming a fresh handshake would
+    clear a staleness flag the rest of the snapshot has not earned. Only the
+    menus this response reported are written, and none when a newer
+    measurement has replaced the record ``snapshot`` was read from
+    (``SnapshotStore.revise``). That newer record is returned instead, unrevised:
+    this response may predate it, so its menus are not taken over it, but the
+    caller's next response is then judged against the stamp actually stored.
 
     ``None`` when there was nothing to learn, which includes a response carrying
-    no modes at all. That is read as "this route did not report them", never as
-    "the agent dropped them": erasing the menu takes the ``mode`` argument out
-    of the spawn schema entirely, and a stale description is the smaller harm.
+    neither menu. Each menu is judged on its own, and an absent or empty one is
+    read as "this route did not report it", never as "the agent dropped it":
+    erasing the modes takes the ``mode`` argument out of the spawn schema, and
+    erasing the models takes the picker off the row, both worse than a stale
+    entry. A model menu the agent flagged as unread is not taken either, for
+    the reason ``_read_session_menu_unread`` gives.
+
+    The reasoning-effort menu is deliberately not among them. It belongs to the
+    model the session is on -- OpenCode 1.19.4 offers one only for a model that
+    reasons -- so a session's menu is a fact about that session, and the row's
+    is the probe's, measured on the row's own model. Taking a session's over it
+    made the agent-wide record swing with every model switch, each swing a
+    rebuild of the whole agent table.
+
+    With no record at all -- a boot probe that failed leaves none -- a response
+    carrying a menu mints the first one instead of being dropped, when the
+    caller names the agent and the launch fingerprint its row belongs to. The
+    early return this branch replaces made the menus stay empty for the life of
+    the process, so no successful dispatch could repair the failed probe.
+    ``agent`` and ``fingerprint`` are absent at call sites that only refresh an
+    existing record, and then nothing is minted.
     """
     if snapshot is None:
-        return None
+        return _mint_session_menus(result, agent=agent, fingerprint=fingerprint, store=store)
+    changes: dict[str, Any] = {}
     modes = _read_session_modes(result)
-    if not modes or modes == snapshot.available_modes:
+    if modes and modes != snapshot.available_modes:
+        changes["available_modes"] = modes
+    choices = () if _read_session_menu_unread(result) else _read_session_model_choices(result)
+    if choices and choices != snapshot.model_choices:
+        changes["model_choices"] = choices
+        changes["model_menu_measured"] = True
+    if not changes:
         return None
-    updated = replace(snapshot, available_modes=modes)
-    (store or SnapshotStore()).record(updated)
+    revised = (store or SnapshotStore()).revise(snapshot, **changes)
+    if revised is None:
+        return None
+    updated, written = revised
+    if not written:
+        logger.info(
+            "acp agent {!r}: session menus not re-recorded over a newer measurement; building on that one next",
+            snapshot.agent,
+        )
+        return updated
     logger.info(
-        "acp agent {!r}: re-recorded {} mode(s) from a session response",
+        "acp agent {!r}: re-recorded {} mode(s) and {} model(s) from a session response",
         snapshot.agent,
-        len(modes),
+        len(updated.available_modes),
+        len(updated.model_choices),
     )
     return updated
 
@@ -682,49 +1086,10 @@ def looks_like_auth(text: str) -> bool:
     return any(hint in lowered for hint in _AUTH_HINTS)
 
 
-# npm's own report of a failed fetch, as npm prints it before exiting: the code
-# on a line of its own, then (for a network failure) lines headed "network".
-# `npm error` is npm 10, `npm ERR!` npm 9 and older; both measured 2026-09-23
-# against an unreachable and an unresolvable registry, npm 10.9.8 and 9.9.4.
-_NPM_CODE = re.compile(r"^npm (?:ERR!|error) code (\S+)", re.MULTILINE)
-_NPM_NETWORK = re.compile(r"^npm (?:ERR!|error) network ", re.MULTILINE)
-# The codes that mean the registry could not be reached or would not serve the
-# package: the network, TLS in front of it, or the registry's own answer (the
-# E<status> codes, and ETARGET for a mirror that lacks the pinned version). A
-# local failure -- EACCES on the cache, ENOSPC -- is deliberately not here: no
-# network, registry or proxy setting fixes it, and that is what this verdict
-# tells its reader to look at.
-_NPM_FETCH_CODES = frozenset(
-    {
-        "ECONNREFUSED",
-        "ECONNRESET",
-        "ECONNABORTED",
-        "ENOTFOUND",
-        "EAI_AGAIN",
-        "ETIMEDOUT",
-        "EHOSTUNREACH",
-        "ENETUNREACH",
-        "ENETDOWN",
-        "EPROTO",
-        "ERR_SOCKET_TIMEOUT",
-        "ETARGET",
-        "EINTEGRITY",
-        "CERT_HAS_EXPIRED",
-        "SELF_SIGNED_CERT_IN_CHAIN",
-        "DEPTH_ZERO_SELF_SIGNED_CERT",
-        "UNABLE_TO_GET_ISSUER_CERT",
-        "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-        "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-        "ERR_TLS_CERT_ALTNAME_INVALID",
-    }
-)
-_NPM_STATUS_CODE = re.compile(r"E\d{3}")
-
-
 def launches_with_npx(command: str) -> bool:
     """Whether ``command`` is run by ``npx``, which fetches what it names on first use."""
     try:
-        argv = shlex.split(command or "")
+        argv = command_argv(command or "")
     except ValueError:
         return False
     if not argv:
@@ -740,8 +1105,9 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     out of time while npx still had it, ``None`` for everything else.
 
     Needed because both look like something else from above. A fetch that
-    fails is a process that exits before the handshake, so it arrives as
-    "connection ended (exit 1)" with npm's stack trace under it; and npm spends
+    fails is an npx that exits before any handshake -- the fetch run ahead of
+    the launch (`npx_fetch`), or the launch itself when no fetch could run --
+    so it arrives as an exit with npm's stack trace under it; and npm spends
     about 70s retrying an unreachable registry before it says so (measured),
     which is past a budget that did not allow for it -- so what the reader saw
     was "it did not answer within 60s", about an agent that never started.
@@ -751,10 +1117,19 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     Evidence rather than inference, in the way `looks_like_auth` is not: the
     verdict needs npm's own error-code line, read from the whole stderr
     (``AcpConnectionError.stderr``, or ``stderr`` for a caller that holds the
-    client) because npm prints that line first. The timeout is the one reading
-    without such a line, and it is kept to an ``initialize`` that ran out on an
-    ``npx`` command -- an agent that has not finished starting, where a first
-    download is the likeliest cause and the one the reader can act on.
+    client) because npm prints that line first. A launch on a registered machine
+    relays the same report inside the node's own sentence (`stderr tail: npm
+    error code ...`), so that sentence is evidence too, read by the connect
+    (`verify_agent`) and by `probe.ping_agent`. The timeout is the one reading
+    without such a line, and
+    it is kept to an ``initialize`` that ran out on an ``npx`` command whose
+    package was not fetched ahead of the handshake
+    (`npx_fetch.fetchable_package`) -- an agent that has not finished starting,
+    where a first download is the likeliest cause and the one the reader can act
+    on. One that was fetched ahead had its download over before the handshake
+    began, so running out there is the agent's own start. That half stays this
+    computer's: a row on a registered machine is started by its node with no
+    fetch ahead, so a start that ran out there is the machine's to report.
     """
     if not launches_with_npx(command):
         return None
@@ -763,26 +1138,77 @@ def npx_fetch_failure(command: str, exc: BaseException, stderr: str | None = Non
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, protocol.AcpTimeoutError) and current.method == "initialize":
-            return "timeout"
+            return None if npx_fetch.fetchable_package(command_argv(command)) else "timeout"
         if isinstance(current, protocol.AcpConnectionError) and current.stderr:
             stderr = stderr or current.stderr
         current = current.__cause__
-    if not stderr:
-        return None
-    for match in _NPM_CODE.finditer(stderr):
-        code = match.group(1)
-        if code in _NPM_FETCH_CODES or _NPM_STATUS_CODE.fullmatch(code):
-            return code
-    if _NPM_NETWORK.search(stderr):
-        return "network"
-    return None
+    return npx_fetch.fetch_failure_code(stderr or "")
 
 
 def npx_fetch_lead(verdict: str) -> str:
-    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI."""
+    """The sentence `npx_fetch_failure`'s verdict is reported with, for the log, the CLI and the TUI.
+
+    ETARGET gets words of its own because it is the one verdict that reads like a
+    bad pin rather than a bad connection: npm states that the version does not
+    exist, and it can state that from a cached packument it fell back to when the
+    registry did not answer. Measured 2026-11-04 on npm 10.9.3: three
+    FETCH_ERRORs against registry.npmjs.org, then a stale body that predated the
+    pinned version, reported as `No matching version found`. The sentence names
+    the cache so a reader checks that before hunting for a typo.
+    """
     if verdict == "timeout":
         return "it did not finish starting in time, and npx may still have been downloading it"
+    if verdict == "ETARGET":
+        return (
+            "npx could not download it (ETARGET: the registry metadata it read has no such version); "
+            "check the network, the npm registry or the proxy -- npm can fall back to cached metadata "
+            "when the registry does not answer, so a version published since that cache was written is "
+            "missing from it"
+        )
     return f"npx could not download it ({verdict}); check the network, the npm registry or the proxy"
+
+
+def npx_incomplete_lead(entry: npx_fetch.IncompleteEntry) -> str:
+    """The sentence an npx cache entry left without its package.json is reported with, and its fix."""
+    return (
+        "npx's copy of it is incomplete -- a download of it was cut off part-way -- and npx cannot start it "
+        f"until that copy ({entry.directory}) is removed; run `{entry.clear_command}` and connect again"
+    )
+
+
+class _NotThereError(Exception):
+    """A machine an agent cannot be verified on, in one sentence."""
+
+
+@dataclass(frozen=True)
+class _OnMachine:
+    """The link to a machine, with the agent's command confirmed to be there."""
+
+    link: Any
+    target: remote.Machine
+
+
+async def _reach(machine_id: str, command: str, env: dict[str, str]) -> _OnMachine:
+    """The machine's node, after it has found ``command`` there; :class:`_NotThereError` says why not.
+
+    One round trip on the link (``probe/agent``) before the real handshake,
+    so "not installed there" is told apart from "installed and broken"
+    without starting anything.
+    """
+    try:
+        target = await asyncio.to_thread(remote.machine, machine_id)
+    except remote.RemoteMachineError as exc:
+        raise _NotThereError(str(exc)) from None
+    link = remote_path.nodes()
+    if link is None:
+        raise _NotThereError(f"machine {target.label}: this process does not reach registered machines")
+    try:
+        probed = await link.probe_agent(machine_id, command, env)
+    except remote_path.NodeCallError as exc:
+        raise _NotThereError(str(exc)) from None
+    if not probed.get("found"):
+        raise _NotThereError(remote.agent_missing(target))
+    return _OnMachine(link, target)
 
 
 async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> CapabilitySnapshot:
@@ -836,6 +1262,9 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             prompt_modalities=hs.prompt_modalities,
             available_models=hs.available_models,
             model_choices=hs.model_choices,
+            effort_choices=hs.effort_choices,
+            effort_option=hs.effort_option,
+            model_menu_measured=not hs.menu_unread,
             available_modes=hs.available_modes,
             auth_methods=hs.auth_methods,
             needs_auth=needs_auth,
@@ -843,19 +1272,57 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
 
+    agent_env = dict(env if env is not None else (getattr(cfg, "env", None) or {}))
+    command = getattr(cfg, "command", "") or ""
+    machine_id = (getattr(cfg, "machine", None) or "").strip()
+    there: _OnMachine | None = None
+    if machine_id:
+        # An agent on a registered machine is verified where it runs, through
+        # the machine's Raven node as a dispatch starts it, after the node has
+        # said the command is there. Every failure there is "attention", never
+        # "missing": the roster answers "missing" with an installer, and that
+        # installer would run on this computer.
+        try:
+            there = await _reach(machine_id, command, agent_env)
+        except _NotThereError as exc:
+            return done("attention", str(exc))
     client: AcpClient | None = None
+    scratch: ScratchDir | None = None
     try:
-        client = await AcpClient.launch(
-            name=name,
-            command=getattr(cfg, "command", "") or "",
-            cwd=getattr(cfg, "cwd", None),
-            env=dict(env if env is not None else (getattr(cfg, "env", None) or {})),
-            # Nothing here is prompted, so no permission request is expected.
-            # One that arrives anyway still has to be answered, or the agent
-            # waits for a reply that never comes and the handshake stalls behind
-            # its own timeout.
-            on_request=auto_approver(name),
-        )
+        # Nothing here is prompted, so no permission request is expected. One
+        # that arrives anyway still has to be answered, or the agent waits for
+        # a reply that never comes and the handshake stalls behind its own
+        # timeout.
+        if there is not None:
+            try:
+                endpoint = await there.link.open_channel(
+                    machine_id,
+                    name=name,
+                    command=command,
+                    cwd=remote.root_of(getattr(cfg, "remote_cwd", None)),
+                    env={**subagent_role_env(), **agent_env},
+                )
+            except remote_path.NodeCallError as exc:
+                return done("attention", str(exc))
+            client = AcpClient.over(endpoint, name=name, on_request=auto_approver(name))
+        else:
+            try:
+                client = await AcpClient.launch(
+                    name=name,
+                    command=command,
+                    cwd=getattr(cfg, "cwd", None),
+                    env=agent_env,
+                    on_request=auto_approver(name),
+                )
+            except AcpConnectionError as exc:
+                # The npx fetch ahead of the agent fails here, before any handshake,
+                # and is read the way a handshake that died under npx is read below:
+                # neither is an install the roster's installer would bring.
+                if (entry := npx_fetch.incomplete_entry(str(exc))) is not None:
+                    return done("attention", f"{npx_incomplete_lead(entry)}; {exc}")
+                if (unfetched := npx_fetch_failure(command, exc)) is not None:
+                    return done("attention", f"{npx_fetch_lead(unfetched)}; {exc}", unfetched=True)
+                raise
         try:
             init = await client.request("initialize", protocol.initialize_params(), timeout=budget)
         except AcpRemoteError as exc:
@@ -866,13 +1333,21 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         except AcpError as exc:
             tail = client.stderr_tail(400)
             suffix = f"; stderr: {tail}" if tail else ""
-            unfetched = npx_fetch_failure(getattr(cfg, "command", "") or "", exc, client.stderr_tail() or None)
+            # On a registered machine npm's report reaches this side inside the
+            # node's own sentence (`stderr tail: ...`), and there is no local
+            # stderr to read: that sentence is the evidence, as it is for a ping.
+            evidence = client.stderr_tail() or (str(exc) if there is not None else None)
+            unfetched = npx_fetch_failure(command, exc, evidence)
             if unfetched is not None:
                 # Not `missing`: nothing is absent that an install would bring, and
                 # the roster answers `missing` with the agent's own installer.
                 return done(
                     "attention", f"{npx_fetch_lead(unfetched)}; handshake failed: {exc}{suffix}", unfetched=True
                 )
+            if there is not None:
+                # In the far side's own words (a full disk, a crash), never
+                # "missing": whatever is absent is absent there.
+                return done("attention", f"handshake failed: {exc}{suffix}")
             return done("missing", f"handshake failed: {exc}{suffix}")
 
         handshake = _read_initialize(init)
@@ -881,39 +1356,90 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 f"agent speaks ACP v{handshake.protocol_version}, raven speaks v{protocol.PROTOCOL_VERSION}"
             )
 
-        with tempfile.TemporaryDirectory(prefix="raven_acp_verify_") as tmp:
+        if there is None:
+            # Removed in the `finally`, after the close: an agent may start its
+            # worker in the session's directory (Claude Code does), and Windows
+            # will not remove one a live process works in.
+            scratch = ScratchDir("raven_acp_verify_")
+            tmp = str(scratch.path)
+        else:
+            # On the machine, the one directory every check reuses: a local
+            # temp dir does not exist where the agent runs, and it refuses one.
             try:
-                session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
-            except AcpRemoteError as exc:
-                # Two readings of one refusal, and they do not take the same
-                # evidence. The advertisement is enough for the coarse status --
-                # it only decides whether a reader should look at this row -- and
-                # it is not enough for `needs_auth`, which is persisted, rendered
-                # as a disabled control and read as "go and sign in". Every agent
-                # that works advertises auth methods too, so taking the
-                # advertisement there would label any unrelated session failure,
-                # a transient one included, as a credential story with no way out.
-                advertised = bool(handshake.auth_methods)
-                # The agent's whole answer, `data` included: the Connect button
-                # classifies this same text (`reason_of`), and two readers given
-                # different halves of one refusal are how they came to disagree.
-                refused_over_a_credential = looks_like_auth(reason_of(exc))
-                needs_auth = refused_over_a_credential
-                status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
-                hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
-                return done(
-                    status,
-                    f"connected, but no session could be opened: {reason_of(exc)}{hint}",
-                    handshake,
-                    needs_auth=needs_auth,
+                tmp, _since = await there.link.session_dir(
+                    machine_id,
+                    remote.session_root(getattr(cfg, "remote_cwd", None), remote.CHECK_HANDLE),
+                )
+            except remote_path.NodeCallError as exc:
+                return done("attention", str(exc), handshake)
+        try:
+            session = await client.request("session/new", {"cwd": tmp, "mcpServers": []}, timeout=budget)
+        except AcpRemoteError as exc:
+            # Two readings of one refusal, and they do not take the same
+            # evidence. The advertisement is enough for the coarse status --
+            # it only decides whether a reader should look at this row -- and
+            # it is not enough for `needs_auth`, which is persisted, rendered
+            # as a disabled control and read as "go and sign in". Every agent
+            # that works advertises auth methods too, so taking the
+            # advertisement there would label any unrelated session failure,
+            # a transient one included, as a credential story with no way out.
+            advertised = bool(handshake.auth_methods)
+            # The agent's whole answer, `data` included: the Connect button
+            # classifies this same text (`reason_of`), and two readers given
+            # different halves of one refusal are how they came to disagree.
+            refused_over_a_credential = looks_like_auth(reason_of(exc))
+            needs_auth = refused_over_a_credential
+            status: SnapshotStatus = "attention" if advertised or refused_over_a_credential else "unknown"
+            hint = f" (auth methods: {', '.join(handshake.auth_methods)})" if handshake.auth_methods else ""
+            return done(
+                status,
+                f"connected, but no session could be opened: {reason_of(exc)}{hint}",
+                handshake,
+                needs_auth=needs_auth,
+            )
+        except AcpError as exc:
+            tail = client.stderr_tail(400)
+            suffix = f"; stderr: {tail}" if tail else ""
+            return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
+
+        # The effort menu can be model-specific: OpenCode 1.19.4 advertises a
+        # thought_level option for a model that reasons, and a fresh session
+        # opens on the agent's own default. Put the row's model on the
+        # throwaway session first, so a row pinned to a reasoning model records
+        # the menu that model has; the set response is the one carrying it.
+        wanted_model = getattr(cfg, "model", None)
+        session_id = _dict(session).get("sessionId")
+        selected_effort: tuple[str, tuple[AcpEffortChoice, ...]] | None = None
+        if isinstance(wanted_model, str) and wanted_model and isinstance(session_id, str) and session_id:
+            try:
+                switched = await client.request(
+                    "session/set_config_option",
+                    {"sessionId": session_id, "configId": "model", "value": wanted_model},
+                    timeout=budget,
                 )
             except AcpError as exc:
-                tail = client.stderr_tail(400)
-                suffix = f"; stderr: {tail}" if tail else ""
-                return done("attention", f"connected, but session/new failed: {exc}{suffix}", handshake)
+                logger.debug(
+                    "acp verify for {!r}: setting {!r} for its effort menu failed: {}", name, wanted_model, exc
+                )
+            else:
+                if isinstance(switched, dict):
+                    option, _effort_now, efforts = read_session_effort(switched)
+                    # A response that lists the options the model now has, with
+                    # no thought_level among them, says the model takes no
+                    # effort; keeping the default model's menu would offer rungs
+                    # every turn on this one drops. An empty or absent list says
+                    # nothing either way.
+                    if efforts or switched.get("configOptions"):
+                        selected_effort = (option, efforts)
 
         handshake.available_models = _read_session_models(session)
         handshake.model_choices = _read_session_model_choices(session)
+        handshake.effort_option, _effort_now, handshake.effort_choices = read_session_effort(session)
+        if selected_effort is not None:
+            # The row's model, not the session's default, is what the effort
+            # menu belongs to -- the set response is authoritative for it.
+            handshake.effort_option, handshake.effort_choices = selected_effort
+        handshake.menu_unread = _read_session_menu_unread(session)
         handshake.available_modes = _read_session_modes(session)
         caps = ", ".join(
             [
@@ -931,6 +1457,8 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
         )
         return done("ready", detail, handshake)
     except AcpError as exc:
+        if there is not None:
+            return done("attention", str(exc))
         return done("missing", str(exc))
     except Exception as exc:  # noqa: BLE001 - a raising verify would blank the page
         logger.opt(exception=True).warning("acp verify for {!r} failed unexpectedly: {}", name, exc)
@@ -941,10 +1469,15 @@ async def verify_agent(cfg: Any, *, env: dict[str, str] | None = None) -> Capabi
                 await asyncio.wait_for(client.close(), timeout=_CLOSE_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 - teardown must never mask the verdict
                 logger.debug("acp verify: closing {!r} did not finish cleanly: {}", name, exc)
+        if scratch is not None:
+            await scratch.remove()
 
 
 __all__ = [
+    "AcpEffortChoice",
     "CapabilitySnapshot",
+    "EFFORT_MODE_IDS",
+    "mode_effort_choices",
     "SnapshotStatus",
     "SnapshotStore",
     "default_snapshot_path",
@@ -952,7 +1485,10 @@ __all__ = [
     "looks_like_auth",
     "npx_fetch_failure",
     "npx_fetch_lead",
-    "relearn_session_modes",
+    "npx_incomplete_lead",
+    "read_session_current_mode",
+    "read_session_effort",
+    "relearn_session_menus",
     "snapshot_fingerprint",
     "steer_offered",
     "verify_agent",

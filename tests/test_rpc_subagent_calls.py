@@ -432,9 +432,9 @@ async def test_the_transcript_carries_the_runs_own_turns_when_recorded(workspace
 
 
 async def test_the_answer_row_is_the_closing_message_when_the_lane_reports_one(workspace: Path) -> None:
-    """A narrating agent's whole reply repeats the notes already drawn on the
-    steps; the answer row is what it said after its last call, and the whole
-    reply stays in out.md for the caller that received it."""
+    """The answer row is what a narrating agent said after its last call when
+    the lane reports one, and out.md keeps what the caller received, whatever
+    the lane put in it."""
 
     class _Narrating:
         async def run(self, task: str, **_kw: Any) -> str:
@@ -658,6 +658,57 @@ async def test_the_panel_lists_the_agents_a_graph_ran(workspace: Path) -> None:
     assert by_node["write"]["ended_at"] is None
 
 
+async def test_a_reassigned_node_is_one_row_under_the_agent_that_ran_it_last(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The graph names the agent that gave up; the node's durable row names the one
+    that is running it now. An unfinalized run has no manifest to say otherwise."""
+    from raven.agent.subagent import instances as instances_mod
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    run_id = "20260812T120000Z-deadbeef"
+    _write_run(workspace, run_id, nodes=[{"id": "fix", "subagent": "alpha", "depends_on": []}])
+    await registry.upsert_dag_node(SESSION, run_id, "fix", "alpha", "exception")
+    await registry.move_dag_node(
+        SESSION,
+        run_id=run_id,
+        node_id="fix",
+        old_agent="alpha",
+        new_agent="beta",
+        status="running",
+        instance="fix-b",
+        instance_auto=True,
+        attempt_agents=["alpha", "beta"],
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert set(by_node) == {"fix"}
+    assert by_node["fix"]["agent"] == "beta"
+    assert by_node["fix"]["instance"] == "fix-b"
+    assert by_node["fix"]["instance_auto"] is True
+    assert by_node["fix"]["attempt_agents"] == ["alpha", "beta"]
+
+
+async def test_a_node_that_never_moved_keeps_the_row_keys_it_always_had(
+    workspace: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent.subagent import instances as instances_mod
+
+    registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
+    monkeypatch.setattr(instances_mod, "_registry", registry)
+    run_id = "20260812T120000Z-deadbeef"
+    _write_run(workspace, run_id, nodes=[{"id": "fix", "subagent": "alpha", "depends_on": []}])
+    await registry.upsert_dag_node(SESSION, run_id, "fix", "alpha", "running")
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    (row,) = [i for i in items if i["kind"] == "dag"]
+    assert not {"attempt_agents", "instance_auto"} & set(row)
+
+
 async def test_a_skipped_node_is_not_a_row(workspace: Path) -> None:
     """A skipped node never ran -- no transcript, no cost, no clock -- so the
     panel does not list it. The graph view is where "skipped because its
@@ -699,6 +750,72 @@ async def test_a_cancelled_node_keeps_its_row(workspace: Path) -> None:
     by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
     assert set(by_node) == {"survey"}
     assert by_node["survey"]["status"] == "cancelled"
+
+
+async def test_a_not_executed_node_is_not_a_row(workspace: Path) -> None:
+    """Like a skipped one, a node on a branch nobody took never called a
+    sub-agent -- and the stamps the runner puts on it are not a clock it ever had.
+    A status this list has no word for reads as running, so a row left in would
+    show an agent working on that branch. A cancelled node, by contrast, did
+    run and keeps its row."""
+    _write_run(
+        workspace,
+        "20260812T120000Z-deadbeef",
+        nodes=[
+            {"id": "triage", "subagent": "Researcher", "routes": {"bug": "a defect", "docs": "a question"}},
+            {"id": "fix", "subagent": "Writer", "depends_on": ["triage"], "when": "triage.bug"},
+            {"id": "reply", "subagent": "Writer", "depends_on": ["triage"]},
+            {"id": "gone", "subagent": "Writer"},
+        ],
+        manifest={
+            "triage": {
+                "status": "completed",
+                "subagent": "Researcher",
+                "started_at": 1_700_000_000_000,
+                "ended_at": 1_700_000_004_000,
+                "selected_routes": ["docs"],
+            },
+            "fix": {
+                "status": "not_executed",
+                "subagent": "Writer",
+                "reason": "when_false",
+                "started_at": 1_700_000_005_000,
+                "ended_at": 1_700_000_005_000,
+            },
+            "reply": {"status": "completed", "subagent": "Writer", "started_at": 1_700_000_005_000},
+            "gone": {"status": "cancelled", "subagent": "Writer", "started_at": 1_700_000_005_000},
+        },
+    )
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    by_node = {i["node"]: i for i in items if i["kind"] == "dag"}
+    assert set(by_node) == {"triage", "reply", "gone"}
+    assert by_node["gone"]["status"] == "cancelled"
+    assert by_node["reply"]["status"] == "ok"
+
+
+async def test_a_not_executed_node_the_registry_recorded_is_not_a_row_either(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unfinalized run has no manifest, so its status comes from the instance
+    registry -- the path a branch decided while the run is still going takes."""
+    from raven.rpc.methods import subagent as subagent_module
+
+    _write_run(workspace, "20260812T120000Z-deadbeef")
+
+    class _Registry:
+        def list_instances(self, session_key=None):
+            return [
+                {"kind": "dag-node", "runId": "20260812T120000Z-deadbeef", "nodeId": nid, "status": status}
+                for nid, status in (("survey", "completed"), ("write", "not_executed"))
+            ]
+
+    monkeypatch.setattr(subagent_module, "get_registry", lambda: _Registry())
+
+    items = (await subagent_list({"session_id": SESSION}))["items"]
+
+    assert {i["node"] for i in items if i["kind"] == "dag"} == {"survey"}
 
 
 async def test_an_exception_node_is_reported_as_error(workspace: Path) -> None:

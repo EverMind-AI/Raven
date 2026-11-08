@@ -52,8 +52,8 @@ class NamespacedWakeScheduler:
     def advance_wake_to_now(self, key: str) -> bool:
         return self._service.advance_wake_to_now(self._key(key))
 
-    def pending_wakes(self, prefix: str = "") -> "list[CronJob]":
-        return self._service.pending_wakes(f"{self._namespace}:{prefix}")
+    def pending_wakes(self, prefix: str = "", *, include_running: bool = True) -> "list[CronJob]":
+        return self._service.pending_wakes(f"{self._namespace}:{prefix}", include_running=include_running)
 
     def cancel_wake(self, key: str) -> bool:
         return self._service.cancel_wake(self._key(key))

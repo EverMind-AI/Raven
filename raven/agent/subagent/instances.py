@@ -22,6 +22,7 @@ from typing import Any
 
 from loguru import logger
 
+from raven.config.agent_names import canonical_agent_name
 from raven.utils.atomic_io import atomic_replace, write_transaction
 from raven.utils.paths import mint_slug
 
@@ -71,6 +72,42 @@ def _dag_origin(existing: dict[str, Any]) -> dict[str, Any]:
     return origin
 
 
+def _attempt_history(attempt_agents: list[str] | None, instance: str | None, instance_auto: bool) -> dict[str, Any]:
+    """The history a reassigned node's row carries, or nothing for any other node.
+
+    ``attempt_agents`` being supplied is what marks the node as reassigned; an
+    empty history on every node would claim a move that never happened. The
+    instance fields ride along because the row's own handle is synthetic.
+    """
+    if attempt_agents is None:
+        return {}
+    return {
+        "attemptAgents": list(attempt_agents),
+        "nodeInstance": instance,
+        "nodeInstanceAuto": bool(instance_auto),
+    }
+
+
+def _carried_outcome(
+    held: dict[str, Any],
+    reason: str | None,
+    selected_routes: list[str] | None,
+    route_evidence: str | None,
+) -> dict[str, Any]:
+    """The branch outcome to write: what the caller supplied, else what the row held.
+
+    A move is a change of agent, not a new branch decision, so the outcome the
+    old row records survives it -- an empty selection included, since a decision
+    that chose nothing has still decided.
+    """
+    fields = {
+        "reason": reason if reason is not None else held.get("reason"),
+        "selectedRoutes": list(selected_routes) if selected_routes is not None else held.get("selectedRoutes"),
+        "routeEvidence": route_evidence if route_evidence is not None else held.get("routeEvidence"),
+    }
+    return {key: value for key, value in fields.items() if value is not None}
+
+
 class InstanceRegistry:
     """Handle-to-session-id store backed by one JSON file."""
 
@@ -114,11 +151,18 @@ class InstanceRegistry:
         for rec in (raw.get("instances") if isinstance(raw, dict) else None) or []:
             if not isinstance(rec, dict):
                 continue
+            if isinstance(rec.get("agent"), str):
+                # A row written under a former name of a built-in row is keyed, and
+                # listed, under the current one: a resume asks with that name.
+                rec["agent"] = canonical_agent_name(rec["agent"])
             key = (rec.get("sessionKey"), rec.get("agent"), rec.get("handle"))
             if not all(isinstance(part, str) and part for part in key):
                 continue
             if "kind" not in rec:
                 rec["kind"] = "cli"
+            held = records.get(key)
+            if held is not None and (held.get("updatedAtMs") or 0) > (rec.get("updatedAtMs") or 0):
+                continue
             records[key] = rec  # type: ignore[index]
         self._records = records
         # Stamped from the stat taken BEFORE the read: a writer that lands
@@ -130,7 +174,14 @@ class InstanceRegistry:
     def _flush(self) -> None:
         assert self._records is not None  # noqa: S101
         data = {"version": 1, "instances": list(self._records.values())}
-        atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        try:
+            atomic_replace(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        except (TypeError, ValueError):
+            # A value the file cannot hold, such as text UTF-8 cannot encode. Each write
+            # flushes the whole cache, so a row left in it would fail every later write in
+            # the process, whichever session made it; the next read reloads the file instead.
+            self._records = None
+            raise
         # Our own write is not a reason to re-read on the next call.
         self._stamp = self._file_stamp()
 
@@ -143,7 +194,7 @@ class InstanceRegistry:
         Defaults to ``cli`` so every existing caller keeps its behaviour.
         """
         async with self._lock:
-            rec = self._load().get((session_key, agent, handle))
+            rec = self._load().get((session_key, canonical_agent_name(agent), handle))
         if not rec or rec.get("kind") != kind:
             return None
         return rec.get("agentId")
@@ -151,27 +202,61 @@ class InstanceRegistry:
     async def commit(self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli") -> None:
         async with self._lock:
             with write_transaction(self._path):
+                self._bind(self._load(), (session_key, canonical_agent_name(agent), handle), agent_id, kind)
+
+    async def bind_if_absent(
+        self, session_key: str, agent: str, handle: str, agent_id: str, *, kind: str = "cli"
+    ) -> str:
+        """Bind ``handle`` to ``agent_id`` unless it is bound to another id already; the id it is bound to after this.
+
+        One step under the registry's own lock, for a writer that must neither
+        replace a binding made meanwhile nor wait for the handle's lock: the
+        pick-up of a run a stopped host left on a machine
+        (``CliAgentBackend._bind_picked_up``, ``resume_remote._conclude``).
+        A dispatch to the same named instance holds ``hold_handle`` across
+        its whole turn and commits last; whichever order the two land in,
+        the handle ends bound to the dispatch's session, and the pick-up
+        never waits for that turn. A row of another ``kind``, or a status row
+        with no id, counts as absent, as :meth:`lookup` reads it. A row
+        bound to ``agent_id`` itself is rebuilt as a binding alone, as
+        :meth:`commit` rebuilds one: a left turn that resumed the session
+        its handle is bound to owns that row, and the rebuild closes the
+        ``running`` the manager put on it when the turn began -- or the
+        instance reads as interrupted after a reply that was announced.
+        """
+        async with self._lock:
+            with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
-                now = int(time.time() * 1000)
-                existing = records.get(key) or {}
-                records[key] = {
-                    "kind": kind,
-                    "sessionKey": session_key,
-                    "agent": agent,
-                    "handle": handle,
-                    "agentId": agent_id,
-                    "createdAtMs": existing.get("createdAtMs", now),
-                    "updatedAtMs": now,
-                    **_dag_origin(existing),
-                }
-                try:
-                    self._flush()
-                except OSError as e:  # noqa: BLE001 - persistence is best-effort
-                    logger.warning(
-                        "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
-                        e,
-                    )
+                key = (session_key, canonical_agent_name(agent), handle)
+                rec = records.get(key)
+                if rec and rec.get("kind") == kind and rec.get("agentId") and rec["agentId"] != agent_id:
+                    return str(rec["agentId"])
+                # Unbound, or bound to this very id: this run's own row either way.
+                self._bind(records, key, agent_id, kind)
+                return agent_id
+
+    def _bind(self, records: dict[_Key, dict[str, Any]], key: _Key, agent_id: str, kind: str) -> None:
+        """Write ``key``'s binding into ``records`` and to disk; the caller holds the lock and the transaction."""
+        session_key, agent, handle = key
+        now = int(time.time() * 1000)
+        existing = records.get(key) or {}
+        records[key] = {
+            "kind": kind,
+            "sessionKey": session_key,
+            "agent": agent,
+            "handle": handle,
+            "agentId": agent_id,
+            "createdAtMs": existing.get("createdAtMs", now),
+            "updatedAtMs": now,
+            **_dag_origin(existing),
+        }
+        try:
+            self._flush()
+        except OSError as e:  # noqa: BLE001 - persistence is best-effort
+            logger.warning(
+                "subagent instance registry write failed (mapping live in-process, will not survive restart): {}",
+                e,
+            )
 
     async def upsert_spawn(
         self, session_key: str, agent: str, handle: str, status: str, agent_id: str | None = None
@@ -186,6 +271,7 @@ class InstanceRegistry:
         when not given, so a status write after a successful create does not
         erase the session id ``commit`` already stored for that handle.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -215,12 +301,44 @@ class InstanceRegistry:
                         e,
                     )
 
-    async def upsert_dag_node(self, session_key: str, run_id: str, node_id: str, agent: str, status: str) -> None:
-        """Record or update one DAG node's status.
+    async def upsert_dag_node(
+        self,
+        session_key: str,
+        run_id: str,
+        node_id: str,
+        agent: str,
+        status: str,
+        *,
+        reason: str | None = None,
+        selected_routes: list[str] | None = None,
+        route_evidence: str | None = None,
+        attempt_agents: list[str] | None = None,
+        instance: str | None = None,
+        instance_auto: bool = False,
+    ) -> None:
+        """Record or update one DAG node's status, and what a branch decided about it.
 
         The handle is namespaced by run id so a node can never collide with a
         user-chosen CLI instance handle.
+
+        ``reason``, ``selected_routes`` and ``route_evidence`` are written as
+        ``reason``, ``selectedRoutes`` and ``routeEvidence``, each only when given;
+        an empty selection is given, since a decision that chose nothing has still
+        decided. Until the run's manifest is written they are the only durable
+        record of a branch's outcome. The record is rebuilt on every write, so the
+        row always says what the latest write said: a write without them leaves
+        none behind.
+
+        ``attempt_agents`` is the agents that have tried a node that moved off the
+        one the graph submitted, and it is given only for such a node: a run
+        without a reassignment carries no history at all rather than an empty one
+        on every row. Beside it travel ``nodeInstance`` and ``nodeInstanceAuto`` --
+        the instance the node actually ran on, and whether that handle was minted.
+        The row's own ``handle`` is ``<run>/<node>`` and cannot say either, and the
+        absence of the key on a row written before reassignment existed is a
+        different fact from an explicit null (a stateless attempt).
         """
+        agent = canonical_agent_name(agent)
         handle = f"{run_id}/{node_id}"
         async with self._lock:
             with write_transaction(self._path):
@@ -236,6 +354,10 @@ class InstanceRegistry:
                     "runId": run_id,
                     "nodeId": node_id,
                     "status": status,
+                    **({"reason": reason} if reason is not None else {}),
+                    **({"selectedRoutes": list(selected_routes)} if selected_routes is not None else {}),
+                    **({"routeEvidence": route_evidence} if route_evidence is not None else {}),
+                    **_attempt_history(attempt_agents, instance, instance_auto),
                     "createdAtMs": existing.get("createdAtMs", now),
                     "updatedAtMs": now,
                 }
@@ -247,6 +369,75 @@ class InstanceRegistry:
                         "will not survive restart): {}",
                         e,
                     )
+
+    async def move_dag_node(
+        self,
+        session_key: str,
+        *,
+        run_id: str,
+        node_id: str,
+        old_agent: str,
+        new_agent: str,
+        status: str,
+        instance: str | None,
+        instance_auto: bool,
+        attempt_agents: list[str],
+        reason: str | None = None,
+        selected_routes: list[str] | None = None,
+        route_evidence: str | None = None,
+    ) -> None:
+        """Move a node's ``dag-node`` row onto the agent about to run it.
+
+        The row is keyed by agent, so writing the new agent's row alone would
+        leave the old one behind and every reader would list one node twice. Both
+        halves happen in one locked read-modify-write, so another process never
+        sees the pair half-applied -- and a failure leaves the file exactly as it
+        was, because the whole map is written atomically at the end.
+
+        ``createdAtMs`` is carried over: it is when this node's work began, and
+        the move is a change of agent rather than a new piece of work. The
+        branch outcome is carried only for the fields the caller did not supply
+        again. The old row's ``agentId`` is deliberately *not* carried: it binds
+        a native session to the old agent, and the destination has its own.
+
+        Absent ``old_agent`` row is not an error -- a move accepted while the node
+        was still pending writes its first row under the destination.
+
+        Raises:
+            OSError: the file could not be written. The in-process cache is
+                dropped first, so a reader in this process answers from the
+                previous complete file rather than from this unpersisted map.
+        """
+        old_agent = canonical_agent_name(old_agent)
+        new_agent = canonical_agent_name(new_agent)
+        handle = f"{run_id}/{node_id}"
+        async with self._lock:
+            with write_transaction(self._path):
+                records = self._load()
+                previous = records.pop((session_key, old_agent, handle), None)
+                held = previous if previous is not None else records.get((session_key, new_agent, handle)) or {}
+                now = int(time.time() * 1000)
+                records[(session_key, new_agent, handle)] = {
+                    "kind": "dag-node",
+                    "sessionKey": session_key,
+                    "agent": new_agent,
+                    "handle": handle,
+                    "runId": run_id,
+                    "nodeId": node_id,
+                    "status": status,
+                    **_carried_outcome(held, reason, selected_routes, route_evidence),
+                    **_attempt_history(attempt_agents, instance, instance_auto),
+                    "createdAtMs": held.get("createdAtMs", now),
+                    "updatedAtMs": now,
+                }
+                try:
+                    self._flush()
+                except OSError:
+                    # The map in memory now holds a row the file does not. Sharing
+                    # it would make this process answer differently from every
+                    # other reader over the same registry.
+                    self._records = None
+                    raise
 
     async def link_dag_node(self, session_key: str, agent: str, handle: str, run_id: str, node_id: str) -> None:
         """Mark the instance a DAG node is running on as belonging to that node.
@@ -264,6 +455,7 @@ class InstanceRegistry:
         still the node's, and a reader that saw only the ``dag-node`` row would
         report the graph twice.
         """
+        agent = canonical_agent_name(agent)
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
@@ -308,7 +500,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 rec = records.get(key)
                 if rec is None or rec.get("agentId") is None:
                     return False
@@ -327,7 +519,7 @@ class InstanceRegistry:
         async with self._lock:
             with write_transaction(self._path):
                 records = self._load()
-                key = (session_key, agent, handle)
+                key = (session_key, canonical_agent_name(agent), handle)
                 if key not in records:
                     return False
                 del records[key]
@@ -406,8 +598,10 @@ def reconcile_instance_rows(
             # without this branch such a row read "running" forever.
             session_key = row.get("sessionKey", "")
             if session_key not in live_by_session:
-                live_by_session[session_key] = live_handles(session_key)
-            if (row.get("agent"), row.get("handle")) not in live_by_session[session_key]:
+                live_by_session[session_key] = {
+                    (canonical_agent_name(agent), handle) for agent, handle in live_handles(session_key)
+                }
+            if (canonical_agent_name(row.get("agent", "")), row.get("handle")) not in live_by_session[session_key]:
                 out.append({**row, "status": "interrupted"})
                 continue
         out.append(row)
@@ -461,7 +655,7 @@ async def hold_handle(session_key: str, agent: str, handle: str) -> AsyncIterato
     is what the lock protects. Non-reentrant, that pair is a deadlock with no
     error and no timeout: the turn's record simply stays ``running`` forever.
     """
-    key = (session_key, agent, handle)
+    key = (session_key, canonical_agent_name(agent), handle)
     current = asyncio.current_task()
 
     if current is not None and _handle_owners.get(key) is current:

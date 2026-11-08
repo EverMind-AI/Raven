@@ -351,7 +351,7 @@ def read_brief(task: str) -> BriefConstraints:
     return BriefConstraints(count=_count_of(text), exclusions=_exclusions_of(text), artefacts=_artefacts_of(text))
 
 
-def render_checklist(task: str) -> str:
+def render_checklist(task: str, limits: str = "`## Limitations`") -> str:
     """One sentence restating the request's checkable parts, or an empty string.
 
     Written as a reading rather than as an order - "read literally, this asks for" - so a
@@ -371,5 +371,5 @@ def render_checklist(task: str) -> str:
     return (
         " Read literally, this message asks for: "
         + "; ".join(parts)
-        + ". Deliver each one, or name it in `## Limitations` and say why it is absent."
+        + f". Deliver each one, or name it in {limits} and say why it is absent."
     )

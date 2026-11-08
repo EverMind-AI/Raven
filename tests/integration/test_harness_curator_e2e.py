@@ -586,10 +586,10 @@ async def test_generated_mcp_server_connects_executes_and_closes(baseline, tmp_p
     server = """
 import os
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 Path(os.environ["CURATOR_TEST_PIDFILE"]).write_text(str(os.getpid()))
-server = FastMCP("curated")
+server = MCPServer("curated")
 
 @server.tool()
 def reflect(value: str) -> str:

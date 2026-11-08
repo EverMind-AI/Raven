@@ -127,13 +127,15 @@ class CreatePlaybookTool(Tool):
                 "Pick another name, or ask to revise the existing one."
             )
         try:
-            generated = await self._generator.generate(workflow, skills)
+            generated = await self._generator.generate(workflow, skills, dag_only=True)
         except PlaybookGenerationError as exc:
             return (
                 f"Error: playbook generation failed: {exc}. Do not write directly into the Playbook "
                 "library or report success; a Playbook is usable only after its official validation passes."
             )
-        spec = generated.spec.model_copy(update={"name": name})
+        from raven.playbook.unified import unified_from_legacy
+
+        spec = unified_from_legacy(generated.spec, name=name)
         try:
             path = self._store.save(spec, notes=generated.notes)
         except PlaybookExistsError:

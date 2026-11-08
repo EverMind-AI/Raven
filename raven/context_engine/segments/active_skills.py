@@ -1,4 +1,4 @@
-"""Segment 4 — ``# Active Skills`` (always-on skills). Host-owned."""
+"""Segment 3 — ``# Active Skills`` (always-on skills). Host-owned."""
 
 from __future__ import annotations
 
@@ -16,13 +16,11 @@ if TYPE_CHECKING:
 
 class ActiveSkillsSegmentBuilder:
     name = "active_skills"
-    order = 4
+    order = 3
     needs_prefix = False
-    # The always-on skills do not depend on the message -- but this segment
-    # sits behind `memory`, so the stable run has already ended by the time the
-    # assembler reaches it and the flag buys nothing until the two are
-    # reordered. Declared honestly anyway: the flag describes the segment, and
-    # a reorder should not also have to discover what this one is.
+    # Ahead of `memory`, not behind it: the always-on skills do not depend on
+    # the message, and a stable segment only extends the cacheable head while
+    # no volatile one stands in front of it.
     stable = True
 
     def __init__(

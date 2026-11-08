@@ -18,10 +18,10 @@ afterEach(() => {
 const tabs = (): HTMLButtonElement[] => [...document.querySelectorAll<HTMLButtonElement>('.hub-head-tab')]
 
 describe('the hub header', () => {
-  it('names both modules and marks the one on screen', () => {
+  it('names the three modules and marks the one on screen', () => {
     render(<HubHead current="channels" />)
-    expect(tabs().map((b) => b.textContent)).toEqual(['gui.hub.agents', 'gui.hub.channels'])
-    expect(tabs().map((b) => b.getAttribute('aria-selected'))).toEqual(['false', 'true'])
+    expect(tabs().map((b) => b.textContent)).toEqual(['gui.hub.agents', 'gui.hub.channels', 'gui.hub.machines'])
+    expect(tabs().map((b) => b.getAttribute('aria-selected'))).toEqual(['false', 'true', 'false'])
   })
 
   /* The line under the tabs belongs to the module on screen, not the hub. */
@@ -30,6 +30,8 @@ describe('the hub header', () => {
     expect(document.querySelector('.hub-head-sub')!.textContent).toBe('gui.page.agents_sub')
     rerender(<HubHead current="channels" />)
     expect(document.querySelector('.hub-head-sub')!.textContent).toBe('gui.page.conn_sub')
+    rerender(<HubHead current="machines" />)
+    expect(document.querySelector('.hub-head-sub')!.textContent).toBe('gui.page.machines_sub')
   })
 
   /* The current tab is a title, not a control: pressing it would reopen the
@@ -41,5 +43,7 @@ describe('the hub header', () => {
     expect(open).not.toHaveBeenCalled()
     act(() => tabs()[1]!.click())
     expect(open).toHaveBeenCalledWith('channels')
+    act(() => tabs()[2]!.click())
+    expect(open).toHaveBeenCalledWith('machines')
   })
 })

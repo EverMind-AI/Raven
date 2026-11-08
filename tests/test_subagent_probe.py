@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 from contextlib import closing
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from raven.config.schema import (
     ThirdPartyCliSubagentConfig,
     ThirdPartyOpenAISubagentConfig,
 )
+from tests._windows_dirs import scratch_root, windows_removal
 
 
 def _free_port() -> int:
@@ -152,7 +154,30 @@ async def test_cli_probe_reports_missing_and_still_names_what_it_looked_for(tmp_
     assert "definitely-not-installed" in res.detail
 
 
+@pytest.mark.parametrize("kind", ["cli", "acp"])
+async def test_windows_probes_find_a_legacy_single_quoted_program(tmp_path, monkeypatch, kind):
+    import shlex
+    from types import SimpleNamespace
+
+    from raven.utils import commands
+
+    monkeypatch.setattr(commands, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda _cfg: None)
+    program = _fake_executable(tmp_path, "saved agent.exe")
+    command = shlex.quote(str(program))
+    cfg = _cli(command) if kind == "cli" else ThirdPartyAcpSubagentConfig(name="saved-command", command=command)
+
+    result = await probe_one(cfg, source="config", path=str(tmp_path))
+
+    assert result.target == str(program)
+    assert result.status == ("ready" if kind == "cli" else "attention")
+    assert result.absent is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell line: a lone quote is not a parse error to CreateProcess")
 async def test_cli_probe_reports_unparseable_command_as_unknown() -> None:
+    # This single quote belongs to a non-path token, so it stays literal on
+    # Windows and the probe reports a missing agent rather than invalid syntax.
     res = await probe_one(_cli("claude -p 'unbalanced {prompt}"), source="config", path="/usr/bin")
     assert res.status == "unknown"
     assert "cannot be parsed" in res.detail
@@ -342,8 +367,8 @@ async def test_openai_probe_does_send_for_a_keyless_configured_entry() -> None:
 
 
 def test_openai_config_coerces_declared_local_file_access_away() -> None:
-    # `reads_local_files` is rendered into the spawn / DAG tool descriptions as a
-    # `local-files` tag, so honouring it here would licence the dispatching model
+    # `reads_local_files` is rendered into the roster that closes the spawn tool's
+    # description as a `local-files` tag, so honouring it here would licence the dispatching model
     # to hand this agent a path that nothing can open. It is coerced rather than
     # rejected because the older web form defaulted the checkbox to true and
     # rendered it for both kinds: rejecting on load would raise inside the whole
@@ -521,6 +546,24 @@ async def test_test_of_a_failing_cli_reports_its_error_rather_than_raising(
     res = await run_test(_cli("broken-agent {prompt}"), source="config")
     assert res.ok is False
     assert "ProviderAuthError" in res.detail
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the stand-in CLI is a POSIX shell script")
+async def test_a_cli_test_whose_directory_stays_in_use_reports_the_reply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows a process the CLI left running keeps the directory; the test reports what the CLI said."""
+    exe = tmp_path / "echo-agent"
+    exe.write_text("#!/bin/sh\necho PONG\n")
+    exe.chmod(0o755)
+    _patch_login_env_for_spawn(monkeypatch, tmp_path)
+    root = scratch_root(tmp_path, monkeypatch)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    res = await run_test(_cli("echo-agent {prompt}"), source="config")
+
+    assert (res.ok, res.reply) == (True, "PONG")
+    assert refused, "no removal was refused, so this tested nothing"
 
 
 async def test_stateful_cli_test_leaves_the_real_registry_untouched(
@@ -886,6 +929,75 @@ async def test_ping_closes_the_pool_it_opened(monkeypatch: pytest.MonkeyPatch) -
     assert closed == [1, 1]
 
 
+async def test_a_directory_its_agent_will_not_let_go_does_not_fail_a_ping_that_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The verdict is the agent's answer; the directory is logged and left, not reported in its place.
+
+    A refused removal raised out of the ping was reported as "did not answer a
+    test message" about an agent that had answered: on native Windows that is
+    every Connect of an agent whose processes still worked in the directory.
+    """
+    root = scratch_root(tmp_path, monkeypatch)
+
+    class _Answers:
+        async def run(self, prompt, **kwargs):
+            return "PONG"
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Answers())
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+
+    assert result == probe_mod.PingResult(True, "it ran and replied")
+    assert refused, "no removal was refused, so this tested nothing"
+    assert [path.name.startswith("raven_subagent_ping_") for path in root.iterdir()] == [True]
+
+
+async def test_a_ping_that_runs_out_says_so_while_its_directory_is_still_in_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusal raised on the way out took the timeout's place, so a silent agent read as a file error."""
+    root = scratch_root(tmp_path, monkeypatch)
+
+    class _Hangs:
+        async def run(self, prompt, **kwargs):
+            await asyncio.sleep(30)
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", lambda cfg, **kw: _Hangs())
+    monkeypatch.setattr(probe_mod, "_ENABLE_PING_TIMEOUT_SECONDS", 0.2)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    cfg = ThirdPartyAcpSubagentConfig(name="hanging-acp", kind="acp", command="fake-agent acp", ready_timeout_ms=100)
+    result = await probe_mod.ping_agent(cfg)
+
+    assert result.ok is False
+    assert result.detail.startswith("it did not answer within"), result.detail
+    assert refused, "no removal was refused, so this tested nothing"
+
+
+async def test_a_ping_with_nowhere_to_make_its_directory_says_so_rather_than_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "gone"))
+
+    def must_not_build(*args, **kwargs):
+        raise AssertionError("there is no directory to hand the agent")
+
+    monkeypatch.setattr(probe_mod, "build_third_party_backend", must_not_build)
+
+    result = await probe_mod.ping_agent(
+        ThirdPartyAcpSubagentConfig(name="ping-acp", kind="acp", command="fake-agent acp")
+    )
+
+    assert result.ok is False
+    assert "gone" in result.detail
+
+
 def test_the_factory_honours_the_pool_its_caller_overrides() -> None:
     """Read off a real build, for the reason the bounds test states: a request
     recorded by a replaced builder proves nothing about what the backend then
@@ -1012,10 +1124,12 @@ class TestAutomaticSnapshotVerification:
         An agent that answers the handshake and then refuses to open a session
         without a credential has told us something durable about itself, and the
         agents page reads exactly that to say `Unauthorized` instead of offering
-        a Connect that spends a launch to be refused again. Every other failure
-        stays unrecorded, deliberately: a timeout or a crashed adapter is a fact
-        about this minute, and freezing it into a snapshot would label a working
-        agent broken until someone pressed Test.
+        a Connect that spends a launch to be refused again. Any other failure is
+        recorded only over a row whose last record had already failed, replacing
+        that verdict and keeping its capabilities. Over a row with no record, as
+        here, or a passing one, a timeout or a crashed adapter stays unrecorded:
+        it is a fact about this minute, and freezing it into a snapshot would
+        label a working agent broken until someone pressed Test.
         """
         from raven.agent.subagent.probe import schedule_snapshot_verification
 
@@ -1040,6 +1154,85 @@ class TestAutomaticSnapshotVerification:
 
         await schedule_snapshot_verification(_FakeManager([_FakeRow("refused"), _FakeRow("wedged"), _FakeRow("fine")]))
         assert sorted(recorded) == ["attention", "ready"]
+
+    @staticmethod
+    def _mirasim_boot(
+        monkeypatch: pytest.MonkeyPatch, snapshot: object, installed: frozenset[str], own_host: str | None = None
+    ) -> tuple[list, list]:
+        """A boot whose unconfigured presets are three Mirasim agents and one other; what it verified and asked.
+
+        ``own_host`` names the one Mirasim row whose ``env`` points it at a host of its own.
+        """
+        from raven.agent.subagent import mirasim_presets
+        from raven.agent.subagent.presets import third_party_subagent_preset
+        from raven.config.schema import SubagentsConfig
+
+        keys = ("mirasim_claude", "mirasim_zcode", "mirasim_qwen")
+        rows = [
+            {**third_party_subagent_preset(key), **({"env": {"RAVEN_MIRASIM_HOST": "4971"}} if key == own_host else {})}
+            for key in keys
+        ]
+        configs = SubagentsConfig(agents=rows).agents
+        verified: list[str] = []
+        asked: list[str | None] = []
+
+        async def fake_verify(cfg: object) -> object:
+            verified.append(cfg.name)
+            return type("S", (), {"status": "ready", "needs_auth": False})()
+
+        async def fake_installed(*, path: str | None) -> frozenset[str]:
+            asked.append(path)
+            return installed
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: snapshot)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(
+            probe_mod,
+            "_unconfigured_acp_preset_rows",
+            lambda configured, path=None: [*(probe_mod._PresetRow(cfg) for cfg in configs), _FakeRow("a-preset")],
+        )
+        monkeypatch.setattr(mirasim_presets, "installed_agents", fake_installed, raising=False)
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+        return verified, asked
+
+    async def test_a_mirasim_preset_whose_agent_mirasim_lacks_is_not_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Its handshake fails and a preset's failure is not kept, so verifying it would handshake it again at
+        every start: two adapter launches or more for nothing, per such agent. Mirasim is asked once
+        instead."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        verified, asked = self._mirasim_boot(monkeypatch, None, frozenset({"claude", "qwen"}))
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == ["Claude Code-Mirasim", "Qwen Code-Mirasim", "a-preset"]
+        assert len(asked) == 1
+
+    async def test_with_no_mirasim_host_running_only_a_row_that_names_its_own_host_is_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every other handshake would fail on the same missing host, and be tried again at the next start."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        verified, asked = self._mirasim_boot(monkeypatch, None, frozenset(), own_host="mirasim_qwen")
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == ["Qwen Code-Mirasim", "a-preset"]
+        assert len(asked) == 1
+
+    async def test_mirasim_is_asked_only_when_one_of_its_presets_is_to_be_handshaken(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The question launches the adapter and waits out the host's agent list, which a fully measured boot never needs."""
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        measured = type("S", (), {"status": "ready", "stale": False, "needs_auth": False})()
+        verified, asked = self._mirasim_boot(monkeypatch, measured, frozenset())
+        await schedule_snapshot_verification(_FakeManager([]))
+        assert verified == [] and asked == []
 
     async def test_a_preset_nobody_has_configured_is_verified_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Or the page can never say `Unauthorized` before the first press.
@@ -1074,15 +1267,16 @@ class TestAutomaticSnapshotVerification:
         assert seen == ["configured", "a-preset"], "the configured rows first: they are the ones a run can dispatch to"
 
     async def test_a_recorded_credential_refusal_is_measured_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The one recorded verdict a restart must not take on trust.
+        """A recorded refusal is a verdict a restart must not take on trust.
 
-        Every other snapshot is skipped while it is fresh, and rightly: a `ready`
-        agent that has not been relaunched is still ready, and re-proving it
-        would spend a process per row per boot. A credential refusal is the
-        opposite kind of fact -- it is a state the user is expected to go and
-        fix, and nothing about fixing it touches the launch config, so the
-        snapshot never goes stale and the row would keep saying "Unauthorized"
-        across every restart after the sign-in that cured it.
+        A fresh `ready` snapshot is skipped, barring the two model-menu cases
+        tested below, and rightly: a `ready` agent that has not been relaunched is
+        still ready, and re-proving it would spend a process per row per boot. A
+        fresh failure is measured again, and a credential refusal is the failure
+        that most needs it -- it is a state the user is expected to go and fix,
+        and nothing about fixing it touches the launch config, so the snapshot
+        never goes stale and the row would keep saying "Unauthorized" across
+        every restart after the sign-in that cured it.
         """
         from dataclasses import dataclass
 
@@ -1121,6 +1315,51 @@ class TestAutomaticSnapshotVerification:
 
         await schedule_snapshot_verification(_FakeManager([fine, refused]))
         assert verified == ["refused"], "a fresh pass is still trusted; a fresh refusal is not"
+
+    async def test_a_minted_row_is_re_verified_so_the_backfill_completes_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A row minted from a live session has its menus but not the effort
+        ladder, which is why it is written with ``effort_measured=False``. The
+        boot backfill is what finishes it; a complete row is still skipped, or
+        every start would spend a handshake per agent."""
+        from dataclasses import dataclass
+
+        from raven.agent.subagent.probe import schedule_snapshot_verification
+
+        @dataclass
+        class Snap:
+            status: str = "ready"
+            stale: bool = False
+            needs_auth: bool = False
+            model_menu_measured: bool = True
+            effort_measured: bool = True
+
+        minted, complete = _FakeRow("minted"), _FakeRow("complete")
+        verified: list[str] = []
+
+        def fake_snapshot_for(cfg: object) -> Snap:
+            return {
+                id(minted.config): Snap(effort_measured=False),
+                id(complete.config): Snap(),
+            }[id(cfg)]
+
+        async def fake_verify(cfg: object) -> Snap:
+            verified.append(cfg.name)
+            return Snap()
+
+        monkeypatch.setattr(probe_mod, "acp_snapshot_for", fake_snapshot_for)
+        monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+        monkeypatch.setattr(
+            "raven.acp_client.capabilities.SnapshotStore",
+            lambda: type("S", (), {"record": staticmethod(lambda s: None)})(),
+        )
+        monkeypatch.setattr(probe_mod, "_unconfigured_acp_preset_rows", lambda configured, path=None: [])
+        monkeypatch.setattr(probe_mod, "_SCHEDULED", False)
+
+        await schedule_snapshot_verification(_FakeManager([minted, complete]))
+
+        assert verified == ["minted"], "a minted row is what the backfill exists to finish"
 
     async def test_failed_verification_does_not_stop_the_rest(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from raven.agent.subagent.probe import schedule_snapshot_verification
@@ -1567,6 +1806,118 @@ def test_only_resolvable_unconfigured_acp_presets_are_offered_for_verification(
     assert set(seen_paths) == {"/login/shell/bin"}
 
 
+def test_a_shim_preset_whose_agent_is_absent_is_not_offered_for_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shim's command resolves on any machine; the agent it drives may not.
+
+    ``_probe_acp`` reads such a row as missing, so handshaking it at boot would
+    pay to learn what the free probe already said. Sharpest for a Mirasim row,
+    whose command is Raven's own interpreter.
+    """
+    presets = [
+        {
+            "name": "Claude Code-Mirasim",
+            "preset": "mirasim_claude",
+            "kind": "acp",
+            "command": "/venv/bin/python -P -m raven.acp.mirasim --agent claude",
+        },
+        {"name": "Pi", "preset": "pi", "kind": "acp", "command": "npx -y pi-acp@0.0.33"},
+    ]
+    present = {"/venv/bin/python", "npx", "pi"}
+    monkeypatch.setattr(probe_mod, "third_party_subagent_presets", lambda: presets)
+    monkeypatch.setattr(probe_mod.shutil, "which", lambda exe, path=None: f"/bin/{exe}" if exe in present else None)
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": "/mirasim"})
+    asked: list[tuple[dict[str, str], str | None]] = []
+    state = "installed"
+
+    def fake_presence(env: dict[str, str], *, path: str | None) -> tuple[str, str]:
+        asked.append((env, path))
+        return state, "/mirasim/bin/mirasim"
+
+    monkeypatch.setattr(probe_mod.mirasim_presets, "presence", fake_presence)
+
+    # Installed but no host to reach: its handshake would fail on that, and `_probe_acp` already says so.
+    assert [row.name for row in probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")] == ["Pi"]
+    state = "running"
+    rows = probe_mod._unconfigured_acp_preset_rows(set(), path="/login/bin")
+    assert [row.name for row in rows] == ["Claude Code-Mirasim", "Pi"]
+    # Asked in the login shell's environment, against its PATH, once per boot however many Mirasim rows.
+    assert asked == [({"MIRASIM_HOME": "/mirasim"}, "/login/bin")] * 2
+
+
+async def test_a_mirasim_row_is_read_by_whether_mirasim_is_here_not_by_an_executable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mirasim puts its CLI on no PATH, and the adapter runs none: the row read as *Not installed* on every
+    computer that had Mirasim. Three states now, each with the reader's next move."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"RAVEN_MIRASIM_HOST": "", "MIRASIM_HOME": "/elsewhere"})
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+        env={"MIRASIM_HOME": str(home)},  # the row's own wins over the login shell's, as at launch
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "missing"
+    assert res.absent == "mirasim" and res.target == "mirasim", "what the page offers to install is read from this"
+    assert res.detail == (
+        "Mirasim is not installed on this computer; install the Mirasim app from https://mirasim.ai/download "
+        "and open it, or let the Mirasim app on another computer reach this one over ssh"
+    )
+
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and res.absent is None
+    assert res.detail == (
+        f"Mirasim is installed ({launcher}) but no host of it is running: open the Mirasim app or start "
+        "`mirasim serve`, or let the Mirasim app on another computer reach this one again, then check again"
+    )
+    assert res.target == str(launcher)
+
+    mp.token_file(cfg.env).parent.mkdir(parents=True)
+    mp.token_file(cfg.env).write_text("desk\n", encoding="utf-8")
+    monkeypatch.setattr(mp, "_listening", lambda port: True)
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+    assert res.status == "attention" and "have not been recorded yet" in res.detail
+
+
+async def test_a_mirasim_row_is_judged_in_the_login_shells_environment_when_its_own_names_no_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`MIRASIM_HOME` exported in the shell rc alone is where the adapter would look, so the probe looks there."""
+    from raven.agent.subagent import mirasim_presets as mp
+
+    home = tmp_path / "mirasim"
+    launcher = home.joinpath(*mp.LAUNCHER)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setattr(probe_mod, "login_shell_env", lambda: {"MIRASIM_HOME": str(home)})
+    monkeypatch.setattr(mp, "remote_root", lambda: tmp_path / "no-remote")
+    monkeypatch.setattr(mp, "_listening", lambda port: False)
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: None)
+    cfg = ThirdPartyAcpSubagentConfig(
+        name="Claude Code-Mirasim",
+        preset="mirasim_claude",
+        command=f"{sys.executable} -P -m raven.acp.mirasim --agent claude",
+    )
+
+    res = await probe_one(cfg, source="preset", path=str(tmp_path / "bin"))
+
+    assert res.status == "attention" and res.target == str(launcher)
+
+
 async def test_a_hand_written_npx_row_is_not_held_to_a_shims_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1638,3 +1989,305 @@ def _fake_executable(tmp_path: Path, name: str) -> Path:
     exe.write_text("#!/bin/sh\nexit 0\n")
     exe.chmod(0o755)
     return exe
+
+
+def test_a_machine_failure_says_where_the_fix_is_made_unless_the_fix_is_the_node_installed_from_here():
+    from raven.agent.subagent import probe
+
+    there = probe._on_machine("'claude' is not on the login shell PATH", "ravenx2")
+    assert there.endswith("(on machine 'ravenx2': any fix is made there)")
+
+    here = probe._on_machine(
+        "Raven node 0.2.4-abc is not installed on machine 'RavenX 2' (ravenx2); install it with "
+        "`raven ops connection install-node ravenx2`",
+        "ravenx2",
+    )
+    assert "any fix is made there" not in here and here.endswith("install-node ravenx2`")
+
+
+@pytest.mark.parametrize(
+    "status,detail",
+    [
+        ("unknown", "unsupported session configuration"),
+        ("attention", "session/new timed out"),
+        ("missing", "transport disconnected"),
+    ],
+)
+async def test_boot_replaces_an_auth_verdict_and_retries_until_ready(tmp_path, monkeypatch, status, detail):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="sign in",
+        measured_at_ms=1,
+        needs_auth=True,
+        can_load=True,
+        model_choices=(caps.AcpModelChoice(value="a", name="A"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    failed = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=old.fingerprint,
+        status=status,
+        detail=detail,
+        measured_at_ms=2,
+        needs_auth=False,
+    )
+    verified = AsyncMock(side_effect=[failed, replace(old, status="ready", needs_auth=False, measured_at_ms=3)])
+    monkeypatch.setattr(caps, "verify_agent", verified)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    manager = _FakeManager(rows, with_refresh=True)
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    saved = store.load([cfg])[cfg.name]
+    assert not saved.needs_auth
+    assert not saved.usable
+    assert (saved.status, saved.detail) == (status, detail)
+    assert saved.can_load and saved.model_choices == old.model_choices
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert store.load([cfg])[cfg.name].usable
+    await probe_mod._verify_missing_snapshots(manager, rows)
+    assert verified.await_count == 2
+    assert manager.refresh_calls == 2
+
+
+@pytest.mark.parametrize(
+    "tested_status,late",
+    [
+        ("ready", {"status": "attention", "detail": "session/new timed out"}),
+        ("ready", {"status": "attention", "detail": "Authentication required", "needs_auth": True}),
+        ("attention", {"status": "ready", "detail": "connected"}),
+    ],
+    ids=[
+        "a-late-timeout-loses-to-a-test-pass",
+        "a-late-refusal-loses-to-a-test-pass",
+        "a-late-pass-loses-to-a-test-failure",
+    ],
+)
+async def test_a_record_written_while_the_boot_verify_ran_outranks_its_late_verdict(
+    tmp_path, monkeypatch, tested_status, late
+):
+    """The newest evidence wins: a Test recorded while the boot's handshake was in
+    flight stands, whatever that handshake returns afterwards.
+
+    The boot reads the row before it launches anything, and the handshake can
+    then hold that read for the whole ready timeout. A write built from it took
+    the Test's verdict and the menu the Test measured both -- a late timeout
+    included, which the boot records over any row whose last record failed.
+    """
+    from dataclasses import replace
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="sign in",
+        measured_at_ms=1,
+        needs_auth=True,
+        can_load=True,
+        model_choices=(caps.AcpModelChoice(value="a", name="A"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    if tested_status == "ready":
+        tested = replace(
+            old,
+            status="ready",
+            detail="connected",
+            needs_auth=False,
+            measured_at_ms=3,
+            model_choices=(caps.AcpModelChoice(value="b", name="B"),),
+        )
+    else:
+        tested = replace(old, status="attention", detail="session/new timed out", needs_auth=False, measured_at_ms=3)
+    late_result = replace(
+        old, **{"needs_auth": False, "measured_at_ms": 4, "model_choices": (caps.AcpModelChoice(value="c"),), **late}
+    )
+    calls: list[str] = []
+    boot_parked, released = asyncio.Event(), asyncio.Event()
+
+    async def fake_verify(cfg, **kwargs):
+        if not calls:
+            calls.append("boot")
+            boot_parked.set()
+            await released.wait()
+            return late_result
+        calls.append("test")
+        return tested
+
+    monkeypatch.setattr(caps, "verify_agent", fake_verify)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(_FakeManager(rows, with_refresh=True), rows))
+    await asyncio.wait_for(boot_parked.wait(), 2)
+    await probe_mod.record_capabilities(cfg)
+    after_test = store.load([cfg])[cfg.name]
+    assert not boot.done(), "the Test has to land while the boot's handshake is still open"
+    assert after_test == tested, "and record its own measurement there"
+    released.set()
+    await asyncio.wait_for(boot, 2)
+
+    assert calls == ["boot", "test"]
+    assert store.load([cfg])[cfg.name] == after_test, "the boot's late verdict must not replace the Test's"
+
+
+@pytest.mark.parametrize("late_status", ["ready", "attention"])
+async def test_a_modes_relearn_during_the_boot_verify_does_not_stop_its_write(tmp_path, monkeypatch, late_status):
+    """A dispatch that relearns the agent's modes mid-handshake measures nothing.
+
+    It keeps the record's measurement stamp, so the boot's verdict still lands:
+    otherwise a failed row that a dispatch merely touched would stay failed until
+    the next boot. A late failure is written over the re-read record, so the
+    relearned modes survive it; a late ``ready`` is a whole measurement, its own
+    menu included, and is written as measured.
+    """
+    from dataclasses import replace
+
+    import raven.acp_client.capabilities as caps
+
+    cfg = ThirdPartyAcpSubagentConfig(name="measured", command="measured --acp")
+    monkeypatch.setattr(caps, "default_snapshot_path", lambda: tmp_path / "caps.json")
+    monkeypatch.setattr(probe_mod, "_launch_kw", lambda cfg: {})
+    old = caps.CapabilitySnapshot(
+        agent=cfg.name,
+        fingerprint=caps.snapshot_fingerprint(cfg),
+        status="attention",
+        detail="session/new timed out",
+        measured_at_ms=1,
+        can_load=True,
+        available_modes=(caps.AcpMode(id="old", name="Old"),),
+    )
+    store = caps.SnapshotStore()
+    store.record(old)
+    late_result = replace(
+        old,
+        status=late_status,
+        detail="connected" if late_status == "ready" else "session/new timed out again",
+        measured_at_ms=4,
+        available_modes=(caps.AcpMode(id="measured", name="Measured"),),
+    )
+    boot_parked, released = asyncio.Event(), asyncio.Event()
+
+    async def fake_verify(cfg, **kwargs):
+        boot_parked.set()
+        await released.wait()
+        return late_result
+
+    monkeypatch.setattr(caps, "verify_agent", fake_verify)
+    rows = [_FakeRow(cfg.name, config=cfg)]
+    manager = _FakeManager(rows, with_refresh=True)
+    boot = asyncio.ensure_future(probe_mod._verify_missing_snapshots(manager, rows))
+    await asyncio.wait_for(boot_parked.wait(), 2)
+    relearned = caps.relearn_session_menus(
+        store.load([cfg])[cfg.name],
+        {"sessionId": "s1", "modes": {"availableModes": [{"id": "fast", "name": "Fast"}], "currentModeId": "fast"}},
+        store=store,
+    )
+    assert relearned is not None and relearned.measured_at_ms == 1, "a relearn keeps the stamp it found"
+    assert not boot.done(), "the relearn has to land while the boot's handshake is still open"
+    released.set()
+    await asyncio.wait_for(boot, 2)
+
+    stored = store.load([cfg])[cfg.name]
+    assert (stored.status, stored.measured_at_ms) == (late_status, 4), "the boot's verdict must still land"
+    expected_modes = ("measured",) if late_status == "ready" else ("fast",)
+    assert tuple(m.id for m in stored.available_modes) == expected_modes
+    assert manager.refresh_calls == 1
+
+
+def _menu_records() -> tuple[object, object]:
+    """A record with a measured menu, and a later answer that was ready but could not read one."""
+    from raven.acp_client.capabilities import AcpMode, AcpModelChoice, CapabilitySnapshot
+
+    measured = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="old",
+        status="ready",
+        detail="",
+        measured_at_ms=1,
+        model_choices=(AcpModelChoice("own:sonnet", "Sonnet", "Claude Code"),),
+        available_modes=(AcpMode("high", "High"),),
+        stale=True,
+    )
+    unread = CapabilitySnapshot(
+        agent="Claude Code-Mirasim",
+        fingerprint="new",
+        status="ready",
+        detail="ready",
+        measured_at_ms=2,
+        model_menu_measured=False,
+    )
+    return measured, unread
+
+
+def test_a_ready_answer_whose_menu_went_unread_keeps_the_menu_it_had() -> None:
+    """A connect or a Test the Mirasim host leaves unanswered is menuless: a read that failed, not a measured none."""
+    measured, unread = _menu_records()
+    saved = probe_mod._test_record(unread, measured)
+    assert (saved.model_choices, saved.available_modes) == (measured.model_choices, measured.available_modes)
+    assert saved.model_menu_measured
+    assert (saved.status, saved.fingerprint, saved.measured_at_ms) == ("ready", "new", 2)
+
+
+async def test_the_boot_keeps_a_measured_menu_over_an_answer_that_could_not_read_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    measured, unread = _menu_records()
+    recorded: list[object] = []
+
+    async def fake_verify(cfg: object) -> object:
+        return unread
+
+    monkeypatch.setattr(probe_mod, "acp_snapshot_for", lambda cfg: measured)
+    monkeypatch.setattr("raven.acp_client.capabilities.verify_agent", fake_verify)
+    monkeypatch.setattr(
+        "raven.acp_client.capabilities.SnapshotStore",
+        lambda: type("S", (), {"record": staticmethod(recorded.append)})(),
+    )
+    row = _FakeRow("Claude Code-Mirasim")
+    await probe_mod._verify_missing_snapshots(_FakeManager([row]), [row])
+    assert [snapshot.model_choices for snapshot in recorded] == [measured.model_choices]
+
+
+@pytest.mark.parametrize("needs_auth,unfetched", [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize("previous_status", ["ready", "attention"])
+def test_manual_test_merges_current_failure_flags_with_old_capabilities(needs_auth, unfetched, previous_status):
+    from dataclasses import replace
+
+    from raven.acp_client.capabilities import CapabilitySnapshot
+
+    old = CapabilitySnapshot(
+        agent="agent",
+        fingerprint="old",
+        status=previous_status,
+        detail="old refusal",
+        measured_at_ms=1,
+        needs_auth=previous_status == "attention",
+        can_load=True,
+    )
+    measured = replace(
+        old,
+        status="attention",
+        fingerprint="new",
+        measured_at_ms=2,
+        detail="current refusal",
+        can_load=False,
+        needs_auth=needs_auth,
+        unfetched=unfetched,
+    )
+    saved = probe_mod._test_record(measured, old)
+    assert saved.can_load
+    assert saved.fingerprint == "new"
+    assert (saved.needs_auth, saved.unfetched) == (needs_auth, unfetched)

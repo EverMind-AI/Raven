@@ -416,6 +416,9 @@ class DiscordChannel(ChannelBase):
 
         self._typing_tasks[channel_id] = asyncio.create_task(loop())
 
+    async def end_turn(self, chat_id: str) -> None:
+        await self._stop_typing(chat_id)
+
     async def _stop_typing(self, channel_id: str) -> None:
         if task := self._typing_tasks.pop(channel_id, None):
             task.cancel()

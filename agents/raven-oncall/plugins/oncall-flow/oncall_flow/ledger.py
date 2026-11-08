@@ -160,7 +160,10 @@ class Ledger:
         os.replace(tmp, self._path)
         # The rename itself needs flushing too, or a host crash can leave the
         # directory entry unwritten and the previous ledger in place -- silently
-        # losing the last mutation instead of corrupting it.
+        # losing the last mutation instead of corrupting it. Windows cannot open
+        # a directory as a file (EACCES), and NTFS journals the rename itself.
+        if os.name == "nt":
+            return
         dir_fd = os.open(self._path.parent, os.O_RDONLY)
         try:
             os.fsync(dir_fd)

@@ -178,7 +178,7 @@ class LazyProvider(LLMProvider):
         """Forwarded post-materialization, like ``request_generation``: only the
         inner provider knows whether its wire can tell two efforts apart, and the
         base answer says every label is its own request -- which is the answer
-        that let the retry re-send an unchanged one."""
+        that let the step-down re-send an unchanged one."""
         if self._provider is None:
             return super().reasoning_wire_keys(model, reasoning_effort)
         return self._provider.reasoning_wire_keys(model, reasoning_effort)

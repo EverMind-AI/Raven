@@ -29,8 +29,9 @@ from typing import Any
 from loguru import logger
 
 from raven.agent.subagent.direct_chat import direct_root
+from raven.agent.subagent.instance_paths import MESSAGES_FILENAME
 
-_FILENAME = "messages.json"
+_FILENAME = MESSAGES_FILENAME
 
 
 def instance_state_path(session_dir: Path, agent: str, handle: str) -> Path:

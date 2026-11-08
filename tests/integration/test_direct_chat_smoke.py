@@ -399,6 +399,10 @@ async def test_an_untargeted_cancel_does_not_touch_a_direct_turn(
     scheduler, _hub, turn_ids, teardown = build_rpc_spine(
         loop, emitter, on_turn_end=turn_mod.clear_active, direct_targets=targets
     )
+    # The refusal answers whether the lane it resolved to still has a turn to
+    # run, and only the real scheduler can say: a refusal that falls back to
+    # "no scheduler, so not busy" would pass this case whatever the lane held.
+    turn_mod.bind_scheduler(scheduler)
     try:
         await turn_send(
             {
@@ -425,7 +429,8 @@ async def test_an_untargeted_cancel_does_not_touch_a_direct_turn(
         touched_the_instance = reached_backend.is_set()
     finally:
         await teardown()
+        turn_mod.bind_scheduler(None)
         turn_mod._active_turns.clear()
 
-    assert result == {"cancelled": False}
+    assert result == {"cancelled": False, "busy": False}
     assert not touched_the_instance, "an untargeted cancel tore down a sub-agent the user was not watching"

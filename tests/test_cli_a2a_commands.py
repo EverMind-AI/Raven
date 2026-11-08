@@ -32,6 +32,19 @@ def test_serve_exits_nonzero_in_a_subagent_process(monkeypatch):
     assert "sub-agent" in result.output
 
 
+def test_serve_starts_the_heap_trimmer():
+    """Freed native memory goes back to the system while the standalone host
+    serves. ``_serve`` runs until the process is stopped, so its source is
+    pinned rather than executed."""
+    import inspect
+
+    from raven.cli import a2a_commands
+
+    src = inspect.getsource(a2a_commands.serve)
+    serve_body = src.split("async def _serve() -> None:", 1)[1].split("asyncio.run(_serve())", 1)[0]
+    assert "start_trimmer()" in serve_body
+
+
 def test_the_gateway_mount_is_skipped_in_a_subagent_process(monkeypatch):
     from raven.a2a.gate import mount_if_allowed
 

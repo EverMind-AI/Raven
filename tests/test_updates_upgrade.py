@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import errno
 import io
 import json
 import os
+import ssl
+import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import FrozenInstanceError
 from datetime import datetime
 from pathlib import Path
@@ -20,9 +24,11 @@ from unittest.mock import Mock
 
 import httpx
 import pytest
+import truststore
 from typer.testing import CliRunner
 
 from raven.cli.commands import app
+from raven.security.tls import use_system_ca
 from raven.updates import upgrade as upgrade_commands
 
 WHEEL_NAME = "raven-0.1.4-py3-none-any.whl"
@@ -548,6 +554,126 @@ def test_is_editable_install_reads_pep_610_metadata(monkeypatch: pytest.MonkeyPa
     distribution.read_text.assert_called_once_with("direct_url.json")
 
 
+def test_editable_checkout_reads_the_directory_from_pep_610_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    checkout = tmp_path / "source checkout"
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": checkout.as_uri(), "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+    run = Mock(side_effect=AssertionError("naming the checkout must not run git"))
+    monkeypatch.setattr(upgrade_commands.subprocess, "run", run)
+
+    assert upgrade_commands.editable_checkout() == checkout
+
+
+@pytest.mark.parametrize("url", ["https://example.com/source", "file://remote/source", "file:relative"])
+def test_editable_checkout_refuses_a_url_that_is_not_a_local_directory(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    distribution = Mock()
+    distribution.read_text.return_value = json.dumps({"url": url, "dir_info": {"editable": True}})
+    monkeypatch.setattr(upgrade_commands.metadata, "distribution", lambda name: distribution)
+
+    with pytest.raises(upgrade_commands.UpgradeError):
+        upgrade_commands.editable_checkout()
+
+
+@pytest.mark.parametrize(
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_names_the_platform_s_install_script(windows: bool, script: str) -> None:
+    """install.sh stops on Windows with "on Windows use install.ps1", so the CLI
+    and the page's editable refusal must both name the script by platform --
+    read from this one definition so the two spellings cannot drift apart."""
+    assert upgrade_commands.install_script(windows=windows) == script
+
+
+@pytest.mark.parametrize(
+    ("windows", "script"),
+    [(True, ".\\install.ps1"), (False, "./install.sh")],
+    ids=["windows", "posix"],
+)
+def test_install_script_defaults_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch, windows: bool, script: str
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: windows)
+
+    assert upgrade_commands.install_script() == script
+
+
+@pytest.mark.parametrize(
+    ("windows", "command"),
+    [
+        (True, 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'),
+        (False, "./install.sh"),
+    ],
+    ids=["windows", "posix"],
+)
+def test_install_command_runs_the_platform_s_installer(windows: bool, command: str) -> None:
+    """The page and the CLI must share the invocation, not only the script name:
+    a bare `.\\install.ps1` is refused by the stock Windows client policy."""
+    assert upgrade_commands.install_command(windows=windows) == command
+
+
+def test_install_command_defaults_to_the_running_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.install_command() == (
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("windows", "commands"),
+    [
+        (
+            True,
+            (
+                "raven web --stop",
+                "git pull",
+                'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+            ),
+        ),
+        (False, ("git pull && ./install.sh",)),
+    ],
+    ids=["windows", "posix"],
+)
+def test_checkout_update_commands_are_runnable_in_the_platform_s_shell(
+    windows: bool, commands: tuple[str, ...]
+) -> None:
+    """Windows PowerShell 5.1 rejects `&&` as a statement separator, and
+    cmd.exe cannot run a .ps1 by name, so the Windows form is several commands
+    and names the PowerShell that runs the installer. It stops the page first:
+    `uv tool install --force` cannot replace a running `raven.exe`. POSIX keeps
+    the one-line form every release has printed."""
+    assert upgrade_commands.checkout_update_commands(windows=windows) == commands
+
+
+def test_checkout_update_commands_default_to_the_running_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(upgrade_commands, "_on_windows", lambda: True)
+
+    assert upgrade_commands.checkout_update_commands() == (
+        "raven web --stop",
+        "git pull",
+        'powershell -NoProfile -ExecutionPolicy Bypass -File ".\\install.ps1"',
+    )
+
+
+@pytest.mark.parametrize(("name", "windows"), [("nt", True), ("posix", False)])
+def test_the_platform_switch_reads_os_name(monkeypatch: pytest.MonkeyPatch, name: str, windows: bool) -> None:
+    """The CLI's default path must read the real predicate, not a patched seam:
+    an inverted `_on_windows` would print the POSIX form on Windows, which is
+    the defect this change removes."""
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "name", name)
+        assert upgrade_commands._on_windows() is windows
+
+
 @pytest.mark.parametrize(
     "raw",
     [
@@ -692,10 +818,20 @@ class _ReleaseDirectory:
         # this file keep observing the output they were written against.
         self.sizes: dict[str, int] = {}
         self.requests: list[urllib.request.Request] = []
+        # Hosts no connection reaches, by URL prefix.
+        self.unreachable: set[str] = set()
+        # Hosts whose certificate fails verification, by URL prefix.
+        self.untrusted: set[str] = set()
 
     def urlopen(self, request: urllib.request.Request, *args: object, **kwargs: object) -> io.BytesIO:
         self.requests.append(request)
         url = request.full_url
+        if any(url.startswith(prefix) for prefix in self.unreachable):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+        if any(url.startswith(prefix) for prefix in self.untrusted):
+            raise urllib.error.URLError(
+                ssl.SSLCertVerificationError(1, "certificate verify failed: unable to get local issuer certificate")
+            )
         name = url.rsplit("/", 1)[1]
         if request.get_method() == "HEAD":
             if name not in self.sizes:
@@ -720,7 +856,7 @@ def _uv_calls(run: Mock) -> list[dict[str, object]]:
     for call in run.call_args_list:
         argv = list(call.args[0])
         assert argv[:3] == ["/usr/bin/uv", "tool", "install"], argv
-        assert call.kwargs == {"check": False}
+        assert call.kwargs.keys() == {"check", "env"} and call.kwargs["check"] is False
         options, requirement = argv[3:-1], argv[-1]
         mode = options[:2] if options[0] == "--reinstall-package" else options[:1]
         options = options[len(mode) :]
@@ -887,7 +1023,7 @@ def test_upgrade_helper_manifest_reaches_a_log_file_before_uv_does(
     monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(raw, encoding="utf-8", write_through=False))
     seen: dict[str, str] = {}
 
-    def run(argv, check):
+    def run(argv, check, env):
         seen.setdefault("before_uv", raw.getvalue().decode("utf-8"))
         return Mock(returncode=0)
 
@@ -1057,7 +1193,7 @@ class TestTheHelperAnswersOnThePagePort:
         and asks the reader to sign in again on 401 or 403."""
         seen: dict[str, tuple[int, bytes]] = {}
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             seen["status"] = _get(port, "/upgrade/status")
             seen["root"] = _get(port, "/")
             return Mock(returncode=0)
@@ -1084,7 +1220,7 @@ class TestTheHelperAnswersOnThePagePort:
         own to this port and read the answer."""
         seen: list[int] = []
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             seen.append(_get(port, "/upgrade/status", host=f"attacker.example:{port}")[0])
             return Mock(returncode=0)
 
@@ -1136,7 +1272,7 @@ class TestTheHelperAnswersOnThePagePort:
         """The terminal has no page to answer and sees the progress itself."""
         free_during_install: list[bool] = []
 
-        def run(_argv, check):
+        def run(_argv, check, env):
             free_during_install.append(_port_is_free(port))
             return Mock(returncode=0)
 
@@ -1227,6 +1363,26 @@ def test_upgrade_helper_keeps_the_channel_extras_when_only_an_engine_fails(
     assert LOST_CHANNELS not in err and LOST_PLUGINS not in err
 
 
+def test_upgrade_helper_keeps_both_memory_backends_when_the_engines_fail(
+    monkeypatch: pytest.MonkeyPatch,
+    release_directory: _ReleaseDirectory,
+) -> None:
+    """A release ships a local and a hosted memory backend, and the rung that
+    drops the engines exists so long-term memory outlives them. Keeping only
+    the local distribution uninstalls the cloud one from under a host whose
+    `memory.backend` names it -- a native build refusing on this platform would
+    take that user's memory with it."""
+    cloud = f"everos-cloud-memory @ {RELEASE_DIR}/everos_cloud_memory-0.1.0-py3-none-any.whl\n"
+    lines = PLUGIN_LIST.splitlines(keepends=True)
+    release_directory.files["raven-plugins.txt"] = "".join([lines[0], cloud, *lines[1:]]).encode("utf-8")
+    run = Mock(side_effect=[Mock(returncode=9)] * 4 + [Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"]) == 0
+    assert _uv_calls(run)[-1]["plugins"] == lines[0] + cloud
+
+
 def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -1260,6 +1416,65 @@ def test_upgrade_helper_walks_both_axes_and_lands_on_the_largest_install(
     assert LOST_PLUGINS in captured.err and LOST_CHANNELS in captured.err
     assert LOST_ENGINES not in captured.err, "the landing rung has no engines to blame separately"
     assert "Raven upgraded: 0.1.3 -> 0.1.4" in captured.out
+
+
+def test_upgrade_helper_carries_the_sandbox_extra_when_boxlite_was_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rebuild syncs the tool environment to the requirement set it is
+    given, so a boxlite the sandbox advice installed survives only when the
+    rung that names it comes first."""
+    run = Mock(side_effect=[Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("RAVEN_UPGRADE_KEEP_SANDBOX", "1")
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert _ladder(run) == [(REINSTALL, PLUGIN_LIST, f"raven[channels,sandbox] @ {WHEEL_URL}")]
+
+
+def test_upgrade_helper_falls_back_to_the_plain_rung_and_warns_when_boxlite_cannot_come_along(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A platform that cannot take the sandbox extra must not lose the upgrade
+    over it: the plain rung follows as the fallback, and the reader learns a
+    configured boxlite backend will not start."""
+    run = Mock(side_effect=[Mock(returncode=9), Mock(returncode=9), Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setenv("RAVEN_UPGRADE_KEEP_SANDBOX", "1")
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    sandbox = f"raven[channels,sandbox] @ {WHEEL_URL}"
+    channels = f"raven[channels] @ {WHEEL_URL}"
+    assert _ladder(run) == [
+        (REINSTALL, PLUGIN_LIST, sandbox),
+        (FORCE, PLUGIN_LIST, sandbox),
+        (REINSTALL, PLUGIN_LIST, channels),
+    ]
+    err = capsys.readouterr().err
+    assert "boxlite" in err and "could not be reinstalled" in err
+
+
+def test_upgrade_helper_without_boxlite_walks_exactly_todays_rungs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the keep flag the ladder is the one that shipped before sandbox
+    preservation existed: first rung unchanged."""
+    monkeypatch.delenv("RAVEN_UPGRADE_KEEP_SANDBOX", raising=False)
+    run = Mock(side_effect=[Mock(returncode=0)])
+    monkeypatch.setattr(subprocess, "run", run)
+    helper_main = _load_upgrade_helper()
+
+    status = helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4"])
+
+    assert status == 0
+    assert _ladder(run) == [(REINSTALL, PLUGIN_LIST, f"raven[channels] @ {WHEEL_URL}")]
 
 
 def test_upgrade_helper_returns_final_uv_status(
@@ -1405,7 +1620,7 @@ def test_upgrade_helper_waits_for_parent_before_running_uv(
         events.append(("wait", parent_pid))
         return 0
 
-    def run(argv: list[str], *, check: bool) -> Mock:
+    def run(argv: list[str], *, check: bool, env: dict[str, str]) -> Mock:
         events.append(("run", argv))
         return Mock(returncode=0)
 
@@ -1670,6 +1885,7 @@ def test_handoff_replaces_process_with_isolated_base_python(
     monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
     monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
     monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: False)
     monkeypatch.setenv("UV_TOOL_DIR", "/wrong/tools")
     monkeypatch.setenv("UV_TOOL_BIN_DIR", "/wrong/bin")
     execve = Mock(side_effect=OSError("handoff failed"))
@@ -1693,6 +1909,57 @@ def test_handoff_replaces_process_with_isolated_base_python(
     assert env["UV_TOOL_DIR"] == str(target.tool_dir)
     assert env["UV_TOOL_BIN_DIR"] == str(target.bin_dir)
     assert env["PATH"] == os.environ["PATH"]
+    assert env["RAVEN_UPGRADE_KEEP_SANDBOX"] == "0", "no boxlite in this environment"
+
+
+def test_handoff_carries_a_present_boxlite_into_the_helper_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The helper runs under -I with the base interpreter, so it cannot see the
+    tool environment's packages itself; whether boxlite must survive the
+    rebuild is decided here and handed over in the environment."""
+    prefix = tmp_path / "tools" / "raven"
+    base_python = tmp_path / "python" / "python"
+    uv_path = tmp_path / "bin" / "uv"
+    base_python.parent.mkdir(parents=True)
+    uv_path.parent.mkdir()
+    prefix.mkdir(parents=True)
+    base_python.touch()
+    uv_path.touch()
+    target = upgrade_commands.ToolInstallTarget(tmp_path / "tools", tmp_path / "tool-bin")
+    monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
+    monkeypatch.setattr(upgrade_commands.sys, "prefix", str(prefix))
+    monkeypatch.setattr(upgrade_commands.sys, "_base_executable", str(base_python))
+    monkeypatch.setattr(upgrade_commands.shutil, "which", lambda executable: str(uv_path))
+    monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: True)
+    execve = Mock(side_effect=OSError("handoff failed"))
+    monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+
+    with pytest.raises(upgrade_commands.UpgradeError, match="handoff failed"):
+        upgrade_commands._handoff_upgrade(
+            upgrade_commands.ReleaseInfo("0.1.4", WHEEL_URL),
+            "0.1.3",
+            target,
+        )
+
+    _, _, env = execve.call_args.args
+    assert env["RAVEN_UPGRADE_KEEP_SANDBOX"] == "1"
+
+
+def test_boxlite_installed_reads_the_running_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both faces of the lookup: the handoff flag follows what the environment
+    actually holds, because that is what the rebuild can drop."""
+    monkeypatch.setattr(upgrade_commands.metadata, "version", lambda name: "0.9.5")
+    assert upgrade_commands._boxlite_installed() is True
+
+    def missing(name: str) -> str:
+        raise upgrade_commands.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(upgrade_commands.metadata, "version", missing)
+    assert upgrade_commands._boxlite_installed() is False
 
 
 def test_windows_handoff_starts_external_helper(
@@ -2226,6 +2493,24 @@ class TestSpawningLeavesTheMarker:
         assert at_spawn == [True]
         assert handed == [str(isolated_raven_home / "upgrade.json")]
 
+    def test_the_boxlite_flag_crosses_the_detached_handoff_too(
+        self, plan: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The served page reaches the same helper through this spawn, so the
+        sandbox-preservation decision crosses here as well, both ways."""
+        handed: list[str] = []
+
+        def popen(_argv, env=None, **_kwargs):
+            handed.append(env["RAVEN_UPGRADE_KEEP_SANDBOX"])
+            return Mock()
+
+        monkeypatch.setattr(subprocess, "Popen", popen)
+        monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: True)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+        monkeypatch.setattr(upgrade_commands, "_boxlite_installed", lambda: False)
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+        assert handed == ["1", "0"]
+
     def test_the_marker_names_the_page_port_for_the_helper_to_answer_on(
         self, plan: object, isolated_raven_home: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2316,6 +2601,104 @@ def test_upgrade_helper_stops_what_still_runs_from_the_old_install(monkeypatch: 
     assert "Stop-Process" not in check and "ExecutablePath.StartsWith($root" in check
 
 
+@pytest.mark.parametrize("quote", ["'", "\u2018", "\u2019", "\u201a", "\u201b"])
+def test_upgrade_helper_cannot_close_its_quoted_root_early(monkeypatch: pytest.MonkeyPatch, quote: str) -> None:
+    """PowerShell reads the four curly single quotes as quotes too, so a uv
+    tool directory under a profile spelled O\u2019Neil would end the literal
+    early and run the rest of the path as code unless every one is doubled."""
+    namespace = _load_upgrade_helper_namespace()
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    root = "C:\\Users\\O" + quote + "Neil\\AppData\\Roaming\\uv\\tools\\raven"
+
+    assert namespace["stop_leftovers_of"](root) == ([], [])
+
+    script = ran[0][-1]
+    assert "$root = 'C:\\Users\\O" + quote * 2 + "Neil\\AppData\\Roaming\\uv\\tools\\raven\\'" in script
+
+
+def test_upgrade_helper_does_not_read_a_failed_query_as_no_survivors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A PowerShell that failed answered nothing; its empty stdout is not
+    evidence that nothing runs from the environment."""
+    namespace = _load_upgrade_helper_namespace()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, stdout="", stderr="denied"),
+    )
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == ([], None)
+
+
+def test_upgrade_helper_does_not_trust_a_stop_list_from_a_failed_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The query that follows the stop decides whether the stop was enough; a
+    non-zero exit there is not a verdict, whatever its stdout says."""
+    namespace = _load_upgrade_helper_namespace()
+    answers = iter(
+        [
+            subprocess.CompletedProcess([], 0, stdout="4242\r\n", stderr=""),
+            subprocess.CompletedProcess([], 1, stdout="", stderr="denied"),
+        ]
+    )
+    monkeypatch.setattr(subprocess, "run", lambda argv, **kwargs: next(answers))
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+
+    assert namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven") == (["4242"], None)
+
+
+def test_upgrade_helper_makes_each_leftover_query_fail_loudly(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Under the default preference a non-terminating Get-CimInstance failure
+    still exits 0, so an empty stdout from a broken query would read as "no
+    survivors" again. Stop makes the failure terminate, which the exit code the
+    caller checks can report."""
+    namespace = _load_upgrade_helper_namespace()
+    ran: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(namespace["shutil"], "which", lambda name: "powershell")
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _s: None)
+
+    namespace["stop_leftovers_of"](r"C:\Users\x\AppData\Roaming\uv\tools\raven")
+
+    assert len(ran) == 2
+    assert all(argv[-1].startswith("$ErrorActionPreference = 'Stop'; ") for argv in ran)
+
+
+def test_upgrade_helper_does_not_install_when_it_could_not_check_for_survivors(
+    monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """An unanswered query used to read as "nothing is running", and uv then
+    deleted the environment an unknown process still used. It has to stop the
+    install instead."""
+    namespace = _load_upgrade_helper_namespace()
+    order: list[object] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("UV_TOOL_DIR", r"C:\tools")
+    namespace["wait_for_parent"] = lambda _pid: 0
+    namespace["stop_leftovers_of"] = lambda env_dir: ([], None)
+    monkeypatch.setattr(
+        subprocess, "run", lambda argv, **kw: order.append("uv") or subprocess.CompletedProcess(argv, 0)
+    )
+
+    assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 1
+    assert order == []
+    assert "could not check" in capsys.readouterr().err
+
+
 def test_upgrade_helper_refuses_to_install_over_a_survivor(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """Stop-Process is denied on another user's or an elevated process, and
     `uv tool install --force` deletes the environment before writing: a
@@ -2370,3 +2753,623 @@ def test_upgrade_helper_does_not_sweep_on_posix(monkeypatch: pytest.MonkeyPatch)
 
     assert namespace["main"](["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "123"]) == 0
     assert "sweep" not in order
+
+
+class TestTheHelperFallsBackToAMirror:
+    """uv resolves an upgrade's dependencies from PyPI, and fetches a Python from
+    releases.astral.sh when the machine has none it can use. When either cannot
+    be reached at all, uv is pointed at the mirror instead -- only uv: the Raven
+    relaunched afterwards starts with the helper's own environment."""
+
+    @pytest.fixture(autouse=True)
+    def _fallbacks_on(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
+        for name in (
+            "UV_DEFAULT_INDEX",
+            "UV_INDEX_URL",
+            "UV_INDEX",
+            "UV_PYTHON_INSTALL_MIRROR",
+            "UV_PYTHON_DOWNLOADS_JSON_URL",
+            "UV_ASTRAL_MIRROR_URL",
+            "UV_CONFIG_FILE",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        # The user's uv.toml is looked for under these; none is there.
+        for name in ("APPDATA", "PROGRAMDATA", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "HOME", "USERPROFILE"):
+            monkeypatch.setenv(name, str(tmp_path / name.lower()))
+
+    @staticmethod
+    def _uv_environments(
+        monkeypatch: pytest.MonkeyPatch, first_attempt: int = 0
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """Run the helper; return the environment of every uv install it made, and of the Raven it relaunched."""
+        uv: list[dict[str, str]] = []
+        relaunched: list[dict[str, str]] = []
+        outcomes = iter([first_attempt, 0, 0])
+
+        def run(argv, **kwargs):
+            if argv[1:] == ["--version"]:
+                return Mock(returncode=0, stdout="uv 0.13.0 (x86_64-unknown-linux-gnu)\n")
+            uv.append(kwargs.get("env") or {})
+            return Mock(returncode=next(outcomes))
+
+        monkeypatch.setattr(subprocess, "run", run)
+        helper_main, popen = _helper_with_relaunch(monkeypatch)
+        helper_main.__globals__["use_system_ca"] = lambda: None
+        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        assert helper_main(["/usr/bin/uv", WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
+        return uv, relaunched
+
+    @staticmethod
+    def _probes(directory: _ReleaseDirectory, prefix: str) -> int:
+        return sum(1 for request in directory.requests if request.full_url.startswith(prefix))
+
+    def test_an_unreachable_pypi_sends_uv_to_the_mirror(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://pypi.org/")
+
+        uv, relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and {env["UV_DEFAULT_INDEX"] for env in uv} == {mirrors.PYPI_INDEX}
+        (relaunch,) = relaunched
+        assert "UV_DEFAULT_INDEX" not in relaunch, "only uv is told"
+        said = capsys.readouterr().out
+        assert "pypi.tuna.tsinghua.edu.cn" in said and "RAVEN_NO_MIRROR" in said
+
+    def test_a_pypi_that_answers_leaves_uv_alone(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_pypi_is_asked_once_however_many_installs_it_takes(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch, first_attempt=1)
+
+        assert len(uv) == 2, "the cheap install failed and the forced one ran"
+        assert self._probes(release_directory, "https://pypi.org/") == 1
+
+    def test_an_index_the_user_chose_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        monkeypatch.setenv("UV_INDEX_URL", "https://pypi.example.internal/simple")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        assert self._probes(release_directory, "https://pypi.org/") == 0, "a choice already made is not second-guessed"
+
+    def test_an_index_in_the_users_uv_toml_is_kept(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        (root / "uv").mkdir(parents=True)
+        (root / "uv" / "uv.toml").write_text('index-url = "https://pypi.example.internal/simple"\n', encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_a_uv_toml_with_a_byte_order_mark_is_read(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path
+    ) -> None:
+        """uv reads past the mark a Windows editor writes; a reader that does
+        not would call the file broken and take the user's index for none."""
+        release_directory.unreachable.add("https://pypi.org/")
+        root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        (root / "uv").mkdir(parents=True)
+        (root / "uv" / "uv.toml").write_bytes(b"\xef\xbb\xbf" + b'index-url = "https://pypi.example.internal/simple"\n')
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    @pytest.mark.parametrize("default_in", ["machines", "users"])
+    def test_each_uv_toml_is_read_on_its_own(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory, tmp_path: Path, default_in: str
+    ) -> None:
+        """One file's list of indexes does not hide the other's default one."""
+        release_directory.unreachable.add("https://pypi.org/")
+        user = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+        machine = tmp_path / ("programdata" if os.name == "nt" else "xdg_config_dirs")
+        extra = '[[index]]\nurl = "https://extra.example.internal/simple"\n'
+        default = '[[index]]\nurl = "https://pypi.example.internal/simple"\ndefault = true\n'
+        for root, text in (
+            (user, default if default_in == "users" else extra),
+            (machine, default if default_in == "machines" else extra),
+        ):
+            (root / "uv").mkdir(parents=True)
+            (root / "uv" / "uv.toml").write_text(text, encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_a_certificate_that_fails_verification_keeps_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        """Not a host that cannot be reached: whatever re-signs its traffic
+        re-signs the mirror's too, the rule the runtime and both installers keep."""
+        release_directory.untrusted.add("https://pypi.org/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any("UV_DEFAULT_INDEX" in env for env in uv)
+
+    def test_the_opt_out_keeps_pypi(
+        self, monkeypatch: pytest.MonkeyPatch, release_directory: _ReleaseDirectory
+    ) -> None:
+        release_directory.unreachable.add("https://pypi.org/")
+        monkeypatch.setenv("RAVEN_NO_MIRROR", "1")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        assert self._probes(release_directory, "https://pypi.org/") == 0
+
+    def test_an_unreachable_python_host_sends_uv_to_the_python_mirror(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://releases.astral.sh/")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert {env["UV_PYTHON_INSTALL_MIRROR"] for env in uv} == {mirrors.PYTHON_DOWNLOADS}
+        assert not any("UV_DEFAULT_INDEX" in env for env in uv)
+        said = capsys.readouterr().out
+        assert "releases.astral.sh could not be reached" in said and "RAVEN_NO_MIRROR" in said
+
+    @pytest.mark.parametrize(
+        ("variable", "uv_toml"),
+        [
+            ("UV_PYTHON_INSTALL_MIRROR", None),
+            ("UV_PYTHON_DOWNLOADS_JSON_URL", None),
+            ("UV_ASTRAL_MIRROR_URL", None),
+            (None, 'python-install-mirror = "https://python.example.internal"\n'),
+            (None, 'python-downloads-json-url = "https://python.example.internal/downloads.json"\n'),
+        ],
+        ids=["mirror", "downloads-list", "astral-copy", "uv-toml-mirror", "uv-toml-downloads-list"],
+    )
+    def test_a_python_source_the_user_chose_is_kept(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        release_directory: _ReleaseDirectory,
+        tmp_path: Path,
+        variable: str | None,
+        uv_toml: str | None,
+    ) -> None:
+        """uv puts a mirror it is given before a copy of releases.astral.sh, and
+        fails outright beside a list of downloads that live elsewhere."""
+        from raven.utils import mirrors
+
+        release_directory.unreachable.add("https://releases.astral.sh/")
+        if variable is not None:
+            monkeypatch.setenv(variable, "https://python.example.internal")
+        if uv_toml is not None:
+            root = tmp_path / ("appdata" if os.name == "nt" else "xdg_config_home")
+            (root / "uv").mkdir(parents=True)
+            (root / "uv" / "uv.toml").write_text(uv_toml, encoding="utf-8")
+
+        uv, _relaunched = self._uv_environments(monkeypatch)
+
+        assert uv and not any(env.get("UV_PYTHON_INSTALL_MIRROR") == mirrors.PYTHON_DOWNLOADS for env in uv)
+        assert self._probes(release_directory, "https://releases.astral.sh/") == 0, (
+            "a choice already made is not second-guessed"
+        )
+
+    def test_the_helper_names_the_hosts_the_runtime_does(self) -> None:
+        """The helper runs outside the environment it rewrites and cannot import
+        raven, so it carries its own copy; this holds the copies equal."""
+        from raven.utils import mirrors
+
+        namespace = _load_upgrade_helper_namespace()
+
+        assert namespace["PYPI_DEFAULT_INDEX"] == mirrors.PYPI_DEFAULT_INDEX
+        assert namespace["PYPI_MIRROR"] == mirrors.PYPI_INDEX
+        assert namespace["PYTHON_DEFAULT_DOWNLOADS"] == mirrors.PYTHON_DEFAULT_DOWNLOADS
+        assert namespace["PYTHON_MIRROR"] == mirrors.PYTHON_DOWNLOADS
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            urllib.error.URLError(ConnectionRefusedError(111, "Connection refused")),
+            urllib.error.URLError(TimeoutError("timed out")),
+            urllib.error.URLError(OSError(errno.EHOSTUNREACH, "No route to host")),
+            urllib.error.URLError(OSError(errno.EPERM, "Operation not permitted")),
+            urllib.error.URLError(OSError(errno.EACCES, "Permission denied")),
+            OSError(errno.ENETUNREACH, "Network is unreachable"),
+            OSError(errno.EACCES, "Permission denied"),
+            urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden")),
+            urllib.error.URLError(OSError("Tunnel connection failed: 502 Bad Gateway")),
+            urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed")),
+            urllib.error.URLError(ssl.SSLEOFError(8, "EOF occurred in violation of protocol")),
+            OSError(errno.EMFILE, "Too many open files"),
+            ValueError("not a network problem"),
+        ],
+        ids=[
+            "refused",
+            "timed-out",
+            "no-route",
+            "refused-by-the-machine",
+            "refused-by-the-machine-again",
+            "no-network",
+            "a-file-of-our-own",
+            "tunnel-refused",
+            "tunnel-bad-gateway",
+            "certificate",
+            "tls",
+            "ours",
+            "not-the-network",
+        ],
+    )
+    def test_the_helper_draws_the_runtimes_line_where_no_test_host_can_take_it(self, error: BaseException) -> None:
+        """No loopback host can be made to have no route; the copies are held
+        equal on those failures by asking both about the same error."""
+        from raven.utils import mirrors
+
+        connection_failed = _load_upgrade_helper_namespace()["connection_failed"]
+        assert callable(connection_failed)
+
+        assert connection_failed(error) == mirrors.unreachable(error)
+
+
+class TestTheHelperVerifiesAgainstTheSystemStore:
+    """The helper fetches the release's lists itself and uv fetches the rest, both
+    outside the environment that holds truststore. The spawning side hands the
+    helper a copy, and the helper tells uv, so an upgrade succeeds wherever the
+    release lookup did."""
+
+    INVALID = "Unable to upgrade Raven: invalid upgrade helper arguments.\n"
+    HANDED = ("RAVEN_UPGRADE_TRUSTSTORE", "UV_SYSTEM_CERTS", "UV_NATIVE_TLS")
+
+    @pytest.fixture(autouse=True)
+    def scratch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """Where the copy is made, so one no helper consumed stays out of the real temp dir."""
+        directory = tmp_path / "scratch"
+        directory.mkdir()
+        monkeypatch.setattr(tempfile, "tempdir", str(directory))
+        monkeypatch.delenv("RAVEN_NO_SYSTEM_CA", raising=False)
+        for name in self.HANDED:
+            monkeypatch.delenv(name, raising=False)
+        return directory
+
+    @pytest.fixture
+    def plan(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
+        uv = tmp_path / "uv"
+        uv.write_text("", encoding="utf-8")
+        uv.chmod(0o755)
+        monkeypatch.setattr(upgrade_commands.shutil, "which", lambda _name: str(uv))
+        monkeypatch.setattr(upgrade_commands, "_external_executable", lambda value, *, label: Path(str(value)))
+        return upgrade_commands.UpgradePlan(
+            current_version="0.1.3",
+            release=upgrade_commands.ReleaseInfo(version="0.1.4", wheel_url=WHEEL_URL),
+            target=upgrade_commands.ToolInstallTarget(tool_dir=tmp_path / "tools", bin_dir=tmp_path / "bin"),
+        )
+
+    @pytest.fixture
+    def switched(self) -> Iterator[None]:
+        """This process verifying against the system store, switched the way `cli.entry` does it."""
+        use_system_ca()
+        yield
+        truststore.extract_from_ssl()
+
+    @staticmethod
+    def _copy_in(env: dict[str, str]) -> tuple[Path, bytes]:
+        copy = Path(env["RAVEN_UPGRADE_TRUSTSTORE"])
+        return copy, (copy / "truststore" / "__init__.py").read_bytes()
+
+    def test_the_cli_handoff_hands_the_helper_a_copy_of_truststore(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
+    ) -> None:
+        monkeypatch.setattr(upgrade_commands.sys, "platform", "linux")
+        handed: list[tuple[Path, bytes]] = []
+
+        def execve(_executable, _argv, env):
+            handed.append(self._copy_in(env))
+            raise OSError("stop here")
+
+        monkeypatch.setattr(upgrade_commands.os, "execve", execve)
+
+        with pytest.raises(upgrade_commands.UpgradeError, match="stop here"):
+            upgrade_commands._handoff_upgrade(plan.release, plan.current_version, plan.target)
+
+        ((copy, package),) = handed
+        assert package == Path(truststore.__file__).read_bytes()
+        assert not copy.exists(), "a helper that never started left its copy behind"
+
+    def test_the_page_spawn_hands_the_helper_a_copy_of_truststore(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, switched: None
+    ) -> None:
+        handed: list[tuple[Path, bytes]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: handed.append(self._copy_in(env)))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        ((_copy, package),) = handed
+        assert package == Path(truststore.__file__).read_bytes()
+
+    def test_a_page_spawn_that_never_started_leaves_no_copy(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, switched: None
+    ) -> None:
+        monkeypatch.setattr(subprocess, "Popen", Mock(side_effect=OSError("spawn denied")))
+
+        with pytest.raises(upgrade_commands.UpgradeError):
+            upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_started_under_the_opt_out_hands_over_nothing_not_even_an_inherited_path(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path, tmp_path: Path
+    ) -> None:
+        """The helper deletes the directory it is handed, so only one made for it may reach it."""
+        monkeypatch.setenv("RAVEN_NO_SYSTEM_CA", "1")
+        use_system_ca()
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "not-for-this-helper"))
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_that_never_switched_hands_over_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """Started some way other than `cli.entry`, a process verifies the way each library does,
+        and its helper should do the same, whether or not truststore could be imported."""
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_process_without_truststore_starts_its_helper_all_the_same(
+        self, monkeypatch: pytest.MonkeyPatch, plan: object, scratch: Path
+    ) -> None:
+        """The real-uv upgrade test's tool environment has no truststore, and calls the handoff
+        without `cli.entry`; importing truststore there ended the upgrade before it began."""
+        monkeypatch.setitem(sys.modules, "truststore", None)
+        envs: list[dict[str, str]] = []
+        monkeypatch.setattr(subprocess, "Popen", lambda _argv, env=None, **_kw: envs.append(env))
+
+        upgrade_commands.spawn_detached_upgrade(plan, parent_pid=1234)
+
+        (env,) = envs
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+
+    def test_a_copy_that_cannot_be_made_is_reported_and_nothing_is_handed_over(
+        self, monkeypatch: pytest.MonkeyPatch, scratch: Path, capsys: pytest.CaptureFixture[str], switched: None
+    ) -> None:
+        """The helper then verifies the way it always did; the upgrade itself goes ahead."""
+
+        def full(_source, destination, **_kwargs):
+            Path(destination).mkdir()
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(upgrade_commands.shutil, "copytree", full)
+        env: dict[str, str] = {}
+
+        assert upgrade_commands._hand_over_system_ca(env) is None
+
+        assert "RAVEN_UPGRADE_TRUSTSTORE" not in env
+        assert list(scratch.iterdir()) == []
+        assert "No space left on device" in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows keeps no POSIX permission bits")
+    def test_each_copy_is_a_new_directory_only_this_user_can_open(self, switched: None) -> None:
+        """The helper imports what it finds there. A name another user could guess, or a
+        directory they could write to, would let them put their code in its place."""
+        copies = [upgrade_commands._hand_over_system_ca({}) for _ in range(2)]
+
+        assert None not in copies
+        assert copies[0] != copies[1]
+        assert [stat.S_IMODE(copy.stat().st_mode) for copy in copies] == [0o700, 0o700]
+
+    def _uv_and_relaunch_environments(
+        self, monkeypatch: pytest.MonkeyPatch, version: str | Exception = "uv 0.13.0 (x86_64-unknown-linux-gnu)\n"
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+        """``version`` is what the helper's uv prints for `--version`, or what asking it raises;
+        any other uv says nothing."""
+        uv_path = "/usr/bin/uv"
+        uv: list[dict[str, str]] = []
+        relaunched: list[dict[str, str]] = []
+
+        def install(_argv, check, env):
+            uv.append(env)
+            return Mock(returncode=0)
+
+        def run(argv, **kwargs):
+            if argv[1:] != ["--version"]:
+                return install(argv, **kwargs)
+            if argv[0] != uv_path:
+                return Mock(returncode=0, stdout="")
+            if isinstance(version, Exception):
+                raise version
+            return Mock(returncode=0, stdout=version)
+
+        monkeypatch.setattr(subprocess, "run", run)
+        helper_main, popen = _helper_with_relaunch(monkeypatch)
+        # This process's ssl module is not the helper's to change.
+        helper_main.__globals__["use_system_ca"] = lambda: None
+        popen.side_effect = lambda *_a, **_kw: relaunched.append(dict(os.environ))
+
+        assert helper_main([uv_path, WHEEL_URL, "0.1.3", "0.1.4", "4321", RELAUNCH]) == 0
+        return uv, relaunched
+
+    def test_a_handed_over_store_reaches_uv_and_not_the_relaunched_raven(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The relaunched Raven inherits the helper's own environment, and everything it starts after."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, relaunched = self._uv_and_relaunch_environments(monkeypatch)
+
+        assert uv
+        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"1"}
+        (relaunch,) = relaunched
+        assert not set(self.HANDED) & relaunch.keys()
+
+    @pytest.mark.parametrize(
+        "version",
+        ["uv 0.11.0 (x86_64-unknown-linux-gnu)\n", "uv 0.12.3 (aarch64-apple-darwin)\n", "uv 1.0.0\n"],
+    )
+    def test_a_uv_that_reads_system_certs_is_not_given_the_name_it_calls_deprecated(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str
+    ) -> None:
+        """uv 0.11.9 to 0.12.15 print the deprecation warning even beside UV_SYSTEM_CERTS,
+        on every upgrade, about a variable the user never set."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, version)
+
+        assert uv
+        assert {env["UV_SYSTEM_CERTS"] for env in uv} == {"1"}
+        assert not any("UV_NATIVE_TLS" in env for env in uv)
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "uv 0.10.12 (x86_64-pc-windows-msvc)\n",
+            "uv 0.5.0\n",
+            "",
+            "error: unexpected argument\n",
+            OSError("uv is gone"),
+            subprocess.TimeoutExpired(["uv", "--version"], 30),
+        ],
+        ids=["0.10.12", "0.5.0", "says nothing", "says something else", "cannot be asked", "times out"],
+    )
+    def test_a_uv_older_than_system_certs_or_that_does_not_say_is_given_the_name_it_reads(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: str | Exception
+    ) -> None:
+        """Before 0.11 uv reads UV_NATIVE_TLS alone. A warning is the lesser cost when the
+        version cannot be read: without either name, a download through a TLS-inspecting
+        proxy fails."""
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, version)
+
+        assert uv
+        assert {(env["UV_SYSTEM_CERTS"], env["UV_NATIVE_TLS"]) for env in uv} == {("1", "1")}
+
+    def test_without_a_copy_uv_is_told_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, "uv 0.10.12\n")
+
+        assert uv
+        assert not any({"UV_SYSTEM_CERTS", "UV_NATIVE_TLS"} & env.keys() for env in uv)
+
+    @pytest.mark.parametrize("name", ["UV_SYSTEM_CERTS", "UV_NATIVE_TLS"])
+    def test_a_uv_setting_already_made_is_left_alone(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+    ) -> None:
+        monkeypatch.setenv(name, "0")
+        monkeypatch.setenv("RAVEN_UPGRADE_TRUSTSTORE", str(tmp_path / "copy"))
+
+        uv, _relaunched = self._uv_and_relaunch_environments(monkeypatch, "uv 0.10.12\n")
+
+        assert {env[name] for env in uv} == {"0"}
+
+    def _run_helper(self, interpreter: str, copy: Path, **extra: str) -> subprocess.CompletedProcess[str]:
+        env = {**os.environ, "RAVEN_UPGRADE_TRUSTSTORE": str(copy), **extra}
+        env.pop("RAVEN_UPGRADE_MARKER", None)
+        return subprocess.run(
+            [interpreter, "-I", "-c", upgrade_commands._upgrade_helper_bootstrap()],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    @staticmethod
+    def _base_interpreter() -> str:
+        """The interpreter the helper runs on, which holds no truststore of its own."""
+        base = getattr(sys, "_base_executable", None) or sys.executable
+        if subprocess.run([base, "-I", "-c", "import truststore"], capture_output=True, check=False).returncode == 0:
+            pytest.skip("this base interpreter has its own truststore, which would hide a copy that cannot load")
+        return base
+
+    def test_the_helper_switches_to_the_store_it_is_handed_before_anything_else(self, tmp_path: Path) -> None:
+        """A stand-in package records the call; the helper exits on its empty argv right after."""
+        copy = tmp_path / "handed"
+        (copy / "truststore").mkdir(parents=True)
+        (copy / "truststore" / "__init__.py").write_text(
+            "import os\n\n\ndef inject_into_ssl():\n    open(os.environ['RAVEN_TEST_INJECTED'], 'w').close()\n",
+            encoding="utf-8",
+        )
+        injected = tmp_path / "injected"
+
+        done = self._run_helper(sys.executable, copy, RAVEN_TEST_INJECTED=str(injected))
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        assert injected.exists()
+        assert not copy.exists()
+
+    def test_the_helper_takes_the_copy_off_its_import_path(self, tmp_path: Path) -> None:
+        """The copy is deleted next. Left first on sys.path, its name would point every later
+        import, ahead of the standard library, at a directory anyone who can write the temp
+        dir may make again. A stand-in package records the path as the helper exits."""
+        copy = tmp_path / "handed"
+        (copy / "truststore").mkdir(parents=True)
+        (copy / "truststore" / "__init__.py").write_text(
+            "import atexit\nimport json\nimport os\nimport sys\n\n\n"
+            "def record():\n"
+            "    with open(os.environ['RAVEN_TEST_PATH'], 'w') as handle:\n"
+            "        json.dump(sys.path, handle)\n\n\n"
+            "def inject_into_ssl():\n"
+            "    atexit.register(record)\n",
+            encoding="utf-8",
+        )
+        recorded = tmp_path / "path.json"
+
+        done = self._run_helper(sys.executable, copy, RAVEN_TEST_PATH=str(recorded))
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        path = json.loads(recorded.read_text(encoding="utf-8"))
+        assert os.path.dirname(os.__file__) in path, path
+        assert str(copy) not in path
+
+    def test_the_base_interpreter_loads_the_copy_it_is_handed(self, switched: None) -> None:
+        base = self._base_interpreter()
+        copy = upgrade_commands._hand_over_system_ca({})
+
+        done = self._run_helper(base, copy)
+
+        assert (done.returncode, done.stderr) == (2, self.INVALID)
+        assert not copy.exists()
+
+    def test_a_copy_that_does_not_load_is_reported_and_the_helper_carries_on(self, tmp_path: Path) -> None:
+        base = self._base_interpreter()
+        copy = tmp_path / "empty"
+        copy.mkdir()
+
+        done = self._run_helper(base, copy)
+
+        warning, refusal = done.stderr.splitlines(keepends=True)
+        assert done.returncode == 2
+        assert "system certificate store" in warning
+        assert refusal == self.INVALID
+        assert not copy.exists()

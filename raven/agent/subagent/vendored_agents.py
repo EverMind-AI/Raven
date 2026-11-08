@@ -52,6 +52,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
+from raven.utils.commands import command_tokens, resolve_subagent_command
+
 if TYPE_CHECKING:
     from raven.config.schema import ThirdPartyAcpSubagentConfig, ThirdPartyCliSubagentConfig
 
@@ -64,6 +66,7 @@ __all__ = [
     "merge_product_seeds",
     "product_folder",
     "product_image_key",
+    "product_image_pin",
     "product_llm_key",
     "product_secret",
     "product_state",
@@ -300,7 +303,8 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
     the generator speaks. Lending a chat credential to an address its owner
     never nominated for pictures is the one thing that backfill must not do,
     so the endpoint is read on both sides: the product's own image base pin,
-    and the gateway its provider blocks actually address.
+    and the gateway its provider blocks actually address. A folder pinning its
+    pictures to another provider (:func:`product_image_pin`) lends nothing either.
 
     ``""`` is "only the host can supply one", which is a different answer from
     "cannot draw": the launcher inherits the host's image section where the
@@ -311,6 +315,11 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
         return ""
     if explicit := _folder_setting(folder, "IMAGE_API_KEY"):
         return explicit
+    from raven.providers.registry import canonical_provider_name
+
+    pinned_provider = _folder_setting(folder, "IMAGE_PROVIDER")
+    if pinned_provider and canonical_provider_name(pinned_provider) != "openrouter":
+        return ""
     # The inherit branch has no key of its own to lend: a folder naming none
     # takes the host's, and the host's image section is the caller's other half.
     key = _folder_setting(folder, "API_KEY")
@@ -323,6 +332,20 @@ def product_image_key(row_name: str, root: Path | None = None) -> str:
     if base:
         return key if _IMAGE_GATEWAY in base else ""
     return key if _folder_addresses_openrouter(folder) else ""
+
+
+def product_image_pin(row_name: str, root: Path | None = None) -> tuple[str, str]:
+    """The provider and model one agent's folder pins its pictures to, each ``""`` when unset.
+
+    ``<PREFIX>_IMAGE_PROVIDER`` and ``<PREFIX>_IMAGE_MODEL``, read the way the
+    launcher reads them. A provider named here moves the pictures off the host's
+    image role, so the gate asking whether the lane can draw has to ask about
+    that provider instead.
+    """
+    folder = product_folder(row_name, root)
+    if folder is None:
+        return "", ""
+    return _folder_setting(folder, "IMAGE_PROVIDER"), _folder_setting(folder, "IMAGE_MODEL")
 
 
 def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
@@ -471,10 +494,9 @@ def _is_absolute_path(token: str) -> bool:
     missing, disabling the row rather than advertising a command this host
     cannot run (and symmetrically for ``/``-rooted tokens on Windows).
 
-    Tokens come from ``str.split()``, so a path containing spaces arrives here
-    as fragments. The command templates the manifests and each ``install.py``
-    emit keep their paths space-free, and that constraint is cheaper than
-    re-tokenizing every stored row's command line.
+    Tokens come from ``command_tokens``, which keeps a token whole under
+    either quote character, so a spaced path its producer quoted is judged as
+    one token. A spaced path written unquoted still arrives as fragments.
     """
     return PureWindowsPath(token).is_absolute() or PurePosixPath(token).is_absolute()
 
@@ -490,7 +512,8 @@ def _launcher_missing(entry: dict) -> str:
     command carries.
     """
     command = str(entry.get("command") or "")
-    for token in command.split():
+    tokens = command_tokens(command)
+    for token in tokens:
         if _is_absolute_path(token) and not Path(token).exists():
             return token
     return ""
@@ -621,7 +644,9 @@ def _scan_folders(root: Path | None) -> Iterator[tuple[Path, dict, Readiness]]:
                 raise ValueError("manifest is not an object")
             for field in _PLACEHOLDER_FIELDS:
                 if template := entry.get(field):
-                    entry[field] = str(template).replace("{SUBAGENT_DIR}", str(folder)).replace("{PYTHON}", python)
+                    entry[field] = resolve_subagent_command(
+                        str(template), python=python, subagent_dir=str(folder), quote=field != "cwd"
+                    )
             _read_route_notes(folder, entry)
         except Exception as exc:  # noqa: BLE001 - one bad folder must not sink the rest
             logger.warning("Skipping the agent product in {}: {}", folder.name, exc)
@@ -928,5 +953,6 @@ def _launcher_is_gone(cfg: Any) -> bool:
     manifests can produce, which is exactly the shape this exists to catch.
     """
     command = str(getattr(cfg, "command", "") or "")
-    absolute = [token for token in command.split() if _is_absolute_path(token)]
+    tokens = command_tokens(command)
+    absolute = [token for token in tokens if _is_absolute_path(token)]
     return bool(absolute) and not all(Path(token).exists() for token in absolute)

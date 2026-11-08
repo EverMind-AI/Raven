@@ -34,6 +34,14 @@ SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的
 Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
 也不证明所需工具存在。
 
+搜索 Skill Hub 会把文字发出本机。两个初始化向导都会把共享目录地址
+（`https://skillhub.evermind.ai`）写入 `skillForge.router.hub.endpoint`，配置里已有地址时
+保留原值；开启期间，Raven 每次查找技能都会把对话中的文字（消息本身，或模型据此写出的查询）
+发送到这个地址。可以用设置弹窗「技能」页上的 Skill Hub 开关关闭，或把
+`skillForge.router.hub.enabled` 设为 `false`；地址会保留，重新打开时回到同一个目录。没有
+配置地址时不会搜索 Hub。关闭对下一次搜索即生效；网关启动时没有地址的话，打开后要等重新
+加载才开始搜索。
+
 `skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
 模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，
 把选中正文放入上下文。Pull 避免 push 路径逐轮的重写与门控模型调用，但不意味着所有
@@ -55,6 +63,9 @@ Bundle 下载有独立的同意设置：
 应使用 blocklist。执行前检查脚本；目录安全分数不是安全保证，当前策略也不会仅因缺少
 分数就直接拒绝。成功安装记录在 `<workspace>/skills/hub/installs.jsonl`。
 
+网页端设置弹窗的「技能」页负责技能和 Skill Hub 搜索的开关；页上的「新增」会把你带到对话里，并替你写好半句
+请求——技能是让 Raven 在对话里安装的，受上面的同意设置约束。
+
 ## 记忆与学习边界 { #memory-and-learning-boundaries }
 
 EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory Engine 召回用户
@@ -65,15 +76,13 @@ EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory
 
 1. 上下文组装决定本次模型调用看到什么，长历史可能被归档或压缩。
 2. 记忆存储和召回把选定知识保留到对话之外。
-3. 经验提炼是后端相关能力，与 SkillForge 检索不同。当前树保留了
-   `skillForge.extraction` 配置和关于本地管线的旧描述，但实际宿主装配不消费该设置。
-   不要假定开启它就会启动本地技能提炼或创建 `.cache/skills.db`。
+3. 经验提炼由选用的记忆后端提供，通过该后端的插件设置配置。
+   宿主不使用 `skillForge.extraction` 启动本地提炼管线。
 
-反馈驱动的 skill 版本管理和退役，并不会因为存在配置占位字段就自动生效。
-宣称学会某个过程前，应检查记忆后端实际存储的 case/skill 和健康情况。Harness
+SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
+可通过记忆后端存储的 case、skill 和健康状态检查保留了哪些经验。Harness
 自进化由独立 Evolver 工具执行，并经过基准评估，先读
 [Evolver：使用与实验](evolver.md)，实现细节见[设计与实现](self-evolution-map.md)。
-不要把检索或后端经验提炼描述为自动修改生产代码。
 
 ## 从已完成任务到可复用知识 { #from-a-completed-task-to-reusable-knowledge }
 
@@ -148,6 +157,10 @@ slow path 可消耗有限模型调用生成计划，无有效计划时使用确�
 能力已由服务接口提供时使用 MCP。配置服务、核对工具列表与认证，再先测试只读操作，
 最后才允许修改。`raven plugin auth <server>` 处理已配置 MCP 的 OAuth，不是任意
 插件安装器。
+
+网页端设置弹窗的「插件」页负责开关、重试和授权已配置的服务；页上的「新增」会把你带到
+对话里，由 Raven 从 PlugHub 目录接入服务；目录里没有的服务，要手改 `config.json` 的
+`tools.mcpServers`。
 
 需要进程内工具、hook、服务或记忆后端时使用 Raven plugin。声明式
 `raven-plugin.toml` 列出贡献，代码运行于宿主信任域内。`raven plugins` 列出已安装

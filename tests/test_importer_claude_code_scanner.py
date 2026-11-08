@@ -348,6 +348,25 @@ class TestReadConversation:
 
 
 class TestReadMemory:
+    @pytest.mark.parametrize("scope", ["global", "project"])
+    async def test_invalid_yaml_does_not_remove_memory_rules(self, claude_dir, scanner, scope):
+        text = "---\nRule: never do X: ever\n---\n# Notes\nkeep this\n"
+        path = (
+            claude_dir / "CLAUDE.md" if scope == "global" else claude_dir / "projects" / "proj" / "memory" / "rules.md"
+        )
+        _write_md(path, text)
+        results = await scanner.scan()
+        source = next(
+            result
+            for result in results
+            if (scope == "global" and result.source_key == "global-claude-md")
+            or (scope == "project" and "memory" in result.source_key)
+        )
+        imported = await scanner.read(source)
+        content = "\n".join(message.content for message in imported.messages)
+        assert "Rule: never do X: ever" in content
+        assert "keep this" in content
+
     async def test_global_md_english(self, claude_dir: Path, scanner: ClaudeCodeScanner) -> None:
         _write_md(claude_dir / "CLAUDE.md", "## Rules\nUse English.\n\n## Style\nBe concise.")
         r = [r for r in await scanner.scan() if r.source_key == "global-claude-md"][0]

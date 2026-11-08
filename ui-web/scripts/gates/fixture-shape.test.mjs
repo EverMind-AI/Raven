@@ -149,6 +149,9 @@ function optionals(schema, value, path, declared, sent) {
    found are carried only by a Node.js agent that quit on an old Node.js; the
    one Qwen Code row here shows its two-step fix instead. */
 const UNSENT = new Set([
+  // machines.add: 1 -- a register the offline library refuses (every id it is
+  // asked for with no fields is one) writes no row, and the row is the write's.
+  'machines.add.row',
   // credential.submit: 1 -- the offline card always saves, and an error is the refusal's alone
   'credential.submit.error',
   // browser.close: 7
@@ -174,12 +177,26 @@ const UNSENT = new Set([
   // config.set: 5 -- the model-switch group, which the offline library does not
   // model: its gateway always has a loop, so there is no restart to report.
   'config.set.applies_to_session', 'config.set.needs_restart', 'config.set.scope', 'config.set.session_id', 'config.set.value',
+  // trajectory.*: 6 -- one recorded turn, served whole: no second page to point
+  // at, no index failure to report, and the probed block (the tool's own
+  // key-values) was read in full, so it carries no reason. The demo export is
+  // done the moment it is asked for, and an error is a failed export's alone.
+  'trajectory.list.next_cursor', 'trajectory.list.index_state.failure', 'trajectory.changes.index_state.failure',
+  'trajectory.block.next_cursor', 'trajectory.block.reason', 'trajectory.export_status.error',
+  // bugreport.status: 5 -- probed while the demo report waits for decisions:
+  // nothing has failed, been frozen, landed or uploaded yet, and the history
+  // read cleanly, so it has no warning to give.
+  'bugreport.status.error', 'bugreport.status.history.warning', 'bugreport.status.receipt',
+  'bugreport.status.record_dir', 'bugreport.status.summary',
   // cron.list: 4
   'cron.list.jobs[].at_ms', 'cron.list.jobs[].every_ms', 'cron.list.jobs[].last_error', 'cron.list.jobs[].tz',
   // cron.save: 4
   'cron.save.job.at_ms', 'cron.save.job.every_ms', 'cron.save.job.last_error', 'cron.save.job.tz',
-  // dag.get: 10
-  'dag.get.run.files[].error', 'dag.get.run.files[].instance', 'dag.get.run.files[].node_summary', 'dag.get.run.files[].output_file', 'dag.get.run.files[].prompt_file', 'dag.get.run.summary.cancelled', 'dag.get.run.summary.failed', 'dag.get.run.summary.skipped', 'dag.get.run.task_summary', 'dag.get.run.terminal_outputs',
+  // dag.get: 19 -- seven of them (reason, route_evidence, routes, select, selected_routes, when and
+  // summary.not_executed) are what a run that branches adds, and no run on this canvas branches.
+  // attempt_agents and instance_auto are what a node handed to another agent adds, and nothing
+  // here is reassigned.
+  'dag.get.run.files[].attempt_agents', 'dag.get.run.files[].error', 'dag.get.run.files[].instance', 'dag.get.run.files[].instance_auto', 'dag.get.run.files[].node_summary', 'dag.get.run.files[].output_file', 'dag.get.run.files[].prompt_file', 'dag.get.run.files[].reason', 'dag.get.run.files[].route_evidence', 'dag.get.run.files[].routes', 'dag.get.run.files[].select', 'dag.get.run.files[].selected_routes', 'dag.get.run.files[].when', 'dag.get.run.summary.cancelled', 'dag.get.run.summary.failed', 'dag.get.run.summary.not_executed', 'dag.get.run.summary.skipped', 'dag.get.run.task_summary', 'dag.get.run.terminal_outputs',
   // dag.node: 6
   'dag.node.node.error', 'dag.node.node.messages', 'dag.node.node.output', 'dag.node.node.output_file', 'dag.node.node.prompt', 'dag.node.node.prompt_file',
   // deliverables.list: 1
@@ -190,6 +207,11 @@ const UNSENT = new Set([
   'fs.open.app',
   // import.status: 4
   'import.status.current', 'import.status.phase', 'import.status.phases', 'import.status.tier',
+  // knowledge.chunks.create: 2 -- and knowledge.chunks.update: 2. Both answer
+  // with a piece a person wrote, and a written piece has no page: the pages
+  // are what a parser found on the way in, and nobody parsed this one.
+  'knowledge.chunks.create.chunk.page_end', 'knowledge.chunks.create.chunk.page_number',
+  'knowledge.chunks.update.chunk.page_end', 'knowledge.chunks.update.chunk.page_number',
   // knowledge.search: 2
   'knowledge.search.embed_ms', 'knowledge.search.search_ms',
   // knowledge.status: 1
@@ -223,13 +245,15 @@ const UNSENT = new Set([
   // skills.manage: 9 -- the gate asks for the list; inspect, open, search, browse and install answer the rest
   'skills.manage.info', 'skills.manage.installed', 'skills.manage.items', 'skills.manage.name', 'skills.manage.opened', 'skills.manage.page', 'skills.manage.results', 'skills.manage.total', 'skills.manage.total_pages',
   // session.compress: 10
-  'session.compress.info.config_notices', 'session.compress.info.endpoint', 'session.compress.info.running_ms', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
+  'session.compress.info.config_notices', 'session.compress.info.harness', 'session.compress.info.endpoint', 'session.compress.info.running_ms', 'session.compress.info.update_available', 'session.compress.info.update_command', 'session.compress.info.usage.context_estimated', 'session.compress.messages', 'session.compress.summary.note', 'session.compress.summary.token_line', 'session.compress.usage',
   // session.create: 6 -- nothing is ever in flight on this canvas, so the age of a running turn has nothing to report
-  'session.create.info.config_notices', 'session.create.info.endpoint', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
+  'session.create.info.config_notices', 'session.create.info.harness', 'session.create.info.endpoint', 'session.create.info.running_ms', 'session.create.info.update_available', 'session.create.info.update_command', 'session.create.info.usage.context_estimated',
   // session.resume: 13
-  'session.resume.info.config_notices', 'session.resume.info.endpoint', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
-  // settings.everos: 1
-  'settings.everos.note',
+  'session.resume.info.config_notices', 'session.resume.info.harness', 'session.resume.info.endpoint', 'session.resume.info.running_ms', 'session.resume.info.update_available', 'session.resume.info.update_command', 'session.resume.info.usage.context_estimated', 'session.resume.messages[].context', 'session.resume.messages[].dag_run_id', 'session.resume.messages[].diff', 'session.resume.messages[].notice', 'session.resume.messages[].reasoning_ms', 'session.resume.messages[].spawn_task_id', 'session.resume.messages[].turn_ended',
+  // settings.everos: 2 -- reason is set only when another backend holds long-term memory; this library runs on EverOS
+  'settings.everos.note', 'settings.everos.reason',
+  // settings.everosCloud: 3 -- the cloud backend is not the selected one here, so no key is on file and nothing is probed
+  'settings.everosCloud.hint', 'settings.everosCloud.key_source', 'settings.everosCloud.status',
   // settings.everosSet: 1 -- the gateway's re-index warning, which only a real embedding move raises
   'settings.everosSet.warning',
   // settings.set: 1 -- the gateway's reload-only warning, which the key the gate writes (a live one) never raises
@@ -244,6 +268,12 @@ const UNSENT = new Set([
   'subagents.test.cancelled', 'subagents.test.reply',
   // system.hello: 1
   'system.hello.platform',
+  // turn.cancel: 1 -- the offline stop always lands, and busy rides a refusal alone
+  'turn.cancel.busy',
+  // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
+  'session.compress.info.read_only', 'session.create.info.read_only',
+  // session.resume: 1 -- the page reads no message-tool verdict; the ACP replay and the session list do
+  'session.resume.messages[].replied_via_tool',
 ])
 
 describe('the offline fixture library', () => {
@@ -281,8 +311,10 @@ describe('the offline fixture library', () => {
     /* The rows one call answers differently per argument, so a field sent for
        the second conversation counts as sent. The three `k` rows are the
        scheduled ones, and the only place the library sends `origin` and
-       `delegated` -- the two entries a reader never types. */
-    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3']) await walk('session.resume', { session_id })
+       `delegated` -- the two entries a reader never types; the imported one is
+       the only place it sends `read_only`. */
+    const { IMPORTED_DEMO } = await import('../../src/rpc/fixtures/sessions.ts')
+    for (const session_id of ['a', 'b', 'g', 'k1', 'k2', 'k3', IMPORTED_DEMO]) await walk('session.resume', { session_id })
     const unsent = [...declared].filter((at) => !sent.has(at)).sort()
     expect(unsent.filter((at) => !UNSENT.has(at)), 'send the field, or add it to UNSENT under its method')
       .toEqual([])

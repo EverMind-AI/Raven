@@ -31,6 +31,11 @@ export interface Provider {
   /* Resells other vendors' models under vendor/model ids (the registry's
      `is_gateway`). The settings catalogue filters on it. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`). The roles card offers the image role exactly these. */
+  imageApi?: boolean
+  /* The same for the video tool (the registry's `video_api`). */
+  videoApi?: boolean
   /* Every model-id prefix that names this provider, which is what one spelling
      of a model has to be stripped of before it can be compared with another
      (`ModelHost` below). Absent on a wire that does not carry the set, and on
@@ -241,15 +246,19 @@ export const withCurrent = (host: ModelHost, rows: string[], held: string | null
 
 export interface ModelSource {
   providers(): Provider[]
+  /* Whether the composer's Provider catalogue read is in flight, independent of
+     selection readiness and settings slots. */
+  loading?(): boolean
   /* Send it. The provider is required: a model id does not name whose
      credential serves it, so the backend refuses a switch without one -- the
      column the model was chosen from is that answer. ``scope`` says whether the
-     switch is for this conversation or the global default, carried from the
-     opener rather than guessed from whether a conversation is open. Rejecting is
-     meaningful: the picker rolls the local pick back. Resolving to ``'staged'``
-     means the pick was held rather than applied (a draft has no session yet),
-     and the picker words its toast accordingly. */
-  persist(m: string, provider: string, scope: 'session' | 'default'): Promise<void | 'staged' | 'needs_restart'>
+     switch is for this conversation, the global default, or both at once (the
+     composer chip), carried from the opener rather than guessed from whether a
+     conversation is open. Rejecting is meaningful: the picker rolls the local
+     pick back. Resolving to ``'staged'`` means the pick was held rather than
+     applied (a draft has no session yet), and the picker words its toast
+     accordingly. */
+  persist(m: string, provider: string, scope: 'session' | 'default' | 'both'): Promise<void | 'staged' | 'needs_restart'>
   /* Add a model to a provider's list. The picker's typed-id row calls it
      before the switch, so a conversation never names a model its provider does
      not list. `kind` states what the person said it is, for an id no catalogue

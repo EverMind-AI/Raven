@@ -14,7 +14,7 @@
 | 委派给专用 Agent | Roster 中已配置的 Agent | [Agent 集成](agent-integrations.md) |
 | 与专用 Agent 继续协作 | 它的有状态实例 | [与子 Agent 协作](agent-collaboration.md) |
 | 操作共享浏览器 | 浏览器工具和 WebUI 面板 | [浏览器协作](browser-collaboration.md) |
-| 检索文档段落 | 知识库 Python 库或 RPC 客户端 | [知识库](knowledge.md) |
+| 检索文档段落 | WebUI 知识库页面与对话中的知识库选择；集成使用 Python 库或 RPC | [知识库](knowledge.md) |
 | 执行并观察长任务 | 声明 campaign 后的 Raven-Oncall | [长任务托管（Oncall）](oncall.md) |
 | 集成编辑器或远程 peer | ACP 或 A2A | [Agent 协议](agent-protocols.md) |
 
@@ -31,7 +31,10 @@ raven agent --workspace /absolute/path/to/project -m "Read the README and summar
 ```
 
 这会执行模型轮次，可能产生服务商费用。修改任务应明确可编辑文件和验证方式。
-并行编码 Agent 不会自动获得独立 worktree，应划分文件所有权或使用不同工作副本。
+同一 Git 项目中有多个编码任务并行时，宿主的 `multi-agent-coding` skill 会要求各编码
+Agent 创建独立 worktree，并汇报路径和分支。协调并发修改前，应检查这些汇报。
+该流程见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)；
+手动构建任务图时参阅[DAG 编排](orchestration.md)。
 
 ## 继续对话 { #continue-a-conversation }
 
@@ -45,6 +48,35 @@ raven agent --continue -m "Expand the previous summary; do not modify files"
 
 交互式会话通过 UI 的对话选择器切换。子 Agent 的 `instance` 续接子 Agent 对话，
 不是宿主 session id 或 DAG node id，详见[DAG 编排](orchestration.md)。
+
+## 设置思考深度 { #set-the-reasoning-effort }
+
+思考深度是模型每次回答前思考多少。可选的词由当前模型声明：多数模型是 `minimal`、
+`low`、`medium`、`high`，厂商提供时还会有 `xhigh`、`max`；有些接口的档位更窄，只收其中
+几个（DeepSeek 只收 `low`、`high`、`max`，把 `minimal` 归入 `low`、`medium` 归入
+`high`）。档位跟随实际承接请求的服务商，而不只看模型名：同一个模型经网关访问时，用网关
+的档位。没有声明任何档位的模型不会出现这一行。各厂商把这些词映射成自己的请求参数
+（Anthropic 的自适应思考强度与思考预算，OpenAI 风格接口的 `reasoning_effort` 字段），
+没有思考能力的模型会忽略它。不设置时使用厂商自己的默认值。
+
+两处可以设置：
+
+- **对所有对话**：在 WebUI 打开设置页，在「主对话」一行点「参数」，再选「思考深度」；
+  或在 `~/.raven/config.json` 里设置 `agents.defaults.reasoningEffort`。第一档
+  「厂商默认」会清掉这个键。
+- **只对当前对话**：WebUI 模型选择器（点输入框旁的模型标签打开）里的「思考深度」行，
+  或 TUI 里的 `/effort <词>`。单独输入 `/effort` 查看当前生效的档位，`/effort default`
+  让这个对话重新跟随全局设置。在与某个子智能体实例直聊时这条命令会被拒绝：这个选择
+  属于主对话，实例自己没有思考深度可设。
+
+也可以在厂商的 `model_overlay.reasoningEfforts` 里声明某个模型的可用档位
+（设置页该厂商的「高级」→「显示名」下的「添加」）。非空声明优先于 LiteLLM 的表，
+包括表里标为不支持 reasoning 的路由；留空则回退到表。
+
+单个对话的选择优先于全局设置和该对话的模式。它记录在对话自己的档案里，网关重启后仍在，
+恢复对话时一并带回，从下一轮开始生效。当前模型不声明这个档位时不会发送，改为运行该对话
+模式的档位或全局设置；这个选择会保留，切回支持它的模型时继续生效。它只影响 Raven 自己的
+模型调用；子智能体仍按全局默认值运行。
 
 ## 有目的地增加能力 { #add-capability-deliberately }
 

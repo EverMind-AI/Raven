@@ -28,10 +28,8 @@ is an internal data layer.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-import re
 import shutil
 import threading
 from collections.abc import Collection
@@ -40,6 +38,13 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from raven.memory_engine.skill_local.types import SkillMeta
+from raven.utils.skill_meta import (
+    nested_metadata as _parse_nested_metadata,
+)
+from raven.utils.skill_meta import (
+    resolve_always as _resolve_always,
+)
+from raven.utils.text import parse_frontmatter
 
 # Default builtin skills directory.
 #
@@ -173,13 +178,7 @@ class SkillRegistry:
             resolved_path = path.resolve(strict=False)
         except OSError:
             resolved_path = path
-        layers: list[tuple[Path | None, str]] = [
-            (self.workspace_skills, "workspace"),
-        ]
-        for ed_path, ed_label, _ in self._extra_dirs:
-            layers.append((ed_path, ed_label))
-        layers.append((self.builtin_skills, "builtin"))
-        for root, default in layers:
+        for root, default in self.layer_roots():
             if root is None:
                 continue
             try:
@@ -195,6 +194,19 @@ class SkillRegistry:
                 return None  # SKILL.md directly at root — iterator skips it
             return default if len(parts) == 1 else parts[0]
         return None
+
+    def layer_roots(self) -> list[tuple[Path, str]]:
+        """Each root the scan walks, with its layer label, in scan order:
+        ``workspace``, then each ``skillForge.localDirs`` entry under its own
+        label, then ``builtin``."""
+        return [(root, label) for root, label, _ in self._layers()]
+
+    def _layers(self) -> list[tuple[Path, str, bool]]:
+        return [
+            (self.workspace_skills, "workspace", True),
+            *self._extra_dirs,
+            (self.builtin_skills, "builtin", True),
+        ]
 
     def list_all(self) -> list[SkillMeta]:
         """All visible skills (compound (source, name) identity). Cached.
@@ -246,14 +258,7 @@ class SkillRegistry:
 
         # Walk layers: workspace → extra_dirs (list order) → builtin.
         # R1: later extra_dirs override earlier on name collision.
-        layers: list[tuple[Path, str, bool]] = [
-            (self.workspace_skills, "workspace", True),
-        ]
-        for path, name, always_enabled in self._extra_dirs:
-            layers.append((path, name, always_enabled))
-        layers.append((self.builtin_skills, "builtin", True))
-
-        for root, layer_label, layer_always_enabled in layers:
+        for root, layer_label, layer_always_enabled in self._layers():
             if root is None or not root.exists():
                 continue
             for skill_dir, source in self._iter_skill_dirs(
@@ -334,6 +339,16 @@ class SkillRegistry:
             return (self._by_full_key or {}).get((source, name))
         return self._by_name.get(name) if self._by_name else None
 
+    def names(self) -> list[str]:
+        """Every name a source-less :meth:`get` resolves, as of the last scan.
+
+        Reads the index :meth:`get` reads, so a source marked dirty since is
+        not rescanned here.
+        """
+        if self._by_name is None:
+            self.list_all()
+        return list(self._by_name or ())
+
     def get_body(self, name: str, source: str | None = None) -> str | None:
         """Full SKILL.md content. Resolves through ``list_all`` to handle
         nested layouts; layer priority used when ``source`` is omitted."""
@@ -350,7 +365,7 @@ class SkillRegistry:
         name: str,
         source: str | None = None,
     ) -> dict | None:
-        """Top-level frontmatter dict (YAML-lite parsed)."""
+        """Top-level frontmatter dict, as :func:`_parse_frontmatter` reads it."""
         body = self.get_body(name, source=source)
         if not body:
             return None
@@ -442,14 +457,13 @@ class SkillRegistry:
         except (OSError, UnicodeDecodeError):
             return None
 
-        frontmatter = _parse_frontmatter(body) or {}
+        frontmatter, content = parse_frontmatter(body, line_fallback=True, preserve_body_whitespace=True)
         nested = _parse_nested_metadata(frontmatter.get("metadata", ""))
         requires = nested.get("requires", {}) if isinstance(nested.get("requires"), dict) else {}
         always = _resolve_always(frontmatter, nested)
         if not always_enabled:
             always = False
         inject = _resolve_inject(frontmatter, nested)
-        content = _strip_frontmatter(body)
 
         # ``stable_key`` is the directory name. For everos it is
         # the sqlite ``skills.id`` string (the pipeline materializes
@@ -461,7 +475,7 @@ class SkillRegistry:
         # label. Falls back to dir name for hand-authored skills lacking
         # that field.
         display_name = (frontmatter.get("name") or "").strip() or skill_dir.name
-        description = frontmatter.get("description", "") or display_name
+        description = " ".join(frontmatter.get("description", "").split()) or display_name
 
         return SkillMeta(
             id=f"{source}/{stable_key}",
@@ -483,95 +497,19 @@ class SkillRegistry:
 
 
 def _parse_frontmatter(content: str) -> dict | None:
-    """Minimal YAML-lite parser for SKILL.md frontmatter.
-
-    Expected format::
-
-        ---
-        name: foo
-        description: "bar"
-        metadata: '{"raven": {...}}'
-        ---
-
-    Values are stripped of surrounding quotes; nested keys are not supported.
-    Returns ``None`` when no frontmatter is present.
-    """
-    if not content.startswith("---"):
-        return None
-    m = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-    if not m:
-        return None
-    metadata: dict = {}
-    for line in m.group(1).split("\n"):
-        if ":" in line:
-            key, value = line.split(":", 1)
-            metadata[key.strip()] = value.strip().strip("\"'")
-    return metadata
+    """Read SKILL.md with the importers' shared YAML and legacy-fallback rules."""
+    metadata, body = parse_frontmatter(content, line_fallback=True)
+    return metadata if body != content else None
 
 
 def _strip_frontmatter(content: str) -> str:
     """Return the markdown body with the leading ``---...---`` frontmatter removed."""
-    if not content.startswith("---"):
-        return content
-    m = re.match(r"^---\n.*?\n---\n?", content, re.DOTALL)
-    if not m:
-        return content
-    return content[m.end() :]
+    return parse_frontmatter(content, line_fallback=True, preserve_body_whitespace=True)[1]
 
 
-def _parse_nested_metadata(raw: str) -> dict:
-    """Extract Raven-namespaced metadata from the ``metadata`` JSON blob.
-
-    Lookup order (first match wins): ``raven`` > ``nanobot`` > ``openclaw``.
-    Returns ``{}`` on any failure.
-    """
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    for key in ("raven", "nanobot", "openclaw"):
-        if key in data and isinstance(data[key], dict):
-            return data[key]
-    return {}
-
-
-_ALWAYS_TRUTHY = {"true", "1", "yes"}
-_ALWAYS_KNOWN = _ALWAYS_TRUTHY | {"false", "0", "no", ""}
-
-
-def _parse_always_value(raw: object) -> bool:
-    """Strict always parser (R3). Only explicit truthy values count."""
-    if raw is None:
-        return False
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, (int, float)):
-        return bool(raw)
-    if isinstance(raw, str):
-        lower = raw.strip().lower()
-        if lower not in _ALWAYS_KNOWN:
-            log.warning(
-                "Unrecognized 'always' value '%s' — treated as false. Expected true/false/yes/no/1/0.",
-                raw,
-            )
-        return lower in _ALWAYS_TRUTHY
-    return False
-
-
-def _resolve_always(frontmatter: dict, nested: dict) -> bool:
-    """Resolve always flag from nested metadata (priority) or frontmatter.
-
-    R3 fix: ``"false"`` is now correctly treated as ``False`` instead of
-    the old behavior where ``bool("false") == True``.
-    """
-    nested_val = nested.get("always")
-    if nested_val is not None:
-        return _parse_always_value(nested_val)
-    return _parse_always_value(frontmatter.get("always"))
+# ``_parse_nested_metadata`` and ``_resolve_always`` are imported above from
+# ``raven.utils.skill_meta``: the importer asks the same parser, so the two
+# cannot drift into different answers about the same file.
 
 
 _INJECT_MODES = {"full", "description"}

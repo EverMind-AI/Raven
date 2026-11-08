@@ -35,21 +35,25 @@ ABORTED_ACTION_RESULT = (
 def bounded_delta(
     on_delta: "Callable[[str], Awaitable[None]] | None", limit: int
 ) -> "Callable[[str], Awaitable[None]] | None":
-    """Wrap a delta callback so what streams stays a prefix of what returns.
+    """Wrap a delta callback so what streams stays within the cap its reply is held to.
 
     The backends that cap a reply truncate their return value to
     ``max_output_chars``. An uncapped stream would render text the record
     never stores and the next turn's history never replays -- the transcript on
     screen would be the only place that text ever existed, and it would vanish
-    on the next switch into the instance.
+    on the next switch into the instance. A lane that streams narration before
+    its reply wraps each message in a budget of its own instead (the acp
+    collector): only the last message is the reply, and the ones before it are
+    kept on the transcript, so the cap that guards a message is the reply's.
 
     Returns ``None`` unchanged, so a caller can wrap unconditionally.
 
-    One deliberate exception: raven's own truncation notice is sent through the
-    *unbounded* callback, past this budget. A reply that saturates the budget is
-    precisely the one about to be capped, so honouring the limit for that line
-    would drop the only sentence saying the rest of the answer is missing. The
-    exempt text is raven's, never the agent's, and it is in the record too.
+    One deliberate exception: raven's own text -- the truncation notice, and the
+    acp collector's break between messages -- is sent through the *unbounded*
+    callback, past this budget. A reply that saturates the budget is precisely
+    the one about to be capped, so honouring the limit for the notice would drop
+    the only sentence saying the rest of the answer is missing. The exempt text
+    is raven's, never the agent's, and the notice is in the record too.
     """
     if on_delta is None:
         return None

@@ -51,7 +51,8 @@ describe('the behind-sources notice', () => {
   it('rises on the header and names the rebuild, then falls when a later look no longer carries it', async () => {
     let behind = true
     vi.stubGlobal('fetch', () =>
-      Promise.resolve(served(behind ? { etag: '"a"', 'x-raven-page-behind': 'sources' } : { etag: '"a"' })))
+      Promise.resolve(served(behind ? { etag: '"a"', 'x-raven-page-behind': 'sources' } : { etag: '"a"' }))
+    )
     const note = row()
 
     const mod = await watching()
@@ -82,7 +83,8 @@ describe('the behind-sources notice', () => {
     let tag = '"a"'
     let behind = true
     vi.stubGlobal('fetch', () =>
-      Promise.resolve(served(behind ? { etag: tag, 'x-raven-page-behind': 'sources' } : { etag: tag })))
+      Promise.resolve(served(behind ? { etag: tag, 'x-raven-page-behind': 'sources' } : { etag: tag }))
+    )
     const note = row()
 
     const mod = await watching()
@@ -101,7 +103,13 @@ describe('the behind-sources notice', () => {
     const asked: string[] = []
     const note = row()
 
-    await watching({ 'src/state/confirm': { ask: (title: string) => { asked.push(title) } } })
+    await watching({
+      'src/state/confirm': {
+        ask: (title: string) => {
+          asked.push(title)
+        }
+      }
+    })
     note.click()
 
     expect(asked).toEqual([t('gui.update.behind_title')])
@@ -126,14 +134,22 @@ describe('an upgrade the server refused', () => {
     const err = {
       data: {
         reason: 'unsupervised',
-        detail: 'This Raven was started by hand, so nothing would bring it back after an upgrade.',
-      },
+        detail: 'This Raven was started by hand, so nothing would bring it back after an upgrade.'
+      }
     }
 
     const text = mod.refusalText(err)
 
     expect(text).toBe(t('gui.upg.why.unsupervised'))
     expect(text).not.toContain('This Raven was started by hand, so nothing')
+  })
+
+  it('names the checkout refusal in the reader language too', async () => {
+    const mod = (await loadPart(() => import('./updates'), {})) as Updates
+
+    const text = mod.refusalText({ data: { reason: 'editable', detail: 'This Raven is a source checkout.' } })
+
+    expect(text).toBe(t('gui.upg.why.editable'))
   })
 
   it('keeps the detail when it carries facts from this run', async () => {
@@ -149,6 +165,60 @@ describe('an upgrade the server refused', () => {
     expect(mod.refusalText({ message: 'socket closed' })).toBe('socket closed')
   })
 
+  it('offers no command at all when the refusal proved the default cannot work', async () => {
+    const calls: unknown[][] = []
+    const shade = { say: () => {}, fail: (...args: unknown[]) => calls.push(args), close: vi.fn() }
+    const mod = (await loadPart(() => import('./updates'), {
+      fakes: {
+        'src/state/upgradeShade': { open: () => shade },
+        'src/state/confirm': { ask: () => {} },
+        'src/rpc/gateway': {
+          gateway: () => ({
+            call: () =>
+              Promise.reject({
+                data: { reason: 'not_upgradable', detail: 'Malformed Raven installation metadata', command: null }
+              })
+          })
+        }
+      }
+    })) as Updates
+
+    await mod.runUpgrade()
+
+    /* null, not undefined: the card must drop the command row rather than
+       fall back to `raven upgrade`, which this very refusal proved fails. */
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.[2]).toBe(null)
+  })
+
+  it('keeps the default command for a refusal that only names why it refused', async () => {
+    /* The plan path's not_upgradable -- the raven executable is missing --
+       leaves command absent on purpose: the CLI upgrade does not need it, and
+       the card's default is the right suggestion. The null the probe sends is
+       per refusal, not per reason. */
+    const calls: unknown[][] = []
+    const shade = { say: () => {}, fail: (...args: unknown[]) => calls.push(args), close: vi.fn() }
+    const mod = (await loadPart(() => import('./updates'), {
+      fakes: {
+        'src/state/upgradeShade': { open: () => shade },
+        'src/state/confirm': { ask: () => {} },
+        'src/rpc/gateway': {
+          gateway: () => ({
+            call: () =>
+              Promise.reject({
+                data: { reason: 'not_upgradable', detail: 'Could not find the raven executable' }
+              })
+          })
+        }
+      }
+    })) as Updates
+
+    await mod.runUpgrade()
+
+    expect(calls.length).toBe(1)
+    expect(calls[0]?.[2]).toBeUndefined()
+  })
+
   it('answers busy work it cannot see with a notice to wait, not the terminal command', async () => {
     const asked: string[][] = []
     const failed: string[] = []
@@ -159,14 +229,14 @@ describe('an upgrade the server refused', () => {
         'src/state/confirm': {
           ask: (title: string, body: string) => {
             asked.push([title, body])
-          },
+          }
         },
         'src/rpc/gateway': {
           gateway: () => ({
-            call: () => Promise.reject({ data: { reason: 'busy', detail: 'Raven is still working' } }),
-          }),
-        },
-      },
+            call: () => Promise.reject({ data: { reason: 'busy', detail: 'Raven is still working' } })
+          })
+        }
+      }
     })) as Updates
 
     await mod.runUpgrade()
@@ -185,7 +255,7 @@ describe('the progress the upgrade helper reports', () => {
     total: 0,
     rate: 0,
     message: null,
-    ...fields,
+    ...fields
   })
 
   it('says how much, of how much, and how fast', async () => {
@@ -211,7 +281,7 @@ describe('the progress the upgrade helper reports', () => {
 
     expect(mod.describeStatus(report({ phase: 'installing', done: 9, total: 9 }))).toEqual({
       text: t('gui.upg.phase.install'),
-      fraction: null,
+      fraction: null
     })
   })
 })
@@ -222,7 +292,12 @@ describe('waiting out an upgrade the page started', () => {
     vi.unstubAllGlobals()
   })
 
-  type Shade = { say: ReturnType<typeof vi.fn>; measure: ReturnType<typeof vi.fn>; fail: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
+  type Shade = {
+    say: ReturnType<typeof vi.fn>
+    measure: ReturnType<typeof vi.fn>
+    fail: ReturnType<typeof vi.fn>
+    close: ReturnType<typeof vi.fn>
+  }
   const shade = (): Shade => ({ say: vi.fn(), measure: vi.fn(), fail: vi.fn(), close: vi.fn() })
 
   /* The helper's port: `/upgrade/status` answers with the report, everything

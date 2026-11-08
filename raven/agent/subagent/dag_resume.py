@@ -14,7 +14,10 @@ depending on which client asked.
 from collections.abc import Callable
 from typing import Any
 
+from raven.agent.subagent.dag_reader import current_assignment, registry_outcome
+from raven.agent.subagent.dag_store import tally_node_statuses
 from raven.agent.subagent.instances import get_registry
+from raven.config.agent_names import canonical_agent_name
 
 
 async def read_run_reconciled(
@@ -47,7 +50,11 @@ async def read_run_reconciled(
         `dict`:
             The manifest-shaped payload from :func:`dag_reader.read_run`, with
             per-node status/timestamps and the summary recomputed from the
-            overlay when the run had not finalized.
+            overlay when the run had not finalized, and each node's branch
+            outcome (``reason``, ``selected_routes``, ``route_evidence``) filled
+            from its row. A node whose row records a reassignment is reported
+            under the agent, instance and attempt history that row names, so a
+            reload does not fall back to the agent ``graph.json`` submitted.
     """
     run = await tool.read_run(run_id, session_key)
     if run.get("finalized"):
@@ -77,12 +84,20 @@ async def read_run_reconciled(
             entry["started_at"] = entry["started_at"] or row.get("createdAtMs")
             if status not in ("pending", "running", "exception"):
                 entry["ended_at"] = entry["ended_at"] or row.get("updatedAtMs")
+            # Only the keys the entry lacks: a value it already has is the manifest's.
+            for key, value in registry_outcome(row).items():
+                entry.setdefault(key, value)
+            assignment = current_assignment(entry, row)
+            if assignment.attempt_agents is not None:
+                entry["attempt_agents"] = list(assignment.attempt_agents)
+            if "attemptAgents" in row:
+                # A node the row says was reassigned: it is the durable record of
+                # who runs the node now, and graph.json names the agent that gave
+                # up. Explicit nulls are taken as written -- a stateless attempt
+                # clears the handle the submitted node carried.
+                entry["subagent"] = canonical_agent_name(str(assignment.agent or ""))
+                entry["instance"] = assignment.instance
+                entry["instance_auto"] = bool(assignment.instance_auto)
         statuses.append(entry["status"])
-    run["summary"] = {
-        "total": len(statuses),
-        "completed": statuses.count("completed"),
-        "failed": statuses.count("failed"),
-        "skipped": statuses.count("skipped"),
-        "cancelled": statuses.count("cancelled"),
-    }
+    run["summary"] = tally_node_statuses(statuses)
     return run

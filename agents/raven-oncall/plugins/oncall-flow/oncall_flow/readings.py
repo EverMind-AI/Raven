@@ -263,7 +263,9 @@ async def take(
         return []
     cdir = Path(cdir).expanduser()
     if runner is None:
-        runner = _runner(meta)
+        # Off the loop, like the commands below: a password machine's runner
+        # asks a local ``ssh -G`` which host its prompt will name.
+        runner = await asyncio.to_thread(_runner, meta)
     if runner is None:
         return [_record(cdir, r, when, trial, error="the campaign's machine could not be reached") for r in due]
 

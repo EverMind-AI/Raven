@@ -3,8 +3,10 @@ import { actName, argPath, firstErrLine, phraseOf, shortArg, splitMcp, verbIngOf
 import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
+import { readingImported } from '../../lib/imported'
 import { md } from '../../lib/prose'
 import { ds } from '../../state/sources'
+import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
@@ -63,6 +65,14 @@ const shortPath = (p: string): string => {
 
 const MIN_RUN_STEPS = 2
 export const DTL_MAX_LINES = 80
+
+/* An agent message this long keeps its turn's fold open. Importance is read
+   off the message's length rather than off measured rows -- a rendered-lines
+   test would need a layout pass per segment, and the caller has only the
+   string. 140 characters is about two lines at the transcript's reading width
+   (a ~70-glyph measure at 15px), so a message that fills two lines is on the
+   open side of the threshold. Tune it here, not at a call site. */
+export const FOLD_KEEP_OPEN_CHARS = 140
 
 export { actName, argPath, firstErrLine, phraseOf, shortArg, verbIngOf, verbOf }
 
@@ -185,11 +195,15 @@ export const dagRunIdFrom = (res: unknown): string | null =>
 export const DOT_OF: Record<string, string> = {
   pending: '', running: 'run', completed: 'ok',
   failed: 'bad', cancelled: 'stop', skipped: 'skip', interrupted: 'bad',
+  /* Its own value for the same reason: a node a branch left out is not a skip. A skipped node is one a
+     failure cascaded past, so a run that skipped went wrong somewhere; this one the run chose away,
+     and the run is none the worse for it. The tally says so in its own word. */
+  not_executed: 'notx',
 }
 
 /* A graph node that has stopped, whatever it stopped as. `pending` and
    `running` are the two that have not. */
-const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted'])
+const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'not_executed'])
 
 /* Whether one node has stopped. Exported because the graph's own clock is not
    the only reader: the transcript card's state word is about the graph rather
@@ -360,18 +374,28 @@ export function dropSeg(lane: Lane, id: number): boolean {
   return true
 }
 
+/* File a turn's id on the question that opened it. Nothing draws the id, so
+   nothing re-renders; a bubble since redrawn from history is not found and
+   keeps none. */
+export function tagTurn(lane: Lane, id: number, turnId: string): void {
+  const seg = lane.segs.find((s) => s.id === id)
+  if (seg?.kind === 'ask') seg.turnId = turnId
+}
+
 /* The header of the reminder a cron turn carries, and the two lines inside it
    a reader may be shown.
 
    The entry's text as a whole is runtime prose -- the contract's `origin` says
    so and raven/agent/loop/_shared.py says why -- but it is not prose all the
-   way down. `raven/core/cron_stack.py` writes four parts, and two of them were
+   way down. `raven/core/cron_stack.py` writes five parts, and two of them were
    written FOR the reader: the parenthetical, whose own docstring says it
    describes when the reminder was set "for the user", and the instruction,
    which is the sentence the reader wrote when they made the job (the same
-   string the schedules section edits). The two that were not are the header
-   and the closing "when you reply, mention ..." -- wording aimed at the model,
-   and a reader shown those is a reader shown the prompt. */
+   string the schedules section edits). The three that were not are the header,
+   the closing "when you reply, mention ..." and the paragraph after it that
+   teaches the model to answer `[SILENT]` -- wording aimed at the model, and a
+   reader shown those is a reader shown the prompt. That last paragraph follows
+   the closing line, so the instruction's run to that line already leaves it out. */
 const CRON_HEAD = /^\[Scheduled Task\]/
 const CRON_WHEN = /^Task '.*' \((.+)\) has been triggered\.$/
 const CRON_SAID = /^Scheduled instruction: /
@@ -411,9 +435,11 @@ export function askAuto(lane: Lane, origin: string, text: string, when?: string 
   })
 }
 
-export function note(lane: Lane, label: string, detail: string, opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
+export function note(lane: Lane, label: string, detail: string,
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null } | null): NoteHandle {
   const seg: NoteData = {
     v: 0, id: nextId(), kind: 'note', label: String(label || ''), detail: String(detail || ''),
+    full: String((opts && opts.full) || ''),
     quiet: !!(opts && opts.quiet), retry: (opts && opts.retry) || null,
   }
   push(lane, seg)
@@ -437,7 +463,9 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 }
 
 /* What a delegated result looks like to a reader: the text from INSIDE the
-   untrusted fence, and nothing else.
+   untrusted fence, and nothing else -- unless the delivery also carries what a
+   dag node returned (`delivered`, below), since that report's fence holds a
+   brief written for the model.
 
    One rule, and it is the fence's own contract rather than a guess about the
    prose around it. A spawn's injection wraps the result in framing the model
@@ -454,42 +482,55 @@ export function qa(lane: Lane, question: string, answer: string, opts?: { skippe
 /* `status` is loosely typed and normalised here rather than by the caller,
    because one caller is the live path's plain-JS turn handler, which has no
    import statements and only ever hands this function a raw wire string. */
+const DELIVERED_STATUSES: ReadonlySet<string> = new Set(['error', 'exception', 'notice', 'cancelled'])
 const deliveredStatus = (v: unknown): DeliveredData['status'] =>
-  v === 'error' ? 'error' : v === 'exception' ? 'exception' : 'ok'
+  typeof v === 'string' && DELIVERED_STATUSES.has(v) ? v as DeliveredData['status'] : 'ok'
 
+/* `output` is a dag node's own words, sent beside its report. A string, even an
+   empty one, wins over the fenced brief: empty is a node that said nothing, and
+   then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
-  label: string; isDag: boolean; status?: string; open: () => void; body?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
+  at?: number; turnId?: string
 }): void {
+  const said = typeof p.output === 'string'
   push(lane, {
-    v: 0, id: nextId(), kind: 'sdlv',
+    v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(), ...(p.turnId ? { turnId: p.turnId } : {}),
     label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
-    body: defence(p.body || ''), shown: false,
+    body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
+    outputTruncated: said && p.outputTruncated === true,
   } satisfies DeliveredData)
 }
 
-const FENCE_OPEN = /^\s*\[BEGIN UNTRUSTED ([^ #]+) #([^ ]+) /
+const FENCE_OPEN = /\[BEGIN UNTRUSTED ([^ #\]]+) #([^ \]]+) [^\n]*\n/g
 const FENCE_CLOSE = /^\s*\[END UNTRUSTED ([^ #]+) #([^ ]+) /
 
-/* A forged close marker must not end the fence. wrap_untrusted tags both ends
-   with a per-call nonce for exactly that reason: the fence ends only at the
-   line whose source AND nonce match the opening line's. Anything else --
-   including a close-shaped line with a different tag -- is content, and if the
-   genuine close never appears the whole rest is content too. */
+/* A forged close marker must not end a fence. wrap_untrusted tags both ends
+   with a per-call nonce for exactly that reason: a fence ends only at the close
+   marker whose source AND nonce match its opening one's, and the next opening
+   marker is looked for after that close. Anything else -- a close-shaped line
+   with a different tag, a marker the result quotes -- is content, and if the
+   genuine close never appears the whole rest is content too. Every fence is
+   kept, joined by newlines, not only the first: a result made of content blocks
+   is fenced one text block at a time, and session.resume joins the blocks with a
+   space, so one restored row can hold several fences in a row. */
 export function defence(text: string): string {
-  const lines = String(text || '').split('\n')
-  const start = lines.findIndex((l) => FENCE_OPEN.test(l))
-  if (start < 0) {
-    return lines.filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
+  const src = String(text || '')
+  const open = new RegExp(FENCE_OPEN.source, 'g')
+  const parts: string[] = []
+  let m: RegExpExecArray | null
+  while ((m = open.exec(src))) {
+    const start = m.index + m[0].length
+    const close = `\n[END UNTRUSTED ${m[1]} #${m[2]}]`
+    const end = src.indexOf(close, start - 1)
+    parts.push(src.slice(start, end < 0 ? undefined : Math.max(start, end)))
+    if (end < 0) break
+    open.lastIndex = end + close.length
   }
-  const m = FENCE_OPEN.exec(lines[start] || '')
-  const tag = m ? `${m[1]} #${m[2]}` : null
-  const rest = lines.slice(start + 1)
-  let end = -1
-  if (tag) {
-    const close = new RegExp(`^\\s*\\[END UNTRUSTED ${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\]`)
-    end = rest.findIndex((l) => close.test(l))
+  if (!parts.length) {
+    return src.split('\n').filter((l) => !FENCE_CLOSE.test(l)).join('\n').trim()
   }
-  return (end < 0 ? rest : rest.slice(0, end)).join('\n').trim()
+  return parts.join('\n').trim()
 }
 
 export function toggleDelivered(lane: Lane, seg: DeliveredData): void {
@@ -778,6 +819,7 @@ let spawnRoster: Promise<SpawnListRow[]> | null = null
    never the instance. Nothing the card already knows is overwritten -- a live
    card never comes here, and if one did, the event is the fresher word. */
 export function resolveSpawn(lane: Lane, c: CallData): void {
+  if (readingImported()) return
   const node = String(c.args.node_id || c.args.call_id || '')
   if (c.spawnId || (!node && !c.spawnTaskId) || c.spawnAsked) return
   const read = source().spawnList
@@ -989,6 +1031,13 @@ function bindRun(call: CallData): void {
  * for a finished run and because a card is re-rendered on every node update. */
 function hydrateDag(lane: Lane, call: CallData): void {
   bindRun(call)
+  /* An imported conversation's runs are on another machine. With no record to
+     read, the nodes the arguments named stay pending forever, so the graph is
+     closed here: a run that ended long ago must not read as still going. */
+  if (readingImported()) {
+    call.graphClosed = true
+    return
+  }
   if (!call.runId || call.asked) return
   const read = source().dagRun
   if (!read) return
@@ -1043,12 +1092,31 @@ function newCallData(
   return c
 }
 
-/* The row-fold transitions: the step that just outgrew a single call folds its
-   rows for the first time, and a failure is the one thing worth opening
-   unasked -- unless the reader pinned the fold. */
+/* A call whose information a one-line summary cannot stand in for. A spawn or
+   a dag row is the only place the delegation is visible -- which sub-agent ran,
+   and how far its graph got -- so the default-open rules read this predicate
+   rather than restating it. The reader's own toggle still decides either way:
+   this answers "what does an untouched step do", never "may the reader shut
+   it".
+
+   `load_playbook` is classified `dag` by name even when it runs in prompt mode
+   and starts no run (see `DAG_CALLS` in `newStep`), so such a turn opens here
+   too: the card it draws still names the playbook. The TUI has no card for a
+   call with no run and leaves the same turn folded; that is the one place the
+   two clients disagree about this rule. */
+const callKeepsOpen = (c: CallData): boolean => c.kind === 'spawn' || c.kind === 'dag'
+
+/* The row-fold transitions: a step that just outgrew a single call folds its
+   rows for the first time, and one holding a spawn or dag call defaults open
+   instead of folding, so the delegation is readable without a click. Both are
+   defaults -- `wkPinned` is the reader having taken the fold over, and from
+   then on nothing here moves it. A failed call does not open the fold: a tool
+   that went wrong is ordinary work, and the row carries the word instead. */
 function paintWork(lane: Lane, seg: StepData, grewPast1: boolean): void {
-  if (seg.calls.length > 1 && grewPast1 && !seg.wkPinned) seg.wkOpen = false
-  if (seg.calls.length > 1 && seg.failed && !seg.wkPinned && !seg.wkOpen) seg.wkOpen = true
+  if (seg.calls.length > 1 && !seg.wkPinned) {
+    if (seg.calls.some(callKeepsOpen)) seg.wkOpen = true
+    else if (grewPast1) seg.wkOpen = false
+  }
   bump(lane, seg)
 }
 
@@ -1077,7 +1145,7 @@ function callDone(lane: Lane, seg: StepData, c: CallData,
 export function newStep(lane: Lane): StepHandle {
   const seg: StepData = {
     v: 0, id: nextId(), kind: 'step',
-    think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
+    think: '', thinkLive: false, thinkT0: 0, thinkMs: 0, thinkOpen: false, thinkPinned: false, thinkShown: false,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false, failed: false,
     calls: [], wkOpen: true, wkPinned: false, merged: false,
   }
@@ -1088,7 +1156,10 @@ export function newStep(lane: Lane): StepHandle {
      click away -- where it follows its newest line for as long as it grows. */
   const reveal = (): void => {
     seg.thinkShown = true
-    if (!seg.thinkLive) seg.thinkLive = true
+    if (!seg.thinkLive) {
+      seg.thinkLive = true
+      seg.thinkT0 = Date.now()
+    }
     poke(lane)
     bump(lane, seg)
   }
@@ -1097,10 +1168,16 @@ export function newStep(lane: Lane): StepHandle {
     if (!seg.thinkShown) return
     if (seg.thinkLive) {
       seg.thinkLive = false
+      seg.thinkMs = seg.thinkT0 ? Date.now() - seg.thinkT0 : 0
       if (!seg.thinkPinned) seg.thinkOpen = false
     }
     bump(lane, seg)
   }
+
+  /* Where the prose of the step's latest model call starts. A call's narration
+     comes before the tools it calls, so prose after the step's last tool call
+     is a later call's: an exhausted turn's wrap-up opens no episode and streams
+     into the step the last call left open. */
 
   const h: StepHandle = {
     seg,
@@ -1116,7 +1193,10 @@ export function newStep(lane: Lane): StepHandle {
       seg.hasThink = true
       seg.think += text || ''
       seg.thinkShown = true
-      if (!seg.thinkLive) seg.thinkLive = true
+      if (!seg.thinkLive) {
+        seg.thinkLive = true
+        seg.thinkT0 = Date.now()
+      }
       poke(lane)
       scheduleFlush(lane, seg)
     },
@@ -1137,6 +1217,17 @@ export function newStep(lane: Lane): StepHandle {
       seg.say += text || ''
       seg.sayCaret = true
       scheduleFlush(lane, seg)
+    },
+    dropReply(shown: string) {
+      /* What the closing reply put on screen is the end of what the step holds,
+         or, on a page that joined the turn part-way, all of what it holds is the
+         end of that reply. Anything else the step said is not the reply's. */
+      const say = seg.say
+      seg.say = say.endsWith(shown) ? say.slice(0, say.length - shown.length) : shown.endsWith(say) ? '' : say
+      seg.hasSay = !!seg.say
+      seg.sayCaret = false
+      if (!seg.hasThink && !seg.calls.length && !seg.hasQA && replaceStep(lane, seg, null)) bumpList(lane)
+      else bump(lane, seg)
     },
     tool(name: string, args: unknown, display?: string | null, callId?: string | null): CallHandle {
       thinkDone()
@@ -1178,16 +1269,31 @@ export function newStep(lane: Lane): StepHandle {
 const stepSolid = (s: StepData): boolean =>
   s.calls.length > 0 || (s.thinkShown && s.hasThink) || !!s.say.trim()
 
+/* Whether a turn's work reads as important enough not to fold away. Two things
+   qualify, and both are display defaults rather than a change to what folding
+   can do -- the reader may still shut the fold by hand:
+ *
+ *  - an agent message of two or more rendered lines (`FOLD_KEEP_OPEN_CHARS`);
+ *  - a spawn or dag call, whose whole point is that the reader can see the
+ *    delegation happened. */
+const foldKeepsOpen = (steps: StepData[]): boolean =>
+  steps.some((s) => s.say.trim().length >= FOLD_KEEP_OPEN_CHARS || s.calls.some(callKeepsOpen))
+
 /* Every fold this lane opened by itself, shut. The reader's own are left
  * alone: `toggleFold` clears `auto`, so a fold they have touched is no longer
  * one of these.
  *
- * A running sub-agent under a fold does not hold it open. The run's own status
- * lives on the task rows, which is where a reader follows it; the fold is the
- * turn's, and the turn is over. */
+ * A fold holding a message or a delegation the rule protects stays open. The
+ * rule is re-read here rather than latched at creation because the work that
+ * completes it can land after the fold exists.
+ *
+ * A run still executing under the fold is not what holds it open -- the run's
+ * own status lives on the task rows, which is where a reader follows it. It is
+ * the call's kind that does: a spawn or dag row is the only place the
+ * delegation is visible, whether or not the run has finished. */
 function shutAutoFolds(lane: Lane, except: FoldData | null): void {
   lane.segs.forEach((s) => {
-    if (s.kind !== 'fold' || s === except || !s.auto) return
+    if (s.kind !== 'fold' || s === except || !s.auto || foldKeepsOpen(s.steps)) return
     s.auto = false
     s.open = false
     bump(lane, s)
@@ -1201,12 +1307,13 @@ function shutAutoFolds(lane: Lane, except: FoldData | null): void {
  * the whole time the turn ran; once the answer lands they fold shut behind the
  * one line, so what stays on screen is the answer and not the trail that led
  * to it. The trail is one click away, and the row's clock says there is one.
- * A sub-agent still running under it does not keep it open: that run is
- * followed on the task rows, not here.
  *
- * Replay opens none: a reopened conversation arrives with every turn shut, the
- * last one included, the same as a turn watched live ends. That is also what
- * the weight asks for -- a forty-turn session built 7361 nodes and 6400 of them
+ * `foldKeepsOpen` is the exception, and it applies on both paths: a turn whose
+ * work carries an agent message of two or more rendered lines, or a spawn or
+ * dag call, arrives with its fold open. That is a default, not a lock -- a
+ * reader who shuts it keeps it shut (`toggleFold` clears `auto`). What the
+ * weight still gets is every other turn, and the shut bodies of every fold a
+ * reader never opened: a forty-turn session built 7361 nodes and 6400 of them
  * sat in shut fold bodies. */
 export function collapse(lane: Lane, time?: string | null, live = false): void {
   const segs = lane.segs
@@ -1240,6 +1347,11 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
       fold!.steps.push(s)
     })
     fold.time = time || null
+    /* Work joining a fold the runtime still owns brings the rule with it: a
+       long message or a delegation that completes the turn opens the fold
+       around it. A fold the reader touched has `auto` cleared and is left the
+       way they left it. */
+    if (fold.auto && foldKeepsOpen(fold.steps)) fold.open = true
     bump(lane, fold)
     bumpList(lane)
     return
@@ -1251,10 +1363,16 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
      instance's conversation is short enough to read at once, which is why
      `shutAutoFolds` stays on the live path, where a whole session's folds
      accumulate. Marked `auto` either way, so the reader's own collapse takes it
-     over from the runtime (`toggleFold`) and survives the next poll. */
+     over from the runtime (`toggleFold`) and survives the next poll.
+
+     The main conversation's fold opens on the same rule when its work carries
+     a long message or a delegation (`foldKeepsOpen`), and stays open across
+     later turns because `shutAutoFolds` re-reads that rule rather than the one
+     decision made here. */
   const born = !lane.main
+  const keepOpen = born || foldKeepsOpen(loose)
   const f: FoldData = {
-    v: 0, id: nextId(), kind: 'fold', time: time || null, open: born, auto: born, steps: [],
+    v: 0, id: nextId(), kind: 'fold', time: time || null, open: keepOpen, auto: true, steps: [],
   }
   if (live) shutAutoFolds(lane, f)
   segs.splice(firstAt, 0, f)
@@ -1351,12 +1469,20 @@ function replaceStep(lane: Lane, at: StepData, next: StepData | null): boolean {
 function mergeRun(lane: Lane, group: StepData[]): void {
   const calls = group.flatMap((s) => s.calls)
   if (!calls.length || !calls.every((c) => c.done)) return
+  /* A merged step is a fresh default, unless one of the steps it replaces was
+     the reader's: then their choice travels with the calls it was made about.
+     Otherwise the same rule `paintWork` applies holds -- a run holding a
+     delegation stays open until someone closes it. */
+  const pinned = group.find((s) => s.wkPinned)
   const holder: StepData = {
     v: 0, id: nextId(), kind: 'step',
-    think: '', thinkLive: false, thinkOpen: false, thinkPinned: false, thinkShown: false,
+    think: '', thinkLive: false, thinkT0: 0, thinkMs: 0, thinkOpen: false, thinkPinned: false, thinkShown: false,
     say: '', sayCaret: false, hasSay: false, hasThink: false, hasQA: false,
     failed: calls.some((c) => !c.ok),
-    calls, wkOpen: false, wkPinned: false, merged: true,
+    calls,
+    wkOpen: pinned ? pinned.wkOpen : calls.some(callKeepsOpen),
+    wkPinned: Boolean(pinned),
+    merged: true,
   }
   replaceStep(lane, group[0] as StepData, holder)
   group.slice(1).forEach((s) => replaceStep(lane, s, null))
@@ -1364,8 +1490,14 @@ function mergeRun(lane: Lane, group: StepData[]): void {
 }
 
 /* The render half of the turn's landing: promote the streamed prose into the
-   answer block where the prose stood, merge the silent stretches, fold. */
-export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[], time?: string | null): void {
+   answer block where the prose stood, merge the silent stretches, fold.
+
+   A `silent` turn ended on the model's own silence marker and has no answer, so
+   nothing it said on the way is promoted into one: it stays narration under the
+   fold, which is what a reload of the same turn draws. */
+export function finishTurn(
+  lane: Lane, st: StepHandle | null, steps: StepData[], time?: string | null, silent = false,
+): void {
   stopFlush(lane)
   if (st) st.seal()
   /* The last step that said something, which is usually the open one -- but a
@@ -1374,9 +1506,11 @@ export function finishTurn(lane: Lane, st: StepHandle | null, steps: StepData[],
      one. Promoting only the open step left that prose as narration for the
      fold to close over, while a reload of the same turn showed it as the
      answer: the two halves disagreeing again, one case over. */
-  const said = st && st.seg.say.trim()
-    ? st.seg
-    : [...steps].reverse().find((g) => g.say.trim()) || null
+  const said = silent
+    ? null
+    : st && st.seg.say.trim()
+      ? st.seg
+      : [...steps].reverse().find((g) => g.say.trim()) || null
   if (said) {
     const seg = said
     const text = seg.say
@@ -1495,6 +1629,14 @@ const callParts = (raw: unknown): { name: string; display: string } => {
    the two views of one turn cannot drift apart. */
 export const failedTurnLabel = (): string => t('gui.turn_died', { e: '' }).replace(/\s*[-·]\s*$/, '')
 
+/* The notice kind the runtime raises when a turn ends on the model's silence
+   marker. A stored silent row reads as the same kind, so the replayed line is
+   the live one -- except after a message-tool reply: that turn's marker is
+   filed silent too, but the server sent no notice live, where the turn landed
+   with the reply as its answer. A reload draws this line there instead, with
+   the reply inside the message call's row. */
+const SILENT_KIND = 'silent_turn'
+
 export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMessage[] = []): void {
   /* A different conversation, so a different roster -- but only on the lane that
      IS one.
@@ -1546,6 +1688,10 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
      them -- under a note promising the output above was kept. */
   const spoken = (m: HistoryMessage | undefined): boolean =>
     !!m && m.role === 'assistant' && !m.turn_ended && !m.notice && !!m.text && !!m.text.trim()
+  /* A silent row is deliberately not left out of `spoken`: it is the model's
+     last word, and a turn that ends on it has no answer. Counting it keeps what
+     the model said on the way narration -- the turn's fold -- as the live turn
+     does; leaving it out would lift that narration into the answer. */
   /* Scanned over what FOLLOWS as well, which is not always drawn. The agent
      stage paints a run in slices -- each poll hands over only what arrived
      since the last one -- and "is anything still to be said" cannot be answered
@@ -1657,8 +1803,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         delivered(lane, {
           label: String(d.label || ''),
           isDag,
+          at: turnAt,
           status: d.status,
           body: m.text || '',
+          output: d.output,
+          outputTruncated: d.output_truncated,
           open: () => {
             const src = source()
             if (isDag) src.openDagRun?.(String(d.run_id || d.label || ''))
@@ -1709,6 +1858,27 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         m.notice.detail || '', { quiet: true })
       return
     }
+    if (m.role === 'assistant' && m.silent) {
+      /* The model's own silence marker: the row is kept because the model reads
+         it next turn, and a reader is shown one quiet line in its place -- the
+         one a live silent turn closes with (a marker after a message-tool reply
+         is the exception, see SILENT_KIND). Its reasoning is the model's work
+         and is drawn like any other step's, so the fold has the thought the live
+         turn showed. */
+      const thought = String(m.reasoning_content || '').trim()
+      if (thought) {
+        sealTools()
+        toolRun = newStep(lane)
+        toolRun.seg.hasThink = true
+        toolRun.seg.think = thought
+        toolRun.reveal()
+        toolRun.thinkDone()
+      }
+      sealTools()
+      closeTurn(msOf(m.timestamp))
+      note(lane, t('gui.notice.' + SILENT_KIND, undefined, SILENT_KIND), '', { quiet: true })
+      return
+    }
     if (m.role === 'assistant' && m.turn_ended) {
       sealTools()
       closeTurn(msOf(m.timestamp))
@@ -1716,8 +1886,9 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
       /* Same promise as the live stop, checked the same way: a replayed turn
          whose whole content is this marker has no output above to keep. */
       const halted = turnKept(lane) ? 'gui.halted' : 'gui.halted_bare'
+      const full = stopped ? '' : (m.turn_ended.full_detail || '')
       note(lane, stopped ? t(halted) : failedTurnLabel(),
-        stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped })
+        stopped ? '' : (m.turn_ended.reason || ''), { quiet: stopped, ...(full ? { full } : {}) })
       return
     }
     if (m.role === 'assistant') {
@@ -1761,7 +1932,11 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
          sentence for, and it is the only thread a restored card has back to the
          record. */
       if (m.spawn_task_id && h.spawnTask) h.spawnTask(String(m.spawn_task_id))
-      const preview = src.clean(m.text).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
+      /* The stored result is the model's copy: inside its fence, and after it
+         whatever note this system added for the model (a dispatch receipt's
+         reply rules). The live preview is the raw result, so this one is the
+         fence's content alone. */
+      const preview = src.clean(defence(String(m.text || ''))).split('\n').slice(0, 8).map((l) => l.slice(0, 160)).join('\n')
       h.done(src.okOf(m.name || '', preview), preview, m.duration_ms != null ? m.duration_ms : 0, m.diff)
     }
   })
@@ -2027,15 +2202,17 @@ export function copyText(text: string): void {
 }
 
 export function branchOf(lane: Lane): ((text: string) => void) | null {
-  if (!lane.main) return null
+  if (!lane.main || readingImported()) return null
   try { return source().branch || null } catch { return null }
 }
 
 export function openDagRun(runId: string): void {
+  if (readingImported()) { toast(t('gui.sess.imported_unavailable')); return }
   try { source().openDagRun?.(runId) } catch { /* no opener wired */ }
 }
 
 export function openSpawn(nodeId: string): void {
+  if (readingImported()) { toast(t('gui.sess.imported_unavailable')); return }
   const src = source()
   if (src.openSpawn) { src.openSpawn(nodeId); return }
   pane().show('agents')

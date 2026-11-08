@@ -359,8 +359,9 @@ async def test_relay_enforces_the_handshake_deadline(home: Path, tmp_path: Path)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("forward_signals", [False, True])
 def test_attached_launch_falls_back_to_embedded_when_the_gateway_is_gone(
-    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, forward_signals: bool
 ) -> None:
     """/health answered at discovery, and the gateway died before the WS
     connect: the accepted socket is untouched, so the embedded server (stubbed
@@ -376,6 +377,8 @@ def test_attached_launch_falls_back_to_embedded_when_the_gateway_is_gone(
         return True
 
     monkeypatch.setattr(tui_commands, "_run_rpc_server_until_done", fake_embedded)
+    relayed: list[object] = []
+    monkeypatch.setattr(tui_commands, "_forward_signals_to", relayed.append)
 
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     probe.bind(("127.0.0.1", 0))
@@ -391,10 +394,11 @@ def test_attached_launch_falls_back_to_embedded_when_the_gateway_is_gone(
     )
     plan = AttachPlan(port=dead_port, token="tok", workdir=tmp_path)
     code = run_subprocess_attached(
-        sys.executable, ["-c", child], cwd=tmp_path, plan=plan, forward_signals=False, workspace=None
+        sys.executable, ["-c", child], cwd=tmp_path, plan=plan, forward_signals=forward_signals, workspace=None
     )
     assert code == 0
     assert "conn" in calls
+    assert len(relayed) == int(forward_signals)
 
 
 # ---------------------------------------------------------------------------

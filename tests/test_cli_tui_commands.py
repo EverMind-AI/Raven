@@ -33,6 +33,7 @@ from typer.testing import CliRunner
 from raven.cli.commands import app
 from raven.cli.tui_commands import _UI_TUI_DIR
 from raven.config.raven import TokenWiseConfig
+from raven.utils import heap
 from tests.conftest import wired_kwarg
 
 runner = CliRunner()
@@ -372,6 +373,8 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
 
     Returns a ``ctx`` dict with the spy backend and call-tracking lists.
     """
+    # Keep the real trimmer out: it would read /proc and leave heap._task set after the test.
+    monkeypatch.setattr(heap, "start_trimmer", lambda: None)
     ctx: dict[str, Any] = {
         "start_calls": [],
         "stop_calls": [],
@@ -507,6 +510,23 @@ async def test_the_acp_snapshot_backfill_is_scheduled_on_the_tui_server_path(
     await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
 
     ctx["schedule_backfill"].assert_called_once_with(ctx["agent_loop"].subagents)
+
+
+async def test_the_tui_spine_and_turn_cancel_share_one_map_of_what_running_turns_measured(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """Hand-wired like the backfill above: a stopped turn's cancel reads what
+    the turn measured from the map the spine's runner fills, so the two have to
+    be handed the same one."""
+    ctx = rpc_server_deps
+    register = MagicMock()
+    monkeypatch.setattr("raven.rpc.methods.register_aligned_methods_except_system", register)
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    spine_map = ctx["fake_build_rpc_spine"].call_args.kwargs["live_usages"]
+    assert isinstance(spine_map, dict)
+    assert register.call_args.kwargs["live_usages"] is spine_map
 
 
 async def _run_until_done_with_immediate_proc_done(monkeypatch, ctx):
@@ -1255,3 +1275,172 @@ def test_an_explicit_node_env_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("NODE_ENV", "development")
 
     assert tui_commands.child_env()["NODE_ENV"] == "development"
+
+
+def test_bare_raven_opens_the_page_without_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, serve_commands
+    from raven.rpc.transports.ws import DEFAULT_PORT
+
+    opened: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
+    monkeypatch.setattr(serve_commands, "_web", lambda *args, **kwargs: opened.append((args, kwargs)))
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
+
+    assert r.exit_code == 0, r.output
+    assert opened == [((DEFAULT_PORT,), {})]
+
+
+@pytest.mark.parametrize("argv", [["--dev"], ["--dev", "web"], ["--dev", "tui"]])
+def test_bare_raven_rejects_dev(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, serve_commands, tui_commands
+
+    started: list[str] = []
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: True)
+    monkeypatch.setattr(serve_commands, "_web", lambda *a, **k: started.append("web"))
+    monkeypatch.setattr(tui_commands, "tui", lambda *a, **k: started.append("tui"))
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, argv)
+
+    assert r.exit_code == 2
+    assert "No such option" in r.stderr
+    assert started == []
+
+
+def test_bare_raven_without_a_browser_starts_the_tui_plainly(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    from raven.cli import commands, tui_commands
+
+    received: dict[str, Any] = {}
+
+    def recorder(_ctx, **kwargs: Any) -> None:
+        received.update(kwargs)
+
+    monkeypatch.setattr(tui_commands, "tui", recorder)
+    monkeypatch.setattr(commands, "_can_open_a_browser", lambda: False)
+
+    r = CliRunner(mix_stderr=False).invoke(commands.app, [])
+
+    assert r.exit_code == 0, r.output
+    assert received["dev"] is False
+    assert "--dev" not in r.output
+
+
+async def test_the_terminal_host_starts_the_heap_trimmer(monkeypatch: pytest.MonkeyPatch, rpc_server_deps) -> None:
+    """The terminal's rpc host lives as long as the TUI does, so it trims like the gateway."""
+    started: list[int] = []
+    monkeypatch.setattr(heap, "start_trimmer", lambda: started.append(1))
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
+
+    assert started == [1]
+
+
+async def test_the_tui_host_leaves_the_agents_on_machines_running_at_exit_and_picks_them_up_at_start(
+    monkeypatch: pytest.MonkeyPatch, rpc_server_deps
+) -> None:
+    """As the gateway and the served page do: the stop says the agents stay before it cancels, the start schedules the pick-up."""
+    from raven.acp_client import remote
+
+    ctx = rpc_server_deps
+    leaving_at_cancel: list[bool] = []
+
+    async def cancel_all(**kwargs: Any) -> int:
+        leaving_at_cancel.append(remote.leaving())
+        return 0
+
+    ctx["agent_loop"].subagents.cancel_all = cancel_all
+    scheduled: list[Any] = []
+    monkeypatch.setattr(
+        "raven.agent.subagent.resume_remote.schedule_remote_resume",
+        lambda subagents: scheduled.append(subagents) or None,
+    )
+    try:
+        await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+    finally:
+        remote.staying()
+
+    assert leaving_at_cancel == [True], "said before the cancel, so a run on a machine is left, not ended"
+    assert scheduled == [ctx["agent_loop"].subagents]
+
+
+# ---------------------------------------------------------------------------
+# Signal relay to the Node child
+# ---------------------------------------------------------------------------
+
+
+class _Child:
+    """A spawned child that records what it was sent."""
+
+    def __init__(self, gone: bool = False) -> None:
+        self.sent: list[int] = []
+        self._gone = gone
+
+    def send_signal(self, sig: int) -> None:
+        if self._gone:
+            raise ProcessLookupError
+        self.sent.append(sig)
+
+
+def _relay_handlers(monkeypatch: pytest.MonkeyPatch, child: _Child) -> dict[int, Any]:
+    import signal
+
+    from raven.cli import tui_commands
+
+    handlers: dict[int, Any] = {}
+    monkeypatch.setattr(signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+    tui_commands._forward_signals_to(child)
+    return handlers
+
+
+def test_ctrl_c_is_left_to_the_console_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows delivers Ctrl+C to the child itself, and Popen.send_signal(SIGINT)
+    raises there: relaying it would take the TUI down instead."""
+    import signal
+    import sys
+
+    child = _Child()
+    handlers = _relay_handlers(monkeypatch, child)
+    monkeypatch.setattr(sys, "platform", "win32")
+    handlers[signal.SIGINT](signal.SIGINT, None)
+    handlers[signal.SIGTERM](signal.SIGTERM, None)
+    assert child.sent == [signal.SIGTERM]
+
+
+def test_ctrl_c_is_relayed_to_the_child_elsewhere(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+    import sys
+
+    child = _Child()
+    handlers = _relay_handlers(monkeypatch, child)
+    monkeypatch.setattr(sys, "platform", "linux")
+    handlers[signal.SIGINT](signal.SIGINT, None)
+    assert child.sent == [signal.SIGINT]
+
+
+def test_a_signal_for_a_child_already_gone_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    import signal
+
+    handlers = _relay_handlers(monkeypatch, _Child(gone=True))
+    handlers[signal.SIGTERM](signal.SIGTERM, None)
+
+
+def test_the_rpc_launch_relays_signals_only_when_asked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import sys
+
+    from raven.cli import tui_commands
+
+    relayed: list[object] = []
+    monkeypatch.setattr(tui_commands, "_forward_signals_to", relayed.append)
+    monkeypatch.setattr(tui_commands, "_RPC_HANDSHAKE_TIMEOUT_S", 0.1)
+    for forward in (False, True):
+        code = tui_commands.run_subprocess_with_rpc(
+            sys.executable, ["-c", "import time; time.sleep(30)"], cwd=tmp_path, forward_signals=forward
+        )
+        assert code == tui_commands._RPC_HANDSHAKE_EXIT_CODE
+    assert len(relayed) == 1

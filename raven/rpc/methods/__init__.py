@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from raven.rpc.methods._stubs import register_stub_methods
 from raven.rpc.methods.approval import register_approval_methods
 from raven.rpc.methods.browser import register_browser_methods
+from raven.rpc.methods.bugreport import register_bugreport_methods
 from raven.rpc.methods.cli_dispatch import register_cli_methods
 from raven.rpc.methods.clipboard import register_clipboard_methods
 from raven.rpc.methods.command_dispatch import register_command_dispatch_methods
@@ -27,9 +28,11 @@ from raven.rpc.methods.console import register_console_methods
 from raven.rpc.methods.dag import register_dag_methods
 from raven.rpc.methods.delegation import register_delegation_methods
 from raven.rpc.methods.import_sync import register_import_methods
+from raven.rpc.methods.imported import register_imported_methods
 from raven.rpc.methods.input import register_input_methods
 from raven.rpc.methods.instances import register_instance_methods
 from raven.rpc.methods.knowledge import register_knowledge_methods
+from raven.rpc.methods.machines import register_machines_methods
 from raven.rpc.methods.memory import register_memory_methods
 from raven.rpc.methods.model import register_model_methods
 from raven.rpc.methods.playbooks import register_playbooks_methods
@@ -47,6 +50,8 @@ from raven.rpc.methods.subagents import register_subagents_methods
 from raven.rpc.methods.system import register_system_methods
 from raven.rpc.methods.tasks import register_tasks_methods
 from raven.rpc.methods.terminal import register_terminal_methods
+from raven.rpc.methods.trajectory import register_trajectory_methods
+from raven.rpc.methods.trajectory_export import register_trajectory_export_methods
 from raven.rpc.methods.turn import (
     register_session_interrupt_method,
     register_turn_methods,
@@ -79,6 +84,7 @@ def register_aligned_methods(
     build_error: "RpcError | None" = None,
     send_frame: "Any" = None,
     default_channel: str = "tui",
+    live_usages: "dict[str, dict[str, Any]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler on a dispatcher.
 
@@ -111,6 +117,7 @@ def register_aligned_methods(
         build_error=build_error,
         send_frame=send_frame,
         default_channel=default_channel,
+        live_usages=live_usages,
     )
 
 
@@ -130,6 +137,7 @@ def register_aligned_methods_except_system(
     send_frame: "Any" = None,
     default_channel: str = "tui",
     ensure_stack: "Callable[[], Awaitable[bool]] | None" = None,
+    live_usages: "dict[str, dict[str, Any]] | None" = None,
 ) -> None:
     """Register every aligned RPC handler EXCEPT system.* on a dispatcher.
 
@@ -213,9 +221,12 @@ def register_aligned_methods_except_system(
             turn_ids=turn_ids,
             direct_targets=direct_targets,
             build_error=build_error,
+            # A message typed while an ask_user question waits answers it.
+            question_broker=question_broker,
             # Must equal the channel ``build_rpc_spine`` registered its outlet
             # under; ``turn.py`` documents that a mismatch drops the reply.
             default_channel=default_channel,
+            live_usages=live_usages,
         )
     # confirm.respond — needs a ConfirmBroker to resolve the pending
     # confirm future. Gated like turn.*: when no broker is supplied (demo
@@ -237,6 +248,11 @@ def register_aligned_methods_except_system(
     # without an RPC surface. (A matching subagent.* view waits for the
     # transcript writer that would give it anything to list.)
     register_memory_methods(dispatcher)
+    register_trajectory_methods(dispatcher)
+    register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
+    # imported.* plus the guard that keeps every write off an Imported Conversation.
+    register_imported_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the
     # page can list what is stored and read one whole spec. Registered
@@ -254,6 +270,11 @@ def register_aligned_methods_except_system(
     # streaming half (browser.watch) needs the transport's notification sink;
     # a transport without one simply has no live view.
     register_browser_methods(dispatcher, send_frame=send_frame)
+    # machines.* -- the Agent Hub's machines tab over the machine registry,
+    # the same registry ``raven ops connection`` keeps. Registered
+    # unconditionally: the registry is a file, and the node pool is the
+    # process's own.
+    register_machines_methods(dispatcher)
 
 
 __all__ = [
@@ -272,6 +293,7 @@ __all__ = [
     "register_dag_methods",
     "register_console_methods",
     "register_knowledge_methods",
+    "register_machines_methods",
     "register_memory_methods",
     "register_playbooks_methods",
     "register_plughub_methods",

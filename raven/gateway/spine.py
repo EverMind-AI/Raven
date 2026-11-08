@@ -19,7 +19,7 @@ from raven.agent.spine_runner import AgentTurnRunner
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
-from raven.spine import OriginPools, Scheduler
+from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
 from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
 from raven.spine.message import Source
@@ -78,17 +78,32 @@ class GatewayTurnRunner(AgentTurnRunner):
     TUI runner, which pops every turn because its turns are homogeneous — it stores
     only the read-back origins' text, keyed by conversation; the submitter pops it
     after ``result()``. A delivery-only turn (a channel user or heartbeat reply) is
-    never stored, so the long-running daemon does not accumulate."""
+    never stored, so the long-running daemon does not accumulate.
+
+    ``merged`` records, by turn id, where each person's message the turn took in
+    while it ran came from; the sink pops it when the turn ends."""
 
     def __init__(
         self,
         agent_loop: AgentLoop,
         readback_texts: dict[str, str],
         sources: dict[str, Source],
+        merged: dict[str, list[Source]] | None = None,
     ) -> None:
         super().__init__(agent_loop, stream=False)
         self._readback_texts = readback_texts
         self._sources = sources
+        self._merged = {} if merged is None else merged
+
+    def _noting_merges(self, req: TurnRequest, drain: Drain) -> Drain:
+        def noted() -> list[TurnRequest]:
+            taken = drain()
+            people = [merged.source for merged in taken if merged.origin is Origin.USER]
+            if people:
+                self._merged.setdefault(req.turn_id or "", []).extend(people)
+            return taken
+
+        return noted
 
     async def run(self, req: TurnRequest, emit: Emit, drain: Drain) -> TurnOutcome:
         # Stash the turn's reply address so the sink can route a TurnFailed error
@@ -97,6 +112,7 @@ class GatewayTurnRunner(AgentTurnRunner):
         # on TurnEnded/TurnFailed so the daemon does not accumulate.
         cid = _cid(req)
         self._sources[cid] = req.source
+        drain = self._noting_merges(req, drain)
         # The same per-turn rebinding RpcTurnRunner applies, but deliberately
         # not its SUBAGENT widening: a channel session has no watched-signal to
         # gate on, and widening here would regress an abandoned-channel
@@ -126,6 +142,8 @@ class GatewayTurnRunner(AgentTurnRunner):
         start_permission_turn(
             ApprovalViaAsk(asker, cid) if asker is not None else None,
             conversation_id=cid,
+            # An instance-addressed cron wake uses its conversation's policy.
+            session=session_key_for(req) if req.direct_target else "",
             turn_id=req.turn_id or "",
             origin=req.origin.value,
         )
@@ -165,15 +183,27 @@ def _make_gateway_sink(
     agent_loop: AgentLoop,
     sources: dict[str, Source],
     cut_by_reload: Callable[[], bool] | None = None,
+    channels: Mapping[str, Channel] | None = None,
+    ending: set[asyncio.Task[None]] | None = None,
+    merged: dict[str, list[Source]] | None = None,
 ) -> Callable[[TurnEvent], Awaitable[None]]:
-    """Adapt the delivery hub into the gateway's EventSink, with the two
+    """Adapt the delivery hub into the gateway's EventSink, with the
     lifecycle side effects the plain hub sink does not carry: on TurnEnded or
     TurnFailed fire ``on_turn_complete`` (the WakeScheduler's parked-wake
     signal), and on a non-cancelled failure deliver a user-visible error reply
     to the originating channel -- the failure's category when a model call was
-    what failed. A cancelled turn (/stop) fires the wake and
-    sends no reply -- unless ``cut_by_reload`` says a generation swap did the
-    cancelling, in which case the channel is told the reply was cut.
+    what failed. A cron turn the model gave no output for gets none: no one is
+    waiting on it, and its job records the failure. A cancelled turn (/stop)
+    fires the wake and sends no reply -- unless ``cut_by_reload`` says a
+    generation swap did the cancelling, in which case the channel is told the
+    reply was cut. A turn a user started that ended with no reply tells its
+    channel so (``end_turn``): the typing indicator the user's message started
+    is otherwise stopped only by a send, and no other origin starts one. A turn
+    any origin opened tells the chat of each person's message merged into it
+    while it ran (``merged``, filled by the runner), for the indicator that
+    message started. That runs as a task held in ``ending``, not inline: the
+    scheduler resolves a turn only after this sink returns, and stopping an
+    indicator can be a network call.
 
     notify fires on every origin (cron / sentinel / heartbeat / channel) rather
     than on user turns only -- benign and slightly more correct:
@@ -181,25 +211,73 @@ def _make_gateway_sink(
     just un-park any turn, and a wake parked during a proactive turn is never
     stranded."""
 
+    ending = set() if ending is None else ending
+    merged = {} if merged is None else merged
+    # The origin of each live turn, from its TurnStarted until it ends, fails or
+    # is cancelled.
+    origins: dict[str, Origin | None] = {}
+
     async def sink(event: TurnEvent) -> None:
         if isinstance(event, TurnStarted):
+            origins[event.turn_id] = event.origin
             return
         if isinstance(event, (TurnEnded, TurnFailed)):
             source = sources.pop(event.conversation_id, None)
+            origin = origins.pop(event.turn_id, None)
+            people = merged.pop(event.turn_id, [])
             if isinstance(event, TurnFailed) and source is not None:
                 if not event.cancelled:
-                    await hub.dispatch(
-                        Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
-                    )
+                    # No one is waiting on a cron run, and its job records the
+                    # failure.
+                    if not (origin is Origin.CRON and event.no_output):
+                        await hub.dispatch(
+                            Text(content=_failed_turn_reply(event.error, reported=event.reported), source=source)
+                        )
                 elif cut_by_reload is not None and cut_by_reload():
                     # /stop is the user's own act and stays silent; a reload is
                     # not, so the reply it cut is owed at least a sentence.
                     await hub.dispatch(Text(content=_TURN_CUT_BY_RELOAD_REPLY, source=source))
+            elif isinstance(event, TurnEnded) and not event.explicit_reply:
+                # Only a person's message starts an indicator, the one that
+                # opened this turn or one merged into it: ending a turn no person
+                # wrote into would cancel the one a user turn is running in the
+                # same chat.
+                if origin is Origin.USER and source is not None:
+                    people = [source, *people]
+                for channel_name, chat_id in dict.fromkeys((person.channel, person.chat_id) for person in people):
+                    task = asyncio.create_task(_end_turn((channels or {}).get(channel_name), chat_id))
+                    ending.add(task)
+                    task.add_done_callback(ending.discard)
             agent_loop.notify_turn_complete()
             return
         await hub.dispatch(event)
 
     return sink
+
+
+async def _end_turn(channel: Channel | None, chat_id: str) -> None:
+    """Best-effort: the turn is already over, so a channel that cannot be told
+    so costs a log line, not the turn."""
+    end = getattr(channel, "end_turn", None)
+    if end is None:
+        return
+    try:
+        await end(chat_id)
+    except Exception as exc:
+        logger.warning("gateway: {} could not end a turn with no reply: {}", getattr(channel, "name", "?"), exc)
+
+
+async def _settle(tasks: set[asyncio.Task[None]], deadline: float) -> None:
+    """Let the turn ends still in flight run until ``deadline`` (loop time), then
+    cut them: a channel whose transport is gone costs its indicator, not the swap."""
+    if not tasks:
+        return
+    _, pending = await asyncio.wait(set(tasks), timeout=max(0.0, deadline - asyncio.get_running_loop().time()))
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    if pending:
+        logger.warning("gateway: {} turn end(s) still running when the grace expired; cut", len(pending))
 
 
 #: Seconds ``teardown`` gives the outlets to deliver what is already queued.
@@ -239,30 +317,36 @@ def build_gateway(
         hub.register(ChannelOutletAdapter(channel))
     readback_texts: dict[str, str] = {}
     sources: dict[str, Source] = {}
+    ending: set[asyncio.Task[None]] = set()
+    merged: dict[str, list[Source]] = {}
     # user>1 is safe now that per-turn tool state (message routing, context) is
     # turn-local: concurrent user turns no longer clobber each other's reply
     # target. system>1 lets a cron and a heartbeat/sentinel turn overlap.
     scheduler = Scheduler(
-        GatewayTurnRunner(agent_loop, readback_texts, sources),
+        GatewayTurnRunner(agent_loop, readback_texts, sources, merged),
         OriginPools(user=user_pool, system=system_pool),
-        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload),
+        _make_gateway_sink(hub, agent_loop, sources, cut_by_reload, channels, ending, merged),
     )
 
     async def teardown() -> None:
         await scheduler.shutdown(grace=shutdown_grace)
+        grace = max(shutdown_grace, _DELIVERY_GRACE)
+        deadline = asyncio.get_running_loop().time() + grace
         # shutdown resolves the turns it cut, and the sink enqueues the sentence
         # each cut turn is owed while that happens. ``aclose`` cancels the outlet
         # workers mid-flight, so without a barrier here the sentence is queued
         # and then dropped -- a reload would be silent for exactly the user whose
         # reply it interrupted. Bounded: a channel whose transport is already
-        # gone costs the sentence, not the swap.
+        # gone costs the sentence, not the swap. A turn end still in flight shares
+        # that one grace rather than adding its own.
         try:
             await asyncio.wait_for(
                 asyncio.gather(*(hub.wait_idle(name) for name in channels)),
-                timeout=max(shutdown_grace, _DELIVERY_GRACE),
+                timeout=grace,
             )
         except TimeoutError:
             logger.warning("gateway: delivery still queued when the grace expired; closing anyway")
+        await _settle(ending, deadline)
         await hub.aclose()
 
     return scheduler, hub, readback_texts, sources, teardown

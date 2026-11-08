@@ -37,7 +37,9 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from loguru import logger
 from pydantic import ValidationError
 
+from raven.agent.subagent.dag_guard import parse_guard
 from raven.agent.subagent.prompt_placeholders import iter_placeholders
+from raven.observability.purpose import purpose as _llm_purpose
 from raven.playbook.agent_profiles import AgentProfileSource, validate_node_capabilities
 from raven.playbook.credentials import credential_scope, stored_secret_params
 from raven.playbook.llm_result import ProviderResponseError, RequiredToolError, required_tool_arguments
@@ -55,11 +57,12 @@ def _fill_text(text: str, spec: PlaybookSpec, values: Mapping[str, str], where: 
     """Fill one piece of playbook text, minus any secret, and say what was withheld.
 
     Every path that turns playbook text into something a model or a sub-agent
-    reads goes through here, and there are three: the guidance reply, the compose
-    input, and a node's prompt template. They had a redaction each and a log line
-    between two of them, so the third changed a work order and said nothing --
-    leaving an operator to debug a graph that could not do what the file asked,
-    with no trace of why.
+    reads goes through here: the guidance reply, the compose input, a node's
+    prompt template, a route condition -- which reaches the judge in the model's
+    place -- and a role's standing orders. The first three had a redaction each
+    and a log line between two of them, so the third changed a work order and
+    said nothing -- leaving an operator to debug a graph that could not do what
+    the file asked, with no trace of why.
 
     ``where`` names the piece, because "a secret was withheld" is not actionable
     without it: the fix is to move the reference into an ``mcpServers`` ``env`` or
@@ -282,6 +285,10 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
     than a run counter: a counter would restart with the process while the
     session's id registry outlives it.
 
+    A ``when`` guard moves with the ids it names: each atom is ``<node>.<route>``
+    and only the node part is an id. The route names (and ``done``) are the
+    author's, so they stay as written.
+
     ``instance`` is namespaced with the same tag, so an author writing
     ``instance: researcher`` on three steps gets one session shared by those
     three steps *of this run* rather than one shared by every run of the
@@ -319,6 +326,18 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
                 rewritten[key] = value
         return rewritten
 
+    def rewrite_guard(guard: str | None) -> str | None:
+        if guard is None or not guard.strip():
+            return guard
+        rewritten: list[str] = []
+        last = 0
+        for atom in parse_guard(guard).atoms:
+            rewritten.append(guard[last : atom.pos])
+            rewritten.append(f"{mapping.get(atom.node, atom.node)}.{atom.name}")
+            last = atom.end
+        rewritten.append(guard[last:])
+        return "".join(rewritten)
+
     return [
         n.model_copy(
             update={
@@ -327,6 +346,7 @@ def _namespace_run(spec_name: str, nodes: list[NodeSpec]) -> list[NodeSpec]:
                 "prompt_template": rewrite_refs(n.prompt_template),
                 "inputs": rewrite_inputs(n.inputs),
                 "instance": f"{prefix}-{tag}-{n.instance}" if n.instance else None,
+                "when": rewrite_guard(n.when),
             }
         )
         for n in nodes
@@ -419,12 +439,14 @@ class PlaybookExecutor:
         """
         return self._dag_tool
 
-    def set_context(self, *, channel: str | None, chat_id: str | None, session_key: str | None) -> None:
+    def set_context(
+        self, *, channel: str | None, chat_id: str | None, session_key: str | None, surface: str | None = None
+    ) -> None:
         """Address this turn's dispatch (progress + announce) like the loop
         does for registered tools; the executor's tool instance is private,
         so nobody else calls set_context on it."""
         if self._dag_tool is not None and hasattr(self._dag_tool, "set_context") and channel and chat_id:
-            self._dag_tool.set_context(channel, chat_id, session_key)
+            self._dag_tool.set_context(channel, chat_id, session_key, surface=surface)
 
     async def execute(
         self,
@@ -518,7 +540,24 @@ class PlaybookExecutor:
             # missing X" would invite the same wrong call again.
             return ExecutionPlan(kind="questions", reply="Error: " + " ".join(fill_errors))
         nodes = [
-            n.model_copy(update={"prompt_template": _fill_text(n.prompt_template, spec, values, f"node {n.id!r}")})
+            n.model_copy(
+                update={
+                    "prompt_template": _fill_text(n.prompt_template, spec, values, f"node {n.id!r}"),
+                    # A route condition reaches the judge where a prompt reaches
+                    # its node, so it is filled on the same terms -- secrets
+                    # withheld included, by _fill_text itself.
+                    **(
+                        {
+                            "routes": {
+                                name: _fill_text(condition, spec, values, f"node {n.id!r} route {name!r}")
+                                for name, condition in n.routes.items()
+                            }
+                        }
+                        if n.routes
+                        else {}
+                    ),
+                }
+            )
             for n in nodes
         ]
         blanks = [(n.id, f) for n in nodes for f in FILLABLE_REQUIRED if not str(getattr(n, f, "") or "").strip()]
@@ -541,12 +580,13 @@ class PlaybookExecutor:
         errors: list[str] = []
         for _ in range(2):
             try:
-                response = await self._provider.chat_with_retry(
-                    messages=messages,
-                    tools=compose_tool(),
-                    model=self._compose_model,
-                    tool_choice={"type": "function", "function": {"name": COMPOSE_TOOL_NAME}},
-                )
+                with _llm_purpose("playbook"):
+                    response = await self._provider.chat_with_retry(
+                        messages=messages,
+                        tools=compose_tool(),
+                        model=self._compose_model,
+                        tool_choice={"type": "function", "function": {"name": COMPOSE_TOOL_NAME}},
+                    )
             except Exception as exc:  # noqa: BLE001 - composition failure degrades, never raises
                 return None, [str(exc)]
             try:
@@ -623,6 +663,9 @@ class PlaybookExecutor:
                     **({"inputs": dict(run_node.inputs)} if run_node.inputs else {}),
                     **({"mcps": run_node.mcps} if run_node.mcps is not None else {}),
                     **({"instance": run_node.instance} if run_node.instance else {}),
+                    **({"routes": dict(run_node.routes)} if run_node.routes else {}),
+                    **({"select": run_node.select} if run_node.select else {}),
+                    **({"when": run_node.when} if run_node.when else {}),
                 }
             )
         receipt = await self._dag_tool.execute(

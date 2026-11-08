@@ -46,6 +46,11 @@ export interface ProviderRow {
      `is_gateway`). The catalogue's filter reads it; no client can derive it
      from a slug. */
   gateway?: boolean
+  /* The image tool can run on this provider's address and key (the registry's
+     `image_api`); the roles card offers the image role exactly these. */
+  imageApi?: boolean
+  /* The same for the video tool (the registry's `video_api`). */
+  videoApi?: boolean
   needsBase?: boolean
   /* Whether the provider takes an API key at all. Absent from a source that
      predates the field, where every non-local provider took one. */
@@ -86,6 +91,9 @@ export interface EverosInfo {
      in a model and a key and have nothing happen. */
   available?: boolean
   note?: string | null
+  /* "other_backend" when long-term memory runs on a backend that is not EverOS:
+     the three EverOS-only role rows are then hidden (Roles.tsx). */
+  reason?: string | null
   /* False for a root the user manages: raven neither starts it nor writes its
      config, so the slots are shown and not editable. */
   owned?: boolean
@@ -131,16 +139,26 @@ export interface ToolRow {
 export type SkillRow = ExtSkillRow
 export type SkillDetail = NonNullable<ResultOf<'skills.manage'>['info']>
 export type ArchivedSession = ResultOf<'session.list'>['sessions'][number]
+/* The EverOS Cloud card's data: settings.everosCloud's own shape. */
+export type EverosCloudInfo = ResultOf<'settings.everosCloud'>
 export type OauthStart = ResultOf<'model.oauth_login'>
+/* What the vendor said about a key before it was stored (`model.check_key`). */
+export type KeyCheck = ResultOf<'model.check_key'>
 
 /* Everything the dialog draws from, in one read. `raw` is the config
-   settings.get returned (camelCased keys, one level per dot). The skill and
-   MCP rows are `ext.list`'s own, untouched, because the two pages read fields
-   the inventory's row shapes drop (`always`, `auth`, `credentialed`). */
+   settings.get returned, as the file writes it (one level per dot; a
+   top-level block may be camelCase or snake_case). The skill and MCP rows are
+   `ext.list`'s own, untouched, because the two pages read fields the
+   inventory's row shapes drop (`always`, `auth`, `credentialed`). */
 export interface SettingsSnapshot {
   raw: Record<string, unknown>
   configPath: string
+  /* The Skill Hub source as the runtime reads it, answered by settings.get:
+     the loader's migrations and boolean rules decide it, not the raw file.
+     `awaitingReload` is on while the serving loop holds no Hub client. */
+  skillHub: { on: boolean; awaitingReload: boolean }
   everos: EverosInfo | null
+  everosCloud?: EverosCloudInfo | null
   providers: ProviderRow[]
   curProvider: string
   model: string
@@ -171,18 +189,25 @@ export interface ModelCatalogue {
   models: ModelCandidate[]
   status: string
   error?: string | null
+  /* With a verify: the vendor itself refused the stored key. `invalid_key`
+     alone also covers a 403, which is not that. */
+  refused?: boolean
 }
 
 /* What a provider's credential check answered, after a connect or on a
    "check again". `status` is the probe's word -- valid, invalid_key,
    key_unchecked, no_credits, rate_limited, network_error, proxy_unreachable,
-   no_probe_endpoint, http_<code>. */
+   certificate_untrusted, no_probe_endpoint, http_<code>. */
 export interface ConnectProbe {
   ok: boolean
   status: string
   http_status?: number | null
   models_count?: number | null
   error?: string | null
+  /* The vendor's own refusal of the key -- the one verdict a row calls
+     "rejected". `invalid_key` alone is broader: a 403 maps to it as well, and
+     a 403 can mean a region, a plan or a proxy, not the key. */
+  refused?: boolean
 }
 
 /* The DS.settings contract the rpc source implements. A write that fails
@@ -213,6 +238,10 @@ export interface McpDetail {
 
 export interface SettingsSource {
   load(): Promise<SettingsSnapshot>
+  /* The cloud probe `load` started without waiting for it (a slow or absent
+     service must not hold the page): resolves when it lands, null when it failed,
+     so the store can patch the snapshot the moment the answer is in. */
+  everosCloud(): Promise<EverosCloudInfo | null>
   set(key: string, value: unknown): Promise<SettingsSnapshot>
   /* A role is a pair: a model and the vendor serving it. No credential travels
      -- the address and key stay on the provider and are resolved at spawn, so
@@ -226,6 +255,13 @@ export interface SettingsSource {
   /* Ask the provider what it serves right now. A read: nothing is written
      until a row is added. */
   fetchModels(slug: string, verify?: boolean): Promise<ModelCatalogue>
+  /* The vendor's answer to a credential a form holds, before anything is
+     stored: a read, with `refused` for a key the vendor itself turned away. */
+  checkKey(slug: string, params: { api_key?: string; api_base?: string }): Promise<KeyCheck>
+  /* The key a connected provider saved, for the eye beside its empty key
+     field; null when it keeps none in its own section. Asked for one provider
+     on a press, never part of the snapshot. */
+  revealKey(slug: string): Promise<string | null>
   /* The provider offer again, with no write before it: what a live read put in
      the server's served-models cache changes it. */
   reloadProviders(): Promise<SettingsSnapshot>

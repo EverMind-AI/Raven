@@ -177,6 +177,33 @@ describe('merging one source onto another', () => {
     expect(merge(done, fromSnapshot([{ node: 'a', status: 'interrupted' }]))[0]?.status).toBe('interrupted')
   })
 
+  /* A node a branch left out is an ending like the others. Unranked it counts
+     as `pending`, and a `dag.get` read issued before the run reached it drags
+     it back to "in progress" for the rest of the run. */
+  it('ranks a not-executed node as terminal, so no earlier stage drags it back', () => {
+    const left = merge(args, fromSnapshot([{ node: 'a', status: 'not_executed' }]))
+
+    expect(left[0]?.status).toBe('not_executed')
+    for (const stale of ['pending', 'running', 'exception']) {
+      expect(merge(left, fromSnapshot([{ node: 'a', status: stale }]))[0]?.status).toBe('not_executed')
+    }
+  })
+
+  it('lets a not-executed status and another ending replace each other', () => {
+    const done = merge(args, fromSnapshot([{ node: 'a', status: 'completed' }]))
+    const left = merge(done, fromSnapshot([{ node: 'a', status: 'not_executed' }]))
+
+    expect(left[0]?.status).toBe('not_executed')
+    expect(merge(left, fromSnapshot([{ node: 'a', status: 'skipped' }]))[0]?.status).toBe('skipped')
+  })
+
+  it('takes a not-executed status from a node that was still waiting', () => {
+    const waiting = fromArgs({ nodes: [{ id: 'a', subagent: 'scout' }] })
+
+    expect(merge(waiting, fromSnapshot([{ node: 'a', status: 'not_executed' }]))[0]?.status).toBe('not_executed')
+    expect(applyUpdate(waiting, { node: 'a', status: 'not_executed' })[0]?.status).toBe('not_executed')
+  })
+
   it('appends a node the existing list never had', () => {
     /* A card whose arguments carried no graph at all: everything is new. */
     const merged = merge(args, fromSnapshot([{ node: 'b', status: 'pending' }]))
@@ -215,5 +242,129 @@ describe('one node updated', () => {
     const started = applyUpdate(two, { node: 'a', status: 'running', started_at: 7 })
     const ended = applyUpdate(started, { node: 'a', status: 'completed' })
     expect(ended[0]?.started_at).toBe(7)
+  })
+})
+
+/* A node handed to another agent mid-run. The frames of the attempt that gave
+   up can still be in flight when the next one starts, so every fold has to know
+   which attempt a frame speaks for: the history is the only thing that says. */
+describe('a reassigned node', () => {
+  const moved = (over: Record<string, unknown> = {}) => fromSnapshot([{
+    node: 'a',
+    subagent: 'beta',
+    instance: 'a-minted',
+    status: 'running',
+    started_at: 20,
+    attempt_agents: ['alpha', 'beta'],
+    ...over,
+  }])[0]!
+
+  it('reads the history and the current handle off the snapshot', () => {
+    expect(moved()).toMatchObject({ attempt_agents: ['alpha', 'beta'], instance: 'a-minted', subagent: 'beta' })
+  })
+
+  it('does not let a delayed snapshot without history replace a node that carries one', () => {
+    const stale = fromSnapshot([{ node: 'a', subagent: 'alpha', status: 'exception', started_at: 10 }])
+    const merged = merge([moved()], stale)
+
+    expect(merged[0]).toMatchObject({
+      attempt_agents: ['alpha', 'beta'],
+      instance: 'a-minted',
+      started_at: 20,
+      status: 'running',
+      subagent: 'beta',
+    })
+  })
+
+  it('does not let a shorter history overwrite the newer attempt', () => {
+    const stale = fromSnapshot([{
+      node: 'a', subagent: 'alpha', status: 'exception', attempt_agents: ['alpha'],
+    }])
+    const merged = merge([moved()], stale)
+
+    expect(merged[0]).toMatchObject({ attempt_agents: ['alpha', 'beta'], status: 'running', subagent: 'beta' })
+  })
+
+  it('lets a longer history move the node on, and takes its timing with it', () => {
+    const later = fromSnapshot([{
+      node: 'a', subagent: 'gamma', status: 'completed', started_at: 30, ended_at: 40,
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+    }])
+    const merged = merge([moved()], later)
+
+    expect(merged[0]).toMatchObject({
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+      ended_at: 40,
+      started_at: 30,
+      status: 'completed',
+      subagent: 'gamma',
+    })
+    expect(merged[0]?.instance).toBeNull()
+  })
+
+  it('moves identity, status and timing together on a live frame', () => {
+    const next = applyUpdate([moved()], {
+      node: 'a',
+      status: 'running',
+      started_at: 30,
+      subagent: 'gamma',
+      instance: null,
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+    })
+
+    expect(next[0]).toMatchObject({
+      attempt_agents: ['alpha', 'beta', 'gamma'],
+      instance: null,
+      started_at: 30,
+      status: 'running',
+      subagent: 'gamma',
+    })
+  })
+
+  it('ignores a delayed frame from an earlier attempt', () => {
+    const run = [moved()]
+    const delayed = applyUpdate(run, {
+      node: 'a', status: 'exception', started_at: 5, ended_at: 9, subagent: 'alpha', attempt_agents: ['alpha'],
+    })
+
+    expect(delayed).toBe(run)
+    expect(delayed[0]).toMatchObject({ started_at: 20, status: 'running', subagent: 'beta' })
+  })
+
+  it('treats a frame naming no attempt as older than the history the node carries', () => {
+    const run = [moved()]
+    const delayed = applyUpdate(run, { node: 'a', status: 'completed' })
+
+    expect(delayed).toBe(run)
+  })
+
+  it('applies a frame of the same attempt by the established status and timing policy', () => {
+    const done = applyUpdate([moved()], {
+      node: 'a', status: 'completed', ended_at: 60, subagent: 'beta', attempt_agents: ['alpha', 'beta'],
+    })
+    const late = applyUpdate(done, {
+      node: 'a', status: 'completed', subagent: 'beta', attempt_agents: ['alpha', 'beta'],
+    })
+
+    expect(late[0]).toMatchObject({ ended_at: 60, started_at: 20, status: 'completed' })
+  })
+
+  it('ignores a malformed history rather than half-adopting it', () => {
+    const run = [moved()]
+    const malformed = applyUpdate(run, {
+      node: 'a', status: 'completed', subagent: 'gamma', attempt_agents: ['alpha', 7, ''] as never,
+    })
+
+    expect(malformed).toBe(run)
+  })
+
+  it('leaves a node that never moved exactly as it was', () => {
+    const plain = fromSnapshot([{ node: 'a', subagent: 'alpha', status: 'completed' }])
+    const next = applyUpdate(plain, { node: 'a', status: 'failed', ended_at: 7 })
+
+    expect(next[0]).toStrictEqual({
+      id: 'a', subagent: 'alpha', instance: null, depends_on: [], status: 'failed',
+      started_at: null, ended_at: 7, node_summary: null, prompt_template: null, inputs: null,
+    })
   })
 })

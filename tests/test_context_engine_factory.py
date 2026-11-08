@@ -122,7 +122,7 @@ def _build_engine(
     engine = build_context_engine(
         provider_pool=provider_pool,
         workspace=tmp_path,
-        config=ContextConfig(),
+        config=ContextConfig(history={"strategy": "curator"}),
         builder=builder,
         provider=_StubProvider(),
         model=model,
@@ -225,6 +225,24 @@ class TestSkillForgeRouterAssembly:
     def test_hub_source_present_when_endpoint_set(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
         assert HubSkillSource in types
+
+    def test_hub_source_built_while_switched_off(self, tmp_path: Path, monkeypatch) -> None:
+        """The source exists while the switch is off -- so turning it back on
+        needs no loop rebuild -- and the live reader is what gates the call."""
+        _point_live_config(
+            tmp_path,
+            monkeypatch,
+            {"skillForge": {"router": {"hub": {"endpoint": "http://hub.test", "enabled": False}}}},
+        )
+
+        types, sources = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test")
+        )
+
+        assert HubSkillSource in types
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._enabled_reader is not None
+        assert hub._enabled_reader() is False
 
     def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)
@@ -362,7 +380,7 @@ def _make_loop(tmp_path: Path, *, backend=None, agents=None, skill_forge_config=
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             backend=backend,
-            context_config=ContextConfig(),
+            context_config=ContextConfig(history={"strategy": "curator"}),
             memory_config=MemoryConfig(),
             skill_forge_router_config=SkillForgeRouterConfig(),
             skill_forge_config=skill_forge_config,
@@ -504,7 +522,7 @@ class TestTheWindowFollowsTheTurnsBinding:
             tools=ToolWiring(restrict_to_workspace=True),
             engine=EngineWiring(
                 context_window_tokens=8192,
-                context_config=ContextConfig(),
+                context_config=ContextConfig(history={"strategy": "curator"}),
                 memory_config=MemoryConfig(),
                 skill_forge_router_config=SkillForgeRouterConfig(),
             ),
@@ -540,6 +558,31 @@ def test_push_config_restores_the_legacy_pipeline(tmp_path):
 # ---------------------------------------------------------------------------
 # Ownership reaching the identity prompt, and the paths it depends on
 # ---------------------------------------------------------------------------
+
+
+class TestTheEngineTellsItsIdentityWhoOwnsMemory:
+    """The turn's half of the flag, held where the engine decides it.
+
+    Handing ``IdentitySegmentBuilder`` the flag directly pins how it renders,
+    not who told it. This builds the engine the way the loop does and reads
+    the builder it chose, so deleting the argument at the factory's call site
+    reddens here -- the suite was otherwise green with the request path naming
+    both memory files again.
+    """
+
+    @staticmethod
+    async def _identity_text(engine) -> str:
+        builder = next(b for b in engine._builders if isinstance(b, IdentitySegmentBuilder))
+        return (await builder.build(_assembly_ctx())).text
+
+    async def test_without_a_backend_the_turn_still_names_the_memory_files(self, tmp_path: Path) -> None:
+        text = await self._identity_text(_build_engine(tmp_path))
+        assert f"{tmp_path}/user_memory/profile/user.md" in text
+
+    async def test_with_a_backend_the_turn_names_no_memory_file(self, tmp_path: Path) -> None:
+        text = await self._identity_text(_build_engine(tmp_path, backend=_FakeBackend()))
+        assert "profile/user.md" not in text
+        assert "# Memory" in text
 
 
 def _assembly_ctx() -> AssemblyContext:
@@ -679,14 +722,24 @@ def _engine_with(tmp_path: Path, config: ContextConfig) -> ContextAssembler:
 
 
 def test_a_product_drops_the_host_segments_it_names(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
     assert full[:2] == ["identity", "bootstrap"] and "memory" in full and "curator" in full
 
-    slim = [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["identity", "memory"]))._builders]
+    slim = [
+        b.name
+        for b in _engine_with(
+            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["identity", "memory"])
+        )._builders
+    ]
     assert "identity" not in slim and "memory" not in slim
     assert slim == [n for n in full if n not in ("identity", "memory")], "order and the rest untouched"
 
 
 def test_an_unknown_segment_name_drops_nothing(tmp_path: Path) -> None:
-    full = [b.name for b in _engine_with(tmp_path, ContextConfig())._builders]
-    assert [b.name for b in _engine_with(tmp_path, ContextConfig(drop_segments=["nope"]))._builders] == full
+    full = [b.name for b in _engine_with(tmp_path, ContextConfig(history={"strategy": "curator"}))._builders]
+    assert [
+        b.name
+        for b in _engine_with(
+            tmp_path, ContextConfig(history={"strategy": "curator"}, drop_segments=["nope"])
+        )._builders
+    ] == full

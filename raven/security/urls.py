@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlsplit
 
-from raven.security.hosts import as_ip, is_legacy_ip_form, is_local_name, names_this_machine, not_public
+from raven.security.hosts import as_ip, is_legacy_ip_form, is_local_name, is_loopback_ip, names_this_machine, not_public
 
 
 class HubTrustError(ValueError):
@@ -26,12 +26,7 @@ class HubTrustError(ValueError):
 def _host_is_local(host: str) -> bool:
     """Whether a URL host may buy the plaintext exemption: one of the names that
     mean this machine outright, or a loopback address in canonical form."""
-    if is_local_name(host):
-        return True
-    if is_legacy_ip_form(host):
-        return False
-    addr = as_ip(host)
-    return addr is not None and addr.is_loopback
+    return is_local_name(host) or is_loopback_ip(host)
 
 
 def _split(url: str, what: str) -> Any:

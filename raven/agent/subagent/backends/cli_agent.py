@@ -11,6 +11,22 @@ child's stdin.
 With ``resume_command`` set the agent is stateful: an instance handle is bound
 to the CLI's own session id in :mod:`raven.agent.subagent.instances`, so a later
 spawn with the same handle resumes that session.
+
+An entry that names a ``machine`` runs the same command on that registered
+machine, started there by the machine's Raven node (:mod:`raven.node.client`)
+in the registered user's login environment, in a directory made there for the
+run (``<remoteCwd>/<instance or task id>``). The prompt reaches it the same
+three ways -- the file is written there, stdin travels on the link and is
+closed after it -- and its output lines come back on the link and are read as
+a local run's are. Nothing of this computer goes with it: not its login shell,
+not its working directory, not the files that came with the task, which are
+named to it by address.
+
+While this computer stops, a run on a machine is left with the machine's
+daemon and its record with this computer (:mod:`raven.acp_client.remote_runs`),
+and the next process reads the command's whole output off the daemon and
+reports it (``pick_up``, through :mod:`raven.agent.subagent.resume_remote`),
+as an acp entry's turn is picked up.
 """
 
 from __future__ import annotations
@@ -20,12 +36,15 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
+import subprocess
 import tempfile
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import nullcontext
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -34,7 +53,7 @@ from loguru import logger
 from raven.agent.subagent import activity
 from raven.agent.subagent.attachments import with_attachment_note
 from raven.agent.subagent.backends.base import bounded_delta, clamp_output
-from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
 from raven.agent.subagent.backends.observability import (
     external_agent_span,
     record_outcome,
@@ -58,6 +77,8 @@ from raven.agent.subagent.mcp_grant import (
 from raven.agent.subagent.role import subagent_role_env
 from raven.agent.tools.snapshot import take as take_snapshot
 from raven.spine.message import Media
+from raven.utils import mirrors
+from raven.utils.commands import command_argv
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -72,6 +93,9 @@ _FAILURE_CHARS = 240
 kept on the span (see ``_record``), so this text exists for a person reading a
 conversation, not for diagnosis -- and uncapped it put an entire JSON transcript
 into one."""
+
+_TASKKILL_TIMEOUT_S = 5.0
+"""How long a stop on Windows waits for ``taskkill`` before killing the launcher alone."""
 
 
 def _one_line(said: str) -> str:
@@ -167,6 +191,34 @@ class CliAgentReportedError(RuntimeError):
     """
 
 
+@dataclass(frozen=True)
+class _OnMachine:
+    """One dispatch's place on its machine, resolved through the machine's Raven node."""
+
+    target: Any
+    """The registered machine (``raven.acp_client.remote.Machine``), named by id in every sentence."""
+    session_cwd: str
+    """The run's directory under the entry's root, made there and resolved to an absolute path."""
+    link: Any
+    """The machine's node pool: the launch, the prompt file, the frames and the end."""
+    skey: str = ""
+    """The dispatch's session key, for the run's record (:mod:`raven.acp_client.remote_runs`)."""
+    handle: str = ""
+    """The dispatch's handle, for the record."""
+    authored_task: str = ""
+    """The task as the dispatching model wrote it, for the record: what an announce after a restart quotes."""
+    reported_by_caller: bool = False
+    """Whether the caller reports the reply itself and forgets the record then (``remote_runs.forget_dispatch``):
+    the record outlives the command's output; otherwise it goes with it."""
+
+
+def _untrack(tracker: Any, *, keep: bool) -> None:
+    """The run's record on this computer goes with a command that ended here, or stays: for the next process, or
+    for the caller that reports the output (``_OnMachine.reported_by_caller``)."""
+    if tracker is not None:
+        tracker.close(keep=keep)
+
+
 class CliAgentBackend:
     kind = "cli"
     streams = False
@@ -219,6 +271,8 @@ class CliAgentBackend:
         registry: InstanceRegistry | None = None,
         mcps: list[str] | None = None,
         allow_mcp_secrets: bool = False,
+        machine: str | None = None,
+        remote_cwd: str | None = None,
     ) -> None:
         self.name = name
         self.command = command
@@ -235,6 +289,10 @@ class CliAgentBackend:
         self.mcps = mcps
         self.allow_mcp_secrets = allow_mcp_secrets
         self.mcp_source: McpSource | None = None
+        # The registered machine this agent runs on, or None for this computer;
+        # ``remote_cwd`` is where its runs work there (``remote.root_of``).
+        self.machine = (machine or "").strip() or None
+        self.remote_cwd = remote_cwd
         self.streams = self._can_stream(command, resume_command, transcript_format)
 
     def set_mcp_source(self, source: McpSource | None) -> None:
@@ -257,10 +315,20 @@ class CliAgentBackend:
         prompt_file: str,
         agent_id: str | None,
         mcp_file: str | None = None,
+        *,
+        split: Callable[[str], list[str]] = command_argv,
     ) -> tuple[list[str], bool]:
+        """The argv of one launch: ``template`` split by ``split``, its placeholders filled in.
+
+        ``split`` reads this computer's grammar by default (``command_argv``:
+        POSIX here, CommandLineToArgvW on Windows), right for a process
+        started here. A launch on a machine passes the machine's instead: its
+        node runs the command under a POSIX shell, so ``shlex.split`` reads
+        the template the way that shell will, whatever this computer is.
+        """
         argv: list[str] = []
         used_placeholder = False
-        for tok in shlex.split(template):
+        for tok in split(template):
             if agent_id is not None:
                 tok = tok.replace("{agent_id}", agent_id)
             if mcp_file is not None:
@@ -292,13 +360,64 @@ class CliAgentBackend:
         (not re-derived via `os.getpgid(proc.pid)` now, which would risk
         hitting an unrelated process if the launcher's pid was already
         recycled by the OS).
+
+        Windows has no `os.killpg` and ignores `start_new_session`, and calling
+        `killpg` there raised `AttributeError` in place of the timeout or the
+        cancel, with the CLI left running. `taskkill /T` ends the tree from the
+        launcher's pid instead, and only while the launcher is alive, for the
+        same recycling reason: a worker left behind by a launcher that has
+        already exited outlives the stop there.
         """
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if hasattr(os, "killpg"):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif proc.returncode is None:
+            taskkill = shutil.which("taskkill")
+            if taskkill:
+                try:
+                    await asyncio.to_thread(
+                        subprocess.run,
+                        [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=_TASKKILL_TIMEOUT_S,
+                        check=False,
+                    )
+                except (OSError, RuntimeError, subprocess.SubprocessError):
+                    pass
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
         if proc.returncode is None:
             await proc.wait()
+
+    def _line_publisher(self, on_delta: Callable[[str], Awaitable[None]] | None) -> Callable[[str], Awaitable[None]]:
+        """How one stdout line of a run is observed as it lands, wherever the run is.
+
+        The reply text of the line, where the transcript format carries partial
+        text (``delta_reader``), goes to the activity console and to
+        ``on_delta``; for the plain ``text`` format the raw line goes to the
+        console, since that is what a human watching the terminal would have
+        seen. Machine formats with no delta reader (codex_jsonl and kin) put
+        nothing readable on stdout mid-run, so only their stderr shows.
+        """
+        read_delta = delta_reader(self.transcript_format)
+        raw_console = read_delta is None and (self.transcript_format or "text") == "text"
+
+        async def publish_out_line(line: str) -> None:
+            if read_delta is not None:
+                if text := read_delta(line):
+                    activity.note_console(text)
+                    if on_delta is not None:
+                        await on_delta(text)
+            elif raw_console:
+                activity.note_console(line + "\n")
+
+        return publish_out_line
 
     async def _communicate_streaming(
         self,
@@ -335,8 +454,7 @@ class CliAgentBackend:
         ``communicate`` does it: a child that fills the stdout pipe while raven
         is still writing its prompt deadlocks both ends.
         """
-        read_delta = delta_reader(self.transcript_format)
-        raw_console = read_delta is None and (self.transcript_format or "text") == "text"
+        publish_out_line = self._line_publisher(on_delta)
         out_chunks: list[bytes] = []
         err_chunks: list[bytes] = []
 
@@ -353,15 +471,6 @@ class CliAgentBackend:
                 pass
             finally:
                 proc.stdin.close()
-
-        async def publish_out_line(line: str) -> None:
-            if read_delta is not None:
-                if text := read_delta(line):
-                    activity.note_console(text)
-                    if on_delta is not None:
-                        await on_delta(text)
-            elif raw_console:
-                activity.note_console(line + "\n")
 
         async def pump_out() -> None:
             if proc.stdout is None:
@@ -438,6 +547,10 @@ class CliAgentBackend:
             # is the way to hand one agent back its full registry. A third-party
             # CLI reads none of these; a ``raven`` one does.
             env = {**env_base, **host_identity_env(), **subagent_role_env(), **(runtime_env or {}), **self.env}
+            # An agent started through uvx or npx fetches itself first, and from
+            # the mirror when its registry cannot be reached.
+            argv = await mirrors.package_launch_async(argv, env, cwd)
+            argv = resolve_program(argv, env)
             logger.info("Subagent [{}] CLI agent {!r}: {}", task_id, self.name, argv[:1])
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -513,6 +626,185 @@ class CliAgentBackend:
             except OSError:
                 pass
 
+    async def _exec_there(
+        self,
+        placed: _OnMachine,
+        template: str,
+        task: str,
+        task_id: str,
+        agent_id: str | None,
+        attempts: list[dict[str, Any]] | None,
+        *,
+        on_delta: Callable[[str], Awaitable[None]] | None,
+    ) -> tuple[str, str]:
+        """One invocation on the entry's machine, through its node: the same argv, run and read there.
+
+        What differs from :meth:`_exec` is where each piece lives, and whose
+        grammar splits the command -- the machine's POSIX shell's, not this
+        computer's. The prompt
+        file is written into the run's directory on the machine, under its
+        ``.raven/``, since a path here means nothing there; stdin travels on
+        the link and is closed after it -- for every command, not only one
+        with no placeholder, because the node opens a stdin for each agent it
+        starts, where the local launch hands a placeholder command none, and a
+        command that reads to the end would wait for it. The MCP file, when
+        the command takes one, is written there naming no server: the host's
+        are reached through a socket on this computer, and the reply says so
+        (``_withheld_note``). The environment is the machine user's login one,
+        captured by the node, with the role mark and the entry's ``env`` over
+        it: this computer's login shell, its ``RAVEN_HOME`` and the parent's
+        model binding describe a process of raven's own here, and say nothing
+        on that machine. A cancel or a timeout ends the whole process tree
+        there (``agent/cancel``). The node forwards every line the command
+        writes, a blank one included, so a plain-text answer comes back as it
+        was printed; a quick command may leave before its stdin reaches it,
+        and then its own output and exit code are the report, as here.
+        """
+        from raven.ops import remote_path
+
+        cwd = placed.session_cwd
+        scratch = f"{cwd}/.raven"
+        prompt_path = f"{scratch}/prompt-{task_id}.txt"
+        mcp_there: str | None = None
+        try:
+            if "{prompt_file}" in template:
+                await placed.link.write_file(placed.target.id, prompt_path, task, roots=[cwd])
+            if "{mcp_file}" in template:
+                mcp_there = f"{scratch}/mcp-{task_id}.json"
+                empty = json.dumps({"tools": McpGrant().for_child_config()}, ensure_ascii=False)
+                await placed.link.write_file(placed.target.id, mcp_there, empty, roots=[cwd])
+        except remote_path.NodeCallError as exc:
+            raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
+        # Split for the machine's shell, not this computer's: the node runs
+        # the command under a POSIX shell, and a Windows host's own splitter
+        # would hand it ``sh -c 'a; b'`` as the words ``'a;`` and ``b'``.
+        argv, used_placeholder = self._build_argv(template, task, prompt_path, agent_id, mcp_there, split=shlex.split)
+        env = {**subagent_role_env(), **self.env}
+        logger.info("Subagent [{}] CLI agent {!r} on machine {}: {}", task_id, self.name, placed.target.id, argv[:1])
+        try:
+            endpoint = await placed.link.open_channel(
+                placed.target.id, name=self.name, command=shlex.join(argv), cwd=cwd, env=env
+            )
+        except remote_path.NodeCallError as exc:
+            raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
+        # The run's record on this computer: for the process after this one
+        # to pick up, should this one stop while the command runs.
+        tracker = self._track_on_machine(endpoint, placed, task_id=task_id, agent_id=agent_id)
+        out_lines: list[str] = []
+        err_lines: list[str] = []
+        publish_out_line = self._line_publisher(on_delta)
+
+        async def read_out() -> None:
+            while raw := await endpoint.readline():
+                line = raw.decode("utf-8", "replace").rstrip("\n")
+                out_lines.append(line)
+                await publish_out_line(line)
+
+        async def read_err() -> None:
+            while raw := await endpoint.readerr():
+                line = raw.decode("utf-8", "replace").rstrip("\n")
+                err_lines.append(line)
+                activity.note_console(line + "\n")
+
+        async def drive() -> int | None:
+            # The prompt after the launch, and the end of stdin either way. A
+            # quick command may have left already, having read none of it: its
+            # own output and exit code are the report, as they are here.
+            try:
+                await endpoint.send_input("" if used_placeholder else task, eof=True)
+            except BrokenPipeError:
+                if endpoint.returncode is None:
+                    raise
+            await asyncio.gather(read_out(), read_err())
+            return await endpoint.wait()
+
+        try:
+            rc = await asyncio.wait_for(drive(), timeout=self.timeout) if self.timeout is not None else await drive()
+        except asyncio.TimeoutError:
+            # Ended on the machine; the record stays for the caller that
+            # reports the failure, as it does for the output (below), so a
+            # host that stops before the announce still reports the end.
+            await endpoint.end()
+            _untrack(tracker, keep=placed.reported_by_caller)
+            raise CliAgentTimeoutError(f"CLI agent {self.name!r} timed out after {self.timeout}s") from None
+        except asyncio.CancelledError:
+            # While this process stops, the command stays with the machine's
+            # daemon (``ChannelEndpoint.end``) and its record with this
+            # computer, for the next process to pick up, and the manager
+            # reads the dispatch as left, not cancelled. Any other cancel
+            # ends the command there. See ``_kill_process_group``.
+            left = tracker is not None and bool(getattr(endpoint, "stays", False))
+            await endpoint.end()
+            if left:
+                from raven.acp_client import remote_runs
+
+                remote_runs.mark_left(task_id)
+            _untrack(tracker, keep=left)
+            raise
+        except BaseException:
+            # A delta sink that raised: nothing may be left running on the
+            # machine.
+            await endpoint.end()
+            _untrack(tracker, keep=False)
+            raise
+        # The output is the reply: a caller that reports it keeps the record
+        # until it has, so a host that stops in between reads the output again.
+        _untrack(tracker, keep=placed.reported_by_caller)
+        if (why := endpoint.ended()) is not None:
+            raise RuntimeError(f"CLI agent {self.name!r}: {why}")
+        stdout = "".join(f"{line}\n" for line in out_lines)
+        stderr = "".join(f"{line}\n" for line in err_lines)
+        if attempts is not None:
+            attempts.append(
+                {
+                    "argv0": argv[0] if argv else "",
+                    "agentId": agent_id,
+                    "exitCode": rc,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                }
+            )
+        if rc != 0:
+            said = _human_failure(stdout, stderr)
+            raise RuntimeError(f"CLI agent {self.name!r} exited {rc}" + (f": {said}" if said else ""))
+        return stdout, stderr
+
+    async def _on_machine(self, handle: str) -> _OnMachine:
+        """This dispatch's place on its machine, or one sentence that says why not, before anything starts.
+
+        The run's directory is made fresh for every dispatch, never cached,
+        for the reason the acp lane gives: one removed on the machine between
+        two dispatches would otherwise be launched into and refused there.
+        """
+        from raven.acp_client import remote
+        from raven.ops import remote_path
+
+        try:
+            target = await asyncio.to_thread(remote.machine, self.machine or "")
+        except remote.RemoteMachineError as exc:
+            raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
+        link = remote_path.nodes()
+        if link is None:
+            raise RuntimeError(
+                f"CLI agent {self.name!r}: this process does not reach registered machines, so it cannot run on "
+                f"machine {target.label}"
+            )
+        try:
+            session_cwd, _since = await link.session_dir(target.id, remote.session_root(self.remote_cwd, handle))
+        except remote_path.NodeCallError as exc:
+            raise RuntimeError(f"CLI agent {self.name!r}: {exc}") from None
+        return _OnMachine(target=target, session_cwd=session_cwd, link=link)
+
+    def _withheld_note(self, grant: McpGrant) -> str:
+        """What the reply says of the servers a machine row was granted and not handed: there is no socket to hand."""
+        names = sorted(server.name for server in grant.granted)
+        if not self.machine or not names:
+            return ""
+        return (
+            f"MCP servers {names} were not lent to cli agent {self.name!r}: it runs on machine {self.machine!r}, "
+            "and the host's servers are reached through a socket on this computer"
+        )
+
     async def run(
         self,
         task: str,
@@ -530,8 +822,16 @@ class CliAgentBackend:
         authored_task: str | None = None,
         on_delta: Callable[[str], Awaitable[None]] | None = None,
         media: Sequence[Media] = (),
+        # Whether the caller reports the reply itself (the manager's announce)
+        # and removes the run's record on its machine then
+        # (`remote_runs.forget_dispatch`); otherwise the record goes as this
+        # returns. Read on a machine only: a command here leaves no record.
+        reported_by_caller: bool = False,
     ) -> str:
-        task = with_attachment_note(task, media)
+        # A path here means nothing on another machine: the files that came
+        # with the task are named to an agent there by address instead, once
+        # its machine is known (``_dispatch_there``).
+        task = task if self.machine else with_attachment_note(task, media)
         runtime_env: dict[str, str] = {}
         if model:
             runtime_env["RAVEN_PARENT_MODEL"] = model
@@ -558,7 +858,12 @@ class CliAgentBackend:
         output = ""
         grant = mcp_grant if mcp_grant is not None else self.resolve_mcp_grant(mcps)
         mcp_path: str | None = None
-        if "{mcp_file}" in self.command or (self.resume_command and "{mcp_file}" in self.resume_command):
+        wants_mcp_file = "{mcp_file}" in self.command or bool(
+            self.resume_command and "{mcp_file}" in self.resume_command
+        )
+        # On a machine the file is written there by the launch, naming no
+        # server (``_exec_there``); nothing here would reach the agent.
+        if wants_mcp_file and not self.machine:
             fd, mcp_path = tempfile.mkstemp(prefix=f"raven_subagent_{task_id}_", suffix=".mcp.json")
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
                 json.dump({"tools": grant.for_child_config()}, stream, ensure_ascii=False)
@@ -580,8 +885,11 @@ class CliAgentBackend:
                         notice_sink=on_delta,
                         runtime_env=runtime_env,
                         mcp_file=mcp_path,
+                        media=media,
+                        authored_task=authored_task,
+                        reported_by_caller=reported_by_caller,
                     )
-                    if note := grant.note_text():
+                    for note in filter(None, (self._withheld_note(grant), grant.note_text())):
                         notice = f"\n\n[raven] {note}."
                         if on_delta is not None and self.streams:
                             await on_delta(notice)
@@ -646,8 +954,25 @@ class CliAgentBackend:
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
         mcp_file: str | None = None,
+        media: Sequence[Media] = (),
+        authored_task: str | None = None,
+        reported_by_caller: bool = False,
     ) -> str:
         skey = session_key or "default"
+        if self.machine:
+            return await self._dispatch_there(
+                task,
+                task_id,
+                skey=skey,
+                handle=handle,
+                resumable=resumable,
+                attempts=attempts,
+                on_delta=on_delta,
+                notice_sink=notice_sink,
+                media=media,
+                authored_task=authored_task,
+                reported_by_caller=reported_by_caller,
+            )
         cwd = self.cwd or str(workspace)
         # Here rather than beside either launch: this lane sees nothing of what
         # the child did between them -- no tool results, no protocol -- so its
@@ -672,6 +997,64 @@ class CliAgentBackend:
         finally:
             activity.record_snapshot_changes(before_files, take_snapshot(cwd), cwd)
 
+    async def _dispatch_there(
+        self,
+        task: str,
+        task_id: str,
+        *,
+        skey: str,
+        handle: str,
+        resumable: bool,
+        attempts: list[dict[str, Any]],
+        on_delta: Callable[[str], Awaitable[None]] | None,
+        notice_sink: Callable[[str], Awaitable[None]] | None,
+        media: Sequence[Media],
+        authored_task: str | None = None,
+        reported_by_caller: bool = False,
+    ) -> str:
+        """The run on the entry's machine: placed there first, with the task's files named by address.
+
+        No account of this computer's files: the run's are on the machine,
+        and what it wrote there is named in the reply by address rather than
+        brought back. The parent's model binding and the MCP file stay here
+        too, for the reason ``_exec_there`` gives.
+        """
+        from raven.acp_client import remote
+
+        placed = replace(
+            await self._on_machine(handle),
+            skey=skey,
+            handle=handle,
+            authored_task=authored_task or "",
+            reported_by_caller=reported_by_caller,
+        )
+        # Nothing is carried to the machine: the files that come with the
+        # task are named to the agent by address, and it looks for them there.
+        if note := remote.files_note(media, placed.target):
+            task = f"{task}\n\n{note}"
+        output = await self._launch(
+            task,
+            task_id,
+            placed.session_cwd,
+            skey=skey,
+            handle=handle,
+            resumable=resumable,
+            attempts=attempts,
+            on_delta=on_delta,
+            notice_sink=notice_sink,
+            placed=placed,
+        )
+        # Where to find what it made: the caller's workspace line names this
+        # computer, and what it wrote is there, by address -- nothing is
+        # brought back unasked.
+        notice = (
+            f"\n\n[raven] Ran on machine {placed.target.label}, in "
+            f"{remote.shown(placed.target, placed.session_cwd)}; the files it wrote are there, not on this computer."
+        )
+        if notice_sink is not None and self.streams:
+            await notice_sink(notice)
+        return output + notice
+
     async def _launch(
         self,
         task: str,
@@ -686,6 +1069,7 @@ class CliAgentBackend:
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
         mcp_file: str | None = None,
+        placed: _OnMachine | None = None,
     ) -> str:
         """Run the child, resuming this handle's session when it has one."""
         if self.is_stateful:
@@ -716,6 +1100,7 @@ class CliAgentBackend:
                     notice_sink=notice_sink,
                     runtime_env=runtime_env,
                     mcp_file=mcp_file,
+                    placed=placed,
                 )
 
         return await self._attempt(
@@ -732,6 +1117,7 @@ class CliAgentBackend:
             notice_sink=notice_sink,
             runtime_env=runtime_env,
             mcp_file=mcp_file,
+            placed=placed,
         )
 
     async def _run_stateful(
@@ -748,6 +1134,7 @@ class CliAgentBackend:
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
         mcp_file: str | None = None,
+        placed: _OnMachine | None = None,
     ) -> str:
         """Resume this handle's session, or mint one.
 
@@ -786,6 +1173,7 @@ class CliAgentBackend:
                     notice_sink=notice_sink,
                     runtime_env=runtime_env,
                     mcp_file=mcp_file,
+                    placed=placed,
                 )
             except (CliAgentTimeoutError, CliAgentReportedError):
                 # Neither is evidence the CLI's session store pruned this id: a
@@ -823,7 +1211,219 @@ class CliAgentBackend:
             notice_sink=notice_sink,
             runtime_env=runtime_env,
             mcp_file=mcp_file,
+            placed=placed,
         )
+
+    def _transcript(self, stdout: str) -> tuple[str | None, str | None]:
+        """The session id and the reply the command's transcript carries, by its format; ``None`` each when it has none."""
+        if self.transcript_format == "codex_jsonl":
+            return parse_codex_jsonl(stdout)
+        if self.transcript_format == "claude_stream_json":
+            jsonl_id, jsonl_reply, is_error = parse_claude_stream_json(stdout)
+            # Claude does not reliably exit non-zero under -p, so the exit code
+            # check is not enough on its own.
+            if is_error:
+                raise CliAgentReportedError(
+                    f"CLI agent {self.name!r} reported an error: {(jsonl_reply or stdout).strip()[-2000:]}"
+                )
+            return jsonl_id, jsonl_reply
+        if self.transcript_format == "openclaw_json":
+            return parse_openclaw_json(stdout)
+        if self.transcript_format == "opencode_json":
+            return parse_opencode_json(stdout)
+        return None, None
+
+    def _reply_from(self, stdout: str, stderr: str, parsed: str | None) -> str:
+        """The answer in what the command wrote: the transcript's reply when its format gives one, else the matched or whole stdout.
+
+        stderr is a log lane, not part of the answer: it streams to the live
+        console and rides in the attempts record, and folding it into a
+        successful reply is what forced quiet launchers to bury their
+        progress in files instead of logging it. It still stands in when
+        stdout said nothing at all -- an answerless run's stderr is the only
+        account it left.
+        """
+        if parsed is not None:
+            return parsed.strip()
+        if self._output_re is not None and (m := self._output_re.search(stdout)) is not None:
+            return m.group(1).strip()
+        return stdout.strip() or stderr.strip()
+
+    def _track_on_machine(self, endpoint: Any, placed: _OnMachine, *, task_id: str, agent_id: str | None) -> Any:
+        """The record of this run on its machine (``remote_runs.Tracker``), or ``None`` for an endpoint that is not a node's.
+
+        A cli run's reply is the whole of its output, read from the start,
+        so the record never moves past frame 0: the pick-up replays every
+        line (``pick_up``). The session id is the agent id the launch minted,
+        when it minted one; an id derived from the output is not known here,
+        and the pick-up reads it off the output it replays (``_bind_picked_up``).
+        """
+        from raven.acp_client import remote_runs
+
+        task = getattr(endpoint, "task", None)
+        if not isinstance(task, str):
+            return None
+        run = remote_runs.RemoteRun(
+            kind="cli",
+            machine=self.machine or "",
+            task=task,
+            agent=self.name,
+            session_key=placed.skey,
+            handle=placed.handle,
+            task_id=task_id,
+            session_id=agent_id or "",
+            prompt_id=0,
+            next_id=0,
+            initialize=None,
+            launch_key="",
+            config_key="",
+            session_cwd=placed.session_cwd,
+            stateful=self.is_stateful,
+            authored_task=placed.authored_task,
+        )
+        try:
+            return remote_runs.Tracker(run)
+        except OSError as exc:
+            logger.warning(
+                "CLI agent {!r}: the run on machine {} could not be recorded: {}", self.name, self.machine, exc
+            )
+            return None
+
+    async def pick_up(self, run: Any, *, pool: Any = None) -> Any:
+        """The output the command in ``run`` owes, read off its machine after this computer restarted; or why there is none.
+
+        What :mod:`raven.agent.subagent.resume_remote` asks of a cli entry for
+        a run a process before this one left on the machine
+        (:class:`raven.acp_client.remote_runs.RemoteRun`, kind ``cli``). The
+        machine's daemon replays every line the command wrote and hands the
+        rest over as it comes -- a cli run's reply is the whole of its
+        output, read from the start -- and the exit code ends it, as a run
+        here ends (``_exec_there``). Raises
+        :class:`raven.acp_client.remote_pickup.UnreachableError` when the
+        machine cannot be asked, or this computer stops under the pick-up,
+        so the record stays for a later start; every other outcome is a
+        ``PickedUp``, and the record is the caller's to remove.
+        """
+        from raven.acp_client import remote
+        from raven.acp_client.remote_pickup import PICKED_UP_NOTE, PickedUp, UnreachableError
+        from raven.ops import remote_path
+
+        link = pool if pool is not None else remote_path.nodes()
+        if link is None:
+            raise UnreachableError(
+                f"this process does not reach registered machines, so the run on machine {run.machine} waits"
+            )
+        try:
+            target = remote.machine(run.machine)
+        except remote.RemoteMachineError as exc:
+            return PickedUp("error", f"the run of {run.agent!r} cannot be picked up: {exc}")
+        try:
+            rows = await link.tasks(run.machine)
+        except remote_path.NodeCallError as exc:
+            raise UnreachableError(str(exc)) from None
+        if not any(row.get("task") == run.task for row in rows):
+            return PickedUp(
+                "error",
+                f"machine {target.label} no longer has the run of {run.agent!r} (task {run.task}); "
+                "its record there was removed, or the machine's node directory was",
+            )
+        try:
+            endpoint, _attached = await link.attach(run.machine, run.task, name=run.agent, after=0)
+        except remote_path.NodeCallError as exc:
+            if exc.reason in ("unknown_task", None) and "no longer runs" in str(exc):
+                return PickedUp("error", str(exc))
+            raise UnreachableError(str(exc)) from None
+        out_lines: list[str] = []
+        err_lines: list[str] = []
+
+        async def read_out() -> None:
+            while raw := await endpoint.readline():
+                out_lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+
+        async def read_err() -> None:
+            while raw := await endpoint.readerr():
+                err_lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+
+        try:
+            await asyncio.gather(read_out(), read_err())
+            rc = await endpoint.wait()
+        except BaseException:
+            await endpoint.end()
+            raise
+        if (why := endpoint.ended()) is not None:
+            if remote.leaving():
+                raise UnreachableError(
+                    f"this computer stopped while the run of {run.agent!r} on machine {target.label} was being "
+                    "picked up; it waits for the next start"
+                )
+            return PickedUp(
+                "error", f"the run of {run.agent!r} on machine {target.label} ended while this computer was away: {why}"
+            )
+        stdout = "".join(f"{line}\n" for line in out_lines)
+        stderr = "".join(f"{line}\n" for line in err_lines)
+        if rc != 0:
+            said = _human_failure(stdout, stderr)
+            return PickedUp("error", f"CLI agent {run.agent!r} exited {rc}" + (f": {said}" if said else ""))
+        try:
+            jsonl_id, parsed = self._transcript(stdout)
+        except CliAgentReportedError as exc:
+            return PickedUp("error", str(exc))
+        warning = await self._bind_picked_up(run, jsonl_id, stdout, stderr)
+        output = await clamp_output(
+            self._reply_from(stdout, stderr, parsed), self.max_output_chars, agent=self.name, reserved=warning
+        )
+        return PickedUp(
+            "ok",
+            output + f"\n\n[raven] Ran on machine {target.label}, in {remote.shown(target, run.session_cwd)}, "
+            f"{PICKED_UP_NOTE}; the files it wrote are there, not on this computer." + warning,
+        )
+
+    async def _bind_picked_up(self, run: Any, jsonl_id: str | None, stdout: str, stderr: str) -> str:
+        """Bind the instance a picked-up create left unbound to the session id its output names; the warning when none.
+
+        The dispatch that started the command ran ``_attempt``'s deferred
+        commit only on its own return; a host that stopped first never got
+        there, and the record carries no id for a ``derived`` entry (the
+        launch minted none). Read here the way ``_attempt`` reads it --
+        the transcript's id, else the pattern over stdout then stderr -- so
+        the next dispatch to the handle resumes this session instead of
+        opening a fresh one. Nothing for a minted id (bound at the launch)
+        or a stateless run -- the record's ``stateful`` says which, as the
+        handle cannot: every run carries one (``instance`` or ``task_id``),
+        and a stateless entry may declare ``idSource: derived`` too, which
+        the dispatch path then reads nothing from and binds nothing with.
+
+        Bound only where nothing is bound yet (``InstanceRegistry.bind_if_absent``,
+        one step under the registry's own lock): a dispatch to the same named
+        instance while this pick-up waited on the machine's command looked
+        the handle up, found nothing, and bound the session it created; that
+        binding is the newer turn's thread and is kept, this one's session
+        left unbound, where committing over it would have moved the instance
+        back to a session the newer turn never saw. Not under ``hold_handle``:
+        the dispatch holds that across its whole turn, with no timeout, and
+        the pick-ups run one after another -- a pick-up waiting for it would
+        hold back every run picked up after it. The dispatch commits last
+        whichever way the two land, so the handle ends on its session either
+        way, and the pick-up never waits for that turn. The minted id of a
+        ``provisioned`` entry is bound the same way, by ``resume_remote._conclude``.
+        """
+        if run.session_id or not run.stateful or self.id_source != "derived":
+            return ""
+        agent_id = jsonl_id
+        if agent_id is None and self._session_id_re is not None:
+            for stream in (stdout, stderr):
+                if (m := self._session_id_re.search(stream)) is not None:
+                    agent_id = m.group(1)
+                    break
+        if agent_id is None:
+            if await self._registry.lookup(run.session_key, self.name, run.handle) is not None:
+                return ""  # bound meanwhile by a newer turn: resumable through that
+            return (
+                "\n\n[raven] Warning: no session id could be extracted from the create "
+                "output, so this instance is not resumable. Use a new handle to recreate."
+            )
+        await self._registry.bind_if_absent(run.session_key, self.name, run.handle, agent_id)
+        return ""
 
     async def _attempt(
         self,
@@ -841,36 +1441,27 @@ class CliAgentBackend:
         notice_sink: Callable[[str], Awaitable[None]] | None = None,
         runtime_env: dict[str, str] | None = None,
         mcp_file: str | None = None,
+        placed: _OnMachine | None = None,
     ) -> str:
         """Run one CLI invocation (create or resume) and return its output, raising on failure."""
-        stdout, stderr = await self._exec(
-            template,
-            task,
-            task_id,
-            cwd,
-            agent_id,
-            attempts,
-            on_delta=on_delta,
-            runtime_env=runtime_env,
-            mcp_file=mcp_file,
-        )
+        if placed is not None:
+            stdout, stderr = await self._exec_there(
+                placed, template, task, task_id, agent_id, attempts, on_delta=on_delta
+            )
+        else:
+            stdout, stderr = await self._exec(
+                template,
+                task,
+                task_id,
+                cwd,
+                agent_id,
+                attempts,
+                on_delta=on_delta,
+                runtime_env=runtime_env,
+                mcp_file=mcp_file,
+            )
 
-        jsonl_id: str | None = None
-        jsonl_reply: str | None = None
-        if self.transcript_format == "codex_jsonl":
-            jsonl_id, jsonl_reply = parse_codex_jsonl(stdout)
-        elif self.transcript_format == "claude_stream_json":
-            jsonl_id, jsonl_reply, is_error = parse_claude_stream_json(stdout)
-            # Claude does not reliably exit non-zero under -p, so the exit code
-            # check above is not enough on its own.
-            if is_error:
-                raise CliAgentReportedError(
-                    f"CLI agent {self.name!r} reported an error: {(jsonl_reply or stdout).strip()[-2000:]}"
-                )
-        elif self.transcript_format == "openclaw_json":
-            jsonl_id, jsonl_reply = parse_openclaw_json(stdout)
-        elif self.transcript_format == "opencode_json":
-            jsonl_id, jsonl_reply = parse_opencode_json(stdout)
+        jsonl_id, jsonl_reply = self._transcript(stdout)
 
         if created and self.id_source == "derived":
             if jsonl_id is not None:
@@ -889,18 +1480,7 @@ class CliAgentBackend:
         if created and agent_id is not None:
             await self._registry.commit(skey, self.name, handle, agent_id)
 
-        if jsonl_reply is not None:
-            output = jsonl_reply.strip()
-        elif self._output_re is not None and (m := self._output_re.search(stdout)) is not None:
-            output = m.group(1).strip()
-        else:
-            # stderr is a log lane, not part of the answer: it streams to the
-            # live console and rides in the attempts record, and folding it
-            # into a successful reply is what forced quiet launchers to bury
-            # their progress in files instead of logging it. It still stands
-            # in when stdout said nothing at all -- an answerless run's stderr
-            # is the only account it left.
-            output = stdout.strip() or stderr.strip()
+        output = self._reply_from(stdout, stderr, jsonl_reply)
 
         warning = None
         if created and self.id_source == "derived" and agent_id is None:

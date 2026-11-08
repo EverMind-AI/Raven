@@ -186,6 +186,33 @@ def _with_reference(tmp_path, body: str, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_reading_the_case_s_changes_builds_its_backend_off_the_loop(tmp_path, monkeypatch):
+    """A password machine's runner asks a local ``ssh -G`` which host its prompt names; built on the loop, that
+    wait held every other turn (reviewed 2026-10-20)."""
+    import asyncio
+
+    from oncall_flow.tools.ops_case_dict import OpsCaseChangesTool
+
+    cdir, backend = _with_reference(tmp_path, DIFF, monkeypatch)
+    where: list[bool] = []
+
+    def build(meta):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return backend
+
+    monkeypatch.setattr("oncall_flow.backends.backend_from_meta", build)
+
+    out = await OpsCaseChangesTool().execute(campaign="c", ledger=str(cdir / "ledger.json"))
+
+    assert REF in out
+    assert where == [False], "the backend was built on the event loop"
+
+
+@pytest.mark.asyncio
 async def test_it_reports_the_one_entry_that_moved(tmp_path, monkeypatch):
     """Seven watch rounds read the settings one at a time and none noticed the
     single altered entry. The point of this tool is that the alteration is one

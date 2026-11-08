@@ -81,6 +81,12 @@ export interface DeliveryRow {
      carry one, and that one belongs to the conversation; every row the registry
      gives back has it, filled in on the way in. */
   scope?: string
+  /* When the gateway says the delivery happened (`delivered_at`, epoch
+     milliseconds), or null for a manifest that predates the field and for a
+     row recovered from the registry. Declared here because a card's picture is
+     named by it: a path delivered again keeps its token, and the stamp is what
+     tells the two cards' pictures apart. */
+  when?: number | null
 }
 
 /* The stable workspace record owned by the island store. */
@@ -121,6 +127,11 @@ export interface DirListing {
   parent?: string | null
   home: string
   ok: boolean
+  /* Every root the gateway's machine exposes, present only while `path` IS
+     one: a root has no parent, so where there are several (Windows drives) the
+     others are reachable no other way. Absent and empty both mean there is no
+     other root to offer. */
+  roots?: DirEntry[]
   entries: DirEntry[]
 }
 
@@ -153,10 +164,13 @@ export interface WorkspaceSource {
      (state/workdir.ts). Optional like `reveal`: a page with no gateway behind
      it says so on the menu instead of offering a browser over nothing. */
   dirs?(path?: string): Promise<DirListing>
-  /* A folder chosen in the gateway host's own folder dialog -- Finder, the
-     Explorer dialog, zenity -- for the same picker. `path` is absent when the
-     dialog was dismissed; `ok` is `fs.dirs`'s judgement of the folder. Only
-     worth offering while `hostIsLocal`, since the dialog opens where the
-     gateway runs. */
+  /* A folder chosen in the gateway host's own folder dialog -- Finder, or
+     zenity/kdialog on a Linux desktop -- for the same picker. Windows is
+     absent on purpose: its dialog opens behind the browser, so the picker
+     walks the folders there instead (raven/rpc/folder_dialog.py). `path` is absent
+     when the dialog was dismissed; `ok` is `fs.dirs`'s judgement of the
+     folder. Only worth offering while `hostIsLocal`, since the dialog opens
+     where the gateway runs, and while the handshake says that host has one
+     (`folder-dialog-v1`). */
   pickDir?(): Promise<DirPick>
 }

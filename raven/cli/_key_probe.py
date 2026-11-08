@@ -22,6 +22,8 @@ def probe_models(api_key: str, api_base: str, *, transport: Any = None) -> dict[
     """
     import httpx
 
+    from raven.security.tls import is_untrusted_certificate
+
     base = api_base.rstrip("/")
     url = base + "/models" if "/v1" in base else base + "/v1/models"
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -32,7 +34,8 @@ def probe_models(api_key: str, api_base: str, *, transport: Any = None) -> dict[
         with httpx.Client(**kwargs) as client:
             resp = client.get(url, headers=headers)
     except httpx.HTTPError as exc:
-        return {"ok": False, "status": "network_error", "model_ids": None, "error": str(exc)}
+        status = "certificate_untrusted" if is_untrusted_certificate(exc) else "network_error"
+        return {"ok": False, "status": status, "model_ids": None, "error": str(exc)}
     if resp.status_code != 200:
         return {"ok": False, "status": f"http_{resp.status_code}", "model_ids": None, "error": resp.text[:200]}
     ids: list[str] = []

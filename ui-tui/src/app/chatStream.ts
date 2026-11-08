@@ -414,6 +414,15 @@ const dispatch = (
         showTransientNotice(event.payload.kind)
         return
       }
+      // The model ended the turn on its silence marker: the line below is all
+      // the turn has to say, and what the detail says the reply had already
+      // streamed is taken back. The detail is that text, so the line omits it.
+      if (event.payload.kind === 'silent_turn') {
+        turnController.recordSilentTurn(event.payload.detail ?? '')
+        turnController.recordNotice(noticeLine({ kind: 'silent_turn' }))
+
+        return
+      }
       // Runtime prose, not the model's: never merged into the streamed answer.
       // Handed to the turn rather than appended here, because it arrives mid-turn
       // and this turn's steps reach the transcript only at `message.complete` --
@@ -522,6 +531,10 @@ const dispatch = (
       // here is a product call for the terminal, not a consequence of the wire
       // event. Named for the same reason `turn.started` is.
       return
+    case 'tasks.board_updated':
+      // The host's task board is the web page's tasks tab; the terminal draws
+      // none. Named for the same reason `turn.started` is.
+      return
     default: {
       // Exhaustiveness — if a new TurnEvent variant lands the type-checker
       // will complain here, forcing this file to be updated.
@@ -620,6 +633,12 @@ const onError = (
   const { reason, message } = ev.payload
   state.turns.delete(MAIN_VIEW_KEY)
   clearRunning(null)
+  // A turn that ended without an answer, failed or stopped, filed the reading
+  // its calls last measured with its record, so the bar moves on with it as
+  // `onMessageComplete` moves it for an answered one.
+  if (ev.payload.usage) {
+    patchUiState(s => ({ ...s, usage: { ...s.usage, ...ev.payload.usage } }))
+  }
   if (reason === 'cancelled_by_client') {
     restoreInputPrompt(appendMessage, sys)
     appendArtifacts(state, appendMessage)

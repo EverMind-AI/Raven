@@ -18,20 +18,22 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from loguru import logger
 from pydantic import ValidationError
 
-from raven.agent.subagent.backends import acp_snapshot_for, agent_meta
+from raven.agent.subagent.backends import acp_menus, acp_snapshot_for, agent_meta
 from raven.agent.subagent.backends.env import refresh_login_shell_env
 from raven.agent.subagent.presets import (
+    BUNDLED_SHIM_PRESETS,
     THIRD_PARTY_SUBAGENT_PRESETS,
     third_party_subagent_preset,
     third_party_subagent_presets,
 )
 from raven.agent.subagent.probe import (
+    PingResult,
     ProbeResult,
     capabilities_wanted,
     ping_agent,
@@ -44,6 +46,7 @@ from raven.config.loader import get_config_path
 from raven.config.schema import SubagentsConfig
 from raven.config.update_subagents import (
     get_agents,
+    reject_unsupported_acp_fields,
     reject_unsupported_openai_fields,
     remove_agent,
     set_agents,
@@ -199,7 +202,6 @@ async def _rows(*, probe: bool = True) -> list[dict]:
     # because "configured" drives the delete button and a seed row cannot be
     # deleted: not writing one is what "use the default" means.
     from raven.agent.subagent.builtin_agents import (
-        canonical_agent_name,
         is_builtin_agent_name,
         merge_builtin_seeds,
     )
@@ -243,17 +245,27 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         # shows the roster the model reads, and this row is not on it.
         and not getattr(c, "hidden", False)
     ]
-    configured_names = {canonical_agent_name(getattr(c, "name", "")) for c in configured}
+    # The discovered names a stored row redefines, told apart from the switch's
+    # own row the way the switch itself tells them (`_is_switch_row`).
+    discovered_entries = {getattr(c, "name", ""): c.model_dump(by_alias=True) for c in discovered}
+    redefined = {
+        e.get("name")
+        for e in configured_raw
+        if e.get("name") in discovered_entries and not _is_switch_row(e, discovered_entries[e.get("name")])
+    }
 
     entries: list[tuple[Any, str]] = [(c, "builtin") for c in builtin_cfgs]
     # A discovered row is reported as its own source, not as "config": there is no
     # config entry to delete, and the delete button reads ``configured``. Removing
     # one means removing its folder. A row the user has also written by hand is
-    # theirs, so it keeps the config source and its delete button.
+    # theirs, so it keeps the config source and its delete button. The row the
+    # switch writes is not one: listed as config, a switched-off folder offered a
+    # delete that puts it back on the roster past the enable gate, and its Test
+    # ran that row's empty command.
     # "vendored" is the wire name for a discovered row (the clients and the
     # schema read it); renaming it is a schema change, not a refactor.
     entries += [
-        (c, "config" if getattr(c, "name", "") in configured_names else "vendored")
+        (c, "config" if getattr(c, "name", "") in redefined else "vendored")
         if getattr(c, "name", "") in discovered_names
         else (c, "config")
         for c in external
@@ -360,7 +372,9 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # things. Always present, never omitted -- a client cannot tell
                 # a missing key from a false one, and one day it will mean
                 # "this server predates the field".
-                "needs_auth": bool(getattr(snapshot, "needs_auth", False)),
+                # Old capabilities remain useful after a config edit; an old
+                # authentication verdict must not disable the edited row.
+                "needs_auth": bool(getattr(snapshot, "needs_auth", False)) and not getattr(snapshot, "stale", False),
                 "mcps": list(getattr(cfg, "mcps", None) or []),
                 "allow_mcp_secrets": bool(getattr(cfg, "allow_mcp_secrets", False)),
                 "last_test_ok": None if last is None else last.ok,
@@ -370,9 +384,12 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 "test_running": task is not None and not task.done(),
                 "model": getattr(cfg, "model", None),
                 "model_choices": [{"value": c.value, "name": c.name, "group": c.group} for c in meta.model_choices],
+                "effort": getattr(cfg, "effort", None),
+                "effort_choices": [{"value": c.value, "name": c.name} for c in meta.effort_choices],
                 # The row's editing rule, not ownership: what `subagents.update`
                 # accepts for `model` on this row. `own` is the ownership mark.
                 "model_source": _model_rule(cfg, snapshot, meta),
+                "machine": (getattr(cfg, "machine", None) or "").strip() or None,
             }
         )
     return rows
@@ -443,7 +460,10 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     backend, and a refusal in the agent's own words when nothing answers. So
     this spends one call on that agent's own quota, and can hold the add for up
     to the row's own start window plus `_ENABLE_PING_TIMEOUT_SECONDS`
-    (`probe._ping_bounds`). `force: true` bypasses it, as on the
+    (`probe._ping_bounds`), then, for an acp row, up to two start windows more
+    for the capability record (`_record_after_the_answer`); while it runs, `subagents.test_cancel` on the name
+    the entry would land under stops it, and the add refuses with `cancelled`
+    in its data (`_run_once`). `force: true` bypasses it, as on the
     switch. A refusal stores nothing at all -- not the row disabled -- because
     the surface that calls this offers one verb per row: an added row is
     connected, and a row that could not be proved has to stay one Connect away
@@ -456,9 +476,20 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
             data={"preset": preset_name, "known": sorted(THIRD_PARTY_SUBAGENT_PRESETS)},
         )
     entry = third_party_subagent_preset(preset_name)
+    machine = _clean_name(params.get("machine"), field="machine")
+    if machine:
+        remote_cwd = params["remote_cwd"].strip() if isinstance(params.get("remote_cwd"), str) else ""
+        _refuse_unless_it_can_run_there(entry, machine, remote_cwd=remote_cwd)
+        entry["machine"] = machine
+        if remote_cwd:
+            entry["remoteCwd"] = remote_cwd
     name = _clean_name(params.get("name"), field="name")
     if name:
         entry["name"] = name
+    elif machine:
+        # One preset is added once per machine it runs on; the shipped name
+        # alone would be every one of them, so the machine is in the default.
+        entry["name"] = f"{preset_name}@{machine}"
     if params.get("description"):
         entry["description"] = params["description"]
     if (params.get("lend_key") or "").strip():
@@ -487,12 +518,18 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     # would run for an add that could never land -- and for a duplicate name it
     # would run against the *stored* row of that name, because the schema keeps
     # the first of two, so it would prove a row this call is not writing.
+    existing = _read_agents()
+    if machine and not name:
+        _refuse_a_second_entry_there(existing, preset_name, machine)
     try:
         reject_unsupported_openai_fields([entry])
-        entries = [*_read_agents(), entry]
+        reject_unsupported_acp_fields([entry])
+        entries = [*existing, entry]
         validate_agents(entries, config_path=get_config_path())
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
+    if entry.get("model") and entry.get("kind") == "acp":
+        await _refuse_a_model_it_does_not_offer(entry)
     # `force is not True` for the same reason the switch reads it that way: it is
     # declared a boolean, and `"no"` / `"0"` / `"false"` are all truthy in Python
     # while reading as a refusal to whoever sent them.
@@ -508,6 +545,75 @@ async def subagents_add(params: dict, *, agent_loop_factory: "AgentLoopFactory |
         _raise_config_error(exc)
     _hot_apply(agent_loop_factory)
     return {"added": True, "name": entry["name"]}
+
+
+def _refuse_a_second_entry_there(existing: list[dict], preset_name: str, machine: str) -> None:
+    """Refuse a default-named add of a preset the machine already carries.
+
+    One preset is added once per machine -- that is what the default name
+    says -- and the machine is reached by more than one route: the chat's
+    ``raven_config``, the preset's own sheet, the machine's sheet. Seen live
+    (2026-10-19): one route had put Claude Code on a machine under one name,
+    and the next would have put it there again under the default, two rows of
+    one agent on one machine with nothing to tell them apart. Judged on the
+    preset and the machine, not the name, since the routes spell the name
+    differently; judged before the ping, so no prompt is spent on it; and
+    only under the default name -- a caller that names the new entry means a
+    second one (two working directories, say), and is allowed it. The entry
+    the machine has is named, switched off or not: switched off, the fix is
+    to switch it back on rather than to make another.
+    """
+    for row in existing:
+        if str(row.get("preset") or "") != preset_name or str(row.get("machine") or "").strip() != machine:
+            continue
+        held = str(row.get("name") or "")
+        on = row.get("enabled", True)
+        raise ConfigValidationError(
+            f"preset {preset_name!r} is already on machine {machine!r} as {held!r} "
+            + ("(connected); use that entry" if on else "(switched off); switch that entry back on")
+            + ", or give this one a name of its own",
+            data={"field": "machine", "machine": machine, "existing": held},
+        )
+
+
+def _refuse_unless_it_can_run_there(entry: dict, machine: str, *, remote_cwd: str = "") -> None:
+    """Refuse an add on a registered machine before anything is spent on it.
+
+    An acp or cli preset's command is started there by the machine's Raven
+    node; an openai preset's endpoint is reached from the machine through an
+    ssh tunnel, so it has no directory there, and a ``remote_cwd`` is refused
+    with it rather than written and ignored. A built-in agent is Raven's own
+    loop in this process and runs on no other machine, and so is a bundled shim
+    (the ``mirasim_*`` presets): its command is this host's own interpreter. The machine is judged
+    the way a dispatch judges it (:func:`raven.acp_client.remote.machine`):
+    the row registered and usable -- each refusal one sentence,
+    with no address in it.
+    """
+    from raven.acp_client import remote
+
+    shown = str(entry.get("preset") or entry.get("name"))
+    if entry.get("kind") == "builtin":
+        raise ConfigValidationError(
+            f"preset {shown!r} is a built-in agent: Raven's own loop in this process, which runs on no other "
+            "machine; reach the machine from it with exec instead",
+            data={"field": "machine", "machine": machine},
+        )
+    if entry.get("preset") in BUNDLED_SHIM_PRESETS:
+        raise ConfigValidationError(
+            f"preset {shown!r} is served by Raven's own Mirasim adapter, started on this host's interpreter, which "
+            "runs on no other machine",
+            data={"field": "machine", "machine": machine},
+        )
+    if entry.get("kind") == "openai" and remote_cwd:
+        raise ConfigValidationError(
+            f"preset {shown!r} is an openai agent, reached from machine {machine!r} through a tunnel: it has no "
+            "working directory there, so leave remote_cwd out",
+            data={"field": "remote_cwd", "machine": machine},
+        )
+    try:
+        remote.machine(machine)
+    except remote.RemoteMachineError as exc:
+        raise ConfigValidationError(str(exc), data={"field": "machine", "machine": machine}) from exc
 
 
 def _lend_keys(preset: Any, providers: list[Any]) -> list[str]:
@@ -612,6 +718,50 @@ def _model_rule(cfg: Any, snapshot: Any, meta: Any) -> str:
     return "raven" if getattr(snapshot, "agent_name", "") == "raven" else "agent"
 
 
+def _no_such_effort(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
+    """The refusal of an effort the agent's thought_level option does not hold."""
+    offered = f"; it offers {', '.join(choices)}" if choices else "; it offers none"
+    return ConfigValidationError(
+        f"{name!r} has no reasoning effort {proposed!r}{offered}",
+        data={"field": "effort", "name": name},
+    )
+
+
+def _no_such_model(name: str, proposed: str, choices: list[str]) -> ConfigValidationError:
+    """The refusal of a pick the agent's own menu does not hold, for add and update alike."""
+    # Mirrors ``SubagentManager.set_instance_model``'s own message: the values are
+    # opaque provider-qualified ids, so a refusal names how many the agent offers
+    # rather than leaving a reader to guess at the vocabulary.
+    return ConfigValidationError(
+        f"{name!r} has no model {proposed!r}" + (f"; it offers {len(choices)}" if choices else "; it offers none"),
+        data={"field": "model", "name": name},
+    )
+
+
+async def _refuse_a_model_it_does_not_offer(entry: dict) -> None:
+    """Judge an add's model pick on the agent's own menu, as ``subagents.update`` does.
+
+    Before the ping rather than left to it: an agent that refuses the pick goes
+    on with its own default, so the ping passes and the row would be stored
+    naming a model it never runs. A menu never recorded is read from the
+    handshake first, which spends nothing; one of raven's own takes host ids
+    too, and is judged where it is dispatched.
+    """
+    cfg = _as_configs([entry])[0]
+    snapshot = acp_snapshot_for(cfg)
+    if snapshot is None:
+        try:
+            snapshot = await record_capabilities(cfg)
+        except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as update is
+            logger.debug("subagents: {!r} menu not measured for a model pick: {}", cfg.name, exc)
+    meta = agent_meta(cfg, snapshot=snapshot)
+    if _model_rule(cfg, snapshot, meta) != "agent":
+        return
+    choices = [c.value for c in meta.model_choices]
+    if entry["model"] not in choices:
+        raise _no_such_model(str(entry["name"]), entry["model"], choices)
+
+
 def _host_pair(model: str) -> str | None:
     """The id a built-in row stores for ``model``, or ``None`` when no provider
     of raven's can serve it.
@@ -659,6 +809,135 @@ def _host_pair(model: str) -> str | None:
     return stored_model_id(listing, model)
 
 
+@dataclass(frozen=True)
+class _MenuMove:
+    """One handshake taken for a row's model move, and what undoing it needs.
+
+    ``key`` is the name the measurement was stored under and ``stamp`` its
+    ``measured_at_ms``; ``previous`` is the record a refusal restores under that
+    key, ``None`` when there was none to restore. ``destination`` is the
+    measurement when it reached the new model's menu, ``None`` when it did not,
+    with ``detail`` saying why.
+    """
+
+    key: str
+    previous: Any
+    stamp: int
+    destination: Any
+    detail: str
+
+
+async def _measure_the_move(name: str, row_before: dict, target: dict) -> _MenuMove:
+    """Measure ``target`` on the model the row moves to.
+
+    ``record_capabilities`` does not raise for a handshake that failed: it answers
+    an unusable snapshot, and the record it writes keeps the previous model's
+    menus under that verdict. So the measurement only speaks for the new model
+    when it is usable and read the menu -- the test ``subagents.refresh_models``
+    applies -- and otherwise the move is unmeasured.
+    """
+    before = acp_snapshot_for(_as_configs([row_before])[0])
+    cfg = _as_configs([target])[0]
+    try:
+        measured = await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - a move nothing measured is judged as one
+        logger.warning("subagents: {!r} effort menu not re-measured after a model move: {}", name, exc)
+        return _MenuMove(key=cfg.name, previous=None, stamp=0, destination=None, detail=str(exc) or type(exc).__name__)
+    key = str(getattr(measured, "agent", "") or cfg.name)
+    reached = bool(getattr(measured, "usable", False) and getattr(measured, "model_menu_measured", False))
+    return _MenuMove(
+        key=key,
+        previous=before if before is not None and getattr(before, "agent", None) == key else None,
+        stamp=int(getattr(measured, "measured_at_ms", 0) or 0),
+        destination=measured if reached else None,
+        detail="" if reached else str(getattr(measured, "detail", "") or getattr(measured, "status", "")),
+    )
+
+
+def _put_the_rows_menu_back(name: str, move: _MenuMove) -> None:
+    """Undo a capability measurement taken for a model a refused write never adopted.
+
+    The row keeps the model it had, so the store has to describe that model again
+    rather than the one the refused call would have written; with nothing
+    recorded under the measurement's key before, the record this call wrote is
+    dropped instead.
+
+    By the key the measurement wrote, not by the name the request used: a
+    built-in row answers to every name it has had, and a rename measures under
+    the new name. Stamped, so a measurement a Test or a refresh recorded in the
+    meantime is left to stand.
+    """
+    from raven.acp_client.capabilities import SnapshotStore
+
+    try:
+        SnapshotStore().restore(move.key, move.previous, only_if_stamp=move.stamp)
+    except Exception as exc:  # noqa: BLE001 - the refusal is the answer; a cache undo is not
+        logger.warning("subagents: {!r} capability menu not put back after a refused model move: {}", name, exc)
+
+
+async def _apply_the_effort(params: dict, target: dict, name: str, move: _MenuMove | None) -> None:
+    """Write this call's ``effort`` or ``clear_effort`` onto ``target``, or refuse it.
+
+    A pick is judged against the menu of the model the row ends this call on:
+    ``move``'s measurement when the call moves the row, else the stored record.
+    """
+    if target.get("kind") != "acp":
+        raise ConfigFieldReadonlyError(
+            f"effort is not editable for kind {target.get('kind')!r}: only an acp agent advertises a thought_level menu",
+            data={"field": "effort", "name": name},
+        )
+    if params.get("clear_effort"):
+        target["effort"] = None
+        return
+    cfg = _as_configs([target])[0]
+    if move is not None:
+        if move.destination is None:
+            raise _effort_menu_unread(name, target.get("model"), move.detail)
+        snapshot = move.destination
+    else:
+        snapshot = acp_snapshot_for(cfg)
+        if snapshot is None:
+            # A menu never measured is not "offers none": the thought_level
+            # option rides the same session response as the model menu, which
+            # the free handshake already takes.
+            try:
+                snapshot = await record_capabilities(cfg)
+            except Exception as exc:  # noqa: BLE001 - judged on what is recorded, as the model pick is
+                logger.debug("subagents: {!r} effort menu not measured for a pick: {}", name, exc)
+    choices = [c.value for c in agent_meta(cfg, snapshot=snapshot).effort_choices]
+    proposed = str(params["effort"])
+    if proposed not in choices:
+        raise _no_such_effort(name, proposed, choices)
+    target["effort"] = proposed
+
+
+def _drop_an_effort_the_move_lacks(target: dict, move: _MenuMove) -> None:
+    """Clear ``target``'s stored effort when the model it moved to does not offer it.
+
+    Judged like a pick, against the menu just measured: a rung the new model
+    lacks is refused by the agent on every turn, and with no menu the page hides
+    the picker, so the value could be neither seen nor cleared. Left alone when
+    the read failed -- there is nothing to judge it by.
+    """
+    effort = target.get("effort")
+    if move.destination is None or not effort:
+        return
+    offered = agent_meta(_as_configs([target])[0], snapshot=move.destination).effort_choices
+    if effort not in [c.value for c in offered]:
+        target["effort"] = None
+
+
+def _effort_menu_unread(name: str, model: Any, detail: str) -> ConfigValidationError:
+    """The refusal of an effort picked with a model move whose menu could not be read."""
+    on = f"on {model!r}" if model else "on its own model"
+    why = f" ({detail})" if detail else ""
+    return ConfigValidationError(
+        f"could not read {name!r}'s reasoning effort menu {on}{why}, so the effort was not checked "
+        "and nothing was changed; test the agent, then pick again",
+        data={"field": "effort", "name": name},
+    )
+
+
 async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
     """Change editable presentation, credential, MCP policy and model fields."""
     name = params.get("name")
@@ -688,13 +967,20 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             )
     else:
         target = next((e for e in entries if e.get("name") == name), None)
-    materialized_discovered = target is None
-    if target is None:
-        from raven.agent.subagent.vendored_agents import discover_product_rows
-
-        discovered = next((cfg for cfg in discover_product_rows() if getattr(cfg, "name", None) == name), None)
-        if discovered is not None:
-            target = discovered.model_dump(by_alias=True)
+    shipped = _discovered_entry(str(name or ""))
+    # The switch's own row carries the switch alone -- the table reads only its
+    # flag -- so an edit written there reached nothing, and a rename moved the
+    # switch off its folder, which put the agent back on the roster past the
+    # enable gate. The folder's entry takes the edit instead, as it does when
+    # there is no row at all, and keeps the switch's "no".
+    switch = target if target is not None and shipped is not None and _is_switch_row(target, shipped) else None
+    materialized_discovered = target is None or switch is not None
+    if switch is not None:
+        target = {**shipped, "enabled": bool(switch.get("enabled", False))}
+        entries = [target if e is switch else e for e in entries]
+    elif target is None:
+        if shipped is not None:
+            target = dict(shipped)
             entries.append(target)
         elif is_builtin_agent_name(name or ""):
             # A built-in row has no config entry until its first edit -- writing
@@ -726,6 +1012,14 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 data={"field": "new_name", "name": name},
             )
         target["name"] = new_name
+        if new_name != name_before:
+            # Refused now rather than at the write: the capability store keys a
+            # record by agent name, so a handshake below taken under a name another
+            # row holds would write over that row's record.
+            try:
+                validate_agents(entries, config_path=get_config_path())
+            except (ValueError, ValidationError) as exc:
+                _raise_config_error(exc)
     if "description" in params:
         description = params["description"]
         # Blank, whitespace-only or explicit ``null`` all revert to the factory
@@ -753,7 +1047,8 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                 "only an acp agent can be started with Raven's keys", data={"field": "lend_keys", "name": name}
             )
         target["lendKeys"] = _lend_keys(target.get("preset"), list(params["lend_keys"]))
-    if params.get("clear_model") or params.get("model") is not None:
+    model_moved = params.get("clear_model") or params.get("model") is not None
+    if model_moved:
         cfg_for_meta = _as_configs([target])[0]
         snapshot = acp_snapshot_for(cfg_for_meta) if cfg_for_meta.kind == "acp" else None
         if snapshot is None and cfg_for_meta.kind == "acp" and params.get("model") is not None:
@@ -785,15 +1080,7 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
             if proposed in choices:
                 target["model"] = proposed
             elif rule == "agent" and not own_acp:
-                # Mirrors ``SubagentManager.set_instance_model``'s own message: the
-                # values are opaque provider-qualified ids, so a refusal names how
-                # many the agent offers rather than leaving a reader to guess at
-                # the vocabulary.
-                raise ConfigValidationError(
-                    f"{name!r} has no model {proposed!r}"
-                    + (f"; it offers {len(choices)}" if choices else "; it offers none"),
-                    data={"field": "model", "name": name},
-                )
+                raise _no_such_model(name, proposed, choices)
             else:
                 # One of raven's own reaches here under either rule, and so takes
                 # either vocabulary: it runs on this host's providers, so a host id
@@ -825,33 +1112,95 @@ async def subagents_update(params: dict, *, agent_loop_factory: "AgentLoopFactor
                         data={"field": "model", "name": name},
                     )
                 target["model"] = stored
-    # A credential or a model swapped under a row that is already on is a
-    # connect nobody gated: the row goes on serving dispatches with something
-    # nothing has tried, and the first real task is what discovers the typo. So
-    # it is asked here, the same question the switch asks, and only when one of
-    # the two actually moved -- the sheet posts whatever is in its field, so an
-    # unchanged form would otherwise spend a call on every save. A row that is
-    # off is left alone: nothing is serving, and the switch that turns it on is
-    # already gated, so asking here would buy the same answer twice.
-    if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
-        await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
-        entries, target = _merged_over_the_ping(target, row_before, name_before, materialized=materialized_discovered)
+    # A row moved to another model is on that model's effort menu, and nothing
+    # else marks the record stale: the model is not a launch field, so no read
+    # re-measures it. So the move is measured on the model it moves to, and the
+    # menu an effort in this same call is judged against, the stored effort the
+    # row keeps or drops, and the menu the picker draws next are all that model's.
+    #
+    # When depends on what the call carries. An effort is judged before the
+    # connect gate below spends a prompt on the agent. A move without one is
+    # measured after the gate, so an agent that does not start is waited out once,
+    # by the gate, rather than by a handshake and then by the gate again.
+    #
+    # The measurement describes a model this call may still refuse to write, so
+    # every step that can refuse runs inside one guard: a refusal puts the
+    # previous record back rather than leaving the store describing a model the
+    # row never moved to.
+    moved_the_row = bool(model_moved and target.get("kind") == "acp" and target.get("model") != model_before)
+    picks_effort = params.get("effort") is not None and not params.get("clear_effort")
+    move: _MenuMove | None = None
+    committed = False
     try:
-        reject_unsupported_openai_fields([target])
-        set_agents(entries, config_path=get_config_path())
-    except (ValueError, ValidationError) as exc:
-        _raise_config_error(exc)
+        if moved_the_row and picks_effort:
+            move = await _measure_the_move(name, row_before, target)
+        if params.get("clear_effort") or params.get("effort") is not None:
+            await _apply_the_effort(params, target, name, move)
+        # A form saves every field it shows, so an edit can leave a folder's entry as
+        # it found it, and a stored copy would then outlive the manifest it was taken
+        # from. What is stored -- the switch, or nothing -- stands.
+        if materialized_discovered and shipped is not None and _is_switch_row(target, shipped):
+            committed = True
+            return {"updated": True, "name": target["name"]}
+        # A credential or a model swapped under a row that is already on is a
+        # connect nobody gated: the row goes on serving dispatches with something
+        # nothing has tried, and the first real task is what discovers the typo. So
+        # it is asked here, the same question the switch asks, and only when one of
+        # the two actually moved -- the sheet posts whatever is in its field, so an
+        # unchanged form would otherwise spend a call on every save. A row that is
+        # off is left alone: nothing is serving, and the switch that turns it on is
+        # already gated, so asking here would buy the same answer twice.
+        if bool(target.get("enabled")) and (target.get("apiKey") != key_before or target.get("model") != model_before):
+            await _refuse_unless_it_answers(entries, str(target["name"]), refusal="so it was not changed")
+        if moved_the_row and move is None:
+            move = await _measure_the_move(name, row_before, target)
+        # Read again after the last await, whichever ran: the gate's prompt and a
+        # move's handshake each give other `subagents.*` writes time to land.
+        entries, target = _merged_over_the_awaits(
+            target,
+            row_before,
+            name_before,
+            materialized=materialized_discovered,
+            shipped=shipped,
+            switch_row=switch is not None,
+        )
+        if move is not None:
+            _drop_an_effort_the_move_lacks(target, move)
+        try:
+            reject_unsupported_openai_fields([target])
+            reject_unsupported_acp_fields([target])
+            set_agents(entries, config_path=get_config_path())
+        except (ValueError, ValidationError) as exc:
+            _raise_config_error(exc)
+        committed = True
+    finally:
+        # Not `except Exception`: a cancelled call can leave the same row behind
+        # as a refused one, and CancelledError is not an Exception. `committed`
+        # separates the two outcomes -- a discarded write restores the record,
+        # a landed one keeps the measurement that describes it.
+        if not committed and move is not None and move.stamp:
+            _put_the_rows_menu_back(name, move)
     _hot_apply(agent_loop_factory)
     return {"updated": True, "name": target["name"]}
 
 
-def _merged_over_the_ping(
-    target: dict, before: dict, stored_name: str | None, *, materialized: bool
+def _merged_over_the_awaits(
+    target: dict,
+    before: dict,
+    stored_name: str | None,
+    *,
+    materialized: bool,
+    shipped: dict | None = None,
+    switch_row: bool = False,
 ) -> tuple[list[dict], dict]:
-    """Re-read the agent list across the gate's await, keeping both authors.
+    """Re-read the agent list across the call's awaits, keeping both authors.
 
-    The list read before a ping of up to a minute is stale in two ways, and
-    they want different answers.
+    The list read before the gate's ping of up to a minute, or a model move's
+    handshake bounded only by the agent's readiness timeout, is stale in two
+    ways, and they want different answers. It is read once, after the last of
+    them: this call's own fields are worked out against ``before`` every time,
+    and a second merge over a list the first had already merged into ``target``
+    would replay fields another writer set there.
 
     Rows this call never touched are simply whatever disk says now, so the list
     is read again -- writing back the one read before the ping would revert
@@ -871,18 +1220,33 @@ def _merged_over_the_ping(
     removed meanwhile, and there is nothing left to merge onto: the change is
     refused rather than resurrecting a row somebody deleted. The exception is a
     row this call materialized itself -- a discovered folder or a built-in
-    getting its first stored entry -- which was never on disk to be found.
+    getting its first stored entry -- which was never on disk to be found. Under
+    a folder's name disk may hold the switch's stub instead, which carries the
+    flag and nothing to merge onto: the folder's entry this call built replaces
+    it whole, as the write would have without the await.
+
+    The flag is the one field that is never carried from the pre-await copy,
+    because it is the one a concurrent `subagents.toggle` writes. A stub still on
+    disk when this returns is the switch as it now stands, so its flag wins; a
+    stub that is gone was switched ON, which is spelled by removing the row at
+    all (the folder governs), and a row put back with the old flag would switch
+    the agent off again after that toggle had answered success.
     """
     entries = _read_agents()
     current = next((e for e in entries if e.get("name") == stored_name), None)
     if current is None:
         if materialized:
+            if switch_row:
+                target["enabled"] = True
             entries.append(target)
             return entries, target
         raise SubagentNotFoundError(
-            f"sub-agent {stored_name!r} was renamed or removed while it was being proved, so it was not changed",
+            f"sub-agent {stored_name!r} was renamed or removed while this change was being checked, so it was not changed",
             data={"name": stored_name, "field": "name"},
         )
+    if materialized and shipped is not None and _is_switch_row(current, shipped):
+        target["enabled"] = bool(current.get("enabled", False))
+        return [target if e is current else e for e in entries], target
     current.update({key: value for key, value in target.items() if before.get(key) != value})
     return entries, current
 
@@ -911,6 +1275,11 @@ def _is_switch_row(stored: dict, discovered: dict) -> bool:
         return True
     drop = {"enabled", "switchOnly", "switch_only"}
     return {k: v for k, v in stored.items() if k not in drop} == {k: v for k, v in discovered.items() if k not in drop}
+
+
+def _switch_row(name: str, discovered: dict) -> dict:
+    """The stored "no" of a discovered folder: its name, its kind and the flag."""
+    return {"name": name, "kind": discovered.get("kind", "cli"), "enabled": False, "command": "", "switchOnly": True}
 
 
 def _discovered_entry(name: str) -> dict | None:
@@ -967,9 +1336,12 @@ async def _read_the_shell_again(cfg: Any) -> None:
     Only for the kinds that launch a process: an endpoint is called from this
     process, whose own environment a capture does not change. The capture runs
     the user's shell and can take seconds, which a press about to spend a real
-    prompt can afford and a listing cannot.
+    prompt can afford and a listing cannot. Not for an agent on a registered
+    machine either: its node starts it in that machine's login environment,
+    captured there, and this computer's shell says nothing about it.
     """
-    if getattr(cfg, "kind", None) in ("cli", "acp"):
+    on_machine = bool((getattr(cfg, "machine", None) or "").strip())
+    if getattr(cfg, "kind", None) in ("cli", "acp") and not on_machine:
         await asyncio.to_thread(refresh_login_shell_env)
 
 
@@ -1008,19 +1380,8 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
         return
     if getattr(cfg, "kind", None) not in _PINGED_KINDS:
         return
-    await _read_the_shell_again(cfg)
-    result = await ping_agent(cfg)
+    result = await _run_once(cfg, name, refusal=refusal)
     if result.ok:
-        if getattr(cfg, "kind", None) == "acp" and capabilities_wanted(cfg):
-            # It answered, so it can be measured: the record its statefulness,
-            # menu and modes are read from is written now rather than left to
-            # the Test button or the next restart. Best effort -- the agent has
-            # already proved itself, and a handshake that fails afterwards is
-            # not a reason to refuse the connect.
-            try:
-                await record_capabilities(cfg)
-            except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
-                logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
         return
     # `detail` is repeated inside `data` deliberately: the dispatcher fills
     # `data` from `detail` only when a handler passed no `data` of its own, so a
@@ -1047,6 +1408,85 @@ async def _refuse_unless_it_answers(entries: list[dict], name: str, *, refusal: 
             if models:
                 data["models"] = models[:20]
     raise SubagentNotReadyError(detail, data=data)
+
+
+async def _record_after_the_answer(cfg: Any, name: str) -> None:
+    """Measure an acp row that has just answered the gate's prompt, when its record wants it.
+
+    It answered, so it can be measured: the record its statefulness, menu and
+    modes are read from is written now rather than left to the Test button or
+    the next restart. Best effort -- the agent has already proved itself, and
+    a handshake that fails afterwards is not a reason to refuse the connect. A
+    cancel is not a failure of the handshake and is not caught here: it ends
+    the run, and the gate refuses as for a cancel during the prompt.
+    """
+    if getattr(cfg, "kind", None) != "acp" or not capabilities_wanted(cfg):
+        return
+    try:
+        await record_capabilities(cfg)
+    except Exception as exc:  # noqa: BLE001 - the connect stands on the ping
+        logger.warning("subagents: {!r} answered but its capabilities could not be recorded: {}", name, exc)
+
+
+async def _run_once(cfg: Any, name: str, *, refusal: str) -> PingResult:
+    """The gate's one real prompt, held in `_RUNNING` under the entry's name while it runs.
+
+    The same map a test's run is held in, so `subagents.test_cancel` reaches
+    this run the same way -- the machine form's Cancel is that call, on the
+    name the entry lands under -- and the roster's `test_running` says the
+    agent is being run whichever press started it. One run per name at a
+    time, as for a test: a second would be a second real prompt on the agent's
+    own quota, and whichever ended first would take the other's entry out of
+    the map, leaving that one uncancellable for the rest of its timeout.
+
+    Cancelled, the gate refuses with `cancelled` in its data and the caller
+    writes nothing: a run that was stopped proved nothing either way. Only a
+    cancel of this run reads that way. A cancel of the call itself -- its
+    connection went, and the transport cancels what that connection had in
+    flight -- keeps unwinding, so no frame is composed for a socket that is
+    gone; the run is cancelled with it, since the call was awaiting it.
+
+    The login shell's capture is inside the task, as it is for a test, so a
+    cancel pressed during it ends the wait too. So is the capability record an
+    acp row that answered is measured with (`_record_after_the_answer`): that
+    is a second launch and handshake, two requests of up to the preset's start window each, and
+    outside the task it ran after the name had left `_RUNNING` -- a cancel then
+    answered `cancelled: false` and the caller went on to write. Inside it, the
+    whole stretch between the press and the write is one run a cancel reaches.
+    """
+    live = _RUNNING.get(name)
+    if live is not None and not live.done():
+        detail = f"sub-agent {name!r} is already running (a test, or a connect proving it), {refusal}; wait for it to end, or stop it"
+        raise SubagentNotReadyError(detail, data={"name": name, "field": "enabled", "detail": detail})
+
+    answered = False
+
+    async def _run() -> PingResult:
+        nonlocal answered
+        await _read_the_shell_again(cfg)
+        result = await ping_agent(cfg)
+        if result.ok:
+            answered = True
+            await _record_after_the_answer(cfg, name)
+        return result
+
+    task = asyncio.ensure_future(_run())
+    _RUNNING[name] = task
+    try:
+        return await task
+    except asyncio.CancelledError:
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            raise
+        when = "after it answered, while its capabilities were being recorded" if answered else "before it answered"
+        detail = f"the run of sub-agent {name!r} was cancelled {when}, {refusal}"
+        raise SubagentNotReadyError(
+            detail, data={"name": name, "field": "enabled", "detail": detail, "cancelled": True}
+        ) from None
+    finally:
+        # Identity-checked, as for a test: only this call's own entry comes out.
+        if _RUNNING.get(name) is task:
+            _RUNNING.pop(name, None)
 
 
 def _read_agents() -> list[dict]:
@@ -1121,9 +1561,7 @@ def _resolve_toggle(entries: list[dict], name: Any, enabled: bool) -> tuple[list
         # that had moved on. This row declares no launcher because it defines
         # nothing; the folder still defines the agent, and the merge reads only
         # the flag from here.
-        entries.append(
-            {"name": name, "kind": discovered.get("kind", "cli"), "enabled": enabled, "command": "", "switchOnly": True}
-        )
+        entries.append(_switch_row(name, discovered))
     elif enabled and discovered is None and "command" in target and not str(target["command"] or "").strip():
         # Asked to enable a row that names no launcher and no folder: there is
         # nothing to start, so the switch answers what is true rather than
@@ -1144,7 +1582,8 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
     answers: the roster's entry criterion is that the agent works now, not that
     it is installed. So this spends one call on that agent's own quota and can
     hold the switch for up to the row's own start window plus
-    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`). Exempt: switching
+    `_ENABLE_PING_TIMEOUT_SECONDS` (`probe._ping_bounds`), then, for an acp
+    row, up to two start windows more for the capability record. Exempt: switching
     off, a `builtin` row (this process, with no backend to reach), and
     `force: true`, the operator's override for an agent whose provider is
     briefly down. A refusal writes nothing.
@@ -1176,9 +1615,30 @@ async def subagents_toggle(params: dict, *, agent_loop_factory: "AgentLoopFactor
 
 
 async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
-    """Delete one entry. Reports `removed: false` for a name that was not there."""
+    """Delete one entry. Reports `removed: false` for a name that was not there.
+
+    A discovered folder's row that is off leaves its "no" behind as the switch's
+    own row: without the row the folder defines the agent again, and dropping
+    the flag with it put the agent back on the roster past the enable gate. The
+    switch's row is no definition to delete, so removing one removes nothing.
+    """
+    name = params.get("name", "")
     try:
-        removed = remove_agent(params.get("name", ""), config_path=get_config_path())
+        entries = get_agents(config_path=get_config_path())
+    except ValidationError as exc:
+        _raise_config_error(exc)
+    stored = next((e for e in entries if e.get("name") == name), None)
+    shipped = _discovered_entry(str(name or "")) if stored is not None and not stored.get("enabled", True) else None
+    try:
+        if shipped is None:
+            removed = remove_agent(name, config_path=get_config_path())
+        elif _is_switch_row(stored, shipped):
+            removed = False
+        else:
+            set_agents(
+                [_switch_row(name, shipped) if e is stored else e for e in entries], config_path=get_config_path()
+            )
+            removed = True
     except (ValueError, ValidationError) as exc:
         _raise_config_error(exc)
     if removed:
@@ -1186,7 +1646,9 @@ async def subagents_remove(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"removed": removed}
 
 
-# name -> the in-flight test task, so `subagents.test_cancel` can reach it.
+# name -> the agent's in-flight run, so `subagents.test_cancel` can reach it:
+# a test's (`subagents_test`), or the one real prompt a connect proves the
+# entry with (`_run_once`, under the name the entry has or lands under).
 # Cancelling the task is what kills the subprocess: `CliAgentBackend` catches
 # `asyncio.CancelledError` and killpg's the whole process group
 # (`backends/cli_agent.py:170`), and `run_test` catches only `Exception`, so the
@@ -1262,12 +1724,13 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
     # entry, so whichever run finished first would pop the *other* run's entry out
     # from under it, leaving that survivor both undispatchable-a-verdict and
     # uncancellable for up to the full test timeout. Refusing keeps one running
-    # test per name, which keeps `subagents.test_cancel` able to reach it.
+    # test per name, which keeps `subagents.test_cancel` able to reach it. The
+    # run in flight may be a connect's proof (`_run_once`) rather than a test.
     existing = _RUNNING.get(name)
     if existing is not None and not existing.done():
         return {
             "ok": False,
-            "detail": f"a test is already running for {name!r}",
+            "detail": f"{name!r} is already running (a test, or a connect proving it)",
             "elapsed_ms": 0,
             "reply": None,
             "cancelled": False,
@@ -1332,18 +1795,320 @@ async def subagents_test(params: dict, *, agent_loop_factory: "AgentLoopFactory 
 
 
 async def subagents_test_cancel(params: dict) -> dict:
-    """Cancel an in-flight test. Only the asyncio task is cancelled here.
+    """Cancel the named agent's in-flight run. Only the asyncio task is cancelled here.
 
-    What that reaps belongs to the measurement it interrupts: a cli test unwinds
-    into the backend, which kills the agent's process group; an acp test unwinds
-    into the closes its handshake and its ping each hold, and each of those ends
-    the child it launched. Neither leaves a process behind.
+    The run is a test's, or the proof prompt a connect sends together with the
+    capability record an acp row is measured with once it answers (`_run_once`):
+    that connect -- `subagents.add`, `subagents.toggle`, `subagents.update` --
+    then refuses with `cancelled` in its data and writes nothing, where a test
+    answers `cancelled: true`. What the cancel reaps belongs to the measurement
+    it interrupts: a cli run unwinds into the backend, which kills the agent's
+    process group; an acp run unwinds into the closes its handshake and its
+    ping each hold, and each of those ends the child it launched, on this
+    computer or through the machine's node. Neither leaves a process behind.
     """
     task = _RUNNING.get(params.get("name", ""))
     if task is None or task.done():
         return {"cancelled": False}
     task.cancel()
     return {"cancelled": True}
+
+
+_MENU_TASKS: dict[tuple[str, str], asyncio.Task[Any]] = {}
+"""The menu reads in flight, by (source, agent name), so concurrent asks share one handshake.
+
+The source is part of the key because a config row and a preset may share a
+name; one is not the other's stored menu, and a task started for one must not
+answer the other."""
+
+_MENU_READ_AT: dict[tuple[str, str], tuple[float, bool, str]] = {}
+"""``time.monotonic()``, ``ok`` and ``detail`` of each (source, agent) menu's last read.
+
+Recorded however the read ended, because the failure is what an automatic ask
+next has to be told: a failed read keeps the previous menu in the store, and a
+picker opening again inside the cooldown is answered from here. Stamped on
+failure as well as on success, since launching an agent that has just failed to
+start, once per open, is what the cooldown is there to stop -- so the entry has
+to carry the outcome too, or suppressing the launch would report the recorded
+menu as a fresh read."""
+
+_MENU_REFRESH_COOLDOWN_S = 5.0
+"""How long an automatic ask trusts the last read, answered or failed.
+
+A picker opened, closed and opened again is one reader looking at one menu; it
+should not launch the agent a second time -- and an agent that just failed to
+start should not be launched again inside the same window either. Its answer is
+the outcome recorded with the stamp. A manual refresh (`force`) always reads,
+because that press means the menu itself moved."""
+
+_MENU_REFRESH_TIMEOUT_S = 60.0
+"""How long a menu read may take before the caller is told it did not answer.
+
+Under the Mirasim presets' own 150 s start budget and over the adapter's 30 s
+catalog read, so a slow host still answers where an agent that hung is reported."""
+
+
+def _wire_choices(choices: Any) -> list[dict[str, str]]:
+    """Model choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name, "group": c.group} for c in choices or ()]
+
+
+def _wire_efforts(choices: Any) -> list[dict[str, str]]:
+    """Effort choices in the shape ``subagents.list`` sends them."""
+    return [{"value": c.value, "name": c.name} for c in choices or ()]
+
+
+def _recorded_menu(cfg: Any) -> dict[str, Any]:
+    """The menu the capability store holds for ``cfg``, in ``subagents.list``'s shape."""
+    meta = agent_meta(cfg, snapshot=acp_snapshot_for(cfg))
+    return {
+        "models": _wire_choices(meta.model_choices),
+        "effort_choices": _wire_efforts(getattr(meta, "effort_choices", ())),
+    }
+
+
+_READ_BOOKKEEPING = ("measuredAtMs", "elapsedMs", "status", "detail")
+
+
+def _read_left_the_capabilities_alone(previous: Any, stored: Any) -> bool:
+    """Did this read change a capability the composed table derives?
+
+    ``previous`` is the row the store held before the read and ``stored`` the one
+    it holds after.
+
+    Compared on the stored row without the read's own bookkeeping -- when it was
+    taken, how long it took, and what it said about the attempt -- because every
+    other field is what ``_row_for`` builds a row's caps and injectability from.
+    A failed read keeps the previous capabilities and rewrites only that
+    bookkeeping (``_test_record``), so it belongs here too: recomposing for it
+    would replace every backend to show what the table already showed.
+
+    A measurement that cannot produce a stored row (a test double, a shape this
+    function does not know) is never called unchanged, so a read is never left
+    unsynced on the strength of a shape that is not the real one.
+    """
+    if previous is None or stored is None:
+        return False
+    stored_before = getattr(previous, "to_row", None)
+    stored_after = getattr(stored, "to_row", None)
+    if not callable(stored_before) or not callable(stored_after):
+        return False
+    left, right = stored_before(), stored_after()
+    for key in _READ_BOOKKEEPING:
+        left.pop(key, None)
+        right.pop(key, None)
+    return left == right
+
+
+async def _read_menu_and_sync(
+    key: tuple[str, str], cfg: Any, source: str, agent_loop_factory: "AgentLoopFactory | None"
+) -> Any:
+    """One menu read, and the table sync that belongs with it.
+
+    The body of the shared task rather than of a waiter: the read is shielded, so
+    it completes after every asker has timed out or disconnected, and the store
+    still gets the menu it measured. The table has to be recomposed here too, or
+    `subagents.list` (which reads the store) and the composed table answer
+    different menus until the next apply.
+
+    Recomposed only when the read changed a capability: the picker asks for this
+    read every time it opens, and an apply replaces every backend instance. When
+    the handshake reports what the row already held there is nothing for the
+    table to pick up. The comparison is against the row the store now holds, not
+    the handshake's own answer: a failed handshake answers with no capabilities
+    at all while the store keeps the previous ones, and read off the answer every
+    failure looked like news.
+
+    Stamped for the cooldown however the read ended, with how it ended. A failed
+    read leaves the recorded menu standing, and that is what a picker opening
+    moments later takes; launching an agent that just failed to start on every
+    open is what the cooldown is there to stop, and the outcome recorded with
+    the stamp is what the suppressed ask answers with. A press of the refresh
+    control still reads.
+    """
+    previous = acp_snapshot_for(cfg)
+    snapshot = await record_capabilities(cfg)
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    # Stamped for the cooldown however the read ended, with the outcome: a
+    # failed read leaves the recorded menu standing, and that is what a picker
+    # opening moments later takes -- told how this read went, so it repeats the
+    # reason instead of presenting the old menu as a fresh one. A press of the
+    # refresh control still reads.
+    _MENU_READ_AT[key] = (time.monotonic(), measured, str(getattr(snapshot, "detail", "") or ""))
+    if source != "preset" and not _read_left_the_capabilities_alone(previous, acp_snapshot_for(cfg)):
+        # The roster reads `stateful` and the menu from the table built the last
+        # time `apply` ran, so a snapshot written now has to reach the table or
+        # `subagents.list` and the instance picker answer different menus.
+        try:
+            _hot_apply(agent_loop_factory)
+        except Exception as exc:  # noqa: BLE001 - the measurement is already recorded
+            logger.warning("subagent menu refreshed but the agent table was not re-composed: {}", exc)
+    return snapshot
+
+
+async def subagents_refresh_models(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:
+    """Read an acp agent's model menu from its handshake again, spending no prompt.
+
+    An acp row's menu is a capability snapshot: a launch-config change invalidates
+    it, and a Test or a session response re-learns it. But the agent's own menu can
+    move while its launch stays identical -- Mirasim adds the user's provider
+    profiles to the catalog it answers with -- and then nothing marks the snapshot
+    stale. The picker goes on drawing yesterday's menu until someone runs a whole
+    Test, which spends a prompt, or starts a turn through the agent.
+
+    This is that read without the prompt: ``initialize`` plus ``session/new``, the
+    free handshake :func:`record_capabilities` records. A session is opened in a
+    throwaway directory and never prompted, so it costs no tokens.
+
+    ``force`` separates the two callers. A reader pressing refresh means the menu
+    moved since the last read, so it always launches. A picker opening on its own
+    does not: a read moments ago is taken as current rather than launching the
+    agent again -- and answered as it ended, so a failed one still says why.
+    Concurrent asks for one agent share one handshake either way, and
+    the sync to the composed table is part of that shared read -- a read that
+    outlives its last asker still leaves the store and the table agreeing. A read
+    that reports the capabilities the row already held does not recompose at all:
+    the rebuild replaces every backend instance, and there is nothing new to show.
+
+    A read that fails keeps the recorded menu in place (``record_capabilities``
+    hands a failed measurement to ``_test_record``, which retains the previous
+    capabilities) and answers it with ``ok: false``, so the picker can show the old
+    list with the reason beside it instead of emptying.
+
+    Unlike a Test or a Connect, this does not take the login shell's environment
+    again. Those presses follow a fix made in a terminal; this one reads a menu,
+    and the press that follows a fix is still Check again or Test.
+
+    Only an acp row has a menu to read. Every other kind is refused rather than
+    answered with an empty one, which would read as an agent that offers nothing.
+    """
+    name = params.get("name", "")
+    source = params.get("source", "config")
+    force = bool(params.get("force", False))
+    cfg = _find(name, source)
+    if getattr(cfg, "kind", None) != "acp":
+        raise ConfigFieldReadonlyError(
+            f"sub-agent {name!r} has no model menu to re-read: only an acp agent advertises one",
+            data={"field": "model", "name": name},
+        )
+
+    key = (source, name)
+    task = _MENU_TASKS.get(key)
+    if task is None or task.done():
+        last = _MENU_READ_AT.get(key)
+        if not force and last is not None and time.monotonic() - last[0] < _MENU_REFRESH_COOLDOWN_S:
+            # The read this stands in for, told as it ended: a failed one leaves
+            # the recorded menu in the store, and answering `ok` would draw that
+            # menu as current and drop the reason the picker was showing.
+            return {"ok": last[1], "detail": last[2], **_recorded_menu(cfg)}
+        task = asyncio.ensure_future(_read_menu_and_sync(key, cfg, source, agent_loop_factory))
+        _MENU_TASKS[key] = task
+        task.add_done_callback(lambda done, key=key: _forget_menu_task(key, done))
+
+    try:
+        # Shielded: the read is shared, so one asker's budget running out, or its
+        # connection closing, must not cancel it under every asker joined to it.
+        snapshot = await asyncio.wait_for(asyncio.shield(task), timeout=_MENU_REFRESH_TIMEOUT_S)
+    except TimeoutError:
+        return {
+            "ok": False,
+            "detail": f"the agent did not report its menu within {_MENU_REFRESH_TIMEOUT_S:.0f}s",
+            **_recorded_menu(cfg),
+        }
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - one failed read must not end the connection
+        logger.warning("subagents: {!r} menu could not be read: {}", name, exc)
+        return {"ok": False, "detail": str(exc) or type(exc).__name__, **_recorded_menu(cfg)}
+
+    measured = bool(getattr(snapshot, "usable", False) and getattr(snapshot, "model_menu_measured", False))
+    # The measured menu is the one just recorded; the store read is only for the
+    # paths where a failed read keeps the previous one in place. The effort menu
+    # is sent too: for a model-specific option it moves with the model, and the
+    # picker that asked for this read is still open on the old rungs.
+    recorded = _recorded_menu(cfg)
+    if measured:
+        # Read the two menus off the snapshot the read just returned rather than
+        # through `agent_meta`, which also derives policy a refresh must not
+        # re-evaluate (and which test doubles for the handshake do not carry);
+        # `acp_menus` is the derivation `agent_meta` itself uses.
+        menus = acp_menus(snapshot)
+        models = _wire_choices(menus.models)
+        effort_choices = _wire_efforts(menus.efforts)
+    else:
+        models = recorded["models"]
+        effort_choices = recorded["effort_choices"]
+    return {
+        "ok": measured,
+        "detail": getattr(snapshot, "detail", "") or "",
+        "models": models,
+        "effort_choices": effort_choices,
+    }
+
+
+def _forget_menu_task(key: tuple[str, str], done: asyncio.Task[Any]) -> None:
+    """Drop a finished read from the in-flight table, only while it is still this one."""
+    if _MENU_TASKS.get(key) is done:
+        _MENU_TASKS.pop(key, None)
+    if not done.cancelled():
+        # A read that outlived its last asker has no one to raise into; marking
+        # the exception retrieved keeps the loop from logging it as unhandled.
+        done.exception()
+
+
+async def subagents_presets(params: dict) -> dict:
+    """The presets an entry can be made from on a registered machine, and where each already is.
+
+    What the machines tab's "connect an agent on this machine" form chooses
+    from. Unlike ``subagents.list``, a preset is listed here whether or not an
+    entry already holds it: an entry is one preset on one machine, so a preset
+    connected on this computer is still to be had on each machine, under
+    the add's default ``<preset>@<machine id>`` -- the roster withholds it only because two
+    rows of one NAME would be unusable there. Only the kinds a machine's node
+    starts are listed (acp, cli): a built-in agent is this process's own loop,
+    a Mirasim shim runs on this host's interpreter, and an openai endpoint
+    takes a key this form does not. The page greys a preset the machine
+    already has connected (``on_machines``), offers one it has switched off
+    back under its entry's name (``off_on_machines``), and says when this
+    computer has it too (``connected_here``), so the add's own refusals are
+    not the first word.
+    """
+    configured = _as_configs(_read_agents())
+    presets: list[dict[str, Any]] = []
+    for preset in third_party_subagent_presets():
+        key = str(preset.get("preset") or "")
+        kind = preset.get("kind")
+        if kind not in ("acp", "cli") or key in BUNDLED_SHIM_PRESETS:
+            continue
+        name = str(preset.get("name") or key)
+        holders = [c for c in configured if getattr(c, "preset", None) == key or getattr(c, "name", "") == name]
+        # (machine, switched on, entry name) per holder: a machine's entry that
+        # is switched off still holds the machine for the add's duplicate rule,
+        # so the form has to see it -- as something to switch back on, by name
+        # -- rather than count it nowhere.
+        wheres = [
+            (
+                (getattr(c, "machine", None) or "").strip(),
+                bool(getattr(c, "enabled", True)),
+                str(getattr(c, "name", "")),
+            )
+            for c in holders
+        ]
+        presets.append(
+            {
+                "preset": key,
+                "name": name,
+                "kind": kind,
+                "description": str(preset.get("description") or ""),
+                "connected_here": any(not where for where, _on, _name in wheres),
+                "on_machines": sorted({where for where, on, _name in wheres if where and on}),
+                "off_on_machines": sorted(
+                    ({"machine": where, "name": held} for where, on, held in wheres if where and not on),
+                    key=lambda entry: (entry["machine"], entry["name"]),
+                ),
+            }
+        )
+    return {"presets": presets}
 
 
 def register_subagents_methods(
@@ -1354,6 +2119,7 @@ def register_subagents_methods(
     """Register the ``subagents.*`` methods on a dispatcher instance."""
     dispatcher.register("subagents.list", subagents_list)
     dispatcher.register("subagents.probe", subagents_probe)
+    dispatcher.register("subagents.presets", subagents_presets)
 
     async def _add(params: dict) -> dict:
         return await subagents_add(params, agent_loop_factory=agent_loop_factory)
@@ -1385,6 +2151,12 @@ def register_subagents_methods(
     dispatcher.register("subagents.test", _test)
     dispatcher.register("subagents.test_cancel", subagents_test_cancel)
 
+    async def _refresh_models(params: dict) -> dict:
+        # Wrapped like the test: the handshake it records feeds the same table.
+        return await subagents_refresh_models(params, agent_loop_factory=agent_loop_factory)
+
+    dispatcher.register("subagents.refresh_models", _refresh_models)
+
 
 __all__ = [
     "subagents_list",
@@ -1396,5 +2168,6 @@ __all__ = [
     "subagents_build",
     "subagents_test",
     "subagents_test_cancel",
+    "subagents_refresh_models",
     "register_subagents_methods",
 ]

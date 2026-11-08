@@ -14,7 +14,12 @@
  * either sets a field to the value the event carries (replaying the same
  * event sets it to the same value again) or is guarded by an existence check
  * before it inserts a row.
+ *
+ * `carryOutcome` is the one function here that folds a read rather than a
+ * frame: what `tasks.list` answers over what the frames already said.
  */
+
+import { attemptOrder, attemptsOf, instanceOf } from '../../lib/attempts'
 
 import type {
   DagNodeUpdatedEvent, DagRunCompletedEvent, DagRunReplannedEvent, DagRunStartedEvent, SubagentStatusEvent,
@@ -48,7 +53,10 @@ export function startOfRunId(id: string): number | null {
 }
 
 const blankCounts = (): TaskCounts => (
-  { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0 }
+  {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0,
+    exception: 0, not_executed: 0,
+  }
 )
 
 export function countsOf(nodes: readonly TaskNode[]): TaskCounts {
@@ -64,6 +72,7 @@ export function countsOf(nodes: readonly TaskNode[]): TaskCounts {
       case 'cancelled': c.cancelled += 1; break
       case 'interrupted': c.interrupted += 1; break
       case 'exception': c.exception += 1; break
+      case 'not_executed': c.not_executed += 1; break
     }
   })
   return c
@@ -83,8 +92,44 @@ export function deriveStatus(nodes: readonly TaskNode[]): TaskStatus {
 const blankNode = (id: string): TaskNode => ({
   node_id: id, node_summary: null, agent: '', instance: null, status: 'pending', depends_on: [],
   started_at: null, ended_at: null, error: null, tokens_in: null, tokens_out: null,
-  tool_call_count: null, tool_failure_count: null, has_output: null, prompt_template: null, files: [],
+  tool_call_count: null, has_output: null, prompt_template: null, files: [],
 })
+
+/* How a branch came out, as a frame or a row says it: `reason` for a node a
+   branch left out, `selected_routes` and `route_evidence` for a decision. Copied
+   field by field and only the fields present -- a key the source never had is
+   not written, so a node of a run that never branches keeps the keys it had.
+   Presence, not truthiness: an empty `selected_routes` is a decision that chose
+   nothing, and dropping it would draw the node as one that has not decided. */
+const outcomeOf = (
+  f: { reason?: TaskNode['reason']; selected_routes?: string[]; route_evidence?: string },
+): Partial<TaskNode> => ({
+  ...(f.reason !== undefined ? { reason: f.reason } : {}),
+  ...(f.selected_routes !== undefined ? { selected_routes: f.selected_routes } : {}),
+  ...(f.route_evidence !== undefined ? { route_evidence: f.route_evidence } : {}),
+})
+
+const hasOutcome = (n: TaskNode): boolean =>
+  n.reason !== undefined || n.selected_routes !== undefined || n.route_evidence !== undefined
+
+/* While a run goes, `tasks.list` reads a node's outcome off its registry row,
+   a best-effort write that can be dropped, so a read taken then can answer a
+   node without one -- and a read that replaced the row would take back what the
+   node's own frame said. A node that answers with no outcome of its own, held
+   in the same status with one, keeps the held one. All or nothing: the three
+   fields describe one outcome, and a read that has any of them speaks for all. */
+export function carryOutcome(held: TaskRow | undefined, got: TaskRow): TaskRow {
+  if (!held) return got
+  let moved = false
+  const nodes = got.nodes.map((n) => {
+    if (hasOutcome(n)) return n
+    const was = held.nodes.find((h) => h.node_id === n.node_id)
+    if (!was || was.status !== n.status || !hasOutcome(was)) return n
+    moved = true
+    return { ...n, ...outcomeOf(was) }
+  })
+  return moved ? { ...got, nodes } : got
+}
 
 /* The graph arrives whole, before any node runs: a spawn row at `pending`,
    built the same way, follows from `subagent.status` instead. Guarded so a
@@ -99,6 +144,9 @@ export function applyRunStarted(rows: readonly TaskRow[], p: RunStartedPayload):
     agent: n.subagent,
     instance: n.instance ?? null,
     depends_on: n.depends_on || [],
+    ...(n.routes !== undefined ? { routes: n.routes } : {}),
+    ...(n.select !== undefined ? { select: n.select } : {}),
+    ...(n.when ? { when: n.when } : {}),
   }))
   const row: TaskRow = {
     id: p.run_id, kind: 'dag', task_summary: p.task_summary ?? null, status: 'running',
@@ -111,7 +159,7 @@ export function applyRunStarted(rows: readonly TaskRow[], p: RunStartedPayload):
 /* The statuses a node's own frame can settle it into: its collecting block
    has exited, so the account the runner set aside for it is final. */
 const NODE_SETTLED: ReadonlySet<TaskNode['status']> = new Set<TaskNode['status']>(
-  ['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'exception'],
+  ['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'exception', 'not_executed'],
 )
 
 /* Moves one node. Timestamps only where the event actually carries them --
@@ -126,9 +174,30 @@ export function applyNodeUpdated(rows: readonly TaskRow[], p: NodeUpdatedPayload
   if (at < 0) return { rows: [...rows] }
   const next = rows.map((row) => {
     if (row.kind !== 'dag' || row.id !== p.run_id) return row
-    const nodes = row.nodes.map((n) => (n.node_id === p.node
-      ? { ...n, status: p.status, started_at: p.started_at ?? n.started_at, ended_at: p.ended_at ?? n.ended_at }
-      : n))
+    const nodes = row.nodes.map((n) => {
+      if (n.node_id !== p.node) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(p.attempt_agents)
+      /* A frame that cannot claim a newer attempt than the node holds is from
+         the attempt it has moved past -- the frames of the agent that gave up
+         can still be in flight when the next one starts -- so it moves nothing. */
+      const order = attemptOrder(held, history)
+      if (order === 'stale') return n
+      /* A longer history is a later attempt, and it supersedes what the node says
+         however that attempt ended: identity, status and timing move together. */
+      const newer = order === 'newer'
+      return {
+        ...n,
+        status: p.status,
+        started_at: newer ? (p.started_at ?? null) : (p.started_at ?? n.started_at),
+        ended_at: newer ? (p.ended_at ?? null) : (p.ended_at ?? n.ended_at),
+        ...(p.subagent !== undefined ? { agent: p.subagent } : {}),
+        ...instanceOf(p),
+        ...(p.instance_auto !== undefined ? { instance_auto: p.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
+        ...outcomeOf(p),
+      }
+    })
     return { ...row, nodes, counts: countsOf(nodes), status: deriveStatus(nodes) }
   })
   return { rows: next, refetch: NODE_SETTLED.has(p.status) ? { kind: 'dag', id: p.run_id } : undefined }
@@ -148,7 +217,27 @@ export function applyRunCompleted(rows: readonly TaskRow[], p: RunCompletedPaylo
   const nodes = files.length
     ? row.nodes.map((n) => {
       const f = files.find((x) => x.node === n.node_id)
-      return f ? { ...n, status: f.status, error: f.error ?? n.error } : n
+      if (!f) return n
+      const held = n.attempt_agents
+      const history = attemptsOf(f.attempt_agents)
+      /* The manifest of an attempt the node has moved past says what that
+         attempt ended as, not what the node is doing now. */
+      const order = attemptOrder(held, history)
+      if (order === 'stale') return n
+      const newer = order === 'newer'
+      return {
+        ...n,
+        status: f.status,
+        /* The frame carries no node timings, so a newer attempt it names keeps
+           none rather than the previous attempt's. */
+        ...(newer ? { started_at: null, ended_at: null } : {}),
+        ...(f.subagent !== undefined ? { agent: f.subagent } : {}),
+        ...instanceOf(f),
+        ...(f.instance_auto !== undefined ? { instance_auto: f.instance_auto } : {}),
+        ...(history !== undefined ? { attempt_agents: history } : {}),
+        error: f.error ?? n.error,
+        ...outcomeOf(f),
+      }
     })
     : row.nodes
   const next: TaskRow = {

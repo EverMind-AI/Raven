@@ -29,6 +29,7 @@ __all__ = [
     "SUBAGENT_ENV_VAR",
     "get_config_path",
     "is_subagent_process",
+    "oauth_home",
     "raven_home",
     "set_config_path",
     "subagent_role_env",
@@ -54,6 +55,18 @@ def raven_home() -> Path:
     """
     home = os.environ.get(HOME_ENV_VAR, "").strip()
     return Path(home).expanduser() if home else Path.home() / DEFAULT_HOME_DIRNAME
+
+
+def oauth_home() -> Path:
+    """Where every OAuth provider's credentials live, without touching the disk.
+
+    The one definition of that path: ``config.paths.oauth_dir`` is the config
+    shelf's name for it and the redaction pass asks for it here, so a store
+    that moves moves both readers with it. It cannot live in the config shelf
+    instead, because the shelf already imports the redaction pass -- a
+    definition asked of it would close that pair into a cycle.
+    """
+    return raven_home() / "oauth"
 
 
 def get_config_path() -> Path:

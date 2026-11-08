@@ -21,5 +21,6 @@ disclosure when appropriate.
 
 ## Supported Versions
 
-Raven is pre-alpha. Security fixes target the default branch first. Release
-branch support will be documented once public releases are cut.
+Security fixes target the default branch first. Consult the
+[release notes](https://github.com/EverMind-AI/Raven/releases) for fixes included
+in each published version.

@@ -6,7 +6,7 @@ sub-agent cannot delegate the task it was handed. A ``kind: acp`` agent whose
 command is ``raven acp`` gets none of that narrowing -- the child is a separate
 raven process that builds its own full registry from its own config and has no way
 to tell a DAG node from a user. Measured on a graph whose first node ran the
-built-in ``Raven`` agent over acp: the child answered by handing the node's whole
+built-in generic agent over acp: the child answered by handing the node's whole
 task to a background ``spawn``, whose receipt returns before any work is done, and
 ended the turn on the receipt. Twice, with a continuation in between.
 

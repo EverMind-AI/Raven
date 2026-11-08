@@ -134,9 +134,9 @@ def _with_messages(node: dict, run_id: str, node_id: str) -> dict:
         stored.append({"role": "console", "content": live_run.console})
     if node.get("output"):
         # The closing message when the lane left one -- what the node said
-        # after its last step -- rather than the whole reply, which repeats the
-        # narration already on the steps above (CONTEXT.md, Closing Message).
-        # `output` itself stays whole for every other reader of the node.
+        # after its last step (CONTEXT.md, Closing Message) -- and the output
+        # otherwise. `output` itself is left as stored for every other reader
+        # of the node.
         stored.append({"role": "assistant", "content": node.get("closing") or node["output"]})
     elif node.get("error"):
         # A failed node's account of itself. It has no output by definition, so

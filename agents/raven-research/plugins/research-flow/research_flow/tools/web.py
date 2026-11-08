@@ -1,7 +1,7 @@
 """Web tools: ``web_search`` and ``web_fetch`` for the research flow.
 
 These replace the kernel's built-in tools of the same names. Both route through a
-vendor the deployment picks, the same seven search and five fetch backends the
+vendor the deployment picks, the same nine search and six fetch backends the
 built-ins offer, declared in :data:`SEARCH_PROVIDERS` and
 :data:`FETCH_PROVIDERS`; Serper and Jina remain the defaults and their wire
 traffic is byte-identical to what this pair has always sent. What the pair adds
@@ -191,15 +191,23 @@ class SearchProviderSpec:
 
     ``label`` is what an error line names when it must identify a vendor without
     quoting the request.
+
+    ``needs_key`` decides whether the tool may be advertised without a key:
+    Keenable searches unauthenticated (at a lower rate limit), the others refuse
+    without one.
     """
 
     vendor: str
     label: str
     env_var: str
     paginates: bool
+    needs_key: bool = True
 
 
 DEFAULT_SEARCH_PROVIDER = "serper"
+# DeepSeek's Search API accepts 1-128 Unicode characters in ``query``; longer
+# answers HTTP 400, which the ledger's status-only error path cannot explain.
+DEEPSEEK_SEARCH_QUERY_MAX_CHARS = 128
 
 SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
     "serper": SearchProviderSpec(
@@ -263,6 +271,22 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         # ``start`` is a result offset like SerpApi's, so page N is start=(N-1)*num.
         paginates=True,
     ),
+    "keenable": SearchProviderSpec(
+        vendor="keenable",
+        label="Keenable",
+        env_var="KEENABLE_API_KEY",
+        # No documented result offset; ``max_results`` is honoured as asked.
+        paginates=False,
+        needs_key=False,
+    ),
+    "deepseek": SearchProviderSpec(
+        vendor="deepseek",
+        label="DeepSeek",
+        env_var="DEEPSEEK_API_KEY",
+        # No offset of any kind, so the ``paginate`` rung is declared
+        # unavailable rather than attempted; ``widen`` stays useful.
+        paginates=False,
+    ),
 }
 
 
@@ -270,9 +294,9 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
 class FetchProviderSpec:
     """One ``web_fetch`` backend.
 
-    ``needs_key`` decides whether the tool may be advertised at all: Jina reads
-    pages unauthenticated (at a lower rate limit), the others refuse without a
-    key. A tool that cannot run must not be registered - the model reaches for
+    ``needs_key`` decides whether the tool may be advertised at all: Jina and
+    Keenable read pages unauthenticated (at a lower rate limit), the others
+    refuse without a key. A tool that cannot run must not be registered - the model reaches for
     it, every call fails, and the error text naming a config path is relayed to
     whoever is on the other end of the channel.
 
@@ -329,6 +353,21 @@ FETCH_PROVIDERS: dict[str, FetchProviderSpec] = {
         env_var="FIRECRAWL_API_KEY",
         extractor="firecrawl-scrape",
         # No anonymous tier.
+        needs_key=True,
+    ),
+    "keenable": FetchProviderSpec(
+        vendor="keenable",
+        label="Keenable",
+        env_var="KEENABLE_API_KEY",
+        extractor="keenable-fetch",
+        # Reads pages without a key at a lower rate limit, like Jina.
+        needs_key=False,
+    ),
+    "deepseek": FetchProviderSpec(
+        vendor="deepseek",
+        label="DeepSeek",
+        env_var="DEEPSEEK_API_KEY",
+        extractor="deepseek-fetch",
         needs_key=True,
     ),
 }
@@ -1030,11 +1069,21 @@ class WebSearchTool(Tool):
         making it one read makes them unable to disagree.
         """
         saturation = state.saturation
-        if not self.api_key:
+        if self.spec.needs_key and not self.api_key:
             return (
                 f"Error: {self.spec.label} API key not configured. Set it in "
                 '~/.raven/config.json under plugins.config["research-flow"].search.apiKey '
                 f"(or export {self.spec.env_var}), then restart the gateway.",
+                [],
+                dict(_NO_SHAPING),
+            )
+        if self.provider == "deepseek" and len(query) > DEEPSEEK_SEARCH_QUERY_MAX_CHARS:
+            # The vendor's own limit, checked before the request: its 400 reads as
+            # a bare status through this tool's error path, so the model would
+            # otherwise never learn to shorten the query.
+            return (
+                f"Error: DeepSeek accepts at most {DEEPSEEK_SEARCH_QUERY_MAX_CHARS} characters in a search "
+                f"query; this one is {len(query)}. Shorten it and call web_search again.",
                 [],
                 dict(_NO_SHAPING),
             )
@@ -1245,6 +1294,29 @@ class WebSearchTool(Tool):
                 headers={"Accept": "application/json", "X-Api-Key": self.api_key},
                 timeout=10.0,
             )
+        if self.provider == "keenable":
+            # The public path answers without a key at a lower rate limit and
+            # wants the app named; a key moves the same request to the keyed path.
+            headers = {"Accept": "application/json", "Content-Type": "application/json", "X-Keenable-Title": "Raven"}
+            if key := self.api_key:
+                headers["x-api-key"] = key
+            return await client.post(
+                "https://api.keenable.ai/v1/search" if key else "https://api.keenable.ai/v1/search/public",
+                json={"query": query, "max_results": n},
+                headers=headers,
+                timeout=10.0,
+            )
+        if self.provider == "deepseek":
+            return await client.post(
+                "https://api.deepseek.com/v1/tools/search",
+                json={"query": query, "count": n},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {self.api_key}",
+                },
+                timeout=10.0,
+            )
         # AnySearch.
         return await client.post(
             "https://api.anysearch.com/v1/search",
@@ -1318,6 +1390,32 @@ class WebSearchTool(Tool):
         if self.provider == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
+        if self.provider == "keenable":
+            # ``snippet`` is the page's own text, line breaks and all and often
+            # thousands of characters; ``description`` is empty. Collapsed and
+            # cut to the 300 characters Exa's highlights are bounded to, since
+            # ``_snippet_line`` renders whatever it is handed.
+            return {
+                "organic": [
+                    {**row, "snippet": " ".join(str(row["snippet"]).split())[:300]}
+                    for row in _rows(data.get("results"), url="url", snippet="snippet")
+                ]
+            }
+        if self.provider == "deepseek":
+            # ``summary`` (600-800 characters) is the field the vendor documents
+            # as the one the model reads; ``snippet`` is the UI line beside it.
+            organic = []
+            for item in data.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                organic.append(
+                    {
+                        "title": str(item.get("title") or ""),
+                        "link": str(item.get("url") or ""),
+                        "snippet": str(item.get("summary") or item.get("snippet") or ""),
+                    }
+                )
+            return {"organic": organic}
         # AnySearch publishes the request shape but not the response. Parse
         # tolerantly: results may sit at the top level or inside the
         # ``{code, message, data}`` envelope its auth endpoint uses, and an item
@@ -1487,6 +1585,19 @@ def _encoding_lost(text: str) -> bool:
     legitimate page carries; a run of them means the decode itself failed.
     """
     return text.count("\ufffd") > max(8, len(text) // 200)
+
+
+# Jina answers 200 for the page it rendered and names the target's own failure in the
+# header above ``Markdown Content:``, so without these a CAPTCHA wall reads as a page.
+_READER_TARGET_ERROR_RE = re.compile(r"^Warning: Target URL returned error (\d{3})\b", re.M)
+_READER_CAPTCHA_RE = re.compile(r"^Warning: This page maybe requiring CAPTCHA\b", re.M)
+
+
+def reader_target_verdict(text: str) -> tuple[int | None, bool]:
+    """``(status, blocked)`` the reader reported for the target, from its header only."""
+    head = text.split("\nMarkdown Content:", 1)[0]
+    hit = _READER_TARGET_ERROR_RE.search(head)
+    return (int(hit.group(1)) if hit else None), _READER_CAPTCHA_RE.search(head) is not None
 
 
 _UNRESOLVED_REFUSAL = "Cannot resolve hostname:"
@@ -1749,6 +1860,8 @@ class WebFetchTool(Tool):
             # written under the address that served it.
             ("requested_chars", "chars"),
             ("length", "chars"),
+            ("requested_status", "status"),
+            ("requested_blocked", "blocked"),
             ("source_chars", "source_chars"),
             ("digested", "digested"),
             ("docid", "docid"),
@@ -1758,7 +1871,13 @@ class WebFetchTool(Tool):
             ("extractor", "extractor"),
             ("served_url", "served_url"),
             ("fallbacks_tried", "fallbacks_tried"),
+            ("status", "status"),
+            ("blocked", "blocked"),
         ):
+            # A recovered fetch's ``blocked`` is the served text's verdict; that text
+            # has its own row, and this one carries ``requested_blocked`` or nothing.
+            if key == "blocked" and "served_url" in payload:
+                continue
             if key in payload and out_key not in record:
                 record[out_key] = payload[key]
         # Annotations a digest function asked to have ledgered but not shown
@@ -1869,6 +1988,7 @@ class WebFetchTool(Tool):
         # never really read - on the run that prompted this, 21 of 33 listed pages came
         # back under 3,000 characters and the report estimated what it could not find.
         served_url, fallbacks_tried, requested_chars = url, [], len(text)
+        requested_text, requested_status = text, status
         if len(text) < _THIN_PAGE_CHARS:
             text, status, served_url, fallbacks_tried = await self._recover_thin(url, text, status)
 
@@ -1877,11 +1997,22 @@ class WebFetchTool(Tool):
         self._record_source(url, text, self.spec.extractor)
 
         recovery: dict[str, Any] = {}
+        target_status, blocked = self._target_verdict(text)
+        if target_status is not None:
+            status = target_status
+        if blocked:
+            recovery["blocked"] = "captcha"
         if fallbacks_tried:
             recovery["fallbacks_tried"] = fallbacks_tried
             recovery["requested_chars"] = requested_chars
             if served_url != url:
                 recovery["served_url"] = served_url
+                # The verdict above is the served text's; the requested address keeps
+                # its own, as its row keeps its own length (``_fetch_record``).
+                own_status, own_blocked = self._target_verdict(requested_text)
+                recovery["requested_status"] = requested_status if own_status is None else own_status
+                if own_blocked:
+                    recovery["requested_blocked"] = "captcha"
 
         # A page that lost its encoding is not worth a digest call: the
         # model would distill replacement characters.
@@ -1925,6 +2056,10 @@ class WebFetchTool(Tool):
             payload["warning"] = _ENCODING_LOST_WARNING
         return json.dumps(payload, ensure_ascii=False)
 
+    def _target_verdict(self, text: str) -> tuple[int | None, bool]:
+        """:func:`reader_target_verdict` for the Jina reader; other backends carry no such header."""
+        return reader_target_verdict(text) if self.provider == "jina" else (None, False)
+
     async def _recover_thin(self, url: str, text: str, status: int) -> tuple[str, int, str, list[str]]:
         """Re-read a stub at the addresses that carry its body.
 
@@ -1962,18 +2097,22 @@ class WebFetchTool(Tool):
                     }
                 )
                 continue
-            _ledger_append(
-                {
-                    "ts": time.time(),
-                    "op": "fetch",
-                    "url": candidate,
-                    "source": "web",
-                    "ok": True,
-                    "chars": len(alt_text),
-                    "status": alt_status,
-                    "fallback_for": url,
-                }
-            )
+            # The reader answers 200 for whatever it rendered; a fallback's own refusal
+            # is in its header, as it is for the requested page.
+            own_status, own_blocked = self._target_verdict(alt_text)
+            row: dict[str, Any] = {
+                "ts": time.time(),
+                "op": "fetch",
+                "url": candidate,
+                "source": "web",
+                "ok": True,
+                "chars": len(alt_text),
+                "status": alt_status if own_status is None else own_status,
+                "fallback_for": url,
+            }
+            if own_blocked:
+                row["blocked"] = "captcha"
+            _ledger_append(row)
             if len(alt_text) > len(best_text):
                 best_text, best_status, served = alt_text, alt_status, candidate
             if len(best_text) >= _THIN_PAGE_CHARS:
@@ -2069,6 +2208,42 @@ class WebFetchTool(Tool):
             body = data.get("data") if isinstance(data.get("data"), dict) else {}
             if not (text := str(body.get("markdown") or "")):
                 raise _ProviderPageError("Firecrawl returned no page content")
+            return text, r.status_code
+
+        if self.provider == "keenable":
+            # Keyless on the public path, as for search; a key moves it to the keyed one.
+            headers = {"Accept": "application/json", "X-Keenable-Title": "Raven"}
+            if key := self.api_key:
+                headers["x-api-key"] = key
+
+            async def _send_keenable() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.get(
+                        "https://api.keenable.ai/v1/fetch" if key else "https://api.keenable.ai/v1/fetch/public",
+                        params={"url": url},
+                        headers=headers,
+                    )
+
+            r = await _send_with_retry(_send_keenable, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            if not isinstance(data, dict) or not (text := str(data.get("content") or "")):
+                raise _ProviderPageError("Keenable returned no page content")
+            return text, r.status_code
+
+        if self.provider == "deepseek":
+            headers = {**json_headers, "Authorization": f"Bearer {self.api_key}"}
+
+            async def _send_deepseek() -> httpx.Response:
+                async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
+                    return await client.post(
+                        "https://api.deepseek.com/v1/tools/fetch", json={"url": url}, headers=headers
+                    )
+
+            r = await _send_with_retry(_send_deepseek, op="fetch_retry", key=url, budget=budget)
+            data = r.json()
+            text = str(data.get("content") or "") if isinstance(data, dict) else ""
+            if not text:
+                raise _ProviderPageError("DeepSeek returned no page content")
             return text, r.status_code
 
         # AnySearch. No cache-bust header is published, so the garbled-page

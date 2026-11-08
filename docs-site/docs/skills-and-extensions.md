@@ -38,6 +38,17 @@ configured memory backend, and remote Skill Hub candidates. Availability
 depends on configuration and service connectivity; a catalog result is not
 proof that a bundle is installed or its required tools exist.
 
+Searching Skill Hub sends text off the machine. Both onboarding wizards write
+the shared catalog URL (`https://skillhub.evermind.ai`) to
+`skillForge.router.hub.endpoint` unless the config already names one, and
+while the source is on, Raven sends text from the conversation (the message,
+or a query the model writes from it) to that address whenever it looks for a
+skill. Turn it off with the Skill Hub switch on the settings dialog's Skills
+page, or set `skillForge.router.hub.enabled` to `false`; the URL is kept, so
+turning it back on returns to the same catalog. A config with no endpoint never
+searches the Hub. Switching it off applies to the next search; switching it on
+in a gateway that started without an endpoint waits for a reload.
+
 `skillForge.discovery` defaults to `pull`: the model receives a small
 name/description menu on eligible turns and uses `find_skill` to search and
 `read_skill` to fetch a body. `push` instead runs the selection/injection
@@ -64,6 +75,11 @@ safety score is not a security guarantee, and missing scores are not a hard
 rejection in the current policy. Successful installs are audited under
 `<workspace>/skills/hub/installs.jsonl`.
 
+In the web UI, the settings dialog's Skills page switches skills, and Skill
+Hub search, on and off;
+its **Add** button leads into the chat with the request half written, because
+a skill is installed by asking Raven, under the consent setting above.
+
 ## Memory and learning boundaries
 
 EverOS is the default memory-backend plugin, distributed separately from the
@@ -76,21 +92,17 @@ Keep three mechanisms separate:
 1. Context assembly decides what the current model call sees; long histories
    may be archived or compacted.
 2. Memory storage and recall retain selected knowledge beyond a conversation.
-3. Experience extraction is a backend-specific capability, not the same thing
-   as SkillForge retrieval. The current tree retains `skillForge.extraction`
-   configuration and older descriptions of a local pipeline, but the live
-   host wiring does not consume that setting. Do not assume enabling it
-   starts local skill distillation or creates `.cache/skills.db`.
+3. Experience extraction is provided by the selected memory backend. Configure
+   it through that backend's plugin settings. The host does not use
+   `skillForge.extraction` to start a local extraction pipeline.
 
-Feedback-driven skill versioning and retirement are not implemented merely
-because configuration placeholders exist. Inspect your memory backend's
-actual stored cases/skills and health before claiming it learned a procedure.
-Harness self-evolution is performed
-by the separate Evolver tool and evaluated against benchmarks; start with
+SkillForge retrieves and injects skills and manages downloaded bundles.
+Feedback-driven skill versioning and retirement are not implemented by the host.
+Inspect the memory backend's stored cases, skills, and health to check what
+experience it has retained. The separate Evolver tool evaluates harness changes
+against benchmarks; start with
 [Evolver: usage and experiments](evolver.md), then use
-[Design and implementation](self-evolution-map.md) for implementation details. Do not
-describe retrieval or backend experience extraction as automatic
-production-code self-modification.
+[Design and implementation](self-evolution-map.md) for implementation details.
 
 ## From a completed task to reusable knowledge
 
@@ -178,6 +190,11 @@ Use MCP when a capability already exists behind a service interface. Configure
 the server, verify its tool list and authentication, and then test a read-only
 operation before permitting mutations. `raven plugin auth <server>` handles
 configured MCP OAuth; it is not an installer for arbitrary plugins.
+
+In the web UI, the settings dialog's Plugins page switches, retries and
+authorizes configured servers; its **Add** button leads into the chat, where
+Raven connects a server from the PlugHub catalogue, and a server the catalogue
+does not list is written into `tools.mcpServers` in `config.json` by hand.
 
 Use a Raven plugin for in-process tools, hooks, services, or memory backends.
 Its declarative `raven-plugin.toml` names contributions; code runs in the host

@@ -14,6 +14,37 @@ from bisect import bisect_right
 from itertools import accumulate
 
 from raven.knowledge._types import Chunk, DataBlock, Section, TextBlock
+from raven.knowledge.parser import ATOMIC
+
+#: How far back a cut may be walked to land between words instead of inside
+#: one. A tenth of the budget: far enough to clear any ordinary word, short
+#: enough that a text with no boundary in reach (an unbroken CJK run, a base64
+#: blob) gives up quickly and cuts where it must rather than shrinking chunks.
+_BOUNDARY_REACH = 0.1
+
+
+def _back_to_a_boundary(text: str, start: int, end: int) -> int:
+    """Walk ``end`` back to the nearest break, if one is close enough.
+
+    A cut by byte budget alone lands wherever the count runs out, which is
+    usually the middle of a word: the piece before it ends in half a word and
+    the piece after starts with the other half, and both halves are embedded as
+    the nonsense they now are. Breaking at a newline is better than at a space,
+    because a newline is where the writer broke it.
+
+    Languages that write without spaces have no boundary to find, and the reach
+    is bounded so they are not punished for it.
+    """
+    if end >= len(text):
+        return end
+    floor = max(start + 1, end - int((end - start) * _BOUNDARY_REACH) - 1)
+    for breaks in ("\n", " \t"):
+        cut = end
+        while cut > floor:
+            if text[cut - 1] in breaks:
+                return cut
+            cut -= 1
+    return end
 
 
 class ChunkerBase(ABC):
@@ -26,18 +57,40 @@ class ChunkerBase(ABC):
 
     Subclasses must guarantee:
 
-    - **No cross-Section merging**: every output :class:`Chunk` is
-      derived from exactly one input :class:`Section`.
     - **DataBlock pass-through**: a Section whose content is a
       :class:`DataBlock` becomes a single Chunk
       with the same content; multimodal data is never sliced.
+    - **Atomic sections**: a Section marked
+      :data:`~raven.knowledge.parser.ATOMIC` becomes exactly one
+      Chunk -- not split however long it runs, and nothing merged
+      into it. A parser sets it when its sections are already the
+      unit a reader means, and a slide is the case: a reader says
+      "slide 12", and a deck's preview can only scroll to a page.
     - **Continuous indexing**: ``chunk_index`` runs from ``0`` to
       ``total_chunks - 1`` across the entire output list, even
       when the input contains many Sections.
     - **Consistent total_chunks**: every output Chunk carries the
       same ``total_chunks`` value (the length of the output list).
-    - **Metadata inheritance**: each output Chunk's ``source`` and
-      ``metadata`` are copied from its parent Section.
+    - **Metadata that describes the chunk**: an output Chunk's
+      ``source`` and ``metadata`` describe what is actually in it.
+      A chunk built from one Section inherits that Section's
+      metadata unchanged; a chunk that merged several carries
+      metadata merged to match -- a page *range* rather than one
+      page, and an ``elements`` span per part saying where each
+      came from. Metadata that still describes only the first part
+      is worse than none: it reads as a fact about the whole chunk.
+
+    Whether a chunk may span two Sections is a **strategy's** choice,
+    not a rule of this base. The structural chunkers
+    (:class:`ApproxTokenChunker`,
+    :class:`~raven.knowledge._structure.HeadingAwareChunker`) keep the
+    boundary, because the structure a parser found is the thing they
+    are for. :class:`~raven.knowledge._naive_chunker.NaiveChunker`
+    deliberately crosses it: sections are not a boundary a reader in
+    that mode asked to keep, and refusing to merge across them turns a
+    document of short sections into a chunk per section, each too small
+    to answer anything. What crossing costs is the metadata, which is
+    why the rule above is stated as it is.
     """
 
     @abstractmethod
@@ -120,11 +173,17 @@ class ApproxTokenChunker(ChunkerBase):
         chunks: list[Chunk] = []
         for section in sections:
             contents: list[TextBlock | DataBlock]
-            if isinstance(section.content, TextBlock):
-                contents = [TextBlock(text=piece) for piece in self._split_text(section.content.text)]
-            else:
+            if not isinstance(section.content, TextBlock):
                 # DataBlock pass-through: never slice multimodal data
                 contents = [section.content]
+            elif section.metadata.get(ATOMIC):
+                # One section, one chunk, whatever its size. Honoured here as
+                # well as in the naive chunker because which chunker a base
+                # runs is a setting, and a guarantee a parser relies on cannot
+                # depend on one.
+                contents = [section.content]
+            else:
+                contents = [TextBlock(text=piece) for piece in self._split_text(section.content.text)]
 
             chunks.extend(
                 Chunk(
@@ -143,28 +202,38 @@ class ApproxTokenChunker(ChunkerBase):
 
         return chunks
 
-    def _split_text(self, text: str) -> list[str]:
-        """Split text into pieces of at most ``chunk_size`` approx tokens.
+    def _split_text(self, text: str, budget: int | None = None) -> list[str]:
+        """Split text into pieces of at most ``budget`` approx tokens.
 
         Consecutive pieces share approximately ``overlap`` tokens.
 
         Args:
             text (`str`):
                 The text to split.
+            budget (`int | None`):
+                Tokens a piece may reach, defaulting to ``chunk_size``. A
+                caller that will prepend something to each piece passes what is
+                left after it -- :class:`~raven.knowledge._structure.HeadingAwareChunker`
+                prefixes a heading path, and a split that ignored the narrowed
+                figure hands back pieces that are over the limit once the
+                prefix is on them.
 
         Returns:
             `list[str]`:
                 The text pieces, in document order.
         """
-        if self._approx_count_tokens(text) <= self.chunk_size:
+        size = self.chunk_size if budget is None else max(1, budget)
+        if self._approx_count_tokens(text) <= size:
             return [text]
 
         # Cumulative UTF-8 byte length after each character, so that
         # the byte length of text[i:j] == byte_offsets[j] - byte_offsets[i]
         byte_offsets = [0, *accumulate(len(c.encode("utf-8")) for c in text)]
 
-        chunk_bytes = self.chunk_size * 4
-        overlap_bytes = self.overlap * 4
+        chunk_bytes = size * 4
+        # Never as much as the piece itself, or a budget at or below the
+        # overlap would step back to where it started and never terminate.
+        overlap_bytes = min(self.overlap, max(0, size - 1)) * 4
 
         pieces: list[str] = []
         start = 0
@@ -180,6 +249,7 @@ class ApproxTokenChunker(ChunkerBase):
             # Always make progress, even for characters whose UTF-8
             # encoding exceeds the budget on their own
             end = max(end, start + 1)
+            end = _back_to_a_boundary(text, start, end)
             pieces.append(text[start:end])
 
             if end >= len(text):

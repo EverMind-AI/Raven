@@ -65,11 +65,24 @@ def _use_local_model_cost_map() -> None:
     os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
 
+def _use_bundled_tokenizers() -> None:
+    """Keep Raven's estimator offline before LiteLLM lazily loads its tokenizers."""
+    from importlib.util import find_spec
+    from pathlib import Path
+
+    spec = find_spec("litellm")
+    if spec is not None and spec.origin is not None:
+        cache = Path(spec.origin).parent / "litellm_core_utils" / "tokenizers"
+        os.environ.setdefault("TIKTOKEN_CACHE_DIR", str(cache))
+
+
 # Rows the installed LiteLLM catalogue lacks and raven vouches for itself.
 # ``deepseek/deepseek-flash`` is DeepSeek's own API name for V4.1-Flash (the
-# retired ``deepseek-v4-flash`` routes to it); LiteLLM files nothing under it,
-# so the window resolver fell back to 65,536 for a 1,048,576-token model and
-# the cost recorder wrote 0 (2026-09-11). Prices are DeepSeek's peak-hour
+# retired ``deepseek-v4-flash`` routes to it); before LiteLLM 1.108 the
+# catalogue filed nothing under it, so the window resolver fell back to 65,536
+# for a 1,048,576-token model and the cost recorder wrote 0 (2026-09-11).
+# 1.108 ships its own row, so registration is skipped there; the row stays for
+# the `litellm>=1.82.1` range. Prices are DeepSeek's peak-hour
 # rates per token -- off-peak is half, and a flat table cannot say so, so the
 # recorded cost is an upper bound. Keyed by the exact ids the wire uses; the
 # OpenRouter-routed ``openrouter/deepseek/...`` ids are deliberately absent,
@@ -94,6 +107,29 @@ RAVEN_MODEL_ROWS: dict[str, dict] = {
     "deepseek/deepseek-flash": _DEEPSEEK_FLASH_ROW,
     "deepseek-flash": _DEEPSEEK_FLASH_ROW,
 }
+
+
+def _drop_unread_tokenizer_copies() -> None:
+    """Free the tokenizer copies that stay resident although nothing reads them.
+
+    ``litellm.utils`` loads Anthropic's tokenizer JSON into ``json_data`` and keeps
+    it after dumping it to ``claude_json_str``, which is what its Claude tokenizer
+    is built from. The cl100k encoding, when a registered one is present, keeps a
+    Python copy of its ranks beside the one its core encodes with; tiktoken itself
+    reads that copy only to pickle an encoding outside the registry, since a
+    registered one pickles by name. Raven's estimator drops the same copy when it
+    loads the encoding (``utils.tokens``), so a process that imports LiteLLM and
+    one that never does are both covered. Code that reads the private copy off
+    the registered encoding, as tiktoken's README does to extend one, gets an
+    AttributeError after this. Together about 25 MiB.
+    """
+    utils = sys.modules.get("litellm.utils")
+    if isinstance(getattr(utils, "json_data", None), dict) and isinstance(getattr(utils, "claude_json_str", None), str):
+        utils.json_data = None
+    registry = sys.modules.get("tiktoken.registry")
+    encoding = getattr(registry, "ENCODINGS", {}).get("cl100k_base")
+    if encoding is not None and hasattr(encoding, "_mergeable_ranks"):
+        del encoding._mergeable_ranks
 
 
 def _register_raven_model_rows(litellm) -> None:
@@ -137,6 +173,7 @@ def import_litellm():
             return _READY
         _point_oauth_tokens_at_raven()
         _use_local_model_cost_map()
+        _use_bundled_tokenizers()
         loggers = [logging.getLogger(name) for name in _LITELLM_LOGGERS]
         prev_levels = [lg.level for lg in loggers]
         for lg in loggers:
@@ -151,6 +188,10 @@ def import_litellm():
                 lg.setLevel(prev)
 
         _detach_tty_handlers(loggers)
+        try:
+            _drop_unread_tokenizer_copies()
+        except Exception:  # noqa: BLE001 - freeing memory must not fail the import
+            logging.getLogger(__name__).debug("litellm's tokenizer copies were kept", exc_info=True)
 
         _READY = litellm
         return litellm

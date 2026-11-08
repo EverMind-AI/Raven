@@ -1,7 +1,6 @@
 # Contributing to Raven
 
-Raven is early-stage. Keep contributions small, reviewable, and tied to a
-clear user or maintainer need.
+Keep contributions small, reviewable, and tied to a clear user or maintainer need.
 
 ## Development Setup
 

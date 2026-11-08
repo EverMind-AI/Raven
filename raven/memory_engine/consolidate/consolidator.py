@@ -23,6 +23,7 @@ from loguru import logger
 
 from raven.observability import semconv
 from raven.providers.binding import ModelBinding, active_window, resolve
+from raven.session.refs import tool_result_view
 from raven.tracing import trace
 from raven.utils.paths import ensure_dir
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens_chain
@@ -971,14 +972,22 @@ class MemoryStore:
 
     @staticmethod
     def _format_messages(messages: list[dict]) -> str:
+        """The transcript the annotator reads, one line per message.
+
+        A tool result goes in as :func:`~raven.session.refs.tool_result_view`:
+        the session files results whole for ``context_retrieve``, and one large
+        read would otherwise push the annotation prompt past the model's window,
+        which ``/new`` cannot get past.
+        """
         lines = []
         for message in messages:
-            if not message.get("content"):
+            content = message.get("content")
+            if not content:
                 continue
+            if message.get("role") == "tool" and isinstance(content, str):
+                content = tool_result_view(content)
             tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
-            lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
-            )
+            lines.append(f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {content}")
         return "\n".join(lines)
 
     @trace.instrument("memory.extract", extract=semconv.memory_extract)
@@ -1108,7 +1117,15 @@ episode_summary:
                 ],
                 tools=_build_annotate_tool(enable_foresight=enable_foresight),
                 model=model,
-                tool_choice="required",
+                # Offered, not forced. A vendor can accept a tool list and
+                # still reject being told it must call one -- DeepSeek's
+                # thinking mode answers a 400 -- and on a transport without
+                # the adapter's relax-and-retry that 400 is the whole result,
+                # so the log is never written there at all. The system line
+                # above already says to call it exactly once, and a model that
+                # declines is a case this function has always had: no tool
+                # call, False, the caller keeps its cursor and tries again.
+                tool_choice="auto",
             )
 
             if not response.has_tool_calls:
@@ -1476,7 +1493,7 @@ section_body: full new content for that H2, every bullet ending with
                 ],
                 tools=_REFRESH_SECTION_TOOL,
                 model=model,
-                tool_choice="required",
+                tool_choice="auto",
             )
             if not response.has_tool_calls:
                 logger.warning("refresh_section({}): LLM did not call tool", tag)
@@ -1734,7 +1751,13 @@ class MemoryConsolidator:
         """
         lock = self.get_lock(session.key)
         async with lock:
-            snapshot = session.messages[session.last_consolidated :]
+            # Whichever ran last. ``last_consolidated`` only moves in the token
+            # path, which the shipped context engine owns and so never runs, so
+            # on its own it would hand the whole session over again -- every
+            # episode the after-turn annotator already wrote, a second time,
+            # and every tag counted twice toward its refresh threshold.
+            start = max(session.last_consolidated, int(session.metadata.get("annotated_through") or 0))
+            snapshot = session.messages[min(start, len(session.messages)) :]
             if not snapshot:
                 return True
             ok = await self.consolidate_messages(snapshot)

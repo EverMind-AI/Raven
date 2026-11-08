@@ -27,6 +27,8 @@ class TurnOutcome:
 
     usage: Usage
     explicit_reply: bool
+    # The turn ended on a silence marker, not on an answer.
+    silent: bool = False
 
 
 @runtime_checkable

@@ -42,11 +42,13 @@ from raven.rpc.methods.session import (
     session_most_recent,
     session_pin,
     session_resume,
+    session_set_harness,
     session_set_mode,
     session_title,
     session_usage,
 )
 from raven.session.manager import SessionManager
+from raven.session.refs import tool_result_view
 
 _SESSION_ID_RE = re.compile(r"^tui:\d{8}_\d{6}_[0-9a-f]{6}$")
 
@@ -513,6 +515,88 @@ async def test_session_resume_maps_tool_role_with_name_and_context(
     assert tool_msg["text"] == "tool output here"
     assert tool_msg["name"] == "exec"
     assert tool_msg["context"] == "ls -la"
+
+
+def test_map_to_wire_bounds_tool_results_only() -> None:
+    big = "z" * 50_000
+    wire = _map_to_wire(
+        [
+            {"role": "user", "content": big},
+            {"role": "tool", "name": "read_file", "tool_call_id": "c1", "content": big},
+            {"role": "tool", "name": "read_file", "tool_call_id": "c2", "content": [{"type": "text", "text": big}]},
+            {"role": "assistant", "content": big},
+        ],
+        "tui:x",
+    )
+
+    assert [m["text"] for m in (wire[0], wire[3])] == [big, big]
+    for tool in (wire[1], wire[2]):
+        assert tool["text"] == tool_result_view(big)
+        assert tool["name"] == "read_file"
+
+
+async def test_session_resume_of_large_filed_reads_fits_one_client_frame(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Results are filed whole (the default cap is far above any read), but the
+    transcript a client resumes has to fit the frame it accepts: the TUI drops
+    anything over 1 MiB, and a dropped resume never answers."""
+    from raven.agent.loop import AgentLoop
+    from raven.agent.loop.bundles import ToolWiring
+    from raven.providers.base import LLMProvider, LLMResponse
+
+    class _Stub(LLMProvider):
+        async def chat(self, *args, **kwargs):
+            return LLMResponse(content="ok", finish_reason="stop")
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+    session_key = "tui:20260610_143052_bbbbbb"
+    loop = AgentLoop(
+        provider=_Stub(api_key="test"),
+        workspace=tmp_path,
+        model="stub",
+        tools=ToolWiring(restrict_to_workspace=True),
+    )
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    turn: list[dict] = [{"role": "user", "content": "read the nine files"}]
+    for index in range(9):
+        call_id = f"c{index}"
+        turn += [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": json.dumps({"path": f"f{index}.txt"})},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": call_id, "name": "read_file", "content": str(index) * 128_000},
+        ]
+    turn.append({"role": "assistant", "content": "read them all"})
+    loop._save_turn(session, turn, 0)
+    mgr.save(session)
+    stored = SessionManager(tmp_path).get_or_create(session_key).messages
+    assert [len(m["content"]) for m in stored if m["role"] == "tool"] == [128_000] * 9
+
+    result = await session_resume({"session_id": session_key})
+
+    frame = json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}, ensure_ascii=False).encode("utf-8")
+    assert len(frame) < 1024 * 1024, f"resume frame is {len(frame):,} bytes"
+    msgs = result["messages"]
+    assert [m["role"] for m in msgs] == [m["role"] for m in stored]
+    tools = [m for m in msgs if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tools] == [f"c{index}" for index in range(9)]
+    assert all(m["text"].startswith(str(i) * 1000) and "not shown here" in m["text"] for i, m in enumerate(tools))
+    assert msgs[-1]["text"] == "read them all"
 
 
 async def test_session_resume_skips_malformed_stored_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1555,6 +1639,26 @@ async def test_session_undo_rejects_when_turn_active(tmp_path, monkeypatch):
         await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
 
 
+async def test_a_retry_after_an_undo_whose_save_failed_reaches_the_disk(tmp_path, monkeypatch):
+    from raven.rpc.methods.session import session_undo
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    mgr, key = _seed_manager(tmp_path)
+    with monkeypatch.context() as patched:
+        patched.setattr("raven.session.manager.atomic_replace", _boom)
+        result = await session_undo({"session_id": key}, agent_loop_factory=lambda: _LoopWithManager(mgr))
+    assert result == {"removed": 2}
+    session = mgr.get_or_create(key)
+    session.record({"role": "user", "content": "q2"})
+    session.record({"role": "assistant", "content": "a2, retried"})
+    mgr.save(session)
+
+    reloaded = SessionManager(tmp_path).get_or_create(key)
+    assert [m["content"] for m in reloaded.messages] == ["q1", "a1", "q2", "a2, retried"]
+
+
 # ---------------------------------------------------------------------------
 # session.branch — fork the session
 # ---------------------------------------------------------------------------
@@ -1884,12 +1988,13 @@ async def test_session_delete_releases_the_sessions_binding(tmp_path: Path, monk
 async def test_session_resume_estimates_only_what_the_next_call_sends(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The context meter counts the unconsolidated tail, not the whole file.
+    """With no stored reading, the estimate counts the unconsolidated tail, not the whole file.
 
-    The runtime consolidates on every user-inbound turn and never removes the
-    archived messages from the transcript, so estimating over everything stored
-    reported the size of a context that had already been archived -- a session a
-    quarter full resumed showing a meter pegged at 100%.
+    A runtime whose context engine leaves compaction to the consolidator
+    archives on user-inbound turns and never removes the archived messages from
+    the transcript, so estimating over everything stored reported the size of a
+    context that had already been archived -- a session a quarter full resumed
+    showing a meter pegged at 100%.
     """
     cfg = load_config()
     cfg.agents.defaults.workspace = str(tmp_path)
@@ -1950,6 +2055,76 @@ async def test_session_resume_estimates_past_the_five_hundred_message_default(
     newest_500 = estimate_prompt_tokens(session.get_history())
     assert newest_500 < whole_tail, "fixture must exceed the default cap for this to mean anything"
     assert used == whole_tail, f"{used} is the newest 500 ({newest_500}), not the whole tail ({whole_tail})"
+
+
+async def test_session_resume_reports_the_window_the_last_call_measured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reading stored with a reply wins over any estimate of the stored log.
+
+    The context engine compacts on its own and never advances
+    ``last_consolidated``, so the stored log is not what the model was sent: a
+    long session's log estimated at forty times the window its last call
+    measured, and a short one at a few tokens, the system prompt and the tool
+    list being no part of it. The newest stored reading is the number the meter
+    showed when that turn ended, and a question asked since has no reading yet.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_meas01"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    for i in range(100):
+        session.add_message("user", f"message number {i} " * 200)
+    session.add_message("assistant", "first answer", context_used=1_234)
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=50_000)
+    session.add_message("user", "one more question, not answered yet")
+    mgr.save(session)
+    estimate = estimate_prompt_tokens(session.get_history(max_messages=0))
+    assert estimate > 50_000, f"fixture must estimate past the reading for this to mean anything ({estimate})"
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 50_000
+    assert usage["context_percent"] == 25
+    assert usage["context_estimated"] is False
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [0, -5, True, "50000", 1.5, 10**12, 10**400],
+    ids=["zero", "negative", "bool", "string", "float", "past_any_window", "past_float_range"],
+)
+async def test_session_resume_reads_past_a_stored_reading_that_is_no_token_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, junk: object
+) -> None:
+    """Only a positive integer a window could hold is a reading -- ``True`` is an
+    ``int`` to Python, and a count past float range would raise on the way to a
+    percentage, turning the reader's conversation into a fresh empty one."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    cfg.agents.defaults.context_window_tokens = 200_000
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    session_key = "tui:20260610_143052_meas03"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(session_key)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "first answer", context_used=1_234)
+    session.add_message("user", "and then?")
+    session.add_message("assistant", "second answer", context_used=junk)
+    mgr.save(session)
+
+    result = await session_resume({"session_id": session_key})
+    usage = result["info"]["usage"]
+
+    assert usage["context_used"] == 1_234
+    assert usage["context_estimated"] is False
 
 
 async def test_session_resume_carries_a_stored_tool_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2736,6 +2911,130 @@ async def test_session_list_keeps_identity_separate_from_latest_preview(
     assert row["last_message_preview"] == "latest answer"
 
 
+async def test_session_list_leaves_a_silent_row_out_of_the_preview_and_the_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A silent turn delivered nothing, so its marker is neither the line a
+    picker shows under the title nor activity a session is ordered by. The second
+    session is the same fixture with the flag removed, so only the flag differs."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    for key, reply, flag in (
+        ("tui:quiet", "[SILENT]", {"silent": True}),
+        ("tui:spoken", "all quiet", {}),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "what changed?", timestamp="2026-06-10T10:00:00")
+        session.add_message("assistant", "one file", timestamp="2026-06-10T10:00:05")
+        session.add_message("user", "anything new?", timestamp="2026-06-10T11:00:00")
+        session.add_message("assistant", reply, timestamp="2026-06-10T11:00:05", **flag)
+        mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    rows = {row["id"]: row for row in (await session_list({}))["sessions"]}
+
+    assert rows["tui:quiet"]["last_message_preview"] == "anything new?"
+    assert rows["tui:quiet"]["updated_at"] == datetime.fromisoformat("2026-06-10T11:00:00").timestamp()
+    assert rows["tui:spoken"]["last_message_preview"] == "all quiet"
+    assert rows["tui:spoken"]["updated_at"] == datetime.fromisoformat("2026-06-10T11:00:05").timestamp()
+    assert rows["tui:quiet"]["message_count"] == 4, "the row is still in the transcript"
+
+
+@pytest.mark.parametrize(
+    "first,second,between",
+    [
+        pytest.param({"origin": "cron"}, {"origin": "cron"}, False, id="cron"),
+        pytest.param({"origin": "cron"}, {"origin": "cron"}, True, id="cron_that_used_a_tool_first"),
+        pytest.param({}, {"origin": "subagent", "delegated": {"kind": "spawn"}}, False, id="sub_agent_report"),
+    ],
+)
+async def test_session_list_leaves_a_silent_turn_the_runtime_opened_out_of_the_preview_and_the_clock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: dict, second: dict, between: bool
+) -> None:
+    """The prompt of a turn the runtime opened is prose for the model, not conversation, so when the
+    turn ends silent nothing of it is a line to show or activity to order by -- the tool call the run
+    made on the way included. The second session is the same fixture with the final row answering
+    instead, so only the flag differs."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    channel = "cron" if first else "tui"
+    mgr = SessionManager(tmp_path)
+    for key, reply, flag in (
+        (f"{channel}:quiet", "[SILENT]", {"silent": True}),
+        (f"{channel}:spoken", "nothing new today", {}),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T08:00:00", **first)
+        session.add_message("assistant", "2 new mails", timestamp="2026-06-10T08:00:05")
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T09:00:00", **second)
+        if between:
+            calls = [{"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": "{}"}}]
+            session.add_message("assistant", "", timestamp="2026-06-10T09:00:02", tool_calls=calls)
+            session.add_message("tool", "inbox", timestamp="2026-06-10T09:00:03", tool_call_id="c1", name="list_dir")
+        session.add_message("assistant", reply, timestamp="2026-06-10T09:00:05", **flag)
+        mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    rows = {row["id"]: row for row in (await session_list({"channels": [channel]}))["sessions"]}
+
+    quiet, spoken = rows[f"{channel}:quiet"], rows[f"{channel}:spoken"]
+    assert quiet["last_message_preview"] == "2 new mails"
+    assert quiet["updated_at"] == datetime.fromisoformat("2026-06-10T08:00:05").timestamp()
+    assert spoken["last_message_preview"] == "nothing new today"
+    assert spoken["updated_at"] == datetime.fromisoformat("2026-06-10T09:00:05").timestamp()
+    assert quiet["message_count"] == spoken["message_count"], "the rows are all still in the transcript"
+
+
+async def test_session_list_keeps_a_runtime_turn_the_message_tool_answered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn the message tool answered is not a Silent Turn whatever it ends on: the
+    reply reached the reader, so the turn stays the activity the session is ordered by
+    -- the rule the ACP replay reads the same turn with. The live turn files that
+    verdict on the row that closes it. The second session is the same fixture without
+    the message call, so only that call and its verdict differ."""
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+    mgr = SessionManager(tmp_path)
+    calls = [{"id": "m1", "type": "function", "function": {"name": "message", "arguments": "{}"}}]
+    for key, delivered in (
+        ("cron:answered", True),
+        ("cron:quiet", False),
+    ):
+        session = mgr.get_or_create(key)
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T08:00:00", origin="cron")
+        session.add_message("assistant", "2 new mails", timestamp="2026-06-10T08:00:05")
+        session.add_message("user", "[Scheduled Task] check the mail", timestamp="2026-06-10T09:00:00", origin="cron")
+        if delivered:
+            session.add_message("assistant", "", timestamp="2026-06-10T09:00:02", tool_calls=calls)
+            session.add_message(
+                "tool", "Message sent", timestamp="2026-06-10T09:00:03", tool_call_id="m1", name="message"
+            )
+        verdict = {"replied_via_tool": True} if delivered else {}
+        session.add_message("assistant", "[SILENT]", timestamp="2026-06-10T09:00:05", silent=True, **verdict)
+        mgr.save(session)
+    monkeypatch.setattr("raven.session.resolve.build_manager", lambda cfg: mgr)
+
+    rows = {row["id"]: row for row in (await session_list({"channels": ["cron"]}))["sessions"]}
+
+    answered, quiet = rows["cron:answered"], rows["cron:quiet"]
+    assert answered["updated_at"] == datetime.fromisoformat("2026-06-10T09:00:02").timestamp(), (
+        "the turn delivered a reply, so it is the activity the session is ordered by"
+    )
+    assert quiet["updated_at"] == datetime.fromisoformat("2026-06-10T08:00:05").timestamp(), (
+        "a turn that delivered nothing is taken back whole"
+    )
+    assert answered["last_message_preview"] == "[Scheduled Task] check the mail"
+    assert quiet["last_message_preview"] == "2 new mails"
+
+
 async def test_session_compress_hands_back_what_the_caller_must_redraw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3185,6 +3484,231 @@ async def test_a_clear_wins_over_a_mode_given_alongside_it():
 
 
 # ---------------------------------------------------------------------------
+# session.set_effort: this session's own reasoning effort
+# ---------------------------------------------------------------------------
+
+
+class _EffortLoop:
+    """A loop over a real session manager, which is where the pick is kept."""
+
+    def __init__(self, tmp_path: Path, mode_effort: str | None = None) -> None:
+        self.sessions = SessionManager(tmp_path)
+        self._mode_effort = mode_effort
+
+    def session_policy(self, key):
+        from raven.agent.loop._shared import SessionPolicy
+
+        return SessionPolicy(reasoning_effort=self._mode_effort)
+
+
+def _configured_effort(monkeypatch: pytest.MonkeyPatch, effort: str | None) -> None:
+    cfg = load_config()
+    cfg.agents.defaults.reasoning_effort = effort
+    monkeypatch.setattr(session_module, "load_config", lambda: cfg)
+
+
+def _filed(mgr: SessionManager, key: str) -> None:
+    """A session with a record on disk, which is what a metadata patch lands on."""
+    mgr.save(mgr.get_or_create(key))
+
+
+@pytest.fixture(autouse=True)
+def levels(monkeypatch):
+    """Keep the effort tests off the real LiteLLM table; a test may narrow it."""
+
+    def use(words):
+        monkeypatch.setattr(
+            session_module.effort_levels,
+            "levels_for",
+            lambda model, declared=(), *, provider=None, refresh=False: None if words is None else tuple(words),
+        )
+
+    use(["minimal", "low", "medium", "high"])
+    return use
+
+
+def test_effort_levels_asks_the_provider_the_config_routes_through(monkeypatch) -> None:
+    """A forced gateway serves a bare vendor id; the ladder and the overlay
+    must follow the gateway, not the id's prefix."""
+    seen: dict[str, str | None] = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["provider"] = provider
+        return ("minimal", "low", "medium", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+
+    class _Routed:
+        providers = None
+
+        def get_provider_name(self, model):
+            return "openrouter"
+
+    assert session_module._effort_levels("deepseek/deepseek-r1", _Routed()) == (
+        "minimal",
+        "low",
+        "medium",
+        "high",
+    )
+    assert seen["provider"] == "openrouter"
+
+    class _Unrouted:
+        providers = None
+
+    session_module._effort_levels("deepseek/deepseek-r1", _Unrouted())
+    assert seen["provider"] == "deepseek"
+
+
+async def test_an_effort_read_reports_no_pick_the_default_and_the_words(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result == {
+        "session_key": "tui:1",
+        "effort": None,
+        "default": "low",
+        "options": ["minimal", "low", "medium", "high"],
+    }
+
+
+async def test_an_unset_default_reports_null_not_low(tmp_path, monkeypatch) -> None:
+    """No configured effort means the provider's own default, which has no
+    word: reporting a rung for it is the mistake the settings page made."""
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] is None
+
+
+async def test_an_effort_set_lands_on_the_record_and_outlives_the_manager(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] == "high" and result["default"] == "low"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
+    # On disk, not only on the cached copy: a fresh manager reads it back.
+    assert SessionManager(tmp_path).peek("tui:1").metadata["reasoning_effort"] == "high"
+    again = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert again["effort"] == "high"
+
+
+async def test_an_effort_clear_returns_the_session_to_the_default(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "clear": True}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] is None and result["default"] == "low"
+    # Null rather than absent: a patch sets keys, and both read as "no pick".
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] is None
+    assert SessionManager(tmp_path).peek("tui:1").metadata["reasoning_effort"] is None
+
+
+async def test_an_effort_clear_wins_over_an_effort_given_alongside_it(tmp_path, monkeypatch) -> None:
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:1", "effort": "high", "clear": True}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] is None
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] is None
+
+
+async def test_the_modes_effort_is_the_default_where_the_catalogue_sets_one(tmp_path, monkeypatch) -> None:
+    """raven-code's modes each set an effort; that, not the file's, is what a
+    session in such a mode runs at without a pick of its own."""
+    _configured_effort(monkeypatch, "low")
+    loop = _EffortLoop(tmp_path, mode_effort="medium")
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] == "medium"
+
+
+async def test_an_unknown_effort_is_refused_naming_the_words(tmp_path, monkeypatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "turbo"}, agent_loop_factory=lambda: loop
+        )
+    assert "minimal, low, medium, high" in str(exc.value)
+    assert "reasoning_effort" not in loop.sessions.peek("tui:1").metadata, "a refused set must not half-land"
+
+
+async def test_a_draft_reads_the_default_but_cannot_set_without_a_key(tmp_path, monkeypatch) -> None:
+    """The page's draft has no session yet; it still draws the row from the
+    default and the words, and stages a pick until the first message mints one."""
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, "medium")
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": ""}, agent_loop_factory=lambda: loop)
+    assert result == {
+        "session_key": "",
+        "effort": None,
+        "default": "medium",
+        "options": ["minimal", "low", "medium", "high"],
+    }
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort({"effort": "high"}, agent_loop_factory=lambda: loop)
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort({"clear": True}, agent_loop_factory=lambda: loop)
+
+
+async def test_an_effort_set_on_a_draft_is_held_until_its_first_save(tmp_path, monkeypatch) -> None:
+    """A conversation the first message has not filed yet has no record to
+    patch; the pick waits on the in-memory copy, which that first save writes."""
+    _configured_effort(monkeypatch, None)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort(
+        {"session_key": "tui:draft", "effort": "minimal"}, agent_loop_factory=lambda: loop
+    )
+    assert result["effort"] == "minimal"
+    held = loop.sessions.get_or_create("tui:draft")
+    assert held.metadata["reasoning_effort"] == "minimal"
+    loop.sessions.save(held)
+    assert SessionManager(tmp_path).peek("tui:draft").metadata["reasoning_effort"] == "minimal"
+
+
+async def test_the_bundle_reports_the_effort_in_force(tmp_path, monkeypatch) -> None:
+    """The status bar sits beside the model; it shows the pick where there is
+    one and the default otherwise, the same answer the next turn runs at."""
+    from unittest.mock import MagicMock
+
+    _configured_effort(monkeypatch, "low")
+    # MagicMock for the unrelated skills/tools enumeration, as the session-info
+    # tests above do; the manager and the policy are real.
+    loop = MagicMock()
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: "vendor-a/model"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = _EffortLoop(tmp_path).session_policy
+    _filed(loop.sessions, "tui:1")
+    config = session_module.load_config()
+    before = await session_module._default_session_info(loop, config, "tui:1")
+    assert before["reasoning_effort"] == "low"
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    after = await session_module._default_session_info(loop, config, "tui:1")
+    assert after["reasoning_effort"] == "high"
+    fresh = await session_module._default_session_info(loop, config, None)
+    assert fresh["reasoning_effort"] == "low"
+
+
+async def test_set_effort_is_registered_beside_set_mode() -> None:
+    d = Dispatcher()
+    register_session_methods(d, agent_loop_factory=lambda: None)
+    assert "session.set_effort" in d.methods() and "session.set_mode" in d.methods()
+
+
+# ---------------------------------------------------------------------------
 # session.list {archived} and the lazy auto-archive pass
 # ---------------------------------------------------------------------------
 
@@ -3459,6 +3983,25 @@ async def test_session_usage_sums_the_sessions_calls_its_delegations_included(
     assert result["context_estimated"] is True
 
 
+async def test_session_usage_reports_the_measured_window_when_one_was_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The panel's gauge is read the way ``session.resume`` reads it."""
+    _usage_setup(tmp_path, monkeypatch)
+    root = "tui:20260922_101500_meas02"
+    mgr = SessionManager(tmp_path)
+    session = mgr.get_or_create(root)
+    session.add_message("user", "hello")
+    session.add_message("assistant", "hi", context_used=14_795)
+    mgr.save(session)
+
+    result = await session_usage({"session_id": root})
+
+    assert result["context_used"] == 14_795
+    assert result["context_percent"] == 7
+    assert result["context_estimated"] is False
+
+
 async def test_session_usage_for_a_worker_that_only_delegated_reports_zeros(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3597,3 +4140,507 @@ async def test_session_usage_is_no_longer_a_stub(tmp_path: Path, monkeypatch: py
     assert "error" not in response, response
     METHOD_MODELS["session.usage"][1].model_validate(response["result"])
     assert response["result"]["input"] == 42
+
+
+# ---------------------------------------------------------------------------
+# session.set_knowledge -- which bases a conversation's turns may search
+# ---------------------------------------------------------------------------
+
+
+async def test_resuming_an_id_that_does_not_exist_caches_no_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read must not mint what it was asked to look at.
+
+    `_default_session_info` reads the knowledge selection before `resume`
+    peeks, so a read that used `get_or_create` cached a fresh empty session
+    under the unknown id -- and the peek below it then found that ghost and
+    answered it as a session, with nothing on disk behind it.
+    """
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+    unknown = "tui:doesnotexist123"
+
+    await session_resume({"session_id": unknown})
+
+    assert unknown not in sessions._cache, "a read minted nothing"
+
+
+def _shared_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionManager:
+    """One session manager behind every call in a case.
+
+    `manager_for` prefers the loop's own and builds a fresh one otherwise, so
+    two calls with no loop write to two different managers -- and a test would
+    read back nothing whatever the handler did. Pinning it is what makes the
+    record the picker writes the record the turn reads.
+    """
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(tmp_path)
+    monkeypatch.setattr("raven.rpc.methods.session.load_config", lambda: cfg)
+    sessions = SessionManager(tmp_path)
+    monkeypatch.setattr("raven.rpc.methods.session.manager_for", lambda loop, config: sessions)
+    return sessions
+
+
+async def test_a_session_is_created_with_the_bases_it_was_pointed_at(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.agent import knowledge_scope
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+
+    made = await session_create({"knowledge_bases": ["kb-a", "kb-b"]})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ("kb-a", "kb-b")
+
+
+async def test_a_session_created_without_them_searches_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ordinary case: a conversation nobody pointed at a base."""
+    from raven.agent import knowledge_scope
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+
+    made = await session_create({})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ()
+
+
+async def test_what_was_set_is_what_the_turn_will_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The whole point of the selection: the record the picker writes is the
+    record the turn binds from."""
+    from raven.agent import knowledge_scope
+    from raven.rpc.methods.session import session_set_knowledge
+
+    sessions = _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({})
+
+    await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": ["kb-b", "kb-a"]})
+
+    assert knowledge_scope.read(sessions, made["session_id"]) == ("kb-b", "kb-a")
+
+
+async def test_setting_the_bases_replaces_what_was_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The picker sends what is ticked, and a call that added would have no way
+    to say that something was unticked."""
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({"knowledge_bases": ["kb-a", "kb-b"]})
+
+    out = await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": ["kb-c"]})
+
+    assert out == {"knowledge_bases": ["kb-c"]}
+
+
+async def test_the_bases_can_be_cleared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Detaching every base has to be sayable, or the tool could never be taken
+    away once it was offered."""
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({"knowledge_bases": ["kb-a"]})
+
+    assert await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": []}) == {
+        "knowledge_bases": []
+    }
+
+
+async def test_setting_the_bases_without_a_session_is_refused() -> None:
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods.session import session_set_knowledge
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_knowledge({"knowledge_bases": ["kb-a"]})
+
+
+async def test_a_selection_that_is_not_a_list_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.rpc.errors import ConfigValidationError
+    from raven.rpc.methods.session import session_set_knowledge
+
+    _shared_sessions(tmp_path, monkeypatch)
+    made = await session_create({})
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_knowledge({"session_id": made["session_id"], "knowledge_bases": "kb-a"})
+
+
+class _HarnessLoop:
+    """The two verbs `session.set_harness` reaches for, and a library of one."""
+
+    def __init__(self, known=("travel-concierge",)) -> None:
+        self.known = set(known)
+        self.bound: dict[str, str | None] = {}
+
+    def bind_session_harness(self, session_key: str, name: str | None) -> str | None:
+        if name is None:
+            self.bound.pop(session_key, None)
+            return None
+        if name not in self.known:
+            raise ValueError(f"no stored Harness named {name!r}")
+        self.bound[session_key] = name
+        return name
+
+    def session_harness_name(self, session_key: str) -> str | None:
+        return self.bound.get(session_key)
+
+
+@pytest.mark.asyncio
+async def test_set_harness_reports_binds_and_unbinds_by_which_fields_are_present() -> None:
+    """Three calls told apart by the `harness` key, the way session.set_mode does it."""
+    loop = _HarnessLoop()
+
+    reported = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: loop)
+    assert reported == {"session_key": "s1", "harness": None}
+
+    bound = await session_set_harness(
+        {"session_key": "s1", "harness": "travel-concierge"}, agent_loop_factory=lambda: loop
+    )
+    assert bound == {"session_key": "s1", "harness": "travel-concierge"}
+    assert loop.bound == {"s1": "travel-concierge"}
+
+    again = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: loop)
+    assert again["harness"] == "travel-concierge"
+
+    cleared = await session_set_harness({"session_key": "s1", "harness": None}, agent_loop_factory=lambda: loop)
+    assert cleared == {"session_key": "s1", "harness": None}
+    assert loop.bound == {}
+
+
+@pytest.mark.asyncio
+async def test_set_harness_refuses_a_missing_key_and_an_unknown_harness() -> None:
+    from raven.rpc.errors import ConfigValidationError
+
+    loop = _HarnessLoop()
+    with pytest.raises(ConfigValidationError) as missing:
+        await session_set_harness({}, agent_loop_factory=lambda: loop)
+    assert missing.value.data["field"] == "session_key"
+
+    with pytest.raises(ConfigValidationError) as unknown:
+        await session_set_harness({"session_key": "s1", "harness": "nope"}, agent_loop_factory=lambda: loop)
+    assert unknown.value.data["field"] == "harness"
+    assert "nope" in str(unknown.value)
+
+
+@pytest.mark.asyncio
+async def test_set_harness_says_so_when_this_build_cannot_bind_one() -> None:
+    """A loop without the verb refuses the write rather than reporting success."""
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError):
+        await session_set_harness(
+            {"session_key": "s1", "harness": "travel-concierge"}, agent_loop_factory=lambda: object()
+        )
+
+    reported = await session_set_harness({"session_key": "s1"}, agent_loop_factory=lambda: object())
+    assert reported == {"session_key": "s1", "harness": None}
+
+
+@pytest.mark.asyncio
+async def test_session_create_refuses_a_harness_a_build_cannot_bind() -> None:
+    """The zero-factory path has no binder, so asking to open on one is an error
+    rather than a session that silently comes up as an ordinary one."""
+    from raven.rpc.errors import ConfigValidationError
+
+    with pytest.raises(ConfigValidationError) as exc:
+        await session_create({"harness": "travel-concierge"})
+    assert exc.value.data["field"] == "harness"
+
+
+# ── Imported Conversations through session.* ───────────────────────────
+
+
+def _import_export(tmp_path: Path, **source: object) -> str:
+    from raven.trajectory import imported
+    from tests import imported_package_builders as builders
+
+    package, _ = builders.build_export(tmp_path / f"src-{len(list(tmp_path.glob('src-*')))}")
+    return imported.import_bytes(package.read_bytes(), package.name).conversation.key
+
+
+def _imported_with_record(rows: list[dict]) -> str:
+    import gzip
+    import tarfile
+
+    from raven.trajectory import imported
+    from tests.test_trajectory_imported_package import EXP, _export_entries, _raw
+
+    record = "".join(json.dumps(r) + "\n" for r in rows).encode()
+    entries = _export_entries(extra=[(f"{EXP}/session.jsonl", tarfile.REGTYPE, record)])
+    return imported.import_bytes(gzip.compress(_raw(entries), mtime=0), "record.tar.gz", force=True).conversation.key
+
+
+async def test_session_list_adds_imported_rows_when_asked(tmp_path: Path) -> None:
+    from raven.trajectory import imported
+
+    key = _import_export(tmp_path)
+    rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
+    row = next(r for r in rows if r["id"] == key)
+    conversation = imported.get(key)
+    assert row == {
+        "id": key,
+        "message_count": 4,
+        "preview": conversation.title,
+        "last_message_preview": "",
+        "source": "imported",
+        "started_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
+        "updated_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
+        "title": conversation.title,
+        "pinned": False,
+        "running": False,
+        "workdir": None,
+        "imported": {"kind": "export", "source_name": "export.tar.gz"},
+    }
+    assert key not in [r["id"] for r in (await session_list({"channels": ["tui"]}))["sessions"]]
+    assert key not in [r["id"] for r in (await session_list({}))["sessions"]]
+    archived = await session_list({"channels": ["tui", "imported"], "archived": True})
+    assert key not in [r["id"] for r in archived["sessions"]]
+
+
+async def test_session_list_keeps_imported_rows_out_of_the_limit_and_newest_first(tmp_path: Path) -> None:
+    import time
+
+    mgr = SessionManager(load_config().workspace_path)
+    for name in ("tui:one", "tui:two"):
+        session = mgr.get_or_create(name)
+        session.add_message("user", name)
+        mgr.save(session)
+    first = _import_export(tmp_path)
+    time.sleep(0.01)
+    second = _import_export(tmp_path)
+    rows = (await session_list({"channels": ["tui", "imported"], "limit": 1}))["sessions"]
+    assert [r["source"] for r in rows] == ["tui", "imported", "imported"]
+    assert [r["id"] for r in rows if r["source"] == "imported"] == [second, first]
+
+
+async def test_auto_archive_never_touches_an_imported_conversation(tmp_path: Path, monkeypatch) -> None:
+    from raven.trajectory import imported
+
+    key = _import_export(tmp_path)
+    conversation = imported.get(key)
+    meta = dict(conversation.meta, imported_at="2020-01-01T00:00:00+00:00")
+    (conversation.path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    before = (conversation.path / "meta.json").read_bytes()
+    rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
+    assert key in [r["id"] for r in rows]
+    assert (conversation.path / "meta.json").read_bytes() == before
+
+
+async def test_resume_serves_an_imported_conversation_read_only(tmp_path: Path) -> None:
+    from tests import imported_package_builders as builders
+
+    key = _import_export(tmp_path)
+    result = await session_resume({"session_id": key})
+    assert result["session_id"] == key
+    assert result["info"]["read_only"] is True
+    assert result["info"]["title"] == builders.TITLE
+    assert result["info"]["running"] is False
+    _assert_session_info(result["info"])
+    assert [m["text"] for m in result["messages"]] == [
+        builders.FIRST_INPUT,
+        "found three hotels",
+        builders.SECOND_INPUT,
+        "booked",
+    ]
+
+
+@pytest.mark.parametrize("key", ["imported:" + "0" * 32, "imported:../../etc", "imported:"])
+async def test_resume_of_an_unknown_imported_key_creates_nothing(key: str) -> None:
+    from raven.rpc.errors import SessionNotFoundError
+
+    sessions = load_config().workspace_path / "sessions"
+    before = sorted(sessions.rglob("*")) if sessions.exists() else []
+    with pytest.raises(SessionNotFoundError):
+        await session_resume({"session_id": key})
+    after = sorted(sessions.rglob("*")) if sessions.exists() else []
+    assert after == before
+
+
+async def test_an_imported_delivery_is_missing_whatever_this_machine_holds(tmp_path: Path) -> None:
+    from raven.agent.tools.deliverables import DeliverableStore
+
+    present = tmp_path / "report.pdf"
+    present.write_bytes(b"pdf")
+    store = DeliverableStore(tmp_path / "deliverables.json")
+    record = store.register(
+        path=str(present), name="report.pdf", media_type="application/pdf", size=3, conversation="tui:s1"
+    )
+    download = f"/files/download?token={record.token}"
+    assert store.get(record.token) is not None
+    delivery = {
+        "role": "tool",
+        "content": "Delivered files",
+        "metadata": {
+            "raven_delivery": {
+                "message": "Final files",
+                "files": [
+                    {
+                        "name": "report.pdf",
+                        "title": "Report",
+                        "path": str(present),
+                        "size": 3,
+                        "download_path": download,
+                    }
+                ],
+            }
+        },
+    }
+    ordinary = session_module._map_to_wire([delivery], "tui:s1")[0]["metadata"]["raven_delivery"]["files"][0]
+    assert (ordinary["missing"], ordinary["download_path"]) == (False, download)
+
+    key = _imported_with_record([{"_type": "metadata", "metadata": {}}, delivery])
+    files = (await session_resume({"session_id": key}))["messages"][0]["metadata"]["raven_delivery"]["files"]
+    assert files == [
+        {"name": "report.pdf", "title": "Report", "path": str(present), "size": 3, "download_path": "", "missing": True}
+    ]
+
+
+async def test_title_of_an_imported_conversation(tmp_path: Path) -> None:
+    from raven.rpc.errors import InvalidParamsError, SessionNotFoundError, SessionTitleTooLongError
+    from raven.session.title import TITLE_STORAGE_MAX
+    from tests import imported_package_builders as builders
+
+    key = _import_export(tmp_path)
+    assert await session_title({"session_id": key}) == {"title": builders.TITLE, "session_key": key, "pending": False}
+    renamed = await session_title({"session_id": key, "title": "  Hotel   analysis "})
+    assert renamed == {"title": "Hotel analysis", "session_key": key, "pending": False}
+    rows = (await session_list({"channels": ["imported"]}))["sessions"]
+    assert [r["title"] for r in rows if r["id"] == key] == ["Hotel analysis"]
+    with pytest.raises(InvalidParamsError):
+        await session_title({"session_id": key, "title": "   "})
+    with pytest.raises(SessionTitleTooLongError):
+        await session_title({"session_id": key, "title": "x" * (TITLE_STORAGE_MAX + 1)})
+    with pytest.raises(SessionNotFoundError):
+        await session_title({"session_id": "imported:" + "0" * 32, "title": "x"})
+    with pytest.raises(SessionNotFoundError):
+        await session_title({"session_id": "imported:" + "0" * 32})
+
+
+async def test_delete_of_an_imported_conversation(tmp_path: Path) -> None:
+    from raven.trajectory import imported
+    from raven.trajectory import index as tidx
+
+    key = _import_export(tmp_path)
+    state, _ = imported.trajectory_target(key)
+    tidx.indexer_for(state)
+    assert state.resolve() in tidx._INDEXERS
+    assert await session_delete({"session_id": key}) == {"deleted": key, "still_on_disk": False}
+    assert imported.get(key) is None
+    assert not state.exists()
+    assert state.resolve() not in tidx._INDEXERS
+    assert await session_delete({"session_id": key}) == {"deleted": None, "still_on_disk": False}
+
+
+async def test_effort_options_come_from_the_models_declared_levels(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == ["medium", "high", "xhigh"]
+
+
+async def test_a_declared_level_is_refused_when_the_model_does_not_carry_it(tmp_path, monkeypatch, levels):
+    from raven.rpc.errors import ConfigValidationError
+
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    with pytest.raises(ConfigValidationError):
+        await session_module.session_set_effort(
+            {"session_key": "tui:1", "effort": "minimal"}, agent_loop_factory=lambda: loop
+        )
+
+
+async def test_a_draft_read_names_the_model_it_asks_about(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort(
+        {"session_key": "", "model": "openai/gpt-5.5-pro"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == "openai/gpt-5.5-pro"
+    assert result["options"] == ["low", "high"]
+
+
+async def test_a_model_that_declares_no_reasoning_offers_no_words(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels([])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["options"] == []
+
+
+async def test_the_reported_pick_is_clamped_to_the_model(tmp_path, monkeypatch, levels):
+    """A pick the model stopped declaring reads as no pick, and the default
+    the turn actually falls back to is reported as it stands."""
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high", "xhigh"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["medium"])
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["effort"] is None and result["default"] == "low"
+
+
+async def test_the_default_is_not_narrowed_by_the_model(tmp_path, monkeypatch, levels):
+    """The mode's word and the configured default are sent as they stand; only
+    a pick is bounded by what the model declares."""
+    _configured_effort(monkeypatch, "xhigh")
+    levels(["low", "medium"])
+    loop = _EffortLoop(tmp_path)
+    result = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert result["default"] == "xhigh"
+    assert result["options"] == ["low", "medium"]
+
+
+async def test_the_bundle_reports_the_default_when_the_pick_is_clamped(tmp_path, monkeypatch, levels):
+    from unittest.mock import MagicMock
+
+    _configured_effort(monkeypatch, "low")
+    loop = MagicMock()
+    loop.model = "vendor-a/model"
+    loop.session_model = lambda key: "vendor-a/model"
+    loop.sessions = SessionManager(tmp_path)
+    loop.session_policy = _EffortLoop(tmp_path).session_policy
+    _filed(loop.sessions, "tui:1")
+    config = session_module.load_config()
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["low", "medium"])
+    info = await session_module._default_session_info(loop, config, "tui:1")
+    assert info["reasoning_effort"] == "low"
+
+
+async def test_a_pick_comes_back_when_a_later_model_declares_it(tmp_path, monkeypatch, levels):
+    _configured_effort(monkeypatch, "low")
+    levels(["medium", "high"])
+    loop = _EffortLoop(tmp_path)
+    _filed(loop.sessions, "tui:1")
+    await session_module.session_set_effort({"session_key": "tui:1", "effort": "high"}, agent_loop_factory=lambda: loop)
+    levels(["medium"])
+    dropped = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert dropped["effort"] is None
+    levels(["medium", "high"])
+    back = await session_module.session_set_effort({"session_key": "tui:1"}, agent_loop_factory=lambda: loop)
+    assert back["effort"] == "high"
+    assert loop.sessions.peek("tui:1").metadata["reasoning_effort"] == "high"
+
+
+async def test_a_model_param_does_not_override_a_sessions_model(tmp_path, monkeypatch):
+    _configured_effort(monkeypatch, "low")
+    seen = {}
+
+    def resolve(model, declared=(), *, provider=None, refresh=False):
+        seen["model"] = model
+        return ("low", "high")
+
+    monkeypatch.setattr(session_module.effort_levels, "levels_for", resolve)
+    loop = _EffortLoop(tmp_path)
+    await session_module.session_set_effort(
+        {"session_key": "tui:1", "model": "other/model"}, agent_loop_factory=lambda: loop
+    )
+    assert seen["model"] == session_module.load_config().agents.defaults.model

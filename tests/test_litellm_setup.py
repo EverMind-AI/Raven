@@ -108,6 +108,47 @@ def test_import_litellm_keeps_an_explicit_model_cost_map_setting(monkeypatch) ->
     assert os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] == "False"
 
 
+def test_import_litellm_keeps_an_explicit_tokenizer_cache(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path))
+
+    import_litellm()
+
+    assert os.environ["TIKTOKEN_CACHE_DIR"] == str(tmp_path)
+
+
+@pytest.mark.slow
+def test_token_estimates_use_the_bundled_encoding_offline_with_a_cold_cache(tmp_path) -> None:
+    import subprocess
+
+    probe = """
+import requests
+
+downloads = []
+def offline(url, *args, **kwargs):
+    downloads.append(url)
+    raise requests.ConnectionError("offline")
+requests.get = offline
+
+from raven.providers.litellm_setup import import_litellm
+import_litellm()
+from raven.utils.tokens import estimate_message_tokens
+
+for text, expected in [("x" * 32, 4), ("hello world hello world hello world", 6)]:
+    actual = estimate_message_tokens({"role": "user", "content": text})
+    assert actual == expected, (text, actual, expected)
+assert downloads == [], downloads
+"""
+    env = dict(os.environ)
+    env.pop("TIKTOKEN_CACHE_DIR", None)
+    env.pop("DATA_GYM_CACHE_DIR", None)
+    env.update(TMPDIR=str(tmp_path), TMP=str(tmp_path), TEMP=str(tmp_path))
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30
+    )
+
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 def test_import_litellm_detaches_terminal_handlers() -> None:
     """Every litellm import in raven is deferred, so the handler litellm installs
     lands after the CLI has already stripped terminal handlers. Left attached, it
@@ -140,28 +181,31 @@ def test_import_litellm_keeps_non_terminal_handlers() -> None:
 # in no LiteLLM table, so the window resolver fell back to 65,536 for a
 # 1,048,576-token model and the cost recorder wrote 0. The row is registered
 # into the live table at import, where the window, the output ceiling and the
-# price are all read from.
+# price are all read from. LiteLLM 1.108 learned the id itself, so registration
+# now applies only when the installed catalogue is missing it.
 
 
-def test_import_litellm_registers_the_deepseek_flash_row() -> None:
+def test_the_installed_catalogue_carries_the_deepseek_flash_row() -> None:
     litellm = import_litellm()
 
     row = litellm.model_cost["deepseek/deepseek-flash"]
-    assert row["max_input_tokens"] == 1_048_576
-    assert row["max_output_tokens"] == 384_000
+    # Since LiteLLM 1.108 the catalogue carries the id itself, so raven's row
+    # is not registered and the upstream numbers are the ones in force.
+    assert row["max_input_tokens"] == 1_000_000
+    assert row["max_output_tokens"] == 393_216
     assert row["litellm_provider"] == "deepseek"
     # Peak-hour rates per token; off-peak is half, which a flat table cannot say.
     assert row["input_cost_per_token"] == 0.30 / 1_000_000
     assert row["output_cost_per_token"] == 1.20 / 1_000_000
 
 
-def test_the_registered_row_reaches_the_window_and_ceiling_resolvers() -> None:
+def test_the_row_reaches_the_window_and_ceiling_resolvers() -> None:
     from raven.providers import rates
 
     import_litellm()
 
-    assert rates.resolve_context_window("deepseek/deepseek-flash") == 1_048_576
-    assert rates.declared_max_output_tokens("deepseek/deepseek-flash") == 384_000
+    assert rates.resolve_context_window("deepseek/deepseek-flash") == 1_000_000
+    assert rates.declared_max_output_tokens("deepseek/deepseek-flash") == 393_216
     # The row's ceiling is where the resolver starts, not what it returns: a
     # declaration this far inside the window still outruns any one reply, so
     # what a request carries is the per-iteration bound.
@@ -253,3 +297,102 @@ def test_a_second_caller_during_the_import_does_not_leave_the_levels_raised(monk
 
     assert not first.is_alive() and not second.is_alive()
     assert [logger.level for logger in loggers] == [logging.INFO] * 3
+
+
+# litellm's import leaves the dict its utils module loads Anthropic's tokenizer
+# JSON into, kept beside the string the Claude tokenizer is built from. cl100k's
+# Python rank copy is freed by raven's estimator when it loads the encoding --
+# LiteLLM 1.108 no longer loads it during the import.
+
+_TEXT = "malloc_trim returns freed arenas"
+
+
+def test_the_import_frees_the_anthropic_copy_and_the_estimator_frees_cl100k() -> None:
+    import litellm.utils
+    import tiktoken
+
+    from raven.utils.tokens import encoding
+
+    import_litellm()
+
+    assert litellm.utils.json_data is None
+    assert isinstance(litellm.utils.claude_json_str, str)
+    encoding()
+    assert "_mergeable_ranks" not in vars(tiktoken.get_encoding("cl100k_base"))
+    # Where tiktoken keeps the ranks, read off an encoding outside the registry: a
+    # release that moved them would leave the line above passing with nothing freed.
+    unregistered = tiktoken.Encoding(name="unregistered", pat_str=r"\S+", mergeable_ranks={b"a": 0}, special_tokens={})
+    assert "_mergeable_ranks" in vars(unregistered)
+
+
+@pytest.mark.slow
+def test_raven_s_estimator_registers_the_encoding_whose_ranks_it_frees(tmp_path) -> None:
+    """LiteLLM 1.108 no longer loads cl100k during its import; raven's own
+    estimator loads it and frees the Python copy of its ranks. Checked in a fresh
+    interpreter because an earlier test may have loaded it first."""
+    import subprocess
+
+    probe = (
+        "import tiktoken.registry as registry\n"
+        "from raven.providers.litellm_setup import import_litellm\n"
+        "import_litellm()\n"
+        "from raven.utils.tokens import encoding as raven_encoding\n"
+        "encoding = raven_encoding()\n"
+        "print('registered by raven:', registry.ENCODINGS.get('cl100k_base') is encoding)\n"
+        "print('ranks left:', '_mergeable_ranks' in vars(encoding))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", probe], cwd=tmp_path, capture_output=True, text=True, timeout=120
+    )
+
+    assert "registered by raven: True" in done.stdout, done.stdout + done.stderr
+    assert "ranks left: False" in done.stdout, done.stdout + done.stderr
+
+
+def test_every_tokenizer_counts_the_same_without_them() -> None:
+    """Anthropic's tokenizer, built from the string, counts this text as 7; cl100k
+    counts it as 5 through raven's estimate, through litellm, and through a copy of
+    the encoding made by pickling, which a registered encoding does by name."""
+    import pickle
+
+    import tiktoken
+
+    from raven.utils.tokens import estimate_message_tokens
+
+    litellm = import_litellm()
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    assert encoding.encode(_TEXT) == [16561, 71125, 4780, 28634, 98767]
+    assert pickle.loads(pickle.dumps(encoding)).encode(_TEXT) == [16561, 71125, 4780, 28634, 98767]
+    assert estimate_message_tokens({"role": "user", "content": _TEXT}) == 5
+    assert litellm.token_counter(model="gpt-4", text=_TEXT) == 5
+    assert litellm.token_counter(model="claude-sonnet-4-5", text=_TEXT) == 7
+
+
+def test_a_tokenizer_built_from_the_dict_itself_keeps_it(monkeypatch) -> None:
+    """The dict goes only where its string form exists, since the string is what the
+    tokenizer is built from; a litellm that read the dict instead keeps it."""
+    import types
+
+    data = {"model": {"vocab": {}}}
+    utils = types.ModuleType("litellm.utils")
+    utils.json_data = data
+    monkeypatch.setitem(sys.modules, "litellm.utils", utils)
+
+    litellm_setup._drop_unread_tokenizer_copies()
+
+    assert utils.json_data is data
+
+
+def test_a_failure_to_free_them_leaves_the_import_standing(monkeypatch) -> None:
+    """Both sit in other libraries' undocumented internals, so freeing them is best effort."""
+
+    def moved() -> None:
+        raise AttributeError("a later release moved them")
+
+    monkeypatch.setattr(litellm_setup, "_drop_unread_tokenizer_copies", moved)
+
+    litellm = import_litellm()
+
+    assert litellm is sys.modules["litellm"]
+    assert litellm_setup._READY is litellm

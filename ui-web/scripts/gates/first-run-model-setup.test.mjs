@@ -32,7 +32,8 @@ describe('first-run model setup', () => {
   })
 
   it('guards New Task, Send, and the model selector with the same redirect', () => {
-    expect(wiring).toContain('.beforeSend = openModelsForMissingProvider')
+    expect(wiring).toContain('.beforeSend = blockSendForModel')
+    expect(moduleText('features/model/source.ts')).toContain('if (openModelsForMissingProvider()) return true')
     expect(wiring.match(/if \(openModelsForMissingProvider\(\)\) return/g)).toHaveLength(2)
   })
 

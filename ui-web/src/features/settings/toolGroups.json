@@ -8,6 +8,9 @@
     "find",
     "deliver_files"
   ],
+  "knowledge": [
+    "knowledge_search"
+  ],
   "run": [
     "exec",
     "ops_connection_add"

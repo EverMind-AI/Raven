@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
 import { cleanup, fireEvent, render } from '@testing-library/react'
+// @ts-expect-error Vitest provides Node built-ins without adding Node types to the browser bundle.
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { resetSources, setSources } from '../../state/sources'
@@ -12,14 +14,14 @@ import type { NodeStep, TaskNode, TaskRow, TasksSource } from './types'
 
 const taskRow = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
   task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
-  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0 },
+  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
   nodes: [],
   ...over,
 })
 
 const taskNode = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'status'>): TaskNode => ({
   node_summary: null, instance: null, depends_on: [], started_at: null, ended_at: null, error: null,
-  tokens_in: null, tokens_out: null, tool_call_count: null, tool_failure_count: null, has_output: null,
+  tokens_in: null, tokens_out: null, tool_call_count: null, has_output: null,
   prompt_template: null, files: [],
   ...over,
 })
@@ -122,11 +124,11 @@ describe('groupSteps', () => {
 
 describe('verb labels', () => {
   it.each([
-    ['write_file', JSON.stringify({ path: '/a.py', content: 'x' }), 'wrote', 'writing'],
-    ['edit_file', JSON.stringify({ path: '/a.py', old_text: 'a', new_text: 'b' }), 'edited', 'editing'],
-    ['exec', JSON.stringify({ command: 'ls' }), 'ran command', 'running command'],
-    ['read_file', JSON.stringify({ path: '/a.py' }), 'read', 'reading'],
-    ['web_fetch', JSON.stringify({ url: 'https://a.com' }), 'read page', 'reading page'],
+    ['write_file', JSON.stringify({ path: '/a.py', content: 'x' }), 'Wrote', 'Writing'],
+    ['edit_file', JSON.stringify({ path: '/a.py', old_text: 'a', new_text: 'b' }), 'Edited', 'Editing'],
+    ['exec', JSON.stringify({ command: 'ls' }), 'Ran command', 'Running command'],
+    ['read_file', JSON.stringify({ path: '/a.py' }), 'Read', 'Reading'],
+    ['web_fetch', JSON.stringify({ url: 'https://a.com' }), 'Read page', 'Reading page'],
   ])('shows %s\'s catalogue verb, done and in flight', (name, args, doneWord, ingWord) => {
     const { container, unmount } = render(
       <StepList steps={[tool({ name, args, result: 'ok', ok: true })]} running={false} />,
@@ -167,7 +169,7 @@ describe('the multi-call summary', () => {
     )
     const sum = container.querySelector('.tkwrow.tksum')
     expect(sum).not.toBeNull()
-    expect(sum?.querySelector('.tkar')?.textContent).toBe('read 2 files')
+    expect(sum?.querySelector('.tkar')?.textContent).toBe('Read 2 files')
     expect(container.querySelector('.tkwkin')).toHaveProperty('hidden', true)
   })
 
@@ -182,6 +184,28 @@ describe('the multi-call summary', () => {
       />,
     )
     expect(container.querySelector('.tkbadchip')?.textContent).toBe('1 failed')
+  })
+
+  it('names a single failed call with the shared word', () => {
+    const { container } = render(
+      <StepList
+        steps={[tool({ name: 'read_file', id: 'c1', result: 'ENOENT', ok: false })]}
+        running={false}
+      />,
+    )
+    expect(container.querySelector('.tkbadchip')?.textContent).toBe('failed')
+  })
+
+  it('keeps a failed call out of the clay ink', () => {
+    /* The `tkbad` class still marks the state; the stylesheet must not paint
+       it with the failure colour any more. */
+    const css = readFileSync('src/features/tasks/styles.css', 'utf8')
+    expect(css).not.toMatch(/\.tkwrow\.tkbad[^{]*\{[^}]*--clay/)
+    expect(css).not.toMatch(/\.tkbadchip[^{]*\{[^}]*--clay/)
+    /* The call's own exit badge and a delegated call's state dot are the same
+       kind of reading: neutral ink, with the word carrying the failure. */
+    expect(css).not.toMatch(/\.tkexit\.bad[^{]*\{[^}]*--clay/)
+    expect(css).not.toMatch(/\.tkstt \.dot\.bad[^{]*\{[^}]*--clay/)
   })
 
   it('renders a single call as just its own row, with no summary and nothing hidden', () => {
@@ -228,7 +252,7 @@ describe('detail cards', () => {
     expect(container.querySelector('.tkdtlnm')?.textContent).toBe('ls -la')
     expect(container.querySelector('.tkcmd')?.textContent).toBe('ls -la')
     expect(container.querySelector('.tkdtlbd pre')?.textContent).toBe('file1\nfile2')
-    expect(container.querySelector('.tkexit')?.textContent).toBe('exit code 0')
+    expect(container.querySelector('.tkexit')?.textContent).toBe('Exit code 0')
     expect(container.querySelector('.tkexit')?.className).toContain('ok')
   })
 
@@ -273,7 +297,7 @@ describe('detail cards', () => {
     expect(keys).toEqual(['Task', 'Agent', 'State'])
     expect(values[0]).toBe('cross-check quotes')
     expect(values[1]).toBe('coder')
-    expect(values[2]).toBe('running')
+    expect(values[2]).toBe('Running')
   })
 
   it('shows a run_subagent_dag card as a scale / state grid, with no task/run-id/elapsed row when the receipt cannot be parsed', () => {
@@ -320,11 +344,11 @@ describe('detail cards', () => {
     openRow(container)
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
-    expect(keys).toEqual(['Task', 'Scale', 'State', 'Elapsed', 'Run id'])
+    expect(keys).toEqual(['Task', 'Scale', 'State', 'Elapsed', 'Run ID'])
     expect(values[0]).toBe('nightly audit')
     expect(values[1]).toBe('2 nodes · 2 agents · coder · reviewer')
-    expect(values[2]).toBe('running')
-    expect(values[3]).toBe('1m05s')
+    expect(values[2]).toBe('Running')
+    expect(values[3]).toBe('1m 5s')
     expect(values[4]).toBe('r1')
     fireEvent.click(container.querySelector('.tkdgv.tkgov') as HTMLElement)
     expect(opened).toEqual(['r1'])
@@ -358,8 +382,8 @@ describe('detail cards', () => {
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
     expect(keys).toEqual(['Task', 'Agent', 'State', 'Elapsed'])
-    expect(values[2]).toBe('completed')
-    expect(values[3]).toBe('1m05s')
+    expect(values[2]).toBe('Completed')
+    expect(values[3]).toBe('1m 5s')
     fireEvent.click(container.querySelector('.tkdgv.tkgov') as HTMLElement)
     expect(opened).toEqual(['n42'])
   })
@@ -378,7 +402,7 @@ describe('detail cards', () => {
     openRow(container)
     const keys = [...container.querySelectorAll('.tkdgk')].map((k) => k.textContent)
     const values = [...container.querySelectorAll('.tkdgv')].map((v) => v.textContent)
-    expect(keys).toEqual(['Scale', 'Playbook', 'State', 'Run id'])
+    expect(keys).toEqual(['Scale', 'Playbook', 'State', 'Run ID'])
     expect(values[1]).toBe('nightly-checks')
     expect(values[3]).toBe('r9')
     expect(container.querySelector('.tkdgv.tkgov')).toBeNull()
@@ -548,7 +572,7 @@ describe('the folded summary row', () => {
     const cls = container.querySelector('.tkwrow')?.className.split(' ') ?? []
     expect(cls).toContain('tknoresult')
     expect(cls).not.toContain('tkbusy')
-    expect(container.querySelector('.tknoresultchip')?.textContent).toBe('no result')
+    expect(container.querySelector('.tknoresultchip')?.textContent).toBe('No result')
   })
 
   it('still breathes for the same call while the node runs', () => {
@@ -585,12 +609,14 @@ describe('fold memory', () => {
   it('keeps a fold open across a remount when the node key is the same', () => {
     const steps: NodeStep[] = [{ kind: 'think', text: 'first, check the dates' }]
     const first = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n1" />)
-    fireEvent.click(first.container.querySelector('.tkthh') as HTMLElement)
+    /* A sub-agent's reasoning is folded until asked for; the click is the ask. */
     expect(first.container.querySelector('blockquote')).toBeNull()
+    fireEvent.click(first.container.querySelector('.tkthh') as HTMLElement)
+    expect(first.container.querySelector('blockquote')).not.toBeNull()
     first.unmount()
 
     const second = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n1" />)
-    expect(second.container.querySelector('blockquote')).toBeNull()
+    expect(second.container.querySelector('blockquote')).not.toBeNull()
   })
 
   it('does not carry one node\'s fold onto a different node', () => {
@@ -600,7 +626,7 @@ describe('fold memory', () => {
     a.unmount()
 
     const b = render(<StepList steps={steps} running={false} nodeKey="dag:r1:n2" />)
-    expect(b.container.querySelector('blockquote')).not.toBeNull()
+    expect(b.container.querySelector('blockquote')).toBeNull()
   })
 })
 

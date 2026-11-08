@@ -37,6 +37,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Collection
 
@@ -198,6 +199,31 @@ async def _within(staging: "concurrent.futures.Future[str | None]", deadline: fl
         if not waiter.done():
             waiter.cancel()
     return bool(done)
+
+
+def _precomposed(name: str) -> str:
+    """``name`` as git on macOS spells it before matching an ignore rule.
+
+    With ``core.precomposeunicode`` on, git respells a name it reads off the
+    disk through iconv's UTF-8-MAC, whose table is Unicode 3.2's compositions
+    and which composes only neighbours: unlike NFC it reorders no marks,
+    composes no pair a mark stands between, and makes no composition added
+    after Unicode 3.2. Checked against macOS's libiconv on the decomposition
+    of every decomposable character, reordered, partly composed, and with a
+    mark added.
+    """
+    if name.isascii():
+        return name
+    ucd = unicodedata.ucd_3_2_0
+    spelled: list[str] = []
+    for char in name:
+        if spelled:
+            pair = ucd.normalize("NFC", spelled[-1] + char)
+            if len(pair) == 1 and ucd.normalize("NFD", pair) == ucd.normalize("NFD", spelled[-1]) + char:
+                spelled[-1] = pair
+                continue
+        spelled.append(char)
+    return "".join(spelled)
 
 
 class CheckpointService:
@@ -644,24 +670,39 @@ class CheckpointService:
         checkpoint keeps an ignored file out of storage, so its text must not
         reach a diff either. A path outside the work-tree is never trackable,
         and when git cannot answer nothing is.
+
+        A name is asked about in three spellings, and any of them being
+        ignored withholds it. As given is how git matches a name off macOS,
+        or with ``core.precomposeunicode`` off. On macOS, where ``git init``
+        turns that setting on, git precomposes a name it reads off the disk
+        before matching a rule but takes a path read from ``--stdin`` as
+        written, so the name is also asked about as git spells it
+        (``_precomposed``). That is not NFC: a name whose marks are out of
+        canonical order, or with a mark between a letter and the mark that
+        composes with it, comes out as neither. NFC, the spelling a rule is
+        usually typed in, is asked about as well, so such a rule withholds
+        the name even where git, matching another spelling, stores it: the
+        safe side of the mismatch, as off macOS for a decomposed name under a
+        precomposed rule.
         """
         if not await self._ensure_init():
             return set()
-        rel_of: dict[str, str] = {}
+        spellings: dict[str, set[str]] = {}
         for path in paths:
             try:
-                rel_of[path] = Path(path).resolve().relative_to(self._workspace).as_posix()
+                rel = Path(path).resolve().relative_to(self._workspace).as_posix()
             except (OSError, ValueError):
                 continue
-        if not rel_of:
+            spellings[path] = {rel, unicodedata.normalize("NFC", rel), _precomposed(rel)}
+        if not spellings:
             return set()
-        query = "".join(f"{rel}\0" for rel in rel_of.values()).encode(errors="surrogateescape")
+        query = "".join(f"{rel}\0" for rels in spellings.values() for rel in rels).encode(errors="surrogateescape")
         rc, out, _ = await self._run(("check-ignore", "--no-index", "-z", "--stdin"), stdin=query)
         # 0: some are ignored, 1: none are; anything else is git failing to say.
         if rc not in (0, 1):
             return set()
         ignored = set(out.decode(errors="surrogateescape").split("\0")) - {""}
-        return {path for path, rel in rel_of.items() if rel not in ignored}
+        return {path for path, rels in spellings.items() if ignored.isdisjoint(rels)}
 
     def _stage_path(self) -> Path:
         """This process's staging index.

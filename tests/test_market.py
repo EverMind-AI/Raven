@@ -129,6 +129,18 @@ async def test_install_missing_required_field_fails_clean(_isolated):
     assert read_ledger("firecrawl") is None
 
 
+async def test_install_python_plugin_explains_market_limitation(_isolated):
+    entry = {"id": "python-tool", "version": "1.0.0", "contributes": [{"kind": "python"}]}
+
+    with pytest.raises(PlugInstallError) as exc:
+        await install_plugin(entry)
+
+    message = str(exc.value)
+    assert "Python plugins cannot be installed from the market yet." in message
+    assert "pip install" not in message
+    assert "uv tool install raven" not in message
+
+
 async def test_install_twice_rejected(_isolated):
     await install_plugin(ENTRY_NONE)
     with pytest.raises(PlugInstallError, match="already installed"):
@@ -305,6 +317,16 @@ def test_a_catalog_entry_may_launch_a_package_runner(command: str) -> None:
     from raven.market.vetting import validate_mcp_connection
 
     validate_mcp_connection({"type": "stdio", "command": command, "args": ["-y", "some-mcp"]})
+
+
+@pytest.mark.parametrize("cwd", ["/tmp/pwned", ".", "${PLUGIN_ROOT}"])
+def test_a_catalog_entry_must_not_choose_a_working_directory(cwd: str) -> None:
+    """A catalogue entry is remote content; its cwd is a host path it would run in."""
+    from raven.market.vetting import validate_mcp_connection
+    from raven.security.urls import HubTrustError
+
+    with pytest.raises(HubTrustError):
+        validate_mcp_connection({"type": "stdio", "command": "npx", "args": ["-y", "some-mcp"], "cwd": cwd})
 
 
 @pytest.mark.parametrize(

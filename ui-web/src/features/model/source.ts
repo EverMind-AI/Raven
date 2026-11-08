@@ -8,19 +8,31 @@
 
 import { t } from '../../i18n/t'
 import { current as sessionCurrent } from '../../lib/session'
+import { supportsModelSelectionOnly } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
+import { load as loadEffort } from '../../state/effort'
 import { generation } from '../../state/session/generation'
 import { staging } from '../../state/session/staging'
+import { show as toast } from '../../state/toast'
 import { openModels, openProviderModels } from '../settings/store'
-import { open as openPickerAt, setCurrent, statedTags } from './store'
+import { remember } from './recent'
+import { beginLoad, current, currentProvider, failLoad, loadStatus, loadToken, open as openPickerAt, setCurrent, statedTags } from './store'
 
 import type { ParamsOf, ResultOf } from '../../rpc/generated'
+import type { EffortSource } from '../../state/effort'
+import type { Staging } from '../../state/session/staging'
 import type { TierReply, TierSource } from '../../state/tier'
+import type { Recent } from './recent'
 import type { ApiProtocol, Kind, ModelSource, Offer, Provider } from './types'
 
 type ProviderWire = ResultOf<'model.options'>['providers'][number]
 
 let providersLive: Provider[] = []
+let providersLoading = false
+let providersFailed = false
+let providerRead = 0
+let selectionSession: string | null = null
+let selectionGeneration = -1
 let defaultProvidersLive: Provider[] = []
 let defaultModelLive = ''
 let defaultProviderLive = ''
@@ -60,6 +72,20 @@ export function setChipPainter(fn: () => void): void {
   paintChip = fn
 }
 
+/* What the composer's chip names -- the model, and the account it runs on --
+   or null while nothing has said which account: a recent row needs both, and
+   one with no account could never be listed. Read by the send as a message
+   goes out (state/session/runtime.ts), which records it once the server has
+   taken that message (`rememberUsed`). */
+export function chipModel(): Recent | null {
+  const model = current()
+  const provider = currentProvider()
+  return model && provider ? { model, provider } : null
+}
+
+/* A turn the server took ran on this: it heads the picker's recent list. */
+export const rememberUsed = (used: Recent): void => remember(used.model, used.provider)
+
 /* The chip the composer shows and the settings default both write. */
 export const showModel = (model: string, provider = ''): void => {
   setCurrent(model, provider)
@@ -77,8 +103,25 @@ export function openPicker(anchor: HTMLElement, offer: Offer, after?: () => void
 export function openModelsForMissingProvider(): boolean {
   const connected = providersLive.some((p) => p.on)
   const knownMissing = setupState.providerConfigured === false || providersLive.length > 0
-  if (connected || !knownMissing) return false
-  void openModels()
+  if (!connected && knownMissing) {
+    void openModels()
+    return true
+  }
+  return false
+}
+
+export function blockSendForModel(): boolean {
+  if (openModelsForMissingProvider()) return true
+  if (loadStatus() === 'loading' || loadStatus() === 'error') {
+    toast(loadStatus() === 'loading' ? t('gui.model.loading') : t('gui.model.load_failed'))
+    return true
+  }
+  return false
+}
+
+export function retryFailedLoad(): boolean {
+  if (loadStatus() !== 'error' && !providersFailed) return false
+  void loadProviders()
   return true
 }
 
@@ -103,6 +146,9 @@ const rowsOf = (list: ProviderWire[]): Provider[] =>
     // The catalogue page's filter, and the picker's answer to "whose column
     // does the running model belong in": both are facts only the registry has.
     gateway: !!p.gateway, current: !!p.is_current, routes: p.route_names || [],
+    // Which providers the image and video roles may run on; the save checks
+    // the same flags.
+    imageApi: !!p.image_api, videoApi: !!p.video_api,
     // Addresses to choose between. A provider that has them is asked which
     // storefront the key came from instead of being handed a host field --
     // the key does not say, and the three are separate accounts.
@@ -147,6 +193,41 @@ function readOptions(params: ParamsOf<'model.options'>): Promise<ResultOf<'model
   return read
 }
 
+export async function loadSelection(sid?: string | null, gen?: number): Promise<void> {
+  const target = sid !== undefined ? sid : sessionCurrent()
+  const ticket = gen !== undefined ? gen : generation()
+  if (ticket !== generation()) return
+  const preserveReady = selectionSession === target && selectionGeneration === ticket
+  selectionSession = target
+  selectionGeneration = ticket
+  const read = beginLoad(preserveReady)
+  const staged = !target ? staging().model : null
+  if (staged) {
+    showModel(staged.model, staged.provider)
+    return
+  }
+  try {
+    const params: ParamsOf<'model.options'> = target ? { session_id: target } : {}
+    if (supportsModelSelectionOnly()) params.include_providers = false
+    const mo = await readOptions(params)
+    if (ticket !== generation() || read !== loadToken()) return
+    showModel(mo.model, mo.provider || '')
+  } catch {
+    if (ticket === generation() && read === loadToken()) failLoad()
+  }
+}
+
+/* A draft promoted to a conversation is the same view under a new key: the
+   promotion takes no view ticket, and the selection the draft read (its staged
+   pick, or the default) is what the session starts on. Hand that reading to the session, so its first
+   re-read refreshes a known selection instead of waiting as if for a new view.
+   Only a reading taken under the ticket the promotion began on: every switch to
+   another view starts that view's own read at once, under its own ticket, so a
+   reader who left during the create keeps the selection of where they went. */
+export function adoptSelection(sessionId: string, gen: number): void {
+  if (selectionGeneration === gen) selectionSession = sessionId
+}
+
 export async function loadProviders(sid?: string | null, gen?: number): Promise<void> {
   // The model is per conversation, so ask for the visible one's -- model.options
   // stars the row that conversation actually runs, not agents.defaults. Omit the
@@ -159,28 +240,51 @@ export async function loadProviders(sid?: string | null, gen?: number): Promise<
   // generation it captured then -- the answer is about that older view, and a
   // ticket taken here would read as current.
   const ticket = gen !== undefined ? gen : generation()
-  const mo = await readOptions(target ? { session_id: target } : {})
-  // model.options does its catalogue work off-thread, so responses can land out
-  // of click order. A refresh keyed to a superseded view must not repaint the
-  // page the reader has since moved to.
   if (ticket !== generation()) return
-  providersLive = rowsOf(mo.providers || [])
-  if (mo.model) showModel(mo.model, mo.provider || '')
+  const read = ++providerRead
+  providersLoading = true
+  providersFailed = false
+  const selection = loadSelection(target, ticket)
+  try {
+    const mo = await readOptions(target ? { session_id: target } : {})
+    // model.options does its catalogue work off-thread, so responses can land
+    // out of click order. A refresh keyed to a superseded view, or overtaken by
+    // a later refresh of this one, must not repaint what the reader now sees.
+    if (ticket !== generation() || read !== providerRead) return
+    providersLive = rowsOf(mo.providers || [])
+  } catch {
+    if (ticket !== generation() || read !== providerRead) return
+    providersFailed = true
+    toast(t('gui.model.provider_catalogue_failed'))
+  } finally {
+    if (read === providerRead) {
+      providersLoading = false
+      paintChip()
+    }
+  }
+  await selection
 }
 
 /* provider is required -- a bare model id does not name whose credential serves
    it. scope comes from the opener, matching the TUI's `/model` with or without
-   --default:
+   --default, plus the web composer's two-at-once pick:
    - 'default' changes agents.defaults (the settings control). The visible
      session rides along so the server can say whether that conversation follows
      the default; when it does (`applies_to_session`), its chip is re-read, or
      the conversation would run the new default under a chip showing the old.
-   - 'session' changes the open conversation; while it is still a draft there is
-     no session to scope to, so the pick is staged (writing it would move the
-     global default) and applied to the session the first message mints. Staging
-     is said back to the caller: it is not an applied switch yet. */
+   - 'session' changes the open conversation only; while it is still a draft
+     there is no session to scope to, so the pick is staged (writing it would
+     move the global default) and applied to the session the first message
+     mints. Staging is said back to the caller: it is not an applied switch yet.
+   - 'both' is the composer chip's pick: one write moves this conversation and
+     the default a new one starts on. One write rather than two calls, because a
+     client cannot roll back half of a pick -- a session binding written and a
+     default refused would leave the chip rolling back to a model the session no
+     longer runs. On a draft the default is what the minted session reads, and
+     the pick is staged too so a default moved elsewhere in between cannot take
+     it. */
 export async function persistModel(
-  m: string, provider: string, scope: 'session' | 'default',
+  m: string, provider: string, scope: 'session' | 'default' | 'both',
 ): Promise<void | 'staged' | 'needs_restart'> {
   const sid = sessionCurrent()
   // Captured with sid, before the write: the repaint below must prove the page
@@ -210,11 +314,42 @@ export async function persistModel(
     // (every view switch does) -- so without this the resolved draft write
     // repaints a chip that has since been loaded correctly for someone else.
     if (!sid && !staging().model && gen === generation()) showModel(m, provider)
+    /* The row describes this model's words; the model just moved, so read it
+       again under the same ticket. A draft has no session to name, so it
+       passes the model it staged. */
+    if (gen === generation()) void loadEffort(sid ?? null, gen, sid ? undefined : m)
     /* The write landed in a process with no agent loop -- a first run, where
        the gateway started before there was a model to build one from. Said
        back so the onboarding wizard can tell the reader, instead of the next
        send answering with the startup error. */
     return r && r.needs_restart ? 'needs_restart' : undefined
+  }
+  if (scope === 'both') {
+    /* Captured before the write: the reader can start another draft while it
+       is in flight, and the pick belongs to the staging object it was made
+       on, not to whichever one is on screen when the answer lands. */
+    const held = staging()
+    const p: ParamsOf<'config.set'> = { key: 'model', value: m, provider, scope: 'both' }
+    if (sid) p.session_id = sid
+    const r = await gateway().call('config.set', p)
+    /* A refusal RESOLVES. Thrown here so the rollback `choose` already does is
+       the one that runs: the chip must not stay on a pair neither half took. */
+    if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    // The default moved, so the settings row's pair is this one now.
+    setDefaultPair(m, provider)
+    /* The row describes this model's words; both halves of a 'both' write move
+       the conversation's model, so it is read again under the same ticket. The
+       composer chip is the opener that draws the row, and it writes 'both'. */
+    if (sid) {
+      void loadEffort(sid, gen)
+      return
+    }
+    /* No session yet: the default is what the conversation minted from this
+       draft reads, and the staged pair re-states it against that session, so a
+       default moved elsewhere before the first message cannot take the pick. */
+    held.model = { model: m, provider }
+    void loadEffort(null, gen, m)
+    return r && r.needs_restart ? 'needs_restart' : 'staged'
   }
   if (sid) {
     const r = await gateway().call('config.set', { key: 'model', value: m, provider, session_id: sid })
@@ -226,14 +361,17 @@ export async function persistModel(
        reported, because the rollback this needs is the one the catch already
        does, and `data.detail` is the shape it renders. */
     if (r && r.applied === false) throw { data: { detail: t('gui.model.refused') } }
+    void loadEffort(sid, gen)
     return
   }
   staging().model = { model: m, provider }
+  void loadEffort(null, gen, m)
   return 'staged'
 }
 
 export const modelSource: ModelSource = {
   providers: () => providersLive,
+  loading: () => providersLoading,
   persist: persistModel,
   addModel: async (m: string, provider: string, kind?: Kind) => {
     await gateway().call('model.add_model', { slug: provider, model: m, ...statedTags(kind ?? 'text') })
@@ -257,15 +395,30 @@ export const modelSource: ModelSource = {
 let tierMenu: TierReply['availableModes'] = []
 
 export const tierSource: TierSource = {
-  read: async () => {
-    /* A draft asks too, and the handler answers the catalogue and its default
-       for a key it has never seen -- which is exactly what the first turn of a
-       new conversation will run at. */
-    const r = await gateway().call('session.set_mode', { session_key: sessionCurrent() || '' })
+  read: async (sid, gen) => {
+    /* The conversation named by the caller, else the one on screen: a switch
+       asks before the current session moves over, so "current" there is the
+       conversation being left (see TierSource). A draft asks too, with no key,
+       and the handler answers the catalogue and its default for a key it has
+       never seen -- which is exactly what the first turn of a new conversation
+       will run at. */
+    const target = sid !== undefined ? sid : sessionCurrent()
+    const ticket = gen !== undefined ? gen : generation()
+    const r = await gateway().call('session.set_mode', { session_key: target || '' })
+    /* The catalogue is the deployment's, not the conversation's, so it is
+       kept from every answer; the rung in force is the conversation's, and an
+       answer about a view the reader has already left is dropped rather than
+       painted -- the same guard `loadProviders` keeps. */
     tierMenu = (r && r.availableModes) || tierMenu
-    return r
+    return ticket === generation() ? r : null
   },
   set: async (mode: string) => {
+    /* The write is about the conversation on screen when it was clicked, and
+       its reply paints the chip: the ticket is taken before the await, so a
+       reader who left that view mid-write is not shown its answer over the one
+       they are on now. The draft branch below answers without awaiting, so
+       there is no answer to overtake. */
+    const ticket = generation()
     const sid = sessionCurrent()
     if (!sid) {
       /* Staged, and echoed back as though written: there is no server state to
@@ -276,8 +429,74 @@ export const tierSource: TierSource = {
     }
     const r = await gateway().call('session.set_mode', { session_key: sid, mode })
     tierMenu = (r && r.availableModes) || tierMenu
-    return r
+    return ticket === generation() ? r : null
   },
+}
+
+/* The reasoning effort over the wire: one method for all three calls, every
+   reply carrying the pick, what the session runs at without one and the
+   words. A draft reads with no key -- the handler answers the default a fresh
+   session starts on -- and stages a pick the way it stages a tier, for the
+   send path to write once the first message has minted a session
+   (state/session/runtime.ts, applyStagedEffort). */
+export const effortSource: EffortSource = {
+  read: async (sid, gen, model) => {
+    /* The conversation named by the caller, else the one on screen: a switch
+       asks before the current session moves over, so "current" there is the
+       conversation being left (see EffortSource). The ticket is the same guard
+       `loadProviders` keeps -- an answer about a view the reader has already
+       left is dropped rather than painted. A draft names the model it staged,
+       because it has no session record for the handler to read one from. */
+    const target = sid !== undefined ? sid : sessionCurrent()
+    const ticket = gen !== undefined ? gen : generation()
+    const params: { session_key: string; model?: string } = { session_key: target || '' }
+    if (model) params.model = model
+    const r = await gateway().call('session.set_effort', params)
+    return ticket === generation() ? r : null
+  },
+  set: async (effort: string | null) => {
+    const ticket = generation()
+    const sid = sessionCurrent()
+    if (!sid) {
+      /* Staged, and echoed back as though written: there is no server state
+         to contradict it yet. Clearing a staged pick is just dropping it --
+         a draft follows the default anyway. Staged BEFORE the read, so a send
+         during the round trip carries it; and put back when the read fails,
+         because the caller then says the pick was not made and repaints the
+         old rung, and a value left staged would run the first turn at a pick
+         the reader was told did not take. The draft's own object, held across
+         the await: a reader who moved to another draft meanwhile has another
+         one, which this must not touch. */
+      const held = staging()
+      held.effort = effort
+      const staged = held.model
+      const params: { session_key: string; model?: string } = { session_key: '' }
+      if (staged) params.model = staged.model
+      try {
+        const was = await gateway().call('session.set_effort', params)
+        stood.set(held, effort)
+        return ticket === generation() ? { ...was, effort } : null
+      } catch (e) {
+        if (held.effort === effort) held.effort = stood.get(held) ?? null
+        throw e
+      }
+    }
+    const reply = await gateway().call('session.set_effort', effort
+      ? { session_key: sid, effort }
+      : { session_key: sid, clear: true })
+    return ticket === generation() ? reply : null
+  },
+}
+
+/* The last pick of each draft whose read landed, which is what a failed read
+   puts back: the value staged before the failing call is not it when a second
+   pick went out while the first was in flight and failed too. Keyed by the
+   draft's staging object, so a draft that was left takes its entry with it. */
+const stood = new WeakMap<Staging, string | null>()
+
+/* Read by the send path next to the staged tier. */
+export function stagedEffort(): string | null {
+  return staging().effort
 }
 
 /* Read by the send path, which applies it next to the staged model. The object
@@ -293,6 +512,13 @@ export function stagedTier(): string | null {
    registered, are both the module's. */
 export function _resetForTests(): void {
   providersLive = []
+  providersLoading = false
+  providersFailed = false
+  providerRead = 0
+  selectionSession = null
+  selectionGeneration = -1
+  inFlight.clear()
+  setupState.providerConfigured = null
   defaultProvidersLive = []
   defaultModelLive = ''
   defaultProviderLive = ''

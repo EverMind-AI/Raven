@@ -30,6 +30,7 @@ import {
   RESET_SCROLL_REGION,
   setScrollRegion
 } from './termio/csi.js'
+import { DISABLE_AUTO_WRAP, ENABLE_AUTO_WRAP } from './termio/dec.js'
 import { LINK_END, link as oscLink } from './termio/osc.js'
 
 type State = {
@@ -652,7 +653,27 @@ function writeCellWithStyleStr(screen: VirtualScreen, cell: Cell, styleStr: stri
     diff.push({ type: 'cursorTo', col: px + 1 })
   }
 
+  // A grapheme of several code points is one glyph of width 2 to the layout,
+  // but a terminal without grapheme clusters walks its code points and
+  // advances further (Terminal.app: 5 columns for a ZWJ bird, 8 for a ZWJ
+  // family; xterm.js and pyte: 4 for the bird). Near the right margin that
+  // overrun auto-wraps onto the next row, where the CHA below cannot bring
+  // the cursor back and the rest of the frame lands one row down. Writing
+  // the glyph with auto-wrap off keeps the overrun on this row, clamped at
+  // the last column; the columns it spilled into are repainted by the cells
+  // that follow. On a terminal that agrees with the layout the toggle
+  // changes nothing.
+  const guardMargin = needsCompensation && !isSingleCodePoint(cell.char)
+
+  if (guardMargin) {
+    diff.push({ type: 'stdout', content: DISABLE_AUTO_WRAP })
+  }
+
   diff.push({ type: 'stdout', content: cell.char })
+
+  if (guardMargin) {
+    diff.push({ type: 'stdout', content: ENABLE_AUTO_WRAP })
+  }
 
   // Force terminal cursor to correct column after the emoji.
   if (needsCompensation) {
@@ -695,14 +716,24 @@ function moveCursorTo(screen: VirtualScreen, targetX: number, targetY: number) {
 }
 
 /**
- * Identify emoji where the terminal's wcwidth may disagree with Unicode.
- * On terminals with correct tables, the CHA we emit is a harmless no-op.
+ * Identify glyphs whose width the terminal may size differently from the
+ * layout. On terminals with correct tables, the CHA we emit is a harmless
+ * no-op.
  *
  * Two categories:
  * 1. Newer emoji (Unicode 12.0+) missing from terminal wcwidth tables.
- * 2. Text-by-default emoji + VS16 (U+FE0F): the base codepoint is width 1
- *    in wcwidth, but VS16 triggers emoji presentation making it width 2.
- *    Examples: ⚔️ (U+2694), ☠️ (U+2620), ❤️ (U+2764).
+ * 2. Graphemes of several code points, which the layout measures as one
+ *    glyph of width 2 while a terminal without grapheme clusters sizes each
+ *    code point on its own:
+ *    - text-by-default emoji + VS16 (U+FE0F): the base is width 1 in
+ *      wcwidth, VS16 asks for emoji presentation. Examples: ⚔️ (U+2694),
+ *      ☠️ (U+2620), ❤️ (U+2764). Terminal.app advances 1 column.
+ *    - ZWJ sequences (U+1F426 U+200D U+2B1B, the black bird), skin-tone
+ *      modifiers, flags, keycaps: Terminal.app advances 5 columns for the
+ *      bird and 8 for a three-person family, xterm.js and pyte 4 for the
+ *      bird. Every cell written after such a glyph on that row then lands
+ *      that far off, which showed as whole spans of a Chinese reply missing
+ *      or replaced by stale text from an earlier frame.
  */
 function needsWidthCompensation(char: string): boolean {
   const cp = char.codePointAt(0)
@@ -717,18 +748,25 @@ function needsWidthCompensation(char: string): boolean {
     return true
   }
 
-  // Text-by-default emoji with VS16: scan for U+FE0F in multi-codepoint
-  // graphemes. Single BMP chars (length 1) and surrogate pairs without VS16
-  // skip this check. VS16 (0xFE0F) can't collide with surrogates (0xD800-0xDFFF).
-  if (char.length >= 2) {
-    for (let i = 0; i < char.length; i++) {
-      if (char.charCodeAt(i) === 0xfe0f) {
-        return true
-      }
-    }
+  return !isSingleCodePoint(char)
+}
+
+/**
+ * One code point: a BMP char, or exactly one surrogate pair. Anything
+ * longer is a grapheme cluster (ZWJ sequence, modifier, VS16, flag).
+ */
+function isSingleCodePoint(char: string): boolean {
+  if (char.length === 1) {
+    return true
   }
 
-  return false
+  if (char.length !== 2) {
+    return false
+  }
+
+  const lead = char.charCodeAt(0)
+
+  return lead >= 0xd800 && lead <= 0xdbff
 }
 
 class VirtualScreen {

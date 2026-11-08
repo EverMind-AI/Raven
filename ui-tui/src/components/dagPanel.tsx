@@ -51,7 +51,8 @@ import {
   dagRowDetail,
   dagRunElapsedMs,
   dagRunTally,
-  dagSharedInstances
+  dagSharedInstances,
+  hasDagRowDetail
 } from '../lib/dagStatus.js'
 import { clipToWidth, elideMiddle, padToWidth } from '../lib/text.js'
 import { DagNodeSlot } from './dagNodeTrace.js'
@@ -117,7 +118,7 @@ const spanColor = (span: DagPictureSpan, status: DagRunNodeStatus | undefined, t
     return status ? DAG_STATUS_GLYPH[status].color(t) : t.color.text
   }
 
-  return status === 'pending' || status === 'skipped' ? t.color.muted : t.color.text
+  return status === 'pending' || status === 'skipped' || status === 'not_executed' ? t.color.muted : t.color.text
 }
 
 const DagPicture = ({
@@ -267,12 +268,16 @@ const NodeRow = ({
         </Box>
       </Box>
 
-      {(detail.summary || detail.deps || detail.error) && (
+      {hasDagRowDetail(detail) && (
         <Box onClick={onClick}>
           <Text color={t.color.muted}>
             <Text color={t.color.border} dim>
               {mark}
             </Text>
+            {detail.outcome && (
+              <Text color={node.status === 'not_executed' ? t.color.muted : t.color.text}>{detail.outcome}</Text>
+            )}
+            {detail.outcome && detail.summary ? '  ' : ''}
             {detail.summary}
             {detail.deps && (
               <Text dim>
@@ -280,9 +285,21 @@ const NodeRow = ({
                 {detail.deps}
               </Text>
             )}
+            {detail.guard && (
+              <Text dim>
+                {detail.outcome || detail.summary || detail.deps ? '  ' : ''}
+                {detail.guard}
+              </Text>
+            )}
+            {detail.evidence && (
+              <Text dim>
+                {detail.outcome || detail.summary || detail.deps || detail.guard ? '  ' : ''}
+                {detail.evidence}
+              </Text>
+            )}
             {detail.error && (
               <Text color={t.color.error}>
-                {detail.summary || detail.deps ? '  ' : ''}
+                {detail.outcome || detail.summary || detail.deps || detail.guard || detail.evidence ? '  ' : ''}
                 {detail.error}
               </Text>
             )}

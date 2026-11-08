@@ -109,7 +109,7 @@ describe('renderDagGraph', () => {
       )
       .join('\n')
 
-    // A branch leaving the fan-out trunk, and a branch entering the fan-in one.
+    // An edge leaving the fan-out trunk, and an edge entering the fan-in one.
     expect(out).toContain('├──▸')
     expect(out).toContain('──┤')
     // A genuine fan or join shares an endpoint, so it is not a crossing: the

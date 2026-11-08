@@ -2,7 +2,10 @@
 
 import multiprocessing
 import os
+import stat
 from pathlib import Path
+
+import pytest
 
 from raven.utils.atomic_io import atomic_replace, atomic_update, locked_append, write_transaction
 
@@ -145,6 +148,109 @@ def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
 
     assert (path.stat().st_mode & 0o777) == 0o600
     assert path.read_text(encoding="utf-8") == '{"token": "s3cret"}'
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
+def test_the_tmp_is_never_more_open_than_the_target_while_it_holds_the_new_bytes(tmp_path: Path, monkeypatch):
+    """A chmod after the write left a private target's next text in a
+    umask-default tmp for the span in between."""
+    path = tmp_path / "agent.md"
+    path.write_text("private", encoding="utf-8")
+    os.chmod(path, 0o600)
+    seen: list[int] = []
+    real_fsync = os.fsync
+
+    def watched(fd: int) -> None:
+        seen.append(stat.S_IMODE(os.fstat(fd).st_mode))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", watched)
+    previous = os.umask(0o022)
+    try:
+        atomic_replace(path, "still private")
+    finally:
+        os.umask(previous)
+    assert seen == [0o600]
+    assert path.read_text(encoding="utf-8") == "still private"
+
+
+def test_the_windows_bindings_are_declared_once_not_per_save(tmp_path: Path, monkeypatch):
+    """ctypes keeps every pointer type it is asked for: a structure declared per
+    call pinned about 6 KB more on every save, for the process's life."""
+    import ctypes
+    import sys
+    import types
+
+    from raven.utils import atomic_io
+
+    class _Fn:
+        def __init__(self, impl):
+            self.impl = impl
+
+        def __call__(self, *args):
+            return self.impl(*args)
+
+    def get_security(_path, _info, buffer, _size, needed):
+        needed._obj.value = 16
+        return buffer is not None
+
+    def create(path, *_rest):
+        return os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    loaded: list[str] = []
+
+    def win_dll(name, **_kwargs):
+        loaded.append(name)
+        return types.SimpleNamespace(
+            GetFileSecurityW=_Fn(get_security), CreateFileW=_Fn(create), CloseHandle=_Fn(lambda _h: True)
+        )
+
+    monkeypatch.setattr(ctypes, "WinDLL", win_dll, raising=False)
+    monkeypatch.setitem(sys.modules, "msvcrt", types.SimpleNamespace(open_osfhandle=lambda handle, _flags: handle))
+    atomic_io._win32_security.cache_clear()
+    try:
+        target = tmp_path / "agent.md"
+        target.write_text("old", encoding="utf-8")
+        for attempt in range(2):
+            tmp = tmp_path / f"agent.md.{attempt}.tmp"
+            os.close(atomic_io._create_with_dacl_of(tmp, target))
+            assert tmp.is_file()
+        assert loaded == ["advapi32", "kernel32"]
+    finally:
+        atomic_io._win32_security.cache_clear()
+
+
+def test_a_failed_replace_takes_its_tmp_with_it(tmp_path: Path, monkeypatch):
+    """Windows refuses to replace a read-only target, by which point the tmp
+    has taken the target's read-only mode; left behind, it refused the next
+    attempt's open even after the target was made writable again."""
+    path = tmp_path / "agent.md"
+    path.write_text("old", encoding="utf-8")
+
+    def refused(_src, dst):
+        raise PermissionError(13, "Access is denied", str(dst))
+
+    monkeypatch.setattr(os, "replace", refused)
+    with pytest.raises(PermissionError):
+        atomic_replace(path, "new")
+    assert not (tmp_path / "agent.md.tmp").exists()
+
+    monkeypatch.undo()
+    atomic_replace(path, "new")
+    assert path.read_text(encoding="utf-8") == "new"
+
+
+def test_a_read_only_tmp_a_dead_writer_left_does_not_block_the_replace(tmp_path: Path):
+    path = tmp_path / "agent.md"
+    path.write_text("old", encoding="utf-8")
+    stale_tmp = tmp_path / "agent.md.tmp"
+    stale_tmp.write_text("dead writer residue", encoding="utf-8")
+    os.chmod(stale_tmp, stat.S_IREAD)
+
+    atomic_replace(path, "new")
+
+    assert path.read_text(encoding="utf-8") == "new"
+    assert not stale_tmp.exists()
 
 
 def test_write_transaction_is_reentrant_for_the_helpers(tmp_path: Path):

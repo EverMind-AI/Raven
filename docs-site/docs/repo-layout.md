@@ -8,7 +8,7 @@ Key directories:
 ```text
 raven/                 # Shared runtime, feature engines, and CLI/RPC/ACP surfaces
 agents/                # Specialized agents assembled from installed Raven and plugins
-plugins-dist/          # everos-memory, design-engine, and ppt-engine distributions
+plugins-dist/          # everos-memory, everos-cloud-memory, design-engine, and ppt-engine distributions
 ui-web/                # Browser UI, also used by the desktop window
 ui-tui/                # React/Ink terminal UI
 rpc-schema/            # Shared OpenRPC contract for interactive clients
@@ -35,6 +35,7 @@ repository's commit conventions.
 | `acp` | ACP server interface for exposing Raven to external agent hosts |
 | `acp_client` | ACP client, capability negotiation, and adapters for third-party agent events |
 | `agent` | Agent Loop, Harness Modules, tool execution, and subagent orchestration |
+| `agent_plugins` | Portable Agent Plugins 1.0 packages: manifest reading, package discovery, skill import, and the package ledger |
 | `auth` | Authentication and authorization primitives |
 | `browser` | Browser automation, session management, and navigation checks |
 | `channels` | Messaging adapters and their shared channel contract |
@@ -52,6 +53,7 @@ repository's commit conventions.
 | `market` | PlugHub catalog, trust checks, installation, and contribution ledgers |
 | `mcp` | MCP server connections and tool integration |
 | `memory_engine` | Memory recall and consolidation, local skills, and SkillForge retrieval |
+| `node` | The Raven node: Raven's own file tools and the agents it dispatches, run on a registered machine over one ssh link |
 | `observability` | Span semantics, attribute extraction, and usage attribution |
 | `ops` | Local and remote machine registry and execution transports |
 | `permissions` | Tool-call decisions: allow, request approval, or deny |
@@ -59,6 +61,7 @@ repository's commit conventions.
 | `plugins` | Plugin manifests, discovery, contribution registry, and bundled plugins |
 | `proactive_engine` | Sentinel event processing, cron scheduling, heartbeat, and proactive decisions |
 | `providers` | LLM adapters, provider pool, and model-to-provider binding |
+| `resources` | Downloads the dictionary and parser models that are too large to track |
 | `routing` | Task classification and model selection by quality and cost |
 | `rpc` | Shared typed RPC methods, streaming events, and the gateway control interface |
 | `sandbox` | Isolated execution, VM lifecycle, and debugging tools |

@@ -49,7 +49,11 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import zstandard
+
 from raven.tracing import artifact_v2
+from raven.tracing.codec import ZSTD_MAGIC
+from raven.tracing.message_pack import PACKS_DIR_NAME
 from raven.tracing.store import BLOBS_DIR_NAME
 
 # Directories under ``audit-artifacts/`` that are content-addressed stores, not
@@ -66,7 +70,7 @@ _TMP_SUFFIX = ".compact.tmp"
 _MAX_ERRORS = 500
 
 
-_CONTENT_STORES = frozenset({BLOBS_DIR_NAME, artifact_v2.MESSAGES_DIR_NAME})
+_CONTENT_STORES = frozenset({BLOBS_DIR_NAME, artifact_v2.MESSAGES_DIR_NAME, PACKS_DIR_NAME})
 
 
 @dataclass
@@ -110,10 +114,26 @@ def _record_error(result: CompactResult, message: str) -> None:
 
 
 def _sha1_of(path: Path) -> str:
+    """The plaintext digest: a compressed artifact hashes what it decodes to.
+
+    A blob's name is the digest of the payload, never of its zstd frame, so a
+    compressed artifact has to be decoded before it can be compared with, or
+    folded onto, the blob it belongs to.
+    """
     digest = hashlib.sha1()
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
-            digest.update(chunk)
+        head = handle.read(4)
+        handle.seek(0)
+        if head == ZSTD_MAGIC:
+            try:
+                with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                    for chunk in iter(lambda: reader.read(_READ_CHUNK), b""):
+                        digest.update(chunk)
+            except zstandard.ZstdError as exc:
+                raise OSError(f"corrupt compressed artifact: {exc}") from exc
+        else:
+            for chunk in iter(lambda: handle.read(_READ_CHUNK), b""):
+                digest.update(chunk)
     return digest.hexdigest()
 
 

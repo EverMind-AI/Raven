@@ -37,17 +37,35 @@ same profile + rc chain the user's own terminal does.
 
 Known limitation: if the login shell's profile prints a banner to stdout, that
 banner corrupts the first parsed variable. This is not worked around here.
+
+Windows has no login shell to ask: explorer.exe holds the interactive
+environment, and installers refresh a terminal opened afterwards by
+broadcasting WM_SETTINGCHANGE. `_capture_windows` rebuilds PATH from the
+persisted User and Machine stores that broadcast refreshes and keeps every
+other value of raven's own environment. A launch finds a bare program name
+differently there too, so `resolve_program` lives beside the capture whose
+PATH it reads.
 """
 
 from __future__ import annotations
 
+import ntpath
 import os
+import shutil
 import subprocess
+import sys
+import threading
+from collections.abc import Mapping
 
 from loguru import logger
 
+# Held for the length of every capture, so they run one at a time and the one
+# that lands last is the one that read the shell last.
+_CAPTURE_LOCK = threading.Lock()
 _LOGIN_ENV: dict[str, str] | None = None
 _LOGIN_ENV_FAILED = False
+_MAX_EXPANDED_ENV_CHARS = 32767
+_MAX_ENV_REFERENCE_DEPTH = 16
 
 # bash -lic is given a deliberately minimal base rather than raven's environment:
 # inheriting it would only overlay the profile on top, leaving the very variables
@@ -61,6 +79,53 @@ _BOOTSTRAP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # does, and which print nothing of their own on the way. Keyed by basename so a
 # homebrew or nix `$SHELL` path still matches; the path itself is what gets run.
 _DRIVABLE_SHELLS = frozenset({"bash", "zsh"})
+
+# The batch-file kinds CreateProcess also starts, through cmd.exe, in PATHEXT's order.
+_BATCH_SUFFIXES = (".bat", ".cmd")
+
+
+def _on_windows() -> bool:
+    """Whether this is Windows, the one switch the capture and the launch lookup below read."""
+    return sys.platform == "win32"
+
+
+def resolve_program(argv: list[str], env: Mapping[str, str], *, batch_files: bool = False) -> list[str]:
+    r"""``argv`` with a bare program name looked up on the PATH of the env the child gets.
+
+    POSIX needs nothing here: its exec resolves the name on that PATH itself.
+    CreateProcess searches the gateway's own PATH instead and never the block it is
+    handed, so on Windows an agent installed after raven started -- found by the
+    refreshed capture and by the probe -- would still not start. The lookup follows
+    CreateProcess's own rule that a name with no extension means ``.exe``, and by
+    default only a program CreateProcess runs natively is put in its place:
+    CreateProcess never turns a bare name into a ``.cmd`` or ``.bat`` shim, and doing
+    it here would put the shim's arguments, a cli agent's prompt among them, through
+    cmd.exe's parser.
+
+    ``batch_files`` lets a ``.bat`` or ``.cmd`` stand in as well, for a caller whose
+    argv is configuration rather than turn content: an acp server takes its turns
+    over stdio, and an npm-installed one (``npx``) has no ``.exe`` to find at all.
+    The PATH directories are searched in order and ``.exe`` first within each, the
+    order a terminal finds the name in, so the program that starts is the one the
+    user runs there.
+    """
+    if not _on_windows() or not argv or ntpath.dirname(argv[0]):
+        return argv
+    batch = _BATCH_SUFFIXES if batch_files else ()
+    suffix = ntpath.splitext(argv[0])[1].lower()
+    if suffix:
+        programs = [argv[0]] if suffix in (".exe", ".com", *batch) else []
+    else:
+        programs = [f"{argv[0]}{ext}" for ext in (".exe", *batch)]
+    search = env.get("PATH")
+    if search is None:
+        search = os.environ.get("PATH", os.defpath)
+    for directory in search.split(os.pathsep):
+        for program in programs:
+            found = directory and shutil.which(program, path=directory)
+            if found:
+                return [found, *argv[1:]]
+    return argv
 
 
 def _login_shell() -> str | None:
@@ -80,18 +145,27 @@ def login_shell_env() -> dict[str, str]:
 
     Once per process is what makes it cheap, and also what makes it go stale;
     `refresh_login_shell_env` is the way to take it again without a restart.
+    Readers that arrive while the first capture runs wait for it rather than
+    each running the shell.
     """
     global _LOGIN_ENV, _LOGIN_ENV_FAILED
     if _LOGIN_ENV is not None:
         return dict(_LOGIN_ENV)
     if _LOGIN_ENV_FAILED:
         return dict(os.environ)
-    captured = _capture(consequence="subagents inherit raven's environment")
-    if captured is None:
-        _LOGIN_ENV_FAILED = True
-        return dict(os.environ)
-    _LOGIN_ENV = captured
-    return dict(captured)
+    with _CAPTURE_LOCK:
+        if _LOGIN_ENV is not None:
+            return dict(_LOGIN_ENV)
+        if _LOGIN_ENV_FAILED:
+            return dict(os.environ)
+        captured = _capture_now(consequence="subagents inherit raven's environment")
+        if captured is None:
+            _LOGIN_ENV_FAILED = True
+            _remember_launch_path(os.environ)
+            return dict(os.environ)
+        _LOGIN_ENV = captured
+        _remember_launch_path(captured)
+        return dict(captured)
 
 
 def refresh_login_shell_env() -> bool:
@@ -112,13 +186,164 @@ def refresh_login_shell_env() -> bool:
     and a process whose earlier capture failed gets another try: the memo is
     read before the failure flag, so a landed capture is what every later read
     returns. Returns whether a capture landed.
+
+    Refreshes run one at a time. ``settings.set`` refreshes after writing a key
+    to ``~/.raven/env``, and a refresh still reading the shell from before that
+    write would otherwise land after it and put back the key it replaced.
     """
     global _LOGIN_ENV
-    captured = _capture(consequence="keeping the environment captured earlier")
-    if captured is None:
-        return False
-    _LOGIN_ENV = captured
-    return True
+    with _CAPTURE_LOCK:
+        captured = _capture_now(consequence="keeping the environment captured earlier")
+        if captured is None:
+            return False
+        _LOGIN_ENV = captured
+        _remember_launch_path(captured)
+        return True
+
+
+def _remember_launch_path(env: Mapping[str, str]) -> None:
+    """Leave the PATH a launch here gets where config, which starts no shell, can read it.
+
+    Config moves a row onto an adapter build only beside the local agent that build
+    needs (``raven.config.loader._SHIM_COMMAND_NEEDS``), so it has to read that agent
+    on this PATH and not on its own process's.
+    """
+    from raven.config import login_path
+
+    login_path.remember(env.get("PATH", ""))
+
+
+def _capture_now(*, consequence: str) -> dict[str, str] | None:
+    """This platform's capture: the registry's PATH on Windows, the login shell elsewhere.
+
+    The first capture and every refresh both come here, so a refresh cannot go
+    looking for a login shell on a host whose first capture never had one.
+    """
+    if _on_windows():
+        return _capture_windows(consequence=consequence)
+    return _capture(consequence=consequence)
+
+
+def _capture_windows(*, consequence: str) -> dict[str, str] | None:
+    r"""Raven's environment with persisted PATH entries prepended to its launch PATH.
+
+    Windows has no login shell to ask: explorer.exe holds the interactive
+    environment, and installers refresh a terminal opened afterwards by
+    broadcasting WM_SETTINGCHANGE (measured 2026-10-08: a `uv tool install`
+    made an agent resolvable from every new terminal minutes before the
+    running gateway, a service with a frozen `os.environ`, could see it --
+    and the WebUI probe answered "not on the login shell PATH" while the
+    file sat on disk).
+
+    Rather than round-trip a PowerShell (which needs quoting, base64, and
+    a WM broadcast), read the persisted stores the shell itself reassembles
+    a terminal from: HKCU\Environment for the user's own variables and
+    HKLM\...\Environment for the machine's.
+
+    Only PATH is taken from them. The rest of a store is what Windows builds an
+    environment *from*, not what it hands a process: ``ComSpec`` and ``TEMP``
+    sit there unexpanded, and the machine's ``USERNAME`` is ``SYSTEM`` until a
+    logon replaces it. Raven's own values are those, already resolved, so the
+    child keeps them -- proxy, temp, SystemRoot and conda included -- under the
+    upper-case names ``os.environ`` gives them on Windows, which is the spelling
+    every reader of this capture asks for.
+
+    ``None`` when neither store can be read, or when a stored Path cannot be
+    expanded (a cyclic, too deeply nested or oversized reference): either is
+    the "capture failed" signal the caller falls back on.
+    """
+    import winreg
+
+    def _read_store(hive: int, subkey: str) -> dict[str, str]:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                entries = {}
+                for i in range(winreg.QueryInfoKey(key)[1]):
+                    name, value, _vtype = winreg.EnumValue(key, i)
+                    if name and isinstance(value, str):
+                        entries[name.upper()] = value
+                return entries
+        except OSError as exc:
+            logger.warning(
+                "Windows login environment capture could not read {} ({}); {}",
+                subkey,
+                exc,
+                consequence,
+            )
+            return {}
+
+    machine = _read_store(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")
+    user = _read_store(winreg.HKEY_CURRENT_USER, r"Environment")
+    if not machine and not user:
+        return None
+
+    captured = dict(os.environ)
+    # Raven's own values outrank the stores' in a stored Path's references: they
+    # are what this logon resolved, and the child carries them beside the result.
+    # A variable an installer added after raven started is only in the stores,
+    # where the user's shadows the machine's, the order Windows layers them in.
+    context = {**machine, **user, **{name.upper(): value for name, value in captured.items()}}
+    context.pop("PATH", None)
+    try:
+        stored = [path for entries in (machine, user) if (path := _expand_windows(entries.get("PATH", ""), context))]
+    except ValueError as exc:
+        logger.warning("Windows PATH expansion failed ({}); {}", exc, consequence)
+        return None
+    if stored:
+        # Union rather than replace: the machine+user stores are the PATH a
+        # *new* terminal gets, but raven's own launcher's bin (MinGit/usr/bin,
+        # conda) reached this process's PATH without touching the stores, and
+        # a child spawned from the gateway needs every one of them.
+        live = captured.get("PATH", "")
+        captured["PATH"] = ";".join([*stored, live] if live else stored)
+    return captured
+
+
+def _expand_windows(value: str, context: dict[str, str]) -> str:
+    r"""``%VAR%`` references in a stored value, resolved against ``context`` whatever their case.
+
+    Stored Path entries hold unexpanded references, and passed on raw they hand
+    the child a PATH whose entries never existed (the gateway's own measured log
+    shows a launcher script dying on `%USERPROFILE%/go/bin`). A reference whose
+    value holds another is resolved again; an unknown name stays as written.
+    Cycles, excessive nesting and oversized results fail the capture rather
+    than publishing a truncated PATH. Resolved names are reused so a branching
+    reference graph cannot multiply the work on every level.
+    """
+    resolved: dict[str, str] = {}
+
+    def expand(text: str, active: frozenset[str]) -> str:
+        if len(text) > _MAX_EXPANDED_ENV_CHARS:
+            raise ValueError("stored value exceeds the expansion limit")
+        parts: list[str] = []
+        size = 0
+        pos = 0
+        while pos < len(text):
+            start = text.find("%", pos)
+            end = text.find("%", start + 1) if start >= 0 else -1
+            name = text[start + 1 : end].upper() if end >= 0 else ""
+            if name and name in context:
+                if name in active or len(active) >= _MAX_ENV_REFERENCE_DEPTH:
+                    raise ValueError("cyclic or too deeply nested environment reference")
+                if name not in resolved:
+                    resolved[name] = expand(context[name], active | {name})
+                literal, replacement = text[pos:start], resolved[name]
+                pos = end + 1
+            elif start >= 0:
+                # An unknown or literal percent must not consume the opening
+                # percent of the next valid reference (for example, after ;).
+                literal, replacement = text[pos : start + 1], ""
+                pos = start + 1
+            else:
+                literal, replacement = text[pos:], ""
+                pos = len(text)
+            size += len(literal) + len(replacement)
+            if size > _MAX_EXPANDED_ENV_CHARS:
+                raise ValueError("expanded value exceeds the expansion limit")
+            parts.extend((literal, replacement))
+        return "".join(parts)
+
+    return expand(value, frozenset())
 
 
 def _capture(*, consequence: str) -> dict[str, str] | None:
@@ -194,4 +419,4 @@ def host_identity_env() -> dict[str, str]:
     return {HOME_ENV_VAR: home} if home else {}
 
 
-__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env"]
+__all__ = ["host_identity_env", "login_shell_env", "refresh_login_shell_env", "resolve_program"]

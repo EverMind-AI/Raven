@@ -367,6 +367,54 @@ async def test_session_resume(workspace: Path) -> None:
     assert len(out.messages) == 1
 
 
+async def test_a_silent_row_reaches_the_wire(workspace: Path) -> None:
+    """A reload is told which stored row is the model's silence marker.
+
+    The row's ``text`` is the marker itself, so a reader that cannot tell it from
+    an answer draws ``[SILENT]`` as what the model said. ``notice`` is the wrong
+    carrier: its contract is a row the runtime wrote, and this one the model did.
+    """
+    from raven.rpc.methods import session as session_mod
+    from raven.rpc.models import TranscriptMessage
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(workspace)
+    stored = mgr.get_or_create("tui:quiet")
+    stored.add_message("user", "anything new?")
+    stored.add_message("assistant", "[SILENT]", silent=True)
+    stored.add_message("assistant", "all quiet")
+    mgr.save(stored)
+
+    payload = await session_mod.session_resume({"session_id": "tui:quiet"})
+    _check("session.resume", payload)
+
+    marker, spoken = payload["messages"][1], payload["messages"][2]
+    assert marker["text"] == "[SILENT]" and marker["silent"] is True
+    assert TranscriptMessage.model_validate(marker).silent is True
+    assert "silent" not in spoken, "an ordinary reply carries no flag"
+
+
+async def test_the_message_tools_verdict_reaches_the_wire(workspace: Path) -> None:
+    """A reload is told which turn the message tool answered, as the live turn judged it."""
+    from raven.rpc.methods import session as session_mod
+    from raven.rpc.models import TranscriptMessage
+    from raven.session.manager import SessionManager
+
+    mgr = SessionManager(workspace)
+    stored = mgr.get_or_create("tui:answered")
+    stored.add_message("user", "[Scheduled Task] check the build", origin="cron")
+    stored.add_message("assistant", "[SILENT]", silent=True, replied_via_tool=True)
+    mgr.save(stored)
+
+    payload = await session_mod.session_resume({"session_id": "tui:answered"})
+    _check("session.resume", payload)
+
+    closing = payload["messages"][1]
+    assert closing["replied_via_tool"] is True
+    assert TranscriptMessage.model_validate(closing).replied_via_tool is True
+    assert "replied_via_tool" not in payload["messages"][0]
+
+
 async def test_session_close(workspace: Path) -> None:
     from raven.rpc.methods import session as session_mod
 

@@ -47,7 +47,7 @@ export interface Portal {
   readonly bootKey?: string
 }
 
-/* The body's standing order after boot, as the goldens record it: seventeen
+/* The body's standing order after boot, as the goldens record it: eighteen
    static regions (#splash and #noJs are removed before the snapshot is taken)
    then the four appended while the page installs itself. Keyed by tag plus id,
    or tag plus classes when there is no id -- the model picker's wrapper has
@@ -61,6 +61,7 @@ export const BOOT_BODY_ORDER = [
   ...PAGES.map((page) => `section#${page.id}`),
   'aside#detail',
   'div#setVeil',
+  'div#exportVeil',
   'div#veil',
   'div#menu',
   'div#toasts',

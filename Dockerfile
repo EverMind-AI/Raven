@@ -37,9 +37,12 @@ COPY ui-web/package.json ui-web/package-lock.json ./ui-web/
 RUN --mount=type=cache,target=/root/.npm npm ci --prefix ui-web
 
 # i18n/messages.json is the catalogue build.py inlines; it is shared with the
-# TUI and lives at the repo root, not under ui-web.
+# TUI and lives at the repo root, not under ui-web. ui-shared/ is the same kind
+# of input: the page imports its catalogues at build time, so the directory has
+# to be in this stage too.
 COPY ui-web ./ui-web
 COPY i18n ./i18n
+COPY ui-shared ./ui-shared
 RUN npm run --prefix ui-web build && python3 ui-web/build.py
 
 # --- the engine's dependencies ----------------------------------------------
@@ -90,12 +93,37 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     for extra in $(echo "${RAVEN_EXTRAS}" | tr ',' ' '); do flags="${flags} --extra ${extra}"; done; \
     uv sync --frozen --no-dev ${flags}
 
+# The weights and dictionaries that cannot live in git: the word dictionary the
+# tokenizer segments Chinese with, the nltk corpora beside it, and the deepdoc
+# vision models the PDF parser runs -- about 160 MB, fetched into the package
+# directories their readers look in. Done here rather than at first use so the
+# image is self-contained: a container that had to reach huggingface the first
+# time somebody uploaded a PDF is one that fails in a deployment with no egress,
+# long after the build that could have said so.
+#
+# RAVEN_RESOURCES=0 builds a smaller image without them. What it costs is
+# Chinese segmentation and PDF layout; both report their own absence.
+#
+# What it also costs is the licence question: one of the four models,
+# layout.onnx, stamps AGPL-3.0 into its own metadata. Baking it in here is the
+# operator's own fetch inside a container, but an image that is then pushed to
+# a registry is redistribution. NOTICES.md, "deepdoc models", has the detail.
+ARG RAVEN_RESOURCES="1"
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -eu; \
+    if [ "${RAVEN_RESOURCES}" = "1" ]; then \
+        uv run --frozen --no-dev python scripts/fetch_resources.py; \
+    fi
+
 # The distributables beside the host wheel, discovered through the
-# `raven.plugins` entry-point group. everos-memory by default: the gateway
-# starts the everos memory server on boot, so without it memory is the one
-# capability that silently does nothing. ppt-engine and design-engine are
-# opt-in -- between them they add matplotlib, pymupdf and cairo.
-ARG RAVEN_PLUGINS="everos-memory"
+# `raven.plugins` entry-point group. Both memory backends by default: the
+# gateway starts the everos memory server on boot, so without everos-memory
+# memory is the one capability that silently does nothing, and
+# everos-cloud-memory lets a container point at the hosted EverOS instead
+# (raven and httpx only, and it costs nothing until memory.backend names it).
+# ppt-engine and design-engine are opt-in -- between them they add
+# matplotlib, pymupdf and cairo.
+ARG RAVEN_PLUGINS="everos-memory,everos-cloud-memory"
 RUN --mount=type=cache,target=/root/.cache/uv \
     set -eu; \
     if [ -n "${RAVEN_PLUGINS}" ]; then \

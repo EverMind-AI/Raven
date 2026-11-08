@@ -571,3 +571,19 @@ class TestRobustness:
             store.behaviors_file.read_text(encoding="utf-8"),
         )
         assert events[0].session == "telegram:user_42"
+
+
+def test_a_chunk_renders_a_large_tool_result_as_its_view() -> None:
+    """Filed whole for ``context_retrieve``; an extraction request must not carry it whole."""
+    from raven.memory_engine.consolidate.behaviors_extractor import _render_chunk_for_llm
+    from raven.session.refs import TOOL_RESULT_VIEW_MAX_CHARS
+
+    rendered = _render_chunk_for_llm(
+        [
+            {"role": "user", "content": "read it", "timestamp": "2026-10-21T10:00:00"},
+            {"role": "tool", "content": "y " * 100_000, "timestamp": "2026-10-21T10:00:01"},
+        ]
+    )
+
+    assert len(rendered) < 2 * TOOL_RESULT_VIEW_MAX_CHARS
+    assert "more characters of the stored result not shown here" in rendered

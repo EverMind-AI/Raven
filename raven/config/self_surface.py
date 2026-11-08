@@ -32,16 +32,21 @@ import copy
 import json
 import re
 import string
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 from pydantic.alias_generators import to_camel, to_snake
 
+from raven.config.agent_names import GENERIC_AGENT
+from raven.config.keys import key_as_written as _spelled
 from raven.config.loader import EXTENSION_KEYS, get_config_path, read_raw_or_raise
+from raven.config.schema import REASONING_EFFORTS
+from raven.providers.registry import PROVIDERS
 from raven.utils.atomic_io import atomic_update
 
 
@@ -109,6 +114,10 @@ class Setting:
     #: confirmation card words in the reader's language.
     unset_means: str = ""
     unset_to: str = ""
+    #: For a setting that acts only together with other keys (a switch that
+    #: also needs an address), what the runtime runs on, read from the whole
+    #: file: a read shows it beside the stored value, which alone misleads.
+    in_effect: "Callable[[dict[str, Any]], Any] | None" = None
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -144,12 +153,41 @@ class Section:
     settings: tuple[Setting, ...] = field(default_factory=tuple)
 
 
-_REASONING = ("minimal", "low", "medium", "high")
-_WEB_SEARCH = ("serper", "anysearch", "serpapi", "tavily", "exa", "brave", "firecrawl", "serply")
-_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl")
-_WEB_VENDORS = ("serper", "anysearch", "serpapi", "jina", "tavily", "exa", "brave", "firecrawl", "serply")
+_WEB_SEARCH = (
+    "serper",
+    "anysearch",
+    "serpapi",
+    "tavily",
+    "exa",
+    "brave",
+    "firecrawl",
+    "serply",
+    "keenable",
+    "deepseek",
+)
+_WEB_FETCH = ("jina", "anysearch", "tavily", "exa", "firecrawl", "keenable", "deepseek")
+_WEB_VENDORS = (
+    "serper",
+    "anysearch",
+    "serpapi",
+    "jina",
+    "tavily",
+    "exa",
+    "brave",
+    "firecrawl",
+    "serply",
+    "keenable",
+    "deepseek",
+)
 
 _E = Effect
+
+
+def _skill_hub_in_effect(raw: dict[str, Any]) -> bool:
+    from raven.config.live import skill_hub_on
+
+    return skill_hub_on(raw)
+
 
 SECTIONS: tuple[Section, ...] = (
     Section(
@@ -174,13 +212,17 @@ SECTIONS: tuple[Section, ...] = (
                 note='value is {"provider": "<provider>", "model": "<model id>"}; takes over from this '
                 "conversation's next turn",
             ),
+            # The words are ``REASONING_EFFORTS``, the one list the console's
+            # checker and the session's pick read too; null hands the choice
+            # back to the provider's own default, as the settings page offers.
             Setting(
                 "agents.defaults.reasoningEffort",
-                "Reasoning effort sent with each model call",
+                "Reasoning effort sent with each model call; null is the provider's own default",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
-                choices=_REASONING,
+                choices=REASONING_EFFORTS,
+                nullable=True,
             ),
             Setting(
                 "agents.defaults.maxToolIterations",
@@ -300,7 +342,7 @@ SECTIONS: tuple[Section, ...] = (
             Setting("tools.exec.pathAppend", "Directories appended to PATH for shell commands", "str", _E.RELOAD),
             Setting(
                 "tools.web.search.provider",
-                "Web search vendor; web_search runs only once this vendor's key is set",
+                "Web search vendor; web_search runs once this vendor's key, or the model-provider key it borrows, is set (keenable needs none)",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -308,7 +350,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting(
                 "tools.web.fetch.provider",
-                "Web page fetch vendor; a keyless vendor (jina) works without one",
+                "Web page fetch vendor; a keyless vendor (jina, keenable) works without one",
                 "enum",
                 _E.NEXT_TURN,
                 writer="settings",
@@ -355,8 +397,19 @@ SECTIONS: tuple[Section, ...] = (
             ),
             *(
                 Setting(
+                    f"tools.media.{medium}.provider",
+                    f"Provider the {medium} tool runs on, its address and key together; empty is OpenRouter",
+                    "enum",
+                    _E.NEXT_TURN,
+                    writer="settings",
+                    choices=("", *(spec.name for spec in PROVIDERS if getattr(spec, f"{medium}_api"))),
+                )
+                for medium in ("image", "video")
+            ),
+            *(
+                Setting(
                     f"tools.media.{medium}.apiKey",
-                    f"Key for {medium} generation; left empty, the key of providers.openrouter is used",
+                    f"Key for {medium} generation; left empty, a tool calling OpenRouter uses the key of providers.openrouter",
                     "str",
                     _E.NEXT_TURN,
                     secret=True,
@@ -402,7 +455,7 @@ SECTIONS: tuple[Section, ...] = (
                 "Let the agent register remote machines",
                 "bool",
                 _E.RELOAD,
-                sensitive="lets the agent write the owner's ssh config",
+                sensitive="lets the agent write the owner's SSH config",
             ),
             Setting(
                 "tools.browser.headfulOnAgentUse",
@@ -532,6 +585,19 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Setting("skillForge.enabled", "Mount the extra local skill directories", "bool", _E.RELOAD),
             Setting(
+                "skillForge.router.hub.enabled",
+                "Search the shared Skill Hub during conversations",
+                "bool",
+                _E.IMMEDIATE,
+                writer="settings",
+                sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
+                note=(
+                    "on only while skillForge.router.hub.endpoint is set, which a read shows as in_effect; "
+                    "switching it off applies at once; turning it on may wait for a reload, and the write says so"
+                ),
+                in_effect=_skill_hub_in_effect,
+            ),
+            Setting(
                 "skillForge.autoInstall",
                 "Installing a Skill Hub skill the router picked",
                 "enum",
@@ -558,14 +624,20 @@ SECTIONS: tuple[Section, ...] = (
         (
             Setting(
                 "context",
-                "Model that curates long history",
+                "Model that curates long history (curator strategy only)",
                 "pin",
                 _E.NEXT_TURN,
                 writer="settings",
                 note='value is {"curatorModel": "<model>", "curatorProvider": "<provider>"}',
                 keys=("curatorModel", "curatorProvider"),
             ),
-            Setting("context.protectFirstN", "Leading messages never archived", "int", _E.RELOAD, low=0),
+            Setting(
+                "context.protectFirstN",
+                "Leading messages never archived (curator strategy only)",
+                "int",
+                _E.RELOAD,
+                low=0,
+            ),
             Setting("context.pinnedSkillIds", "Skills kept in context once read", "list", _E.RELOAD),
         ),
     ),
@@ -590,9 +662,11 @@ SECTIONS: tuple[Section, ...] = (
                 "cron.defaultTimezone",
                 "Default timezone for cron jobs",
                 "str",
-                _E.INERT,
-                writer="inert",
-                note="nothing reads it; a job without a timezone uses the host's",
+                _E.NEXT_TURN,
+                writer="settings",
+                nullable=True,
+                unset_means="new cron jobs use the host's local time",
+                note="read when a new cron-expression job is created; existing jobs keep their stored timezone",
             ),
         ),
     ),
@@ -621,7 +695,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="subagents",
                 sensitive="the dispatching model reads it every turn, so it can steer what is sent where",
-                note="the built-in Raven row's description is fixed",
+                note=f"the built-in {GENERIC_AGENT} row's description is fixed",
             ),
             Setting(
                 "subagents.*.enabled",
@@ -769,6 +843,47 @@ def find(path: str) -> tuple[Setting, list[str]] | None:
         if "*" in setting.path and (bound := _matches(setting.path, path)) is not None:
             return setting, list(bound.values())
     return None
+
+
+@lru_cache(maxsize=1024)
+def _wildcard_indexes(path: str) -> frozenset[int]:
+    """The positions in ``path`` that stand for a map entry rather than a field.
+
+    Asked of the longest catalog entry whose path is a *prefix* of this one, not
+    of a full match: the catalog carries ``tools.mcpServers.*.enabled`` and the
+    tool may not write ``tools.mcpServers.fooBar.command``, but a map entry is
+    named the same way however deep inside it a path reaches. The binding is a
+    property of the segment, so it is read before the rest of the path is known.
+
+    A path with no catalog entry anywhere along it (an extension section, a
+    second-level sub-agent field) has no wildcard to find, and the tolerant rule
+    that was there before is what reads it. The catalog is the only thing that
+    knows a segment was named by the caller, so it is asked rather than guessed
+    from the shape of the name.
+
+    Cached on the path: the catalog is a module constant, so the answer cannot
+    change while the process runs, and ``lookup`` is called once per leaf on
+    every settings read. Uncached, this walked the 95 catalog entries once per
+    prefix -- 48us a call against the 22us the walk itself costs, on a path a
+    page reload repeats for every row it draws.
+    """
+    parts = path.split(".")
+    wildcards: frozenset[int] = frozenset()
+    for end in range(1, len(parts) + 1):
+        found = find(".".join(parts[:end]))
+        if found is not None:
+            pattern = found[0].path.split(".")
+            wildcards = frozenset(index for index, part in enumerate(pattern) if part == "*")
+    return wildcards
+
+
+def _provider_bound(path: str) -> bool:
+    """Whether a wildcard in ``path`` binds a provider name.
+
+    ``providers`` is the one map whose reader folds spellings, so it is the one
+    map where a segment naming an entry keeps the tolerant rule.
+    """
+    return path.split(".", 1)[0] == "providers"
 
 
 def section_of(path: str) -> Section | None:
@@ -962,6 +1077,27 @@ def sensitive_reason(path: str) -> str:
     return str((_channel_field(path) or {}).get("sensitive") or "")
 
 
+def _channel_declaration(path: str) -> tuple[str, dict[str, Any]] | None:
+    """A ``channels.<name>.<field>`` path as its channel declares it, with that field's spec.
+
+    Any spelling the tool would write resolves here: a channel name in another
+    case, a field in camelCase or snake_case. The declared spelling is the one
+    the note catalogue carries its zh entry under, so a key sent as the call
+    spelled it (``gatewayUrl``) misses and falls back to English.
+    """
+    parts = path.split(".")
+    if len(parts) < 3 or parts[0] != "channels":
+        return None
+    from raven.config.update_channels import channel_field_specs, channel_names
+
+    name = parts[1].lower()
+    if name not in channel_names():
+        return None
+    specs = channel_field_specs(name)
+    key = channel_key(".".join(parts[2:]), specs)
+    return (f"channels.{name}.{key}", specs[key]) if key in specs else None
+
+
 def _channel_field(path: str) -> dict[str, Any] | None:
     """The declaration a channel's adapter gives a ``channels.<name>.<field>`` path, if any.
 
@@ -970,18 +1106,22 @@ def _channel_field(path: str) -> dict[str, Any] | None:
     server address); a guess from the key's spelling would be a second
     definition, one that disagrees with the channel's own.
     """
-    parts = path.split(".")
-    if len(parts) < 3 or parts[0] != "channels":
-        return None
-    from raven.config.update_channels import channel_field_specs, channel_names
+    declaration = _channel_declaration(path)
+    return declaration[1] if declaration else None
 
-    # Any spelling the tool would write: a channel name in another case, a field
-    # in camelCase or snake_case.
-    name = parts[1].lower()
-    if name not in channel_names():
-        return None
-    specs = channel_field_specs(name)
-    return specs.get(channel_key(".".join(parts[2:]), specs))
+
+def _note_key(path: str) -> str:
+    """The spelling the note catalogue carries ``path``'s zh entry under.
+
+    A channel field resolves to its channel's declared field; a setting under a
+    wildcard pattern names that pattern (``providers.*.apiBase``), the one entry
+    the catalogue grows per declaration rather than per instance.
+    """
+    declared = _channel_declaration(path)
+    if declared is not None:
+        return declared[0]
+    found = find(path)
+    return found[0].path if found is not None else path
 
 
 def channel_key(field: str, specs: dict[str, Any]) -> str:
@@ -1168,6 +1308,8 @@ _VENDOR_NAMES = {
     "brave": "Brave",
     "firecrawl": "Firecrawl",
     "serply": "Serply",
+    "keenable": "Keenable",
+    "deepseek": "DeepSeek",
 }
 
 
@@ -1331,6 +1473,7 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["agents"] = [_agent_view(item) for item in items]
             if any(item.get("lend_key") for item in items):
                 view["sensitive"] = sensitive_reason(_LENT)
+                view["sensitive_key"] = _LENT
             return view
     if action != "unset":
         view["value"] = _shown(path, params.get("value"))
@@ -1349,14 +1492,22 @@ def change_view(params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
             view["was_default"] = True
     if found is not None:
         view["effect"] = found[0].effect.value
-    if reason := _reason_within(path, params.get("value")):
-        view["sensitive"] = reason
+    if leaf_reason := _sensitive_leaf_within(path, params.get("value")):
+        view["sensitive"] = leaf_reason[1]
+        view["sensitive_key"] = _note_key(leaf_reason[0])
     return view
 
 
 def _reason_within(path: str, value: Any) -> str:
     """The sensitive reason for ``path``, or for the first field below it an object sets."""
     return next((reason for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), "")
+
+
+def _sensitive_leaf_within(path: str, value: Any) -> tuple[str, str] | None:
+    """The first leaf an object set under ``path`` carries a sensitive reason for, with that reason."""
+    return next(
+        ((leaf, reason) for leaf, _ in _leaves(path, _decoded(value)) if (reason := sensitive_reason(leaf))), None
+    )
 
 
 def _short(value: Any) -> str:
@@ -1369,21 +1520,6 @@ def _short(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _spelled(node: dict[str, Any], name: str) -> str:
-    """The spelling ``node`` already uses for ``name``, else ``name`` itself.
-
-    Every block validates under both camelCase and snake_case, and the models
-    forbid extras, so writing the other spelling beside an existing key makes
-    the whole config stop loading.
-    """
-    if name in node:
-        return name
-    for alias in (to_camel(name), to_snake(name)):
-        if alias in node:
-            return alias
-    return name
-
-
 def read_raw(config_path: Path | None = None) -> dict[str, Any]:
     path = config_path or get_config_path()
     if not path.exists():
@@ -1393,11 +1529,12 @@ def read_raw(config_path: Path | None = None) -> dict[str, Any]:
 
 def lookup(data: dict[str, Any], path: str) -> tuple[bool, Any]:
     """``(present, value)`` for ``path`` in a raw config dict, either spelling."""
+    wildcards = _wildcard_indexes(path) if not _provider_bound(path) else frozenset()
     node: Any = data
-    for part in path.split("."):
+    for index, part in enumerate(path.split(".")):
         if not isinstance(node, dict):
             return False, None
-        key = _spelled(node, part)
+        key = _spelled(node, part, top_level=node is data, exact=index in wildcards)
         if key not in node:
             return False, None
         node = node[key]
@@ -1528,13 +1665,17 @@ def remove_value(path: str, *, config_path: Path | None = None) -> Any:
 def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) -> Any:
     target = config_path or get_config_path()
     parts = path.split(".")
+    # The segments standing for a map entry, which the file's own key names:
+    # see ``_wildcard_indexes``. Read once, outside the retry, since the
+    # catalog does not depend on the file's contents.
+    wildcards = _wildcard_indexes(path) if not _provider_bound(path) else frozenset()
 
     def _apply(_text: str | None) -> tuple[str | None, Any]:
         data = read_raw_or_raise(target) if target.exists() else {}
         before = copy.deepcopy(data)
         node = data
-        for part in parts[:-1]:
-            key = _spelled(node, part)
+        for index, part in enumerate(parts[:-1]):
+            key = _spelled(node, part, top_level=node is data, exact=index in wildcards)
             child = node.get(key)
             if child is None:
                 if remove:
@@ -1543,7 +1684,7 @@ def _mutate(path: str, value: Any, *, remove: bool, config_path: Path | None) ->
             if not isinstance(child, dict):
                 raise ValueError(f"{path}: {key} is not an object in config.json")
             node = child
-        leaf = _spelled(node, parts[-1])
+        leaf = _spelled(node, parts[-1], top_level=node is data, exact=len(parts) - 1 in wildcards)
         previous = node.get(leaf)
         if remove:
             if leaf not in node:

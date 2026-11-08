@@ -15,9 +15,10 @@
 
 import { hasBuildFlag } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
+import { MIN_FAMILY, familyOf, isOwnRow } from './catalogue'
 
 import type { ResultOf } from '../../rpc/generated'
-import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, Remedy } from './types'
+import type { ExtAgentActArgs, ExtAgentOp, ExtAgentRow, ExtAgentsSource, MachineRow, MachinesSource, Remedy } from './types'
 
 /** One agent as `subagents.list` sends it. */
 export type ExtAgentRowWire = ResultOf<'subagents.list'>['rows'][number]
@@ -64,6 +65,11 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
       .filter((c) => c && c.value)
       .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
     model_source: r.model_source,
+    effort: r.effort ?? null,
+    effort_choices: (r.effort_choices || [])
+      .filter((c) => c && c.value)
+      .map((c) => ({ value: c.value, name: c.name || '' })),
+    machine: r.machine || null,
   }
 }
 
@@ -126,11 +132,87 @@ export function stageOf(row: ExtAgentRow): Stage {
    whose engine wheel is not installed -- is connected from here, and is one
    section. */
 export type Section = 'on' | 'avail' | 'missing'
+
+/* Whether this row has an entry of its own to write to. A preset that is not
+   on the roster has none: the server answers an update for a name it does not
+   hold with "no configured sub-agent named ...", so a model picked on one waits
+   for the add that writes it. A folder found on disk and Raven's own loop both
+   have somewhere to land -- the server writes the first from its manifest and
+   the second from the seed -- so only a preset waits. */
+export function hasEntry(row: ExtAgentRow): boolean {
+  return row.configured || !!row.builtin || !!row.vendored
+}
+
 export function sectionOf(row: ExtAgentRow): Section {
   const stage = stageOf(row)
   if (stage === 'live' || stage === 'builtin') return 'on'
   if ((row.kind === 'cli' || row.kind === 'acp') && row.probe_status === 'missing' && !row.vendored) return 'missing'
   return 'avail'
+}
+
+/* ── what the grid draws ─────────────────────────────────────────── */
+
+/* One cell of the grid: a row of its own, or the card standing in for a family
+   the reader has not opened yet. */
+export type GridEntry =
+  | { kind: 'row'; row: ExtAgentRow }
+  /* `section` is part of the card's identity, not decoration. The All tab
+     concatenates the three sections, each folded on its own, so a family with
+     MIN_FAMILY members in two of them yields two cards -- and two cards with
+     one React key read as one card that does not respond, because React keeps
+     the first and drops the rest. Two populations, two cards: the drawer lists
+     the unconfigured members, so a family with a connected member and folded
+     ones really does stand for two different things on this tab. */
+  | { kind: 'family'; family: string; section: Section; members: ExtAgentRow[] }
+
+/* The rows folded into what the grid actually draws.
+
+   A Mirasim preset folds into its family's card until it is CONNECTED; a
+   configured one never folds, because it is on the roster and its card is
+   where it is disconnected from. So the fold lifts on the one event the design
+   makes it wait for, and `configured` -- the fact that the add wrote a config
+   entry -- is the whole of it: choosing an agent in the picker does not unfold
+   anything, it connects that agent, and the card that appears is the evidence.
+
+   One exception, about the card earning its place: a family whose folded
+   members are fewer than `MIN_FAMILY` unfolds, because a card standing for one
+   agent hides the very thing the reader came for.
+
+   The family takes the position of its first folded member, so the caller's own
+   ordering -- `ordered`, which sorts Raven's own first and is otherwise the
+   server's -- is what decides where the card lands, exactly as it did for the
+   rows it replaced. */
+export function gridEntries(rows: ExtAgentRow[], section?: Section): GridEntry[] {
+  const folded = new Map<string, ExtAgentRow[]>()
+  const foldedNames = new Set<string>()
+  for (const row of rows) {
+    const family = familyOf(row)
+    if (family && !row.configured) {
+      folded.set(family, [...(folded.get(family) ?? []), row])
+      foldedNames.add(row.name)
+    }
+  }
+  for (const [family, members] of folded) {
+    if (members.length >= MIN_FAMILY) continue
+    folded.delete(family)
+    for (const member of members) foldedNames.delete(member.name)
+  }
+  const entries: GridEntry[] = []
+  const placed = new Set<string>()
+  for (const row of rows) {
+    /* By NAME, not by family: a member the reader has opened out belongs to a
+       family that is still folded, so asking whether the family was placed
+       would swallow the very row the press just asked for. */
+    if (!foldedNames.has(row.name)) {
+      entries.push({ kind: 'row', row })
+      continue
+    }
+    const family = familyOf(row)!
+    if (placed.has(family)) continue
+    placed.add(family)
+    entries.push({ kind: 'family', family, section: section ?? sectionOf(row), members: folded.get(family)! })
+  }
+  return entries
 }
 
 /* The onboarding wizard's agents step draws two of the hub's three sections,
@@ -151,12 +233,14 @@ export function wizardSection(row: ExtAgentRow): Section | null {
    has, whichever of the two sections each sits in. Raven's own shipped agents
    are drawn -- connected when on, available when off -- but never counted:
    the step is about connecting something external, and the prototype counts
-   it done on those alone. A connected row counts whatever its probe says --
-   it is on the roster and dispatchable, which is what `sectionOf` reads
-   first -- so a verdict that failed to carry over a re-scan no longer flips
-   the step back to not done. */
+   it done on those alone. Raven's own whichever way this install registered
+   it (`isOwnRow`), not only a discovered folder: an install can write one
+   of Raven's own agents down as a config row. A connected row counts whatever its
+   probe says -- it is on the roster and dispatchable, which is what
+   `sectionOf` reads first -- so a verdict that failed to carry over a re-scan
+   no longer flips the step back to not done. */
 export function isFound(row: ExtAgentRow): boolean {
-  return !row.vendored && wizardSection(row) !== null
+  return !isOwnRow(row) && wizardSection(row) !== null
 }
 
 /* What the last fetch reported, kept here rather than read back off the page:
@@ -235,14 +319,21 @@ export const extAgentsSource: ExtAgentsSource = {
   act: async (op, row, args) => {
     const a = args || {}
     if (op === 'connect') {
-      /* Only name / description / key travel: every execution field comes from
-         the preset server-side. A page that could post a command line would make
-         "which agent is this" unanswerable. */
+      /* Only name / description / key / model travel: every execution field
+         comes from the preset server-side. A client that could post a command
+         line would make "which agent is this" unanswerable.
+
+         `model` is the one execution field that is the reader's: the add stores
+         it verbatim, so choosing an agent and its model is ONE write rather
+         than an add followed by an update that can fail in between. */
       await gateway().call('subagents.add', {
         preset: row.preset || row.name,
         name: a.new_name || undefined,
         description: a.description || undefined,
         api_key: a.api_key || undefined,
+        machine: a.machine || undefined,
+        remote_cwd: a.machine && a.remote_cwd ? a.remote_cwd : undefined,
+        model: a.model || undefined,
       })
     } else if (op === 'update') {
       await gateway().call('subagents.update', {
@@ -259,6 +350,14 @@ export const extAgentsSource: ExtAgentsSource = {
       await gateway().call(
         'subagents.update',
         a.clear_model ? { name: row.name, clear_model: true } : { name: row.name, model: a.model, provider: a.provider || undefined },
+      )
+    } else if (op === 'effort') {
+      /* The row's reasoning effort, set or cleared. Like the model, the value
+         is the agent's own from its thought_level menu; the server judges it
+         against the recorded menu. */
+      await gateway().call(
+        'subagents.update',
+        a.clear_effort ? { name: row.name, clear_effort: true } : { name: row.name, effort: a.effort },
       )
     } else if (op === 'toggle') {
       /* One switch for every kind of row. A discovered folder has no config
@@ -308,6 +407,70 @@ export const extAgentsSource: ExtAgentsSource = {
     }
     return extAgentsFetch(remeasures(op, row, a))
   },
+  presets: async () => {
+    const got = await gateway().call('subagents.presets', {})
+    return got.presets.map((p) => ({
+      preset: p.preset,
+      name: p.name,
+      kind: p.kind === 'cli' ? 'cli' : 'acp',
+      description: p.description || '',
+      connected_here: !!p.connected_here,
+      on_machines: Array.isArray(p.on_machines) ? p.on_machines.map(String) : [],
+      off_on_machines: Array.isArray(p.off_on_machines)
+        ? p.off_on_machines.map((e) => ({ machine: String(e.machine), name: String(e.name) }))
+        : [],
+    }))
+  },
+  /* The same add a preset's sheet makes, from the machine's side, under the
+     server's own default name (`<preset>@<machine>`): one preset once per
+     machine is the server's rule, kept whichever way the add arrives -- a
+     preset the machine already has is refused, naming the entry it has -- and
+     a preset this computer also runs lands as a second row of its own name.
+     The server starts it on the machine once first, and a refusal is its own
+     sentence -- the agent's words when it did not answer. */
+  connectOnMachine: async (choice, machine, remoteCwd) => {
+    try {
+      const got = await gateway().call('subagents.add', {
+        preset: choice.preset,
+        machine,
+        remote_cwd: remoteCwd || undefined,
+      })
+      return { name: got.name || `${choice.preset}@${machine}` }
+    } catch (e) {
+      const err = e as { message?: string; data?: { detail?: string; cancelled?: boolean } } | null
+      const refused = (err && ((err.data && err.data.detail) || err.message)) || String(e)
+      return err?.data?.cancelled ? { refused, cancelled: true } : { refused }
+    }
+  },
+  /* The run server-side is the agent's one real prompt, held under the name
+     the way a test's is; stopping it ends the agent's process there and the
+     connect's own call answers with the refusal that says so. */
+  cancelRun: async (name) => {
+    const got = await gateway().call('subagents.test_cancel', { name })
+    return !!got.cancelled
+  },
+  /* The agent's own handshake, with no prompt in it: the server opens a
+     throwaway session, records the menu it advertised, and answers with it.
+     A failed read keeps the recorded menu, which is why the answer's `models`
+     is drawable beside `ok: false`. The source is the row's provenance, the
+     same one a test sends. */
+  refreshMenus: async (row, force = false) => {
+    const got = await gateway().call('subagents.refresh_models', {
+      name: row.name,
+      source: row.vendored ? 'vendored' : row.configured ? 'config' : 'preset',
+      force,
+    })
+    return {
+      ok: !!got.ok,
+      detail: got.detail || '',
+      models: (got.models || [])
+        .filter((c) => c && c.value)
+        .map((c) => ({ value: c.value, name: c.name || '', group: c.group || '' })),
+      effortChoices: (got.effort_choices || [])
+        .filter((c) => c && c.value)
+        .map((c) => ({ value: c.value, name: c.name || '' })),
+    }
+  },
 }
 
 /* Test seam only: the rows carried across a refetch are the module's. */
@@ -349,4 +512,68 @@ export function remedyOf(raw: unknown): Remedy | null {
     ...(needs ? { needs } : {}),
     ...(found ? { found } : {}),
   }
+}
+
+/* -- machines: the rpc source ------------------------------------------------
+   `machines.*` is the machine registry behind a page: the same rows `raven ops
+   connection` keeps, with the state of each one's link and node, and none of
+   the way onto it. Mapped through a whitelist like the agent rows above, so a
+   field the contract grows is a field the island does not see until it asks. */
+
+/** One machine as `machines.list` sends it. */
+export type MachineRowWire = ResultOf<'machines.list'>['rows'][number]
+
+export function machineRowOf(r: MachineRowWire): MachineRow {
+  return {
+    id: r.id,
+    name: r.name || r.id,
+    transport: r.transport === 'local' ? 'local' : 'ssh',
+    state: r.state,
+    detail: r.detail || '',
+    agents: r.agents || 0,
+    node_version: r.node_version || '',
+    node_current: !!r.node_current,
+    auth: r.auth === 'password' ? 'password' : r.auth === 'key' ? 'key' : '',
+    install: { running: !!r.install?.running, ok: r.install?.ok ?? null, detail: r.install?.detail || '' },
+    paths: Array.isArray(r.paths) ? r.paths.map(String) : [],
+    problems: Array.isArray(r.problems) ? r.problems.map(String) : [],
+    agents_here: Array.isArray(r.agents_here) ? r.agents_here.map(String) : [],
+    agents_off_here: Array.isArray(r.agents_off_here) ? r.agents_off_here.map(String) : [],
+  }
+}
+
+export const machinesSource: MachinesSource = {
+  list: async (refresh, id) => {
+    const got = await gateway().call('machines.list', refresh ? { refresh: true, ...(id ? { id } : {}) } : {})
+    return got.rows.map(machineRowOf)
+  },
+  add: async (form) => {
+    const got = await gateway().call('machines.add', {
+      id: form.id,
+      name: form.name,
+      host: form.host,
+      port: form.port || undefined,
+      user: form.user,
+      auth: form.auth,
+      ...(form.auth === 'password' ? { password: form.password } : { key: form.key }),
+      paths: form.paths.length ? form.paths : undefined,
+    })
+    return { ok: !!got.ok, detail: got.detail || '', reason: got.reason }
+  },
+  installNode: async (id, nodeDir) => {
+    const got = await gateway().call('machines.install_node', nodeDir ? { id, node_dir: nodeDir } : { id })
+    return { started: !!got.started, detail: got.detail || '' }
+  },
+  doctor: async () => {
+    const got = await gateway().call('machines.doctor', {})
+    return got.problems.map((p) => ({ id: p.id || '', blocking: !!p.blocking, detail: p.detail || '' }))
+  },
+  remove: async (id) => {
+    const got = await gateway().call('machines.remove', { id })
+    return { removed: !!got.removed, detail: got.detail || '', agents: Array.isArray(got.agents) ? got.agents.map(String) : [] }
+  },
+  localKeys: async () => {
+    const got = await gateway().call('machines.local_keys', {})
+    return Array.isArray(got.keys) ? got.keys.map(String) : []
+  },
 }

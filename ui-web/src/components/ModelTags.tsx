@@ -192,6 +192,7 @@ export interface ModelTagFacts {
   capabilities?: string[]
   input_modalities?: string[]
   output_modalities?: string[]
+  reasoning_efforts?: string[]
   context_window?: number
   /* Which bucket a model list files this under, straight off the wire
      (`registry_data.kind_of`). A string rather than the model domain's `Kind`

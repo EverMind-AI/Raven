@@ -20,6 +20,7 @@ from raven.providers.base import (
     format_llm_error,
 )
 from raven.providers.tool_names import normalized_tool_name
+from raven.providers.usage import token_count
 
 _AZURE_MSG_KEYS = frozenset({"role", "content", "tool_calls", "tool_call_id", "name"})
 
@@ -43,6 +44,7 @@ class AzureOpenAIProvider(LLMProvider):
         default_model: str = "gpt-5.6-sol",
         deployment: str = "",
         api_version: str = "2024-10-21",
+        tls_verify: bool = True,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
@@ -50,6 +52,7 @@ class AzureOpenAIProvider(LLMProvider):
         # config written before the field existed says it.
         self.deployment = deployment
         self.api_version = api_version
+        self.tls_verify = tls_verify
 
         if not api_key:
             raise ValueError("Azure OpenAI api_key is required")
@@ -182,7 +185,7 @@ class AzureOpenAIProvider(LLMProvider):
         )
 
         try:
-            async with httpx.AsyncClient(timeout=self.generation.timeout, verify=True) as client:
+            async with httpx.AsyncClient(timeout=self.generation.timeout, verify=self.tls_verify) as client:
                 response = await asyncio.wait_for(
                     client.post(url, headers=headers, json=payload), self.generation.timeout
                 )
@@ -247,13 +250,37 @@ class AzureOpenAIProvider(LLMProvider):
                     "completion_tokens": usage_data.get("completion_tokens", 0),
                     "total_tokens": usage_data.get("total_tokens", 0),
                 }
+                # Prompt-cache counts, reported only on models that cache.
+                # ``prompt_tokens`` already includes them (the accounting
+                # default), so these break it down rather than add to it. Left
+                # out when unreported: written as 0 they would claim a cache
+                # miss or a write the response never reported.
+                prompt_details = usage_data.get("prompt_tokens_details")
+                if isinstance(prompt_details, dict):
+                    cached = token_count(prompt_details.get("cached_tokens"))
+                    if cached is not None:
+                        usage["cache_read_input_tokens"] = cached
+                    # GPT-5.6 and later report writes too; the LiteLLM and
+                    # Responses paths already map the same wire shape.
+                    written = token_count(prompt_details.get("cache_write_tokens"))
+                    if written is not None:
+                        usage["cache_creation_input_tokens"] = written
+                # Part of completion_tokens, and the one count that says a turn
+                # which returned nothing still thought. Left out when unreported:
+                # written as 0 it would read as a turn that did not think.
+                details = usage_data.get("completion_tokens_details")
+                reasoning = token_count(details.get("reasoning_tokens")) if isinstance(details, dict) else None
+                if reasoning is not None:
+                    usage["reasoning_tokens"] = reasoning
 
             reasoning_content = message.get("reasoning_content") or None
 
             return LLMResponse(
                 content=message.get("content"),
                 tool_calls=tool_calls,
-                finish_reason=choice.get("finish_reason", "stop"),
+                # A choice that names none never said how it ended; ``stop`` here
+                # made a cut reply read as a finished one.
+                finish_reason=choice.get("finish_reason") or "unknown",
                 usage=usage,
                 reasoning_content=reasoning_content,
             )

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+import yaml
 from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
@@ -109,7 +110,7 @@ def playbook_validate(
     """Validate without running: spec shape plus the field definition's rules."""
     from pydantic import ValidationError
 
-    from raven.playbook.validate import validate_structure
+    from raven.playbook.runtime import validation_errors
 
     config = _load_config()
     as_path = Path(target)
@@ -127,7 +128,7 @@ def playbook_validate(
         probe = PlaybookStore(path.parent.parent, builtin_root=path.parent.parent)
         try:
             spec = probe.load(path.parent.name)
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, yaml.YAMLError) as exc:
             errors.append(str(exc))
     else:
         store = _store(config)
@@ -135,7 +136,7 @@ def playbook_validate(
         path = store.path_for(target)
         try:
             spec = store.load(target)
-        except (ValidationError, ValueError) as exc:
+        except (ValidationError, ValueError, yaml.YAMLError) as exc:
             errors.append(str(exc))
 
     if spec is not None:
@@ -151,7 +152,7 @@ def playbook_validate(
 
         registry = AgentRegistry()
         registry.apply(config.subagents.agents)
-        errors.extend(validate_structure(spec, known_agents=registry.all_names()))
+        errors.extend(validation_errors(spec, list(registry.all_names())))
     if errors:
         text = path.read_text(encoding="utf-8")
         for error in errors:
@@ -284,8 +285,10 @@ def playbook_create(
         live_inventory(config.tools.mcp_servers),
         model=config.playbooks.model,
     )
-    generated = asyncio.run(generator.generate("\n\n".join(pieces)))
-    spec = generated.spec.model_copy(update={"name": name})
+    generated = asyncio.run(generator.generate("\n\n".join(pieces), dag_only=True))
+    from raven.playbook.unified import unified_from_legacy
+
+    spec = unified_from_legacy(generated.spec, name=name)
     path = store.save(spec, notes=generated.notes)
     console.print(f"[green]Created[/green] {escape(str(path))}")
     if generated.notes:
@@ -461,7 +464,9 @@ def playbook_run(
     _require_known(store, name)
 
     from raven.agent.subagent.dag_tool import SubAgentDagTool
+    from raven.agent.subagent.dag_verdict import judge_provider
     from raven.agent.subagent.manager import SubagentManager
+    from raven.config.raven import load_raven_config
     from raven.playbook import PlaybookExecutor, PlaybookRuntime, agent_profiles_from_registry
     from raven.playbook.credentials import credential_scope, stored_secret_params
     from raven.playbook.mcp import (
@@ -487,6 +492,7 @@ def playbook_run(
         spec = None
 
     provider = make_provider(config)
+    pool = ProviderPool(config)
     manager = SubagentManager(
         provider=provider,
         workspace=config.workspace_path,
@@ -495,8 +501,9 @@ def playbook_run(
         restrict_to_workspace=config.tools.restrict_to_workspace,
         sandbox_config=config.tools.sandbox,
         agents=config.subagents.agents,
-        provider_pool=ProviderPool(config),
+        provider_pool=pool,
     )
+    verdicts = load_raven_config().subagent_dag
     # The manager's table, so a node here resolves to the same agent it would in
     # a conversation -- built-in rows included, which is what lets the CLI run a
     # playbook at all now that no synthetic per-node backend is built for it.
@@ -506,6 +513,10 @@ def playbook_run(
         guide_skill_id=None,
         state_for=manager.instance_state,
         model_for=manager.session_model_for,
+        effort_for=manager.session_effort_for,
+        # The manager was built from the same tools.sandbox above; its builder
+        # keeps a node's exec inside that sandbox rather than on the host.
+        sandbox_for=manager.sandbox_executor_for,
         # A stint only. Its `verify` is shell from a file, which is why such a
         # playbook must keep `confirm: true`, and a gate nobody is asked at does
         # not hold that line. Every other mode keeps this path's approval as it
@@ -513,6 +524,13 @@ def playbook_run(
         # `confirm` means on the command line for every playbook is its own
         # decision, and a script that runs one unattended would start failing.
         ask=ask_at_the_terminal if spec is not None and spec.mode == "stint" else None,
+        # Judged as a conversation judges a node. A decision node chooses its route
+        # through the judge, so without one a playbook that branches cannot run here.
+        provider_for=lambda: judge_provider(provider, pool, verdicts.verdict_model),
+        verdict_config=verdicts,
+        # Nobody here can answer a node that falls short, so it fails on its judge's
+        # reason; suspended, it would wait on an answer that cannot come.
+        control_reachable=lambda: False,
     )
     executor = PlaybookExecutor(
         dag_tool=dag_tool,
@@ -895,6 +913,7 @@ def _stint_driver(config, home: Path):
         registry=manager.registry,
         guide_skill_id=None,
         state_for=manager.instance_state,
+        sandbox_for=manager.sandbox_executor_for,
         session_dir=lambda _key: home,
         ask=ask_at_the_terminal,
     )

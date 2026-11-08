@@ -142,11 +142,10 @@ export function openCredential(req: CredentialReq, handlers: CredentialHandlers,
   function onKey(e: KeyboardEvent): void {
     /* Parked with another conversation, or under a newer sheet: not this card's key. */
     if (!sheet.isConnected || composing(e) || !topmost(sheet)) return
-    /* Stopped here, unlike the approval sheet's Escape: skipping a key is not
-       stopping the turn. The tool is told the key was skipped and the turn
-       goes on to say where it can be entered, so the page's Escape chain
-       (state/escapeOrder.ts, on the document's bubble phase) must not also
-       interrupt it. */
+    /* Skipping a key leaves the turn running. The tool is told the key was
+       skipped and the turn goes on to say where it can be entered, so the
+       page's Escape chain (state/escapeOrder.ts, on the document's bubble
+       phase) must not also interrupt it. */
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); skip(); return }
     /* In the field, Enter with or without the chord is the field's own save. */
     if (inField(e)) return

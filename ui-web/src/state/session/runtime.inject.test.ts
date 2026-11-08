@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harness.mjs'
 import * as turn from '../../features/composer/turn'
+import { readMessage } from '../../lib/attachments'
 
 import type { Sources } from '../sources'
 
@@ -19,7 +20,9 @@ type Runtime = typeof import('./runtime')
 
 interface Row { id: string; title?: string }
 
-async function harness({ reject = null as { code?: number; message?: string } | null, draft = false } = {}) {
+async function harness({
+  reject = null as { code?: number; message?: string } | null, draft = false, current = 's1',
+} = {}) {
   const log: unknown[][] = []
   const queue: string[] = []
   const asked: Array<[string, unknown]> = []
@@ -34,10 +37,13 @@ async function harness({ reject = null as { code?: number; message?: string } | 
       'src/state/ws': { setOpen: () => {}, reset: () => {} },
       'src/state/session/conversation': {
         ask: (text: string) => log.push(['ask', text]),
+        unask: (id: number) => log.push(['unask', id]),
         noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
           log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
         pitch: () => {},
-        splitAtts: (t: string) => ({ text: t, atts: [] }),
+        /* The real reader, which is what the production stub delegates to: a
+           message's note is where the send recovers its files from. */
+        splitAtts: (t: string) => readMessage(t),
         unpitch: () => {},
       },
       'src/features/rail/store': { markNew: () => {}, draw: () => {}, endRename: () => {} },
@@ -64,7 +70,7 @@ async function harness({ reject = null as { code?: number; message?: string } | 
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/i18n/t': { t: (key: string) => key },
       'src/lib/dom': { $: looseQuery() },
-      'src/lib/session': { current: () => 's1', setCurrent: () => {} },
+      'src/lib/session': { current: () => current, setCurrent: () => {} },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: () => {} },
       'src/state/ctxChip': { set: () => {} },
@@ -118,6 +124,22 @@ async function harness({ reject = null as { code?: number; message?: string } | 
 }
 
 afterEach(() => { turn._resetForTests() })
+
+describe('the files a message hands to the turn', () => {
+  /* The note is the record of what was handed over, and the turn receives its
+     paths as it names them: an upload as the file it wrote, a file attached
+     where it already was by the path it was dragged with -- here a session
+     root's own file that shares the upload's name. */
+  it('hands the turn the paths the note names, as it names them', async () => {
+    const h = await harness()
+
+    h.runtime.send('look\n\n[attachments, saved in the workspace]\n'
+      + '- /home/me/.raven/workspace/uploads/shot.png\n- uploads/shot.png')
+    await h.tick()
+
+    expect(h.sends()[0]?.media).toEqual(['/home/me/.raven/workspace/uploads/shot.png', 'uploads/shot.png'])
+  })
+})
 
 describe('a message typed while the turn is running', () => {
   it('goes to that turn instead of the queue', async () => {
@@ -222,5 +244,104 @@ describe('a message typed while a brand-new conversation is being made', () => {
 
     expect(h.sends()).toEqual([])
     expect(h.queue).toEqual(['only the last quarter'])
+  })
+})
+
+/* The composer's recent list (features/model/recent.ts) is written by the send:
+   a message the server takes as a turn of its own is a use of the model the chip
+   named as it left, and one merged into the running turn rides on the model that
+   turn started with, recorded when it did. */
+describe('the model a message goes out on', () => {
+  const used = (): unknown => JSON.parse(localStorage.getItem('raven.models.used') || 'null')
+
+  it('records nothing when the server refuses the send', async () => {
+    localStorage.clear()
+    const h = await harness({ reject: { code: -32003, message: 'refused' } })
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    await h.tick()
+
+    expect(h.did('noteRow')).toHaveLength(1)
+    expect(used()).toBeNull()
+  })
+
+  it('records the model the chip named as the message left, not one picked while it was on its way', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    model.setCurrent('anthropic/claude-sonnet-5', 'openrouter')
+    await h.tick()
+
+    expect(used()).toEqual([{ model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }])
+  })
+
+  it('heads the recent list when the message starts a turn', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+
+    h.runtime.send('hello')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'hello' }])
+    expect(used()).toEqual([{ model: 'z-ai/glm-5.3-flash', provider: 'openrouter' }])
+  })
+
+  it('leaves the list alone for a message merged into the running turn', async () => {
+    localStorage.clear()
+    const h = await harness()
+    const model = await import('../../features/model/store')
+    model.setCurrent('z-ai/glm-5.3-flash', 'openrouter')
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'only the last quarter', busy: 'inject' }])
+    expect(used()).toBeNull()
+  })
+})
+
+describe('an imported conversation', () => {
+  it('sends nothing, by any door', async () => {
+    const h = await harness({ current: 'imported:' + 'a'.repeat(32) })
+    h.runtime.send('can I add to it?')
+    await h.tick()
+    expect(h.sends()).toEqual([])
+  })
+})
+
+/* A message sent with a Move on above the composer carries the group with it, so
+   the turn it opens is told which matter it moves on and nothing waits between
+   the two. It waits for a turn of its own rather than joining one already
+   running, which was told about something else. */
+describe('a message that moves a task on', () => {
+  it('goes at once, carrying the group it moves on', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ pending: (key) => key === 's1', take: (key) => (key === 's1' ? 'g_1' : null) })
+
+    h.runtime.send('the next step')
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'the next step', move_on: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('waits for a turn of its own instead of joining the one running', async () => {
+    const h = await harness()
+    h.runtime.lendBeforeSend({ pending: () => true, take: () => 'g_1' })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('the next step')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(h.queue).toEqual(['the next step'])
+    h.runtime.lendBeforeSend(null)
   })
 })

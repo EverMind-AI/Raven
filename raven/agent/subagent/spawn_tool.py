@@ -43,6 +43,8 @@ class _SpawnOrigin:
     channel: str
     chat_id: str
     session_key: str
+    # The front end the turn declared (``Source.surface``); the result turn is read there.
+    surface: str | None = None
 
 
 class SpawnTool(Tool):
@@ -57,6 +59,10 @@ class SpawnTool(Tool):
     # whether a given one happens to return before its sub-agent does -- a
     # consumer cannot see that distinction.
     blocking_interaction = True
+    # Not declared ``agent_output``: this call returns a receipt this process
+    # composed ("started (id: ...)") or a refusal, and never the sub-agent's own
+    # words -- those arrive separately, as the announcement the manager injects.
+    # Declaring it here is what put the receipt's own text beyond the scrub.
 
     def __init__(self, manager: "SubagentManager"):
         self._manager = manager
@@ -71,9 +77,11 @@ class SpawnTool(Tool):
     def _cur(self) -> _SpawnOrigin:
         return self._origin.get(None) or self._default
 
-    def set_context(self, channel: str, chat_id: str, session_key: str) -> None:
+    def set_context(self, channel: str, chat_id: str, session_key: str, surface: str | None = None) -> None:
         """Set the origin context for subagent announcements (turn-local)."""
-        self._origin.set(replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key))
+        self._origin.set(
+            replace(self._cur(), channel=channel, chat_id=chat_id, session_key=session_key, surface=surface)
+        )
 
     def set_tool_call_id(self, tool_call_id: str | None) -> None:
         """Turn-local: record which tool call this spawn's run belongs to.
@@ -111,27 +119,17 @@ class SpawnTool(Tool):
             "The subagent will complete the task and report back when done. "
             "Multiple spawns run concurrently."
         )
+        labels, _ = self._workers()
+        if labels:
+            base += (
+                " Pick a worker label from the `subagent` parameter enum for this turn; "
+                "its worker brief says which work it handles. `run_subagent_dag` nodes use "
+                "the same worker labels."
+            )
         agents = self._agents()
         if agents:
             from raven.agent.subagent.backends import format_agent_listing
 
-            listing = format_agent_listing(agents)
-            base += (
-                " Pick the agent for the job with `subagent` -- there is no default, so choose "
-                f"deliberately from: {listing}."
-            )
-            # Sits with the roster rather than after the DAG pointer below: it is a
-            # rule about which name to pass here, so a model that has stopped
-            # reading by the time it reaches the DAG advice has still read it.
-            # Withheld when the table holds nothing but the generic row, which
-            # would make it name a specialist the model cannot pick.
-            if any(a.name != GENERIC_AGENT for a in agents):
-                base += (
-                    " Prefer delegation over doing it yourself: when a single specialist on this "
-                    "roster covers the whole task, spawn that one instead of carrying the work out "
-                    f"with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
-                    "capability bias, so reach for it only when no specialist covers the work."
-                )
             # The one moment a wrong choice is visible: the model is reading this
             # tool while the work is really a graph.
             base += (
@@ -148,6 +146,31 @@ class SpawnTool(Tool):
                 "sits `<node_id>.memory.json` -- what the sub-agent concluded for itself, rather "
                 "than the answer it gave you -- written after the call, so absence is normal."
             )
+            # Right before the roster: it is a rule about which name to pass, so it
+            # sits with the list it picks from. It used to come ahead of the DAG
+            # pointer, so that a model which stops reading early still met it; with
+            # the roster closing the description, a model that stops before the rule
+            # has no name to pass either. Withheld when the table holds nothing but
+            # the generic row, which would make it name a specialist the model
+            # cannot pick, or when a worker table supplies this turn's choices.
+            if not labels and any(a.name != GENERIC_AGENT for a in agents):
+                base += (
+                    " Prefer delegation over doing it yourself: when a single specialist on the "
+                    "roster below covers the whole task, spawn that one instead of carrying the work "
+                    f"out with your own tools. `{GENERIC_AGENT}` is not a specialist -- it carries no "
+                    "capability bias, so reach for it only when no specialist covers the work."
+                )
+            # Last, and the array's only copy: the loop lists this tool after every
+            # other one, and run_subagent_dag, listed just before it, points here
+            # rather than rendering the roster a second time.
+            base += (
+                " The roster describes the underlying agents' capabilities; "
+                "pass a worker label from the parameter enum for this turn. Underlying agent roster: "
+                if labels
+                else " Pick the agent for the job with `subagent` -- there is no default, so choose "
+                "deliberately from the roster, which `run_subagent_dag` nodes pick from as well: "
+            )
+            base += f"{format_agent_listing(agents)}."
         return base
 
     @property
@@ -227,6 +250,11 @@ class SpawnTool(Tool):
                 "description": "Which agent runs this task. Required: pick one from the list.",
             }
         stateful_names = sorted(a.name for a in agents if a.stateful)
+        instance_targets = (
+            "Accepted only when the selected worker's underlying agent is tagged [stateful] in the roster"
+            if labels
+            else f"Accepted for `subagent` in {stateful_names}"
+        )
         props["instance"] = {
             "type": "string",
             "description": (
@@ -234,7 +262,7 @@ class SpawnTool(Tool):
                 "conversation with a resumable sub-agent. Reuse the same handle to "
                 "continue that session. Omit it and one is assigned automatically and "
                 "reported when the call finishes, so any run can be continued later. "
-                f"Accepted for `subagent` in {stateful_names} -- against any other one a handle "
+                f"{instance_targets} -- against any other one a handle "
                 "continues nothing and the call is rejected."
             ),
         }
@@ -530,6 +558,7 @@ class SpawnTool(Tool):
                 task_summary=task_summary,
                 origin_channel=org.channel,
                 origin_chat_id=org.chat_id,
+                origin_surface=org.surface,
                 session_key=org.session_key,
                 agent=subagent,
                 instance=instance,

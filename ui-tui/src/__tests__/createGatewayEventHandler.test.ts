@@ -11,7 +11,7 @@ import { createGatewayEventHandler } from '../app/createGatewayEventHandler.js'
 import { getOverlayState, resetOverlayState } from '../app/overlayStore.js'
 import { turnController } from '../app/turnController.js'
 import { getTurnState, resetTurnState } from '../app/turnStore.js'
-import { patchUiState, resetUiState } from '../app/uiStore.js'
+import { getUiState, patchUiState, resetUiState } from '../app/uiStore.js'
 import { estimateTokensRough } from '../lib/text.js'
 
 const ref = <T>(current: T) => ({ current })
@@ -397,6 +397,52 @@ describe('createGatewayEventHandler', () => {
     expect(assistant?.text).toBe(rendered)
   })
 
+  it('appends no assistant row for a turn the model chose not to answer', () => {
+    const appended: Msg[] = []
+    const onEvent = createGatewayEventHandler(buildCtx(appended))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    onEvent({ payload: { text: 'abc' }, type: 'message.delta' } as any)
+    // The typed notice marks the turn on the shared controller; this path has
+    // no frame of its own for it.
+    turnController.recordSilentTurn('abc')
+    onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
+
+    // Neither the marker nor the preview is drawn, and the fallback that stands
+    // an empty turn in for an assistant row stays out of it too.
+    expect(appended).toEqual([])
+  })
+
+  const bellCtx = (appended: Msg[], write: ReturnType<typeof vi.fn>) => {
+    const ctx = buildCtx(appended)
+
+    ctx.system = { bellOnComplete: true, stdout: { isTTY: true, write }, sys: vi.fn() }
+
+    return ctx
+  }
+
+  it('rings the opt-in completion bell when an answer lands', () => {
+    const write = vi.fn()
+    const onEvent = createGatewayEventHandler(bellCtx([], write))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    onEvent({ payload: { text: 'all done' }, type: 'message.complete' } as any)
+
+    expect(write.mock.calls).toEqual([['\x07']])
+  })
+
+  it('does not ring it for a turn the model chose not to answer', () => {
+    const write = vi.fn()
+    const onEvent = createGatewayEventHandler(bellCtx([], write))
+
+    onEvent({ payload: {}, type: 'message.start' } as any)
+    turnController.recordSilentTurn('')
+    onEvent({ payload: { text: '[SILENT]' }, type: 'message.complete' } as any)
+
+    // A bell is a ping, and a ping is a delivery: nothing was delivered.
+    expect(write).not.toHaveBeenCalled()
+  })
+
   it('always accumulates raw text in message.delta and ignores `rendered` (#16391)', () => {
     const appended: Msg[] = []
     const onEvent = createGatewayEventHandler(buildCtx(appended))
@@ -535,6 +581,44 @@ describe('createGatewayEventHandler', () => {
     expect(appended[0]?.tools?.[0]).not.toContain('--- a/foo.ts')
     expect(appended[1]?.text).toBe('done')
     expect(appended[1]?.tools ?? []).toEqual([])
+  })
+
+  it('moves the context bar to the window a failed turn measured', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    patchUiState(state => ({
+      ...state,
+      usage: { ...state.usage, context_max: 40000, context_percent: 8, context_used: 3100 }
+    }))
+    onEvent({
+      payload: {
+        message: 'turn_failed',
+        reason: 'internal',
+        usage: {
+          completion_tokens: 0,
+          context_max: 40000,
+          context_percent: 18,
+          context_used: 7000,
+          prompt_tokens: 7000,
+          total_tokens: 7000
+        }
+      },
+      type: 'error'
+    } as any)
+
+    expect(getUiState().usage).toMatchObject({ context_max: 40000, context_percent: 18, context_used: 7000 })
+  })
+
+  it('leaves the context bar alone when the failure measured nothing', () => {
+    const onEvent = createGatewayEventHandler(buildCtx([]))
+
+    patchUiState(state => ({
+      ...state,
+      usage: { ...state.usage, context_max: 40000, context_percent: 8, context_used: 3100 }
+    }))
+    onEvent({ payload: { message: 'turn_failed', reason: 'internal' }, type: 'error' } as any)
+
+    expect(getUiState().usage).toMatchObject({ context_max: 40000, context_percent: 8, context_used: 3100 })
   })
 
   it('shows setup panel for missing provider startup error', () => {

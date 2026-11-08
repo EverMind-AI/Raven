@@ -101,7 +101,19 @@ def test_container_bootstraps_the_browser_after_the_engine_is_ready() -> None:
 
     assert entrypoint.index("wait_for_engine || boot=$?") < entrypoint.index("start_nginx\n        announce")
     assert 'raven gateway --page-port "${PAGE_PORT}" &' in entrypoint
-    assert 'RAVEN_AUTO_LOGIN_COOKIE="raven_session_${PAGE_PORT}=' in entrypoint
+    # Read back the name the entrypoint builds, against the one the engine reads
+    # (`cookie_name`): nginx forwards Host without a port, so the engine falls back
+    # to its own page port and the two have to name the same jar entry. Spelled as
+    # a literal in both files, they agree only until the engine's rule moves.
+    from raven.rpc.transports.ws import cookie_name
+
+    auto_login = next(
+        line
+        for line in entrypoint.splitlines()
+        if line.strip().startswith("RAVEN_AUTO_LOGIN_COOKIE=") and "cookie}" in line
+    )
+    name = auto_login.split('"', 2)[1].split("=", 1)[0].replace("${PAGE_PORT}", str(18793))
+    assert name == cookie_name(18793), f"the auto-login cookie is {name}, the engine reads {cookie_name(18793)}"
     assert 'add_header Set-Cookie "${RAVEN_AUTO_LOGIN_COOKIE}" always;' in nginx
 
 

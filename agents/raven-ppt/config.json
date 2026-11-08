@@ -48,6 +48,9 @@
       "compaction": {
         "enabled": true,
         "triggerRatio": 0.85
+      },
+      "taskBoard": {
+        "enabled": false
       }
     }
   },
@@ -118,9 +121,6 @@
   },
   "plugins": {
     "config": {
-      "everos-memory": {
-        "base_url": "http://localhost:18791"
-      },
       "ppt-engine": {
         "enabled": true,
         "profile": "script_author",

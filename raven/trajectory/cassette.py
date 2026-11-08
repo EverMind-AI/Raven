@@ -11,8 +11,9 @@ consume it unchanged.
 What survives minimization (the ``load_recording`` consumption surface):
 
 - spans carrying ``llm.*`` / ``tool.*`` / ``turn.input`` artifact references —
-  every other span (memory, skills, channel plumbing) is dropped — with span
-  records and attributes stripped to the consumed keys;
+  every other span (memory, skills, channel plumbing) is dropped, and so is
+  whatever an external agent did inside its own run, which replay never asks
+  for — with span records and attributes stripped to the consumed keys;
 - the referenced artifacts, each payload stripped to the fields replay feeds
   or compares. Recorded system-prompt content is replaced with a placeholder:
   replay never compares it, and it is both the bulk of a recorded request and
@@ -42,6 +43,7 @@ from typing import Any
 from raven.trajectory.redact import KnownSecret, RedactionReport, redact_bundle
 from raven.trajectory.replay import (
     _history_cut,
+    _inside_external_runs,
     _load_artifact,
     _pre_attempt_messages,
     _session_records,
@@ -249,8 +251,9 @@ def minimize_bundle(
 
         kept_spans: list[dict[str, Any]] = []
         written: set[str] = set()
+        external = _inside_external_runs(source_spans)
         for span in source_spans:
-            if not _consumed(span):
+            if span.get("spanId") in external or not _consumed(span):
                 continue
             attrs = span.get("attributes") or {}
             out_attrs: dict[str, Any] = {}

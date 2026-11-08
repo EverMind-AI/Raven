@@ -20,11 +20,11 @@ import { claimDraft as claimComposerDraft } from '../../features/composer/mount'
 import { drawMeter, goPaint as goState, queuePush, queueShift, turn } from '../../features/composer/mount'
 import { reduce } from '../../features/composer/turn'
 import { claimDraft as claimDeskDraft } from '../../features/desk/store'
-import { loadProviders, stagedTier } from '../../features/model/source'
+import { adoptSelection, chipModel, loadProviders, rememberUsed } from '../../features/model/source'
 import { rowPreview, touchSession } from '../../features/rail/source'
 import { draw as sessionDraw } from '../../features/rail/store'
 import { plainTitle } from '../../features/rail/title'
-import { loadPermMode, stagedPerm } from '../../features/settings/source'
+import { loadPermMode } from '../../features/settings/source'
 import * as transcript from '../../features/transcript/mount'
 import { down as scrollTranscriptDown } from '../../features/transcript/tail'
 import { wsSetRoot as wsSetRootImpl } from '../../features/workspace/source'
@@ -32,23 +32,27 @@ import { currentTurn as wsCurrentTurn } from '../../features/workspace/store'
 import { t } from '../../i18n/t'
 import { $ } from '../../lib/dom'
 import { formatDuration as dur } from '../../lib/duration'
+import { isImportedKey } from '../../lib/imported'
 import { show as ntfPush } from '../../lib/notifications'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { hasNamingFlag, hasTurnDuration } from '../../rpc/capabilities'
 import { gateway } from '../../rpc/gateway'
 import { ask as confirmAsk } from '../confirm'
-import { set as setCtx } from '../ctxChip'
+import { load as loadEffort } from '../effort'
+import { adopt as adoptBases, staged as stagedBases } from '../mentions'
 import { ds, sources } from '../sources'
 import { load as loadTier } from '../tier'
 import { show as toast } from '../toast'
 import { clearStaged as clearStagedWorkdir, staged as stagedWorkdir } from '../workdir'
 import { ask, noteRow, noteSay, pitch, splitAtts } from './conversation'
+import { applyUsage } from './ctxReport'
 import { generation } from './generation'
 import { beginNaming, namingDeclined } from './naming'
 import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, viewRuntime } from './registry'
 import { rows as sessionRows, sess } from './rows'
 
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { Recent } from '../../features/model/recent'
 import type { SessRow } from '../../features/rail/types'
 import type { Staging } from './staging'
 
@@ -78,6 +82,41 @@ export class SessionRuntime {
   startedAt = 0
   answerAt = 0
 
+  /* The running turn's id when the runtime opened it (a delegated result
+     re-entering), from its `turn.started`; null for a turn a send opened. The
+     stop button names it, because no handle was bound for such a turn and
+     `turn.cancel` reaches it only by id -- and only while it is the one
+     running, so a stop that arrives late cannot land on the next turn. */
+  openedTurn: string | null = null
+
+  /* The id of the turn running in this conversation, from the frame that
+     opened it: `message.start` for a turn a send opened, `turn.started` for
+     one the runtime opened. It is what tells one frame apart from another --
+     a refusal that holds the lane busy has to know which turn's late
+     completion to drop, and only the page knows which turn the reader
+     pressed stop on. */
+  turnId: string | null = null
+
+  /* A refusal is holding the lane: the server said the lane still has a turn
+     to run whose first frame has not arrived, so the queue waits and no stop
+     is offered until a frame names it -- the turn's own opening frame, or the
+     frame that ends a turn which sent none. */
+  holding = false
+
+  /* The turn such a refusal is holding the lane for: the turn the reader
+     stopped. Its own late frames are dropped rather than folded -- the stop
+     already folded it, and a fold releases the queue into the turn that is
+     starting. Its end arrives as a completion, or as the notice a cancel
+     from another client sends in its place. Null when the page never saw that
+     turn's opening frame, and then no frame can be told from the next turn's. */
+  heldTurn: string | null = null
+
+  /* Set by the notice that says the model chose not to reply, and read when the
+     turn lands, a stop or a failure included: such a turn has no answer, so
+     nothing it said is promoted into one. Cleared with the rest of the turn by
+     `reset`, and again where a turn opens, so the mark never outlives its turn. */
+  silent = false
+
   /* Only read while off screen, same as `phase`. */
   queue: string[] = []
 
@@ -95,13 +134,18 @@ export class SessionRuntime {
      conversation. */
   lastAsk = ''
 
+  /* The bubble a send drew for a turn whose `message.start` has not arrived:
+     that frame files the turn's id on it, and a task board step finds the
+     turn by that id. Null once filed. */
+  asked: number | null = null
+
   /* The wait for a generated title: the opening line to fall back to, and the
      backstop timer. */
   naming: { fallback: string; timer: ReturnType<typeof setTimeout> } | null = null
 
   /* A model, tier and permission mode picked while this was still a draft.
      Applied to the conversation the first message mints, then forgotten. */
-  staged: Staging = { model: null, tier: null, perm: null }
+  staged: Staging = { model: null, tier: null, perm: null, effort: null }
 
   wsRoot: string | null = null
 
@@ -148,7 +192,11 @@ export const state = (): SessionRuntime => viewRuntime()
 /** Back to a conversation with no turn running. */
 export function reset(rt: SessionRuntime = viewRuntime()): void {
   transcript.stopStream()
-  rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false
+  rt.st = null; rt.steps = []; rt.say = ''; rt.open.clear(); rt.sawEpisode = false; rt.silent = false
+  rt.openedTurn = null
+  rt.turnId = null
+  rt.holding = false
+  rt.heldTurn = null
   rt.startedAt = Date.now()
   rt.answerAt = 0
 }
@@ -156,6 +204,25 @@ export function reset(rt: SessionRuntime = viewRuntime()): void {
 export function ensureStep(rt: SessionRuntime = viewRuntime()) {
   if (!rt.st) { rt.st = transcript.step(); rt.steps.push(rt.st) }
   return rt.st
+}
+
+/* A step opened while no turn is open here belongs to a turn that is gone: a
+   stopped turn's late delta still calls `ensureStep` and opens one after the
+   fold at the press, and adds its text to the say buffer. Every opening -- a
+   send, `message.start`, `turn.started` -- lets go of both, so the next turn
+   starts on a clean boundary and its preview and notification do not open
+   with the stopped turn's tail. The step is sealed first so a late thought
+   does not read as live forever.
+
+   Keyed on `turnId`, which only a fold clears, rather than on the phase: a
+   refusal that holds the lane reads `streaming` with no turn open, and a turn
+   waiting on a prompt reads `waiting` with one. */
+export function dropStaleSteps(rt: SessionRuntime = viewRuntime()): void {
+  if (rt.turnId !== null) return
+  rt.st?.seal()
+  rt.st = null
+  rt.steps = []
+  flushSay(rt)
 }
 
 /** Only the local buffer resets; the step keeps its streamed narration. */
@@ -193,7 +260,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the
      prose stood, merges the silent stretches and folds the turn. */
-  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(p.duration_ms, rt), rt.silent)
   /* The turn's products close it, after the answer and after any note: the
      bar is the last line of a turn, and it is only drawn once the turn is
      over -- nothing grows it mid-flight. */
@@ -201,13 +268,18 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   turn.dispatch({ type: 'idle' })
   const inTok = usage.input_tokens || usage.prompt_tokens || 0
   /* The window fill is the turn's prompt, not the running total. */
-  setCtx(usage.context_used || inTok, usage.context_max as number)
+  applyUsage(usage, inTok)
   const s = sess(sessionCurrent())
-  if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
-  touchSession(sessionCurrent(), rt.say)
-  // OS notification when the answer lands while the window is in the
-  // background; ntfPush itself checks focus and the user's preference.
-  ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  /* A silent turn delivered nothing: it writes no preview, does not move its
+     row up the rail (the server's list skips it for its time too) and raises no
+     OS notification -- a ping is a delivery, which silence exists to avoid. */
+  if (!rt.silent) {
+    if (s && rt.say.trim()) s.last = rt.say.trim().split('\n')[0]!.slice(0, 60)
+    touchSession(sessionCurrent(), rt.say)
+    // OS notification when the answer lands while the window is in the
+    // background; ntfPush itself checks focus and the user's preference.
+    ntfPush(t('gui.set.ntf.done'), (s && s.title) || rt.say.trim().slice(0, 80))
+  }
   reset(rt)
   drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
@@ -222,10 +294,30 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
    `media` field as well, recovered from that same note rather than threaded
    separately: a queued message is a plain string by the time it is drained,
    and the draft path sends from a second place, so deriving here covers all
-   three with one rule. */
+   three with one rule. The paths go over exactly as the note names them: the
+   composer names an upload by the file it wrote and a file attached where it
+   already was by its own path, so nothing here has to work out which file a
+   spelling meant. */
 export const mediaOf = (text: unknown): { media?: string[] } => {
   const paths = splitAtts(String(text)).atts
   return paths.length ? { media: paths } : {}
+}
+
+/* What a message carries when it goes, lent at boot (src/app/install.ts)
+   rather than imported from a domain: the Task Board's Move on, which tells
+   the server which group the message is about. It rides the send itself, so
+   nothing waits between the two and a Stop finds no moment where one has gone
+   without the other. A message with one waits for a turn of its own rather
+   than joining the one running, which was told about something else. Unlent,
+   nothing is carried. */
+export interface BeforeSend {
+  pending: (sessionKey: string | null) => boolean
+  take: (sessionKey: string | null) => string | null
+}
+let beforeSend: BeforeSend | null = null
+
+export function lendBeforeSend(hook: BeforeSend | null): void {
+  beforeSend = hook
 }
 
 /* Into the turn that is already running: the server merges it at that turn's
@@ -258,20 +350,28 @@ export function sendMidTurn(text: string): void {
 
 /** Send, into the turn that is running or as one of its own. */
 export function send(text: string): void {
+  /* Every way of sending ends here, the ones that skip the composer's own
+     button included; an imported conversation takes none of them. */
+  if (isImportedKey(sessionCurrent())) return
   /* There is no turn to merge into until the conversation exists. A draft's
      first message is still being turned into one -- `registryIsDraft` is
      already false while `promoting` runs its staged writes -- so a second
      message typed a moment later would call the gateway with no session key at
      all, which is a refusal the reader sees as a red row over a message the
      queue then delivers anyway. It waits in the queue, as it always has. */
-  if (turn.busy() && !registryIsDraft() && !promoting) { sendMidTurn(text); return }
+  if (turn.busy() && !registryIsDraft() && !promoting) {
+    if (beforeSend?.pending(sessionCurrent())) queuePush(text)
+    else sendMidTurn(text)
+    return
+  }
   if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   rt.lastAsk = text
-  ask(text)
+  rt.asked = ask(text)
   turn.dispatch({ type: 'send' })
+  dropStaleSteps(rt)
   reset(rt)
   drawMeter(); goState(); sessionDraw()
   const failed = (e: unknown) => {
@@ -290,11 +390,13 @@ export function send(text: string): void {
   ;(async () => {
     const id = await openConversation(rowPreview(text))
     beginNaming(text)
+    const ran = runsOn(id)
     /* `sessionCurrent()` rather than `id`, which is what this has always sent:
        the two differ only when the reader opened another conversation inside
        the promotion above, and making them agree is a fix about where a raced
        first message lands, not about this one. Left alone deliberately. */
     const sent = await gateway().call('turn.send', { session_key: sessionCurrent() as string, content: text, ...mediaOf(text) })
+    if (ran && sent.accepted !== false) rememberUsed(ran)
     if (hasNamingFlag(sent) && sent.naming === false) namingDeclined(id as string)
   })().catch(failed)
 }
@@ -325,28 +427,98 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
   const current = sessionCurrent()
   touchSession(current, text)
   beginNaming(text)
+  const ran = runsOn(current)
   /* `=== false`, not falsy: a server too old to carry the field says nothing
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  gateway().call('turn.send', { session_key: current as string, content: text, ...mediaOf(text) })
-    .then((r) => { if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string) })
+  const moveOn = current ? (beforeSend?.take(current) ?? null) : null
+  gateway()
+    .call('turn.send', {
+      session_key: current as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
+    })
+    .then((r) => {
+      if (ran && r.accepted !== false) rememberUsed(ran)
+      if (hasNamingFlag(r) && r.naming === false) namingDeclined(current as string)
+    })
     .catch(failed)
+}
+
+/* Conversations whose staged model the server refused while they were being
+   made, until the reload that refusal fired lands. Their first turn runs on the
+   model the session already had, which the chip shows only once that reload
+   lands -- so a send that reads the chip in that window records nothing. Cleared
+   by that send or by the reload, whichever comes first: a conversation the
+   roster made has no send to clear it, and its first one, however much later,
+   would otherwise record nothing either. */
+const refusedModel = new Set<string>()
+
+/* The refusal's reload: it puts the chip back on what the session runs, and from
+   then on the chip can be read again. */
+function reconcileChip(sessionId: string, gen: number): void {
+  void Promise.resolve(loadProviders(sessionId, gen)).finally(() => { refusedModel.delete(sessionId) })
+}
+
+/* What a turn leaving now on `sessionId` runs on, for the picker's recent list
+   (features/model/recent.ts): the chip's model and account, read as the message
+   goes and recorded once the server has taken it, so a pick made while it is on
+   its way does not stand in for it. A message merged into a running turn rides
+   on the model that turn started with and records nothing (`sendMidTurn`). */
+function runsOn(sessionId: string | null | undefined): Recent | null {
+  if (sessionId && refusedModel.delete(sessionId)) return null
+  return chipModel()
 }
 
 /* The stop button: cancel the turn the reader started. */
 export function stop(): void {
-  /* A runtime turn (a delegated result re-entering) is NOT cancellable:
-   turn.cancel resolves only handles turn.send registered, and the stop
-   button claiming the UI here would reset the stage while the delegated
-   deltas are still streaming into it. The reader's stop does nothing until
-   the turn is one they can stop. */
+  /* The machine's guard, not a statement about the turn: a send-bound turn and
+     a runtime-opened one (a delegated result re-entering) can both be stopped,
+     so what stops a second press here is the cancelling phase the first press
+     moved the machine into. The runtime-opened one is named by its id: the
+     server cancels it only while it is still the turn running, and goes past a
+     message the reader slipped into it -- that message runs next as a turn of
+     its own, as it does when a sent turn is stopped. */
   if (!turn.cancellable()) return
   const owner = sessionCurrent()
+  const opened = viewRuntime().openedTurn
+  /* The turn this stop is about: the one running here. Its id came from the
+     frame that opened it -- `message.start` for a turn a send opened,
+     `turn.started` for one the runtime opened -- and that is the id the
+     cancel names when it names one. It is read HERE, before the fold at the
+     press clears the runtime, because a refusal has to drop that turn's late
+     completion. */
+  const stopped = viewRuntime().turnId
   turn.dispatch({ type: 'cancel' })
-  gateway().call('turn.cancel', { session_key: owner as string })
-    .then(() => {
-      get(owner)?.dispatch({ type: 'idle' })
+  gateway().call('turn.cancel', { session_key: owner as string, ...(opened ? { turn_id: opened } : {}) })
+    .then((r) => {
+      const rt = get(owner)
+      /* Refused: the turn it named had already ended. A turn that opened since
+         took the phase off `cancelling` with its first frame -- `openedTurn`
+         cannot say so, the fold at the press cleared it and a turn a send
+         opened never sets it -- and that turn is the one running now: going
+         idle would take its stop button and release the queue into it. */
+      if (r.cancelled === false && rt && (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) !== 'cancelling') return
+      /* Refused, and the lane still has a turn to run whose first frame is not
+         here yet: the reply does not wait out the server's coalescing window,
+         and that frame does. Going idle would release the queue under that
+         turn, so the conversation stays busy, with no stop to offer until the
+         frame arrives and says which turn it is.
+
+         The hold remembers the turn that was stopped: the server read the
+         cancel after that turn had already ended, so its completion is still
+         on the way -- and behind this reply, because the reply is written
+         while the frames wait out the subscription's window. Folding it would
+         release the queue into the turn that is starting. */
+      if (r.cancelled === false && r.busy === true) {
+        if (rt) {
+          rt.heldTurn = stopped
+          rt.holding = true
+          rt.dispatch({ type: 'stream', cancellable: false })
+        }
+        if (sessionCurrent() === owner) { drawMeter(); goState() }
+        return
+      }
+      rt?.dispatch({ type: 'idle' })
       if (sessionCurrent() === owner) { drawMeter(); goState(); sessionDraw(); drain() }
     }, () => {
       get(owner)?.dispatch({ type: 'idle' })
@@ -366,7 +538,7 @@ export function stop(): void {
    "done", under a note saying the output was kept. */
 export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRuntime()): void {
   transcript.killStatus()
-  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt))
+  transcript.finishTurn(rt.st, rt.steps, duration(undefined, rt), rt.silent)
   if (!keepCancelling) turn.dispatch({ type: 'idle' })
   /* Only promise the output was kept when there is output above to keep. */
   noteRow(t(transcript.turnKept() ? 'gui.halted' : 'gui.halted_bare'), '',
@@ -447,7 +619,13 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
      before the list is read back. Spent once the session exists, and left
      staged when the create fails, since the draft is still on screen. */
   const workdir = stagedWorkdir()
-  const r = await gateway().call('session.create', workdir ? { workdir } : {})
+  /* And what it may search, for the same reason and at the same moment: the
+     draft held the pick because there was no session to write it to. */
+  const bases = stagedBases()
+  const r = await gateway().call('session.create', {
+    ...(workdir ? { workdir } : {}),
+    ...(bases.length ? { knowledge_bases: bases } : {}),
+  })
   setWsRoot(draftRt, r.info && r.info.cwd)
   const s: SessRow = {
     id: r.session_id, title: t('gui.new_task'), last: preview || t('gui.sess.not_started'),
@@ -456,10 +634,15 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   }
   sessionRows().unshift(s); sessionSet(s.id)
   clearStagedWorkdir()
+  /* Not cleared: the pick belongs to the conversation that was just minted,
+     and the panel goes on showing what it is pointed at. What is dropped is
+     the staging, which `mentions.adopt` below re-states against the session. */
+  adoptBases(bases)
   /* The draft IS the conversation now: everything it was holding -- the staged
      model, tier and permission mode, the lane it drew into -- belongs to the
      session that was just minted. */
   mint(draftRt, s.id)
+  adoptSelection(s.id, gen)
   /* The pointer has moved, and a caller with something to file under the new
      conversation files it HERE rather than after the round trips below: the
      send records the turn's owner at exactly this point, and a reader switching
@@ -474,8 +657,9 @@ export async function promote(preview?: string, atPointer?: (id: string) => void
   claimComposerDraft(sessionCurrent())
   claimDeskDraft(sessionCurrent())
   await applyStagedModel(draftRt, s.id, gen)
-  await applyStagedTier(draftRt, s.id)
-  await applyStagedPerm(draftRt, s.id)
+  await applyStagedTier(draftRt, s.id, gen)
+  await applyStagedEffort(draftRt, s.id, gen)
+  await applyStagedPerm(draftRt, s.id, gen)
   sessionDraw()
   await subscribe(s.id)
   return s.id
@@ -507,14 +691,16 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
        quiet here: with no loop to bind to, the server answers applied:false,
        and the chip kept a model the session does not have. */
     if (r && r.applied === false) {
+      refusedModel.add(sessionId)
       toast(t('gui.op.switch_failed', { detail: t('gui.model.refused') }))
-      void loadProviders(sessionId, gen)
+      reconcileChip(sessionId, gen)
     }
   } catch (e) {
+    refusedModel.add(sessionId)
     // Said out loud, not just reversed: the pick was announced as staged, so a
     // silent chip flip back would be an unexplained contradiction.
     toast(t('gui.op.switch_failed', { detail: detailOf(e) }))
-    void loadProviders(sessionId, gen)
+    reconcileChip(sessionId, gen)
   }
 }
 
@@ -525,30 +711,73 @@ export async function applyStagedModel(rt: SessionRuntime, sessionId: string, ge
 
    A failure is said rather than reversed silently, and then re-read: the chip is
    showing the staged tier as though it were in force, so leaving it there after
-   a refusal is the one outcome worse than the refusal. */
-export async function applyStagedTier(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedTier()
+   a refusal is the one outcome worse than the refusal.
+
+   `gen` is the ticket the promotion began under, as `applyStagedModel` takes
+   it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's rung
+   painted over that conversation's own read. Under the promotion's ticket the
+   source drops that answer instead. */
+export async function applyStagedTier(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const mode = rt.staged.tier
+  rt.staged.tier = null
   if (!mode) return
   try {
     await gateway().call('session.set_mode', { session_key: sessionId, mode })
   } catch (e) {
     toast(`${t('gui.tier.title')}: ${detailOf(e)}`)
   }
-  void loadTier()
+  void loadTier(sessionId, gen)
+}
+
+/* The reasoning effort picked while this was still a draft, written now that
+   there is a session_key to write it under. Awaited before the turn is sent,
+   for the reason the tier is: the turn's first call reads it, and a pick that
+   lands after the call went out is one that turn did not run at. Said rather
+   than reversed silently on a failure, and then re-read, as the tier is.
+
+   The re-read is about the session the promotion minted and carries the
+   ticket the promotion began under, as `applyStagedModel`'s does: a ticket
+   taken after the awaited write is whichever view the reader has opened
+   since, and under that one the source would paint this session's rung over
+   that view's own read. The source drops the late answer instead.
+
+   The pick is read off the draft's own runtime, not the view on screen now:
+   the model and tier writes above can await long enough for the reader to
+   open another conversation, and its staging is not this draft's. */
+export async function applyStagedEffort(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const effort = rt.staged.effort
+  rt.staged.effort = null
+  if (!effort) return
+  try {
+    await gateway().call('session.set_effort', { session_key: sessionId, effort })
+  } catch (e) {
+    toast(`${t('gui.effort.title')}: ${detailOf(e)}`)
+  }
+  void loadEffort(sessionId, gen)
 }
 
 /* The permission mode picked while this was still a draft, written now that
    there is a session_id to write it under. Awaited before the turn is sent so
-   its first tool call already reads the chosen mode. */
-export async function applyStagedPerm(_rt: SessionRuntime, sessionId: string): Promise<void> {
-  const mode = stagedPerm()
+   its first tool call already reads the chosen mode.
+
+   `gen` is the ticket the promotion began under, as the tier and effort writes
+   take it: the re-read runs after the awaited write, and a ticket taken then is
+   whichever view the reader has opened since -- so a reader who left for
+   another conversation while the write was in flight got this session's mode
+   painted over that conversation's own read. Under the promotion's ticket the
+   read drops that answer instead. */
+export async function applyStagedPerm(rt: SessionRuntime, sessionId: string, gen: number): Promise<void> {
+  const mode = rt.staged.perm
+  rt.staged.perm = null
   if (!mode) return
   try {
     await gateway().call('config.set', { key: 'permissions.mode', value: mode, scope: 'session', session_id: sessionId })
   } catch (e) {
     toast(`${t('gui.perm.title')}: ${detailOf(e)}`)
   }
-  void loadPermMode(sessionId)
+  void loadPermMode(sessionId, gen)
 }
 
 const detailOf = (e: unknown): string => {

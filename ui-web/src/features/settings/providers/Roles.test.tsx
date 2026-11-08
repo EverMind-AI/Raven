@@ -39,8 +39,49 @@ const pick = async (roleName: string, model: string, providerName?: string): Pro
   await act(async () => { fireEvent.click(within(scope).getAllByText(model)[0]!) })
 }
 const sets = (calls: Array<[string, unknown]>) => calls.filter(([m]) => m === 'set').map(([, a]) => a)
+/* OpenAI connected with one image model, as `model.options` answers a key whose
+   list carries gpt-image-2. */
+const withOpenAI = (): ReturnType<typeof snap> => {
+  const data = snap()
+  data.providers = data.providers.map((p) => (p.id === 'openai'
+    ? { ...p, on: true, models: ['gpt-image-2'], configured: ['gpt-image-2'],
+        labels: { 'gpt-image-2': { label: 'gpt-image-2', kind: 'image' } } }
+    : p))
+  return data
+}
+/* MiniMax connected with one video model; the registry marks it for both media
+   tools. */
+const withMiniMax = (data = snap()): ReturnType<typeof snap> => {
+  data.providers = [...data.providers, {
+    id: 'minimax', name: 'MiniMax (Global)', models: ['MiniMax-Hailuo-2.3'], configured: ['MiniMax-Hailuo-2.3'],
+    on: true, kind: 'key', acceptsKey: true, imageApi: true, videoApi: true,
+    labels: { 'MiniMax-Hailuo-2.3': { label: 'MiniMax-Hailuo-2.3', kind: 'video' } },
+  }]
+  return data
+}
 
 describe('model roles', () => {
+  it.each([
+    ['title', 'claude-sonnet-4-5', 'Anthropic'],
+    ['embedding', 'text-embedding-3-small', 'OpenRouter'],
+  ])('allows the %s role to change during a composer provider catalogue refresh', async (slot, model, provider) => {
+    const { calls } = install()
+    setSources({ model: {
+      providers: modelSource.providers,
+      persist: modelSource.persist,
+      openSettings: modelSource.openSettings,
+      loading: () => true,
+    } })
+    await mount('model')
+    await pick(`gui.settings.roles.${slot}`, model, provider)
+    expect(calls).toEqual(slot === 'title' ? [
+      ['set', { key: 'sessionTitle.model', value: 'claude-sonnet-4-5' }],
+      ['set', { key: 'sessionTitle.provider', value: 'anthropic' }],
+    ] : [
+      ['everosSet', { section: 'embedding', model: 'text-embedding-3-small', provider: 'openrouter' }],
+    ])
+  })
+
   it('a keyed role writes its model then its provider; clearing writes null to both', async () => {
     const { calls } = install()
     await mount('model')
@@ -56,6 +97,28 @@ describe('model roles', () => {
       { key: 'context.curatorModel', value: null },
       { key: 'context.curatorProvider', value: null },
     ])
+  })
+
+  it('reads a keyed role from whichever spelling the config file carries', async () => {
+    const camel = snap()
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateModel = 'claude-haiku-4-5'
+    ;(camel.raw.skillForge as Record<string, unknown>).llmGateProvider = 'anthropic'
+    expect(roleValue(role('gate'), camel)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    /* settings.get returns the file as written, so the harness's camel block
+       has to go or it answers for the snake one. */
+    const snake = snap()
+    delete snake.raw.skillForge
+    snake.raw.skill_forge = { llmGateModel: 'claude-haiku-4-5', llmGateProvider: 'anthropic' }
+    expect(roleValue(role('gate'), snake)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+
+    const titled = snap()
+    titled.raw.session_title = { model: 'claude-sonnet-4-5', provider: 'anthropic' }
+    expect(roleValue(role('title'), titled)).toEqual({ model: 'claude-sonnet-4-5', provider: 'anthropic' })
+
+    install(snake)
+    await mount('model')
+    expect(pill('gui.settings.roles.gate').textContent).toContain('claude-haiku-4-5')
   })
 
   it('the chat role writes through pickModel and reloads', async () => {
@@ -75,17 +138,58 @@ describe('model roles', () => {
     expect(store.get().needsRestart).toBe(true)
   })
 
-  it('a media role offers OpenRouter only, writes the selection first and then unhides the tool', async () => {
+  it('an OpenRouter image pick writes the selection, naming no provider, then unhides the tool', async () => {
     const { calls } = install()
     await mount('model')
-    expect(roleProviders(role('image'), snap()).map((p) => p.id)).toEqual(['openrouter'])
     /* The image slot lists image models: a text model on the same provider is
        not offered for it any more. */
     await pick('gui.settings.roles.image', 'gemini-2.5-flash-image')
     expect(sets(calls)).toEqual([
-      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '' } },
+      { key: 'tools.media.image', value: { model: 'google/gemini-2.5-flash-image', quality: '', provider: '' } },
       { key: 'tools.disabledTools', value: ['write_file'] },
     ])
+  })
+
+  it('the image and video roles offer the connected providers their tools run on; speech keeps to OpenRouter', () => {
+    const data = withMiniMax(withOpenAI())
+    expect(roleProviders(role('image'), data).map((p) => p.id)).toEqual(['openrouter', 'openai', 'minimax'])
+    expect(roleProviders(role('speech'), data).map((p) => p.id)).toEqual(['openrouter'])
+    expect(roleProviders(role('video'), data).map((p) => p.id)).toEqual(['openrouter', 'minimax'])
+  })
+
+  it('a video pick writes the provider it runs on, empty for OpenRouter', async () => {
+    /* Empty rather than left out: a pick back to OpenRouter has to move the role
+       off MiniMax, or the next call sends a Kling id to MiniMax. */
+    const data = withMiniMax()
+    data.providers = data.providers.map((p) => (p.id === 'openrouter'
+      ? { ...p, models: [...p.models, 'kwaivgi/kling-v3.0-std'], configured: [...(p.configured || []), 'kwaivgi/kling-v3.0-std'],
+          labels: { ...p.labels, 'kwaivgi/kling-v3.0-std': { label: 'kling-v3.0-std', kind: 'video' } } }
+      : p))
+    const { calls } = install(data)
+    await mount('model')
+    await pick('gui.settings.roles.video', 'MiniMax-Hailuo-2.3', 'MiniMax')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.video', value: { model: 'MiniMax-Hailuo-2.3', quality: '', provider: 'minimax' } })
+    calls.length = 0
+    await pick('gui.settings.roles.video', 'kling-v3.0-std', 'OpenRouter')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.video', value: { model: 'kwaivgi/kling-v3.0-std', quality: '', provider: '' } })
+  })
+
+  it('an image pick on another provider writes that provider into the selection', async () => {
+    const { calls } = install(withOpenAI())
+    await mount('model')
+    await pick('gui.settings.roles.image', 'gpt-image-2', 'OpenAI')
+    expect(sets(calls)[0]).toEqual({ key: 'tools.media.image', value: { model: 'gpt-image-2', quality: '', provider: 'openai' } })
+  })
+
+  it('the image slot reads its provider off the selection, OpenRouter when it names none', () => {
+    const data = withOpenAI()
+    const media = data.raw.tools as { media?: unknown }
+    media.media = { image: { model: 'gpt-image-2', quality: '', provider: 'openai' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'gpt-image-2', provider: 'openai' })
+    /* Counted where a disconnect asks which roles still run on the provider. */
+    expect(rolesUsing(data, 'openai').map((r) => r.id)).toContain('image')
+    media.media = { image: { model: 'google/gemini-2.5-flash-image', quality: '' } }
+    expect(roleValue(role('image'), data)).toEqual({ model: 'google/gemini-2.5-flash-image', provider: 'openrouter' })
   })
 
   it('clearing a media role empties the model, keeps the quality, and puts the tool back on the disabled list', async () => {
@@ -373,6 +477,27 @@ describe('model roles', () => {
     expect(screen.getByRole('alert').textContent).toBe('gui.settings.roles.max {"n":200}')
   })
 
+  it('an unset effort reads as the provider default, and that rung clears the key rather than writing a word', async () => {
+    /* The harness holds `low`; this is the install that never touched the key,
+       which the page used to draw as Low -- a setting the file does not hold. */
+    const unset = snap()
+    delete (unset.raw.agents as { defaults: Record<string, unknown> }).defaults.reasoningEffort
+    const { calls } = install(unset)
+    await mount('model')
+    const disc = screen.getByText('gui.settings.roles.params').closest('button') as HTMLButtonElement
+    expect([...disc.querySelectorAll('.settings-sv')][0]!.textContent)
+      .toBe('gui.settings.roles.sum_effortgui.settings.roles.effort_default')
+    await act(async () => { fireEvent.click(disc) })
+    expect(screen.getByText('gui.settings.roles.effort_default').getAttribute('aria-pressed')).toBe('true')
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_medium')) })
+    /* Re-queried: a write bumps the epoch and the card is rebuilt under it. */
+    await act(async () => { fireEvent.click(screen.getByText('gui.settings.roles.effort_default')) })
+    expect(sets(calls)).toEqual([
+      { key: 'agents.defaults.reasoningEffort', value: 'medium' },
+      { key: 'agents.defaults.reasoningEffort', value: null },
+    ])
+  })
+
   it('a fixed context window below 1024 is refused; above the model window it saves and warns', async () => {
     const { calls } = install()
     await mount('model')
@@ -432,5 +557,49 @@ describe('model roles', () => {
     expect(row.querySelector('.settings-k')?.textContent).toBe('gui.settings.roles.ctx')
     expect([...row.querySelectorAll('.settings-seg button')].map((b) => b.textContent))
       .toEqual(['gui.settings.roles.ctx_auto', 'gui.settings.roles.ctx_pin'])
+  })
+})
+
+describe('another memory backend', () => {
+  it('hides the three EverOS-only rows when the roles RPC says other_backend and keeps embedding', async () => {
+    const data = snap()
+    data.everos = {
+      ...data.everos,
+      reason: 'other_backend',
+      sections: { embedding: { model: 'text-embedding-3-small', provider: 'openrouter', api_key_set: true } },
+    }
+    install(data)
+    await mount('model')
+
+    expect(screen.queryByText(/gui\.settings\.roles\.memllm$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.rerank$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.multimodal$/)).toBe(null)
+    expect(screen.queryByText('gui.settings.roles.everos_missing')).toBe(null)
+    expect(screen.getAllByText(/gui\.settings\.roles\.embedding$/).length).toBeGreaterThan(0)
+  })
+
+  it('draws no EverOS row at all on a cloud-only install: other_backend with empty sections', async () => {
+    const data = snap()
+    data.everos = { available: false, note: 'not here', config_path: '', reason: 'other_backend', sections: {} }
+    install(data)
+    await mount('model')
+
+    expect(screen.queryByText(/gui\.settings\.roles\.memllm$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.rerank$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.multimodal$/)).toBe(null)
+    expect(screen.queryByText(/gui\.settings\.roles\.embedding$/)).toBe(null)
+    expect(screen.queryByText('gui.settings.roles.everos_missing')).toBe(null)
+  })
+
+  it('keeps the four rows and the not-installed pill when available is false without a reason', async () => {
+    const data = snap()
+    data.everos = { available: false, sections: {}, note: 'not here', config_path: '' }
+    install(data)
+    await mount('model')
+
+    for (const id of ['memllm', 'embedding', 'rerank', 'multimodal']) {
+      expect(screen.getAllByText(new RegExp(`gui\\.settings\\.roles\\.${id}$`)).length).toBeGreaterThan(0)
+    }
+    expect(screen.getAllByText('gui.settings.roles.everos_missing').length).toBe(4)
   })
 })

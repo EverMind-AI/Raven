@@ -104,7 +104,7 @@ def test_a_network_failure_is_not_reported_as_a_revocation(
             raise httpx.ConnectError("no route to host")
 
     monkeypatch.setattr(
-        "litellm.llms.chatgpt.authenticator._get_httpx_client",
+        "litellm.llms.chatgpt.authenticator.get_httpx_client",
         lambda *_a, **_k: _Offline(),
     )
 

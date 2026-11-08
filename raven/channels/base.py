@@ -51,6 +51,14 @@ class ChannelBase:
         """
         self._running = False
 
+    async def end_turn(self, chat_id: str) -> None:
+        """A turn a user started in ``chat_id`` ended with nothing sent to it.
+
+        What the user's message started -- a typing indicator -- is stopped by
+        ``send``, and a turn that ended without a reply never calls it. An
+        adapter that shows one stops it here; the rest have nothing to undo.
+        """
+
     def is_allowed(self, sender_id: str) -> bool:
         """Deny-by-default allowlist check (empty = deny all; ``"*"`` = allow
         all). Override for bespoke matching; the override flows into Intake."""

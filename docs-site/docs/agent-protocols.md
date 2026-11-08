@@ -222,6 +222,5 @@ origins, use a card and peer configuration on the intended interface's origin.
 Implementation entry points: `raven/acp/capabilities.py`,
 `raven/acp/methods.py`, `raven/acp_client/permissions.py`, `raven/a2a/card.py`,
 `raven/a2a/routes_aiohttp.py`, `raven/a2a/runtime.py`, and
-`raven/a2a_client/client.py`. CLI help is useful for invocation, but some ACP
-help prose predates session modes and per-session MCP; negotiated capabilities
-and the method implementation determine support.
+`raven/a2a_client/client.py`. Use CLI help for invocation syntax and the ACP
+capability handshake to determine supported session modes and per-session MCP.

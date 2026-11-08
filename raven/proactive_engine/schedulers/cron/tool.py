@@ -139,7 +139,12 @@ class CronTool(Tool):
                 },
                 "tz": {
                     "type": "string",
-                    "description": "IANA timezone for cron expressions (e.g. 'America/Vancouver')",
+                    "description": (
+                        "IANA timezone (e.g. 'America/Vancouver') for a cron expression, or for an "
+                        "`at` datetime without an offset. Omitted, a cron job takes the configured "
+                        "cron timezone, else the machine's local time (the reply names which); an "
+                        "`at` stays on the machine's local time, the clock of current_time."
+                    ),
                 },
                 "at": {
                     "type": "string",
@@ -254,7 +259,7 @@ class CronTool(Tool):
         # Store request-time channel/chat_id verbatim — this binding IS the
         # delivery target; the runner owning that channel fires it directly.
         try:
-            job = self._cron.add_job(
+            res = self._cron.add_job_with_outcome(
                 name=message[:30],
                 schedule=schedule,
                 message=message,
@@ -268,7 +273,37 @@ class CronTool(Tool):
             # invalid cron expr) is rejected by the service rather than stored as
             # a job that silently never fires — surface it so the agent retries.
             return f"Error: {exc}"
-        return f"Created job '{job.name}' (id: {job.id})"
+        job = res.job
+        if res.outcome == "created":
+            return f"Created job '{job.name}' (id: {job.id}){self._zone_note(job.schedule)}"
+        if res.outcome == "updated":
+            if res.schedule_replaced:
+                return f"Updated job '{job.name}' (id: {job.id}) with the new schedule{self._zone_note(job.schedule)}"
+            return f"Updated job '{job.name}' (id: {job.id}); kept its schedule"
+        if res.schedule_matches:
+            return (
+                f"No new job created: '{job.name}' (id: {job.id}) already carries this message; "
+                f"the requested schedule is already in effect{self._zone_note(job.schedule)}"
+            )
+        return (
+            f"No new job created: '{job.name}' (id: {job.id}) already carries this message; "
+            "the requested schedule was not applied"
+        )
+
+    @staticmethod
+    def _zone_note(schedule: CronSchedule) -> str:
+        """Name the zone a new cron job will keep.
+
+        A cron expression without a zone of its own captures the configured
+        default at creation, and that zone can differ from the machine clock the
+        agent and the user reason in; nothing else in the exchange says which
+        one the reminder follows. An ``at`` is an instant and an ``every`` an
+        interval, so neither has a zone to name.
+        """
+        if schedule.kind != "cron":
+            return ""
+        zone = schedule.tz or "this machine's local time"
+        return f", fires on {zone}"
 
     def _list_jobs(self) -> str:
         jobs = self._cron.list_jobs()

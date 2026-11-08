@@ -1,10 +1,13 @@
 """``model.*`` RPC handlers — backend for the TUI ``/model`` v1 picker.
 
-Nine methods drive the picker:
+These handlers back the TUI ``/model`` picker and the page's provider pane:
 
-* ``model.options`` — current model/provider + one row per provider.
+* ``model.options`` — current model/provider + one row per provider, or the
+  selection alone with ``include_providers=False``.
 * ``model.save_key`` — store an api_key (+ optional api_base) for a provider.
 * ``model.disconnect`` — clear a provider's stored credentials.
+* ``model.reveal_key`` — read back the one key ``save_key`` stored, for a
+  reader who pressed the eye beside it.
 * ``model.add_model`` / ``model.remove_model`` — edit a provider's curated
   model list.
 * ``model.endpoints`` / ``model.add_endpoint`` / ``model.remove_endpoint`` —
@@ -44,6 +47,7 @@ from raven.config.update_providers import (
 )
 from raven.providers.auth import credential_status
 from raven.providers.common_models import common_models_for, litellm_models_for
+from raven.providers.endpoints import provider_endpoints
 from raven.providers.registry import (
     SHAPE_ENDPOINT,
     SHAPE_LOCAL,
@@ -63,6 +67,7 @@ from raven.rpc.models import (
     ModelAddEndpointParams,
     ModelAddModelParams,
     ModelAddModelsParams,
+    ModelCheckKeyParams,
     ModelDisconnectParams,
     ModelEndpointsParams,
     ModelFetchModelsParams,
@@ -70,6 +75,7 @@ from raven.rpc.models import (
     ModelOptionsParams,
     ModelRemoveEndpointParams,
     ModelRemoveModelParams,
+    ModelRevealKeyParams,
     ModelSaveKeyParams,
     ModelSetFieldsParams,
     ModelSetProtocolParams,
@@ -258,7 +264,7 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
     for model in models:
         row = describe(slug, model, overlay=_overlay_for(overlays, slug, model))
         window = resolve_context_window(model, allow_fetch=False)
-        if not (row.described or row.tagged or window):
+        if not (row.described or row.tagged or window or row.reasoning_efforts):
             # A model only the vendor's own list names still has the kind that
             # list proved, which is what keeps an embedding model out of the
             # chat slot's column.
@@ -270,6 +276,8 @@ def _model_labels(slug: str, models: "list[str]", *, section: Any = _UNLOADED) -
             entry["description"] = row.description
         if row.capabilities:
             entry["capabilities"] = list(row.capabilities)
+        if row.reasoning_efforts:
+            entry["reasoning_efforts"] = list(row.reasoning_efforts)
         if row.input_modalities:
             entry["input_modalities"] = list(row.input_modalities)
         if row.output_modalities:
@@ -412,6 +420,10 @@ def _build_provider_entry(
         "protocol_overrides": overrides,
         "total_models": len(models),
         "gateway": bool(spec and spec.is_gateway),
+        # Whether the image and video roles may run here; the save that refuses a
+        # provider reads the same registry fields.
+        "image_api": bool(spec and spec.image_api),
+        "video_api": bool(spec and spec.video_api),
         # Every prefix that names this provider, for a client comparing two
         # spellings of one model: `route_names` is what `merge_key` strips, and
         # the spec says to compare against it rather than rebuild it, so it
@@ -505,17 +517,11 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
     The session matters: the model is per conversation now, so answering from
     ``agents.defaults`` would star the wrong row for every session that has
     switched -- the picker would disagree with the status bar it sits under.
-    """
-    from raven.providers.rates import warm_catalog_in_background
 
-    # The windows below are read from whatever catalogue is already in hand
-    # (``_model_labels`` never fetches on a UI call), and nothing else on this
-    # page would ever fill it: the warm otherwise runs only when a vision probe
-    # misses, so a home whose models all answer that question keeps showing the
-    # figures it cached weeks ago -- or none at all. Asking here is what makes
-    # the window a picker shows follow the vendor's published one. Guarded
-    # inside against a fresh table and against retry storms, and off the loop.
-    warm_catalog_in_background()
+    ``include_providers=False`` answers the second question alone, with an
+    empty ``providers`` list, so a page can show the selection without waiting
+    for every provider's row to be built.
+    """
     parsed = _parse(ModelOptionsParams, params)
     current_model, current_provider = _current_selection()
     session_model = _session_model(agent_loop_factory, getattr(parsed, "session_id", None))
@@ -536,7 +542,21 @@ async def model_options(params: dict, *, agent_loop_factory: "AgentLoopFactory |
             head, _ = split_model_id(session_model)
             if head:
                 current_provider = canonical_provider_name(head)
-    entries = await _entries_off_loop(current_provider)
+    entries = []
+    if parsed.include_providers:
+        from raven.providers.rates import warm_catalog_in_background
+
+        # The windows below are read from whatever catalogue is already in hand
+        # (``_model_labels`` never fetches on a UI call), and nothing else on this
+        # page would ever fill it: the warm otherwise runs only when a vision probe
+        # misses, so a home whose models all answer that question keeps showing the
+        # figures it cached weeks ago -- or none at all. Asking here is what makes
+        # the window a picker shows follow the vendor's published one. Guarded
+        # inside against a fresh table and against retry storms, and off the loop.
+        # A selection-only read draws no rows, so it has no window to keep fresh:
+        # it builds no provider rows and leaves the warm to the full read.
+        warm_catalog_in_background()
+        entries = await _entries_off_loop(current_provider)
     return {
         "model": current_model,
         "provider": current_provider or "",
@@ -652,6 +672,37 @@ async def model_disconnect(params: dict, *, agent_loop_factory: "AgentLoopFactor
     return {"disconnected": True}
 
 
+async def model_reveal_key(params: dict) -> dict:
+    """The API key a provider has saved, read back for the reader who asked to see it.
+
+    `model.options` says whether a key is set and stops there, on every poll.
+    This reads one provider's key back when the eye beside its key field is
+    pressed, and answers with that key alone -- the flat ``api_key`` the field
+    edits and `model_save_key` writes, never the rest of the section, an
+    endpoint's key or one taken from the environment.
+
+    Only when it is the key requests carry: an ``endpoints`` list or Gemini's
+    ``api_key_list`` replaces the flat key outright (`provider_endpoints`), and
+    a flat key left behind under one is not a key in use, so that section
+    answers null rather than show it beside a provider marked connected.
+
+    It reaches no further than a signed-in page already did: the CLI bridge
+    answers `provider get --show-secrets` to the same page. What staying out
+    of `model.options` buys is a key that does not ride along on every
+    snapshot, log and screenshot of a page nobody asked to unmask.
+    """
+    parsed = _parse(ModelRevealKeyParams, params)
+    try:
+        section = await asyncio.to_thread(get_provider_config, parsed.slug, redact_secrets=False)
+    except KeyError as exc:
+        raise ConfigValidationError(str(exc), data={"slug": parsed.slug}) from exc
+    key = section.get("api_key")
+    if not isinstance(key, str) or not key:
+        return {"api_key": None}
+    in_use = [endpoint.api_key for endpoint in provider_endpoints(section)]
+    return {"api_key": key if in_use == [key] else None}
+
+
 def _stored_spelling(slug: str, model: str) -> str:
     """The id to store for a model the user typed. See ``providers.wire``.
 
@@ -690,53 +741,96 @@ def _stated_overlay(parsed: "ModelAddModelParams") -> dict[str, object]:
             raise ConfigValidationError(f"unknown {field}: {', '.join(unknown)}", data={"field": field})
         if cleaned:
             stated[field] = list(cleaned)
+    if parsed.reasoning_efforts is not None:
+        from raven.contracts.llm_provider import REASONING_EFFORT_LADDER
+
+        allowed = tuple(reversed(REASONING_EFFORT_LADDER))
+        cleaned = clean_tags(parsed.reasoning_efforts, allowed)
+        if len(cleaned) != len(set(parsed.reasoning_efforts)):
+            unknown = sorted(set(parsed.reasoning_efforts) - set(cleaned))
+            raise ConfigValidationError(
+                f"unknown reasoning effort: {', '.join(unknown)}",
+                data={"field": "reasoning_efforts"},
+            )
+        stated["reasoningEfforts"] = list(cleaned)
     return stated
 
 
-async def model_fetch_models(params: dict) -> dict:
-    """What this provider can serve: the bundled catalogue, plus whatever it says.
+#: How long a credential check may take before the form gives up on a verdict.
+#: Shorter than a catalogue fetch: the person is holding a button, and a vendor
+#: that takes this long to answer has answered "cannot be reached" already.
+_CHECK_TIMEOUT_S = 10
 
-    Two sources, unioned, because they answer the same question with different
-    weaknesses. The registry ships with Raven and needs no credential, so there
-    is a list to pick from before a key is entered -- and something to show when
-    the vendor cannot be reached, where an empty list would claim it serves
-    nothing. The live call is current, and carries the models a registry refresh
-    has not caught up with.
 
-    The asking is ``config.update_providers.test_provider``, which is already
-    the one place that knows where each vendor's catalogue lives and what opens
-    it -- a Codex account's entitlements, a Copilot seat's exchanged token, an
-    OAuth resource URL, Anthropic's and Google's own header shapes, and the
-    OpenAI-compatible GET everything else answers. A second implementation here
-    would be a second set of addresses to keep current.
+async def model_check_key(params: dict) -> dict:
+    """What the vendor says about a credential before it is stored.
 
-    Not reaching the vendor is not an error to this method: no key configured is
-    the ordinary state of a provider a person is still setting up, and the
-    catalogue is exactly what they want to see. ``status`` says what happened so
-    a surface can word its note, and every row says which source it came from.
+    The same probe `model_fetch_models` runs with ``verify`` on a saved key,
+    run on the key a form holds: the stored section with these fields laid
+    over it, so a relay's headers and a stored address still apply. The config
+    is read and not written, whatever the answer; what the vendor said it
+    serves is remembered (``raven.providers.served_models``), as every ask is,
+    because this is the one ask a connect makes -- without it a valid connect
+    left the pickers on the bundled catalogue until an add-model sheet was
+    opened.
 
-    A read throughout -- nothing is written until a row is added.
+    ``refused`` is the vendor's own refusal (`credential_refused`), and it is
+    the only answer the page holds a key back on. Everything else -- a
+    catalogue that answers anyone, a vendor that is down, a code nobody mapped
+    -- is reported beside the key, which is stored: those are things that can
+    be wrong about the check, not about the key.
+    """
+    from raven.config.update_providers import credential_refused, test_provider
+
+    parsed = _parse(ModelCheckKeyParams, params)
+    slug = canonical_provider_name(parsed.slug)
+    override: dict[str, Any] = {}
+    if parsed.api_key:
+        override["api_key"] = parsed.api_key
+    if parsed.api_base:
+        override["api_base"] = parsed.api_base
+    # Off-thread, like the fetch: a round trip to the vendor while the loop
+    # may be carrying a token stream.
+    probe = await asyncio.to_thread(
+        test_provider,
+        slug,
+        timeout_s=_CHECK_TIMEOUT_S,
+        full_catalogue=True,
+        check_credential=True,
+        section_override=override,
+    )
+    if probe.get("ok"):
+        await _remember_served(slug, _served_rows(slug, probe))
+    http_status = probe.get("http_status")
+    models_count = probe.get("models_count")
+    error = probe.get("error")
+    return {
+        "ok": bool(probe.get("ok")),
+        "status": str(probe.get("status") or "unknown"),
+        "http_status": http_status if isinstance(http_status, int) else None,
+        "models_count": models_count if isinstance(models_count, int) else None,
+        "error": str(error) if error else None,
+        "refused": credential_refused(probe),
+    }
+
+
+def _served_rows(slug: str, probe: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """What ``slug`` can serve, as the picker's rows, from one probe's answer.
+
+    The vendor's live list unioned with the bundled catalogue (except for a
+    gateway that renames what it resells, which answers to its own spelling
+    alone), keyed by identity so the two spellings of one model are one row.
+    Shared by the catalogue read and the connect's check, which ask the vendor
+    the same question.
     """
     from raven.config.loader import load_config
-    from raven.config.update_providers import test_provider
     from raven.providers.catalog import describe
     from raven.providers.rates import resolve_context_window
     from raven.providers.registry import find_by_name
     from raven.providers.registry_data import catalogue_for, kind_of
     from raven.providers.wire import merge_key
 
-    parsed = _parse(ModelFetchModelsParams, params)
-    slug = canonical_provider_name(parsed.slug)
-
-    # Off-thread: this is a network round trip to somebody else's server, and
-    # the gateway's loop is carrying a token stream while it happens. Cheap when
-    # there is no credential to send -- the probe refuses before any socket.
-    probe = await asyncio.to_thread(
-        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
-    )
-    asked = bool(probe.get("ok"))
     live = [m for m in (probe.get("model_ids") or []) if isinstance(m, str) and m]
-
     try:
         section = load_config().providers.get(slug)
     except Exception:
@@ -790,10 +884,60 @@ async def model_fetch_models(params: dict) -> dict:
             entry["context_window"] = window
         rows[key] = entry
 
-    if asked:
-        from raven.providers.served_models import remember
+    return rows
 
-        await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+
+async def _remember_served(slug: str, rows: dict[str, dict[str, Any]]) -> None:
+    """Record what the vendor just said it serves (``raven.providers.served_models``).
+
+    Every ask writes it -- the catalogue read, the connect's check -- so the
+    pickers list the live catalogue right after a connect without asking
+    again. Only the rows the vendor listed: the bundled ones are not its word.
+    """
+    from raven.providers.served_models import remember
+
+    await asyncio.to_thread(remember, slug, {r["id"]: r["kind"] for r in rows.values() if r["source"] == "live"})
+
+
+async def model_fetch_models(params: dict) -> dict:
+    """What this provider can serve: the bundled catalogue, plus whatever it says.
+
+    Two sources, unioned, because they answer the same question with different
+    weaknesses. The registry ships with Raven and needs no credential, so there
+    is a list to pick from before a key is entered -- and something to show when
+    the vendor cannot be reached, where an empty list would claim it serves
+    nothing. The live call is current, and carries the models a registry refresh
+    has not caught up with.
+
+    The asking is ``config.update_providers.test_provider``, which is already
+    the one place that knows where each vendor's catalogue lives and what opens
+    it -- a Codex account's entitlements, a Copilot seat's exchanged token, an
+    OAuth resource URL, Anthropic's and Google's own header shapes, and the
+    OpenAI-compatible GET everything else answers. A second implementation here
+    would be a second set of addresses to keep current.
+
+    Not reaching the vendor is not an error to this method: no key configured is
+    the ordinary state of a provider a person is still setting up, and the
+    catalogue is exactly what they want to see. ``status`` says what happened so
+    a surface can word its note, and every row says which source it came from.
+
+    A read throughout -- nothing is written until a row is added.
+    """
+    from raven.config.update_providers import credential_refused, test_provider
+
+    parsed = _parse(ModelFetchModelsParams, params)
+    slug = canonical_provider_name(parsed.slug)
+
+    # Off-thread: this is a network round trip to somebody else's server, and
+    # the gateway's loop is carrying a token stream while it happens. Cheap when
+    # there is no credential to send -- the probe refuses before any socket.
+    probe = await asyncio.to_thread(
+        test_provider, slug, timeout_s=_FETCH_TIMEOUT_S, full_catalogue=True, check_credential=parsed.verify
+    )
+    asked = bool(probe.get("ok"))
+    rows = _served_rows(slug, probe)
+    if asked:
+        await _remember_served(slug, rows)
 
     # By name, and stably: the order a vendor lists its catalogue in is not an
     # order anybody reads, and it changes between calls for some of them.
@@ -802,6 +946,9 @@ async def model_fetch_models(params: dict) -> dict:
         "models": ordered,
         "status": "ok" if asked else str(probe.get("status") or "not_asked"),
         "error": None if asked else (str(probe.get("error") or "") or None),
+        # The vendor's own refusal, the one verdict a surface may call "rejected";
+        # `invalid_key` alone also covers a 403, which is not that.
+        "refused": False if asked else credential_refused(probe),
     }
 
 
@@ -982,6 +1129,8 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
     dispatcher.register("model.set_protocol", model_set_protocol)
     dispatcher.register("model.save_key", partial(model_save_key, agent_loop_factory=agent_loop_factory))
     dispatcher.register("model.disconnect", partial(model_disconnect, agent_loop_factory=agent_loop_factory))
+    dispatcher.register("model.reveal_key", model_reveal_key)
+    dispatcher.register("model.check_key", model_check_key)
     dispatcher.register("model.fetch_models", model_fetch_models)
     dispatcher.register("model.add_model", model_add_model)
     dispatcher.register("model.add_models", model_add_models)
@@ -995,6 +1144,7 @@ def register_model_methods(dispatcher: "Dispatcher", *, agent_loop_factory: "Age
 
 __all__ = [
     "model_options",
+    "model_check_key",
     "model_set_protocol",
     "model_save_key",
     "model_disconnect",

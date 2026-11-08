@@ -1,13 +1,14 @@
 """JSONL + artifact storage for the trace core (audit.span.v1).
 
-Dependency-free (stdlib only). Copied from the shared tracing-plugin core so
-this package stays self-contained for a clean ``pip install``.
+The one third-party dependency is ``zstandard``: a payload is stored as a zstd
+frame under the path it always had, so readers tell the encoding from the
+frame and a store written before compression stays readable.
 
 Layout under the state dir::
 
     <state_dir>/logs/audit-events.log      # one JSON event record per line
     <state_dir>/logs/audit-spans.log       # one JSON span per line
-    <state_dir>/logs/audit-artifacts/_blobs/<sha1[:2]>/<sha1>.<ext>   # one copy per payload
+    <state_dir>/logs/audit-artifacts/_blobs/<sha1[:2]>/<sha1>.<ext>   # one zstd copy per payload
     <state_dir>/logs/audit-artifacts/<kind>/<date>/...      # hard links to those blobs
     <state_dir>/logs/archive/<date>/...     # rotated logs
 """
@@ -23,7 +24,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import zstandard
+
 from . import artifact_v2
+from .codec import compress_bytes, is_compressed
 
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 
@@ -114,8 +118,52 @@ class TraceStore:
         day_dir = self._ensure(self.archive_dir / current_day)
         suffix = datetime.now(timezone.utc).strftime("%H%M%S%f")
         base = _KIND_FILES[kind].replace(".log", "")
-        path.rename(day_dir / f"{base}-{current_day}-{suffix}.log")
+        rotated = day_dir / f"{base}-{current_day}-{suffix}.log"
+        path.rename(rotated)
+        self._compress_previous_archive(base, rotated)
         return path
+
+    def _compress_previous_archive(self, base: str, rotated: Path) -> None:
+        """Compress the log this kind's previous rotation archived.
+
+        Not ``rotated`` itself: another writer may have opened the active log
+        just before the rename and still write into that inode, and a rewrite
+        would drop the line. Every append opens and closes the file, so nothing
+        holds a log one rotation older. One file per rotation bounds the cost
+        here; an older plain backlog is left to ``raven tracing compress --logs``.
+        """
+        try:
+            archived = [p for p in self.archive_dir.glob(f"*/{base}-*.log") if p != rotated]
+            previous = max(archived, key=lambda p: p.stat().st_mtime_ns, default=None)
+        except OSError:
+            return
+        if previous is not None:
+            self._compress_rotated(previous)
+
+    def _compress_rotated(self, path: Path) -> None:
+        """Store a rotated log compressed under the name it already has.
+
+        The mtime is kept: the viewer orders logs by it, and a re-encoded
+        archive must not sort after the logs written later. A failure leaves
+        the log plain, which every reader accepts.
+        """
+        try:
+            with path.open("rb") as handle:
+                if is_compressed(handle.read(4)):
+                    return
+                handle.seek(0)
+                data = handle.read()
+                stat = os.fstat(handle.fileno())
+            packed = compress_bytes(data)
+            tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.compress.tmp"
+            try:
+                tmp.write_bytes(packed)
+                os.utime(tmp, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def append(self, kind: str, record: dict[str, Any]) -> None:
         text = f"{to_json_text(record)}\n"
@@ -165,15 +213,25 @@ class TraceStore:
             return True
         digest = hashlib.sha1()
         with blob.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(_BLOB_READ_CHUNK), b""):
-                digest.update(chunk)
+            head = handle.read(4)
+            handle.seek(0)
+            if is_compressed(head):
+                try:
+                    with zstandard.ZstdDecompressor().stream_reader(handle, read_across_frames=False) as reader:
+                        for chunk in iter(lambda: reader.read(_BLOB_READ_CHUNK), b""):
+                            digest.update(chunk)
+                except zstandard.ZstdError:
+                    return False
+            else:
+                for chunk in iter(lambda: handle.read(_BLOB_READ_CHUNK), b""):
+                    digest.update(chunk)
         if digest.hexdigest() != sha1:
             return False
         self._verified_blobs[blob.name] = token
         return True
 
-    def _publish_blob(self, blob: Path, text: str, sha1: str) -> None:
-        """Create ``blob`` holding ``text``, losing gracefully to a racing writer.
+    def _publish_blob(self, blob: Path, payload: bytes, sha1: str) -> None:
+        """Create ``blob`` holding ``payload``, losing gracefully to a racing writer.
 
         The temp file is named with a ``uuid4`` (not just the pid), so two
         writers in the same process publishing the same new payload never
@@ -186,7 +244,7 @@ class TraceStore:
         self._ensure(blob.parent)
         tmp = blob.parent / f"{sha1}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         try:
-            tmp.write_text(text, encoding="utf-8")
+            tmp.write_bytes(payload)
             os.link(tmp, blob)
             self._remember_blob(blob)
         except FileExistsError:
@@ -194,7 +252,7 @@ class TraceStore:
         finally:
             tmp.unlink(missing_ok=True)
 
-    def _repair_blob(self, blob: Path, text: str, sha1: str) -> None:
+    def _repair_blob(self, blob: Path, payload: bytes, sha1: str) -> None:
         """Point ``blob`` back at the bytes its name claims.
 
         ``os.replace`` here, unlike the publish path: swapping the directory
@@ -206,14 +264,14 @@ class TraceStore:
         """
         tmp = blob.parent / f"{sha1}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
         try:
-            tmp.write_text(text, encoding="utf-8")
+            tmp.write_bytes(payload)
             os.replace(tmp, blob)
             self._remember_blob(blob)
         finally:
             tmp.unlink(missing_ok=True)
 
     def _materialize(self, file_path: Path, text: str, sha1: str, extension: str) -> None:
-        """Link ``file_path`` at the single stored copy of ``text``.
+        """Link ``file_path`` at the single stored copy of ``text``'s compressed form.
 
         Hard link, not copy: the payload occupies its blocks once however many
         spans reference it, and the link count the filesystem keeps is the
@@ -228,17 +286,18 @@ class TraceStore:
         per process, not per span, and none at all when the cached
         (inode, mtime, size) still matches.
         """
+        payload = compress_bytes(text.encode("utf-8"))
         blob = self._blob_path(sha1, extension)
         try:
             if not blob.exists():
-                self._publish_blob(blob, text, sha1)
+                self._publish_blob(blob, payload, sha1)
             if blob.exists() and not self._blob_is_intact(blob, sha1):
-                self._repair_blob(blob, text, sha1)
+                self._repair_blob(blob, payload, sha1)
             os.link(blob, file_path)
         except FileExistsError:
             pass
         except OSError:
-            file_path.write_text(text, encoding="utf-8")
+            file_path.write_bytes(payload)
 
     def persist_artifact(
         self,
@@ -296,14 +355,28 @@ class TraceStore:
                 text = artifact_v2.message_text(item)
                 sha1 = artifact_v2.message_sha1(item)
                 blob = artifact_v2.message_path(self.artifacts_dir, sha1)
-                if not blob.exists():
-                    self._publish_blob(blob, text, sha1)
+                payload = compress_bytes(text.encode("utf-8"))
+                if not blob.exists() and not self._is_packed(sha1):
+                    self._publish_blob(blob, payload, sha1)
                 if blob.exists() and not self._blob_is_intact(blob, sha1):
-                    self._repair_blob(blob, text, sha1)
+                    self._repair_blob(blob, payload, sha1)
                 refs.append(artifact_v2.make_ref(sha1))
             except OSError:
                 refs.append(item)
         return refs
+
+    def _is_packed(self, sha1: str) -> bool:
+        """Whether a pack still holds this address, so its file is not written again.
+
+        The index alone does not say so: a store copied incompletely keeps an
+        index naming slices whose pack is gone or cut short, and writing the
+        file is then how the address heals. The pack's decoded length is cached
+        per process, so this is one stat per address after each pack's first
+        check.
+        """
+        from . import message_pack
+
+        return message_pack.slice_readable(self.artifacts_dir, sha1)
 
     @staticmethod
     def artifact_attributes(prefix: str, artifact: dict[str, Any] | None) -> dict[str, Any]:

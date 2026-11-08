@@ -4,6 +4,8 @@ import { SEND, SEND_PX, SEND_STROKE } from '../../components/Ico'
 import { t } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { formatDuration } from '../../lib/duration'
+import { readingImported } from '../../lib/imported'
+import { IMG_EXT } from '../../lib/pictureExt'
 import { current as currentSession } from '../../lib/session'
 import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
@@ -12,6 +14,7 @@ import { show as toast } from '../../state/toast'
 import { note as transcriptNote } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as turn from './turn'
+import { previousUserTop } from './userjump'
 
 import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
 
@@ -124,6 +127,9 @@ export function parkDraft(): void {
 
 export function loadDraft(id: string | null): void {
   draftOwner = id || 'new'
+  /* A switch starts a new transcript: the direction the last scroll took says
+     nothing about where this one opens. */
+  jumpReset()
   /* Above the guard: the tray is swapped even on the paths that run before the
      field is mounted, or the files of the conversation left behind stay on
      screen and ride the next message out. */
@@ -233,26 +239,152 @@ function placeholder(): string {
   return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
 }
 
-/* A textarea cannot size itself to its content, so the height is set here --
-   but the ceiling stays in CSS and is read back, so there is one cap to tune
-   and it can be viewport-relative. */
+/* The field may take half the visual viewport, computed when asked rather than
+   stored, so a resized window moves the cap with it. The visual viewport is
+   also the one a soft keyboard shrinks -- iOS Safari leaves the window's own
+   height and its resize event alone -- and `innerHeight` is the fallback for a
+   browser that does not implement it. The stylesheet sets no cap of its own,
+   so there is still no second number to keep in step. */
+const fieldCeiling = (): number =>
+  Math.round((window.visualViewport?.height ?? window.innerHeight) * 0.5)
+
+/* The floor is today's resting height, which is the CSS min-height: read back
+   rather than repeated, so the two cannot drift. */
+const fieldFloor = (e: HTMLTextAreaElement): number => parseFloat(getComputedStyle(e).minHeight) || 52
+
+/* The height a drag (or an arrow key) gave the field, or null while the
+   content still decides it. Nothing renders from it directly, which is why it
+   is module state rather than a store key. */
+let manualHeight: number | null = null
+
+function fieldBounds(e: HTMLTextAreaElement): { max: number; min: number } {
+  const min = fieldFloor(e)
+  return { max: Math.max(min, fieldCeiling()), min }
+}
+
+/* A textarea cannot size itself to its content, so the height is set here.
+   The box is reset to auto before `scrollHeight` is read, because a box taller
+   than its content reports the box rather than the content. A dragged height is
+   the field's height, not a cap on the content: a short draft, an emptied field
+   and a sent message all leave it where the reader put it, and a longer draft
+   scrolls inside it. It is still re-clamped on every pass, so a window that
+   shrank pulls the field back under the smaller ceiling instead of leaving it
+   taller than half of one. This reads `manualHeight` and never writes it, so a
+   keyboard that clamps the field for its duration gives the height back when
+   it closes. */
 export function fitField(): void {
   const e = field()
   if (!e) return
-  e.style.height = 'auto'
-  e.style.height = Math.min(parseFloat(getComputedStyle(e).maxHeight) || 168, e.scrollHeight) + 'px'
+  if (manualHeight === null) {
+    e.style.height = 'auto'
+    e.style.height = Math.min(fieldCeiling(), e.scrollHeight) + 'px'
+    dockLift()
+    return
+  }
+  const { max, min } = fieldBounds(e)
+  e.style.height = Math.round(Math.max(min, Math.min(manualHeight, max))) + 'px'
   dockLift()
+}
+
+/* A drag step: the field's new height, clamped and written at once so the
+   reader sees the drag under the pointer. The write and the lift below happen
+   inside the move handler rather than on the next paint, so the transcript's
+   reserve and the sheets stacked over the card travel with the pointer instead
+   of a frame behind it. */
+export function resizeField(px: number): void {
+  const e = field()
+  if (!e) return
+  const { max, min } = fieldBounds(e)
+  manualHeight = Math.round(Math.max(min, Math.min(max, px)))
+  e.style.height = manualHeight + 'px'
+  dockLift()
+}
+
+/* How far a press travels before it is a drag, the slop the page's other
+   drags allow. A dragged height outlives the gesture, so a click's own jitter
+   on the handle must not pin the field at its current height. */
+const GRIP_SLOP = 4
+
+/* The seam on the card's top edge: up raises the field, down lowers it, and
+   the release leaves it where the pointer let go. The pointer is captured on
+   the handle and the move writes the height directly, with no state and no
+   re-render, for the reason `resizeField` gives. */
+export function gripDrag(el: HTMLElement): void {
+  el.tabIndex = 0
+  el.addEventListener('pointerdown', (e) => {
+    const ta = field()
+    if (!ta) return
+    e.preventDefault()
+    e.stopPropagation()
+    const pointerId = e.pointerId
+    const startY = e.clientY
+    const startH = ta.getBoundingClientRect().height
+    el.dataset.drag = 'true'
+    el.setPointerCapture(pointerId)
+    document.body.style.userSelect = 'none'
+    let dragging = false
+    const move = (ev: PointerEvent): void => {
+      if (ev.pointerId !== pointerId) return
+      if (!dragging && Math.abs(ev.clientY - startY) < GRIP_SLOP) return
+      dragging = true
+      resizeField(startH + startY - ev.clientY)
+    }
+    const up = (): void => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      delete el.dataset.drag
+      document.body.style.userSelect = ''
+      fitField()
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+  })
+  /* The handle is a separator, so arrows move it: ten pixels a press, forty
+     with Shift, the same step the pane grips take. A press sets the height
+     the way a drag does, and the field keeps it the same way. */
+  el.addEventListener('keydown', (e) => {
+    const ta = field()
+    if (!ta) return
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
+    e.preventDefault()
+    const base = manualHeight ?? ta.getBoundingClientRect().height
+    resizeField(base + (e.key === 'ArrowUp' ? (e.shiftKey ? 40 : 10) : -(e.shiftKey ? 40 : 10)))
+    fitField()
+  })
+}
+
+/* Written only on a real change: dockLift also runs per scroll event, and a
+   style write there would invalidate layout on every frame of a flick. */
+function publish(chat: HTMLElement, name: string, px: number): void {
+  const v = px + 'px'
+  if (chat.style.getPropertyValue(name) !== v) chat.style.setProperty(name, v)
 }
 
 /* Everything docked at the bottom moves: the composer grows with its content,
    queued rows and a clarify sheet stack above it. The pill hangs off .chat, a
    different positioned ancestor, so keeping them apart takes one measured
    number -- the distance from the chat column's bottom edge up to the top of
-   the highest docked thing -- published for the CSS to offset against. */
+   the highest docked thing -- published for the CSS to offset against.
+
+   A second number rides with it, `--lift-rest`: the same distance with the
+   field at its resting height. The turn nav stands on that one, since it sits
+   in the gutter beside the card and has nothing to clear when the field grows
+   (features/transcript/styles.css): dragging the field taller moves the
+   transcript's edge and leaves the nav's marks where they were. */
 export function dockLift(): void {
   const chat = document.querySelector<HTMLElement>('.chat')
   const dock = document.querySelector<HTMLElement>('.dock')
   if (!chat || !dock) return
+  /* A dock that is not drawn -- an imported conversation's column has none --
+     lifts nothing. Measured as it is below, its zero box would read as a dock
+     the height of the whole column, and the transcript would fade out under it. */
+  if (!dock.getClientRects().length) {
+    publish(chat, '--lift', 0)
+    publish(chat, '--lift-rest', 0)
+    return
+  }
   /* Measured against what the reader SEES, not the dock's box: the dock carries
      padding and an empty hint strip under the field, and offsetting against
      those parks the pill a finger's width above the composer for no reason. */
@@ -272,30 +404,71 @@ export function dockLift(): void {
     const r = n.getBoundingClientRect()
     if (r.height > 0) top = Math.min(top, r.top)
   })
-  /* Written only on a real change: this also runs per scroll event, and a style
-     write there would invalidate layout on every frame of a flick. */
-  const v = Math.round(chat.getBoundingClientRect().bottom - top) + 'px'
-  if (chat.style.getPropertyValue('--lift') !== v) chat.style.setProperty('--lift', v)
+  const lift = chat.getBoundingClientRect().bottom - top
+  publish(chat, '--lift', Math.round(lift))
+  /* Everything measured above rides on top of the field -- the sheets and the
+     chip in flow, the slash popover off the card's top edge -- so the field's
+     growth over its floor is exactly how far it pushed the highest of them up.
+     A field that is not drawn (the trajectory view hides the card) grew
+     nothing. */
+  const ta = field()
+  const grown = ta ? Math.max(0, ta.getBoundingClientRect().height - fieldFloor(ta)) : 0
+  publish(chat, '--lift-rest', Math.round(lift - grown))
 }
 
-/* ── the back-to-bottom pill ──────────────────────────────────────────── */
+/* ── the quick-jump pills ─────────────────────────────────────────────── */
 
 const scroller = (): HTMLElement | null => el('scroll')
 
-/* The pill only appears when the reader has left the tail. */
+/* Where the last scroll went, and the position it started from. Null until the
+   reader moves the transcript, so a conversation restored into the middle opens
+   with both pills away. */
+type Jump = 'down' | 'up'
+let jumpDir: Jump | null = null
+let jumpTop = 0
+
+function jumpReset(): void {
+  jumpDir = null
+  jumpTop = 0
+}
+
+/* The down pill takes the reader to the newest message; the up pill to the
+   question above the content at the top edge. At the two ends the only way left
+   is back, so the edge wins over the direction -- scrolling up to the top must
+   not leave the up pill pointing nowhere. The up pill is not offered when no
+   question sits above that edge: there is nowhere for it to go. */
 export function pillPaint(): void {
   const sc = scroller()
-  const pill = el('backpill')
-  if (!sc || !pill) return
-  const away = sc.scrollHeight - sc.scrollTop - sc.clientHeight > 120
-  const stuck = tail.isStuck()
-  pill.hidden = stuck || !away
-  if (pill.hidden) return
-  /* The offset must be current the moment it appears, not from whenever the
-     dock last changed shape. */
-  dockLift()
-  pill.dataset.tip = t('gui.pill.bottom')
-  pill.setAttribute('aria-label', t('gui.pill.bottom'))
+  const down = el('backpill')
+  const up = el('toppill')
+  if (!sc || (!down && !up)) return
+  const room = sc.scrollHeight - sc.clientHeight
+  const scrollable = room > 4
+  const atTop = sc.scrollTop <= 2
+  const atEnd = room - sc.scrollTop < 4
+  /* The first paint is the baseline the first scroll is measured from. */
+  if (jumpDir === null) jumpTop = sc.scrollTop
+  const upWanted = !!up && scrollable && (atEnd || (jumpDir === 'up' && !atTop))
+  const target = upWanted ? previousUserTop(sc) : null
+  const showDown = !!(down && scrollable && (atTop || (jumpDir === 'down' && !atEnd)))
+  const showUp = upWanted && target !== null
+  if (down) {
+    down.hidden = !showDown
+    if (showDown) {
+      /* The offset must be current the moment it appears, not from whenever the
+         last dock change left it. */
+      dockLift()
+      down.dataset.tip = t('gui.pill.bottom')
+      down.setAttribute('aria-label', t('gui.pill.bottom'))
+    }
+  }
+  if (up) {
+    up.hidden = !showUp
+    if (showUp) {
+      up.dataset.tip = t('gui.pill.prev')
+      up.setAttribute('aria-label', t('gui.pill.prev'))
+    }
+  }
 }
 
 export function pillClick(): void {
@@ -304,15 +477,43 @@ export function pillClick(): void {
   pillPaint()
 }
 
+export function topClick(): void {
+  const sc = scroller()
+  if (!sc) return
+  const top = previousUserTop(sc)
+  if (top === null) return
+  /* Before the scroll: a token landing mid-animation must not haul the reader
+     back to the tail. */
+  tail.setStuck(false)
+  jumpDir = 'up'
+  jumpTop = sc.scrollTop
+  sc.scrollTo({ top, behavior: 'smooth' })
+  pillPaint()
+}
+
 export function scrolled(): void {
   const sc = scroller()
-  if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4) tail.setStuck(true)
+  if (!sc) return
+  const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4
+  if (atEnd) tail.setStuck(true)
+  const delta = sc.scrollTop - jumpTop
+  if (Math.abs(delta) >= 1) {
+    jumpDir = delta > 0 ? 'down' : 'up'
+    jumpTop = sc.scrollTop
+    /* A reader dragging the scrollbar or pressing Page Up is leaving the tail as
+       surely as one turning the wheel, and the next token must not haul them
+       back. Off the tail only: content shrinking can clamp scrollTop down while
+       the reader is still at the end, which is not them going anywhere. */
+    if (delta < 0 && !atEnd) tail.setStuck(false)
+  }
   pillPaint()
 }
 
 export function wheeled(up: boolean): void {
-  if (!up) return
-  tail.setStuck(false)
+  const sc = scroller()
+  jumpDir = up ? 'up' : 'down'
+  if (sc) jumpTop = sc.scrollTop
+  if (up) tail.setStuck(false)
   pillPaint()
 }
 
@@ -418,7 +619,8 @@ export function drawTurnLive(): void {
 
 /* ── the attachment tray ──────────────────────────────────────────────── */
 
-export const fmtSize = (n: number): string => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
+export const fmtSize = (n: number | null): string => (n === null ? ''
+  : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB`
   : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`)
 
 /* The tray's own container is the root React draws into, so its hidden flag is
@@ -506,8 +708,9 @@ export function canPickTemplate(): boolean {
 
 /* A picked template is staged like a file that is still uploading -- the
    server is copying it under uploads -- and becomes an ordinary attachment
-   once the path lands. The cover rides as the chip's picture, so the tray
-   shows which template was picked rather than a file name. */
+   once the path lands, named like an upload by the file the server wrote.
+   The cover rides as the chip's picture, so the tray shows which template was
+   picked rather than a file name. */
 export function addTemplate(row: TemplateRow): void {
   const api = source().templates
   if (!api) return
@@ -519,10 +722,10 @@ export function addTemplate(row: TemplateRow): void {
   goPaint()
   api.pick(row.name)
     .then((r) => {
-      entry.path = r.path
+      entry.path = r.abs_path || r.path
       entry.size = r.size
       entry.uploading = false
-      if (entry.url) attachmentCache.set(r.path, entry.url)
+      if (entry.url) attachmentCache.set(entry.path, entry.url)
       traySet(owner, trayOf(owner).slice())
       goPaint()
     })
@@ -533,9 +736,57 @@ export function addTemplate(row: TemplateRow): void {
     })
 }
 
+/* The picture types, each with the extension a file of that type goes up under
+   when its own name spells no picture. Once the file is uploaded, its name is
+   all that is left of its type, so the extension must be one the sent bubble
+   draws as a picture -- a member of the shared table (lib/pictureExt). */
+const PICTURE_EXT: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'image/bmp': 'bmp', 'image/avif': 'avif', 'image/svg+xml': 'svg',
+  'image/x-icon': 'ico', 'image/vnd.microsoft.icon': 'ico',
+}
+/* By what name draws as a picture here: the shared image table, plus svg,
+   which the viewer's fileKind gives its own kind. */
+const PICTURE_NAMES = new Set([...IMG_EXT, 'svg'])
+
+const namesPicture = (name: string): boolean => {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 && PICTURE_NAMES.has(name.slice(dot + 1).toLowerCase())
+}
+
+/* Chrome on macOS hands an image dragged in from another site as a File named
+   `download`, the name its drop code falls back to, with the format in `type`
+   alone. Everything past the upload -- the sent bubble, the file route, the
+   reloaded history -- tells a picture by its extension, so the name is given
+   the one its type says. */
+function uploadName(file: File): string {
+  const ext = PICTURE_EXT[file.type]
+  return !ext || namesPicture(file.name) ? file.name : `${file.name}.${ext}`
+}
+
+/* A file already on show, attached where it is: a picture dragged out of the
+   transcript names the file it was drawn from, and that path is handed over
+   instead of the same bytes going up again as a second copy. `url` is the
+   address the file is served at, which is what the chip draws a picture from. */
+export function addPaths(refs: ReadonlyArray<{ path: string; url: string }>): void {
+  const owner = ownerKey()
+  const staged = refs.map(({ path, url }): Attachment => {
+    const name = path.split(/[\\/]/).pop() || path
+    return { name, size: null, uploading: false, path, url: namesPicture(name) ? url : null }
+  })
+  traySet(owner, trayOf(owner).concat(staged))
+  goPaint()
+}
+
 /* Files are uploaded into <workspace>/uploads and handed to the agent as
    paths: every file tool is already workspace-scoped, so a path is all it
-   needs. Bytes never ride inside the message. */
+   needs. Bytes never ride inside the message.
+
+   The path staged is the file the upload wrote (`abs_path`), not the short
+   `uploads/<name>` the server answers as well: a session root can hold an
+   `uploads/<name>` of its own, which the workspace pane lists and a drag stages
+   by that very spelling, so only the absolute one says which of the two was
+   meant. */
 export function addFiles(files: ArrayLike<File>): void {
   const up = source().upload
   if (!up) return
@@ -545,7 +796,8 @@ export function addFiles(files: ArrayLike<File>): void {
      ghost that refuses that conversation every later send. */
   const owner = ownerKey()
   Array.from(files).forEach((file) => {
-    const entry: Attachment = { name: file.name, size: file.size, uploading: true, path: null, url: null }
+    const name = uploadName(file)
+    const entry: Attachment = { name, size: file.size, uploading: true, path: null, url: null }
     traySet(owner, trayOf(owner).concat([entry]))
     goPaint()
     const drop = (): void => {
@@ -559,18 +811,18 @@ export function addFiles(files: ArrayLike<File>): void {
       /* Keep the bytes for display only: an image renders as itself in the
          composer, and once uploaded, keyed by path, in the sent bubble. */
       if (/^image\//.test(file.type || '')) entry.url = dataUrl
-      up({ name: file.name, content_b64: b64 })
+      up({ name, content_b64: b64 })
         .then((r) => {
-          entry.path = r.path
+          entry.path = r.abs_path || r.path
           entry.size = r.size
           entry.uploading = false
-          if (entry.url) attachmentCache.set(r.path, entry.url)
+          if (entry.url) attachmentCache.set(entry.path, entry.url)
           traySet(owner, trayOf(owner).slice())
           goPaint()
         })
         .catch((e: unknown) => {
           drop()
-          sayFailed(owner, t('gui.att.fail', { name: file.name }), e)
+          sayFailed(owner, t('gui.att.fail', { name }), e)
         })
     }
     reader.onerror = drop
@@ -630,6 +882,7 @@ export const slashSelected = (): SlashCmd | undefined => get().slashRows[get().s
 /* ── sending ──────────────────────────────────────────────────────────── */
 
 export function fireSend(): void {
+  if (readingImported()) return
   const ta = field()
   const v = ta ? ta.value.trim() : ''
   if (!v && !hasAtts()) return
@@ -760,6 +1013,8 @@ export function _resetForTests(): void {
   liveT0 = 0
   draftOwner = null
   draftTick = null
+  manualHeight = null
+  jumpReset()
   trays.clear()
   store.set({ ...initial })
 }

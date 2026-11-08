@@ -28,19 +28,6 @@ Shared helpers used across multiple command modules live in
 ``raven/core/provider_stack.py`` (assembly).
 """
 
-import os
-import sys
-
-# Force UTF-8 encoding for Windows console
-if sys.platform == "win32":
-    if sys.stdout.encoding != "utf-8":
-        os.environ["PYTHONIOENCODING"] = "utf-8"
-        try:
-            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
 import typer
 from rich.console import Console
 
@@ -148,6 +135,7 @@ from raven.cli import (
     gateway_commands,
     onboard_commands,
     plugin_commands,
+    resources_commands,
     serve_commands,
     status_commands,
     tracing_commands,
@@ -161,6 +149,7 @@ agents_commands.register(app)
 status_commands.register(app)
 doctor_commands.register(app)
 plugin_commands.register(app)
+resources_commands.register(app)
 serve_commands.register(app)
 tracing_commands.register(app)
 upgrade_commands.register(app)
@@ -212,6 +201,12 @@ from raven.cli.plugin_commands import plugin_app
 
 app.add_typer(plugin_app, name="plugin")
 
+# Portable Agent Plugins 1.0 packages: data-only packages that carry
+# skills, not the kernel plugins above.
+from raven.cli.agent_plugin_commands import agent_plugin_app
+
+app.add_typer(agent_plugin_app, name="agent-plugins")
+
 from raven import i18n
 from raven.cli.import_commands import import_app
 
@@ -219,7 +214,7 @@ app.add_typer(import_app, name="import")
 
 
 def run() -> None:
-    """Console-script entry point."""
+    """Run the app, rendering the failures every command shares; ``cli.entry`` calls it."""
     from raven.config.loader import ConfigReadError
     from raven.providers.auth import MissingCredentialsError
 
@@ -252,7 +247,3 @@ def run() -> None:
         from raven.cli._helpers import print_config_migration_notices
 
         print_config_migration_notices()
-
-
-if __name__ == "__main__":
-    run()

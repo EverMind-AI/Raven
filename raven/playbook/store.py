@@ -23,18 +23,20 @@ file wins, and the load path says so once per shadowed name.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from loguru import logger
 
 from raven.agent.subagent.builtin_agents import GENERIC_AGENT
 from raven.playbook.types import NAME_RE, PlaybookSpec
+from raven.playbook.unified import StoredPlaybook, UnifiedPlaybookSpec, is_unified_data
 from raven.playbook.validate import unusable_mcp_servers, validate_structure
 
 #: Playbooks that ship with the package. Kept next to the code so the
@@ -51,6 +53,44 @@ a real agent and must not be rewritten out from under them."""
 
 _FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 _BLOCK_RE = re.compile(r"```yaml\s+playbook-spec\n(.*?)\n```", re.DOTALL)
+
+
+class _KeyAsStringLoader(yaml.SafeLoader):
+    """Mapping keys read as the text they were written as.
+
+    YAML 1.1 resolves ``yes``, ``no``, ``on``, ``off``, ``true``, ``false``,
+    bare digits and bare dates into booleans, numbers and timestamps, and a
+    route named ``yes`` then arrives as a non-string key the spec refuses --
+    the runtime answers a load error by dropping the playbook out of the
+    library. Every scalar key node of a non-string tag is replaced with a copy
+    retagged to a string (a copy, because anchors can share one scalar between
+    a key here and a value elsewhere, and the value must keep its type), after
+    flattening so a key arriving through a ``<<:`` merge is retagged too. The
+    mapping itself is still built by PyYAML's own loop, which keeps its answer
+    for an unhashable key -- the yaml.YAMLError playbooks_validate catches to
+    answer with a finding. Values are untouched, so ``confirm: yes`` still
+    means true.
+    """
+
+    _STR = "tag:yaml.org,2002:str"
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            self.flatten_mapping(node)
+            pairs = []
+            for key_node, value_node in node.value:
+                if isinstance(key_node, yaml.ScalarNode) and key_node.tag != self._STR:
+                    retagged = copy.copy(key_node)
+                    retagged.tag = self._STR
+                    key_node = retagged
+                pairs.append((key_node, value_node))
+            node.value = pairs
+        return super().construct_mapping(node, deep=deep)
+
+
+def _load_yaml(text: str) -> Any:
+    """The store's one YAML read: keys as written, values as YAML resolves them."""
+    return yaml.load(text, Loader=_KeyAsStringLoader)  # noqa: S506 - SafeLoader subclass; only scalar key nodes are retagged
 
 
 class PlaybookExistsError(FileExistsError):
@@ -77,7 +117,8 @@ class PlaybookStore:
 
         `save` is for a spec this class serialised; the stint skeleton is a file
         with comments in it, and a round trip through the model would strip every
-        one of them -- the comments are the whole point of a skeleton.
+        one of them -- the comments are the whole point of a skeleton. Local Run
+        Records are written under this root for the same reason.
         """
         return self._root
 
@@ -157,7 +198,7 @@ class PlaybookStore:
             return set()
         return {p.parent.name for p in root.glob("*/playbook.md")}
 
-    def save(self, spec: PlaybookSpec, *, notes: list[str] | None = None, overwrite: bool = False) -> Path:
+    def save(self, spec: StoredPlaybook, *, notes: list[str] | None = None, overwrite: bool = False) -> Path:
         """Write one playbook into the user layer; returns the playbook.md path.
 
         ``notes`` are the generator's review lines (open questions,
@@ -211,7 +252,7 @@ class PlaybookStore:
             tmp.unlink(missing_ok=True)
         return path
 
-    def load(self, name: str) -> PlaybookSpec:
+    def load(self, name: str) -> StoredPlaybook:
         if self.is_shadowing(name) and name not in self._shadow_warned:
             # Once per store instance, not per load: the runtime re-reads the
             # library before every model call, so a per-load line would repeat
@@ -225,22 +266,29 @@ class PlaybookStore:
         fm_match = _FRONTMATTER_RE.match(text)
         if fm_match is None:
             raise ValueError(f"playbook {name!r}: no frontmatter in playbook.md")
-        front = yaml.safe_load(fm_match.group(1)) or {}
+        front = _load_yaml(fm_match.group(1))
+        if not isinstance(front, dict):
+            raise ValueError(f"playbook {name!r}: the frontmatter is not a mapping")
         block_match = _BLOCK_RE.search(text)
         if block_match is None:
             raise ValueError(f"playbook {name!r}: no '```yaml playbook-spec' block in playbook.md")
-        data = yaml.safe_load(block_match.group(1)) or {}
+        data = _load_yaml(block_match.group(1))
+        if not isinstance(data, dict):
+            raise ValueError(f"playbook {name!r}: the spec block is not a mapping")
         data["name"] = front.get("name")
         data["description"] = front.get("description")
         if data["name"] != name:
             raise ValueError(f"playbook {name!r}: frontmatter name {data['name']!r} != directory name")
-        spec = PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
-        spec = _drop_unusable_mcp_servers(spec)
+        if is_unified_data(data):
+            spec: StoredPlaybook = _drop_unusable_mcp_servers(UnifiedPlaybookSpec.model_validate(data))
+        else:
+            legacy = PlaybookSpec.model_validate(_migrate_legacy_nodes(data, name=name))
+            spec = _drop_unusable_mcp_servers(legacy)
         _require_valid_structure(spec)
         return spec
 
 
-def _drop_unusable_mcp_servers(spec: PlaybookSpec) -> PlaybookSpec:
+def _drop_unusable_mcp_servers(spec: StoredPlaybook) -> StoredPlaybook:
     """Load a playbook without the server definitions it cannot honour.
 
     ``mcpServers`` is an optional section on top of a playbook that otherwise
@@ -259,11 +307,18 @@ def _drop_unusable_mcp_servers(spec: PlaybookSpec) -> PlaybookSpec:
     for name, why in sorted(unusable.items()):
         logger.warning("playbook {}: dropping mcpServers.{} -- {}", spec.name, name, why)
     kept = {name: cfg for name, cfg in (spec.mcp_servers or {}).items() if name not in unusable}
+    if isinstance(spec, UnifiedPlaybookSpec):
+        if spec.workflow is None:
+            return spec
+        return spec.model_copy(update={"workflow": spec.workflow.model_copy(update={"mcp_servers": kept})})
     return spec.model_copy(update={"mcp_servers": kept})
 
 
-def _require_valid_structure(spec: PlaybookSpec) -> None:
-    if errors := validate_structure(spec, allow_blank_fillable=True):
+def _require_valid_structure(spec: StoredPlaybook) -> None:
+    executable = spec.as_legacy_workflow() if isinstance(spec, UnifiedPlaybookSpec) else spec
+    if executable is None:
+        return
+    if errors := validate_structure(executable, allow_blank_fillable=True):
         detail = "; ".join(errors)
         raise ValueError(f"playbook {spec.name!r} failed semantic validation: {detail}")
 
@@ -352,9 +407,9 @@ def _migrate_legacy_nodes(data: dict, *, name: str) -> dict:
     return {**data, "nodes": migrated}
 
 
-def _render(spec: PlaybookSpec, notes: list[str]) -> str:
+def _render(spec: StoredPlaybook, notes: list[str]) -> str:
     # Serialized, not interpolated: ``load`` parses this region with
-    # ``yaml.safe_load``, and ``description`` is model-written prose where a
+    # the key-preserving loader, and ``description`` is model-written prose where a
     # colon or a leading ``#`` is ordinary. Interpolating produced files that
     # could not be read back -- ``description: due diligence: scan first`` is
     # a YAML mapping error, and a leading ``#`` silently became a comment. The
@@ -371,13 +426,18 @@ def _render(spec: PlaybookSpec, notes: list[str]) -> str:
     return f"---\n{front}---\n\n{_body(spec, notes)}\n```yaml playbook-spec\n{block}```\n"
 
 
-def _body(spec: PlaybookSpec, notes: list[str]) -> str:
+def _body(spec: StoredPlaybook, notes: list[str]) -> str:
     """The human-readable region — informational only, never parsed."""
     lines = [f"# {spec.name}", "", spec.description, ""]
     if spec.params:
         lines.append("Params: " + ", ".join(f"{k} ({v.description})" for k, v in spec.params.items()))
-    if spec.nodes:
-        lines.append("Steps: " + " -> ".join(n.id for n in spec.nodes))
+    nodes = (
+        spec.workflow.nodes if isinstance(spec, UnifiedPlaybookSpec) and spec.workflow else getattr(spec, "nodes", None)
+    )
+    if nodes:
+        lines.append("Steps: " + " -> ".join(n.id for n in nodes))
+    if isinstance(spec, UnifiedPlaybookSpec) and spec.harness:
+        lines.append("Workers: " + ", ".join(entry.label for entry in spec.harness.delegate))
     if notes:
         lines += ["", "## Open questions", ""]
         lines += [f"- {note}" for note in notes]

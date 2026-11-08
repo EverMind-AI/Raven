@@ -26,10 +26,19 @@ _SPEC = AcpDialect()
 
 def dialect_for(initialize: Any) -> AcpDialect:
     """The dialect for the agent that answered this ``initialize``."""
-    payload = initialize if isinstance(initialize, dict) else {}
-    info = payload.get("agentInfo")
-    name = (info or {}).get("name") if isinstance(info, dict) else None
+    name = _agent_info(initialize).get("name")
     return _for_name(name if isinstance(name, str) else "")
+
+
+def agent_version(initialize: Any) -> str | None:
+    """The version the agent that answered this ``initialize`` reports, if it reports one."""
+    version = _agent_info(initialize).get("version")
+    return version if isinstance(version, str) else None
+
+
+def _agent_info(initialize: Any) -> dict[str, Any]:
+    info = initialize.get("agentInfo") if isinstance(initialize, dict) else None
+    return info if isinstance(info, dict) else {}
 
 
 def _for_name(agent_name: str) -> AcpDialect:
@@ -47,6 +56,7 @@ __all__ = [
     "CodexDialect",
     "ToolCall",
     "DialectResult",
+    "agent_version",
     "content_texts",
     "dialect_for",
 ]

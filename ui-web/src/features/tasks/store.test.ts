@@ -10,7 +10,7 @@ const emptyRecord: NodeRecord = { dispatch: null, steps: [], answer: null, outpu
 
 const row = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
   task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
-  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0 },
+  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
   nodes: [],
   ...over,
 })
@@ -423,5 +423,103 @@ describe('a frame that lands while the list read is in flight', () => {
     await store.refresh()
 
     expect(store.rows()).toEqual([])
+  })
+})
+
+/* While a run goes, `tasks.list` takes a decision's selection and a left-out
+   node's reason from registry rows, a best-effort write that can be dropped, so
+   any read taken then -- the beat on a running node, the palette opening, a
+   node's own terminal frame -- can answer those nodes without them. The frames
+   said both, and a read that took them back would leave a selection on screen
+   for the length of one round trip. */
+describe('a read taken while a branching run goes', () => {
+  const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
+    agent: 'raven', depends_on: [], files: [], ...over,
+  })
+  const told = (): TaskRow => row({
+    id: 'r1', kind: 'dag', status: 'running',
+    nodes: [
+      node({ node_id: 'triage', status: 'completed', selected_routes: [], route_evidence: 'nothing applied' }),
+      node({ node_id: 'fix', status: 'not_executed', reason: 'when_false' }),
+      node({ node_id: 'tail', status: 'running' }),
+    ],
+  })
+  const silent = (): TaskRow => row({
+    id: 'r1', kind: 'dag', status: 'running',
+    nodes: [
+      node({ node_id: 'triage', status: 'completed' }),
+      node({ node_id: 'fix', status: 'not_executed' }),
+      node({ node_id: 'tail', status: 'running', tokens_in: 400, tokens_out: 90 }),
+    ],
+  })
+
+  it('keeps the selection and the reason the frames gave when it reconciles a row', async () => {
+    store.set((prev) => ({ ...prev, rows: [told()], loaded: true }))
+    rows = [silent()]
+
+    await store.reconcile('dag', 'r1')
+
+    const [triage, fix, tail] = store.byKey('dag', 'r1')!.nodes
+    expect(triage).toMatchObject({ selected_routes: [], route_evidence: 'nothing applied' })
+    expect(fix).toMatchObject({ reason: 'when_false' })
+    expect(tail).toMatchObject({ tokens_in: 400, tokens_out: 90 })
+  })
+
+  it('keeps them through a list read too', async () => {
+    store.set((prev) => ({ ...prev, rows: [told()], loaded: true }))
+    rows = [silent()]
+
+    await store.refresh()
+
+    const [triage, fix] = store.byKey('dag', 'r1')!.nodes
+    expect(triage).toMatchObject({ selected_routes: [], route_evidence: 'nothing applied' })
+    expect(fix).toMatchObject({ reason: 'when_false' })
+  })
+
+  it('keeps them through a list read that raced a frame for another row', async () => {
+    store.set((prev) => ({ ...prev, rows: [told(), row({ id: 'other', kind: 'dag', status: 'running' })], loaded: true }))
+    let release: (r: TaskRow[]) => void = () => {}
+    source.list = () => new Promise((res) => { release = res })
+
+    const inFlight = store.refresh()
+    await Promise.resolve()
+    store.onNodeUpdated({ run_id: 'other', node: 'x', status: 'running' })
+    release([silent(), row({ id: 'other', kind: 'dag', status: 'running' })])
+    await inFlight
+
+    const [triage, fix] = store.byKey('dag', 'r1')!.nodes
+    expect(triage).toMatchObject({ selected_routes: [], route_evidence: 'nothing applied' })
+    expect(fix).toMatchObject({ reason: 'when_false' })
+  })
+
+  it("takes the row's own word once the run has finalized and it has one", async () => {
+    store.set((prev) => ({ ...prev, rows: [told()], loaded: true }))
+    rows = [row({
+      id: 'r1', kind: 'dag', status: 'completed',
+      nodes: [
+        node({ node_id: 'triage', status: 'completed', selected_routes: ['bug'], route_evidence: 'it crashed' }),
+        node({ node_id: 'fix', status: 'not_executed', reason: 'upstream_not_executed' }),
+      ],
+    })]
+
+    await store.reconcile('dag', 'r1')
+
+    const [triage, fix] = store.byKey('dag', 'r1')!.nodes
+    expect(triage).toMatchObject({ selected_routes: ['bug'], route_evidence: 'it crashed' })
+    expect(fix).toMatchObject({ reason: 'upstream_not_executed' })
+  })
+
+  it('hands a row of a run that never branches through exactly as the server sent it', async () => {
+    store.set((prev) => ({
+      ...prev,
+      rows: [row({ id: 'r1', kind: 'dag', status: 'running', nodes: [node({ node_id: 'a', status: 'running' })] })],
+      loaded: true,
+    }))
+    const answer = row({ id: 'r1', kind: 'dag', status: 'completed', nodes: [node({ node_id: 'a', status: 'completed' })] })
+    rows = [answer]
+
+    await store.reconcile('dag', 'r1')
+
+    expect(store.byKey('dag', 'r1')).toBe(answer)
   })
 })

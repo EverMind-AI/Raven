@@ -7,6 +7,7 @@ import { t } from '../../../i18n/t'
 import { openPicker } from '../../model/source'
 import { statedTags } from '../../model/types'
 import { Card, Row, Rov, Seg, Stepper } from '../Fields'
+import { dig } from '../source'
 import * as store from '../store'
 
 import type { Kind, Offer } from '../../model/types'
@@ -73,9 +74,6 @@ const MEDIA_PROVIDER = 'openrouter'
 const CTX_MIN = 1024
 const ITER_RANGE: [number, number] = [1, 200]
 
-const dig = (raw: Record<string, unknown>, path: string): unknown =>
-  path.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), raw)
-
 export const disabledTools = (raw: Record<string, unknown>): string[] => (dig(raw, 'tools.disabledTools') as string[] | undefined) || []
 
 export interface RoleValue {
@@ -98,14 +96,16 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
     return { model: sec.model, provider: sec.provider || '' }
   }
   if (r.media) {
-    const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string } | undefined
-    return sel && sel.model ? { model: sel.model, provider: MEDIA_PROVIDER } : null
+    const sel = dig(snap.raw, `tools.media.${r.media}`) as { model?: string; provider?: string } | undefined
+    return sel && sel.model ? { model: sel.model, provider: sel.provider || MEDIA_PROVIDER } : null
   }
   return null
 }
 
-/* Which connected providers may serve a role: media runs on OpenRouter, an
-   EverOS role takes whichever vendors can actually serve it, the rest take any.
+/* Which connected providers may serve a role: the image and video roles those
+   their tools can run on (the registry's `image_api` and `video_api`, OpenRouter
+   among them), speech OpenRouter, whose request shapes it speaks; an EverOS role
+   takes whichever vendors can actually serve it, the rest take any.
 
    Capability, not auth shape. The filter used to ask `kind === 'key'`, which is
    how the rerank slot came to offer OpenAI -- and, once a self-hosted endpoint
@@ -114,6 +114,8 @@ export function roleValue(r: Role, snap: SettingsSnapshot): RoleValue | null {
    is a separate question, refused at the save with a sentence naming it. */
 export function roleProviders(r: Role, snap: SettingsSnapshot): ProviderRow[] {
   const on = snap.providers.filter((p) => p.on)
+  if (r.media === 'image') return on.filter((p) => !!p.imageApi)
+  if (r.media === 'video') return on.filter((p) => !!p.videoApi)
   if (r.media) return on.filter((p) => p.id === MEDIA_PROVIDER)
   if (r.everos) {
     if (snap.everos?.available === false) return []
@@ -198,7 +200,7 @@ function withRole(r: Role, snap: SettingsSnapshot, model: string, provider: stri
     const sections = snap.everos.sections || {}
     return { ...snap, everos: { ...snap.everos, sections: { ...sections, [r.everos]: { ...sections[r.everos], model, provider } } } }
   }
-  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model)) }
+  if (r.media) return { ...snap, raw: setIn(snap.raw, `tools.media.${r.media}`, mediaSelection(r.media, model, provider)) }
   return snap
 }
 
@@ -215,18 +217,22 @@ async function setRole(r: Role, model: string, provider: string, typed: boolean,
   if (r.keys) { await src.set(r.keys[0], model); return src.set(r.keys[1], provider) }
   if (r.everos) return src.everosSet(r.everos, model, provider)
   if (r.media) {
-    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model))
+    await src.set(`tools.media.${r.media}`, mediaSelection(r.media, model, provider))
     return src.set('tools.disabledTools', disabledTools(store.get().snap.raw).filter((x) => x !== r.tool))
   }
   return undefined
 }
 
-/* The whole selection the checker wants -- model and quality, nothing else --
+/* The whole selection the checker wants -- model and quality, and for an image
+   or video pick the provider it runs on, empty for the OpenRouter default --
    keeping the quality already chosen. An empty model is how the selection is
-   cleared: the key takes no null. */
-function mediaSelection(kind: string, model: string): { model: string; quality: string } {
+   cleared: the key takes no null, and a clear names no provider, so the one
+   chosen stays. */
+function mediaSelection(kind: string, model: string, provider?: string): { model: string; quality: string; provider?: string } {
   const cur = (dig(store.get().snap.raw, `tools.media.${kind}`) as { quality?: unknown } | undefined) || {}
-  return { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
+  const sel = { model, quality: typeof cur.quality === 'string' ? cur.quality : '' }
+  const routed = kind === 'image' || kind === 'video'
+  return routed && provider !== undefined ? { ...sel, provider: provider === MEDIA_PROVIDER ? '' : provider } : sel
 }
 
 async function clearRole(r: Role): Promise<SettingsSnapshot | void> {
@@ -304,8 +310,9 @@ export function RolePill({ role, setup }: { role: Role; setup?: boolean }): JSX.
           /* The tab first: switching a section clears every drawer of the one it
              leaves, `provider` included, so naming the row before the switch
              names it into the state the switch is about to wipe.
-             A media role can only run on OpenRouter, so open that row rather than
-             leaving the reader to find it among fifty-five. */
+             A media role's default is OpenRouter, the one provider every media
+             tool runs on, so open that row rather than leaving the reader to
+             find it among fifty-six. */
           store.setTab('provider')
           if (role.media) store.set({ provider: MEDIA_PROVIDER, provAdd: MEDIA_PROVIDER })
         }}>
@@ -391,20 +398,25 @@ const modelWindow = (snap: SettingsSnapshot): number | null => {
   return typeof win === 'number' && win > 0 ? win : null
 }
 
+/* The first rung is the key unset: the provider's own default, which is what
+   an install that never touched the setting runs at. Drawn as a rung of its
+   own rather than read as Low, which is what this did before and what made
+   the page claim a setting the file does not hold. */
 const EFFORTS: Array<[string, string]> = [
+  ['', 'gui.settings.roles.effort_default'],
   ['minimal', 'gui.settings.roles.effort_minimal'], ['low', 'gui.settings.roles.effort_low'],
   ['medium', 'gui.settings.roles.effort_medium'], ['high', 'gui.settings.roles.effort_high'],
 ]
 
 const effortWord = (v: string): string =>
-  t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_low')
+  t(EFFORTS.find(([id]) => id === v)?.[1] ?? 'gui.settings.roles.effort_default')
 
 /* The three values the parameters drawer edits. Read out here rather than
    inside it, because the closed trigger says what they are. */
 function chatParams(raw: Record<string, unknown>): { effort: string; iters: number; pin: number | null } {
   const pinned = dig(raw, 'agents.defaults.contextWindowTokens')
   return {
-    effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || 'low',
+    effort: (dig(raw, 'agents.defaults.reasoningEffort') as string) || '',
     iters: Number(dig(raw, 'agents.defaults.maxToolIterations')) || 40,
     pin: typeof pinned === 'number' && pinned > 0 ? pinned : null,
   }
@@ -463,7 +475,8 @@ function ChatParams(): JSX.Element {
         <Seg
           opts={EFFORTS.map(([v, key]): [string, string] => [v, t(key)])}
           value={effort}
-          onPick={(v) => void store.write('agents.defaults.reasoningEffort', v)}
+          /* The default rung clears the key: null hands the choice back to the provider. */
+          onPick={(v) => void store.write('agents.defaults.reasoningEffort', v || null)}
         />
       </Row>
       <Row label={t('gui.settings.roles.iterations')}>
@@ -513,9 +526,17 @@ export function RoleRows({ ids, setup, needed }: { ids: RoleId[]; setup?: boolea
 
 export function Roles({ setup }: { setup?: boolean }): JSX.Element {
   const s = store.get()
+  /* Another memory backend reads none of EverOS's extraction models, so an
+     EverOS slot is drawn only when the roles RPC still describes it in
+     `sections` (embedding, when the local plugin is installed: a knowledge base
+     embeds with that pin whatever the backend is). Keyed on the RPC's reason
+     and sections, not on the cloud card, so a third backend hides them too and
+     the server alone says which rows survive. */
+  const everos = s.snap.everos
+  const other = everos?.reason === 'other_backend'
   return (
     <Card title={t('gui.settings.roles.title_card')}>
-      {ROLES.map((r) => (
+      {ROLES.filter((r) => !(other && r.everos && !(r.everos in (everos?.sections ?? {})))).map((r) => (
         <div key={r.id}>
           <Row open={r.id === 'chat' && s.chatCfg} k={(
             <RoleLabel role={r} extra={r.id === 'chat' ? <ParamsDisc /> : undefined} />

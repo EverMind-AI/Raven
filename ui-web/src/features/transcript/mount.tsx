@@ -2,6 +2,7 @@ import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 
 import { holdsHost } from '../../state/session/hosts'
+import * as citations from './citations'
 import * as store from './store'
 import { AgentStageView, StageView } from './TranscriptPage'
 
@@ -100,6 +101,15 @@ export function mainLane(): Lane {
   return laneIn(stage, true, (lane) => <StageView lane={lane} />)
 }
 
+/* The lane on the stage right now, or null -- never a new one. `mainLane`
+   starts a lane when the stage has none, which is right for a caller about to
+   draw into it and wrong for one that only reads: the turn nav asking would
+   put an empty lane on a stage the session layer just wiped. */
+export function shownLane(): Lane | null {
+  const host = document.getElementById('stage')?.querySelector<HTMLElement>(':scope > [data-tsl]')
+  return host ? HOSTS.get(host)?.lane ?? null : null
+}
+
 /* ── the public face the page's own machinery calls ───────────────────── */
 
 /* Answers the segment's id: a mid-turn bubble may have to be taken back when
@@ -110,6 +120,10 @@ export function ask(text: string, when?: string | null, opts?: { midTurn?: boole
 
 export function dropSeg(id: number): boolean {
   return store.dropSeg(mainLane(), id)
+}
+
+export function tagTurn(id: number, turnId: string): void {
+  store.tagTurn(mainLane(), id, turnId)
 }
 
 export function step(): StepHandle {
@@ -132,7 +146,7 @@ export function answerTyped(text: string): { progress(shown: number): void; done
 }
 
 export function note(label: string, detail: string,
-  opts?: { quiet?: boolean; retry?: (() => void) | null } | null): NoteHandle {
+  opts?: { quiet?: boolean; retry?: (() => void) | null; full?: string | null } | null): NoteHandle {
   return store.note(mainLane(), label, detail, opts)
 }
 
@@ -156,9 +170,9 @@ export function foldRuns(steps: StepHandle[]): void {
   store.foldRuns(mainLane(), steps.map((h) => h.seg))
 }
 
-export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: string | null): void {
+export function finishTurn(st: StepHandle | null, steps: StepHandle[], time?: string | null, silent?: boolean): void {
   const segs = steps.map((h) => h.seg)
-  store.finishTurn(mainLane(), st, segs, time ?? null)
+  store.finishTurn(mainLane(), st, segs, time ?? null, silent ?? false)
 }
 
 /* The turn's products, as its closing line. The turn number is the workspace
@@ -169,6 +183,11 @@ export function artifacts(turn: number): void {
 
 export function delivery(turn: number, metadata: unknown, callId?: string | null): void {
   store.recordDelivery(mainLane(), turn, metadata, callId)
+  /* The same channel, read for a different key. A search files where its
+     passages sit so the detail card can offer to open one; the deliveries
+     registry above reads the manifest a handover files. Neither sees the
+     other's. */
+  citations.record(callId, metadata)
 }
 
 export function turnKept(): boolean {
@@ -185,7 +204,8 @@ export function history(messages: HistoryMessage[]): void {
 }
 
 export function delivered(p: {
-  label: string; isDag: boolean; status?: string; open: () => void; body?: string
+  label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
+  at?: number; turnId?: string
 }): void {
   store.delivered(mainLane(), p)
 }

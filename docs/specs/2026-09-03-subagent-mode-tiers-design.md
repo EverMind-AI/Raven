@@ -57,7 +57,7 @@ Against `origin/refactor/raven_v0_2_0` at `9bc06091`.
 
 | Step | Where |
 |---|---|
-| A sub-agent's modes are read from its session response | `raven/acp_client/capabilities.py:428` `_read_session_modes`, re-recorded by `:451` `relearn_session_modes` |
+| A sub-agent's modes are read from its session response | `raven/acp_client/capabilities.py:428` `_read_session_modes`, re-recorded by `:451` `relearn_session_menus` (named `relearn_session_modes` at that revision) |
 | They become the agent's advertised menu | `raven/agent/subagent/backends/__init__.py:135` -> `AgentMeta.modes`, read back by `raven/agent/subagent/manager.py:944` `agent_modes` |
 | The menu is offered to the dispatching model | `raven/agent/subagent/spawn_tool.py:195` - one enum over every agent's ids, per-agent text in the description. Withdrawn by this change |
 | One resolver serves every dispatch lane | `raven/agent/subagent/manager.py:958` `resolve_mode`: `requested` > the instance's standing override > `None`. `requested` is withdrawn too |

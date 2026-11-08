@@ -9,6 +9,10 @@ Invariant 2 — one owner per segment: each memory / skill block has
 exactly one home. The transitional ``# Recalled memory`` and
 ``# Retrieved skills`` blocks are gone; recall merges into ``# Memory``
 and router hits render into ``# Skills`` — one of each, no duplicates.
+
+Invariant 3 — the cacheable prefix: under turn scratch nothing
+query-conditioned sits in the system slot, and nothing from the turn
+scratch reaches the session log.
 """
 
 from __future__ import annotations
@@ -66,6 +70,22 @@ async def _assemble(builder: ContextBuilder, curator, **kw):
         lambda: [],
     )
     return await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
+
+
+def _full_prompt(ac) -> str:
+    """System slot plus the turn's user content.
+
+    ``# Memory`` and ``# Skills`` ride in the user message's turn-scratch tail
+    rather than the system prompt, so an assertion about "the prompt" has to
+    read both slots to keep meaning what it used to.
+    """
+    parts = [ac.messages[0]["content"]]
+    content = ac.messages[-1]["content"]
+    if isinstance(content, str):
+        parts.append(content)
+    else:
+        parts.extend(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +155,7 @@ class TestOneOwnerPerSegment:
             lambda: [],
         )
         ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="hi"))
-        prompt = ac.messages[0]["content"]
+        prompt = _full_prompt(ac)
         # Transitional split blocks are gone for good.
         assert "# Recalled memory" not in prompt
         assert "# Retrieved skills" not in prompt
@@ -143,9 +163,9 @@ class TestOneOwnerPerSegment:
         assert "# Memory" in prompt and prompt.index("# Memory") < prompt.index("user fact")
         assert "### Skill: s  [local/s]" in prompt
         assert "skill body" in prompt
-        # Working state is the single, final segment.
+        # Working state is the single, final segment of the system slot.
         assert prompt.count("# Curator Working State") == 1
-        assert prompt.rstrip().endswith("# Curator Working State\n\nws")
+        assert ac.messages[0]["content"].rstrip().endswith("# Curator Working State\n\nws")
 
 
 # ---------------------------------------------------------------------------
@@ -241,11 +261,96 @@ class TestEngineAssembledInvariants:
             _budget(),
             turn=TurnContext(current_message="hi"),
         )
-        sys_content = ac.messages[0]["content"]
-        assert "# Recalled memory" not in sys_content
-        assert "# Retrieved skills" not in sys_content
+        prompt = _full_prompt(ac)
+        assert "# Recalled memory" not in prompt
+        assert "# Retrieved skills" not in prompt
         # Recall merged under # Memory; router hit rendered under # Skills.
-        assert "# Memory" in sys_content
-        assert sys_content.index("# Memory") < sys_content.index("user prefers dark mode")
-        assert "### Skill: g  [local/g]" in sys_content
-        assert "how to git" in sys_content
+        assert "# Memory" in prompt
+        assert prompt.index("# Memory") < prompt.index("user prefers dark mode")
+        assert "### Skill: g  [local/g]" in prompt
+        assert "how to git" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Invariant 3 — the cacheable prefix: nothing query-conditioned in the system
+# slot, and nothing from the turn scratch in the session log
+# ---------------------------------------------------------------------------
+
+
+class _EchoBackend:
+    """Recall that moves with the query -- the whole point of the invariant."""
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def recall(self, query, *, user_id=None, agent_id=None, top_k):
+        return [Memory(text=f"recalled for {query}")]
+
+
+class _EchoSource:
+    name = "local"
+    weight = 1.0
+
+    async def search(self, query, history, k):
+        return [RouterHit(qualified_id="local/e", name="e", content=f"skill for {query}", score=0.9)]
+
+
+class _HistoryCurator(_FakeCurator):
+    """A phase-B builder that hands back the session it was given."""
+
+    async def build(self, ctx: AssemblyContext) -> Segment:
+        assert ctx.prefix is not None
+        return Segment(text="", history=list(ctx.session_messages))
+
+
+def _prefix_engine(builder: ContextBuilder, **kw) -> ContextAssembler:
+    return ContextAssembler(
+        [
+            IdentitySegmentBuilder(builder.workspace),
+            BootstrapSegmentBuilder(builder.workspace),
+            MemorySegmentBuilder(builder.memory, _EchoBackend()),
+            ActiveSkillsSegmentBuilder(builder.skills),
+            SkillsSegmentBuilder(SkillForgeRouter([_EchoSource()])),
+            _HistoryCurator(""),
+        ],
+        lambda: [],
+        **kw,
+    )
+
+
+class TestCacheablePrefix:
+    async def test_system_slot_holds_nothing_query_conditioned(self, builder: ContextBuilder) -> None:
+        eng = _prefix_engine(builder)
+        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="espresso"))
+
+        system = ac.messages[0]["content"]
+        assert "# Memory" not in system
+        assert "# Skills" not in system
+        assert "espresso" not in system
+        assert "recalled for espresso" in _full_prompt(ac)
+        assert "skill for espresso" in _full_prompt(ac)
+        assert ac.metadata["turn_scratch"] is True
+
+    async def test_prefix_is_byte_identical_across_two_queries(self, builder: ContextBuilder) -> None:
+        history = [{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "sure"}]
+        eng = _prefix_engine(builder)
+
+        first = await eng.assemble("s", history, _budget(), turn=TurnContext(current_message="one"))
+        second = await eng.assemble("s", history, _budget(), turn=TurnContext(current_message="two"))
+
+        # Everything up to the turn's own user message is what providers cache.
+        assert first.messages[:-1] == second.messages[:-1]
+        assert first.messages[-1] != second.messages[-1]
+
+    async def test_turn_scratch_off_puts_the_segments_back_in_system(self, builder: ContextBuilder) -> None:
+        eng = _prefix_engine(builder, turn_scratch=False)
+        ac = await eng.assemble("s", [], _budget(), turn=TurnContext(current_message="espresso"))
+
+        system = ac.messages[0]["content"]
+        assert "# Memory" in system
+        assert "# Skills" in system
+        assert "recalled for espresso" in system
+        assert ac.metadata["turn_scratch"] is False

@@ -46,13 +46,18 @@ raven ops connection add --id local-lab --name "Local lab" \
 先读 config 旁边的 `connections.json`,没有再读家目录。第一次注册写在家目录。
 子代理各自用渲染出的 config 跑在自己的状态目录里、继承家目录，所以读到的是
 主人的注册表，不是一份副本。SSH 注册还可能在 `~/.ssh/config` 写入受管理的别名；
-只记录私钥路径，不记录私钥内容。不要把密钥或密码放进任务消息。
+只记录私钥路径，不记录私钥内容。用密码登记的机器（见[在登记机器上工作](machines.md#1-register-the-machine)）
+同样能跑 campaign：它们的 ssh 和 rsync 用 Raven 为这台机器保存的密码登录，用的选项和 askpass
+钩子与其他每条连接相同；campaign 里记的是连接 id 和 `auth`，从不记密码。地址和账号以登记表为准：
+campaign 的 meta 若给这样一条连接写了别的主机、端口或用户名，在任何 ssh 启动之前就会被拒绝，
+因为保存的密码只送往登记它的那台机器。不要把密钥或密码放进任务消息。
 
 agent 也能登记机器。`ops_connection_add` 工具（raven-oncall 与 raven-code 通过
 `tools.connectionAdd` 开启，其他产品关闭）接主人在对话里说的话——是这台电脑还是
 另一台、叫什么、另一台的话地址是什么——用主人自己的 ssh 配置补上没说的端口、
 用户名或密钥路径，先连上机器，连上了才写入。注册表里没有合适的机器时，agent
-会问主人，而不是拿一条原始 ssh 命令自己找路进去。
+会问主人，而不是拿一条原始 ssh 命令自己找路进去。它从不索要密码：用密码登录的机器由主人
+自己登记，在 Agent Hub 的**机器**标签里，或者用 `raven ops connection add --auth password`。
 
 `doctor` 校验注册表可用性，不会重新执行每台远程环境的连通测试。
 `add --skip-probe` 不联系机器，并明确保留“未验证连接”状态。

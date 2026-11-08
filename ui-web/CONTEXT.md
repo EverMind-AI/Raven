@@ -142,6 +142,162 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Turn Nav**:
+The strip of marks at the chat column's right edge, one per turn of the
+conversation on the stage, drawn by `features/transcript/TurnNav.tsx` under the
+domain's root (`TranscriptApp`) into `#turnNav` -- the box
+`src/chrome/ChatTop.tsx` renders after `#scroll` and hands over empty, and
+which the stylesheet parks with the scroller. A mark is a question that opened
+a turn (an `ask` segment without `midTurn`), counted from the first one the
+lane holds; the mark being read is the last question scrolled past the reading
+line. Pointing at or focusing a mark shows the turn's number, how long ago it
+was asked and what was asked; a click scrolls the question into view. It draws
+nothing below two turns; a strip longer than its band scrolls with no thumb
+(`data-thumb="none"`), centred on the mark being read, and fades at either end
+instead. A single root, not one per lane: it reads the lane whose host is on
+`#stage` (`mount.tsx`'s `shownLane`), never one held off it.
+_Avoid_: "minimap" -- it marks turns, not a scaled copy of the transcript.
+
+**Trajectory View**:
+The chat column's second view: the conversation's trace entries as an agent
+waterfall, in place of the transcript, drawn by `features/trajectory/` into
+`#trajHost` -- the box `src/chrome/ChatTop.tsx` renders beside `#scroll` and
+hands over empty. While it is up the composer card, the task strip and the
+desk step aside: `ChatTop.tsx` sets `data-traj` on the document and the
+stylesheet hides them under it. The sheet rack stays, so an approval, confirm
+or clarify sheet the open conversation raises is still in front of the reader,
+who would otherwise answer one they cannot see with the Escape that closes the
+details pane.
+Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
+hidden, its size and scroll position kept) rather than unmounting it, so the
+transcript goes on streaming underneath and comes back exactly where it was.
+The header's toggle (`#trajBtn`) appears only when the gateway announced
+`trajectory-v1` (every gateway does while its trajectory policy is on, which is the default), `trajectory.state` says the view is on, a conversation is open
+and that conversation is not in its empty state (`state/session/conversation.ts`'s
+flag); the store's `available` is that one condition.
+The waterfall (`features/trajectory/waterfall/`) draws every entry the list
+store holds (`entries`), the ones the index marked `meta.hidden` included: grouped
+by agent -- the main session first, then one group per worker, a worker's runs
+folded into one by instance, else by name, where runs of one name that overlap
+in time are different agents and keep apart (`model.ts`'s `agentIdentity` and
+`foldAgents`) -- then by turn, then by span. A worker's mark is picked by that same recorded name
+(`meta.agent`, else `meta.instance`): an entry carries no preset, so the
+preset key `components/AgentMark.tsx` is built on is not available here.
+A worker's row is named by its task; open, it adds a second line -- the agent
+that ran it, the turn that sent it and how many turns it took. Every worker is
+a sub-agent, an external agent's run included: the header counts the main
+agent and its sub-agents, and only a worker's mark says who ran it.
+Every agent shares one time axis (`axis.ts`): a stretch
+in which no agent was doing anything collapses to a fixed width. Each row
+prints its busy time in a column at the end of its label -- for an agent, its
+turns and loose rows merged (`model.ts`'s `busyRuns`), never its lifetime.
+Above the rows sit the activity strip -- the whole session's calls per bucket of
+real time, its idle stretches folded wide enough to say how long they were
+while the folds keep to a third of it, and the window as a brush a drag takes,
+moves or stretches (`ActivityStrip.tsx`) --
+and the ruler, marked on round clock times (`ticks.ts`) beside the name of the
+window it shows; what
+crosses between agents is marked on rows -- a dispatching row's door arrow, and
+the worker's name on the host turn its report started -- and drawn only once a
+worker is open: a line from the instant it was sent, on its dispatcher's row,
+to where its work begins. Agents start folded when there are several, one row each: a capsule
+per run of work on a faint line from the first to the last, the main agent in
+gold, a diamond where a failure happened, an arrow at an edge its work runs
+past, and a chip naming when it works next once none of it is in the window.
+A lone agent starts open, and turns start folded; a plain wheel scrolls, ctrl
+or cmd with the wheel zooms about the pointer (read against the ruler, which
+spans the axis exactly), and shift with the wheel pans. The header's presets
+set a window of three hours, one hour or fifteen minutes about the middle of
+the one on screen -- a middle in an idle fold moves to the work beside it --
+and Fit gives the whole session back; Collapse folds every agent and turn,
+and Replay draws the session again from its first instant (Waterfall Replay).
+Once the window is narrowed, the workers whose work lies wholly before it, or
+wholly after it, step into one fold row for each side ("2 agents finished
+earlier"), which opens in place; the main agent always keeps its own row.
+The zoomed window and a
+stretch picked on the ruler are kept in real time for the conversation they
+were made on, so a live session growing past its end does not reset them.
+Escape takes the picked stretch back through the one ordered table (before the
+details pane, as the bar's own popovers were), and the arrow keys walk only the
+entries that stretch leaves drawn; a selection made elsewhere -- a link in the
+pane -- drops a pick that would hide it.
+The rows are a tree for assistive technology: agents, turns and spans at three
+levels, each fold a button with `aria-expanded`, and the selected row
+`aria-selected` and the tree's active descendant. A failed operation is marked
+on its own row and on the turn that holds it. A call row is keyed by a square
+in its kind's colour -- the model's violet, a tool's teal, anything else
+neutral, as the turn's bar paints it -- and named by its tool, or by the part
+of a model call it is, beside what the call worked on. A turn row under the
+pointer shows what its time went on (`segments.ts`'s `turnBreakdown`): its
+model and tool calls, each counted once per call, their time and share of
+the turn, and the waiting.
+Picking a row opens the details pane, a white card floating over the
+waterfall's right side -- the rows keep their whole width, and the card starts
+below the whole header, the stats, the activity strip and the ruler
+(`--wf-card-top`), so their handles stay in reach -- and over all of it
+below 800px
+(`features/trajectory/detailStore.ts`): a descriptor read through
+`trajectory.detail` and block bodies read through `trajectory.block`, each filed
+under its whole identity (session, epoch, entry, revision, block) and shown only
+under the ticket it was asked with.
+The reader moves the card by its head and sizes it by its corner, as they do
+the desk palette: let go near where it opened, it goes back there, and
+wherever it is the store keeps it whole inside the area. A pull or arrow that
+moves only the width leaves an auto height auto, so the card keeps filling the
+room under the header instead of freezing the height it had. The corner takes
+the focus on a press, and each arrow moves a free edge 16px (`RESIZE_STEP`). It
+is a button rather than a separator, which is a range along one axis: its
+description says both sizes, and a keyboard step reads out the new one. A press
+on the head's background focuses the card, and a press on one of the head's
+buttons focuses that button, so Escape pressed after either closes the pane
+rather than falling through to the turn behind it.
+The pane's head carries a pin for the tab on screen: the conversation's
+**pinned tab**, opened first whenever the pane arrives at an entry whose strip
+has it (a new selection, or the pane reopened) and never while the reader is
+already on the entry; kept per conversation in memory and in the tab's session
+storage (`lib/persist.ts`), with no cap.
+Under the raw record the details pane lists the files
+the span names (`features/trajectory/Files.tsx`): the `files` directory whole,
+each file's content read by its own cursor while it is open and in view, kept
+apart from the block pages and let go stalest first when the budget is short.
+The list store also keeps a current Sub-agent Scope (`scope`, `scopes` and
+`saved` in `store.ts`), though no strip shows it: `select` on an entry of another scope (a link in the pane) moves it. The
+pane's button on an entry that opens a scope, or on the first row of a turn a
+sub-agent's report started, and a dispatching row's door arrow land on the run
+they name -- its external agent's entry, which opens on what the agent
+recorded, else its first entry (`scopes.ts`'s `landingOf`). Like a click on a
+waterfall row, they select across scopes without moving the current one
+(`selectAcross`), since every agent is on screen at once.
+_Avoid_: "trace view" or "audit view" for this -- the trace is what the runtime
+records, the trajectory is how this page reads it back -- and "sub-agent trace"
+-- a spawned run's steps are in the trace of the turn that dispatched it.
+
+**Waterfall Replay**:
+The Trajectory View drawing its conversation again from the first instant
+(`features/trajectory/waterfall/replay.ts`), from the header's Replay button.
+Each entry appears when it started, one still running at the playhead is cut
+there as running with its failure not yet shown (`entriesAt`), and the header's
+figures, the activity strip and the rows are worked out from that, on the whole
+session's axis, with a playhead line down the ruler and the rows. A narrowed
+window and a picked stretch are let go: the replay is of the whole session.
+The press divides the session: what had started by then is history, however
+late the index hands it over, and the first pass plays all of it on the folded
+axis -- in its own time when that is no longer than fifteen seconds, squeezed
+into fifteen seconds otherwise (`REPLAY_MS`), the button counting it down; if
+the rest of the history lands after a press that found less than that, the
+pass grows towards fifteen seconds and the countdown rises once. What starts
+after the press, or runs on past it, is played next at twice real time
+(`CATCH_UP_RATE`) until the playhead reaches the present. Pressing again,
+opening a step's details, another conversation or going back to the chat ends
+it, and a details pane left open closes as it starts: the pane shows a step as
+it was recorded, not as it stood at the playhead. Meanwhile each header figure
+keeps the room the whole session's takes, the duration the room of the widest
+spelling its count passes through, so nothing in the header moves while it
+plays; the session's own figures growing still do, as without a replay.
+_Avoid_: "trajectory replay" for it -- that is the Runtime's Trajectory Replay
+(`raven trajectory replay`), a re-run of the harness against a recording; this
+re-runs nothing and only redraws the entries the list store holds.
+
 **Region**:
 One of the things `src/App.tsx` renders at the body, in the standing order
 `src/state/portals.ts`'s `BOOT_BODY_ORDER` declares: `div.app`, the collapse's
@@ -165,10 +321,11 @@ children -- and every table that names a page derives from them:
 `chrome/Rail.tsx`'s nav strip, `features/rail/store.ts`'s marks and
 `src/test/regions.test.ts`'s goldens. Adding a page is adding a row.
 
-Two rows today, because a place and a setting are different things: what a
-reader goes TO is the **connections hub** -- the agents Raven hands work to and
-the channels it can be reached from -- while schedules and memory are set up
-once and then left alone, so those two are **settings sections** instead.
+Four rows today -- the **connections hub**'s two (the agents Raven hands work
+to and the channels it can be reached from), the knowledge base and the **Task
+Board page** -- because a place and a setting are different things: those are
+where a reader goes TO, while schedules and memory are set up once and then left
+alone, so those two are **settings sections** instead.
 _Avoid_: "page" for the whole document, or for a dialog -- the settings dialog
 and the model picker are overlays, not module pages.
 
@@ -282,14 +439,15 @@ What ONE opening of the model picker lists, and what a pick there means
 (`Offer` in `features/model/types.ts`): a kind, optionally the providers the
 caller allows, optionally a title and the pair to mark, optionally the write to
 make. The composer's chip opens with none of it and gets the default -- text
-models, every connected provider, switch this conversation. A settings role
-slot opens with its own through `openPicker` in `features/model/source.ts`.
+models, every connected provider, switch this conversation and the default a
+new one starts on. A settings role slot opens with its own through `openPicker`
+in `features/model/source.ts`.
 The kind narrows each provider's column, never the provider list.
 
 **Gateway provider**:
 A provider that resells other vendors' models under `vendor/model` ids --
 `ProviderSpec.is_gateway` in `raven/providers/registry.py`, `gateway` on a
-`model.options` row. Twenty-one of the fifty-five.
+`model.options` row. Twenty-two of the fifty-six.
 _Avoid_: "gateway" alone, which in this document is the page's one data entry
 point above.
 
@@ -308,6 +466,36 @@ opens is the desk's (`kind: 'task'`), and the node's context comes from `dag.nod
 `subagent.context` through the transcript's renderer -- the domain holds the rows and what
 is picked, never a copy of the record.
 _Avoid_: "task" for a turn or for the composer's draft.
+
+**Task Board** (`features/tasks/BoardList.tsx`, `tasks.board`):
+the tasks tab once the host's board holds a Task Group: one card per group, newest first, its
+head naming the group's type on a pill -- the Runtime's Board category, the four the Task
+Board page shows -- and opening its thread of Progress Steps inside the card. Each step's
+Tasks are chips that open the pane a list row opens; the latest step of a group that needs
+the user shows its summary, which opens with what the user is asked, and such a card frames
+the questions that step asked at its bottom, after that step, each in a box of its own with an
+Ignore that sets that question aside (the last one leaves the group idle), and one Answer (a
+draft in the
+composer, a slot under each question, from `composer/startTaskWith.ts` `answerInChat`, lent
+at boot, which holds the group for that message as Move on does); clicking a step scrolls
+the transcript to that turn's reply (`transcript/source.ts` `revealTurnAt`). Finished groups
+fold away at the bottom, and Tasks no step places sit in an Unassigned fold at the top. A conversation whose
+board holds no group draws the flat list of Tasks it always had, and the desk's tab says it is
+empty only with no Task and no group (`desk/DeskPalette.tsx` `TasksNav`, which reads the board
+itself): a conversation that delegated nothing still has its matters. The terms are the Runtime's
+(`CONTEXT.md`: Task Board, Task Group, Progress Step, Board category).
+_Avoid_: "task list" for this -- that is the flat list it falls back to.
+
+**Task Board page** (`features/tasks/BoardsPage.tsx`, `tasks.boards`):
+the module page that gathers every host conversation's Task Groups as cards sorted by Board
+category -- columns in the board view, sections in the list view -- with Completed hidden
+until its switch is on. A card unfolds in place into the group's thread, the tasks tab's own;
+an event opens its conversation with the group expanded in the tasks tab and the transcript at
+that event's reply, and Move on opens it with the group held over the composer
+(`features/tasks/MoveOnBar.tsx`) for the next message, as Answer does with its draft. The rail button's badge counts the Needs
+you cards.
+_Avoid_: "Task Board" alone for the page -- that is one conversation's board, in the tasks
+tab.
 
 **Pane**:
 A resizable column: the workspace pane beside the chat (`src/state/ws.ts` holds
@@ -363,14 +551,72 @@ vocabulary a card is the drawer's content.
 
 **Escape order**:
 The ordered table in `src/state/escapeOrder.ts` (`ESCAPE_ORDER`, of
-`EscapeLayer`): eleven layers that can be on screen at once, and which one an
+`EscapeLayer`): fifteen layers that can be on screen at once, and which one an
 Escape takes back. A table rather than a
 stack, because each entry answers "am I open" when the key arrives -- the
 channel dialog opens over the entries page and closes first, while the shared
-drawer opens over the dialog and closes second. Three capture-phase handlers
-the docked sheets register run ahead of it, and two of them do not stop
-propagation, so one Escape can both deny an approval and interrupt the turn
-behind it.
+drawer opens over the dialog and closes second. Capture-phase handlers the
+docked sheets register run ahead of it. Approval and credential cards consume
+Escape after denying or skipping, leaving the turn running. A later Escape
+reaches the normal close order and stops a running turn only when no higher
+layer is open.
+
+**Export Wizard**:
+The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
+empty `#exportBody`), drawn by `features/export/` and opened from the header's
+conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the corner slot,
+with the desk launcher one slot in over `#wsBtn`). A flow is a sequence of
+pages: the export is the turn picker, then the export page; the bug report
+(offered while the handshake carries `bugreport-v1`) is the picker, the
+problem, the decisions and the upload. The picker drops out when the
+conversation has a single finished turn, and the decisions are marked skipped
+when the Redaction History or a clean snapshot leaves nothing to decide. The
+export runs as a gateway job (`trajectory.export`) the page follows through
+`trajectory.export_status` and downloads with the job's link; the report is a
+Report Session the page follows through `bugreport.status`, which carries the
+values to decide in full only while it waits on the decisions -- the
+decisions page lists those values and nothing else, and an item's contexts
+come one at a time (`bugreport.item`), their hit spans counted in code points. The close button and Escape both
+cancel, asking first while a job is under way or a report is started and not
+over, and closing cancels the report (`bugreport.cancel`) whatever its phase.
+Every answer is checked against the wizard's `epoch` and the job or report it
+was asked about: a start that lands after its wizard closed has its job or
+report cancelled on arrival, and a status query, or a report step whose
+answer is lost, keeps the same job or report and asks its status rather than
+starting or sending again. `exportable` is the one place that says whether the
+conversation on screen may be exported, and the menu button is disabled
+exactly when it says no.
+_Avoid_: "report dialog" for the bug report -- it is this wizard on another
+flow, not a dialog of its own.
+
+**Imported Conversation** (page side; the runtime term is in `../CONTEXT.md`):
+A package read back in, shown read-only. The rail's `#importedBtn`
+(`src/chrome/Rail.tsx`, under the module rows) opens a file dialog through the
+`imported` domain's store, which holds one claim from reading the file to
+dealing with the answer: while it is held the button names the file and takes
+no second one, and the second copy a duplicate offers goes through the same
+claim. A package over the upload limit is refused before it is read; the bytes
+ride `imported.upload` as one frame. A duplicate raises the confirm sheet with
+its second answer (`#cfAlt`): open the copy already imported, or import
+another. The rows are the rail's: `session.list` returns them for the
+`imported` channel (`from === 'imported'`), the Imported group draws them after
+Recent and only while there is one, and each offers rename -- on the row, never
+in the conversation's header -- and delete, and nothing else. The settings
+page's delete-all leaves them alone.
+Opened, one is read-only. The session registry sets `.chat[data-readonly]`
+(`state/session/conversation.ts`'s `readOnly`) as a switch begins, before
+`session.resume` answers, from the key's own prefix (`lib/imported.ts`); the
+stylesheet then takes away the composer dock, the workdir tag and the
+conversation menu (its slot kept), and the name stops being a rename control.
+Sending, branching, the header editor and exporting refuse in their own code
+too. What the package does not carry degrades quietly instead of failing: a
+graph card reads no run record and shows no node count, an agent card asks
+for no roster, a task pane or a file does not open (a notice says why),
+pictures show their names without a request, delivered files are missing,
+and the desk puts back nothing. A package with no session record gets a quiet
+note instead of the empty state, so its trajectory toggle stays.
+_Avoid_: "import" alone -- the `importSync` domain and `#importRow` are the
+cold-start import of another tool's memory.
 
 **Menu**:
 `src/state/menu.ts` plus `<ContextMenu/>` (`src/App.tsx`) -- the one context

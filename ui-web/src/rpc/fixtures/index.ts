@@ -24,13 +24,16 @@
  */
 
 import { createBrowser } from './browser'
+import { createBugReport } from './bugreport'
 import { createChannels } from './channels'
 import { createCron } from './cron'
 import { createDeck } from './deck'
 import { createExt } from './ext'
 import { createFs } from './fs'
 import { createImport } from './import'
+import { createImported } from './imported'
 import { createKnowledge } from './knowledge'
+import { createMachines } from './machines'
 import { createMemory } from './memory'
 import { createModel } from './model'
 import { createPlughub } from './plughub'
@@ -39,6 +42,7 @@ import { createSettings } from './settings'
 import { createSkillhub } from './skillhub'
 import { createSubagents } from './subagents'
 import { createTasks } from './tasks'
+import { createTrajectory } from './trajectory'
 import { RUNS, createTurn } from './turn'
 
 import type { FixtureEnv, Fixtures } from '../fixtureTransport'
@@ -73,13 +77,17 @@ export function demoFixtures(env: FixtureEnv): Fixtures {
     ...createSkillhub(env, ext).fixtures,
     ...createPlughub(env, ext).fixtures,
     ...createSubagents(env).fixtures,
+    ...createMachines(env).fixtures,
     ...createTasks(env).fixtures,
     ...createMemory(env).fixtures,
     ...createFs(env).fixtures,
     ...createDeck(env).fixtures,
     ...createImport(env).fixtures,
+    ...createImported(env, sessions).fixtures,
     ...createBrowser(env).fixtures,
     ...createKnowledge(env).fixtures,
+    ...createTrajectory(env).fixtures,
+    ...createBugReport(env).fixtures,
   }
 }
 

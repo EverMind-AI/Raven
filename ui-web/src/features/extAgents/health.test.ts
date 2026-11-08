@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
-import { healthOf } from './health'
+import { healthOf, refusedWrite, whatFailed } from './health'
 import * as store from './store'
 
 import type { ExtAgentsState } from './store'
@@ -85,5 +85,18 @@ describe('healthOf', () => {
   it('names a failed test in the reader\'s words, with or without the server\'s sentence', () => {
     expect(health(row({ last_test_ok: false, last_test_detail: 'no credential' })).label).toBe('gui.agent.hd_on_test_bad')
     expect(health(row({ last_test_ok: false })).label).toBe('gui.agent.hd_on_test_bad')
+  })
+})
+
+describe('refusedWrite', () => {
+  /* An effort is a pick on a row the agent already serves, like a model: its
+     refusal is a save that did not take, never a connection that failed, or
+     "Ask Raven" hands the main agent a connect task for an agent that is on. */
+  it('reads a refused effort as a save, the way a refused model is', () => {
+    const effort = { op: 'effort' as const, args: {}, detail: 'no such effort' }
+    expect(refusedWrite(effort)).toBe('save')
+    expect(refusedWrite({ ...effort, op: 'model' })).toBe('save')
+    expect(refusedWrite({ ...effort, op: 'connect' })).toBe('connect')
+    expect(whatFailed(row(), effort)).toBe('gui.agent.bad_save {"agent":"codex"}')
   })
 })

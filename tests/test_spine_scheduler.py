@@ -1,11 +1,14 @@
 """The spine Scheduler's submit surface: outcomes, loop affinity, and conversation ids."""
 
 import asyncio
+import contextvars
+from contextvars import ContextVar
 
 import pytest
 from loguru import logger
 
 from raven.spine import (
+    AnswerlessTurnError,
     BusyPolicy,
     ChatType,
     Origin,
@@ -60,6 +63,14 @@ class FailingRunner:
         raise ValueError("boom")
 
 
+class RaisingRunner:
+    def __init__(self, exc: Exception):
+        self.exc = exc
+
+    async def run(self, req, emit, drain) -> TurnOutcome:
+        raise self.exc
+
+
 class ConcurrentProbe:
     def __init__(self, target: int):
         self.running = 0
@@ -76,6 +87,16 @@ class ConcurrentProbe:
 
 def _scheduler(runner) -> Scheduler:
     return Scheduler(runner, OriginPools(user=1, system=1), _sink)
+
+
+async def _lifecycle_of(runner) -> list:
+    events: list = []
+
+    async def sink(event) -> None:
+        events.append(event)
+
+    await Scheduler(runner, OriginPools(user=1, system=1), sink).submit(_req()).result()
+    return events
 
 
 # --- submit / result / outcome channel ---
@@ -96,6 +117,56 @@ async def test_failed_turn_result_is_the_report_the_lane_filed():
     result = await sched.submit(_req()).result()
     assert isinstance(result, TurnFailed)
     assert (result.error, result.cancelled) == ("ValueError: boom", False)
+
+
+async def test_a_no_output_failure_reaches_turn_failed():
+    exc = AnswerlessTurnError("No reply: the model sent nothing.", no_output=True)
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_output is True and failed.reported is True
+
+
+class _SkipsInit(AnswerlessTurnError):
+    """A runner's subclass that never sets ``no_output``."""
+
+    def __init__(self, text: str) -> None:
+        Exception.__init__(self, text)
+
+
+class _GuardsNoOutput(AnswerlessTurnError):
+    """A runner's subclass whose ``no_output`` is a getter that throws."""
+
+    def __init__(self, text: str) -> None:
+        Exception.__init__(self, text)
+
+    @property
+    def no_output(self) -> bool:
+        raise RuntimeError("a foreign getter")
+
+
+@pytest.mark.parametrize(
+    "exc", [_SkipsInit("no answer"), _GuardsNoOutput("no answer")], ids=["skips_init", "throwing_getter"]
+)
+async def test_a_foreign_answerless_error_still_has_its_turn_failed(exc):
+    """``no_output`` is read off the instance dictionary, as ``full_detail`` is: a subclass that never set
+    it, or guards it with a getter that throws, still gets its ``TurnFailed`` rather than killing the lane."""
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = [e for e in events if isinstance(e, TurnFailed)]
+    assert len(failed) == 1
+    assert failed[0].no_output is False and failed[0].reported is True
+
+
+async def test_an_answerless_failure_is_no_output_only_when_the_runner_says_so():
+    exc = AnswerlessTurnError("Error calling LLM (rate_limit@openrouter): busy")
+    events = await _lifecycle_of(RaisingRunner(exc))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_output is False and failed.reported is True
+
+
+async def test_a_crash_is_never_a_no_output():
+    events = await _lifecycle_of(RaisingRunner(RuntimeError("boom")))
+    failed = next(e for e in events if isinstance(e, TurnFailed))
+    assert failed.no_output is False
 
 
 # --- off-loop fail-fast (must compare self._loop, not just get_running_loop) ---
@@ -189,6 +260,120 @@ async def test_handle_cancel_is_idempotent_after_completion():
     handle = sched.submit(_req())
     await handle.result()
     await handle.cancel()  # already terminal -> no-op, no raise
+
+
+async def test_a_cancelled_waiter_leaves_the_turn_and_its_lane_alone():
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    waiter = asyncio.create_task(handle.result())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert not handle._fut.done(), "the waiter's cancellation reached the turn's own future"
+
+    await handle.cancel()
+    assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
+    worker = sched._lanes["tg:1"]._worker
+    await asyncio.wait_for(asyncio.shield(worker), timeout=1.0)
+    assert worker.exception() is None
+    assert not sched.has_inflight("tg:1")
+
+
+async def test_running_turn_names_the_turn_the_lane_is_running():
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    assert sched.running_turn("tg:1") is None
+    first = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    sched.submit(_req(channel="tg", chat_id="1"))
+
+    running = sched.running_turn("tg:1")
+    assert running is not None
+    turn_id, handle = running
+    assert turn_id and handle._fut is first._fut, "the running turn, not the one queued behind it"
+    await handle.cancel()
+    assert await asyncio.wait_for(first.result(), timeout=1.0) is None
+
+
+async def test_running_turn_is_none_once_the_turn_task_has_ended():
+    """Between the turn's task ending and the worker resolving its future, a
+    cancel could only report as stopped a turn that had already finished."""
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    lane = sched._lanes["tg:1"]
+    live = lane._run_task
+    ended = asyncio.get_running_loop().create_future()
+    ended.set_result(None)
+    lane._run_task = ended
+    try:
+        assert sched.running_turn("tg:1") is None
+    finally:
+        lane._run_task = live
+    await handle.cancel()
+    assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
+
+
+async def test_is_busy_while_a_turn_runs_and_not_once_it_has_ended():
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    assert not sched.is_busy("tg:1")
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    assert sched.is_busy("tg:1")
+    await handle.cancel()
+    assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
+    assert not sched.is_busy("tg:1")
+
+
+async def test_is_busy_answers_for_the_lane_it_is_asked_about():
+    """The lane a refusal was refused on, and only that lane: ``turn.cancel``
+    says whether the lane it resolved to still has a turn to run, and a lane
+    with a turn on it says nothing about another lane's."""
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    try:
+        assert sched.is_busy("tg:1")
+        assert not sched.is_busy("tg:2")
+    finally:
+        await handle.cancel()
+        assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
+
+
+@pytest.mark.parametrize("behind", [None, BusyPolicy.APPEND, BusyPolicy.INJECT])
+async def test_a_lane_is_busy_only_with_what_waits_behind_a_turn_that_has_stopped(behind):
+    """Between the running turn stopping and the worker resolving it,
+    ``has_inflight`` still reports the finished turn. What is left to run there
+    is only what waits behind it: a queued turn, or an inject the worker runs as
+    a turn of its own."""
+    runner = HangingRunner()
+    sched = _scheduler(runner)
+    handle = sched.submit(_req(channel="tg", chat_id="1"))
+    await runner.started.wait()
+    waiting = None if behind is None else sched.submit(_req(channel="tg", chat_id="1", busy=behind))
+    lane = sched._lanes["tg:1"]
+    live = lane._run_task
+    ended = asyncio.get_running_loop().create_future()
+    ended.set_result(None)
+    lane._run_task = ended
+    try:
+        assert sched.has_inflight("tg:1")
+        assert sched.is_busy("tg:1") is (behind is not None)
+    finally:
+        # Even on a failed assertion: when the loop's closing sweep cancels the
+        # hanging turn, the worker starts whatever waits behind it, and that
+        # turn hangs the run.
+        lane._run_task = live
+        if waiting is not None:
+            await waiting.cancel()
+        await handle.cancel()
+    assert await asyncio.wait_for(handle.result(), timeout=1.0) is None
 
 
 # --- lane reaper (idle recycling + recycle/submit atomicity) ---
@@ -719,3 +904,53 @@ def test_the_turn_entry_guard_bites(tmp_path):
     )
     strays = _turn_entry_strays(pkg)
     assert len(strays) == 2, strays
+
+
+# --- the scheduler's home context ---------------------------------------------
+
+_PROBE: ContextVar[str] = ContextVar("scheduler_test_probe", default="unset")
+
+
+class _ProbeRunner:
+    def __init__(self) -> None:
+        self.seen: list[str] = []
+
+    async def run(self, req, emit, drain) -> TurnOutcome:
+        self.seen.append(_PROBE.get())
+        return TurnOutcome(usage=Usage(0, 0, 0), explicit_reply=False)
+
+
+def _submit_as(sched: Scheduler, value: str, req: TurnRequest):
+    def _go():
+        _PROBE.set(value)
+        return sched.submit(req)
+
+    return contextvars.copy_context().run(_go)
+
+
+async def test_turns_start_from_the_context_the_scheduler_was_built_in():
+    """What a host set before building the scheduler reaches its turns; what a submitter set does not."""
+    runner = _ProbeRunner()
+
+    def _build() -> Scheduler:
+        _PROBE.set("home")
+        return _scheduler(runner)
+
+    sched = contextvars.copy_context().run(_build)
+    try:
+        await _submit_as(sched, "submitter", _req(text="t1")).result()
+    finally:
+        await sched.shutdown(grace=0)
+
+    assert runner.seen == ["home"]
+
+
+async def test_the_reaper_runs_in_the_home_context():
+    sched = _scheduler(_ProbeRunner())
+    handle = _submit_as(sched, "submitter", _req(text="t1"))
+    try:
+        assert sched._reaper is not None
+        assert sched._reaper.get_context().get(_PROBE, "unset") == "unset"
+        await handle.result()
+    finally:
+        await sched.shutdown(grace=0)

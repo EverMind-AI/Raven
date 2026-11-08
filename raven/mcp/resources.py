@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from raven.contracts.tool import Tool, ToolResult
+from raven.mcp.paging import walk_resource_templates, walk_resources
 from raven.utils.images import image_block, text_block
 
 if TYPE_CHECKING:
@@ -127,12 +128,12 @@ class ListMcpResourcesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resources())
+                resources = await _with_timeout(walk_resources(session))
             except Exception as exc:  # noqa: BLE001 -- one bad server must not hide the others
                 logger.warning("MCP resources: list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing '{target}' failed: {type(exc).__name__}.")
                 continue
-            for res in result.resources:
+            for res in resources:
                 rows.append(
                     {
                         # Carried on every row, not just when several servers were
@@ -142,7 +143,7 @@ class ListMcpResourcesTool(_ResourceTool):
                         "uri": str(res.uri),
                         "name": res.name,
                         "description": res.description,
-                        "mimeType": res.mimeType,
+                        "mimeType": res.mime_type,
                     }
                 )
         return _rendered(rows, errors, empty="No resources on the server(s) asked.")
@@ -186,19 +187,19 @@ class ListMcpResourceTemplatesTool(_ResourceTool):
                 errors.append(refusal)
                 continue
             try:
-                result = await _with_timeout(session.list_resource_templates())
+                templates = await _with_timeout(walk_resource_templates(session))
             except Exception as exc:  # noqa: BLE001 -- see ListMcpResourcesTool
                 logger.warning("MCP resources: template list on '{}' failed: {}", target, exc)
                 errors.append(f"Error: listing templates on '{target}' failed: {type(exc).__name__}.")
                 continue
-            for tpl in result.resourceTemplates:
+            for tpl in templates:
                 rows.append(
                     {
                         "server": target,
-                        "uriTemplate": tpl.uriTemplate,
+                        "uriTemplate": tpl.uri_template,
                         "name": tpl.name,
                         "description": tpl.description,
-                        "mimeType": tpl.mimeType,
+                        "mimeType": tpl.mime_type,
                     }
                 )
         return _rendered(rows, errors, empty="No resource templates on the server(s) asked.")
@@ -323,7 +324,7 @@ def _render_blob(server: str, uri: str, item: Any, blocks: list[Any], *, workspa
             "Ask the server for a smaller representation if it offers one.]"
         )
 
-    mime = item.mimeType or "application/octet-stream"
+    mime = item.mime_type or "application/octet-stream"
     path = _write_blob(server, uri, raw, mime, workspace=workspace)
     note = f"[resource {uri} ({mime}, {len(raw)} bytes)"
     note += f" written to {path}]" if path else " could not be written to disk]"

@@ -15,15 +15,21 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+import raven.agent.subagent.backends.env as env_mod
 from raven.agent.subagent import kimi_code
 from raven.agent.subagent.probe_state import Remedy
 from raven.config.schema import ThirdPartyAcpSubagentConfig
+from raven.utils.pid import pid_alive
+from tests._windows_dirs import scratch_root, windows_removal
+from tests._windows_kill import PYTHON, windows_kill_path
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 
@@ -186,6 +192,7 @@ def _through_kimi(
     message: str | None = None,
     no_acp: bool = False,
     slow_ask: bool = False,
+    ask_worker: bool = False,
     ansi: bool = False,
     command: str = "kimi acp",
     **kw: Any,
@@ -195,7 +202,9 @@ def _through_kimi(
     ``acp`` starts the stub server in ``mode``; ``-p`` prints ``says`` the way
     Kimi Code 2.1.0 does (in colour with ``ansi``), or answers when there is
     nothing to say, and notes that it was asked; with ``slow_ask`` it notes its
-    pid and never finishes. ``doctor config`` reports ``doctor`` as its one issue.
+    pid and never finishes, and with ``ask_worker`` as well it first starts a
+    process of its own and notes that pid too. ``doctor config`` reports
+    ``doctor`` as its one issue.
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -204,6 +213,9 @@ def _through_kimi(
         "printf '%s\\n' \"error: unknown command 'acp'\" >&2; exit 1"
         if no_acp
         else f"exec {shlex.quote(sys.executable)} {shlex.quote(str(_STUB))}"
+    )
+    worker = (
+        f"    sleep 30 & printf '%s\\n' \"$!\" > {shlex.quote(str(tmp_path / 'worker.pid'))}\n" if ask_worker else ""
     )
     slow = f"    printf '%s\\n' \"$$\" > {shlex.quote(str(tmp_path / 'ask.pid'))}; exec sleep 30\n" if slow_ask else ""
     red, plain = ("\\033[91m", "\\033[39m") if ansi else ("", "")
@@ -214,6 +226,7 @@ def _through_kimi(
         f"  acp) {start} ;;\n"
         "  -p)\n"
         f"    printf '%s\\n' \"$*\" >> {shlex.quote(str(asked))}\n"
+        f"{worker}"
         f"{slow}"
         '    if [ -n "$KIMI_STUB_SAYS" ]; then\n'
         "      printf '%s\\n' 'kimi version 2.1.0' >&2\n"
@@ -372,6 +385,121 @@ async def test_a_connect_that_goes_away_mid_ask_takes_the_kimi_it_asked(tmp_path
     assert not _alive(pid)
 
 
+def _python_kimi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, says: str | None = None
+) -> ThirdPartyAcpSubagentConfig:
+    """The Kimi Code preset, its `kimi -p` a script on ``PYTHON`` that notes its pid and does not finish.
+
+    With ``says``, it prints that as Kimi Code's failure line and exits 1 instead.
+    Found by name through ``resolve_program``, the way the ask finds the real one;
+    a script on PATH would not start on Windows, where a bare name means ``.exe``.
+    """
+    stub, noted = tmp_path / "kimi.py", tmp_path / "ask.pid"
+    stub.write_text(
+        "import os, time\n"
+        f"with open({str(noted)!r} + '.tmp', 'w') as out:\n"
+        "    out.write(str(os.getpid()))\n"
+        f"os.replace({str(noted)!r} + '.tmp', {str(noted)!r})\n"
+        "time.sleep(30)\n"
+        if says is None
+        else f"import sys\nprint({f'error: failed to run prompt: {says}'!r}, file=sys.stderr)\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    real = env_mod.resolve_program
+
+    def resolve(argv, env, **kwargs):
+        if argv and argv[0] == "kimi":
+            return [PYTHON, str(stub), *argv[1:]]
+        return real(argv, env, **kwargs)
+
+    monkeypatch.setattr(env_mod, "resolve_program", resolve)
+    return _cfg()
+
+
+async def test_a_connect_that_goes_away_mid_ask_ends_its_kimi_through_taskkill_without_killpg(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows has no ``os.killpg``: calling it raised ``AttributeError`` in place of the cancel."""
+    calls = windows_kill_path(monkeypatch)
+    asking = asyncio.create_task(kimi_code.ask(_python_kimi(tmp_path, monkeypatch), "hi"))
+    started = tmp_path / "ask.pid"
+    for _ in range(200):
+        if started.exists():
+            break
+        await asyncio.sleep(0.05)
+    pid = int(started.read_text())
+
+    asking.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asking
+
+    assert calls == [["/T", "/F", "/PID", str(pid)]]
+    assert not pid_alive(pid)
+
+
+async def test_an_ask_that_runs_out_without_killpg_still_says_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``taskkill`` that does not answer still leaves the `kimi` ended, and the ask still says nothing."""
+    calls = windows_kill_path(monkeypatch, fails=subprocess.TimeoutExpired("taskkill", 5))
+    monkeypatch.setattr(kimi_code, "_ASK_TIMEOUT_S", 1.0)
+
+    assert await kimi_code.ask(_python_kimi(tmp_path, monkeypatch), "hi") == (None, "")
+
+    assert [call[:3] for call in calls] == [["/T", "/F", "/PID"]]
+    assert not pid_alive(int(calls[0][3]))
+
+
+async def test_an_ask_whose_directory_stays_in_use_returns_what_kimi_code_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows a process the `kimi` left running keeps its directory, and the refusal used to raise.
+
+    It raised out of the ask, and so out of the connect's own ping, which
+    promises never to.
+    """
+    cfg = _python_kimi(tmp_path, monkeypatch, says="No model configured.")
+    root = scratch_root(tmp_path, monkeypatch)
+    refused = windows_removal(monkeypatch, lambda path: path.parent == root)
+
+    assert await kimi_code.ask(cfg, "hi") == (1, "No model configured.")
+    assert refused, "no removal was refused, so this tested nothing"
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="process groups are POSIX")
+async def test_ask_cancelled_once_running_takes_what_its_kimi_started(tmp_path: Path) -> None:
+    """Ending an ask takes the group, not only the `kimi`, so what the `kimi` started goes with it.
+
+    Cancelled once the `kimi` is up rather than on the clock: the timeout runs
+    from the spawn, so an ask given a sliver of the cap is killed while the
+    `kimi` is still starting and has no worker to take. Readiness comes from
+    `ask.pid`, which the stand-in writes only after the worker is noted.
+    """
+    asking = asyncio.create_task(kimi_code.ask(_through_kimi(tmp_path, "ok", slow_ask=True, ask_worker=True), "hi"))
+    started = tmp_path / "ask.pid"
+    for _ in range(500):
+        if started.exists() and started.read_text().strip():
+            break
+        await asyncio.sleep(0.01)
+    assert started.exists() and started.read_text().strip(), "the `kimi` never came up"
+
+    worker = int((tmp_path / "worker.pid").read_text())
+    assert _alive(worker), "the ask was cancelled before its `kimi` started a worker to take"
+    asking.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await asking
+        # The group kill is signalled, not awaited: give the worker time to go.
+        for _ in range(40):
+            if not _alive(worker):
+                break
+            await asyncio.sleep(0.05)
+        assert not _alive(worker), "what the `kimi` started outlives the ask"
+    finally:
+        if _alive(worker):
+            os.kill(worker, signal.SIGKILL)
+
+
 async def test_a_coloured_answer_is_read_like_a_plain_one(tmp_path: Path) -> None:
     """With FORCE_COLOR set, `kimi -p` prints its error line in colour (measured); the colour is not the reason."""
     from raven.agent.subagent.probe import ping_agent
@@ -462,3 +590,46 @@ def test_the_plan_and_config_kinds_travel_to_the_page() -> None:
     assert Remedy.from_wire(Remedy("plan", PRICING).to_wire()) == Remedy("plan", PRICING)
     assert Remedy.from_wire(Remedy("config", "kimi doctor config").to_wire()) == Remedy("config", "kimi doctor config")
     assert Remedy.from_wire({"kind": "plan"}) == Remedy("plan")
+
+
+async def test_on_windows_the_kimi_asked_is_the_one_on_the_childs_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ask runs the ``kimi`` the connect started, so it is looked up the way the launch looks it up.
+
+    On Windows that is the child's own PATH, under CreateProcess's rule that a name
+    with no extension means ``.exe``; the gateway's PATH is the one CreateProcess
+    would have searched, and an agent installed after raven started is not on it.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kimi = bin_dir / "kimi.exe"
+    kimi.write_text("#!/bin/sh\nprintf '%s\\n' 'kimi, version 9.9.9'\n", encoding="utf-8")
+    kimi.chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(bin_dir)})
+
+    assert await kimi_code._run(ThirdPartyAcpSubagentConfig(name="Kimi Code", command="kimi acp"), "--version") == (
+        0,
+        "kimi, version 9.9.9\n",
+    )
+
+
+async def test_on_windows_the_kimi_ask_never_starts_a_batch_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ask puts its prompt in argv (``-p``), which a ``.cmd`` would hand to cmd.exe's parser.
+
+    So with only a batch file on the child's PATH the ask finds no program and
+    says nothing, rather than running it.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    batch = bin_dir / "kimi.cmd"
+    batch.write_text("#!/bin/sh\nprintf '%s\\n' 'the batch file ran'\n", encoding="utf-8")
+    batch.chmod(0o755)
+    monkeypatch.setattr(env_mod, "_on_windows", lambda: True)
+    monkeypatch.setattr(env_mod, "_LOGIN_ENV", {"PATH": str(bin_dir)})
+
+    cfg = ThirdPartyAcpSubagentConfig(name="Kimi Code", command="kimi acp")
+    assert await kimi_code._run(cfg, "-p", "a & b") == (None, "")

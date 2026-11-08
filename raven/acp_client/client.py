@@ -5,27 +5,37 @@ run as ``session/prompt`` requests on it, which is the whole difference from the
 cli transport (one process per task). Everything about keeping that process alive
 lives here; deciding when to have one lives in the pool.
 
-Process discipline is copied deliberately from
-:class:`raven.agent.subagent.backends.cli_agent.CliAgentBackend`: own session, pgid
-captured at spawn, ``killpg`` on teardown. An ACP server that reparents a worker
-would otherwise survive ``proc.kill()`` exactly as a ``codex``-style CLI does.
+On POSIX, an agent has its own session, with pgid captured at spawn and
+``killpg`` on teardown. On Windows, a gated launcher joins a kill-on-close
+Job Object before starting the agent, so the whole tree ends even if the host
+dies before teardown. Endpoints supplied without a job retain the
+``taskkill /T`` fallback. An ACP server's workers would otherwise survive ``proc.kill()``.
+
+What a connection runs over is an :class:`Endpoint`: the child's pipes and
+process group for an agent on this computer (:class:`_ProcessEndpoint`), or one
+channel of a machine's Raven node for an agent there
+(:class:`raven.node.client.ChannelEndpoint`). Everything above the endpoint --
+request correlation, the read loops, cancellation, the journal -- is the same
+code either way.
 """
 
 from __future__ import annotations
 
 import asyncio
 import os
-import shlex
+import shutil
 import signal
+import subprocess
+import sys
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from functools import partial
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
-from raven.acp_client import protocol
+from raven.acp_client import leftovers, npx_fetch, protocol, windows
 from raven.acp_client.journal import FrameJournal, redact_acp_frame
 from raven.acp_client.protocol import (
     CANCEL_REQUEST_METHOD,
@@ -35,6 +45,8 @@ from raven.acp_client.protocol import (
     AcpRemoteError,
     AcpTimeoutError,
 )
+from raven.utils import mirrors
+from raven.utils.commands import command_argv
 
 _STDERR_LINES = 200
 
@@ -68,6 +80,287 @@ exiting hands any child it did not collect to init regardless. Measured: an
 ``openclaw acp`` bridge takes longer than this to be collected and is gone
 moments later anyway.
 """
+
+_TEARDOWN_TASKKILL_S = 5.0
+"""How long ``close`` waits for ``taskkill`` where there is no ``killpg``.
+
+A bound rather than an estimate: the walk returns well inside a second, and
+``close`` has to finish whatever ``taskkill`` does.
+"""
+
+_TEARDOWN_GRACE_S = 1.0
+"""How long a local agent is given, once its stdin closes, to end on its own before its process tree is.
+
+What an agent that holds work outside its own process -- a turn on a host it is a client of --
+needs to call that work off before it goes. One that exits at once costs nothing: the wait
+ends when the agent does.
+"""
+
+_TEARDOWN_GRACE_MAX_S = 5.0
+"""The most grace an agent can ask for (``SHUTDOWN_GRACE_META``).
+
+Callers bound a whole close at ten seconds (the pool's drop, the probe's
+handshake), and the drain and the reap after the grace take up to two more.
+"""
+
+_GRACE_POLL_S = 0.02
+
+
+async def _end(pgid: int, proc: Any) -> None:
+    """End the server and what it started: the process group where there is one, else the tree by pid.
+
+    Windows ignores ``start_new_session`` and has no ``os.killpg``, which
+    raised here before any of the teardown ran. ``taskkill /T /F`` walks the
+    launcher's children, which a bare ``Process.kill`` does not reach (the
+    same split as ``raven.ops.transport._kill_process_tree``). It runs only
+    while the launcher is alive: once it has exited, its pid may already
+    name another process. A process already gone is not an error on either
+    path.
+    """
+    if hasattr(os, "killpg"):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        return
+    taskkill = shutil.which("taskkill")
+    if taskkill and proc.returncode is None:
+        try:
+            await asyncio.to_thread(
+                subprocess.run,
+                [taskkill, "/T", "/F", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_TEARDOWN_TASKKILL_S,
+                check=False,
+            )
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+#: What LiteLLM reads from the environment at call time beside the key and base
+#: a provider passes explicitly: other endpoints and API versions, cloud
+#: credentials, proxies and CA bundles. A relayed call is made in the host, with
+#: the host's environment, so an agent configured with its own value for one of
+#: these is launched without the relay and makes its calls itself.
+_LLM_ENV_SUFFIXES = ("_API_BASE", "_BASE_URL", "_API_VERSION")
+_LLM_ENV_PREFIXES = ("AWS_", "AZURE_", "VERTEX", "LITELLM_")
+_LLM_ENV_NAMES = frozenset(
+    {
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+    }
+)
+
+
+def _own_llm_env(agent_env: dict[str, str]) -> list[str]:
+    """The variables LiteLLM would read that this agent's own config sets differently from the host.
+
+    Only the agent's configured map: the login shell's environment differs from a
+    host's in ways nobody chose for one agent (a proxy list's casing), and
+    reading those would turn the relay off for every agent.
+    """
+    own = []
+    for key, value in agent_env.items():
+        upper = key.upper()
+        if upper.startswith("RAVEN_"):
+            continue
+        if upper in _LLM_ENV_NAMES or upper.endswith(_LLM_ENV_SUFFIXES) or upper.startswith(_LLM_ENV_PREFIXES):
+            if os.environ.get(key) != value:
+                own.append(key)
+    return sorted(own)
+
+
+async def _share_with_raven_agent(
+    name: str,
+    argv: list[str],
+    env: dict[str, str],
+    cwd: str | None,
+    base_env: dict[str, str],
+    agent_env: dict[str, str] | None = None,
+) -> Any:
+    """What this host shares with a Raven agent it launches: its model calls, and its loaded code.
+
+    Returns the environment to launch with -- the relay's address added when
+    the host's ``subagents.runtime.llmRelay`` is on -- or, when the fork
+    template started the agent, the endpoint it is already running behind.
+    Anything that is not a Raven agent on this interpreter is returned its
+    environment unchanged, and every failure here falls back to that.
+    """
+    from raven.acp_client import fork_template, leftovers
+    from raven.agent.subagent.backends.env import host_identity_env
+    from raven.agent.subagent.role import subagent_role_env
+    from raven.config.live import default_live, subagent_runtime
+
+    if not fork_template.raven_agent_argv(argv):
+        return env
+    runtime = subagent_runtime(default_live())
+    relayed = False
+    own = _own_llm_env(agent_env or {})
+    if runtime.llm_relay and own:
+        logger.info("acp agent {!r}: its own {} would not reach relayed calls; it makes them itself", name, own)
+    elif runtime.llm_relay:
+        from raven.providers.relay_server import relay_env
+
+        try:
+            env = {**env, **(await relay_env())}
+            relayed = True
+        except Exception as exc:  # noqa: BLE001 - the agent loads LiteLLM itself, as before
+            logger.warning("acp agent {!r}: no llm relay for it: {}", name, exc)
+    if runtime.fork_template:
+        template_env = {**base_env, **host_identity_env(), **subagent_role_env(), **leftovers.launch_env()}
+        endpoint = await fork_template.fork_launch(
+            argv, env, cwd, base_env=template_env, skip=("litellm",) if relayed else ()
+        )
+        if endpoint is not None:
+            return endpoint
+    return env
+
+
+def _retrieved(task: asyncio.Task) -> None:
+    """Read the outcome of a task nobody waits on, so a failure is not reported as never retrieved."""
+    if not task.cancelled():
+        task.exception()
+
+
+class Endpoint(Protocol):
+    """What a connection runs over: where its frames go and come from, and how it ends.
+
+    ``returncode`` is ``None`` while the far side runs. ``ended`` is the
+    endpoint's own sentence for how it ended, when it has a better one than
+    an exit code (a link to a machine that went); ``None`` otherwise.
+    """
+
+    pid: int | None
+
+    @property
+    def returncode(self) -> int | None: ...
+
+    def describe(self) -> str: ...
+
+    async def write(self, data: bytes) -> None: ...
+
+    async def readline(self) -> bytes: ...
+
+    async def readerr(self) -> bytes: ...
+
+    async def end(self) -> None: ...
+
+    async def wait(self) -> int | None: ...
+
+    def ended(self) -> str | None: ...
+
+    def release(self) -> None: ...
+
+
+class _ProcessEndpoint:
+    """A local child's pipes and lifetime, owned by a process group or Windows job."""
+
+    def __init__(self, proc: asyncio.subprocess.Process, pgid: int, job: windows.JobObject | None = None) -> None:
+        self.proc = proc
+        self._job = job
+        self.grace: float | None = None
+        """The grace ``end`` gives the agent, when its handshake asked for one; else ``_TEARDOWN_GRACE_S``."""
+        # Captured at spawn by the caller, not re-derived here: with
+        # start_new_session the launcher's pid doubles as the group's pgid, and
+        # once the launcher exits its pid can be recycled onto an unrelated
+        # process.
+        self._pgid = pgid
+
+    @property
+    def pid(self) -> int | None:
+        return self.proc.pid
+
+    @property
+    def returncode(self) -> int | None:
+        return self.proc.returncode
+
+    def describe(self) -> str:
+        return f"pid {self.proc.pid}"
+
+    async def write(self, data: bytes) -> None:
+        stdin = self.proc.stdin
+        if stdin is None or stdin.is_closing():
+            raise BrokenPipeError("stdin is closed")
+        stdin.write(data)
+        await stdin.drain()
+
+    async def readline(self) -> bytes:
+        if self.proc.stdout is None:  # pragma: no cover - PIPE is always requested
+            return b""
+        return await self.proc.stdout.readline()
+
+    async def readerr(self) -> bytes:
+        if self.proc.stderr is None:  # pragma: no cover - PIPE is always requested
+            return b""
+        return await self.proc.stderr.readline()
+
+    async def end(self) -> None:
+        try:
+            # PID-only cleanup needs a live launcher for taskkill to walk its children.
+            owns_tree = self._job is not None or hasattr(os, "killpg")
+            if owns_tree and self.proc.returncode is None and self.proc.stdin is not None:
+                try:
+                    self.proc.stdin.close()
+                except OSError:
+                    pass
+                else:
+                    await self._exited_within(_TEARDOWN_GRACE_S if self.grace is None else self.grace)
+        finally:
+            if self._job is not None:
+                self._job.close()
+            else:
+                await _end(self._pgid, self.proc)
+
+    async def _exited_within(self, grace: float) -> None:
+        """Wait up to ``grace`` for the agent itself to exit.
+
+        Polled rather than awaited: ``Process.wait`` settles only once every pipe
+        has closed as well, so a descendant that inherited the agent's stdout
+        would hold the wait to its end after the agent was long gone.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + grace
+        while self.proc.returncode is None and loop.time() < deadline:
+            await asyncio.sleep(_GRACE_POLL_S)
+
+    async def wait(self) -> int | None:
+        return await self.proc.wait()
+
+    def ended(self) -> str | None:
+        return None
+
+    def release(self) -> None:
+        """Close the subprocess transport while there is still a loop to close it on.
+
+        ``asyncio.subprocess.Process`` holds its transport until the child is
+        reaped, and an unreaped one is left to ``__del__`` -- which runs at
+        interpreter shutdown, calls ``call_soon`` on a closed loop, and prints a
+        ``RuntimeError`` traceback the user can do nothing about. Closing it
+        here is the only point at which that is still a no-op.
+        """
+        if self._job is not None:
+            self._job.close()
+        transport = getattr(self.proc, "_transport", None)
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception as exc:  # noqa: BLE001 - teardown must not raise
+                logger.debug("acp endpoint pid {}: releasing the transport failed: {}", self.proc.pid, exc)
+        # The group was ended first; its launch record (``leftovers``) goes with it.
+        leftovers.forget(self._pgid)
+
 
 _CANCEL_SETTLE_S = 5.0
 """How long a cancelled turn is given to settle with ``stopReason: cancelled``.
@@ -152,19 +445,26 @@ class AcpClient:
         self,
         *,
         name: str,
-        proc: asyncio.subprocess.Process,
-        pgid: int,
+        endpoint: Endpoint | None = None,
+        proc: asyncio.subprocess.Process | None = None,
+        pgid: int | None = None,
         on_request: RequestHandler | None = None,
         on_notification: NotificationHandler | None = None,
         journal: FrameJournal | None = None,
     ) -> None:
         self.name = name
-        self._proc = proc
-        # Captured at spawn by the caller, not re-derived here: with
-        # start_new_session the launcher's pid doubles as the group's pgid, and
-        # once the launcher exits its pid can be recycled onto an unrelated
-        # process.
-        self._pgid = pgid
+        self.session_identity: tuple[str, str] | None = None
+        """The pool slot this connection fills, as ``(agent name, binding)``, or ``None`` unpooled.
+
+        Set by the pool. It names the process line a session lives on rather than
+        this one process: an agent the pool closes while idle is relaunched into
+        the same slot and reloads the sessions it held, so what this host
+        recorded about those sessions is kept under the slot, not the client."""
+        if endpoint is None:
+            if proc is None:
+                raise ValueError(f"acp agent {name!r}: a connection needs an endpoint or a process")
+            endpoint = _ProcessEndpoint(proc, proc.pid if pgid is None else pgid)
+        self._endpoint: Endpoint = endpoint
         self._on_request = on_request
         self._on_notification = on_notification
         # Every frame both ways, on disk, for the life of this connection. Held
@@ -195,6 +495,8 @@ class AcpClient:
         self._unsettled_cancels: set[str] = set()
         self._stderr: deque[str] = deque(maxlen=_STDERR_LINES)
         self._closed = False
+        # What the agent's last `initialize` answer asked for under SHUTDOWN_GRACE_META.
+        self._asked_grace: float | None = None
         self._reader_task: asyncio.Task | None = None
         self._stderr_task: asyncio.Task | None = None
         # Answering runs off the read loop: a handler may block on a human
@@ -213,65 +515,146 @@ class AcpClient:
         cls,
         *,
         name: str,
-        command: str,
+        command: str | Sequence[str],
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         on_request: RequestHandler | None = None,
         on_notification: NotificationHandler | None = None,
         journal: FrameJournal | None = None,
     ) -> "AcpClient":
-        """Start the agent's ACP server and begin reading it.
+        """Start the agent's ACP server on this computer and begin reading it.
+
+        ``command`` is the line a config stores, split the way this host reads
+        a line, or an argv a caller split already, taken as it is: a word of
+        it that is a command for another machine keeps that machine's
+        quoting, which this host's grammar would read apart (a Windows host's
+        parser made twelve words of a node's one remote-command word while it
+        went as a line).
 
         Raises :class:`AcpConnectionError` if the process cannot be started; a
         server that starts but never speaks is a per-request timeout, not a
         launch failure, because the two need different operator action.
+
+        An ``npx`` launch first has npx fetch the package it names
+        (:func:`npx_fetch.ensure_fetched`), so a caller's handshake budget starts
+        once the agent itself does; a fetch npm refuses raises here, in npm's words.
         """
         # Imported here rather than at module level: backends/__init__ pulls in
         # the acp backend, which pulls in this module, so a module-level import
         # back into that package would close the cycle at init time.
-        from raven.agent.subagent.backends.env import host_identity_env, login_shell_env
+        from raven.agent.subagent.backends.env import host_identity_env, login_shell_env, resolve_program
         from raven.agent.subagent.role import subagent_role_env
 
-        try:
-            argv = shlex.split(command)
-        except ValueError as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
+        if isinstance(command, str):
+            try:
+                argv = command_argv(command)
+            except ValueError as exc:
+                raise AcpConnectionError(f"acp agent {name!r}: command cannot be parsed: {exc}") from exc
+        else:
+            argv = [str(word) for word in command]
         if not argv:
             raise AcpConnectionError(f"acp agent {name!r}: command is empty")
+
+        # Before this launch starts its agent: a dead host's leftover of the same kind
+        # may still hold what the new one needs, such as a lock or a port.
+        await leftovers.sweep_before_first_launch()
 
         # The capture shells out and can block for real seconds on a slow
         # profile (nvm/conda init); to_thread keeps that off the event loop.
         # These agents need the login shell's PATH, not raven's -- the same
         # reason the cli transport does it.
         base_env = await asyncio.to_thread(login_shell_env)
+        # A ``uvx`` or ``npx`` launch fetches the agent on first run, so a
+        # registry that cannot be reached is a launch that never starts. Asked
+        # here rather than before the pool: the pool keys on the launch as
+        # configured, and a verdict that flips must not restart the agents
+        # already running. Asked before the fetch below, for the npx case:
+        # that fetch goes to the default registry, the very one this decides
+        # about, and would fail before this could answer.
+        argv = await mirrors.package_launch_async(argv, {**base_env, **(env or {})}, cwd)
+        # The fetch holds what npx would fetch, so that the handshake is not
+        # cut off by a download. It is given the answer above: an npx launch
+        # the mirror took over is started from what the mirror installed, and
+        # there is nothing left for npx to fetch.
+        await npx_fetch.ensure_fetched(name, argv, env=env, cwd=cwd)
         # The role goes on before the caller's own map, so a config ``env`` entry
-        # is the way to hand one agent back its full registry.
-        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {})}
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                env=child_env,
-                start_new_session=True,
-                limit=_READER_LIMIT,
+        # is the way to hand one agent back its full registry. The mark goes on
+        # last, so no entry can make an agent pass for another host's.
+        child_env = {**base_env, **host_identity_env(), **subagent_role_env(), **(env or {}), **leftovers.launch_env()}
+        # An acp server's argv is its configuration -- its turns travel over
+        # stdio -- so a batch file may stand in for the program here.
+        argv = resolve_program(argv, child_env, batch_files=True)
+        # The agent's own argv, for what this logs and reports: the spawned one
+        # may lead with the wrapper that ties the agent to this host.
+        program_argv = argv
+        shared = await _share_with_raven_agent(name, argv, child_env, cwd, base_env, env or {})
+        if isinstance(shared, dict):
+            child_env = shared
+        else:
+            client = cls(
+                name=name, endpoint=shared, on_request=on_request, on_notification=on_notification, journal=journal
             )
+            client._start_loops()
+            logger.info("acp agent {!r}: forked {} from the template (pid {})", name, program_argv[:2], shared.pid)
+            return client
+        argv = leftovers.bind_to_host(argv, child_env, cwd)
+        job = None
+        try:
+            spawn_options = {
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": cwd,
+                "env": child_env,
+                "start_new_session": True,
+                "limit": _READER_LIMIT,
+            }
+            if sys.platform == "win32":
+                proc, job = await windows.launch(argv, **spawn_options)
+            else:
+                proc = await asyncio.create_subprocess_exec(*argv, **spawn_options)
         except (OSError, ValueError) as exc:
-            raise AcpConnectionError(f"acp agent {name!r}: cannot start {argv[0]!r}: {exc}") from exc
+            raise AcpConnectionError(f"acp agent {name!r}: cannot start {program_argv[0]!r}: {exc}") from exc
+        leftovers.record(proc.pid, name)
 
         client = cls(
             name=name,
-            proc=proc,
-            pgid=proc.pid,
+            endpoint=_ProcessEndpoint(proc, proc.pid, job),
             on_request=on_request,
             on_notification=on_notification,
             journal=journal,
         )
         client._start_loops()
-        logger.info("acp agent {!r}: started {} (pid {})", name, argv[:1], proc.pid)
+        logger.info("acp agent {!r}: started {} (pid {})", name, program_argv[:1], proc.pid)
         return client
+
+    @classmethod
+    def over(
+        cls,
+        endpoint: Endpoint,
+        *,
+        name: str,
+        on_request: RequestHandler | None = None,
+        on_notification: NotificationHandler | None = None,
+        journal: FrameJournal | None = None,
+    ) -> "AcpClient":
+        """A connection over an endpoint somebody else opened: an agent a machine's Raven node started.
+
+        The agent is already running where the endpoint leads; this only
+        begins reading it. Closing the client ends the agent through the
+        endpoint, as it kills a child process it launched itself.
+        """
+        client = cls(
+            name=name, endpoint=endpoint, on_request=on_request, on_notification=on_notification, journal=journal
+        )
+        client._start_loops()
+        logger.info("acp agent {!r}: started on {}", name, endpoint.describe())
+        return client
+
+    @property
+    def _proc(self) -> Any:
+        """The child process of an agent on this computer; ``None`` for one reached through a node."""
+        return getattr(self._endpoint, "proc", None)
 
     def _start_loops(self) -> None:
         self._reader_task = asyncio.create_task(self._read_stdout(), name=f"acp-read-{self.name}")
@@ -291,74 +674,83 @@ class AcpClient:
         Without this the pool would hand that connection out forever, failing
         every task in milliseconds while the process table says all is well.
         """
-        if self._closed or self._proc.returncode is not None:
+        if self._closed or self._endpoint.returncode is not None:
             return False
         return self._reader_task is None or not self._reader_task.done()
 
     async def close(self) -> None:
-        """Kill the whole process group and stop reading. Idempotent.
+        """End the agent's process tree and stop reading. Idempotent.
 
         Bounded from the inside, not by its caller: a ``close`` cancelled from
         outside stops before releasing the subprocess transport, whose
         ``__del__`` then runs after the loop is closed and prints
         ``RuntimeError: Event loop is closed`` over whatever the user is looking
-        at. So both waits below give up on their own and the teardown always
-        runs to its end.
+        at. So the waits below give up on their own, and a close cancelled
+        while the agent is given its grace (``_TEARDOWN_GRACE_S``) still lets
+        go of everything it held before the cancellation goes on: the tree is
+        ended by then either way, and a retry would find the client closed.
+
+        A close that is cancelled part-way leaves its launch record on disk, which
+        is harmless: the group it names was killed first, and the first sweep after
+        this host exits drops the file.
         """
         if self._closed:
             return
         self._closed = True
+        if hasattr(self._endpoint, "grace"):
+            self._endpoint.grace = self._granted_grace()
         try:
-            os.killpg(self._pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        for task in (self._reader_task, self._stderr_task):
-            if task is not None:
-                task.cancel()
-        answer_tasks = list(self._answer_tasks)
-        for task in answer_tasks:
-            task.cancel()
+            await self._endpoint.end()
+        except asyncio.CancelledError:
+            for task in self._stop_tasks():
+                task.add_done_callback(_retrieved)
+            self._let_go()
+            raise
+        pending_tasks = self._stop_tasks()
         # Awaited, not just cancelled: an un-awaited cancelled task logs a
         # "Task exception was never retrieved" warning on some paths, and the
         # child must be reaped here rather than left as a zombie.
-        pending_tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
-        pending_tasks.extend(answer_tasks)
         if pending_tasks:
             done, _ = await asyncio.wait(pending_tasks, timeout=_TEARDOWN_DRAIN_S)
             for task in done:
                 if not task.cancelled():
                     task.exception()
-        if self._proc.returncode is None:
+        if self._endpoint.returncode is None:
             try:
-                await asyncio.wait_for(self._proc.wait(), timeout=_TEARDOWN_REAP_S)
+                await asyncio.wait_for(self._endpoint.wait(), timeout=_TEARDOWN_REAP_S)
             except (asyncio.TimeoutError, ProcessLookupError):
                 logger.debug(
-                    "acp agent {!r}: not reaped within {}s of SIGKILL; abandoning the wait",
+                    "acp agent {!r}: not reaped within {}s of being ended; abandoning the wait",
                     self.name,
                     _TEARDOWN_REAP_S,
                 )
-        self._release_transport()
+        self._let_go()
+
+    def _heard_initialize(self, result: Any) -> None:
+        caps = result.get("agentCapabilities") if isinstance(result, dict) else None
+        meta = caps.get("_meta") if isinstance(caps, dict) else None
+        asked = meta.get(protocol.SHUTDOWN_GRACE_META) if isinstance(meta, dict) else None
+        self._asked_grace = float(asked) if isinstance(asked, (int, float)) and not isinstance(asked, bool) else None
+
+    def _granted_grace(self) -> float:
+        if self._asked_grace is None:
+            return _TEARDOWN_GRACE_S
+        return max(_TEARDOWN_GRACE_S, min(self._asked_grace, _TEARDOWN_GRACE_MAX_S))
+
+    def _stop_tasks(self) -> list[asyncio.Task]:
+        """Cancel the read loops and every answer in progress; the tasks, to wait out."""
+        tasks = [t for t in (self._reader_task, self._stderr_task) if t is not None]
+        tasks.extend(self._answer_tasks)
+        for task in tasks:
+            task.cancel()
+        return tasks
+
+    def _let_go(self) -> None:
+        self._endpoint.release()
         self._fail_pending(AcpConnectionError(f"acp agent {self.name!r}: connection closed"))
         # Last, so the frames the teardown itself produced are in the file.
         if self._journal is not None:
             self._journal.close()
-
-    def _release_transport(self) -> None:
-        """Close the subprocess transport while there is still a loop to close it on.
-
-        ``asyncio.subprocess.Process`` holds its transport until the child is
-        reaped, and an unreaped one is left to ``__del__`` -- which runs at
-        interpreter shutdown, calls ``call_soon`` on a closed loop, and prints a
-        ``RuntimeError`` traceback the user can do nothing about. Closing it
-        here is the only point at which that is still a no-op.
-        """
-        transport = getattr(self._proc, "_transport", None)
-        if transport is None:
-            return
-        try:
-            transport.close()
-        except Exception as exc:  # noqa: BLE001 - teardown must not raise
-            logger.debug("acp agent {!r}: releasing the transport failed: {}", self.name, exc)
 
     async def __aenter__(self) -> "AcpClient":
         return self
@@ -445,8 +837,12 @@ class AcpClient:
         *,
         timeout: float | None = None,
         cancel_session: str | None = None,
+        sent: Callable[[int], None] | None = None,
     ) -> Any:
         """Send a request and await its result.
+
+        ``sent`` hears the request's id as it goes out: what a run on a
+        machine records, so a process after this one can await the answer.
 
         Raises :class:`AcpRemoteError` if the agent answers with an error,
         :class:`AcpTimeoutError` on budget expiry, :class:`AcpConnectionError` if
@@ -482,10 +878,16 @@ class AcpClient:
         self._request_sessions[request_id] = (params or {}).get("sessionId") if isinstance(params, dict) else None
         self._request_methods[request_id] = method
         try:
+            if sent is not None:
+                sent(request_id)
             await self._send(protocol.request(request_id, method, params))
             if timeout is None:
-                return await asyncio.shield(future)
-            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+                result = await asyncio.shield(future)
+            else:
+                result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+            if method == "initialize":
+                self._heard_initialize(result)
+            return result
         except asyncio.TimeoutError:
             raise AcpTimeoutError(
                 f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method
@@ -500,6 +902,51 @@ class AcpClient:
             self._request_methods.pop(request_id, None)
 
     @property
+    def endpoint(self) -> Endpoint:
+        """What this connection runs over: a child process here, or a channel to an agent on a machine."""
+        return self._endpoint
+
+    @property
+    def next_request_id(self) -> int:
+        """The id the next request from here carries."""
+        return self._next_id + 1
+
+    def continue_ids_from(self, next_id: int) -> None:
+        """Carry request ids on from ``next_id``: for a connection taken over from a process that used the ones before it."""
+        self._next_id = max(self._next_id, int(next_id) - 1)
+
+    async def await_response(
+        self, request_id: int, *, method: str, session: str | None = None, timeout: float | None = None
+    ) -> Any:
+        """The answer to a request another process of this Raven sent on this connection: awaited, never sent.
+
+        What a run picked up after a restart waits on: the ``session/prompt``
+        the process before this one sent, whose answer the agent still owes.
+        Raises as :meth:`request` does.
+        """
+        if not self.alive:
+            if self._closed:
+                raise AcpConnectionError(f"acp agent {self.name!r}: connection is not open")
+            await self._settle_exit()
+            raise self._ended_error()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[request_id] = future
+        self._request_sessions[request_id] = session
+        self._request_methods[request_id] = method
+        try:
+            if timeout is None:
+                return await asyncio.shield(future)
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise AcpTimeoutError(
+                f"acp agent {self.name!r}: {method} timed out after {timeout}s", method=method
+            ) from None
+        finally:
+            self._pending.pop(request_id, None)
+            self._request_sessions.pop(request_id, None)
+            self._request_methods.pop(request_id, None)
+
+    @property
     def prompting(self) -> bool:
         """Whether a turn is in flight on this connection right now.
 
@@ -508,6 +955,12 @@ class AcpClient:
         the condition under which another session's open can only queue.
         """
         return any(method == "session/prompt" for method in self._request_methods.values())
+
+    @property
+    def busy(self) -> bool:
+        """Whether either side is waiting on the other: a request of raven's own
+        unanswered (a turn, a held wake included) or one of the agent's being answered."""
+        return bool(self._pending) or bool(self._answer_tasks)
 
     @property
     def idle_seconds(self) -> float:
@@ -553,11 +1006,28 @@ class AcpClient:
         this codebase cancels once and then gathers -- the same property
         ``CliAgentBackend._kill_process_group`` relies on to await the child.
         """
+        if getattr(self._endpoint, "stays", False):
+            # This process is stopping and the agent stays with its machine's
+            # daemon: the turn goes on there, and the next process picks it up.
+            return
         try:
             await self.notify("session/cancel", {"sessionId": session_id})
         except Exception:  # noqa: BLE001 - a connection already gone has nothing to settle
             return
         if is_draining():
+            return
+        if getattr(self._endpoint, "offline", False):
+            # The agent is on a machine whose link is down: the cancel waits
+            # with the endpoint for the next link, and no settlement can
+            # arrive before then. The budget would only hold the caller; the
+            # session is unsettled, as one that outlived the budget is.
+            self._unsettled_cancels.add(session_id)
+            logger.info(
+                "acp agent {!r}: session {!r} was cancelled while its machine's link is down; the cancel goes with "
+                "the next link",
+                self.name,
+                session_id,
+            )
             return
         done, _ = await asyncio.wait({future}, timeout=_CANCEL_SETTLE_S)
         if done:
@@ -589,24 +1059,17 @@ class AcpClient:
         """
         if self._journal is not None:
             self._journal.note("out", frame=redact_acp_frame(frame), session=session or self._frame_session(frame))
-        stdin = self._proc.stdin
-        if stdin is None or stdin.is_closing():
-            raise AcpConnectionError(f"acp agent {self.name!r}: stdin is closed")
         try:
-            stdin.write(protocol.encode(frame))
-            await stdin.drain()
-        except (BrokenPipeError, ConnectionResetError, RuntimeError) as exc:
+            await self._endpoint.write(protocol.encode(frame))
+        except (OSError, RuntimeError) as exc:
             raise AcpConnectionError(f"acp agent {self.name!r}: write failed: {exc}") from exc
 
     # ---- read loops ------------------------------------------------------
 
     async def _read_stdout(self) -> None:
-        stdout = self._proc.stdout
-        if stdout is None:  # pragma: no cover - PIPE is always requested
-            return
         try:
             while True:
-                raw = await stdout.readline()
+                raw = await self._endpoint.readline()
                 if not raw:
                     break
                 line = raw.decode("utf-8", "replace").strip()
@@ -632,6 +1095,12 @@ class AcpClient:
                 if self._journal is not None:
                     self._journal.note("in", frame=frame, session=self._frame_session(frame))
                 await self._dispatch(frame)
+                # Told after the frame is dealt with, so what an endpoint
+                # records as read is what was read: a channel to a machine
+                # keeps the count a later attach goes on from.
+                consumed = getattr(self._endpoint, "consumed", None)
+                if consumed is not None:
+                    consumed()
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - the loop must not die silently
@@ -661,18 +1130,19 @@ class AcpClient:
         stderr open forever must not park every caller behind it.
         """
         try:
-            await asyncio.wait_for(asyncio.shield(self._proc.wait()), timeout=1.5)
+            await asyncio.wait_for(asyncio.shield(self._endpoint.wait()), timeout=1.5)
         except (asyncio.TimeoutError, ProcessLookupError):
             pass
         if self._stderr_task is not None and not self._stderr_task.done():
             await asyncio.wait({self._stderr_task}, timeout=0.5)
 
     def _ended_error(self) -> AcpConnectionError:
-        return AcpConnectionError(
-            f"acp agent {self.name!r}: connection ended (exit {self._proc.returncode}); "
-            f"stderr tail: {self.stderr_tail(400) or '<empty>'}",
-            stderr=self.stderr_tail() or None,
-        )
+        """How the connection ended: the endpoint's own sentence when it has one, else the exit and stderr."""
+        rc = self._endpoint.returncode
+        said = self._endpoint.ended()
+        if said is None:
+            said = f"connection ended (exit {rc}); stderr tail: {self.stderr_tail(400) or '<empty>'}"
+        return AcpConnectionError(f"acp agent {self.name!r}: {said}", stderr=self.stderr_tail() or None, returncode=rc)
 
     async def _read_stderr(self) -> None:
         """Drain the child's stderr for as long as the child is alive.
@@ -687,13 +1157,10 @@ class AcpClient:
         limit, this loop exited, and the agent loop died holding a lock it never
         saw. So the only exits are EOF and cancellation.
         """
-        stderr = self._proc.stderr
-        if stderr is None:  # pragma: no cover - PIPE is always requested
-            return
         try:
             while True:
                 try:
-                    raw = await stderr.readline()
+                    raw = await self._endpoint.readerr()
                 except ValueError as exc:
                     # A line past the reader's limit. It has already cleared its
                     # buffer and resumed the transport, so the oversized line is
@@ -862,6 +1329,7 @@ __all__ = [
     "is_draining",
     "UNHANDLED",
     "AcpClient",
+    "Endpoint",
     "NotificationHandler",
     "RequestHandler",
 ]

@@ -6,9 +6,9 @@ import json
 import os
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-server = FastMCP("raven-mcp-handoff-stub", log_level="ERROR")
+server = MCPServer("raven-mcp-handoff-stub", log_level="ERROR")
 
 
 @server.tool()

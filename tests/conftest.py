@@ -39,6 +39,7 @@ import contextlib
 import fnmatch
 import functools
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -519,6 +520,18 @@ def _no_leaked_skill_watchers() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _forget_learned_reply_headroom() -> Iterator[None]:
+    """The reply headroom a refusal teaches is process state, keyed by model id:
+    a test whose provider refuses one prompt would otherwise move the trigger
+    of every later test on the same stub model."""
+    from raven.context_engine import headroom
+
+    headroom.reset()
+    yield
+    headroom.reset()
+
+
+@pytest.fixture(autouse=True)
 def no_discovered_products(monkeypatch):
     """Pin agent-table discovery off, so the suite sees the same table everywhere.
 
@@ -547,6 +560,24 @@ def _console_socket_registered():
 
     register_console_feature()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_configured_vision_model(monkeypatch):
+    """No test reaches a real vision endpoint by default.
+
+    The parsers resolve the configured ``vision`` pin when they are handed no
+    model -- which is right in production and a trap here: a developer who has
+    configured one, on the machine the suite runs on, pays for a describe call
+    every time a test parses a picture, a figure or a page with no text layer.
+    It happened: a PDF fixture short enough to read as scanned sent its page to
+    a live model, and the test failed on the answer.
+
+    A test that wants the path passes its own stub, which is what every test
+    here does. One that wants to prove the unconfigured behaviour gets it for
+    free.
+    """
+    monkeypatch.setattr("raven.knowledge._vision.load_vision_model", lambda: None)
 
 
 @pytest.fixture(autouse=True)
@@ -627,6 +658,14 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     both camps (measured: 17 unrelated failures), patching ``Path.home`` beats the
     ``setenv`` camp (measured: 3), and setting ``HOME`` beats neither: an attribute
     patch shadows it, and a later ``setenv`` replaces it.
+
+    ``USERPROFILE`` is set beside it, through :func:`tests._home.point_home`: on
+    Windows ``os.path.expanduser`` and ``Path.home`` read that one and ignore
+    ``HOME`` (``ntpath``), so a test that brings no home of its own -- the ssh
+    alias tests that take only ``store`` and ``reached`` -- otherwise writes its
+    ``Host`` block into the ``~/.ssh/config`` of whoever runs the suite on Windows.
+    It loses the same way ``HOME`` does; a test that wants ``~`` moved on every
+    platform moves both, through the same helper.
     """
 
     # Outside ``tmp_path`` rather than under it, and fresh per test. Tests use
@@ -636,9 +675,11 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     # ``tmp_path`` rather than a second numbered directory: pytest picks the next
     # number by scanning the whole base temp dir, and with 22k tests that scan
     # cost 44 s per worker for the numbered dirs this fixture alone created.
+    from tests._home import point_home
+
     home = tmp_path.with_name(f"{tmp_path.name}-home")
     home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
+    point_home(monkeypatch, home)
     # The suite's baseline permission mode is full access -- the behaviour the
     # whole suite was written against before the gate existed, and what a test
     # about streaming or diffs should keep seeing. The product default is ask;
@@ -664,10 +705,11 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
     A stub that answers every call with an error drives the code under test
     into its backoff, and the backoff is tuned for a real outage: the loop's
-    LLM-error ladder is 105 s, the provider's 7 s per model, a memory store
-    retries for 52 s, a subagent steer waits 3 s for a hook, an ACP cancel is
-    given 5 s to settle, the gateway holds delivery 2 s at teardown. One
-    checkpoint test slept 133 s that way and proved nothing by it.
+    LLM-error ladder is 105 s, the provider's 7 s per model, an empty reply's
+    resend backs off 5 to 60 s, a memory store retries for 52 s, a subagent
+    steer waits 3 s for a hook, an ACP cancel is given 5 s to settle, the
+    gateway holds delivery 2 s at teardown. One checkpoint test slept 133 s
+    that way and proved nothing by it.
 
     The lengths stay. ``len(ladder)`` is how both retry ladders count their
     attempts, so an empty tuple would change behaviour rather than speed; the
@@ -682,6 +724,7 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
     if request.node.get_closest_marker("production_timing"):
         return
     from raven.acp_client import client as acp_client
+    from raven.agent.loop import recovery
     from raven.agent.subagent import manager
     from raven.config import schema
     from raven.gateway import spine
@@ -693,6 +736,8 @@ def _no_production_waits(request: pytest.FixtureRequest, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(LLMProvider, "_CHAT_RETRY_DELAYS", shortened(LLMProvider._CHAT_RETRY_DELAYS))
     monkeypatch.setattr(schema, "LLM_ERROR_RETRY_DELAYS_DEFAULT", shortened(schema.LLM_ERROR_RETRY_DELAYS_DEFAULT))
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_BASE_DELAY_S", 0.001)
+    monkeypatch.setattr(recovery, "EMPTY_RETRY_MAX_DELAY_S", 0.001)
     monkeypatch.setattr(store_pipeline, "BACKOFF_S", shortened(store_pipeline.BACKOFF_S))
     monkeypatch.setattr(manager, "_STEER_HOOK_GRACE_S", 0.05)
     monkeypatch.setattr(acp_client, "_CANCEL_SETTLE_S", 0.05)
@@ -808,6 +853,43 @@ def _no_openrouter_network(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _no_codex_version_network(monkeypatch):
+    """Keep the Codex release lookup off npm.
+
+    Every Codex turn asks which CLI release to name, so an un-mocked test of the
+    provider would reach registry.npmjs.org and send whatever was published that
+    morning. Unreachable by default, which answers the bundled fallback; tests
+    of the lookup put back the real fetch and mock the transport.
+    """
+    from raven.providers import codex_client_version
+
+    def offline(*, timeout: float) -> object:
+        raise OSError("npm is not reached in tests")
+
+    codex_client_version.reset_cache()
+    monkeypatch.setattr(codex_client_version, "_fetch_latest", offline)
+    yield
+    codex_client_version.reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_mirror_fallback(monkeypatch):
+    """Keep the mirror fallback, and the probes it makes, off the network.
+
+    Every launch of a uvx or npx agent or MCP server, every bridge build, and
+    the upgrade helper's uv first ask whether the default registry answers, so an
+    un-mocked test would reach registry.npmjs.org or pypi.org and wait on
+    whatever the runner's network does. Opted out by env for the whole suite,
+    which is the launch each test was written against; tests that exercise a
+    fallback clear the variable.
+    """
+    from raven.utils import mirrors
+
+    monkeypatch.setenv(mirrors.OPT_OUT_ENV, "1")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_provider_probe(monkeypatch):
     """Keep the credential probe's socket off the network, and only the socket.
 
@@ -831,7 +913,7 @@ def _no_provider_probe(monkeypatch):
 
     real = update_providers._probe_models_endpoint
 
-    def unreachable(url, headers, *, timeout_s, transport=None, extras=()):
+    def unreachable(url, headers, *, timeout_s, transport=None, extras=(), verify=True):
         if transport is not None:
             return real(url, headers, timeout_s=timeout_s, transport=transport, extras=extras)
         return {
@@ -928,10 +1010,10 @@ def _no_ollama_model_info(monkeypatch):
     1/4. LiteLLM already catches the failure and answers with a zeroed row, so
     that is what this hands back, minus the wait.
     """
-    from litellm.llms.ollama.completion.transformation import OllamaConfig
+    from litellm.llms.ollama.common_utils import OllamaModelInfo
     from litellm.types.utils import ModelInfoBase
 
-    def unreachable(self, model: str, api_base: str | None = None) -> ModelInfoBase:
+    def unreachable(self, model: str, api_base: str | None = None, api_key: str | None = None) -> ModelInfoBase:
         if model.startswith(("ollama/", "ollama_chat/")):
             model = model.split("/", 1)[1]
         return ModelInfoBase(
@@ -945,7 +1027,7 @@ def _no_ollama_model_info(monkeypatch):
             max_output_tokens=None,
         )
 
-    monkeypatch.setattr(OllamaConfig, "get_model_info", unreachable)
+    monkeypatch.setattr(OllamaModelInfo, "get_model_info", unreachable)
     yield
 
 
@@ -1032,6 +1114,31 @@ def _unbind_the_permission_turn() -> Iterator[None]:
         turn._TOOL_CALL_ID.reset(call_token)
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_everos_binding() -> Iterator[None]:
+    """Put the EverOS role binding back where the test found it.
+
+    ``bind_roles_here`` writes the four roles into ``os.environ`` directly,
+    records them in ``raven_everos.config._BOUND_HERE`` and publishes that
+    record as ``RAVEN_EVEROS_BOUND``; ``monkeypatch`` undoes none of it. It is
+    reached by ``EverosBackend.start()`` and by every runtime assembled with
+    the memory plugin on -- the launcher, eval-hook, plugin-tool and remote
+    file-tool tests among them, fourteen files in one measured run
+    (2026-10-15) -- so one test's binding was the next test's environment.
+    Which test paid depended on how the suite was dealt into shards: a
+    settings test reading a saved endpoint was told the environment outranks
+    it (``role_is_env_managed``) and refused the write, in one shard and not
+    in another. Tests that assert on the binding read it inside their own
+    run; ``tests/_everos_env.py`` says what goes back, and why the set is put
+    back as the object the test began with rather than whichever object the
+    attribute holds at teardown.
+    """
+    from tests._everos_env import confined_everos_binding
+
+    with confined_everos_binding():
+        yield
+
+
 def wired_kwarg(kwargs: dict, name: str):
     """Resolve a wiring value from captured AgentLoop kwargs, bundle-aware.
 
@@ -1083,3 +1190,107 @@ def with_channel_fields(view, **overrides):
         section = section.model_copy(update=socket_over)
     cargo.update({k: v for k, v in overrides.items() if k not in socket_keys})
     return DispensedSlice(section, cargo)
+
+
+@pytest.fixture
+def supported_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """This computer offers a machine the password login, whatever host the test runs on.
+
+    For a test of the password flow rather than of the host. A machine
+    registered with a password is reached through OpenSSH's askpass hook
+    (``raven.ops.transport.ssh_env``), and a Windows host refuses the whole
+    mode -- the registration itself is refused there, so a test of the flow
+    would be asserting the host instead. The pin is on ``sys.platform``, which
+    the modules read as they are asked; none of them reads it by value at
+    import time.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
+@pytest.fixture(autouse=True)
+def _one_memory_plugin_in_discovery(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the second memory plugin out of entry-point discovery by default.
+
+    The dev environment installs every workspace member, so once the
+    ``everos-cloud-memory`` distribution joined the tree, every test that
+    walks ``raven onboard``'s memory step through the real registry met the
+    backend chooser -- a question those tests never scripted an answer to,
+    because they describe an install with one memory plugin. The fixture keeps
+    that world for them; a test marked ``everos_cloud`` (the cloud plugin's own
+    files carry the mark module-wide) sees both. Only discovery is touched:
+    ``import raven_everos_cloud`` and ``find_spec`` answer as installed everywhere.
+    """
+    if request.node.get_closest_marker("everos_cloud"):
+        return
+    from importlib import metadata
+
+    real_entry_points = metadata.entry_points
+
+    def _without_the_cloud_plugin(**kwargs):
+        eps = real_entry_points(**kwargs)
+        if kwargs.get("group") != "raven.plugins":
+            return eps
+        return metadata.EntryPoints(ep for ep in eps if ep.name != "everos-cloud-memory")
+
+    monkeypatch.setattr(metadata, "entry_points", _without_the_cloud_plugin)
+
+
+@pytest.fixture(autouse=True)
+def _this_process_goes_on() -> Iterator[None]:
+    """After a test that ran a host's shutdown, the next test is a process that goes on.
+
+    ``raven.acp_client.remote.leave_agents_running`` is said once by a host
+    that is stopping and never unsaid, which is right for a process about to
+    end and wrong for a worker that runs more tests: with it still said,
+    every later close leaves a stand-in machine's agent with its daemon, and
+    the leak check of ``tests/test_subagent_acp_remote.py`` fails for the
+    rest of the worker's life (``tests/test_rpc_bootstrap.py`` runs that
+    shutdown).
+
+    The dispatches such a shutdown marked as left go too: the mark waits for
+    the manager to read it (``raven.acp_client.remote_runs.was_left``), a test
+    that drives a backend alone never does, and a later test of the same
+    dispatch id would read the earlier test's run as left.
+    """
+    yield
+    remote_runs = sys.modules.get("raven.acp_client.remote_runs")
+    if remote_runs is not None:
+        remote_runs._LEFT.clear()
+    remote = sys.modules.get("raven.acp_client.remote")
+    if remote is not None:
+        remote.staying()
+
+
+@pytest.fixture
+def no_real_ssh_g(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail a test that runs the computer's own ``ssh -G``.
+
+    It reads the ssh config of whoever runs the suite -- found through the
+    passwd entry, which the suite's ``HOME`` does not move -- and a ``Match
+    exec`` there runs. A stand-in under the test's own directory, or an ``-F``
+    naming the test's config, is what a test resolves with; with no ssh on
+    PATH at all nothing runs, and the lookup's own error stands. Used by the
+    modules whose code asks ``ssh -G`` (``transport.resolve_with_ssh``).
+
+    It judges the command line ``Popen`` is finally handed, the one that
+    execs: a test may swap ``Popen`` for a wrapper that starts its own
+    stand-in in place of ``ssh``, and what that wrapper passes on is what
+    runs. A subclass, so ``isinstance`` and ``Popen[bytes]`` keep working.
+    """
+    import subprocess
+
+    class Popen(subprocess.Popen):
+        def __init__(self, argv, *args, **kwargs):
+            if (
+                isinstance(argv, (list, tuple))
+                and argv
+                and Path(str(argv[0])).stem.lower() == "ssh"
+                and "-G" in argv
+                and "-F" not in argv
+            ):
+                found = shutil.which(str(argv[0]), path=(kwargs.get("env") or os.environ).get("PATH"))
+                if found is not None and not Path(found).resolve().is_relative_to(tmp_path.resolve()):
+                    raise AssertionError(f"the real ssh -G ran against the owner's own config: {found}")
+            super().__init__(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)

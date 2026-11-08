@@ -126,9 +126,9 @@ raven agents new example-engine-agent --engine-wheel --dry-run
 package 内，并加入 `raven.plugins` entry-point group。Agent 声明 engine package
 和发行包；子解释器能导入之前，readiness 保持 false。
 
-在目标项目/环境中使用 `uv` 管理依赖。Raven 应解析到已验证的源码树或发行包；
-公共索引上不带限定的 `raven` 名称可能是另一个项目。不要照搬旧设计记录中的裸安装
-命令。仓库环境设置见[开发](development.md)。
+在目标项目/环境中使用 `uv` 管理依赖。按[快速开始](quick-start.md)安装 Raven，
+或使用[开发](development.md)中的源码环境设置。这些路径会选取 EverMind Raven
+发行包；公共索引上不带限定的 `raven` 名称可能指向另一个项目。
 
 ## 验证、发现与运行 { #verify-discover-and-operate }
 

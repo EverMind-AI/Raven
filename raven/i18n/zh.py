@@ -6,6 +6,11 @@ boundary test keeps every other module free of CJK text.
 
 MESSAGES: dict[str, str] = {
     "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
+    # Skill Hub search: the reload wait, and what turning it on sends.
+    "Saved. Skill Hub search starts after Raven reloads.": "已保存。Raven 重新加载后才会开始搜索 Skill Hub。",
+    "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
+    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启，Raven 重新加载后生效：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
+    "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set skillForge.router.hub.enabled to false.[/dim]": "  [dim]Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 {endpoint}。可以在网页的“设置 > 技能”中关闭，或把 skillForge.router.hub.enabled 设为 false。[/dim]",
     # raven.playbook rounds: the word that ends a plan early, and who hears it.
     "You are the last role of this round, so what you write is what the stint reads when it decides whether to open another one. If nothing is left that is worth another round, write {marker} on a line of its own and the stint ends with this round. That is the only thing that ends it early: without those words it keeps going until its rounds are spent.": "你是这一轮的最后一个角色，所以计划在决定要不要再开一轮时，读的就是你写的东西。如果已经没有任何值得再开一轮的事情，就单独占一行写下 {marker}，计划就到这一轮为止。能提前结束它的只有这一件事：没有这个词，它会一直跑到轮数用完。",
     # raven.playbook rounds: which directory a role is standing in.
@@ -122,7 +127,8 @@ MESSAGES: dict[str, str] = {
     "Retry after install": "安装后重试",
     "Skip": "跳过",
     "  [dim]Starting {a0} QR login…[/dim]": "  [dim]正在启动 {a0} 扫码登录…[/dim]",
-    "  [dim]A login link / QR code will appear below — scan it with {a0} (or open the link on a phone signed in to {a0}) to connect. This waits until you finish.[/dim]": "  [dim]下方会出现登录链接 / 二维码 — 用 {a0} 扫码(或在已登录 {a0} 的手机上打开该链接)即可接入;这里会一直等到你完成。[/dim]",
+    "  [dim]A login link / QR code will appear below — scan it with {a0} (or open the link on a phone signed in to {a0}) to connect. This waits until you scan the code.{note}[/dim]": "  [dim]下方会出现登录链接 / 二维码 — 用 {a0} 扫码(或在已登录 {a0} 的手机上打开该链接)即可接入;这里会一直等到你扫码。{note}[/dim]",
+    " WhatsApp stops waiting after five minutes.": " WhatsApp 会在五分钟后停止等待。",
     "  [dim]{channel} not connected — finish later with raven channels login {channel}.[/dim]": "  [dim]{channel} 未接入 — 之后用 raven channels login {channel} 完成。[/dim]",
     "  [green]✓ {target} config updated.[/green]": "  [green]✓ {target} 配置已更新。[/green]",
     "  [yellow]{path} is required.[/yellow]": "  [yellow]{path} 为必填项。[/yellow]",
@@ -151,6 +157,7 @@ MESSAGES: dict[str, str] = {
     "Account out of credits or not provisioned — top up and retry.": "账户余额不足或未开通 — 充值后重试。",
     "Rate limited — wait a bit and retry, or switch provider.": "触发限流 — 稍等后重试,或更换服务商。",
     "Network error reaching the provider — check network / proxy / VPN.": "连接服务商时网络出错 — 检查网络 / 代理 / VPN。",
+    "The provider's TLS certificate was refused — if a corporate proxy or a private CA signs it, add that CA to the system certificate store. If SSL_CERT_FILE already trusts that CA, macOS and Windows may still refuse the certificate by their own rules; RAVEN_NO_SYSTEM_CA=1 turns those off. An expired certificate, or one for another host, is the server's to fix.": "服务商的 TLS 证书被拒绝 — 如果它由公司代理或私有 CA 签发，请把该 CA 加入系统证书库。如果 SSL_CERT_FILE 已经信任该 CA，macOS 和 Windows 仍可能按系统自身的规则拒绝该证书；设置 RAVEN_NO_SYSTEM_CA=1 可关闭这些规则。证书已过期或不属于该主机时，需要由服务端修复。",
     "Run: raven provider login {a0}": "请运行:raven provider login {a0}",
     "Verification failed: {status}": "验证失败:{status}",
     "Default model ({a0} available — type to filter, Tab to complete):": "默认模型(共 {a0} 个 — 输入可筛选,Tab 补全):",
@@ -243,6 +250,8 @@ MESSAGES: dict[str, str] = {
     "Importing...": "导入中...",
     "  [dim]This provider has no model list to fetch - offering the ones we know.[/dim]": "  [dim]该服务商没有可拉取的模型列表,先列出已知的。[/dim]",
     "  [dim]Couldn't reach the provider for its model list - offering the ones we know.[/dim]": "  [dim]未能向服务商拉取模型列表,先列出已知的。[/dim]",
+    "  [dim]Reached the provider; its model list answers without checking the key, so the key is not confirmed; connectivity is not tested (--skip-test).[/dim]": "  [dim]已连上服务商；它的模型列表不校验 Key，所以 Key 未经确认；连通性未测试（--skip-test）。[/dim]",
+    "  [dim]Reached the provider; its model list answers without checking the key, so the test message below is what confirms it.[/dim]": "  [dim]已连上服务商；它的模型列表不校验 Key，下面的测试消息才是确认它的一步。[/dim]",
     "Switch provider": "更换服务商",
     "Continue anyway": "仍然继续",
     "Pick a provider to manage:": "选择要管理的服务商:",
@@ -294,7 +303,7 @@ MESSAGES: dict[str, str] = {
     "  [green]✓ Keys written to config and mirrored to {path} (owner-only).[/green]": "  [green]✓ key 已写入配置,并镜像到 {path}(仅本人可读)。[/green]",
     "  [dim]A running gateway / TUI picks these up on its next restart.[/dim]": "  [dim]正在运行的 gateway / TUI 需重启后生效。[/dim]",
     "Web access": "联网能力",
-    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key; without\n              one the tool is not offered to the model at all.\n  [dim]web_fetch [/dim]  Read a page — Jina works with no key at a lower rate limit;\n              every other reader needs its key.": "  [dim]web_search[/dim]  搜索网页 — 需要所选供应商的 key;没有 key 时这个工具\n              根本不会提供给模型。\n  [dim]web_fetch [/dim]  读取网页 — Jina 没有 key 也能用,只是限流更低;\n              其他读页供应商都需要 key。",
+    "  [dim]web_search[/dim]  Search the web — needs the chosen vendor's key, except Keenable;\n              DeepSeek borrows the model-provider key. Without either, the tool is not offered.\n  [dim]web_fetch [/dim]  Read a page — Jina and Keenable work with no key at a lower\n              rate limit; other readers need a key or a borrowed model-provider key.": "  [dim]web_search[/dim]  搜索网页 — 需要所选供应商的 key(Keenable 除外);\n              DeepSeek 会借用 model provider 的 key。两者都没有时,这个工具不会提供给模型。\n  [dim]web_fetch [/dim]  读取网页 — Jina 和 Keenable 没有 key 也能用,只是限流更低;\n              其他读页供应商需要自己的 key 或借用的 model-provider key。",
     "Search provider (web_search)": "搜索供应商(web_search)",
     "Page reader (web_fetch)": "读页供应商(web_fetch)",
     "{label} API key": "{label} API key",
@@ -383,6 +392,18 @@ MESSAGES: dict[str, str] = {
     "Configure it?": "要配置吗?",
     "Enter a different address": "重新填写地址",
     "Let Raven run EverOS for me": "让 Raven 替我运行 EverOS",
+    # raven.cli.onboard_commands step 4: the memory backend chooser (two memory plugins installed).
+    "Which memory backend?": "用哪个记忆后端?",
+    "Off": "关闭",
+    # raven_everos_cloud.onboard: the EverOS Cloud screen.
+    "Long-term memory: EverOS Cloud": "长期记忆:EverOS Cloud",
+    "  [dim]Using the API key from {var}.[/dim]": "  [dim]使用环境变量 {var} 里的 API 密钥。[/dim]",
+    "  [dim]Using the API key on file.[/dim]": "  [dim]使用已保存的 API 密钥。[/dim]",
+    "  [dim]Keys: {url}[/dim]": "  [dim]密钥:{url}[/dim]",
+    "  [dim]Memories are shared by every Raven that uses this key under user id {uid}; change memory.userId in config.json to keep devices apart.[/dim]": "  [dim]凡是用这把密钥、用户 id 为 {uid} 的 Raven 都共享这份记忆;要把设备分开,改 config.json 里的 memory.userId。[/dim]",
+    "  [yellow]✗ Couldn't verify EverOS Cloud: {detail}[/yellow]": "  [yellow]✗ 无法验证 EverOS Cloud:{detail}[/yellow]",
+    "Skip long-term memory": "跳过长期记忆",
+    "  [green]✓ EverOS Cloud connected.[/green]": "  [green]✓ EverOS Cloud 连接成功。[/green]",
     "I run my own EverOS -- connect to it": "我自己运行 EverOS —— 连过去",
     "Use it as it is": "直接用它",
     "Reconfigure it (port and models)": "重新配置（端口和模型）",

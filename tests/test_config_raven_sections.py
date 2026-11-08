@@ -39,6 +39,9 @@ class TestDefaults:
         assert c.user_id == "default"
         assert c.agent_id == "default"
         assert c.memory_top_k == 5
+        # Off out of the box: the step bills a provider call per cadence, and
+        # an install that never reads the episodic log should not pay for it.
+        assert c.annotate_every_turns == 0
 
     def test_memory_backend_none_disables(self) -> None:
         c = MemoryConfig(backend=None)
@@ -53,8 +56,10 @@ class TestDefaults:
         assert c.top_k == 2
         assert c.rrf_k == 10
         # Hub is the remote source (replaces the retired Mass source);
-        # disabled until an endpoint is set.
+        # disabled until an endpoint is set, and the switch can turn it off
+        # while keeping the URL.
         assert isinstance(c.hub, HubSourceConfig)
+        assert c.hub.enabled is True
         assert c.hub.endpoint is None
         assert c.hub.api_key is None
         assert c.hub.timeout_s == pytest.approx(2.0)
@@ -264,27 +269,23 @@ class TestSubagentDagSection:
         assert "subagent_dag" in EXTENSION_KEYS
 
     def test_camel_case_block_reaches_the_model(self, tmp_path: Path) -> None:
-        path = _write_config(
-            tmp_path,
-            {"subagentDag": {"verdictEnabled": False, "verdictModel": "cheap/tier", "maxContinuations": 5}},
-        )
+        path = _write_config(tmp_path, {"subagentDag": {"verdictModel": "cheap/tier", "maxContinuations": 5}})
 
         sd = load_raven_config(path).subagent_dag
 
-        assert sd.verdict_enabled is False
         assert sd.verdict_model == "cheap/tier"
         assert sd.max_continuations == 5
 
     def test_snake_case_block_reaches_the_model(self, tmp_path: Path) -> None:
-        path = _write_config(tmp_path, {"subagent_dag": {"verdict_enabled": False}})
+        path = _write_config(tmp_path, {"subagent_dag": {"max_continuations": 4}})
 
-        assert load_raven_config(path).subagent_dag.verdict_enabled is False
+        assert load_raven_config(path).subagent_dag.max_continuations == 4
 
     def test_a_config_carrying_the_block_still_loads_as_a_base_config(self, tmp_path: Path) -> None:
         """The failure that would have mattered: the block would have bricked load_config."""
         from raven.config import load_config
 
-        path = _write_config(tmp_path, {"subagentDag": {"verdictEnabled": False}})
+        path = _write_config(tmp_path, {"subagentDag": {"maxContinuations": 2}})
 
         base = load_config(path)
 
@@ -295,7 +296,6 @@ class TestSubagentDagSection:
 
         sd = load_raven_config(path).subagent_dag
 
-        assert sd.verdict_enabled is True
         assert sd.verdict_model is None
         assert sd.verdict_timeout_seconds == 180.0
         assert sd.evidence_budget_chars == 8000

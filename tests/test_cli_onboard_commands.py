@@ -27,7 +27,7 @@ import typer
 from typer.testing import CliRunner
 
 from raven import i18n
-from raven.cli import _onboard_shared, onboard_channels, onboard_commands, onboard_web
+from raven.cli import _onboard_shared, _tty_guard, onboard_channels, onboard_commands, onboard_web
 from raven.cli.commands import app
 from raven.config.loader import set_config_path
 from raven.i18n import t
@@ -558,6 +558,25 @@ def test_onboard_non_tty_no_flag_fails(tmp_env: Path) -> None:
     r = runner.invoke(app, ["onboard"])
     assert r.exit_code == 2
     assert "Non-interactive terminal detected" in r.stdout
+
+
+def test_check_tty_or_die_rejects_redirected_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A piped stdin is as fatal as a piped stdout: the wizard prompts read stdin."""
+
+    class _Stream:
+        def __init__(self, tty: bool) -> None:
+            self._tty = tty
+
+        def isatty(self) -> bool:
+            return self._tty
+
+    fake_sys = SimpleNamespace(stdin=_Stream(False), stdout=_Stream(True))
+    # raising=False: the module only re-exports ``sys`` on the unfixed code path.
+    monkeypatch.setattr(onboard_commands, "sys", fake_sys, raising=False)
+    monkeypatch.setattr(_tty_guard, "sys", fake_sys)
+    with pytest.raises(typer.Exit) as excinfo:
+        onboard_commands._check_tty_or_die(False)
+    assert excinfo.value.exit_code == 2
 
 
 # --------------------------------------------------------------------------- existing-config handling
@@ -1458,45 +1477,63 @@ class _FakeMemoryStep:
         return False
 
 
-def test_step4_memory_first_configured_wins(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two memory plugins, first CONFIGURED: its name is recorded and the
-    second screen never runs -- a later DISABLED must not overwrite it."""
+def _choose(monkeypatch: pytest.MonkeyPatch, answer: object, captured: dict | None = None) -> None:
+    """Stub ``questionary.select`` the way the chooser calls it; ``answer`` is
+    what ``.ask()`` returns (a name, the Off choice's value, or ``None``)."""
+    import questionary
+
+    class _FQ:
+        def ask(self):
+            return answer
+
+    def _select(message, **kwargs):
+        if captured is not None:
+            captured.update(kwargs, message=message)
+        return _FQ()
+
+    monkeypatch.setattr(questionary, "select", _select)
+
+
+def test_step4_memory_with_two_screens_runs_only_the_chosen_one(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two memory plugins: the wizard asks which, runs that one screen and
+    records its outcome; the other screen never runs. (Until the chooser
+    existed, every screen ran in order and the first CONFIGURED won.)"""
     from raven.plugins import StepOutcome
 
     step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
     step_b = _FakeMemoryStep(StepOutcome.DISABLED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    captured: dict = {}
+    _choose(monkeypatch, "b", captured)
 
     calls: list[str | None] = []
-    monkeypatch.setattr(
-        "raven.config.update.set_memory_backend",
-        lambda name: calls.append(name),
-    )
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
 
     result = onboard_commands._step4_memory(
         skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
     )
 
     assert result is None
-    assert calls == ["a"]
-    assert step_b.run_calls == 0
+    assert calls == [None]  # b was chosen and declined; a never ran
+    assert step_a.run_calls == 0 and step_b.run_calls == 1
+    assert captured["message"] == "Which memory backend?"
+    assert [c.title for c in captured["choices"]] == ["a", "b", "Off", "Back"]
 
 
-def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every screen declines: the backend is recorded as ``None`` exactly once."""
+def test_step4_memory_chosen_screen_declining_clears_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chosen screen declines: the backend is recorded as ``None`` exactly
+    once, and the screen not chosen is not consulted."""
     from raven.plugins import StepOutcome
 
     step_a = _FakeMemoryStep(StepOutcome.DISABLED)
-    step_b = _FakeMemoryStep(StepOutcome.DISABLED)
+    step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    _choose(monkeypatch, "a")
 
     calls: list[str | None] = []
-    monkeypatch.setattr(
-        "raven.config.update.set_memory_backend",
-        lambda name: calls.append(name),
-    )
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
 
     result = onboard_commands._step4_memory(
         skip=False, non_interactive=False, main_model="openai/gpt-4o-mini", warnings=[]
@@ -1504,6 +1541,112 @@ def test_step4_memory_all_disabled_clears_backend(tmp_env: Path, monkeypatch: py
 
     assert result is None
     assert calls == [None]
+    assert step_b.run_calls == 0
+
+
+def test_step4_memory_chooser_preselects_the_current_backend(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from raven.plugins import StepOutcome
+
+    steps = [
+        ("everos", _FakeMemoryStep(StepOutcome.CONFIGURED)),
+        ("everos-cloud", _FakeMemoryStep(StepOutcome.CONFIGURED)),
+    ]
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: steps)
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    monkeypatch.setattr(onboard_commands, "_selected_backend", lambda: "everos-cloud")
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: None)
+    captured: dict = {}
+    _choose(monkeypatch, "everos-cloud", captured)
+
+    onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[])
+
+    assert captured["default"] == "everos-cloud"
+
+
+def test_step4_memory_choosing_off_writes_null_and_runs_no_screen(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    _choose(monkeypatch, onboard_commands._MEMORY_OFF)
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    result = onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[])
+
+    assert result is None and calls == [None]
+    assert step_a.run_calls == 0 and step_b.run_calls == 0
+
+
+def test_step4_memory_one_screen_runs_without_a_question(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One memory plugin installed is today's shape: its screen runs straight
+    away and nothing is asked first."""
+    import questionary
+
+    from raven.plugins import StepOutcome
+
+    step = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("everos", step)])
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+
+    def _never(*a, **k):
+        raise AssertionError("the chooser must not run for a single screen")
+
+    monkeypatch.setattr(questionary, "select", _never)
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    assert onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[]) is None
+    assert calls == ["everos"] and step.run_calls == 1
+
+
+def test_step4_memory_back_on_the_chooser_returns_to_the_previous_step(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chooser offers Back like the other steps' pickers: nothing runs, nothing is written."""
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(
+        onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", _FakeMemoryStep(StepOutcome.CONFIGURED))]
+    )
+    calls: list = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+    _choose(monkeypatch, onboard_commands._BACK)
+    assert (
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[])
+        is onboard_commands._BACK
+    )
+    assert calls == [] and step_a.run_calls == 0
+
+
+def test_step4_memory_a_cancelled_choice_exits_one_and_writes_nothing(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Esc or Ctrl-C on the question ends the wizard; a dismissed question
+    must not turn memory off."""
+    import typer
+
+    from raven.plugins import StepOutcome
+
+    step_a = _FakeMemoryStep(StepOutcome.CONFIGURED)
+    monkeypatch.setattr(
+        onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", _FakeMemoryStep(StepOutcome.CONFIGURED))]
+    )
+    monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    _choose(monkeypatch, None)
+    calls: list[str | None] = []
+    monkeypatch.setattr("raven.config.update.set_memory_backend", lambda name: calls.append(name))
+
+    with pytest.raises(typer.Exit) as exc:
+        onboard_commands._step4_memory(skip=False, non_interactive=False, main_model=None, warnings=[])
+
+    assert exc.value.exit_code == 1
+    assert calls == [] and step_a.run_calls == 0
 
 
 def test_skipping_preserves_a_backend_that_contributes_no_screen(
@@ -1550,14 +1693,15 @@ def test_skipping_still_clears_a_selected_backend_its_own_screen_calls_unconfigu
 
 
 def test_step4_memory_back_returns_sentinel_without_writing(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The first screen backs out: the wizard returns ``_BACK`` and nothing
-    is recorded, not even for the screen that never ran."""
+    """The chosen screen backs out: the wizard returns ``_BACK`` and nothing
+    is recorded, not even for the screen that was not chosen."""
     from raven.plugins import StepOutcome
 
     step_a = _FakeMemoryStep(StepOutcome.BACK)
     step_b = _FakeMemoryStep(StepOutcome.CONFIGURED)
     monkeypatch.setattr(onboard_commands, "_memory_steps", lambda: [("a", step_a), ("b", step_b)])
     monkeypatch.setattr(onboard_commands, "_onboard_ui", lambda: object())
+    _choose(monkeypatch, "a")
 
     calls: list[str | None] = []
     monkeypatch.setattr(
@@ -2884,6 +3028,28 @@ def test_scancode_login_node_missing_retry_then_present(tmp_env: Path, monkeypat
     assert data["channels"]["whatsapp"]["enabled"] is True
 
 
+def test_scancode_login_says_the_whatsapp_wait_is_bounded(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The shared line must not promise an unbounded wait: WhatsApp gives up
+    after five minutes, and the wizard says so before the scan starts."""
+    monkeypatch.setattr(onboard_channels, "_node_runtime_missing", lambda _channel: False)
+    monkeypatch.setattr(
+        "raven.channels.adapters.whatsapp.channel.WhatsAppChannel.login",
+        _async_return(True),
+    )
+
+    onboard_channels._scancode_login("whatsapp")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "five minutes" in out
+
+
+def test_the_whatsapp_wait_note_is_translated() -> None:
+    note = " WhatsApp stops waiting after five minutes."
+    assert zh_catalog.MESSAGES[note] != note
+
+
 # --------------------------------------------------------------------------- multi-provider add/remove
 
 
@@ -3298,24 +3464,28 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_stays_sparse(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Bootstrap records nothing the user did not set: a default that lands on
-    disk stops following its declaration, so the extension blocks are not
-    materialized -- their readers answer from the declared defaults."""
+def test_fresh_bootstrap_seeds_only_the_skill_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bootstrap records nothing the user did not set, with one exception: the
+    Skill Hub endpoint has no schema default (programmatic loads stay
+    Hub-off), so onboarding is where a fresh install opts in."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
-    for block in ("memory", "plugins", "skillForge"):
-        assert block not in data, f"fresh config must not seed {block}"
+    assert "memory" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.backend == "everos"  # from the declaration, not the file
+    assert rc.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
 
 
 def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config that predates the extension blocks is not backfilled: what the
     user set stays byte-for-byte, and the keys they never set answer from the
-    declarations instead of being materialized."""
+    declarations instead of being materialized. The Skill Hub endpoint is the
+    one documented exception -- onboarding is the opt-in for a schema default
+    that has to stay ``None``."""
     tmp_env.write_text(
         json.dumps(
             {
@@ -3333,11 +3503,75 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert data["memory"]["backend"] == "everos"
     assert data["memory"]["memoryTopK"] == 20
     assert "userId" not in data["memory"]  # not backfilled
-    assert "plugins" not in data and "skillForge" not in data
+    assert "plugins" not in data
+    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
     assert rc.memory.memory_top_k == 20  # the user's value
+
+
+def test_bootstrap_keeps_a_configured_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_env.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}})
+    )
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"endpoint": "https://hub.internal.test", "apiKey": "k"}
+
+
+def test_bootstrap_honours_an_explicit_null_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A null endpoint is the way a user keeps the Hub off across a repeat
+    onboard; seeding must not read it as "unset" and turn it back on."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]["endpoint"] is None
+
+
+def test_bootstrap_does_not_re_enable_a_switched_off_hub(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The seed is an endpoint write, not consent: a config that switched the
+    source off stays off after a repeat onboard."""
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
+    assert hub == {"enabled": False, "endpoint": "https://skillhub.evermind.ai"}
+    from raven.config.raven import load_raven_config
+
+    assert load_raven_config().skill_forge.router.hub.enabled is False
+
+
+def test_bootstrap_says_what_turning_skill_hub_search_on_sends(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Onboarding is the opt-in, so it is where the reader hears what the
+    opt-in sends, where to, and how to stop it."""
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Skill Hub search is on" in out
+    assert "sends text from your conversation to https://skillhub.evermind.ai" in out
+    assert "skillForge.router.hub.enabled" in out
+
+
+@pytest.mark.parametrize(
+    "hub",
+    [{"enabled": False}, {"endpoint": None}, {"endpoint": "https://hub.internal.test"}],
+    ids=["switched off", "explicit null", "already configured"],
+)
+def test_bootstrap_says_nothing_about_skill_hub_when_it_turned_nothing_on(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], hub: dict
+) -> None:
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    assert "Skill Hub" not in capsys.readouterr().out
 
 
 def _onboard_once() -> Any:
@@ -4347,6 +4581,9 @@ def test_rolling_back_a_failed_setup_restores_what_was_there(monkeypatch, tmp_pa
         # A vendor reached over the network gets retry only; the address is not
         # the user's to change, and the key is not what failed.
         ("deepseek", "network_error", "retry", "rebase"),
+        # A certificate this machine does not trust ends the connection before the
+        # key is sent, so the key is no more what failed than it is offline.
+        ("deepseek", "certificate_untrusted", "retry", "rekey"),
         # Rejected credentials: the field to fix is the one the provider uses.
         ("ollama_chat", "invalid_key", "rebase", "rekey"),
         ("deepseek", "invalid_key", "rekey", "rebase"),
@@ -4387,6 +4624,60 @@ def test_the_failure_menu_offers_the_field_the_provider_actually_has(
     assert seen, "the failure menu was never shown"
     assert expected in seen[0], f"{slug}/{status}: offered {seen[0]}"
     assert absent not in seen[0], f"{slug}/{status}: should not offer {absent}, got {seen[0]}"
+
+
+def test_a_certificate_the_machine_does_not_trust_points_at_the_certificate_store(monkeypatch, capsys) -> None:
+    """Behind a corporate proxy the network is fine and the remedy is the CA.
+
+    Telling the reader to check the network, the proxy or the VPN sends them after
+    the parts that work.
+    """
+    from raven.cli import onboard_commands
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda provider, **_: {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "error": "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate",
+        },
+    )
+
+    ok, status, _ = onboard_commands._verify_provider("deepseek")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert (ok, status) == (False, "certificate_untrusted")
+    assert "certificate store" in out
+    assert "VPN" not in out
+
+
+def test_a_refused_certificate_names_the_refusals_a_ca_does_not_fix(monkeypatch, capsys) -> None:
+    """Adding a CA is one remedy of three.
+
+    macOS and Windows refuse a certificate by their own rules even when the CA is
+    trusted through ``SSL_CERT_FILE``, and an expired certificate, or one for
+    another host, is the server's to fix.
+    """
+    from raven.cli import onboard_commands
+    from raven.config import update_providers
+
+    monkeypatch.setattr(
+        update_providers,
+        "test_provider",
+        lambda provider, **_: {
+            "ok": False,
+            "status": "certificate_untrusted",
+            "error": '"api.deepseek.com" certificate is not standards compliant',
+        },
+    )
+
+    onboard_commands._verify_provider("deepseek")
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "RAVEN_NO_SYSTEM_CA=1" in out
+    assert "expired" in out
 
 
 def test_managing_an_oauth_provider_explains_instead_of_exiting(monkeypatch, tmp_path, capsys) -> None:
@@ -8390,3 +8681,78 @@ def test_a_narrower_embedding_model_still_fails_the_wizard_check(monkeypatch: py
     monkeypatch.setattr(onboard_everos, "_probe_embedding_dim", lambda url, headers, model: 768)
 
     assert not onboard_everos._verify_embedding_dim(model="m", api_key="k", base_url="http://p", non_interactive=True)
+
+
+def test_the_wizard_reads_a_borrowed_web_key(tmp_path: Path) -> None:
+    """A DeepSeek key under providers.* pays for the web tools too, so the
+    wizard must not ask for a second one -- or probe with an empty string."""
+    import json
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"providers": {"deepseek": {"apiKey": "sk-llm"}}}), encoding="utf-8")
+    set_config_path(cfg)
+    try:
+        assert onboard_web._stored_key("deepseek") == "sk-llm"
+        assert onboard_web._stored_key("tavily") == ""
+    finally:
+        set_config_path(None)
+
+
+def test_the_onboarding_web_explanation_reaches_the_zh_catalog() -> None:
+    """The step-5 text is its own gettext key; a rewrite that leaves the zh entry
+    behind silently falls the whole screen back to English."""
+    assert onboard_web.WEB_STEPS_INTRO in zh_catalog.MESSAGES
+
+
+# ---------------------------------------------------------------------------
+# Step 1: the key itself is confirmed, not only the model list
+# ---------------------------------------------------------------------------
+
+
+def test_verify_provider_confirms_the_key_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenRouter's list answers anyone; the probe is asked to check the key too."""
+    seen: dict[str, Any] = {}
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return {"ok": True, "status": "valid", "models_count": 2, "model_ids": ["a", "b"], "elapsed_ms": 1}
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("openrouter") == (True, "valid", ["a", "b"])
+    assert seen["check_credential"] is True
+
+
+def test_verify_provider_says_an_unconfirmed_key_is_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A catalogue that checks no keys, on a vendor with no path that would.
+
+    Not a failure -- the list is real and the wizard goes on with it -- and not
+    "Connected!" either: the test message is the check that remains, and the
+    line says so. With ``--skip-test`` there is no such message, and the line
+    says that instead.
+    """
+
+    def probe(name: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "ok": False,
+            "status": "key_unchecked",
+            "models_count": 2,
+            "model_ids": ["a", "b"],
+            "error": "this vendor's models endpoint answers without checking the key",
+            "elapsed_ms": 1,
+        }
+
+    monkeypatch.setattr("raven.config.update_providers.test_provider", probe)
+
+    assert onboard_commands._verify_provider("custom") == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "without checking the key" in out
+    assert "test message" in out
+
+    assert onboard_commands._verify_provider("custom", skip_test=True) == (True, "unchecked", ["a", "b"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Connected" not in out
+    assert "--skip-test" in out

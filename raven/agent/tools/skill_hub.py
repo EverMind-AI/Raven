@@ -30,6 +30,7 @@ plus the ``scripts_dir`` line and the SKILL.md body when present.
 
 from __future__ import annotations
 
+import difflib
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -77,6 +78,36 @@ def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     return registry.get(native, source=source)
 
 
+_CLOSEST_IDS = 3
+# difflib scores a name in about 3 microseconds, and the search runs on the
+# event loop; past this many names a miss skips it rather than stall the loop.
+_NEAR_ID_SEARCH_LIMIT = 1000
+
+
+def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: frozenset[str]) -> str:
+    """What follows a ``local/<native>`` miss.
+
+    ``# Skills`` and ``# Active Skills`` render from this same registry, so a
+    local id it lacks has no body in context to point at. What helps is a near
+    id, for a typo, and the directories local ids come from, for a skill file
+    the model saw outside them. A near id is never one the calling tool's
+    blocklist would refuse.
+    """
+    sentences = []
+    if registry is not None:
+        names = registry.names()
+        if len(names) <= _NEAR_ID_SEARCH_LIMIT:
+            if blocked:
+                names = [name for name in names if not is_blocked(blocked, name)]
+            close = difflib.get_close_matches(native, names, n=_CLOSEST_IDS)
+            if close:
+                sentences.append("Closest local ids: " + ", ".join(f"local/{name}" for name in close) + ".")
+        roots = ", ".join(str(root) for root, _ in registry.layer_roots())
+        sentences.append(f"Local ids cover only the skills under {roots}.")
+    sentences.append("A SKILL.md you found outside Raven's skill directories has no id: read that file with read_file.")
+    return " ".join(sentences)
+
+
 class ReadSkillTool(Tool):
     """Fetch a candidate skill's full SKILL.md body for fine-selection.
 
@@ -96,9 +127,11 @@ class ReadSkillTool(Tool):
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+        enabled_reader: "Callable[[], bool] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
@@ -140,12 +173,17 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
+            return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
 
         if source != "hub":
             meta = lookup_on_disk(self._registry, source, native)
             if meta is None:
+                if source == "local":
+                    hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
+                    return f"Error: no local skill {native!r} found. {hint}"
                 return (
                     f"Error: no {source} skill {native!r} found. Its body may "
                     f"already be present in the '# Skills' context."
@@ -209,11 +247,13 @@ class UseSkillTool(Tool):
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
+        enabled_reader: "Callable[[], bool] | None" = None,
         auto_install: str = "auto",
         install_audit_path: "Path | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(
             min_safety=min_safety,
             blocklist=blocklist,
@@ -259,6 +299,8 @@ class UseSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
+            return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):
             return f"Error: skill {native!r} is on the operator blocklist (skillForge.blocklist) and cannot be used."
 
@@ -270,6 +312,9 @@ class UseSkillTool(Tool):
         """Resolve an already-materialized on-disk skill dir."""
         meta = lookup_on_disk(self._registry, source, native)
         if meta is None:
+            if source == "local":
+                hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
+                return f"Error: no local skill {native!r} found on disk. {hint}"
             return (
                 f"Error: no {source} skill {native!r} found on disk. If it is a "
                 f"pure-instruction skill its body is already in your context."
@@ -370,25 +415,38 @@ class FindSkillTool(Tool):
         get_router: Callable[[], Any],
         *,
         hub_wired: bool = False,
+        enabled_reader: "Callable[[], bool] | None" = None,
         min_safety: float = 0.7,
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
     ) -> None:
         self._get_router = get_router
         self._hub_wired = hub_wired
+        self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
 
     @property
     def name(self) -> str:
         return "find_skill"
 
+    def to_schema(self) -> dict[str, Any]:
+        """Rendered per model call, so the Hub sentence follows the settings switch.
+
+        Authored rather than inherited on purpose: ``ToolRegistry`` serves a
+        tool from the copy it took at registration unless the tool writes its
+        own ``to_schema``, and the Hub client is built while the switch is off,
+        so whether the Hub is searched is known only per call.
+        """
+        return super().to_schema()
+
     @property
     def description(self) -> str:
-        # The blurb must describe what is actually wired: without a Hub
-        # endpoint the search covers only the locally installed pool, and
-        # promising a 110k-skill library would send the model chasing
-        # results that cannot exist on this deployment.
-        scope = f"{_LIBRARY_BLURB} " if self._hub_wired else "It searches the locally installed skill pool. "
+        # The blurb must describe what is actually searched: without a Hub
+        # endpoint, or with the switch off, the search covers only the locally
+        # installed pool, and promising a 110k-skill library would send the
+        # model chasing results that cannot exist on this deployment.
+        searched = self._hub_wired and (self._enabled_reader is None or self._enabled_reader())
+        scope = f"{_LIBRARY_BLURB} " if searched else "It searches the locally installed skill pool. "
         return (
             f"Search the skill library for reusable methodology. {scope}"
             "Facing an unfamiliar kind of task, search before improvising -- "
