@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import itertools
 import json
 import os
@@ -9766,3 +9767,391 @@ async def test_a_failed_call_still_records_what_it_left_on_disk(tmp_path: Path) 
         await _feed(col, {"sessionUpdate": "tool_call_update", "toolCallId": "c1", "status": "failed"})
 
     assert did.files == [{"path": "partial.txt", "op": "add", "add": 1, "del": 0, "size": 5}]
+
+
+# ---- the launch digest follows an in-place upgrade -------------------------
+
+
+def _legacy_launch_digest(cfg: Any) -> str:
+    """The digest an acp row produced before the launcher's own identity joined it."""
+    from raven.acp_client.capabilities import _LAUNCH_FIELDS, REMOTE_LAUNCH_FIELDS
+
+    payload: dict[str, Any] = {name: getattr(cfg, name, None) for name in _LAUNCH_FIELDS}
+    if getattr(cfg, "lend_keys", None):
+        payload["lend_keys"] = list(cfg.lend_keys)
+    for name in REMOTE_LAUNCH_FIELDS:
+        if getattr(cfg, name, None):
+            payload[name] = getattr(cfg, name)
+    raw = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _installed(path: Path, body: str = "#!/bin/sh\n") -> Path:
+    """Leave ``path`` where the launch this digest reads would find it.
+
+    A bare command is looked up on PATH, and Windows' lookup tries only the
+    ``PATHEXT`` names, never an extensionless one, so a fixture that writes
+    ``opencode`` alone is invisible to ``shutil.which`` there. Beside that file
+    write the ``.cmd`` shim an npm install leaves, so a bare name resolves as
+    it does on a real install. A launcher that names a path (``./agent-acp``)
+    still stats the extensionless file itself, which is why both forms are
+    written rather than one standing in for the other. POSIX exec runs the
+    extensionless file and needs no shim.
+    """
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    if os.name == "nt" and not path.suffix:
+        path.with_name(path.name + ".cmd").write_text("@echo off\r\n", encoding="utf-8")
+    return path
+
+
+def test_the_launch_digest_follows_an_in_place_upgrade(tmp_path: Path) -> None:
+    """An agent upgraded where it stands keeps its command line, so the command
+    alone cannot tell that what it offers may have moved with the build."""
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command=str(exe))
+    before = snapshot_fingerprint(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_an_npx_digest_reads_the_pinned_version_not_a_cache_entry() -> None:
+    """An npx command names the version it runs, so an upgrade is a command
+    change and the cache underneath it is not this digest's business."""
+    one = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3")
+    same = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3")
+    bumped = ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.4")
+
+    assert snapshot_fingerprint(one) == snapshot_fingerprint(same)
+    assert snapshot_fingerprint(bumped) != snapshot_fingerprint(one)
+
+
+def test_a_row_on_another_machine_ignores_this_computers_binaries(tmp_path: Path) -> None:
+    """The agent there is another install: digesting a local file of the same
+    name would make this row's staleness depend on a machine it does not run on."""
+    from raven.config import login_path
+
+    login_path.remember(str(tmp_path))
+    remote = ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", machine="ravenx2")
+    before = snapshot_fingerprint(remote)
+
+    _installed(tmp_path / "opencode")
+
+    assert snapshot_fingerprint(remote) == before
+    assert snapshot_fingerprint(remote) == _legacy_launch_digest(remote)
+
+
+def test_a_local_row_digests_a_binary_that_now_exists(tmp_path: Path) -> None:
+    """The sibling of the test above: for a row that runs here, the file is
+    exactly what has to move the digest -- an install is a new agent."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", env={"PATH": str(tmp_path)})
+    before = snapshot_fingerprint(cfg)
+    assert before == _legacy_launch_digest(cfg)
+
+    _installed(tmp_path / "opencode")
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_a_digest_resolves_on_the_login_path_the_launch_uses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A row without its own PATH is launched with the login shell's, so the
+    file this digest reads has to be the one that launch would run -- not
+    whichever same-named file raven's own process PATH happens to find."""
+    from raven.acp_client.capabilities import _executable_identity
+    from raven.config import login_path
+
+    login_dir = tmp_path / "login"
+    process_dir = tmp_path / "process"
+    login_dir.mkdir()
+    process_dir.mkdir()
+    _installed(login_dir / "agent-acp", "#!/bin/sh\nexit 0\n")
+    _installed(process_dir / "agent-acp")
+    login_path.remember(str(login_dir))
+    monkeypatch.setenv("PATH", str(process_dir))
+
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp")
+    on_login_path = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(login_dir)})
+    on_process_path = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(process_dir)})
+
+    assert _executable_identity(cfg) == _executable_identity(on_login_path)
+    assert _executable_identity(cfg) != _executable_identity(on_process_path)
+
+
+def test_a_windows_shim_is_read_where_it_stands(tmp_path: Path) -> None:
+    """A .cmd shim is the file PATH resolves, and this digest reads that file
+    rather than the package entry it names. Following the generated shim is not
+    portable, so the limitation is accepted and pinned here: rewriting the
+    entry behind an untouched shim does not move the digest, and reading the
+    shim never raises."""
+    shim = tmp_path / "agent-acp.cmd"
+    shim.write_text('@echo off\r\nnode "%~dp0\\agent.js" %*\r\n', encoding="utf-8")
+    shim.chmod(0o755)
+    entry = tmp_path / "agent.js"
+    entry.write_text("// v1\n", encoding="utf-8")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp.cmd acp", env={"PATH": str(tmp_path)})
+
+    first = snapshot_fingerprint(cfg)
+
+    assert first == snapshot_fingerprint(cfg)
+    assert first != _legacy_launch_digest(cfg)
+    entry.write_text("// v2, a bigger build\n", encoding="utf-8")
+    assert snapshot_fingerprint(cfg) == first
+
+
+def test_rows_the_launcher_identity_cannot_read_keep_their_old_digest(tmp_path: Path) -> None:
+    """The guarantee that lets this land without invalidating every stored
+    snapshot: an npx row, a row on another machine, and a command nothing
+    resolves all digest exactly as they did before."""
+    from raven.config import login_path
+
+    login_path.remember(str(tmp_path))
+    rows = [
+        ThirdPartyAcpSubagentConfig(name="a", command="npx -y @scope/agent@1.2.3"),
+        ThirdPartyAcpSubagentConfig(name="a", command="opencode acp", machine="ravenx2"),
+        ThirdPartyAcpSubagentConfig(name="a", command="not-installed-agent acp"),
+    ]
+
+    for row in rows:
+        assert snapshot_fingerprint(row) == _legacy_launch_digest(row)
+
+
+def test_an_empty_command_keeps_the_old_digest() -> None:
+    """A switch-only row carries no launcher at all; it digests as it always did."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="")
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_malformed_command_keeps_the_old_digest() -> None:
+    """A command this parser cannot split is not a reason to drop a snapshot."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command='"unclosed')
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_bare_command_with_no_captured_launch_path_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Before any capture the launch PATH is unknown, and guessing raven's own
+    PATH could resolve a file the launch never runs."""
+    monkeypatch.setenv("PATH", str(_installed(tmp_path / "agent-acp").parent))
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp")
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stat is a second filesystem answer after the lookup, and it can lose
+    the race with an uninstall; that is a missing measurement, not a new one."""
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="agent-acp acp", env={"PATH": str(tmp_path)})
+    before = snapshot_fingerprint(cfg)
+    monkeypatch.setattr("raven.acp_client.capabilities.shutil.which", lambda *a, **k: str(tmp_path / "gone"))
+
+    assert snapshot_fingerprint(cfg) == before
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path) -> None:
+    """The launch starts the agent in the row's cwd, so a relative launcher is
+    that directory's file; reading raven's own directory would fingerprint a
+    different binary, or none at all."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(tmp_path / "agent-acp")
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_a_relative_launcher_in_a_row_with_a_cwd_is_unreadable_on_windows(tmp_path: Path) -> None:
+    """Windows' CreateProcess resolves a relative program in the parent's own
+    context -- it looks in this process's directory, not in the child's -- so
+    the row's cwd does not name the file the spawn runs. The digest reads
+    nothing there and leaves the row's digest as it was."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+
+    assert _executable_identity(cfg) is None
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
+    """The same rule for a launcher that names a directory of its own: the
+    directory part is relative to where the subprocess starts, not to raven."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    launch_dir = tmp_path / "agent"
+    (launch_dir / "bin").mkdir(parents=True)
+    _installed(launch_dir / "bin" / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="bin/agent-acp", cwd=str(launch_dir))
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(launch_dir / "bin" / "agent-acp")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) -> None:
+    """The blocking case: an agent installed beside its configured cwd is
+    upgraded where it stands, exactly as for an absolute command."""
+    exe = _installed(tmp_path / "agent-acp")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+    before = snapshot_fingerprint(cfg)
+    assert before != _legacy_launch_digest(cfg)
+
+    stat = exe.stat()
+    os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+
+    assert snapshot_fingerprint(cfg) != before
+
+
+def test_a_relative_launcher_without_a_configured_cwd_resolves_from_the_process_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row that sets no cwd is launched in raven's own directory, so the
+    fallback has to be that same directory."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    _installed(tmp_path / "agent-acp")
+    monkeypatch.chdir(tmp_path)
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
+
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == os.path.join(os.getcwd(), "agent-acp")
+
+
+def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A service can outlive the directory it started in; the launch directory
+    is then unknowable, which is a missing measurement, not an error."""
+    import raven.acp_client.capabilities as capabilities
+
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
+    before = snapshot_fingerprint(cfg)
+
+    def gone() -> str:
+        raise FileNotFoundError("the process directory is gone")
+
+    monkeypatch.setattr(capabilities.os, "getcwd", gone)
+
+    assert snapshot_fingerprint(cfg) == before
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows resolves a relative program in the parent's directory")
+def test_windows_does_not_look_in_the_row_cwd_for_a_relative_launcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule the digest follows on Windows, measured: CreateProcess resolves
+    a relative program in the parent's own context, so a file that exists only
+    in the row's cwd is a file the spawn cannot start at all, and a file in
+    this process's own directory is the one it starts."""
+    import shutil
+
+    async def spawn() -> tuple[int | None, BaseException | None]:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "./agent-acp.exe",
+                cwd=str(row_cwd),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as exc:
+            return None, exc
+        await proc.communicate()
+        return proc.returncode, None
+
+    row_cwd = tmp_path / "row-cwd"
+    row_cwd.mkdir()
+    (row_cwd / "agent-acp.exe").write_text("", encoding="utf-8")
+    process_dir = tmp_path / "process-dir"
+    process_dir.mkdir()
+    monkeypatch.chdir(process_dir)
+
+    _, failure = asyncio.run(spawn())
+
+    assert isinstance(failure, FileNotFoundError), f"the spawn did not fail to find the launcher: {failure!r}"
+
+    # The other half of the claim: what the spawn does find is this process's
+    # own directory. whoami.exe stands in for the agent -- it runs wherever it
+    # is copied, and exits 0.
+    system = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "whoami.exe"
+    if not system.is_file():
+        pytest.skip("this Windows image has no whoami.exe to copy")
+    shutil.copy(system, process_dir / "agent-acp.exe")
+
+    code, failure = asyncio.run(spawn())
+
+    assert failure is None, f"the spawn failed on this process's own copy: {failure!r}"
+    assert code == 0
+
+
+def test_a_relative_launcher_missing_from_the_configured_cwd_keeps_the_old_digest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launcher not installed where the launch looks is a missing
+    measurement, not a new one -- and a same-named file in raven's own
+    directory is not the file that launch would run."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    raven_dir = tmp_path / "raven-dir"
+    launch_dir = tmp_path / "launch-dir"
+    raven_dir.mkdir()
+    launch_dir.mkdir()
+    _installed(raven_dir / "agent-acp")
+    monkeypatch.chdir(raven_dir)
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(launch_dir))
+
+    assert _executable_identity(cfg) is None
+    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+
+
+def test_the_configured_cwd_only_moves_a_relative_launcher(tmp_path: Path) -> None:
+    """A bare name is looked up on the launch PATH and an absolute one is its
+    own file, so neither may resolve differently under another launch
+    directory."""
+    from raven.acp_client.capabilities import _executable_identity
+
+    # Windows' PATH lookup never tries a bare name, so the fixture carries an
+    # extension there and the command names that same file.
+    name = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    exe = _installed(tmp_path / name)
+    here = tmp_path / "here"
+    there = tmp_path / "there"
+    here.mkdir()
+    there.mkdir()
+
+    bare_here = ThirdPartyAcpSubagentConfig(name="a", command=f"{name} acp", env={"PATH": str(tmp_path)}, cwd=str(here))
+    bare_there = ThirdPartyAcpSubagentConfig(
+        name="a", command=f"{name} acp", env={"PATH": str(tmp_path)}, cwd=str(there)
+    )
+    absolute_here = ThirdPartyAcpSubagentConfig(name="a", command=str(exe), cwd=str(here))
+    absolute_there = ThirdPartyAcpSubagentConfig(name="a", command=str(exe), cwd=str(there))
+
+    bare = _executable_identity(bare_here)
+    absolute = _executable_identity(absolute_here)
+
+    assert bare is not None
+    assert absolute is not None
+    assert bare == _executable_identity(bare_there)
+    assert absolute == _executable_identity(absolute_there)
