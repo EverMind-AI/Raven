@@ -1,13 +1,19 @@
 """open_mcp_transport hands back streams without performing a handshake."""
 
 import asyncio
+import io
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from raven.config.schema import MCPServerConfig
-from raven.mcp.client import open_mcp_transport
+from raven.mcp.client import _child_stderr, open_mcp_transport
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.asyncio
@@ -18,6 +24,82 @@ async def test_stdio_transport_yields_streams_without_initialize():
     async with open_mcp_transport(cfg, "stdio") as (read, write):
         assert read is not None
         assert write is not None
+
+
+def test_a_redirect_with_a_descriptor_is_what_the_child_inherits(tmp_path, monkeypatch):
+    """An embedded host that pointed sys.stderr at its own log keeps that log."""
+    redirected = (tmp_path / "redirected.log").open("w", encoding="utf-8")
+    interpreter = (tmp_path / "interpreter.log").open("w", encoding="utf-8")
+    try:
+        monkeypatch.setattr(sys, "stderr", redirected)
+        monkeypatch.setattr(sys, "__stderr__", interpreter)
+        assert _child_stderr() is redirected
+    finally:
+        redirected.close()
+        interpreter.close()
+
+
+def test_a_redirect_without_a_descriptor_falls_back_to_the_interpreter_s_stderr(tmp_path, monkeypatch):
+    """A StringIO redirect cannot be inherited; the interpreter's own stderr can."""
+    interpreter = (tmp_path / "interpreter.log").open("w", encoding="utf-8")
+    try:
+        monkeypatch.setattr(sys, "stderr", io.StringIO())
+        monkeypatch.setattr(sys, "__stderr__", interpreter)
+        assert _child_stderr() is interpreter
+    finally:
+        interpreter.close()
+
+
+def test_a_process_with_no_interpreter_stderr_keeps_its_own_redirect(monkeypatch):
+    """A windowed process has no fd 2 to lend: whatever the host redirected with stays."""
+    redirected = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", redirected)
+    monkeypatch.setattr(sys, "__stderr__", None)
+    assert _child_stderr() is redirected
+
+
+@pytest.mark.slow
+def test_a_stdio_server_starts_when_this_process_stderr_is_no_file(tmp_path):
+    """Capture, an embedded host and a StringIO redirect all hand the SDK a stderr no child can inherit.
+
+    The SDK binds its ``errlog`` default at import, so the fault shows up only
+    in a process whose stderr was replaced before the transport was first
+    imported -- a fresh interpreter is the only honest reproduction.
+    """
+    script = tmp_path / "stderr_without_a_file.py"
+    script.write_text(
+        "\n".join(
+            [
+                "import asyncio, io, sys",
+                "real, sys.stderr = sys.stderr, io.StringIO()",
+                "try:",
+                "    from raven.config.schema import MCPServerConfig",
+                "    from raven.mcp.client import open_mcp_transport",
+                "    cfg = MCPServerConfig(command=sys.executable, args=['-c', 'import sys; sys.stdin.read()'])",
+                "",
+                "    async def main():",
+                "        async with open_mcp_transport(cfg, 'stdio') as (read, write):",
+                "            assert read is not None and write is not None",
+                "",
+                "    asyncio.run(main())",
+                "finally:",
+                "    sys.stderr = real",
+                "print('STARTED')",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # The child imports this checkout, not whatever the running venv happens to
+    # point at: PYTHONPATH is the only thing that decides that, not cwd.
+    previous = os.environ.get("PYTHONPATH")
+    env = {**os.environ}
+    env["PYTHONPATH"] = str(_ROOT) if not previous else os.pathsep.join([str(_ROOT), previous])
+    run = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, timeout=180, env=env, check=False
+    )
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert "STARTED" in run.stdout
 
 
 def _reporting_server(observed) -> list[str]:

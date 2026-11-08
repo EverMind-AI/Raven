@@ -204,8 +204,9 @@ async def test_a_stream_the_host_closes_ends_the_bridge_and_a_bridge_of_no_task_
         await host.until(lambda: host.notified(protocol.MCP_OPEN))
         await host.tell(protocol.MCP_CLOSE, {"stream": 1, "reason": "the dispatch ended"})
         await host.until(lambda: host.lines())
-        assert host.lines() == ["BRIDGE_EXIT 0 "], (
-            "told the stream is over, it leaves, having written nothing of its own"
+        assert host.lines() == ["BRIDGE_EXIT 0 raven node mcp bridge: the stream ended: the dispatch ended"], (
+            "told the stream is over, it leaves and says why: what the agent's log keeps is all anyone has "
+            "when a stream never carried a frame"
         )
         # The agent outlives its server, so the task the bridges below name is still running.
         assert [p for p in host.notified(protocol.AGENT_EXIT) if p.get("channel") == 1] == []
@@ -365,6 +366,17 @@ async def test_the_bridge_says_why_it_never_began_and_why_it_stopped(tmp_path, m
         assert "ValueError: frame exceeds 64 bytes" in capsys.readouterr().err
         await host.until(lambda: host.notified(protocol.MCP_CLOSE))
         assert host.notified(protocol.MCP_CLOSE)[-1]["reason"] == "the bridge ended"
+
+        # The host closes the stream: it ends as streams end, and the reason is said rather than dropped.
+        openings = len(host.notified(protocol.MCP_OPEN))
+        carrying = _carry(root, asyncio.StreamReader(), _Out())
+        await host.until(lambda: len(host.notified(protocol.MCP_OPEN)) == openings + 1)
+        await host.tell(
+            protocol.MCP_CLOSE,
+            {"stream": host.notified(protocol.MCP_OPEN)[-1]["stream"], "reason": "the host's endpoint closed"},
+        )
+        assert await asyncio.wait_for(carrying, timeout=15) == 0
+        assert "the stream ended: the host's endpoint closed" in capsys.readouterr().err
     finally:
         await _wind_down(host, running, channels=(1, 2))
 

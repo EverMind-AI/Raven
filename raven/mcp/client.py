@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from collections.abc import Container
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -186,6 +187,28 @@ def _configured_cwd(cfg) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _child_stderr() -> Any:
+    """A stderr a spawned server can inherit, whatever this process's ``sys.stderr`` is.
+
+    The SDK binds its ``errlog`` default when its module is first imported, so
+    a host that replaced ``sys.stderr`` before that -- pytest's capture, an
+    embedded launcher, a plain ``StringIO`` redirect -- handed ``subprocess`` a
+    stream with no ``fileno()``, and every stdio server it started failed with
+    ``io.UnsupportedOperation: fileno``. A host that redirected ``sys.stderr``
+    to a file keeps that file: its own log is what the child should write to.
+    Only when the redirect has no descriptor to inherit does the interpreter's
+    own stderr, which always has one, stand in; a windowed process without one
+    keeps the old behaviour.
+    """
+    for stream in (sys.stderr, sys.__stderr__):
+        try:
+            if stream is not None and not stream.closed and stream.fileno() >= 0:
+                return stream
+        except (AttributeError, OSError, ValueError):
+            continue
+    return sys.stderr
+
+
 @asynccontextmanager
 async def open_mcp_transport(
     cfg,
@@ -231,7 +254,7 @@ async def open_mcp_transport(
                     env=cfg.env or None,
                     cwd=cwd,
                 )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                read, write = await stack.enter_async_context(stdio_client(params, errlog=_child_stderr()))
         elif transport_type == "sse":
 
             def httpx_client_factory(

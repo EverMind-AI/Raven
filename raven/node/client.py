@@ -799,18 +799,12 @@ class NodePool:
         # Those names cannot authorize access to another task's host endpoint.
         path = granted.paths.get(str(server)) if granted is not None and granted.task == task else None
         if path is None:
-            await self._tell(
-                node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": f"server {server!r} is not lent to that run"}
-            )
+            await self._refuse(node, stream_id, server, task, f"server {server!r} is not lent to that run")
             return
         try:
             reader, writer = await open_endpoint(path)
         except OSError as exc:
-            await self._tell(
-                node,
-                protocol.MCP_CLOSE,
-                {"stream": stream_id, "reason": f"the host's endpoint for {server!r} is gone: {exc}"},
-            )
+            await self._refuse(node, stream_id, server, task, f"the host's endpoint for {server!r} is gone: {exc}")
             return
         # An unlend or a replaced link can run while the socket is opening.
         # Never register a stream under an authorization that ended meanwhile.
@@ -822,11 +816,32 @@ class NodePool:
             writer.close()
             with contextlib.suppress(ConnectionError, OSError):
                 await writer.wait_closed()
-            await self._tell(node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": "the dispatch or link ended"})
+            await self._refuse(node, stream_id, server, task, "the dispatch or link ended", expected=True)
             return
         stream = _HostStream(stream_id, str(lend), str(server), writer)
         node.streams[stream_id] = stream
         stream.pump = asyncio.create_task(self._pump_out(node, stream, reader), name=f"mcp-stream-{stream_id}")
+
+    async def _refuse(
+        self, node: _Node, stream_id: int, server: Any, task: Any, reason: str, *, expected: bool = False
+    ) -> None:
+        """Close a stream this host will not carry, and say why here as well as down the pipe.
+
+        The agent's side of a refused stream is a closed pipe: an MCP client
+        reads that as the server having ended, and the reason never reaches
+        the person whose server it is. ``expected`` marks the refusal that is a
+        normal race -- an unlend or a replaced link while the endpoint opens --
+        so it is said without a warning.
+        """
+        log = logger.info if expected else logger.warning
+        log(
+            "raven node on machine {}: no stream for {!r} on task {!r}: {!r}",
+            node.target.id,
+            server,
+            task,
+            reason,
+        )
+        await self._tell(node, protocol.MCP_CLOSE, {"stream": stream_id, "reason": reason})
 
     async def _pump_out(self, node: _Node, stream: _HostStream, reader: asyncio.StreamReader) -> None:
         """Every frame the endpoint yields, out on the link in pieces; its end, or a frame too large, ends the stream."""

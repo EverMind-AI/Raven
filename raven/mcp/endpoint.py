@@ -270,6 +270,7 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         else None
                     )
                     await up_write.send(SessionMessage(message, metadata=metadata))
+                logger.debug("mcp endpoint: the agent's side of {!r} ended", up.server)
 
             async def up_to_down() -> None:
                 nonlocal initialize_id, protocol_version
@@ -293,6 +294,10 @@ async def _relay(up: _Upstream, reader: asyncio.StreamReader, writer: asyncio.St
                         await send_down(payload.encode() + b"\n")
                 finally:
                     writer.close()
+                # Said only when the upstream itself ended, never when this side
+                # was cancelled by the other pump ending first: the line exists
+                # to name which side ended, and a cancellation is not an end.
+                logger.debug("mcp endpoint: the upstream for {!r} ended", up.server)
 
             pumps = (asyncio.create_task(down_to_up()), asyncio.create_task(up_to_down()))
             try:
