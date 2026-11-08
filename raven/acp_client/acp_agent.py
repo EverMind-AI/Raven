@@ -1010,14 +1010,18 @@ class _SessionState:
     effort was never checked against."""
 
 
-_SESSION_STATE: dict[tuple[str, str], dict[str, _SessionState]] = {}
+_SESSION_STATE: dict[tuple[str, str, str], dict[str, _SessionState]] = {}
 """Pooled connections' session records, by pool slot and then by session id.
 
-The slot is the agent's name and the parent binding (``AcpClient.session_identity``).
+The slot is the agent's name, the parent binding and the loop that owns the
+connection (``AcpClient.session_identity``).
 Not the name alone: the pool holds one process per binding under a name, each
 numbering its own sessions, so two of them can both hold ``s1``, and a record
-shared between them let clearing one forget what was pushed to the other. Not
-the client either: the pool closes an idle agent that can reload its sessions
+shared between them let clearing one forget what was pushed to the other.
+Not the binding alone either: two loops hold two processes of the same agent
+and binding -- each loop's connection has pipes that loop can read -- so the
+records of one are not the records of the other. Not the client either: the
+pool closes an idle agent that can reload its sessions
 and relaunches it into the same slot, where the instance's next turn reloads
 the same session -- a record held by the closed client would be gone exactly
 when the clear that reads it arrives. A hot apply keeps the slot too, so the
@@ -1244,8 +1248,9 @@ class AcpAgentBackend:
         if not connections:
             return
         emit, announce = self._resident_sinks()
-        # One connection per parent binding under the agent's name; every one
-        # of them may hold a recorder, and every one belongs to this generation now.
+        # One connection per parent binding and loop under the agent's name;
+        # every one of them may hold a recorder, and every one belongs to this
+        # generation now.
         for connection in connections:
             self._repoint_resident(connection, emit, announce)
 

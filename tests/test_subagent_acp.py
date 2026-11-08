@@ -8336,7 +8336,9 @@ async def test_close_all_abandons_a_connection_whose_close_hangs() -> None:
             closed.append(self._name)
 
     for name, hangs in (("stuck", True), ("clean", False)):
-        pool._connections[name] = {"": SimpleNamespace(client=_Client(name, hangs))}
+        # The loop is part of the slot now: a connection is closed by the loop
+        # that owns it, and this one is owned by the loop that runs this test.
+        pool._connections[name] = {"": SimpleNamespace(client=_Client(name, hangs), loop=asyncio.get_running_loop())}
 
     monkeypatch_timeout = 0.05
     with patch.object(pool_mod, "_CLOSE_TIMEOUT_S", monkeypatch_timeout):

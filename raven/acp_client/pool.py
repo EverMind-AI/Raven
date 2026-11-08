@@ -17,6 +17,16 @@ provider and protocol the invoking session runs on) reaches the worker as
 launch environment, so two bindings are two processes -- but they are not two
 configs, and a second binding must not close the first binding's connection
 the way an operator's config edit does: a turn was running on it.
+
+Under one binding, one connection per event loop. A connection's pipes and
+its reader task belong to the loop it was made on, so a connection handed to
+another loop answers nothing: the frames arrive on a reader that loop is not
+running, and the request that is waiting on them is waiting on a future
+another thread will settle. More than one loop does use this pool -- the RPC
+server runs a CLI command such as `raven agent -m` on a worker thread under
+its own ``asyncio.run``, beside the host's loop -- so a loop that holds
+nothing launches its own, and every connection the pool holds is the one its
+own loop can use.
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import itertools
 import json
 import time
 import weakref
@@ -130,6 +141,37 @@ def launch_key(
 
 def _binding_key(binding: dict[str, str] | None) -> str:
     return json.dumps(binding or {}, sort_keys=True, default=str)
+
+
+_LOOP_TOKENS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, str] = weakref.WeakKeyDictionary()
+_LOOP_TOKEN_SEQ = itertools.count(1)
+
+
+def _loop_token(loop: asyncio.AbstractEventLoop) -> str:
+    """A name for ``loop``, the same one for as long as the loop lives.
+
+    A slot names the loop that owns it, so that the records keyed by a slot --
+    what an agent was pushed to, per session -- belong to one process and not
+    to two that happen to share a binding. The name outlives the call that
+    made it, and a loop that is gone takes its name with it: a new loop is a
+    new process and a new set of records.
+    """
+    token = _LOOP_TOKENS.get(loop)
+    if token is None:
+        token = f"loop-{next(_LOOP_TOKEN_SEQ)}"
+        _LOOP_TOKENS[loop] = token
+    return token
+
+
+def _usable_by(connection: _Connection, loop: asyncio.AbstractEventLoop) -> bool:
+    """Whether this connection's streams belong to ``loop``.
+
+    A connection made outside any loop belongs to every one, the way ``_on``
+    already reads it. A connection made on another loop does not: its reader
+    task and its pipes are that loop's, and a request answered on them from
+    here would wait on a future nobody settles.
+    """
+    return connection.loop is None or connection.loop is loop
 
 
 class _SessionRouter:
@@ -399,10 +441,10 @@ class _Connection:
 
 
 class AcpConnectionPool:
-    """Process-wide registry of live ACP connections, one per agent name and binding."""
+    """Process-wide registry of live ACP connections, one per agent name, binding and loop."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, dict[str, _Connection]] = {}
+        self._connections: dict[str, dict[tuple[str, str], _Connection]] = {}
         self._locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
             weakref.WeakKeyDictionary()
         )
@@ -427,7 +469,7 @@ class AcpConnectionPool:
         return lock
 
     def live(self, name: str) -> "list[_Connection]":
-        """The live connections held for ``name`` (one per parent binding). Never launches one.
+        """The live connections held for ``name`` (one per parent binding and loop). Never launches one.
 
         For a caller that has something to hand each connection's resident state
         -- a new generation re-pointing the unprompted recorders at its own
@@ -435,6 +477,29 @@ class AcpConnectionPool:
         to hand it to.
         """
         return [conn for conn in self.connections(name) if conn.alive]
+
+    def _reap_gone_loops(self) -> None:
+        """End the agents of loops that have gone, and forget them.
+
+        A connection's pipes belong to the loop that made them, and a loop
+        that has closed cannot read them: the agent it was speaking to would
+        go on running with nobody on the other end, holding its memory until
+        this host exits. There is nothing left to wait on, so the process is
+        ended directly.
+
+        The name's own entry is left where it is, empty or not: another loop
+        may be halfway through an acquire of that name, and dropping the entry
+        under it would leave the connection it is about to make outside the
+        pool's bookkeeping.
+        """
+        for name, held in list(self._connections.items()):
+            for slot, connection in list(held.items()):
+                loop = connection.loop
+                if loop is None or not loop.is_closed():
+                    continue
+                logger.info("acp agent {!r}: the loop that owned it is gone, ending its process", name)
+                held.pop(slot, None)
+                connection.client.abort()
 
     async def acquire(
         self,
@@ -469,7 +534,15 @@ class AcpConnectionPool:
         bindings dispatch to the same agent at once. Each binding holds its own
         connection under the name, and a new binding leaves the others' turns
         running. A change to the config half (`command`, `cwd`, `env`,
-        `machine`) still retires every connection of the name, as it always did.
+        `machine`) still retires every connection of the name this loop holds,
+        as it always did.
+
+        The running loop is part of the slot too. A connection's pipes and its
+        reader task belong to the loop that made them, so a connection made on
+        another loop cannot answer from this one: this loop gets its own
+        connection for the same binding, and the pool keeps both. A connection
+        of another loop is that loop's to retire -- it cannot be closed from
+        here, and the next acquire on the loop that owns it retires its own.
 
         ``launcher`` opens the endpoint the connection runs over when the
         process is not started here: an agent on a registered machine is
@@ -481,29 +554,44 @@ class AcpConnectionPool:
         config = launch_key(command=command, cwd=cwd, env=env, machine=machine)
         key = launch_key(command=command, cwd=cwd, env=env, binding=binding, machine=machine)
         bkey = _binding_key(binding)
+        loop = asyncio.get_running_loop()
+        token = _loop_token(loop)
+        slot = (bkey, token)
         launch_env = {**(env or {}), **binding} if binding else env
+        # Before the lock: a loop that has gone leaves an agent running with
+        # nobody on the other end, and this is where that is noticed.
+        self._reap_gone_loops()
         if launcher is None:
             # Ahead of the lock, which `drop` waits on too: a first fetch can run for
             # minutes. Launches that overlap still share the one fetch (`npx_fetch`).
             await npx_fetch.ensure_fetched(name, command, env=launch_env, cwd=cwd)
         async with self._lock_for(name):
             held = self._connections.setdefault(name, {})
-            existing = held.get(bkey)
-            if existing is not None and existing.alive and existing.launch_key == key:
-                if await self._responsive(existing):
-                    existing.leased_at = time.monotonic()
-                    return existing
-                # Alive by its process and unchanged by its key, yet not answering:
-                # a wedged worker is replaced rather than hit again (see _responsive).
-                logger.info("acp agent {!r}: connection is unresponsive, relaunching", name)
-                held.pop(bkey, None)
+            existing = held.get(slot)
+            if existing is not None:
+                if existing.alive and existing.launch_key == key and _usable_by(existing, loop):
+                    if await self._responsive(existing):
+                        existing.leased_at = time.monotonic()
+                        return existing
+                    # Alive by its process and unchanged by its key, yet not answering:
+                    # a wedged worker is replaced rather than hit again (see _responsive).
+                    logger.info("acp agent {!r}: connection is unresponsive, relaunching", name)
+                else:
+                    reason = "connection is dead" if not existing.alive else "launch config changed"
+                    logger.info("acp agent {!r}: {}, relaunching", name, reason)
+                # The slot's own connection, replaced here: it is the one this
+                # call would otherwise hand out, and it no longer answers.
+                held.pop(slot, None)
                 await existing.client.close()
-            for other_key, other in list(held.items()):
-                if other_key != bkey and other.alive and other.config_key == config:
+            for other_slot, other in list(held.items()):
+                if other_slot == slot or not _usable_by(other, loop):
+                    # Another loop's connection is that loop's to retire.
+                    continue
+                if other.alive and other.config_key == config:
                     continue
                 reason = "connection is dead" if not other.alive else "launch config changed"
                 logger.info("acp agent {!r}: {}, relaunching", name, reason)
-                held.pop(other_key, None)
+                held.pop(other_slot, None)
                 await other.client.close()
 
             router = _SessionRouter(name)
@@ -568,7 +656,7 @@ class AcpConnectionPool:
                 # shutdown cannot find it either.
                 await client.close()
                 raise
-            client.session_identity = (name, bkey)
+            client.session_identity = (name, bkey, token)
             # After the handshake, so a call's own range starts where its own
             # work does and a reader can still find the handshake at [0, here).
             connection = _Connection(
@@ -581,7 +669,7 @@ class AcpConnectionPool:
                 handshake_bytes=journal.offset if journal is not None else 0,
                 config=config,
             )
-            held[bkey] = connection
+            held[slot] = connection
             self._watch_idle()
             return connection
 
@@ -616,6 +704,8 @@ class AcpConnectionPool:
                 endpoint, name=name, on_request=answering, on_notification=notifying, journal=journal
             )
             client.continue_ids_from(next_id)
+            loop = asyncio.get_running_loop()
+            token = _loop_token(loop)
             connection = _Connection(
                 client,
                 router,
@@ -628,15 +718,16 @@ class AcpConnectionPool:
             )
             held = self._connections.setdefault(name, {})
             bkey = _binding_key(None)
+            slot = (bkey, token)
             # The slot this connection fills, as a launched one records it: the
             # next dispatch of a machine's agent acquires with no binding, so it
             # lands on this same key, and the session records written here are
             # what that dispatch -- after an idle close -- has to read back.
-            client.session_identity = (name, bkey)
-            existing = held.get(bkey)
+            client.session_identity = (name, bkey, token)
+            existing = held.get(slot)
             if existing is not None and existing.alive:
                 return connection, False
-            held[bkey] = connection
+            held[slot] = connection
             self._watch_idle()
             return connection, True
 
@@ -645,7 +736,36 @@ class AcpConnectionPool:
         async with self._lock_for(name):
             connections = list((self._connections.pop(name, None) or {}).values())
         for connection in connections:
+            await self._end(connection)
+
+    @staticmethod
+    async def _end(connection: _Connection) -> None:
+        """Close one connection, wherever the loop that owns it is.
+
+        A connection's reader task and its pipes belong to the loop it was made
+        on, and closing it waits on both. Handed to another loop, that wait is
+        a wait on tasks this loop is not running, so the close is given to the
+        loop that owns the connection. A connection whose loop has gone has
+        nothing left to wait on: its process is ended directly, so the agent
+        does not outlive the loop that was speaking to it.
+        """
+        owner = connection.loop
+        if owner is None or owner is asyncio.get_running_loop():
             await connection.client.close()
+            return
+        if owner.is_closed():
+            connection.client.abort()
+            return
+        try:
+            closing = asyncio.run_coroutine_threadsafe(connection.client.close(), owner)
+            await asyncio.wait_for(asyncio.wrap_future(closing), timeout=_CLOSE_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 - a close that cannot be handed over must not skip the rest
+            logger.warning(
+                "acp agent {!r}: closing its connection on another loop failed: {}",
+                connection.client.name,
+                exc,
+            )
+            connection.client.abort()
 
     @staticmethod
     async def _responsive(existing: _Connection) -> bool:
@@ -732,12 +852,13 @@ class AcpConnectionPool:
         if budget is None:
             return []
         loop = asyncio.get_running_loop()
+        self._reap_gone_loops()
         closing: list[tuple[str, _Connection]] = []
         for name in [name for name, held in self._connections.items() if _on(held.values(), loop)]:
             async with self._lock_for(name):
                 held = self._connections.get(name, {})
                 now = time.monotonic()
-                for bkey, connection in list(held.items()):
+                for slot, connection in list(held.items()):
                     if not _on((connection,), loop):
                         continue
                     # A connection whose agent already ended goes too: nothing
@@ -746,7 +867,7 @@ class AcpConnectionPool:
                         continue
                     if connection.alive and await self._holds_resident_work(connection):
                         continue
-                    held.pop(bkey, None)
+                    held.pop(slot, None)
                     closing.append((name, connection))
                 if not held:
                     self._connections.pop(name, None)
