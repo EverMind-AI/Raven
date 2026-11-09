@@ -798,6 +798,27 @@ def test_a_missing_stop_reason_reads_unknown() -> None:
     assert response.finish_reason == "unknown"
 
 
+def test_context_window_exceeded_stop_reason_reads_length() -> None:
+    """``model_context_window_exceeded`` is a cut, like ``max_tokens``; passed through
+    raw it never matched ``flag_truncation``'s ``length`` and a cut reply read as complete."""
+    from raven.providers.anthropic_messages_provider import parse_message
+    from raven.providers.truncation import flag_truncation
+
+    response = parse_message(
+        {
+            "content": [{"type": "text", "text": "partial"}],
+            "stop_reason": "model_context_window_exceeded",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+
+    assert response.finish_reason == "length"
+    _, truncated = flag_truncation(
+        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+    )
+    assert truncated is True
+
+
 async def test_message_stop_without_a_stop_reason_reads_unknown() -> None:
     """``message_stop`` closes the stream, it does not say why the model stopped;
     that is ``message_delta``'s ``stop_reason``. A stream that closes without one
