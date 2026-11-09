@@ -842,21 +842,31 @@ def upgrade_hint_for(cfg: Any) -> str | None:
     of a bare package name installs whatever is newest only when nothing is
     installed yet, so over an old copy the plain hint can leave it where it is.
     Only for an ``npm i -g <package>`` hint, the one shape whose version is known
-    to go on the package's own word. For a shim row the agent is the one the shim
-    drives (:func:`shim_requirement_for`), whose release is the user's to move.
+    to go on the package's own word, with any ``--`` flags after the package kept
+    as they are: a hint carries one only because the install needs it. For a shim
+    row the agent is the one the shim drives (:func:`shim_requirement_for`), whose
+    release is the user's to move.
     """
     requirement = shim_requirement_for(cfg)
     hint = install_hint_for(cfg) or (requirement[1] if requirement else None)
     if not hint:
         return None
     words = hint.split()
-    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) != 4:
+    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) < 4:
         return None
-    package = words[3]
+    package, flags = words[3], words[4:]
     # A scoped package keeps its leading "@"; a version is the "@" after that.
-    if "@" in package[1:]:
+    if package.startswith("-") or "@" in package[1:]:
         return None
-    return f"{hint}@latest"
+    # Any other word after the package may be a second package or a flag's
+    # value, neither of which this can pin.
+    if not all(flag.startswith("--") for flag in flags):
+        return None
+    # Pinning the package leaves an `--allow-scripts` approval in force: npm 12
+    # matches it against the installed package's registry name, not the spec
+    # asked for (measured 2026-11-09 on npm 12.2.2: `core-js@latest` ran its
+    # postinstall under `--allow-scripts=core-js` and was blocked without it).
+    return " ".join([*words[:3], f"{package}@latest", *flags])
 
 
 def sign_in_hint_for(cfg: Any) -> SignIn | None:

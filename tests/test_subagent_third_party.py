@@ -5494,8 +5494,11 @@ def test_a_launch_that_quit_is_named_by_what_it_said_on_its_way_out() -> None:
 def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyPatch) -> None:
     """Over an old copy a bare package name can leave it where it is; `@latest` moves it.
 
-    Only for an `npm i -g <package>` hint: a hint that pins a version already, or
-    installs some other way, is not one this can safely rewrite.
+    Only for an `npm i -g <package>` hint, with or without `--` flags after the
+    package: a hint that pins a version already, or installs some
+    other way, is not one this can safely rewrite. The flags stay, because a
+    hint carries one only when the install needs it -- MiniMax Code's script
+    approval is what builds its native binding on npm 12.
     """
     from types import SimpleNamespace
 
@@ -5506,14 +5509,45 @@ def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyP
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="pi")) == (
         "npm install -g @earendil-works/pi-coding-agent@latest"
     ), "a shim's upgrade is the agent it drives"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="minimax_code")) == (
+        "npm install -g @minimax-ai/code@latest --allow-scripts=@minimax-ai/code,better-sqlite3"
+    ), "the package is pinned and the approval it needs travels with it"
     for hint, upgrade in (
         ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
+        ("npm i -g agent --allow-scripts=agent", "npm i -g agent@latest --allow-scripts=agent"),
         ("npm i -g @scope/agent@1.2.3", None),
         ("npm i -g agent@2", None),
+        ("npm i -g agent@2 --allow-scripts=agent", None),
+        ("npm i -g --allow-scripts=agent agent", None),
+        ("npm i -g --allow-scripts=agent", None),
+        ("npm i -g agent other-agent", None),
+        ("npm i -g agent --registry https://registry.example", None),
         ("curl -fsSL https://agent.example/install.sh | sh", None),
     ):
         monkeypatch.setitem(presets_mod.ACP_REGISTRY_INSTALL_HINTS, "stand_in", hint)
         assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="stand_in")) == upgrade, hint
+
+
+def test_a_minimax_code_too_old_for_acp_is_told_the_upgrade_that_installs_it() -> None:
+    """The too-old reading names a command for MiniMax Code as it does for qwen.
+
+    Its install hint carries a flag, and an upgrade that cannot be read off a
+    flagged hint leaves the reader told to upgrade with nothing to run.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    mcode = SimpleNamespace(name="MiniMax Code", preset="minimax_code", kind="acp", command="mcode acp")
+    old = AcpConnectionError(
+        "acp agent 'MiniMax Code': connection ended (exit 1); stderr tail: error: unknown command 'acp'"
+    )
+    upgrade = "npm install -g @minimax-ai/code@latest --allow-scripts=@minimax-ai/code,better-sqlite3"
+    text, remedy = probe_mod._ping_refusal(mcode, old)
+    assert remedy == Remedy("upgrade", upgrade)
+    assert f"upgrade it with `{upgrade}` and connect again" in text
 
 
 async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatch: pytest.MonkeyPatch) -> None:
