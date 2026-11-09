@@ -4194,13 +4194,17 @@ Which default a `WorkdirResolver` falls back to when a session has no explicit o
 `LAUNCH_DIR` or `PER_CHANNEL`. Fixed per entrypoint (tui/agent vs. gateway), not user-facing.
 
 **Workspace Template** (`templates/`):
-The bundled markdown seed files copied into Agent home on first run by
-`sync_workspace_templates()` (idempotent — fills only missing files, so user edits win):
-`SOUL.md` (agent persona), `AGENTS.md` (agent operating instructions), `USER.md` (user
-profile), `HEARTBEAT.md` (periodic-task list read by the heartbeat Scheduler), `TOOLS.md`
-(tool-usage notes), `memory/MEMORY.md` (legacy memory seed). On the L4 layout these map
-under `agent_memory/profile/` (soul.md, agent.md) and `user_memory/profile/` (user.md);
-`HEARTBEAT.md` / `TOOLS.md` stay at the Agent home root.
+The bundled markdown seed files copied into Agent home by `sync_workspace_templates()`
+(idempotent — fills only missing files, so user edits win), with one exception: `SOUL.md`
+is the host's voice as well as a template, so a copy a previous release wrote is refreshed
+on every sync; an edit to a copy the product wrote is backed up and replaced; and a file
+no receipt or shipped digest attributes to the product is left alone and named. The
+operator's own lines belong in `soul.local.md` beside it. The set is `SOUL.md` (agent persona), `AGENTS.md`
+(agent operating instructions), `USER.md` (user profile), `HEARTBEAT.md` (periodic-task
+list read by the heartbeat Scheduler), `TOOLS.md` (tool-usage notes), `memory/MEMORY.md`
+(legacy memory seed). On the L4 layout these map under `agent_memory/profile/` (soul.md,
+agent.md) and `user_memory/profile/` (user.md); `HEARTBEAT.md` / `TOOLS.md` stay at the
+Agent home root.
 
 **Onboarding** (`raven onboard` → `run_wizard`):
 The first-run wizard (LLM provider → sandbox → channel → EverOS memory → web access → sub-agents → cold-start import) that also seeds

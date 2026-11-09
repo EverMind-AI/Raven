@@ -1,5 +1,11 @@
 """Workspace template sync: the bundled ``templates/`` package data copied into
 Agent home once, creating only what is missing.
+
+One exception: ``SOUL.md`` carries the host's voice rules, so a copy that still
+holds a previous release's text is replaced on sync. A file the operator edited
+is kept and named, and their own lines belong in ``soul.local.md`` beside it.
+A receipt records the text this package last wrote, which is what lets a later
+release recognise its own copy and refresh it.
 """
 
 import sys
@@ -17,6 +23,16 @@ from loguru import logger
 # (tests, embedders), not the first sync of a `--logs` run.
 logger.disable(__name__)
 
+#: Every ``SOUL.md`` this package shipped before the file became product-owned.
+#: A workspace copy matching one of these is the product's to replace; anything
+#: else is the operator's and is left alone.
+_SOUL_LEGACY_DIGESTS = frozenset(
+    {
+        "5555e9bf0abd1fd43b6214cc785a3df4c7bb45504c6e3fbd58312c96a13f66d1",
+        "d1dcf24ed3a81d791f892c71936a0375f00bb3c4a5dbb4b998d44b2ca50586bb",
+    }
+)
+
 
 def _stderr_line(message: str) -> None:
     """Where a report lands when no host supplied a renderer: one plain line on stderr."""
@@ -26,11 +42,12 @@ def _stderr_line(message: str) -> None:
 def sync_workspace_templates(
     workspace: Path, silent: bool = False, *, notify: "Callable[[str], None] | None" = None
 ) -> list[str]:
-    """Sync bundled templates to Agent home. Only creates missing files.
+    """Sync bundled templates to Agent home, creating what is missing.
 
-    ``notify`` receives one plain sentence when files were created ("Initialized
-    workspace (3 files)"); the host decides how to show it. Nothing here owns a
-    terminal.
+    ``SOUL.md`` is the exception: it is the host's voice, so a copy a previous
+    release wrote is refreshed in place. ``notify`` receives one plain sentence
+    per file written or kept ("Initialized workspace (3 files)"); the host
+    decides how to show it. Nothing here owns a terminal.
     """
     from importlib.resources import files as pkg_files
 
@@ -70,6 +87,32 @@ def sync_workspace_templates(
         dest.write_text(text, encoding="utf-8")
         added.append(f"{dest.relative_to(workspace)} (migrated from {src.relative_to(workspace)})")
 
+    say = notify if notify is not None else (None if silent else _stderr_line)
+
+    def _refresh(src, dest: Path):
+        """Replace a product-owned prompt that still holds a release's text."""
+        nonlocal existed
+        if not src.is_file():
+            return
+        if dest.exists():
+            existed += 1
+        from raven.config.product_render import write_generated
+
+        action = write_generated(
+            dest,
+            src.read_text(encoding="utf-8"),
+            owner="raven",
+            legacy_digests=_SOUL_LEGACY_DIGESTS,
+            adopt=False,
+            notify=say,
+        )
+        if action == "written":
+            name = str(dest.relative_to(workspace))
+            # A legacy root copy was just migrated to this same file; the
+            # refresh is the write worth reporting, not the copy before it.
+            added[:] = [item for item in added if item != name and not item.startswith(f"{name} (")]
+            added.append(name)
+
     # Step 1 — migrate legacy workspace files into the L4 layout. Each
     # rule fires only when the legacy file exists and the L4 target is
     # still missing, so user edits made directly to L4 paths win.
@@ -88,7 +131,7 @@ def sync_workspace_templates(
 
     # Step 2 — fall back to bundled templates for anything still missing.
     # L4 pillar files first; root-level files (TOOLS / HEARTBEAT) stay put.
-    _write(tpl / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
+    _refresh(tpl / "SOUL.md", workspace / "agent_memory" / "profile" / "soul.md")
     _write(tpl / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
     _write(tpl / "USER.md", workspace / "user_memory" / "profile" / "user.md")
     _write(None, workspace / "user_memory" / "episodic" / "episodes.md")
@@ -104,7 +147,7 @@ def sync_workspace_templates(
 
     if added:
         for name in added:
-            logger.debug("workspace sync: created {}", name)
+            logger.debug("workspace sync: wrote {}", name)
     if added and not silent:
         label = "Initialized workspace" if existed == 0 else "Updated workspace templates"
         (notify or _stderr_line)(f"{label} ({len(added)} file{'s' if len(added) != 1 else ''})")
