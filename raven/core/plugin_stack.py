@@ -744,7 +744,18 @@ def start_backend_detached(backend: Any, *, logger: Any) -> None:
         except Exception:
             logger.exception("memory backend start failed; continuing with legacy memory path")
 
-    task = asyncio.create_task(_start(), name="memory-backend-start")
+    hold_backend_start(backend, asyncio.create_task(_start(), name="memory-backend-start"))
+
+
+def hold_backend_start(backend: Any, task: asyncio.Task) -> asyncio.Task:
+    """Hold a host's own start task for ``backend`` where a retirement finds it.
+
+    A live memory-backend switch retires the backend it replaces through
+    :func:`cancel_pending_backend_starts`, which can only cancel a start it
+    holds. A host that starts its boot backend on a task of its own (the TUI
+    strips TTY log handlers after it) registers that task here, or a switch
+    landing during the boot window stops the backend under its own start.
+    """
     entry = (backend, task)
     _PENDING_BACKEND_STARTS.append(entry)
 
@@ -753,6 +764,7 @@ def start_backend_detached(backend: Any, *, logger: Any) -> None:
             _PENDING_BACKEND_STARTS.remove(entry)
 
     task.add_done_callback(_release)
+    return task
 
 
 async def cancel_pending_backend_starts(backend: Any) -> None:
@@ -788,6 +800,7 @@ __all__ = [
     "build_plugin_tool_gates",
     "cancel_pending_backend_starts",
     "discover_plugins",
+    "hold_backend_start",
     "maybe_build_memory_backend",
     "plugin_discovery_sources",
     "plugin_failure_note",

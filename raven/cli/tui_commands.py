@@ -561,23 +561,32 @@ async def _run_rpc_server_until_done(
 
                 _logger.exception("tui: plugin services failed to start; continuing without them")
         if agent_loop is not None and agent_loop.backend is not None:
+            from raven.core import plugin_stack
+
+            boot_backend = agent_loop.backend
 
             async def _start_backend() -> None:
                 try:
-                    await agent_loop.backend.start()  # type: ignore[union-attr]
+                    await boot_backend.start()
                 except Exception:
                     from loguru import logger as _logger
 
                     _logger.exception(
                         "tui: memory backend start failed; continuing with degraded memory path",
                     )
-                _strip_tty_stream_handlers()
+                finally:
+                    # Also when a live switch cancels this start: whatever it
+                    # attached to the TTY before the cancel still has to go.
+                    _strip_tty_stream_handlers()
 
             # Held, not dropped: the event loop keeps only a weak reference to
             # a bare task (the GC hazard the MCP event bridge already guards
             # against), and the teardown below must be able to settle a start
             # still spawning EverOS before it drains and stops the backend.
+            # Registered too, so a live switch that retires this backend
+            # cancels the start before stopping it.
             backend_start_task = asyncio.create_task(_start_backend())
+            plugin_stack.hold_backend_start(boot_backend, backend_start_task)
 
         await proc_done.wait()
         return True

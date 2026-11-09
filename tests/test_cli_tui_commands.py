@@ -1285,6 +1285,27 @@ def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
     assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"
 
 
+def test_the_boot_start_is_registered_where_a_live_switch_cancels_it() -> None:
+    """A live switch retires the boot backend through
+    ``cancel_pending_backend_starts``, which only reaches a start the registry
+    holds. Unregistered, a switch landing in the up-to-30s EverOS spawn window
+    stopped the backend while its start was still running -- on Windows that
+    stop can end the child the start is waiting on. The start is a closure with
+    no seam, so this pins the registration and the handler strip that must
+    survive the cancel."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    assert "plugin_stack.hold_backend_start(boot_backend, backend_start_task)" in src
+    start = src[src.index("async def _start_backend") : src.index("backend_start_task = asyncio.create_task")]
+    assert "await boot_backend.start()" in start, "the task must start the boot backend, not whatever serves later"
+    assert start.index("finally:") < start.index("_strip_tty_stream_handlers()"), (
+        "a cancelled start must still strip the TTY handlers it attached"
+    )
+
+
 def test_teardown_stops_the_skill_file_watcher() -> None:
     """The teardown must stop the skill watcher before the process exits.
 

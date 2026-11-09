@@ -531,14 +531,12 @@ async def build_rpc_stack(
         agent_loop.prewarm_mcp()
 
     if owns_loop and agent_loop is not None and agent_loop.backend is not None:
+        from raven.core import plugin_stack
 
-        async def _start_backend() -> None:
-            try:
-                await agent_loop.backend.start()
-            except Exception:
-                logger.exception("serve: memory backend start failed; continuing with degraded memory path")
-
-        asyncio.create_task(_start_backend())
+        # Registered, as the gateway's is: a live switch retires the boot
+        # backend through ``cancel_pending_backend_starts``, and a start that
+        # call cannot see is stopped under its own feet.
+        plugin_stack.start_backend_detached(agent_loop.backend, logger=logger)
 
     async def teardown() -> None:
         confirm_broker.cancel_all()

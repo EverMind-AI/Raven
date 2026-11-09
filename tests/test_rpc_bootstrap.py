@@ -193,6 +193,41 @@ async def test_the_owning_stack_retires_replaced_backends_when_memory_is_off(mon
     assert order == ["drain", "retire"], order
 
 
+async def test_the_owning_stacks_boot_start_is_one_a_live_switch_can_cancel(monkeypatch) -> None:
+    """A live switch retires the boot backend through
+    ``cancel_pending_backend_starts`` before stopping it. A boot start the
+    registry does not hold is invisible to that call, so a switch landing while
+    the start still polls for readiness stops the backend under its own start."""
+    from raven.core import plugin_stack
+
+    order: list[str] = []
+    gate = asyncio.Event()
+
+    class _Gated(_RecordingBackend):
+        async def start(self) -> None:
+            order.append("start-enter")
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                order.append("start-cancelled")
+                raise
+            order.append("start-exit")
+
+    loop = _FakeLoop(_FakeCron())
+    boot = _Gated(order)
+    loop.backend = boot
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
+    await asyncio.sleep(0)
+    await plugin_stack.cancel_pending_backend_starts(boot)
+    await boot.stop()
+    gate.set()
+    await stack.teardown()
+
+    assert order[:3] == ["start-enter", "start-cancelled", "stop"], order
+
+
 async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> None:
     """serve, the page and every ACP worker build through here and used to get
     the spine's built-in 1/1 whatever the config said, so a second conversation
