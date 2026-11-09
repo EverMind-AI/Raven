@@ -1274,6 +1274,12 @@ export interface TurnUsage {
   context_used?: number;
   context_max?: number;
   context_percent?: number;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
   cost_missing_calls?: number;
 }
 export interface CliResult {
@@ -1574,6 +1580,12 @@ export interface TurnUsage1 {
   context_used?: number;
   context_max?: number;
   context_percent?: number;
+  /**
+   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   */
+  context_parts?: {
+    [k: string]: number;
+  } | null;
   cost_missing_calls?: number;
 }
 export interface CronDeliveredEvent {

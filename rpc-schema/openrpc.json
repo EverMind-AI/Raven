@@ -15154,6 +15154,16 @@
           "context_percent": {
             "type": "integer"
           },
+          "context_parts": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn."
+          },
           "cost_missing_calls": {
             "type": "integer",
             "default": 0

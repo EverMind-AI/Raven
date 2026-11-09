@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setCode } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
-import { _resetForTests, draw, set } from './ctxChip'
+import { _resetForTests, draw, get, set, toggle } from './ctxWindow'
 import * as pageStore from './page'
 
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
@@ -104,5 +104,48 @@ describe('the context ring', () => {
     set(50_000, 200_000)
     document.body.innerHTML = ''
     expect(() => draw()).not.toThrow()
+  })
+})
+
+describe('the window the popover reads', () => {
+  it('carries the parts a turn divided it into', () => {
+    set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
+    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
+    expect(get().used).toBe(175_600)
+    expect(get().max).toBe(200_000)
+  })
+
+  it('has no parts until a turn divides the window', () => {
+    set(175_600, 200_000)
+    expect(get().parts).toBe(null)
+  })
+
+  it('keeps the parts it was told when a later report brings none', () => {
+    set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
+    set(180_000, 200_000)
+    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
+  })
+
+  it('opens and closes the popover on the ring\'s click', () => {
+    set(175_600, 200_000)
+    expect(get().open).toBe(false)
+    toggle()
+    expect(get().open).toBe(true)
+    toggle()
+    expect(get().open).toBe(false)
+  })
+
+  it('has no popover to open while no window is known', () => {
+    toggle()
+    expect(get().open).toBe(false)
+  })
+
+  it('shuts the popover when the window goes away', () => {
+    set(175_600, 200_000)
+    toggle()
+    expect(get().open).toBe(true)
+    _resetForTests()
+    draw()
+    expect(get().open).toBe(false)
   })
 })

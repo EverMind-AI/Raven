@@ -52,7 +52,7 @@ async function harness(rows = [], { connected = false, selectionOnly = true } = 
       'src/state/perm': { draw: step('drawPerm') },
       'src/state/tier': { load: step('loadTier') },
       'src/state/effort': { load: step('loadEffort') },
-      'src/state/ctxChip': { draw: step('drawCtx') },
+      'src/state/ctxWindow': { draw: step('drawCtx') },
       'src/state/failureBar': {
         bootError: (where, error) => { throw new Error(`${where}: ${error}`) },
       },

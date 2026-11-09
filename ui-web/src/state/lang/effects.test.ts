@@ -62,7 +62,7 @@ async function harness(
         open: step('sessionOpen'),
       },
       'src/state/perm': { draw: step('drawPerm') },
-      'src/state/ctxChip': { draw: step('drawCtx') },
+      'src/state/ctxWindow': { draw: step('drawCtx') },
       'src/lib/session': { current: () => session },
       'src/features/model/chip': { label: step('modelLabel') },
       'src/features/composer/mount': { drawQueue: step('queueDraw'),

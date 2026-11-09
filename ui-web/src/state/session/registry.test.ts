@@ -128,7 +128,7 @@ async function harness(
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
+      'src/state/ctxWindow': { set: (used: number) => calls.push(['setCtx', used]) },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: (sid?: string | null, gen?: number) => calls.push(['loadTier', sid, gen]) },
       'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', sid, gen]) },

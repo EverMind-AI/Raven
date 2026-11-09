@@ -143,6 +143,34 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
 
 
 @pytest.mark.asyncio
+async def test_usage_sink_carries_the_window_divided(workspace):
+    """The window is divided as well as counted, so a page can say what fills it.
+
+    The three parts are the request the turn sent: the system prompt, the tool
+    schemas, and the conversation. A turn that measured a window measured it on
+    a request that had all three.
+    """
+    provider = UsageProvider("stub", prompt_tokens=6000, completion_tokens=2000)
+    agent = _make_agent(workspace, provider, model="stub", window=40000)
+    sink: dict = {}
+
+    await agent._process_message(
+        TurnRequest(
+            origin=Origin.USER,
+            source=Source(channel="test", chat_id="c1", sender_id="user", chat_type=ChatType.DM),
+            text="hi",
+        ),
+        session_key="s1",
+        usage_sink=sink,
+    )
+
+    parts = sink["context_parts"]
+    assert set(parts) == {"system", "tools", "conversation", "memory", "skills"}
+    assert parts["system"] > 0
+    assert parts["conversation"] > 0
+
+
+@pytest.mark.asyncio
 async def test_a_turn_run_without_a_stream_fills_the_usage_sink_too(workspace):
     """A cron or wake turn runs without a stream; its ``message.complete``
     reports what it spent from the same sink a streamed turn fills."""

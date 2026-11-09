@@ -12,7 +12,7 @@
  * node: the composer hangs a ResizeObserver and a MutationObserver on it
  * (features/composer/mount.tsx), and a node rebuilt per render would lose both.
  *
- * Each of the three small popovers is a child of an anchor wrapper (`.chrome-anch`)
+ * Each of the four small popovers is a child of an anchor wrapper (`.chrome-anch`)
  * around its own chip, and the stylesheet hangs it off that chip's top edge:
  * nothing measures an element, nothing leaves the card, and every row keeps a
  * plain onClick because the tree never leaves the container React delegates
@@ -26,10 +26,10 @@
  * Six of the children are files of their own, because each renders the whole
  * of a store: the "+" and its menu (./PlusMenu.tsx), the workspace chip and
  * its popover (./WorkdirChip.tsx, ./WorkdirPopover.tsx), the permission chip
- * and its popover (./PermChip.tsx, ./PermPopover.tsx), the context ring
- * (./CtxChip.tsx) and the model chip (./ModelChip.tsx). Their place in the bar
- * below is the page's, which is the one thing about them this file still
- * decides.
+ * and its popover (./PermChip.tsx, ./PermPopover.tsx), the context ring and
+ * the popover it opens (./CtxChip.tsx, ./CtxPopover.tsx) and the model chip
+ * (./ModelChip.tsx). Their place in the bar below is the page's, which is the
+ * one thing about them this file still decides.
  *
  * What this does NOT own, though it renders the elements:
  *   - textarea#ta. It stays uncontrolled and its four listeners stay native
@@ -66,6 +66,7 @@ import { t } from '../i18n/t'
 import * as lang from '../state/lang'
 import { At } from './AtMenu'
 import { CtxChip } from './CtxChip'
+import { CtxPopover } from './CtxPopover'
 import { ModelChip } from './ModelChip'
 import { PermChip } from './PermChip'
 import { PermPopover } from './PermPopover'
@@ -113,7 +114,10 @@ function DockIn(): JSX.Element {
         </span>
         <span className="chip" id="envChip" hidden><span className="led" /><span id="envName">Local</span></span>
         <span className="meter" id="meter" />
-        <CtxChip />
+        <span className="chrome-anch">
+          <CtxChip />
+          <CtxPopover />
+        </span>
         {/* The sub-agent tier is a row of the picker this chip opens
             (features/model/ModelPicker.tsx), not a chip of its own. */}
         <ModelChip />

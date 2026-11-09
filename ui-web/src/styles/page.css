@@ -29,6 +29,19 @@
   --gold:     #9a7016;
   --sky:      #2f6d9e;
 
+  /* The context parts' colours: Raven's hues, desaturated, so that a window
+     full of cells reads as a texture rather than a slab of colour. The skills
+     are the palest of the blues here and the dimmest in the dark, because
+     they are the smallest of the five. */
+  --ctx-system: #5b83a6;
+  --ctx-tools: #87a9c9;
+  --ctx-skills: #c3d3e2;
+  --ctx-conversation: #9c8a5c;
+  --ctx-memory: #6b9161;
+  /* The popover's one warm accent: the percentage badge and the room left. */
+  --ctx-ink: #8a5a00;
+  --ctx-ink-bg: #f7e6b8;
+
   /* ---- the sidebar and the conversation ----------------------------------
      Six of the names below are the ones the ramp above could not say. A rail
      and a page are both "surface" to that ramp, and so are a hovered row and a
@@ -293,6 +306,17 @@
     --gold:     #e0a030;
     --sky:      #6fa8d6;
 
+    /* The context parts' colours in the dark: the same hues, lifted off a dark
+       card. The skills go dim rather than pale -- the palest is the one that
+       disappears into the ground. */
+    --ctx-system: #6f95b8;
+    --ctx-tools: #93b4cf;
+    --ctx-skills: #4d6884;
+    --ctx-conversation: #b3a075;
+    --ctx-memory: #7fa674;
+    --ctx-ink: #e8cf49;
+    --ctx-ink-bg: rgba(232, 207, 73, .16);
+
     /* The dark counterparts of the light block's surfaces -- see there. */
     --page:     #141414;
     --topbar-tint: rgba(20, 20, 20, .3);
@@ -374,6 +398,17 @@
   --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+
+  /* The context parts' colours in the dark: the same hues, lifted off a dark
+     card. The skills go dim rather than pale -- the palest is the one that
+     disappears into the ground. */
+  --ctx-system: #6f95b8;
+  --ctx-tools: #93b4cf;
+  --ctx-skills: #4d6884;
+  --ctx-conversation: #b3a075;
+  --ctx-memory: #7fa674;
+  --ctx-ink: #e8cf49;
+  --ctx-ink-bg: rgba(232, 207, 73, .16);
   --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
   --topbar-tint: rgba(20, 20, 20, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(20, 20, 20, .8);
   --side-bg: #333333; --paper: #202020; --hover: #242424;
@@ -1224,6 +1259,63 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chip.ctx.warm { color: var(--gold); }
 .chip.ctx.hot { color: var(--clay); }
 .chip .pico { width: 12px; height: 12px; flex: none; }
+
+/* ── the context popover ───────────────────────────────────────────────
+   What the ring opens: the window, and what is filling it. The headline is
+   the ring's own number -- one window, one number, two places saying it --
+   and the grid under it is the fill drawn as cells, coloured by the part each
+   cell belongs to.
+
+   Solid, where the other popovers are translucent: this one is a table of
+   numbers to be read, and a table read over a blurred conversation is a table
+   nobody can read. The blur goes with it -- there is nothing left to blur
+   behind a card that is not there. */
+#ctxPop {
+  right: 0; left: auto; width: 288px; padding: 14px 16px 12px; border-radius: 14px;
+  background: var(--paper);
+  border-color: var(--line);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .09), 0 1px 2px rgba(0, 0, 0, .06),
+    0 10px 24px -12px rgba(0, 0, 0, .2), 0 24px 56px -22px rgba(0, 0, 0, .3);
+}
+.chrome-ctx-head { display: flex; align-items: center; gap: 8px; }
+.chrome-ctx-title { font-size: 14px; font-weight: 600; }
+.chrome-ctx-model { margin-left: auto; max-width: 150px; padding: 3px 8px; border-radius: 7px;
+  background: var(--raised); color: var(--muted); font-family: var(--mono); font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The number is the headline, so it is set like one: large and light. The
+   weight is what makes it read as a figure rather than as a word. */
+.chrome-ctx-hero { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
+.chrome-ctx-used { font-size: 38px; font-weight: 350; letter-spacing: -.025em; line-height: 1;
+  font-variant-numeric: tabular-nums; }
+.chrome-ctx-of { font-size: 12.5px; color: var(--muted); }
+.chrome-ctx-pct { margin-left: auto; padding: 3px 8px; border-radius: 7px; font-size: 11.5px; font-weight: 600;
+  font-variant-numeric: tabular-nums; color: var(--ctx-ink); background: var(--ctx-ink-bg); }
+.chrome-ctx-pop.hot .chrome-ctx-pct { color: var(--clay); background: color-mix(in oklab, var(--clay) 12%, transparent); }
+/* Twenty-eight across, the cells square: the grid is read as a texture, so a
+   cell that is not square would read as two things rather than one. */
+.chrome-ctx-grid { display: grid; grid-template-columns: repeat(28, 1fr); gap: 2px; margin: 13px 0 14px; }
+.chrome-ctx-cell { aspect-ratio: 1; border-radius: 2px; background: var(--raised); }
+.chrome-ctx-cell[data-part="system"] { background: var(--ctx-system); }
+.chrome-ctx-cell[data-part="tools"] { background: var(--ctx-tools); }
+.chrome-ctx-cell[data-part="skills"] { background: var(--ctx-skills); }
+.chrome-ctx-cell[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-cell[data-part="memory"] { background: var(--ctx-memory); }
+.chrome-ctx-rows { list-style: none; margin: 0; padding: 0; }
+.chrome-ctx-row { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13px; }
+.chrome-ctx-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; background: var(--line); }
+.chrome-ctx-dot[data-part="system"] { background: var(--ctx-system); }
+.chrome-ctx-dot[data-part="tools"] { background: var(--ctx-tools); }
+.chrome-ctx-dot[data-part="skills"] { background: var(--ctx-skills); }
+.chrome-ctx-dot[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-dot[data-part="memory"] { background: var(--ctx-memory); }
+.chrome-ctx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chrome-ctx-num { font-family: var(--mono); font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chrome-ctx-none { margin: 0 0 4px; font-size: 12px; color: var(--faint); }
+.chrome-ctx-foot { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line-soft); }
+.chrome-ctx-left { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ctx-ink); }
+.chrome-ctx-pop.hot .chrome-ctx-left { color: var(--clay); }
 /* The tier with no brakes says so in the chip: same shape, warning colour. */
 .chip.risk { color: var(--clay); }
 .chip.risk:hover { color: var(--clay); background: color-mix(in oklab, var(--clay) 10%, transparent); }
@@ -2771,6 +2863,11 @@ textarea:focus, textarea:focus-visible,
 /* The chip gives with the anchor it hangs in, and only its name clips: the
    anchor must not, because its popover stands outside the anchor's box. */
 .under > .chrome-anch > .chip { flex-shrink: 1; min-width: 0; }
+/* The context ring is not a word: it is a fixed-size mark, and the anchor it
+   hangs in keeps that size too, so the bar's flexible chips are the ones that
+   give when the column narrows. */
+.under > .chrome-anch:has(> .chip.ctx) { flex: none; }
+.under > .chrome-anch:has(> .chip.ctx) > .chip.ctx { flex-shrink: 0; }
 #wdName, #permName, #modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The "+" (src/chrome/PlusMenu.tsx): a 30px round target; open, its cross turns
    into a close mark. */

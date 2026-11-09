@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { resetTranslator, setCode } from '../../i18n/t'
-import { _resetForTests, get } from '../ctxChip'
+import { _resetForTests, get } from '../ctxWindow'
 import { applyUsage } from './ctxReport'
 
 beforeEach(() => {

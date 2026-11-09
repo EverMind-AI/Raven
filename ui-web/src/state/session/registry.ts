@@ -382,7 +382,7 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
     const u = (r.info && r.info.usage) || {}
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
-       See state/ctxChip.ts. */
+       See state/ctxWindow.ts. */
     applyUsage(u)
     /* The turn this conversation is in the middle of, which nothing else on a
        page that has just loaded can know: its frames went to a socket this page

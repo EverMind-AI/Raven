@@ -1,26 +1,33 @@
-/* The composer's context ring: the two numbers, and the five facts a ring can
- * be drawn from.
+/* The context window: the ring on the composer's bar, and the popover it opens.
  *
- * A store rather than a writer, now that <CtxChip/> renders the chip from it
- * (src/chrome/CtxChip.tsx). The showing, the two warmth classes, the dash left
- * to go and the tooltip that doubles as the accessible name were five writes by
- * id here; they are one state read five ways, and the module keeps the pair of
- * numbers they are derived from because nothing else reads those.
+ * One store for both, the way state/perm.ts is one store for the permission
+ * chip and the popover off it: the numbers the ring draws are the numbers the
+ * popover reads, and two stores would have two writers for one window.
  *
  * Hidden until a real window is known. A ring drawn from a guessed denominator
  * is worse than no ring: it looks measured. Until then the two attributes are
  * absent rather than empty -- the page is served with neither -- which is why
  * the tooltip and the offset are nullable here.
+ *
+ * The parts are the window divided: what is filling it, not only how full it
+ * is. They are an estimate of one request -- the loop measures the prompt it
+ * sends -- and they are absent until a turn has measured one. A window nobody
+ * divided is still a window, so the popover says so rather than guessing.
  */
 
 import { t } from '../i18n/t'
 import { makeStore } from './store'
+
+import type { CtxParts } from '../lib/ctxGrid'
 
 /* The turn's own usage, as message.complete reports it (context_used /
    context_max). The state is the store's because the ring is: nothing else
    reads these two numbers. */
 let used = 0
 let max = 0
+let parts: CtxParts | null = null
+
+/** The window divided, in tokens: what is in it, by part. */
 
 export interface CtxState {
   /** Whether a window is known, which is the only reason to draw a ring. */
@@ -31,15 +38,32 @@ export interface CtxState {
   readonly offset: string | null
   /** One sentence for the hover pill and the accessible name, or null. */
   readonly tip: string | null
+  /** The window's fill and its size, in tokens. */
+  readonly used: number
+  readonly max: number
+  /** The window divided, or null while nothing has divided it. */
+  readonly parts: CtxParts | null
+  /** The popover's up-or-down. */
+  readonly open: boolean
 }
 
-const served: CtxState = { shown: false, warm: false, hot: false, offset: null, tip: null }
+const served: CtxState = {
+  shown: false,
+  warm: false,
+  hot: false,
+  offset: null,
+  tip: null,
+  used: 0,
+  max: 0,
+  parts: null,
+  open: false,
+}
 const store = makeStore<CtxState>(served)
 
-/** The ring's state, for <CtxChip/>. */
+/** The window's state, for <CtxChip/> and <CtxPopover/>. */
 export const { get, subscribe } = store
 
-/** For useSyncExternalStore: called whenever the ring changes. */
+/** For useSyncExternalStore: called whenever the window changes. */
 /* The ring's circumference, so a percentage can be said as the length of dash
    left to go. Pinned to the markup: the chip draws the circle at r="7.6", and
    2*pi*7.6 is 47.75. The two have to agree or the ring stops at the wrong
@@ -53,12 +77,14 @@ const fmtTokens = (n: number): string =>
    chip -- the boot list (app/boot.ts), the language repaint
    (state/lang/effects.ts), the turn's own completion -- has to see the ring it
    just asked for. */
-/* The same five fields are not a write: this runs on every report the gateway
+/* The same fields are not a write: this runs on every report the gateway
    sends, and most of them move nothing the reader can see. */
 function unchanged(next: CtxState): boolean {
   const now = get()
   return next.shown === now.shown && next.warm === now.warm && next.hot === now.hot
     && next.offset === now.offset && next.tip === now.tip
+    && next.used === now.used && next.max === now.max
+    && next.parts === now.parts && next.open === now.open
 }
 
 export function draw(): void {
@@ -67,7 +93,7 @@ export function draw(): void {
      cannot be reached with any of them set, because no report ever takes a
      window away again -- `set` below only ever raises one. */
   if (!max) {
-    const off = { ...get(), shown: false }
+    const off = { ...get(), shown: false, open: false }
     if (!unchanged(off)) store.set(off)
     return
   }
@@ -85,11 +111,17 @@ export function draw(): void {
     hot: pct >= 90,
     offset: String(RING * (1 - pct / 100)),
     tip,
+    used,
+    max,
+    parts,
+    /* The popover belongs to a window: with none, it has nothing to say and
+       nothing to stand open over. */
+    open: max ? get().open : false,
   }
   if (!unchanged(next)) store.set(next)
 }
 
-/* Two numbers, though the live layer's message.complete carries a third:
+/* Three numbers, though the live layer's message.complete carries a fourth:
    context_estimated, set when the count was derived from a stored transcript
    instead of reported by the provider. It is not taken here because nothing
    renders it -- the tooltip has no marker for an estimate in either language.
@@ -98,10 +130,35 @@ export function draw(): void {
    bearing for as long as nobody greps for its readers. Marking an estimate is
    worth doing; it is a change to what the page says, so it belongs in a change
    about that and not in this one. */
-export function set(nextUsed: number | undefined, nextMax: number | undefined): void {
+export function set(
+  nextUsed: number | undefined,
+  nextMax: number | undefined,
+  nextParts?: Partial<CtxParts> | null,
+): void {
   if (typeof nextMax === 'number' && nextMax > 0) max = nextMax
   if (typeof nextUsed === 'number' && nextUsed >= 0) used = nextUsed
+  if (nextParts) {
+    parts = {
+      system: nextParts.system ?? 0,
+      tools: nextParts.tools ?? 0,
+      conversation: nextParts.conversation ?? 0,
+      memory: nextParts.memory ?? 0,
+      skills: nextParts.skills ?? 0,
+    }
+  }
   draw()
+}
+
+/** The popover's up-or-down. The chip is the only way back out of it. */
+export function toggle(): void {
+  if (!max) return
+  store.set({ ...get(), open: !get().open })
+}
+
+/** The popover shut. A click elsewhere or a keypress closes it. */
+export function close(): void {
+  if (!get().open) return
+  store.set({ ...get(), open: false })
 }
 
 /* Test seam only: the window the store was told outlives a case now that it is
@@ -110,5 +167,6 @@ export function set(nextUsed: number | undefined, nextMax: number | undefined): 
 export function _resetForTests(): void {
   used = 0
   max = 0
+  parts = null
   store._resetForTests()
 }
