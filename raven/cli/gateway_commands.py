@@ -964,6 +964,15 @@ def register(app: typer.Typer) -> None:  # noqa: C901 (cc 87: pre-existing, abov
 
                 async def _inbound_dispatch(req) -> None:
                     if link_unavailable and req.source.channel == "telegram":
+                        await gw_hub.dispatch(
+                            Text(
+                                content=(
+                                    "Telegram project linking is not supported on this platform; "
+                                    "see docs/telegram-project-link.md."
+                                ),
+                                source=req.source,
+                            )
+                        )
                         await end_channel_turn(channels.get_channel(req.source.channel), req.source.chat_id)
                         return
                     if linked_chat is not None and await linked_chat.dispatch(
