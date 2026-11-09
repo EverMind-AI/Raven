@@ -65,7 +65,7 @@ from raven.agent.subagent.dag_carry import CarryPlan, classify_nodes, plan_carry
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_handover import HandoverError, load_handover_turns, render_handover
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
-from raven.agent.subagent.dag_reader import DagReadError, run_dir_of
+from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
 from raven.agent.subagent.dag_runner import (
@@ -2996,12 +2996,6 @@ class SubAgentDagTool(Tool):
         if (outbox := self._outboxes.get(run_id)) is not None:
             outbox.answered(prepared.node_id)
         return True
-
-    async def _read_graph_json(self, run_id: str, session_key: str | None) -> str:
-        """One run's submitted graph, as text."""
-        root = self._run_root(session_key)
-        path = self._backend.join_path(run_dir_of(self._backend, root, run_id), "graph.json")
-        return (await self._backend.read_file(path)).decode("utf-8", errors="replace")
 
     async def _session_nodes_for_replan(self, run_id: str, live: dict) -> SessionNodes:
         """This session's node index, with the replanned run's live state laid over it.
