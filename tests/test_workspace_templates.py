@@ -49,6 +49,17 @@ def test_merge_applies_a_product_change_elsewhere() -> None:
     assert conflicts == []
 
 
+def test_merge_applies_a_product_change_beside_a_user_edit_in_one_section() -> None:
+    merged, conflicts = _merge_soul(
+        "## A\n- one\n- two\n- three\n",
+        "## A\n- one\n- two mine\n- three\n",
+        "## A\n- one new\n- two\n- three\n",
+    )
+
+    assert merged == "## A\n- one new\n- two mine\n- three\n"
+    assert conflicts == []
+
+
 def test_merge_keeps_the_user_line_on_a_same_line_change() -> None:
     merged, conflicts = _merge_soul(
         "## A\nalpha\n",
