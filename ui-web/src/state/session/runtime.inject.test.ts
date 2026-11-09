@@ -352,7 +352,7 @@ describe('a message that moves a task on', () => {
    turn of its own waits with its group: the bar is gone the moment it is sent,
    the next message is free to join the turn that is running, and the queue
    lets each message go with the group it was sent with. */
-describe('a message that moves a task on, sent while a turn runs', () => {
+describe('a message that moves a group on, sent while a turn runs', () => {
   async function busyWithBar() {
     const h = await harness()
     const tasks = await import('../../features/tasks/store')
