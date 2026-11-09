@@ -297,6 +297,12 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.loop.calls, [])
         self.assertEqual(len(self.sessions.peek(KEY).messages), 1)
 
+    async def test_path_like_text_is_not_refused_as_a_slash_command(self):
+        self.loop.release.set()
+        await self.dispatch(dm("/home/user/file is broken"))
+        await self.idle()
+        self.assertEqual([r.text for r, _ in self.loop.calls], ["/home/user/file is broken"])
+
     async def test_missing_page_or_target_never_creates(self):
         await self.link.dispatch(dm(), None, self.broker, self.subagents)
         self.assertEqual(self.loop.calls, [])

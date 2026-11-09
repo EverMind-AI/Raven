@@ -13,6 +13,19 @@ from raven.spine import ChatType, MediaOut, Notice, NoticeKind, Origin, Text, Tu
 from raven.spine.scheduler import SchedulerDrainingError
 from raven.spine.turn import BusyPolicy
 
+_COMMAND = re.compile(r"^/[A-Za-z0-9_]{1,64}(?:@[A-Za-z0-9_]{1,64})?$")
+
+
+def _command(text: str) -> str:
+    """The command a DM names, lowercased without its @bot suffix; "" when the text is not one."""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    token = stripped.split(maxsplit=1)[0]
+    if _COMMAND.fullmatch(token) is None:
+        return ""
+    return token.split("@", 1)[0].lower()
+
 
 @dataclass(frozen=True)
 class Binding:
@@ -131,7 +144,7 @@ class LinkedChat:
             await reply("Linked project unavailable; no new conversation was created.")
             return True
         cid = self.binding.session_key
-        command = req.text.strip().split(maxsplit=1)[0].split("@", 1)[0].lower() if req.text.strip() else ""
+        command = _command(req.text)
         if command == "/stop":
             if self.stopping:
                 await reply("A stop is already in progress.")
@@ -147,7 +160,7 @@ class LinkedChat:
             finally:
                 self.stopping = False
             await reply(f"Stopped {stopped} task(s)." if stopped else "No active task to stop.")
-        elif command.startswith("/"):
+        elif command:
             # Slash commands can clear history or alter runtime policy; use the page for those.
             await reply("Commands other than /stop are disabled in this linked DM; use the project page.")
         elif self.channel_active(cid) and broker.pending_req(cid) is not None:
