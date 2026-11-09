@@ -149,7 +149,7 @@ async def test_usage_sink_carries_the_window_divided(workspace):
     Four parts are the request the turn sent: the system prompt, the tool
     schemas, the conversation, and the memory this turn recalled. The recalled
     segment reaches ``measure_parts`` only through the stash the assembler
-    fills (``_last_turn_scoped_parts``); without it ``memory`` is always zero,
+    fills (``_last_window_parts``); without it ``memory`` is always zero,
     and a key-set assertion would pass on a window nobody divided. So the
     profile on disk has to be counted here.
     """

@@ -3,11 +3,15 @@
 The parts are what a reader is told when they ask what is filling the context
 window, so the split has to be the one the request actually had: the system
 prompt is the request's system message, the tools are the schemas sent beside
-it, the memory and the skills are the two segments the turn recalled and
-routed, and the conversation is what the rest of the prompt is.
+it, the memory is the recalled segment, the skills are every byte the skill
+subsystem put in the prompt (a resident digest, a routed segment, a pull menu,
+a skill tool's result), and the conversation is what the rest of the prompt
+is.
 """
 
 from __future__ import annotations
+
+import pytest
 
 from raven.agent.window.parts import (
     CONVERSATION,
@@ -157,3 +161,64 @@ def test_the_parts_add_up_to_the_prompt() -> None:
 
 def test_an_empty_prompt_has_no_parts() -> None:
     assert measure_parts([]) == {SYSTEM: 0, TOOLS: 0, CONVERSATION: 0, MEMORY: 0, SKILLS: 0}
+
+
+# The always-on digest a pull-mode turn carries in its system prompt, and the
+# menu the same discovery adds to the user envelope.
+ACTIVE_SKILLS_TEXT = "# Active Skills\n\n### Skill: deck-engine\n\nBuild a deck from an outline."
+SCENT_TEXT = "Possibly relevant skills (matched for: 'deck'):\n- local/deck-engine: build a deck"
+
+
+def test_the_always_on_digest_is_skill_bytes() -> None:
+    """Pull discovery builds no routed segment; the resident digest rides the
+    system prompt, and it is skill material rather than the system's own words."""
+    messages = [
+        {"role": "system", "content": f"you are raven\n\n---\n\n{ACTIVE_SKILLS_TEXT}"},
+        {"role": "user", "content": "make a deck"},
+    ]
+    without = measure_parts(messages)
+    parts = measure_parts(messages, None, {"active_skills": ACTIVE_SKILLS_TEXT})
+
+    assert without[SKILLS] == 0
+    assert parts[SKILLS] > 0
+    assert parts[SYSTEM] < without[SYSTEM]
+    assert parts[CONVERSATION] == without[CONVERSATION]
+
+
+def test_the_pull_menu_is_skill_bytes() -> None:
+    """The scent menu is pull discovery's per-turn skill material, so it is the
+    skills row's, not the conversation's."""
+    messages = [{"role": "user", "content": f"make a deck\n{SCENT_TEXT}"}]
+    without = measure_parts(messages)
+    parts = measure_parts(messages, None, {"scent": SCENT_TEXT})
+
+    assert parts[SKILLS] > 0
+    assert parts[CONVERSATION] < without[CONVERSATION]
+
+
+SKILL_BODY = "### Skill: deck-engine\n\n" + "Build the deck from the outline. " * 40
+
+
+@pytest.mark.parametrize("tool", ["find_skill", "read_skill", "use_skill"])
+def test_a_skill_tool_result_is_skill_bytes(tool: str) -> None:
+    """A skill's body reaches the request as an ordinary tool message; read as
+    conversation, the cost of a skill would be put on the talk that used it."""
+    messages = [
+        {"role": "user", "content": "make a deck"},
+        {"role": "tool", "tool_call_id": "c1", "name": tool, "content": SKILL_BODY},
+    ]
+    as_talk = measure_parts([messages[0], {**messages[1], "name": "exec"}])
+    parts = measure_parts(messages)
+
+    assert as_talk[SKILLS] == 0
+    assert parts[SKILLS] > 0
+    assert parts[CONVERSATION] < as_talk[CONVERSATION]
+
+
+def test_a_tool_result_that_is_not_a_skill_stays_conversation() -> None:
+    messages = [
+        {"role": "user", "content": "make a deck"},
+        {"role": "tool", "tool_call_id": "c1", "name": "exec", "content": "a command said this"},
+    ]
+
+    assert measure_parts(messages)[SKILLS] == 0

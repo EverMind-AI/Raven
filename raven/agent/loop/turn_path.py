@@ -1798,7 +1798,7 @@ class TurnPathMixin:
                 # The window divided, so a reader can be told what is filling it
                 # and not only how full it is. Measured on the request that was
                 # sent, which is the one the count above belongs to.
-                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_turn_scoped_parts)
+                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_window_parts)
 
             # Recoveries that retry this iteration. The classifier on the response
             # says what kind of refusal this was; the Memory role says whether it

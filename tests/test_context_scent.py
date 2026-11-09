@@ -2,14 +2,18 @@
 
 from raven.agent.loop.failure_streak import loop_break_nudge
 from raven.agent.tools.skill_hub import FindSkillTool, ReadSkillTool
+from raven.agent.window.parts import SKILLS, measure_parts
+from raven.context_engine import TurnContext
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import (
     ScentMenu,
+    ScentResult,
     build_scent_query,
     is_fat,
     novelty,
     recent_user_window,
 )
+from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext
 from raven.skill_hub.policy import SkillPolicy
 
@@ -192,6 +196,28 @@ async def test_menu_survives_the_session_persist_strip():
     stored = content.split("\n\n", 1)[1]
     assert stored == "统计一下每个渠道的数据覆盖率"
     assert "UNTRUSTED" not in stored
+
+
+async def test_the_menu_is_recorded_for_the_windows_breakdown():
+    """The menu rides the user envelope, where the window's breakdown cannot
+    tell it from the talk; the assembler records the exact text it inserted."""
+
+    class _Menu:
+        async def build(self, message, history):
+            return ScentResult(text="menu line one\n\nmenu line two", skill_ids=["local/deck"])
+
+    assembler = ContextAssembler([], lambda: [], scent=_Menu())
+    ac = await assembler.assemble(
+        session_key="s",
+        session_messages=[],
+        budget=TokenBudget(1000, 1, 1, 1, 1),
+        turn=TurnContext(current_message="make a deck"),
+    )
+
+    recorded = ac.metadata["window_parts"]["scent"]
+    assert recorded == "menu line one\nmenu line two"
+    assert recorded in ac.messages[-1]["content"]
+    assert measure_parts(ac.messages, [], ac.metadata["window_parts"])[SKILLS] > 0
 
 
 def test_second_turn_followup_is_lean_against_real_history():
