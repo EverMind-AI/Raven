@@ -584,21 +584,21 @@ describe('the queue rows', () => {
   it('owns add, drain, clear, and copied park snapshots', () => {
     wire()
     store.queuePush('first')
-    store.queuePush('second')
+    store.queuePush('second', 'g_1')
     const parked = store.queueSnapshot()
-    parked.push('outside')
-    expect(store.queueShift()).toBe('first')
-    expect(store.queueSnapshot()).toEqual(['second'])
+    parked.push({ text: 'outside' })
+    expect(store.queueShift()).toEqual({ text: 'first' })
+    expect(store.queueSnapshot()).toEqual([{ text: 'second', moveOn: 'g_1' }])
     store.queueClear()
     expect(store.queueSnapshot()).toEqual([])
     store.queueRestore(parked)
-    parked[0] = 'changed outside'
-    expect(store.queueSnapshot()).toEqual(['first', 'second', 'outside'])
+    parked[0] = { text: 'changed outside' }
+    expect(store.queueSnapshot()).toEqual([{ text: 'first' }, { text: 'second', moveOn: 'g_1' }, { text: 'outside' }])
   })
 
   it('draws one row per queued message with an edit and a remove button', () => {
     wire()
-    store.queueRestore(['first', 'second'])
+    store.queueRestore([{ text: 'first' }, { text: 'second' }])
     mountQueue()
     const rows = document.querySelectorAll('#queued .qrow')
     expect(rows.length).toBe(2)
@@ -609,50 +609,52 @@ describe('the queue rows', () => {
     expect(btns[1]!.getAttribute('aria-label')).toBe('删掉')
   })
 
+  /* The group a message was sent about stays with it through an edit: the
+     words changed, not what they are about. */
   it('commits an edit on Enter to the composer queue', () => {
     wire()
-    store.queueRestore(['first', 'second'])
+    store.queueRestore([{ text: 'first' }, { text: 'second', moveOn: 'g_1' }])
     mountQueue()
     act(() => { store.editRow(1) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     expect(input.value).toBe('second')
     input.value = 'second, revised'
     act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
-    expect(store.queueSnapshot()).toEqual(['first', 'second, revised'])
+    expect(store.queueSnapshot()).toEqual([{ text: 'first' }, { text: 'second, revised', moveOn: 'g_1' }])
     expect(document.querySelector('#queued .qrow input')).toBeNull()
   })
 
   it('lets an IME keep Enter while a composition is open', () => {
     wire()
-    store.queueRestore(['first'])
+    store.queueRestore([{ text: 'first' }])
     mountQueue()
     act(() => { store.editRow(0) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     input.value = 'half typed'
     act(() => { fireEvent.keyDown(input, { key: 'Enter', isComposing: true }) })
-    expect(store.queueSnapshot()).toEqual(['first'])
+    expect(store.queueSnapshot()).toEqual([{ text: 'first' }])
     expect(document.querySelector('#queued .qrow input')).toBeTruthy()
   })
 
   it('cancels on Escape, and the blur that follows does not commit either', () => {
     wire()
-    store.queueRestore(['first'])
+    store.queueRestore([{ text: 'first' }])
     mountQueue()
     act(() => { store.editRow(0) })
     const input = document.querySelector('#queued .qrow input') as HTMLInputElement
     input.value = 'never mind'
     act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
     act(() => { fireEvent.blur(input) })
-    expect(store.queueSnapshot()).toEqual(['first'])
+    expect(store.queueSnapshot()).toEqual([{ text: 'first' }])
   })
 
   it('removes a row from the composer queue', () => {
     wire()
-    store.queueRestore(['first', 'second'])
+    store.queueRestore([{ text: 'first' }, { text: 'second' }])
     mountQueue()
     const rm = document.querySelectorAll('#queued .qrow')[0]!.querySelectorAll('button.icb')[1]!
     act(() => { fireEvent.click(rm) })
-    expect(store.queueSnapshot()).toEqual(['second'])
+    expect(store.queueSnapshot()).toEqual([{ text: 'second' }])
     expect(document.querySelectorAll('#queued .qrow').length).toBe(1)
   })
 
@@ -661,7 +663,7 @@ describe('the queue rows', () => {
        source-language gate admits no CJK outside its exemption zones. */
     lang = 'en'
     wire()
-    store.queueRestore(['first', 'second'])
+    store.queueRestore([{ text: 'first' }, { text: 'second' }])
     mountQueue()
     expect(domSnapshot(document.getElementById('queued')!)).toMatchSnapshot()
   })
@@ -1403,7 +1405,7 @@ describe('a language flip', () => {
       slash: [{ id: 'gui.clear', fn: () => {} }],
     })
     turn.dispatch({ type: 'stream', cancellable: true })
-    store.queueRestore(['queued one'])
+    store.queueRestore([{ text: 'queued one' }])
     mountQueue()
     mountSlash()
     mountLive()

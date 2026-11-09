@@ -52,6 +52,7 @@ import { get, isActiveRuntime, isDraft as registryIsDraft, mint, subscribe, view
 import { rows as sessionRows, sess } from './rows'
 
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
+import type { QueuedMessage } from '../../features/composer/types'
 import type { Recent } from '../../features/model/recent'
 import type { SessRow } from '../../features/rail/types'
 import type { UsageReport } from './ctxReport'
@@ -125,7 +126,7 @@ export class SessionRuntime {
   silent = false
 
   /* Only read while off screen, same as `phase`. */
-  queue: string[] = []
+  queue: QueuedMessage[] = []
 
   /* The mid-turn messages already drawn from `message.injected`, by turn id,
      each with the bubble drawn for it. Kept past the end of the turn on
@@ -290,7 +291,7 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
   reset(rt)
   drawMeter(); goState(); sessionDraw(); scrollTranscriptDown()
   const nx = queueShift()
-  if (nx !== undefined) send(nx)
+  if (nx !== undefined) sendQueued(nx)
 }
 
 /* ---- sending ---------------------------------------------------------- */
@@ -299,12 +300,12 @@ export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime())
    over -- the reader's own bubble renders its chips from it, and it is what
    survives into session history. So the paths ride to the model as a typed
    `media` field as well, recovered from that same note rather than threaded
-   separately: a queued message is a plain string by the time it is drained,
-   and the draft path sends from a second place, so deriving here covers all
-   three with one rule. The paths go over exactly as the note names them: the
-   composer names an upload by the file it wrote and a file attached where it
-   already was by its own path, so nothing here has to work out which file a
-   spelling meant. */
+   separately: a queued message keeps only its text and its group by the time
+   it is drained, and the draft path sends from a second place, so deriving
+   here covers all three with one rule. The paths go over exactly as the note
+   names them: the composer names an upload by the file it wrote and a file
+   attached where it already was by its own path, so nothing here has to work
+   out which file a spelling meant. */
 export const mediaOf = (text: unknown): { media?: string[] } => {
   const paths = splitAtts(String(text)).atts
   return paths.length ? { media: paths } : {}
@@ -315,10 +316,13 @@ export const mediaOf = (text: unknown): { media?: string[] } => {
    the server which group the message is about. It rides the send itself, so
    nothing waits between the two and a Stop finds no moment where one has gone
    without the other. A message with one waits for a turn of its own rather
-   than joining the one running, which was told about something else. Unlent,
-   nothing is carried. */
+   than joining the one running, which was told about something else -- and
+   it is taken as the message is sent, so it waits in the queue WITH that
+   message. Taken when the queue lets the message go instead, it would go out
+   with whichever message left first, a later bar's group included, and would
+   keep every message sent meanwhile out of the running turn. Unlent, nothing
+   is carried. */
 export interface BeforeSend {
-  pending: (sessionKey: string | null) => boolean
   take: (sessionKey: string | null) => string | null
 }
 let beforeSend: BeforeSend | null = null
@@ -360,18 +364,29 @@ export function send(text: string): void {
   /* Every way of sending ends here, the ones that skip the composer's own
      button included; an imported conversation takes none of them. */
   if (isImportedKey(sessionCurrent())) return
+  const moveOn = beforeSend?.take(sessionCurrent())
+  route(moveOn ? { text, moveOn } : { text })
+}
+
+/** A queued message, let go with the group it was sent with. */
+export function sendQueued(queued: QueuedMessage): void {
+  if (isImportedKey(sessionCurrent())) return
+  route(queued)
+}
+
+function route({ text, moveOn }: QueuedMessage): void {
   /* There is no turn to merge into until the conversation exists. A draft's
      first message is still being turned into one -- `registryIsDraft` is
      already false while `promoting` runs its staged writes -- so a second
      message typed a moment later would call the gateway with no session key at
      all, which is a refusal the reader sees as a red row over a message the
-     queue then delivers anyway. It waits in the queue, as it always has. */
-  if (turn.busy() && !registryIsDraft() && !promoting) {
-    if (beforeSend?.pending(sessionCurrent())) queuePush(text)
+     queue then delivers anyway. It waits in the queue, as it always has; so
+     does a message about a Task Group (BeforeSend, above). */
+  if (turn.busy()) {
+    if (moveOn || registryIsDraft() || promoting) queuePush(text, moveOn)
     else sendMidTurn(text)
     return
   }
-  if (turn.busy()) { queuePush(text); return }
   const rt = viewRuntime()
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
@@ -390,7 +405,7 @@ export function send(text: string): void {
     goState(); drawMeter()
   }
   if (!registryIsDraft()) {
-    sendOnSession(text, failed)
+    sendOnSession(text, failed, moveOn)
     return
   }
   // The draft becomes a real session here, on its first message.
@@ -422,15 +437,15 @@ export function send(text: string): void {
  * that setup is complete, which is exactly when this send is safe. The guard is
  * on this function rather than on its caller so that the wait cannot be
  * bypassed by a second way in -- the caller is one line either way. */
-export function sendOnSession(text: string, failed: (e: unknown) => void): void {
+export function sendOnSession(text: string, failed: (e: unknown) => void, moveOn?: string): void {
   if (promoting) {
-    openConversation().then(() => dispatchSend(text, failed), failed)
+    openConversation().then(() => dispatchSend(text, failed, moveOn), failed)
     return
   }
-  dispatchSend(text, failed)
+  dispatchSend(text, failed, moveOn)
 }
 
-export function dispatchSend(text: string, failed: (e: unknown) => void): void {
+export function dispatchSend(text: string, failed: (e: unknown) => void, moveOn?: string): void {
   const current = sessionCurrent()
   touchSession(current, text)
   beginNaming(text)
@@ -439,7 +454,6 @@ export function dispatchSend(text: string, failed: (e: unknown) => void): void {
      at all, and reading that as "declined" would tear down a placeholder
      while a title really is on its way. Which servers carry it is
      rpc/capabilities.ts's question; what the verdict means stays here. */
-  const moveOn = current ? (beforeSend?.take(current) ?? null) : null
   gateway()
     .call('turn.send', {
       session_key: current as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
@@ -561,7 +575,7 @@ export function softStop(keepCancelling?: boolean, rt: SessionRuntime = viewRunt
 export function drain(): void {
   if (turn.busy()) return
   const nx = queueShift()
-  if (nx !== undefined) send(nx)
+  if (nx !== undefined) sendQueued(nx)
 }
 
 /* ---- promotion --------------------------------------------------------- */

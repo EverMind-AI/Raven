@@ -14,6 +14,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harne
 import * as turn from '../../features/composer/turn'
 import { readMessage } from '../../lib/attachments'
 
+import type { QueuedMessage } from '../../features/composer/types'
 import type { Sources } from '../sources'
 
 type Runtime = typeof import('./runtime')
@@ -24,7 +25,7 @@ async function harness({
   reject = null as { code?: number; message?: string } | null, draft = false, current = 's1',
 } = {}) {
   const log: unknown[][] = []
-  const queue: string[] = []
+  const queue: QueuedMessage[] = []
   const asked: Array<[string, unknown]> = []
   const rows: Row[] = [{ id: 's1' }]
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
@@ -60,8 +61,8 @@ async function harness({
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => { queue.length = 0 },
-        queuePush: (text: string) => { queue.push(text) },
-        queueRestore: (next: string[]) => { queue.length = 0; queue.push(...next) },
+        queuePush: (text: string, moveOn?: string) => { queue.push(moveOn ? { text, moveOn } : { text }) },
+        queueRestore: (next: QueuedMessage[]) => { queue.length = 0; queue.push(...next) },
         queueShift: () => queue.shift(),
         queueSnapshot: () => [...queue],
         turn,
@@ -180,7 +181,7 @@ describe('a message typed while the turn is running', () => {
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'unknown field: busy', ['retry']]])
     expect(turn.phase()).toBe('streaming')
   })
@@ -195,7 +196,7 @@ describe('a message typed while the turn is running', () => {
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toHaveLength(1)
   })
 
@@ -206,7 +207,7 @@ describe('a message typed while the turn is running', () => {
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'gui.err.disconnected', ['retry']]])
   })
 })
@@ -225,7 +226,7 @@ describe('a message typed while a brand-new conversation is being made', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toEqual([])
   })
 
@@ -243,7 +244,7 @@ describe('a message typed while a brand-new conversation is being made', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
   })
 })
 
@@ -324,7 +325,7 @@ describe('an imported conversation', () => {
 describe('a message that moves a task on', () => {
   it('goes at once, carrying the group it moves on', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ pending: (key) => key === 's1', take: (key) => (key === 's1' ? 'g_1' : null) })
+    h.runtime.lendBeforeSend({ take: (key) => (key === 's1' ? 'g_1' : null) })
 
     h.runtime.send('the next step')
 
@@ -334,14 +335,75 @@ describe('a message that moves a task on', () => {
 
   it('waits for a turn of its own instead of joining the one running', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ pending: () => true, take: () => 'g_1' })
+    h.runtime.lendBeforeSend({ take: () => 'g_1' })
     turn.dispatch({ type: 'stream', cancellable: true })
 
     h.runtime.send('the next step')
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['the next step'])
+    expect(h.queue).toEqual([{ text: 'the next step', moveOn: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+})
+
+/* The same, with the Task Board's own bar lent as it is at boot. The bar goes
+   with its message (the Task Board spec, 5.1.1), so a message that waits for a
+   turn of its own waits with its group: the bar is gone the moment it is sent,
+   the next message is free to join the turn that is running, and the queue
+   lets each message go with the group it was sent with. */
+describe('a message that moves a task on, sent while a turn runs', () => {
+  async function busyWithBar() {
+    const h = await harness()
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+    turn.dispatch({ type: 'stream', cancellable: true })
+    return { h, tasks }
+  }
+  const group = (id: string) => ({ id, title: `Matter ${id}`, summary: '' })
+
+  it('takes the bar into the queue with it', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+
+    h.runtime.send('about a')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(tasks.moveOnFor('s1')).toBeNull()
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('leaves the next message free to join the turn that is running', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+    h.runtime.send('about a')
+
+    h.runtime.send('and one thing more')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'and one thing more', busy: 'inject' }])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  /* Released both ways the queue is: by the turn finishing, then by a stop. */
+  it('leaves the queue with the group it was sent with, not the one held last', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+    h.runtime.send('about a')
+    tasks.moveOn('s1', group('g_b'))
+    h.runtime.send('about b')
+
+    h.runtime.finishTurn({})
+    await h.tick()
+    turn.dispatch({ type: 'idle' })
+    h.runtime.drain()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'about b', move_on: 'g_b' },
+    ])
     h.runtime.lendBeforeSend(null)
   })
 })
