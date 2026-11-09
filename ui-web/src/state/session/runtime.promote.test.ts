@@ -86,7 +86,7 @@ async function harness(
         parkDraft: () => {},
         queueClear: () => {},
         queuePush: () => {},
-        queueShift: () => null,
+        queueShift: () => undefined,
         turn: { dispatch: () => {}, busy: () => false, snapshot: () => ({}), restore: () => {} },
         claimDraft: (id: string | null) => log.push(`claimDraft:${String(id)}`),
       },

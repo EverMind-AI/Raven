@@ -68,7 +68,7 @@ async function harness(): Promise<{
         drawMeter: () => log.push('drawMeter'),
         goPaint: vi.fn(),
         queueRestore,
-        queueSnapshot: () => ['queued'],
+        queueSnapshot: () => [{ text: 'queued', moveOn: 'g_1' }],
         /* The island's own phase machine, which is what is under test here. */
         turn,
         liveAnchor: () => 42,
@@ -132,7 +132,7 @@ describe('the legacy parked-turn adapter', () => {
     turn.dispatch({ type: 'idle' })
     registry.resume(parked as unknown as SessionRuntime)
     expect(turn.snapshot()).toEqual({ phase: 'streaming', cancellable: false, resume: null })
-    expect(queueRestore).toHaveBeenCalledWith(['queued'])
+    expect(queueRestore).toHaveBeenCalledWith([{ text: 'queued', moveOn: 'g_1' }])
     expect(workspaceRestore).toHaveBeenCalledWith(parked.ws)
     expect(document.getElementById('answer')?.textContent).toBe('partial')
   })
