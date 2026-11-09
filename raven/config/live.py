@@ -402,8 +402,8 @@ def media_tool_config(live: LiveConfig, kind: str):
     The resolution itself -- validation and the borrowing rule -- lives in
     ``config.schema`` next to ``effective_media_config``, so the rule is stated
     once and this module never handles a credential field. Only the per-tool
-    section (key / base / model / headers, and the image and video sections'
-    provider) and the provider it borrows from are live preferences; the
+    section (key / base / model / headers / provider) and the provider it
+    borrows from are live preferences; the
     surrounding wiring (proxy, output directory, workspace restriction) is
     generation state and changes with a swap. None means the file has no
     ``tools.media`` section at all -- the constructor-fallback lane. A candidate

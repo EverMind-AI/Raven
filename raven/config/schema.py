@@ -1193,10 +1193,7 @@ class ImageToolConfig(MediaToolConfig):
     ``provider`` names another configured provider to run on instead, whose
     address, key and headers replace this section's -- see
     :func:`borrow_media_credentials`. The image and video tools have request
-    paths for such a provider (OpenAI's Images API, MiniMax's image and video
-    APIs); speech keeps to OpenRouter's request shapes, so its section has no
-    such field, and a ``provider`` written there is ignored like any key its
-    class does not declare.
+    paths for such a provider (OpenAI's Images API and MiniMax's media APIs).
     """
 
     provider: str = ""  # empty (or "openrouter") is the OpenRouter default
@@ -1208,23 +1205,29 @@ class VideoToolConfig(MediaToolConfig):
     provider: str = ""  # empty (or "openrouter") is the OpenRouter default
 
 
+class SpeechToolConfig(MediaToolConfig):
+    """The speech tool's section; ``provider`` enables direct MiniMax operations."""
+
+    provider: str = ""  # empty (or "openrouter") is the OpenRouter default
+
+
 class MediaGenConfig(Base):
     """Multimodal generation tools configuration.
 
     OpenRouter is the default backend: image + speech via chat-completions output
     modalities, and video via the async ``/videos`` endpoint (Kling). The image
     tool also runs on a provider serving OpenAI's Images API or on MiniMax, named
-    by ``image.provider``, and the video tool on MiniMax, named by
-    ``video.provider``; speech keeps to OpenRouter's request shapes.
+    by ``image.provider``. Video and speech can name MiniMax for their direct
+    provider operations.
     """
 
     image: ImageToolConfig = Field(default_factory=ImageToolConfig)
-    speech: MediaToolConfig = Field(default_factory=MediaToolConfig)
+    speech: SpeechToolConfig = Field(default_factory=SpeechToolConfig)
     video: VideoToolConfig = Field(default_factory=VideoToolConfig)
     proxy: str | None = None  # HTTP/SOCKS proxy for media API calls
     output_subdir: str = "generated"  # where generated files are written under workspace
 
-    @field_validator("image", "video", mode="before")
+    @field_validator("image", "speech", "video", mode="before")
     @classmethod
     def _plain_section_takes_its_kind(cls, value: Any, info: ValidationInfo) -> Any:
         """A plain ``MediaToolConfig`` is still an image or video section, one naming
@@ -2859,7 +2862,7 @@ def borrow_media_credentials(tool: MediaToolConfig, providers: Any) -> None:
 
 def media_section_class(kind: str) -> type[MediaToolConfig]:
     """The class ``MediaGenConfig`` declares for ``kind``'s section, for a reader
-    validating a raw one: the image and video sections have a provider."""
+    validating a raw one: each media role can name a supported provider."""
     return MediaGenConfig.model_fields[kind].annotation
 
 

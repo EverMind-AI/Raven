@@ -366,7 +366,7 @@ SECTIONS: tuple[Section, ...] = (
                     writer="settings",
                     choices=("", *(spec.name for spec in PROVIDERS if getattr(spec, f"{medium}_api"))),
                 )
-                for medium in ("image", "video")
+                for medium in ("image", "speech", "video")
             ),
             *(
                 Setting(

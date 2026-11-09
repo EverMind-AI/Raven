@@ -1818,7 +1818,16 @@ def _minimax_answer(*, pictures: list[str] | None = None, failed: str = "0", **e
     return httpx.Response(200, json={**body, **extra})
 
 
-async def test_minimax_voice_design_posts_prompt_and_voice_id(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("provider", "url"),
+    [
+        ("minimax", "https://api.minimax.io/v1/voice_design"),
+        ("minimax_cn_api", "https://api.minimaxi.com/v1/voice_design"),
+    ],
+)
+async def test_minimax_voice_design_uses_real_speech_config(monkeypatch, tmp_path, provider, url) -> None:
+    from raven.config.loader import load_config
+
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1831,21 +1840,70 @@ async def test_minimax_voice_design_posts_prompt_and_voice_id(monkeypatch) -> No
     transport = httpx.MockTransport(handler)
     real_client = httpx.AsyncClient
     monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
-    tool = SpeechGenerateTool(
-        SimpleNamespace(
-            provider="minimax",
-            api_base="https://api.minimax.io/v1",
-            api_key="mm-key",
-            model="",
+    config = load_config(tmp_path / "absent.json")
+    getattr(config.providers, provider).api_key = "mm-key"
+    config.tools.media.speech.model = "speech-02"
+    config.tools.media.speech.provider = provider
+    tool = SpeechGenerateTool(config.effective_media_config().speech)
+
+    out = json.loads(
+        await tool.execute(
+            "This is a voice preview.",
+            operation="voice_design",
+            prompt="Warm and calm",
+            voice_id="custom-voice",
         )
     )
 
-    out = json.loads(await tool.execute("", operation="voice_design", prompt="Warm and calm", voice_id="custom-voice"))
-
     assert out == {"success": True, "voice_id": "custom-voice"}
-    assert [str(request.url) for request in seen] == ["https://api.minimax.io/v1/voice_design"]
+    assert [str(request.url) for request in seen] == [url]
     assert seen[0].headers["authorization"] == "Bearer mm-key"
-    assert json.loads(seen[0].content) == {"prompt": "Warm and calm", "voice_id": "custom-voice"}
+    assert json.loads(seen[0].content) == {
+        "prompt": "Warm and calm",
+        "preview_text": "This is a voice preview.",
+        "voice_id": "custom-voice",
+    }
+
+
+async def test_explicit_speech_operation_does_not_trigger_voice_design(monkeypatch) -> None:
+    tool = SpeechGenerateTool(
+        SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="")
+    )
+
+    async def stream_audio(_payload):
+        return b"pcm", ""
+
+    async def keep_wav(path, _format):
+        return path, "wav", ""
+
+    monkeypatch.setattr(tool, "_stream_audio_pcm", stream_audio)
+    monkeypatch.setattr(tool, "_write_wav", lambda *_args: None)
+    monkeypatch.setattr(tool, "_maybe_transcode", keep_wav)
+
+    result = json.loads(await tool.execute("", operation="speech", prompt="Warm", voice_id="custom-voice"))
+
+    assert result["success"] is True
+
+
+async def test_voice_design_error_omits_trial_audio(monkeypatch) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"trial_audio": "a" * 800_000, "base_resp": {"status_code": 0}})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    tool = SpeechGenerateTool(
+        SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="")
+    )
+
+    result = json.loads(
+        await tool.execute("This is a voice preview.", operation="voice_design", prompt="Warm", voice_id="custom-voice")
+    )
+
+    assert result == {
+        "error": "voice design response carried no voice_id",
+        "detail": {"status_code": 0},
+    }
 
 
 @pytest.mark.parametrize(

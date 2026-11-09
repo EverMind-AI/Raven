@@ -643,14 +643,13 @@ class TestTheBorrowInputIsAdmittedOnTheSameTerms:
         ("kind", "runs_on"),
         [
             ("image", ("https://relay.test/v1", "sk-oa")),
-            ("speech", ("", "sk-or")),
+            ("speech", ("https://relay.test/v1", "sk-oa")),
             ("video", ("https://relay.test/v1", "sk-oa")),
         ],
     )
-    def test_the_image_and_video_sections_run_on_a_named_provider(self, tmp_path, kind, runs_on):
-        """Speech speaks OpenRouter's request shapes alone, so a provider written into
-        its section is ignored like any unknown key; the image and video sections take
-        the named provider's connection. Both readers agree."""
+    def test_media_sections_run_on_a_named_provider(self, tmp_path, kind, runs_on):
+        """Every routed media section takes the named provider's connection, and the
+        boot and live readers agree."""
         from raven.config.live import media_tool_config
         from raven.config.schema import Config
 

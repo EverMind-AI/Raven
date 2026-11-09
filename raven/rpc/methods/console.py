@@ -978,7 +978,7 @@ def _chk_pin_pair(parent: str, model_field: str, provider_field: str):
 
 
 def _chk_routed_selection(kind: str):
-    """The image or video role's selection: model and quality, and the provider it runs on."""
+    """A media role's selection: model and quality, and the provider it runs on."""
 
     def chk(value: Any) -> dict:
         if not isinstance(value, dict) or not {"model", "quality"} <= set(value) <= {"model", "quality", "provider"}:
@@ -989,13 +989,6 @@ def _chk_routed_selection(kind: str):
         }
 
     return chk
-
-
-def _chk_media_selection(value: Any) -> dict:
-    """Speech names no provider: its request shapes are OpenRouter's own."""
-    if not isinstance(value, dict) or set(value) != {"model", "quality"}:
-        raise ConfigValidationError("media selection must contain exactly model and quality")
-    return {k: _SETTINGS_SIMPLE_KEYS[f"tools.media.image.{k}"](v) for k, v in value.items()}
 
 
 def _chk_media_provider(kind: str):
@@ -1062,6 +1055,7 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "tools.media.image.quality": _chk_enum("tools.media.image.quality", "", "low", "medium", "high"),
     "tools.media.image": _chk_routed_selection("image"),
     "tools.media.image.provider": _chk_media_provider("image"),
+    "tools.media.speech.provider": _chk_media_provider("speech"),
     "tools.media.video.provider": _chk_media_provider("video"),
     "channels.sendProgress": _chk_bool("channels.sendProgress"),
     "channels.sendToolHints": _chk_bool("channels.sendToolHints"),
@@ -1098,9 +1092,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     # written a key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
     "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
-    # The three media tools share one config shape; speech's has no provider,
-    # because only the image and video tools run elsewhere.
-    "tools.media.speech": _chk_media_selection,
+    # The three media tools share one config shape and can name a provider when
+    # their direct request path supports it.
+    "tools.media.speech": _chk_routed_selection("speech"),
     "tools.media.video": _chk_routed_selection("video"),
     "sessions.autoArchiveAfterDays": _chk_int_or_null("sessions.autoArchiveAfterDays", 1, 3650),
 }
