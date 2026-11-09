@@ -113,6 +113,10 @@ _RUNNER_EVENT_TYPES = get_args(RunnerEvent)
 _DEFAULT_IDLE_TTL = 300.0  # seconds a lane may sit idle before the reaper reclaims it
 _SWEEP_INTERVAL = 60.0  # seconds between reaper sweeps
 _DEPTH_WARN_THRESHOLD = 50  # warn once when a lane's pending queue reaches this depth
+#: Seconds a reported stop waits for the UI to consume its terminal frames.
+#: Past this the cancellation has already happened; holding admission longer
+#: would leave the conversation closed for a page that is not reading.
+_STOP_REPORT_TIMEOUT_S = 5.0
 
 
 class SchedulerDrainingError(Exception):
@@ -701,7 +705,20 @@ class Scheduler:
                     reports.append(asyncio.shield(running))
             if cancel_children is not None:
                 reports.append(cancel_children())
-            results = await asyncio.gather(*reports, return_exceptions=True)
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*reports, return_exceptions=True), timeout=_STOP_REPORT_TIMEOUT_S
+                )
+            except TimeoutError:
+                # The cancellation landed before this wait; only the UI's
+                # acknowledgement is missing. Release the conversation instead
+                # of leaving it closed for a page that never reads.
+                logger.warning(
+                    "stop on {}: delivery did not settle within {}s; releasing admission",
+                    conversation_id,
+                    _STOP_REPORT_TIMEOUT_S,
+                )
+                return stopped
             for result in results:
                 if isinstance(result, BaseException):
                     raise result

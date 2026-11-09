@@ -678,6 +678,39 @@ async def test_reported_stop_uses_lane_cancel_and_drains_before_reporting(monkey
     assert len([e for e in events if isinstance(e, TurnFailed)]) == 2
 
 
+async def test_a_reported_stop_releases_admission_when_delivery_never_settles(monkeypatch):
+    """A page that never reads must not hold the conversation closed forever."""
+    from raven.spine import scheduler as scheduler_module
+    from raven.spine.scheduler import Scheduler
+
+    monkeypatch.setattr(scheduler_module, "_STOP_REPORT_TIMEOUT_S", 0.1)
+    runner = HangingRunner()
+    blocked = asyncio.Event()
+
+    async def sink(event):
+        if isinstance(event, TurnFailed):
+            await blocked.wait()
+
+    sched = Scheduler(runner, OriginPools(user=1, system=1), sink)
+    running = sched.submit(_req())
+    await runner.started.wait()
+    queued = sched.submit(_req("queued"))
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    stopped = await asyncio.wait_for(sched.cancel_conversation_reported("t:c"), 2)
+    elapsed = loop.time() - started
+    try:
+        assert stopped == 2
+        assert elapsed < 1
+        assert "t:c" not in sched._stopping
+        sched.submit(_req("after timeout"))
+        assert await queued.result() is None
+    finally:
+        blocked.set()
+        await asyncio.wait_for(running.result(), 2)
+        await sched.shutdown(grace=0)
+
+
 async def test_a_runners_long_account_rides_the_failure():
     """The kernel cannot build the long form -- it imports no other raven
     package, so it has nothing to scrub with -- so it copies what the runner
