@@ -1461,9 +1461,14 @@ async def _commit_replan(proposal: ReplanProposal, *, ctx: _CommitContext) -> Re
     try:
         return await asyncio.shield(finishing)
     except asyncio.CancelledError:
-        try:
-            await finishing
-        except Exception:  # noqa: BLE001 - the stop is what the run ends on; the commit's own failure is logged
+        # Shielded again on every pass: a second cancel (a stop arriving twice, a
+        # timed-out wait cancelling on its way out) must not cancel the commit.
+        while not finishing.done():
+            try:
+                await asyncio.shield(finishing)
+            except asyncio.CancelledError:
+                continue
+        if finishing.exception() is not None:
             logger.opt(exception=True).warning(
                 "DAG run {} could not finish its replan into {}", old_run, proposal.successor_run_id
             )

@@ -17885,10 +17885,14 @@ class _SlowToStop(_GatedExec):
             raise
 
 
-async def test_a_stop_landing_in_the_commit_lets_it_finish_and_leaves_no_id_unrecorded(tmp_path: Path) -> None:
+@pytest.mark.parametrize("cancels", [1, 2], ids=["once", "twice"])
+async def test_a_stop_landing_in_the_commit_lets_it_finish_and_leaves_no_id_unrecorded(
+    tmp_path: Path, cancels: int
+) -> None:
     """`/stop` cancels the run's task. Landing once the successor is on disk, it waits
     for the switch and the seal, then stops the successor: cut short there, the
-    successor's ids would keep a claim with no status, which reads as running for good."""
+    successor's ids would keep a claim with no status, which reads as running for
+    good. A second cancel must not cut the wait short either."""
     from raven.agent.subagent.dag_store import UNRECORDED, read_session_nodes
 
     exec_ = _SlowToStop("h")
@@ -17902,8 +17906,8 @@ async def test_a_stop_landing_in_the_commit_lets_it_finish_and_leaves_no_id_unre
         assert future is not None, "the desk refused the proposal"
         await asyncio.wait_for(exec_.winding.wait(), 10)
         assert (tmp_path / "runs" / _RUN_B / "graph.json").exists(), "the stop lands once the successor is on disk"
-        started.run.cancel()
-        for _ in range(20):
+        for _ in range(cancels):
+            started.run.cancel()
             await asyncio.sleep(0)
         exec_.let_go.set()
         with pytest.raises(asyncio.CancelledError):
