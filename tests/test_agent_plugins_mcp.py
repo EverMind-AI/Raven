@@ -323,7 +323,19 @@ def test_stdio_expands_placeholders_in_args_and_env(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "arg", ["../outside", "${PLUGIN_ROOT}/../../etc/passwd", "..", "x/..", "a/../b", "..\\outside"]
+    "arg",
+    [
+        "../outside",
+        "${PLUGIN_ROOT}/../../etc/passwd",
+        "..",
+        "x/..",
+        "a/../b",
+        "..\\outside",
+        "D:..\\target.txt",
+        "d:..\\target.txt",
+        "D:..",
+        "D:.. ",
+    ],
 )
 def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, arg: str) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
@@ -333,15 +345,16 @@ def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, a
     assert "'..' path component" in report.problems[0].reason
 
 
-def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path: Path) -> None:
-    root = _package(tmp_path, mcp=_mcp({"local": _stdio(env={"CONFIG": "${PLUGIN_DATA}/../../secret"})}))
+@pytest.mark.parametrize("value", ["${PLUGIN_DATA}/../../secret", "D:..\\secret"])
+def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path: Path, value: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(env={"CONFIG": value})}))
     report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
 
     assert report.servers == {}
     assert "'..' path component" in report.problems[0].reason
 
 
-@pytest.mark.parametrize("arg", ["a..b", "...", "./bin/tool", "..-ish"])
+@pytest.mark.parametrize("arg", ["a..b", "...", "./bin/tool", "..-ish", "D:foo"])
 def test_stdio_keeps_an_argument_without_a_dotdot_component(tmp_path: Path, arg: str) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
     report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")

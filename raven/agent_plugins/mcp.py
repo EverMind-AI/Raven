@@ -26,6 +26,7 @@ packages are allowed to run.
 
 from __future__ import annotations
 
+import ntpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -69,8 +70,21 @@ _PATH_COMPONENT_RE = re.compile(r"[/\\]")
 
 
 def _has_dotdot_component(text: str) -> bool:
-    """Whether *text* carries a `..` component on either platform's separator."""
-    return any(component == ".." for component in _PATH_COMPONENT_RE.split(text))
+    """Whether *text* carries a traversal component on either platform.
+
+    A Windows drive-relative ``<letter>:..`` is a traversal too: the launch
+    runs on the package root's drive, and Win32 resolves that form against
+    the drive's current directory, so it reaches the package root's parent.
+    Stripping an optional drive prefix first turns ``D:..`` and ``d:..`` into
+    the ``..`` this refuses, and a trailing space before the next separator
+    does not hide it (``D:.. ``); a plain drive-relative component like
+    ``D:foo`` stays allowed.
+    """
+    for component in _PATH_COMPONENT_RE.split(text):
+        rest = ntpath.splitdrive(component)[1]
+        if rest == ".." or rest.rstrip(" ") == "..":
+            return True
+    return False
 
 
 class AgentPluginMcpError(ValueError):
