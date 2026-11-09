@@ -17498,6 +17498,33 @@ async def test_what_the_plan_drops_stops_with_todays_statuses(tmp_path: Path) ->
     assert [entry["node"] for entry in run.result.files] == ["fresh"]
 
 
+async def test_a_replan_cannot_take_an_id_an_older_run_claimed(tmp_path: Path) -> None:
+    """A successor's new id is new to *this* run only. The conversation's ids are
+    one namespace, so an id an older run claimed is refused, as a plain submission
+    refuses it, instead of being written over by the successor's claim."""
+    from raven.agent.subagent.dag_store import read_registry, write_registry
+
+    async def _claim_by_another_run(state: ReassignmentState, exec_: Any) -> None:
+        registry = await read_registry(LocalFileBackend(), str(tmp_path))
+        registry["nodes"]["r2a"] = {"kind": "dag", "run_id": "20260101T000000Z-0000000f", "status": "completed"}
+        await write_registry(LocalFileBackend(), str(tmp_path), registry)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_research_nodes(),
+        entries=_research_entries(),
+        hold=frozenset({"r1", "r3"}),
+        before_propose=_claim_by_another_run,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "already used by run '20260101T000000Z-0000000f'" in run.outcome.reason, run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert registry["nodes"]["r2a"]["run_id"] == "20260101T000000Z-0000000f", "the older claim still stands"
+    assert "r1" not in registry["nodes"] or registry["nodes"]["r1"]["run_id"] == _RUN_A
+
+
 async def test_the_successor_is_on_disk_before_anything_is_stopped(tmp_path: Path) -> None:
     successor_graph = tmp_path / "runs" / _RUN_B / "graph.json"
     seen: list[bool] = []

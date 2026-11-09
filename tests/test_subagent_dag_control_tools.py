@@ -3608,6 +3608,43 @@ async def test_an_answer_for_a_stopped_node_says_it_is_no_longer_waiting(tmp_pat
     assert _calls_for(fakes["alpha"], "s") == 1
 
 
+async def test_a_replan_cannot_take_an_id_an_older_run_claimed(tmp_path: Path, monkeypatch) -> None:
+    """The conversation's node ids are one namespace. A successor's `new` id is new
+    to the run being replanned, not to the conversation: an id an older run claimed
+    is refused here, with the same sentence a plain submission gets, rather than
+    being written over when the successor claims it."""
+    from raven.agent.subagent.dag_store import read_registry, write_registry
+    from raven.agent.subagent.prompt_backend import LocalFileBackend
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=True)
+    try:
+        root = tool._history_root(_REASSIGN_SESSION)
+        registry = await read_registry(LocalFileBackend(), str(root))
+        registry["nodes"]["fresh"] = {"kind": "dag", "run_id": "20260101T000000Z-0000000f", "status": "completed"}
+        await write_registry(LocalFileBackend(), str(root), registry)
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+        runs = list(tool.active_run_ids())
+    finally:
+        await _wind_down(tool, release)
+
+    text = _text(out)
+    assert "already used by run '20260101T000000Z-0000000f'" in text, text
+    # Refused while it was being prepared, not at commit: this test is about the
+    # tool's own check, and the runner's would answer with its own wording.
+    assert text.startswith("Error: ") and "No decision was recorded, so the node is still waiting." in text, text
+    assert runs == [run_id], "no successor was started"
+    registry = await read_registry(LocalFileBackend(), str(root))
+    assert registry["nodes"]["fresh"]["run_id"] == "20260101T000000Z-0000000f", "the older claim still stands"
+
+
 async def test_a_second_replan_prepared_before_the_first_committed_is_stale(tmp_path: Path, monkeypatch) -> None:
     from tests.test_subagent_dag_runner import _wait_until
 

@@ -2273,9 +2273,14 @@ class SubAgentDagTool(Tool):
         )
         try:
             known = await self._session_nodes_for_replan(run_id, live)
-            in_graph = {node.id for node in checked.nodes}
+            # Only what passes to the successor keeps its claim out of the check:
+            # the carried nodes (a redefined one is carried too) and the finished
+            # context, which is read rather than claimed. An id the plan adds is
+            # still checked against every run this conversation has made, as a
+            # plain submission checks it.
+            exempt = {*plan.carried, *plan.context}
             view = SessionNodes(
-                owner={nid: owner for nid, owner in known.owner.items() if nid not in in_graph},
+                owner={nid: owner for nid, owner in known.owner.items() if nid not in exempt},
                 state=known.state,
                 has_output=known.has_output,
             )

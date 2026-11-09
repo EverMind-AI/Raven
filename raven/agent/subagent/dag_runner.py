@@ -1558,20 +1558,23 @@ def _successor_nodes(proposal: ReplanProposal, plan: CarryPlan, state: Reassignm
     return [proposal.dispatch_nodes.get(node.id) or state.effective_nodes[node.id] for node in plan.nodes]
 
 
-def _successor_view(known: SessionNodes, checked: Collection[str], ctx: _CommitContext) -> SessionNodes:
+def _successor_view(known: SessionNodes, exempt: Collection[str], ctx: _CommitContext) -> SessionNodes:
     """The session's node index as the successor's graph is checked against it.
 
     This run's live state is laid over the index, which reads its nodes as still
-    being written, so its finished nodes read as they ended. The claims of every
-    node in the graph being checked are left out -- the carried ones pass to the
-    successor, and the finished context is read, not claimed.
+    being written, so its finished nodes read as they ended. The claims left out
+    are the carried nodes' -- those pass to the successor -- and the finished
+    context's, which is read and not claimed. A node the plan adds is not exempt:
+    the conversation's ids are one namespace, so an id an older run claimed is
+    refused here as a plain submission refuses it, not written over by the
+    successor's claim.
     """
     state = dict(known.state)
     has_output = dict(known.has_output)
     for node_id, node_status in ctx.status.items():
         state[node_id] = node_status
         has_output[node_id] = bool(ctx.output_paths.get(node_id))
-    owner = {node_id: run for node_id, run in known.owner.items() if node_id not in checked}
+    owner = {node_id: run for node_id, run in known.owner.items() if node_id not in exempt}
     return SessionNodes(owner=owner, state=state, has_output=has_output)
 
 
@@ -1599,7 +1602,7 @@ async def _persist_successor(proposal: ReplanProposal, *, plan: CarryPlan, ctx: 
             graph = SubAgentDagSpec(task_summary=proposal.task_summary, nodes=nodes, confirm=proposal.confirm)
             checked = graph.model_copy(update={"nodes": [*nodes, *(ctx.by_id[nid] for nid in plan.context)]})
             known = await read_session_nodes(ctx.backend, ctx.history_root)
-            view = _successor_view(known, {node.id for node in checked.nodes}, ctx)
+            view = _successor_view(known, (*plan.carried, *plan.context), ctx)
             validate_and_order(checked, ctx.roots, view, nodes_root=ctx.nodes_root)
         except Exception as exc:  # noqa: BLE001 - refused, never raised: nothing has been written yet
             return str(exc)
