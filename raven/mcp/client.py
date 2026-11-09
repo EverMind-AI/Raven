@@ -187,6 +187,16 @@ def _configured_cwd(cfg) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _host_sourced(cfg) -> bool:
+    """Whether *cfg* is the host's own server rather than a package's.
+
+    ``getattr`` with the host default: a stub configuration that predates the
+    source marker is the host's own, the same way a config file that never
+    spelled it stays the host's own.
+    """
+    return getattr(cfg, "source", "host") == "host"
+
+
 def _child_stderr() -> Any:
     """A stderr a spawned server can inherit, whatever this process's ``sys.stderr`` is.
 
@@ -235,14 +245,15 @@ async def open_mcp_transport(
             # would be the choice of registry PlugHub's vetting refuses a
             # catalogue entry (see market/vetting.py). A server the sandbox
             # starts is fetched in there, so only its command line can carry one.
-            # The registry probe runs without the server's cwd on purpose: a
+            # The registry probe stays out of a package server's cwd: a
             # package root is third-party content, and a .npmrc there must not
-            # choose the registry or the payload. The cost is that a host
-            # server's own project .npmrc is not seen either; telling the two
-            # apart needs a source marker on the config, not a looser probe.
+            # choose the registry or the payload. A host server's own project
+            # .npmrc should be seen, so the probe runs in its configured cwd;
+            # the source marker on the config tells the two apart.
             sandboxed = executor is not None and executor.supports_process_spawning
+            probe_cwd = _configured_cwd(cfg) if _host_sourced(cfg) else None
             command, *args = await mirrors.package_launch_async(
-                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, local=not sandboxed
+                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, probe_cwd, local=not sandboxed
             )
             cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:

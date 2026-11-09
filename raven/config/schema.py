@@ -1432,6 +1432,10 @@ class MCPServerConfig(Base):
     # that fails may just be waiting for a human.
     auth: Literal["none", "apikey", "oauth"] = "none"
     oauth: MCPOAuthConfig = Field(default_factory=MCPOAuthConfig)
+    # Who configured the server: the host's own configuration, or a portable
+    # Agent Plugins package. The registry probe reads a host server's project
+    # .npmrc (it runs in the server's cwd) but stays out of a package root.
+    source: Literal["host", "package"] = "host"
 
 
 class ToolSearchConfig(Base):

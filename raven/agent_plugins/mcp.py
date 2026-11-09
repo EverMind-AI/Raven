@@ -309,6 +309,7 @@ def _build_stdio(
         args=args,
         env=env,
         cwd=str(cwd),
+        source="package",
     )
 
 
@@ -317,7 +318,7 @@ def _build_http(name: str, entry: HttpServer) -> MCPServerConfig:
     _check_url(entry.url)
     _check_headers(entry.headers)
     transport = "streamableHttp" if entry.type == "streamable-http" else "sse"
-    return MCPServerConfig(type=transport, url=entry.url, headers=dict(entry.headers))
+    return MCPServerConfig(type=transport, url=entry.url, headers=dict(entry.headers), source="package")
 
 
 def _server_entry(raw: Any) -> Any:

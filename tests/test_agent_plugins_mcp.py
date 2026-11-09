@@ -333,6 +333,17 @@ def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:
     assert server.env["PLUGIN_DATA"] == str(data)
 
 
+def test_composed_servers_mark_themselves_package_sourced(tmp_path: Path) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(command="npx"), "remote": _http()}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    local = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    remote = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+    assert local.source == "package"
+    assert remote.source == "package"
+
+
 # ---------------------------------------------------------------------------
 # remote servers
 # ---------------------------------------------------------------------------
