@@ -48,4 +48,10 @@ describe('ravenHomeDir (the TUI reader of RAVEN_HOME)', () => {
 
     expect(ravenHomeDir()).toBe('state')
   })
+
+  it('keeps a ~name value relative (the host expands it, the TUI does not)', () => {
+    vi.stubEnv('RAVEN_HOME', '~bob/state')
+
+    expect(ravenHomeDir()).toBe('~bob/state')
+  })
 })

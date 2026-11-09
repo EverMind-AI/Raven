@@ -46,10 +46,11 @@ constructed graphs.
 
 Raven keeps its runtime state -- configuration, command history, logs -- under
 one directory: `$RAVEN_HOME`, or `~/.raven` when the variable is unset. The
-value may be absolute or start with `~`, which expands to the user's home
-directory in every front end. A relative value stays relative to each process's
-own working directory, so two front ends can disagree about which directory it
-names; prefer an absolute value.
+value may be absolute or start with `~/` (or `~\` on Windows), which expands to
+the user's home directory in every front end. Other leading-tilde forms, such
+as `~name`, are not expanded in the TUI and stay relative values. A relative
+value stays relative to each process's own working directory, so two front ends
+can disagree about which directory it names; prefer an absolute value.
 
 ## Continue a conversation
 
