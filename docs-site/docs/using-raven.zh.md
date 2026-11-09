@@ -36,6 +36,13 @@ Agent 创建独立 worktree，并汇报路径和分支。协调并发修改前�
 该流程见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)；
 手动构建任务图时参阅[DAG 编排](orchestration.md)。
 
+## Raven 的状态存放位置 { #where-raven-keeps-state }
+
+Raven 的运行时状态——配置、命令历史、日志——都放在一个目录下：设置了 `$RAVEN_HOME`
+就用它，未设置则用 `~/.raven`。取值可以是绝对路径，也可以以 `~` 开头，各前端都会把它
+展开为用户主目录。相对路径会相对每个进程各自的工作目录解析，因此不同前端可能指向
+不同目录；建议使用绝对路径。
+
 ## 继续对话 { #continue-a-conversation }
 
 每次单次 CLI 调用默认创建新会话。确实需要延续上下文时，选择 `--continue`、

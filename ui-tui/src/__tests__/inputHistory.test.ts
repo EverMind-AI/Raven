@@ -10,7 +10,7 @@
 // back. cycleHistory relies on this ordering: dir<0 starts at the last index
 // (newest) and walks toward index 0 (oldest); dir>0 walks forward again.
 
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
@@ -84,5 +84,20 @@ describe('input history store (backs cycleHistory)', () => {
       'spaced command',
       'line a\nline b'
     ])
+  })
+
+  it('loads a CRLF file with the same entries an LF one yields', async () => {
+    const crlfDir = mkdtempSync(join(tmpdir(), 'raven-hist-crlf-'))
+
+    vi.stubEnv('RAVEN_HOME', crlfDir)
+    writeFileSync(
+      join(crlfDir, '.raven_history'),
+      '# 2026-11-09 00:00:00\r\n+first command\r\n# 2026-11-09 00:00:01\r\n+second command\r\n# 2026-11-09 00:00:02\r\n+line a\r\n+line b\r\n'
+    )
+
+    vi.resetModules()
+    const reloaded: HistoryModule = await import('../lib/history.js')
+
+    expect(reloaded.load()).toEqual(['first command', 'second command', 'line a\nline b'])
   })
 })

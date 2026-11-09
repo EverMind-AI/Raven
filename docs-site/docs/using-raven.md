@@ -42,6 +42,15 @@ Check those reports before coordinating concurrent edits. See
 for this workflow and [DAG orchestration](orchestration.md) for manually
 constructed graphs.
 
+## Where Raven keeps state
+
+Raven keeps its runtime state -- configuration, command history, logs -- under
+one directory: `$RAVEN_HOME`, or `~/.raven` when the variable is unset. The
+value may be absolute or start with `~`, which expands to the user's home
+directory in every front end. A relative value stays relative to each process's
+own working directory, so two front ends can disagree about which directory it
+names; prefer an absolute value.
+
 ## Continue a conversation
 
 Each one-shot CLI invocation starts a fresh session by default. Use one of

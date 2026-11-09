@@ -20,17 +20,17 @@ import type { FrameEvent } from '@hermes/ink'
 
 import { scrollFastPathStats } from '@hermes/ink'
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { Profiler, type ProfilerOnRenderCallback, type ReactNode } from 'react'
 
+import { ravenHomeDir } from './ravenHome.js'
 import { markWriteLog } from './writeLog.js'
 
 const ENABLED = /^(?:1|true|yes|on)$/i.test((process.env.RAVEN_DEV_PERF ?? '').trim())
 const THRESHOLD_MS = Number(process.env.RAVEN_DEV_PERF_MS ?? '2') || 0
 // RAVEN_HOME first: a second install (its own state dir) would otherwise write
 // its samples into the default one, where they read as the other install's.
-const STATE_HOME = process.env.RAVEN_HOME?.trim() || join(homedir(), '.raven')
+const STATE_HOME = ravenHomeDir()
 const LOG_PATH = process.env.RAVEN_DEV_PERF_LOG?.trim() || join(STATE_HOME, 'perf.log')
 
 let logReady = false
