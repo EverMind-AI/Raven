@@ -29,7 +29,7 @@ async function turnPart(
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => 's1' },
-      'src/state/ctxChip': { set: () => {} },
+      'src/state/ctxWindow': { set: () => {} },
       'src/lib/notifications': { show: () => {} },
       'src/state/session/registry': { touch: () => {} },
       'src/features/transcript/mount': {

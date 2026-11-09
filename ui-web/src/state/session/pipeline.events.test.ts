@@ -105,7 +105,7 @@ async function harness({
       'src/lib/dom': { $: looseQuery() },
       'src/lib/session': { current: () => current },
       'src/state/toast': { show: (text: string) => log.push(['toast', text]) },
-      'src/state/ctxChip': { set: (used: unknown, max: unknown) => log.push(['setCtx', used, max]) },
+      'src/state/ctxWindow': { set: (used: unknown, max: unknown) => log.push(['setCtx', used, max]) },
       'src/lib/notifications': { show: (title: string) => log.push(['notify', title]) },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/features/workspace/record': {
@@ -655,7 +655,7 @@ async function islandHarness() {
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/lib/session': { current: () => 's1' },
       'src/state/toast': { show: () => {} },
-      'src/state/ctxChip': { set: () => {} },
+      'src/state/ctxWindow': { set: () => {} },
       'src/lib/notifications': { show: () => {} },
       'src/features/rail/source': { touchSession: () => {} },
       'src/features/workspace/record': { wsOnTool: () => {}, wsOnToolDone: () => {} },

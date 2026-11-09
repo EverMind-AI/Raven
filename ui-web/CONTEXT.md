@@ -415,10 +415,11 @@ rather than in the order they are asked for.
 
 **Popover**:
 A panel anchored to the control that opened it and floating over the page: the
-permission modes (`#permPop`), the session tier (`#tierPop`) and the model
+permission modes (`#permPop`), the session tier (`#tierPop`), the context
+window (`#ctxPop`, the ring's analysis of what fills it) and the model
 picker (`.mpick`). `src/lib/popover.ts` decides what one has to clear -- the
 composer card when its anchor sits on one, the anchor itself when it does not --
-and `src/chrome/PermPopover.tsx` and `TierPopover.tsx` are the two the dock
+and `src/chrome/PermPopover.tsx` and `CtxPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
 

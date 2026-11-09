@@ -73,7 +73,7 @@ async function harness({
       'src/lib/session': { current: () => current, setCurrent: () => {} },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: () => {} },
-      'src/state/ctxChip': { set: () => {} },
+      'src/state/ctxWindow': { set: () => {} },
       'src/lib/notifications': { show: () => {} },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: () => {} },

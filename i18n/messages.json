@@ -1889,13 +1889,53 @@
       "en": "New schedule",
       "zh": "新建任务"
     },
+    "gui.ctx.estimate": {
+      "en": "Local estimate of this turn's prompt, without the reply.",
+      "zh": "本地估算的本轮提示词，不含回复。"
+    },
     "gui.ctx.label": {
       "en": "context {pct}%",
       "zh": "上下文 {pct}%"
     },
+    "gui.ctx.left": {
+      "en": "{n} left",
+      "zh": "还剩 {n}"
+    },
+    "gui.ctx.noparts": {
+      "en": "The breakdown appears after the next turn.",
+      "zh": "分项在下一轮对话后显示。"
+    },
+    "gui.ctx.of": {
+      "en": "of {max} tokens",
+      "zh": "共 {max} tokens"
+    },
+    "gui.ctx.part.conversation": {
+      "en": "Conversation",
+      "zh": "对话"
+    },
+    "gui.ctx.part.memory": {
+      "en": "Memory",
+      "zh": "记忆"
+    },
+    "gui.ctx.part.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.ctx.part.system": {
+      "en": "System prompt",
+      "zh": "系统提示词"
+    },
+    "gui.ctx.part.tools": {
+      "en": "Tools",
+      "zh": "工具"
+    },
     "gui.ctx.tip": {
       "en": "Context {used}/{max} {pct}%",
       "zh": "上下文使用 {used}/{max} {pct}%"
+    },
+    "gui.ctx.title": {
+      "en": "Context window",
+      "zh": "上下文窗口"
     },
     "gui.dag.aria": {
       "en": "Subagent orchestration",

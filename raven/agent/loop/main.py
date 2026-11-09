@@ -334,6 +334,12 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # so origin reporting needs this side map — see
         # ``SkillsSegmentBuilder.build``.
         self._last_injected_skill_sources: dict[str, str] = {}
+        # The segments that are recomputed every turn -- the memory that was
+        # recalled and the skills that were routed, each one's own text --
+        # surfaced by the same metadata as the ids above. A reader measures the
+        # window against it: the model reads both as one block, and the person
+        # asking what is filling the window wants them apart.
+        self._last_turn_scoped_parts: dict[str, str] = {}
 
         from raven.config.live import LiveConfig, skill_blocklist
 

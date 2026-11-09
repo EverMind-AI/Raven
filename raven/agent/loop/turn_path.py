@@ -124,6 +124,7 @@ from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
+from raven.agent.window.parts import measure_parts
 from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
@@ -1794,6 +1795,10 @@ class TurnPathMixin:
                 usage_sink["context_max"] = context_max
                 usage_sink["context_used"] = context_used
                 usage_sink["context_percent"] = round(100 * context_used / context_max) if context_max else 0
+                # The window divided, so a reader can be told what is filling it
+                # and not only how full it is. Measured on the request that was
+                # sent, which is the one the count above belongs to.
+                usage_sink["context_parts"] = measure_parts(call_messages, call_tools, self._last_turn_scoped_parts)
 
             # Recoveries that retry this iteration. The classifier on the response
             # says what kind of refusal this was; the Memory role says whether it

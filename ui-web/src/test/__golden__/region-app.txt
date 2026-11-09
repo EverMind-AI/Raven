@@ -165,10 +165,22 @@ div.app
                 span.led
                 span#envName
               span#meter.meter
-              button#ctxChip.chip.ctx
-                svg.ring
-                  circle.bg
-                  circle.fg
+              span.chrome-anch
+                button#ctxChip.chip.ctx
+                  svg.ring
+                    circle.bg
+                    circle.fg
+                div#ctxPop.pop.chrome-ctx-pop[data-open=false]
+                  div.chrome-ctx-head
+                    span.chrome-ctx-title
+                  div.chrome-ctx-hero
+                    span.chrome-ctx-used
+                    span.chrome-ctx-of
+                    span.chrome-ctx-pct
+                  div.chrome-ctx-grid
+                  p.chrome-ctx-none
+                  div.chrome-ctx-foot
+                    span.chrome-ctx-left
               button#modelChip.chip.model
                 span#modelName
                 span.chrome-model-caret

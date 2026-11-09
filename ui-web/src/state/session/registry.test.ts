@@ -33,6 +33,9 @@ async function harness(
   } = {},
 ) {
   const calls: unknown[][] = []
+  /* What the context store was told, kept in the fake's own numbers so a case
+     can ask what percentage the ring and the popover would read off it. */
+  const ring = { used: 0, max: 0 }
   const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
   /* Where the island's turn machine has been driven to, read off the traffic
      the switch put through it rather than off the machine itself: the fake
@@ -128,7 +131,18 @@ async function harness(
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/state/ctxChip': { set: (used: number) => calls.push(['setCtx', used]) },
+      'src/state/ctxWindow': {
+        set: (used: number, max?: number) => {
+          calls.push(['setCtx', used])
+          ring.used = used
+          if (typeof max === 'number' && max > 0) ring.max = max
+        },
+        clear: () => {
+          calls.push(['clearCtx'])
+          ring.used = 0
+          ring.max = 0
+        },
+      },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: (sid?: string | null, gen?: number) => calls.push(['loadTier', sid, gen]) },
       'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', sid, gen]) },
@@ -235,6 +249,8 @@ async function harness(
     env,
     state,
     asked,
+    /** The percentage the ring and the popover read, clamped as the store does. */
+    ringPct: () => (ring.max > 0 ? Math.min(100, Math.max(0, Math.round((100 * ring.used) / ring.max))) : 0),
     title: () => (boxes['#title'] ? boxes['#title']!.textContent : null),
     openEditor: (typed: string) => {
       const heading = boxes['#title']
@@ -595,6 +611,87 @@ describe('the live session switch', () => {
     h.startDraft()
 
     expect(h.state.fresh).toBe('1')
+  })
+
+  /* The popover's parts describe one conversation's window, and a reopened
+     conversation's usage carries none: a report without parts keeps the last
+     ones, so leaving the conversation is what has to drop them, or the popover
+     draws the conversation left behind as the composition of the one opened. */
+  it('drops the window\'s parts when another conversation is opened', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    h.click({ id: 'b', title: 'Bravo' })
+    await h.settle('b')
+
+    const after = h.calls.slice(mark).map((c) => c[0])
+    expect(after).toContain('clearCtx')
+    expect(after.indexOf('clearCtx')).toBeLessThan(after.indexOf('setCtx'))
+  })
+
+  it('drops them for a conversation that kept its turn, which reads no usage back', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.env.subBySession.b = 'sub:b'
+    h.env.parkedTurns.set('b', { nodes: [] })
+    const mark = h.calls.length
+
+    await h.click({ id: 'b', title: 'Bravo' })
+
+    expect(h.calls.slice(mark)).toContainEqual(['restoreTurn'])
+    expect(h.calls.slice(mark)).toContainEqual(['clearCtx'])
+    expect(h.calls.slice(mark).filter((c) => c[0] === 'setCtx')).toEqual([])
+  })
+
+  it('drops them for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    h.startDraft()
+
+    expect(h.calls.slice(mark)).toContainEqual(['clearCtx'])
+  })
+
+  /* A new task has measured nothing, so the ring must not go on saying the
+     conversation left behind's fill. Its parts were the visible half of that
+     leak; the percentage is the other half, and it is read off used/max, which
+     `switchToDraft` never touched. */
+  it('takes the ring back to zero for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a', {
+      session_id: 'a',
+      messages: [{ text: 'a' }],
+      info: { usage: { context_used: 176_000, context_max: 200_000 } },
+    })
+    expect(h.ringPct()).toBe(88)
+
+    h.startDraft()
+
+    expect(h.ringPct()).toBe(0)
+  })
+
+  /* The reconnect reopens the conversation already on screen: its parts are
+     still that conversation's, and dropping them would leave the popover
+     saying nothing is known until the next turn. */
+  it('keeps them when the reconnect reopens the conversation they describe', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    const reconnected = h.onReconnect()
+    await new Promise((r) => setTimeout(r, 0))
+    await h.settle('a')
+    await reconnected
+
+    expect(h.calls.slice(mark).map((c) => c[0])).toContain('setCtx')
+    expect(h.calls.slice(mark)).not.toContainEqual(['clearCtx'])
   })
 
   it('takes the visible stream back with a parked turn, without a round trip', async () => {

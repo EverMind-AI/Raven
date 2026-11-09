@@ -176,18 +176,29 @@ class ContextAssembler(ContextEngine):
         meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str, bool]] = []
         scratch_parts: list[tuple[int, str]] = []
+        turn_scoped_by_name: dict[str, str] = {}
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None or isinstance(seg, Exception):
                 continue
             meta |= seg.meta
             if not seg.text:
                 continue
-            if self._turn_scratch and self._is_turn_scoped(builder):
+            turn_scoped = self._is_turn_scoped(builder)
+            if self._turn_scratch and turn_scoped:
                 scratch_parts.append((builder.order, seg.text))
             else:
                 prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
+            if turn_scoped:
+                turn_scoped_by_name[builder.name] = seg.text
         prefix_parts.sort(key=lambda t: t[0])
         scratch_parts.sort(key=lambda t: t[0])
+        # The segments that are recomputed every turn, by name, so a reader can
+        # tell what they cost: the memory that was recalled and the skills that
+        # were routed, apart. They ride in the turn's scratch by default and in
+        # the system prompt when ``context.cache.turn_scratch`` is off, so they
+        # are recorded wherever they went.
+        if turn_scoped_by_name:
+            meta["turn_scoped_parts"] = turn_scoped_by_name
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
 
         if self._scent is not None:

@@ -6,12 +6,20 @@
  * are read one way whichever of them arrives.
  */
 
-import { set } from '../ctxChip'
+import { set } from '../ctxWindow'
 
-/* The two fields of the wire's usage shape the ring is drawn from. */
+/* The two fields of the wire's usage shape the ring is drawn from, and the
+   third the popover is drawn from: the window divided. */
 export interface UsageReport {
   context_used?: number
   context_max?: number
+  context_parts?: {
+    system?: number
+    tools?: number
+    conversation?: number
+    memory?: number
+    skills?: number
+  } | null
 }
 
 /* `fallbackUsed` stands in for a report that measured no window, and only a
@@ -19,5 +27,9 @@ export interface UsageReport {
    a reading -- an empty session -- so without a fallback it is drawn as zero. */
 export function applyUsage(u: UsageReport | undefined, fallbackUsed?: number): void {
   if (!u) return
-  set(fallbackUsed !== undefined && !u.context_used ? fallbackUsed : u.context_used, u.context_max)
+  set(
+    fallbackUsed !== undefined && !u.context_used ? fallbackUsed : u.context_used,
+    u.context_max,
+    u.context_parts ?? undefined,
+  )
 }

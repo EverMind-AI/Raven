@@ -1655,6 +1655,18 @@ The Curator's structured output that the deterministic assembler validates and a
 which message ids and archive refs to include, which to drop, plus memory sections and
 the Working State injection.
 
+**Context parts**:
+The window divided: one request's prompt by part — the system prompt, the tool
+schemas, the conversation, the memory and the skills
+(`raven/agent/window/parts.py`). An estimate of the request the loop sent, not
+a provider's count: the provider reports a prompt as one number and does not
+split it. The memory and the skills are the two segments the turn's scratch
+carried, which the assembler hands over by name so they can be measured apart.
+Carried on the wire as `context_parts` on a turn's usage, and absent until a
+turn has measured one.
+_Avoid_: "segments" for these — a Segment is a piece the context engine assembles
+the prompt from, not a share of the window.
+
 **Fail-Safe**:
 The deterministic fallback when the Slow Path errors or produces no valid plan:
 protected + most relevant + most recent messages, no LLM involved.

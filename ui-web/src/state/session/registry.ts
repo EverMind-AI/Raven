@@ -31,6 +31,7 @@ import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
+import { clear as clearCtx } from '../ctxWindow'
 import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
@@ -263,6 +264,10 @@ export function switchToDraft(): void {
      one conversation to another, and what a draft may search is exactly that
      -- nothing on screen says it once the menu is shut but the count. */
   clearStagedBases()
+  /* And the window the conversation left behind: its fill, its size and its
+     parts. A draft is a conversation that has measured nothing, so carrying
+     any of them over would draw the one just left under the new task's name. */
+  clearCtx()
   const rt = draft()
   adoptRuntime(rt)
   resetView(rt)
@@ -292,10 +297,21 @@ export function switchToDraft(): void {
 export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   endRename()
   const gen = nextToken()
+  /* What the page was showing, read before `park` releases it. Not the session
+     pointer: a rail click moves that to the conversation being opened before
+     it asks for it, so it cannot tell a switch from the reconnect's reopen. */
+  const leaving = activeRt
   park()
   parkDraft(); loadDraft(s.id)
   const rt = ensure(s.id)
   adoptRuntime(rt)
+  /* The window on screen is the conversation left behind's -- its fill, its
+     size and its parts -- and nothing on either path below is sure to replace
+     it: a resume carries no usage for a session that measured none, and a kept
+     turn brings its own only once it ends -- so all of it goes here, ahead of
+     both. Whatever the new conversation has arrives from its own report. The
+     reconnect reopens the same conversation and keeps its own. */
+  if (leaving !== rt) clearCtx()
   // The model is per conversation now, so the chip must follow the one being
   // opened -- otherwise it keeps the model of the session left behind. Keyed to
   // s.id rather than sessionCurrent(): the current session is not switched over
@@ -382,7 +398,7 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
     const u = (r.info && r.info.usage) || {}
     /* context_estimated rides along in this payload and is not passed on: the
        ring has nowhere to say an estimate, so the writer takes two numbers.
-       See state/ctxChip.ts. */
+       See state/ctxWindow.ts. */
     applyUsage(u)
     /* The turn this conversation is in the middle of, which nothing else on a
        page that has just loaded can know: its frames went to a socket this page

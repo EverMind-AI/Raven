@@ -20,7 +20,7 @@ import * as store from '../features/composer/store'
 import { resetTranslator, setTranslator } from '../i18n/t'
 import * as session from '../lib/session'
 import * as confirmStore from '../state/confirm'
-import * as ctx from '../state/ctxChip'
+import * as ctx from '../state/ctxWindow'
 import * as lang from '../state/lang'
 import * as mentions from '../state/mentions'
 import * as pageStore from '../state/page'
@@ -291,7 +291,7 @@ describe('the dock', () => {
   it('takes the chips, and leaves the send button to the module that owns it', () => {
     render()
     expect(el('go').onclick).toBe(null)
-    const OWN = ['plusBtn', 'atBtn', 'permChip', 'modelChip']
+    const OWN = ['plusBtn', 'atBtn', 'permChip', 'ctxChip', 'modelChip']
     for (const id of OWN) expect(typeof el(id).onclick, id).toBe('function')
     for (const node of dock().querySelectorAll('*')) {
       if (OWN.includes(node.id)) continue

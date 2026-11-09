@@ -440,6 +440,13 @@ class TurnUsage(_Strict):
     context_used: int | None = None
     context_max: int | None = None
     context_percent: int | None = None
+    context_parts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "The window divided: tokens by part, keyed system / tools / conversation / "
+            "memory / skills. Absent when no breakdown was measured for this turn."
+        ),
+    )
 
 
 class CliResult(_Strict):

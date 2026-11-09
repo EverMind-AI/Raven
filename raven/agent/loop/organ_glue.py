@@ -228,6 +228,7 @@ class OrganGlueMixin:
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
         self._last_injected_skill_sources = {}
+        self._last_turn_scoped_parts = {}
         self._last_degraded_segments: list[str] = []
         session_messages = self._context_messages_for_session(session)
         assembled = await self.harness.memory.assemble(
@@ -257,6 +258,12 @@ class OrganGlueMixin:
         self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         meta_degraded = assembled.metadata.get("degraded_segments") if assembled.metadata else None
         self._last_degraded_segments = list(meta_degraded) if meta_degraded else []
+        # The segments that are recomputed every turn, for the same reason the
+        # ids are stashed: a reader that measures the window needs to tell the
+        # memory that was recalled from the skills that were routed, and the
+        # model reads both as one block.
+        meta_scoped = assembled.metadata.get("turn_scoped_parts") if assembled.metadata else None
+        self._last_turn_scoped_parts = dict(meta_scoped) if meta_scoped else {}
         messages = assembled.messages
         self._inject_recovery_block(session_key, messages)
         return messages
