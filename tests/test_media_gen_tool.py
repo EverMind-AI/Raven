@@ -1865,6 +1865,55 @@ async def test_minimax_voice_design_uses_real_speech_config(monkeypatch, tmp_pat
     }
 
 
+@pytest.mark.parametrize(
+    ("provider", "prompt", "voice_id", "expected_error"),
+    [
+        ("minimax", "", "custom-voice", "voice_design requires prompt and voice_id"),
+        ("openrouter", "Warm", "custom-voice", "voice_design is available only for MiniMax speech providers"),
+    ],
+)
+async def test_voice_design_rejects_invalid_dispatch(provider, prompt, voice_id, expected_error) -> None:
+    tool = SpeechGenerateTool(
+        SimpleNamespace(provider=provider, api_base="https://api.example/v1", api_key="key", model="")
+    )
+
+    result = json.loads(
+        await tool.execute("This is a voice preview.", operation="voice_design", prompt=prompt, voice_id=voice_id)
+    )
+
+    assert result == {"error": expected_error}
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_error"),
+    [
+        ("http", "HTTP 429"),
+        ("invalid-json", "JSONDecodeError"),
+        ("status", "MiniMax status 1001"),
+    ],
+)
+async def test_voice_design_reports_provider_failures(monkeypatch, answer, expected_error) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if answer == "http":
+            return httpx.Response(429, text="rate limited")
+        if answer == "invalid-json":
+            return httpx.Response(200, text="not json")
+        return httpx.Response(200, json={"base_resp": {"status_code": 1001, "status_msg": "refused"}})
+
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(media_gen.httpx, "AsyncClient", lambda *_a, **_kw: real_client(transport=transport))
+    tool = SpeechGenerateTool(
+        SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="")
+    )
+
+    result = json.loads(
+        await tool.execute("This is a voice preview.", operation="voice_design", prompt="Warm", voice_id="custom-voice")
+    )
+
+    assert result["error"] == expected_error
+
+
 async def test_explicit_speech_operation_does_not_trigger_voice_design(monkeypatch) -> None:
     tool = SpeechGenerateTool(
         SimpleNamespace(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="")
