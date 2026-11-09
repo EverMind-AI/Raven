@@ -268,6 +268,34 @@ describe('double-Esc clearing a draft', () => {
   })
 })
 
+describe('double-Esc clearing a collapsed paste', () => {
+  it('pushes the expanded body to history, so Up recalls text and not a dead label', async () => {
+    const app = mount()
+
+    try {
+      app.composer().actions.setPasteSnips([{ label: '[[paste 1]]', text: 'the body' }])
+      app.composer().actions.updateInput('please read [[paste 1]]')
+      await delay(20)
+
+      cursorAtEnd('please read [[paste 1]]')
+      await app.press('\x1b') // arm
+      await app.press('\x1b') // clear
+
+      expect(app.composer().state.input).toBe('')
+      expect(app.composer().state.pasteSnips).toEqual([])
+
+      // The snippets are gone, so a label in history could never be expanded
+      // again; recalling it would send "[[paste 1]]" to the model verbatim.
+      cursorAtEnd('')
+      await app.press('\x1b[A')
+
+      expect(app.composer().state.input).toBe('please read the body')
+    } finally {
+      app.unmount()
+    }
+  })
+})
+
 describe('history content for a collapsed paste', () => {
   it('stores and recalls the pasted body, and the sent text is expanded exactly once', async () => {
     const app = mount()

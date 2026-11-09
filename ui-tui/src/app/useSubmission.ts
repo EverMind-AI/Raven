@@ -13,14 +13,14 @@ import type {
   ShellExecResponse
 } from '../gatewayTypes.js'
 import type { Msg } from '../types.js'
-import type { ComposerActions, ComposerRefs, ComposerState, PasteSnippet } from './interfaces.js'
+import type { ComposerActions, ComposerRefs, ComposerState } from './interfaces.js'
 
 import { TYPING_IDLE_MS } from '../config/timing.js'
 import { attachedImageNotice } from '../domain/messages.js'
 import { looksLikeSlashCommand } from '../domain/slash.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
-import { PASTE_SNIPPET_RE } from '../protocol/paste.js'
+import { expandSnips } from '../protocol/paste.js'
 import { appendDirectMessage, directKey, getDirectChat, sendingPausedReason } from './directChatStore.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -29,17 +29,6 @@ const DOUBLE_ENTER_MS = 450
 const SESSION_BUSY_RE = /session busy|waiting for model response/i
 
 const isSessionBusyError = (e: unknown) => e instanceof Error && SESSION_BUSY_RE.test(e.message)
-
-const expandSnips = (snips: PasteSnippet[]) => {
-  const byLabel = new Map<string, string[]>()
-
-  for (const { label, text } of snips) {
-    const hit = byLabel.get(label)
-    hit ? hit.push(text) : byLabel.set(label, [text])
-  }
-
-  return (value: string) => value.replace(PASTE_SNIPPET_RE, tok => byLabel.get(tok)?.shift() ?? tok)
-}
 
 const spliceMatches = (text: string, matches: RegExpMatchArray[], results: string[]) =>
   matches.reduceRight((acc, m, i) => acc.slice(0, m.index!) + results[i] + acc.slice(m.index! + m[0].length), text)
