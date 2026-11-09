@@ -224,27 +224,39 @@ export function startCloudEdit(): void {
 
 /* The local server's start button. The backend starts the same server when a
    generation boots; this is the section's way to do it after that process went
-   away, without asking the reader to restart Raven. */
+   away, without asking the reader to restart Raven. The server comes up
+   through the local backend the loop is pointed at, so one call both starts it
+   and moves chat onto it -- the fix for a switch whose apply failed, too. */
 export function startLocal(): void {
   if (get().localBusy) return
   set({ localBusy: true, localErr: '' })
   void (async () => {
     try {
       const r = await source().startLocal()
-      set({ localBusy: false, localErr: r.ok ? '' : (r.detail || t('gui.mem.local_failed')) })
+      const queued = r.state === 'queued'
+      set({
+        localBusy: false,
+        localErr: r.ok || queued ? '' : (r.detail || t('gui.mem.local_failed')),
+        /* Applied means the loop now reads the file's backend, so a notice
+           saying they disagree is over; queued is that notice's own case. */
+        backendNotice: queued ? (r.detail || t('gui.mem.reload_wait')) : r.state === 'applied' ? '' : get().backendNotice,
+      })
       if (r.ok) {
-        /* The server being up is not the loop following: a switch whose
-           applyRuntime failed left chat on the old backend, and this button is
-           where the reader fixes it. Point the loop at the file again before
-           the reads, as the cloud key panel does after a key. */
-        const applied = await source().applyRuntime()
-        set({ backendNotice: applied.ok ? '' : (applied.detail || t('gui.mem.reload_wait')) })
         await refreshStats()
         await load()
       }
     } catch (e) {
       set({ localBusy: false, localErr: failure(e) })
     }
+  })()
+}
+
+/* The panel for a local server the user manages: Raven does not start it, so
+   the one action is to look again once they have. */
+export function recheckLocal(): void {
+  void (async () => {
+    await refreshStats()
+    await load()
   })()
 }
 
@@ -285,7 +297,9 @@ export function saveCloudKey(key: string): void {
       settingsDialog.requestRefresh()
       set({
         cloudBusy: false, cloudRejected: false, cloudEditing: false,
-        backendNotice: applied.ok ? '' : (applied.detail || t('gui.mem.reload_wait')),
+        /* Queued is not done: a turn is running and the loop reaches the key's
+           backend when it ends, which is the sentence the reply carries. */
+        backendNotice: applied.ok && applied.state !== 'queued' ? '' : (applied.detail || t('gui.mem.reload_wait')),
       })
     } catch (e) {
       set({ cloudBusy: false, cloudErr: failure(e) })

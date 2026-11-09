@@ -40,6 +40,9 @@ export interface MemStats {
   /* Whether the local server answers. False with the local backend selected is
      the one state the section replaces with its start panel. */
   local_running?: boolean
+  /* Whether Raven may start the local server. False for a root the user
+     manages: the start panel says whose step it is instead of offering Start. */
+  local_owned?: boolean
 }
 
 export interface MemListRequest {
@@ -82,13 +85,28 @@ export interface SwitchStatus {
   turns: number
 }
 
-/* What memory.startLocal answers: whether the server now answers, and the
-   sentence to show when it does not. */
+/* How a live apply reached the running loop: now, when the running turn ends,
+   or not at all because the agent is shutting down. */
+export type ApplyState = 'applied' | 'queued' | 'closed'
+
+/* What memory.startLocal answers: whether the server now answers, the sentence
+   to show when it does not, and how the start reached the loop -- the server
+   comes up through the local backend the loop is pointed at. */
 export interface LocalStartReply {
   ok: boolean
   running: boolean
   base_url: string
   detail?: string | null
+  state?: ApplyState | null
+}
+
+/* What memory.applyRuntime answers. `queued` is not done yet: `detail` says
+   when it will be. */
+export interface ApplyRuntimeReply {
+  ok: boolean
+  backend?: string | null
+  detail?: string | null
+  state?: ApplyState | null
 }
 
 /* The DS.memory contract both the offline fixture library and the rpc
@@ -113,7 +131,8 @@ export interface MemorySource {
   /* Points the running agent loop at the configured backend. A live reference
      swap, not a runtime rebuild: the document's socket stays up and the
      prompt layout is untouched. */
-  applyRuntime(): Promise<{ ok: boolean; backend?: string | null; detail?: string | null }>
-  /* Starts the local EverOS server on demand, from the section's start panel. */
+  applyRuntime(): Promise<ApplyRuntimeReply>
+  /* Starts the local EverOS server from the section's start panel, by pointing
+     the loop at a freshly built local backend whose own start brings it up. */
   startLocal(): Promise<LocalStartReply>
 }

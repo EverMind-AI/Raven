@@ -6502,6 +6502,10 @@ export interface MemoryStatsResult {
    * Whether the local EverOS server answers where the local backend reads. The section draws its start panel when the local backend is selected and this is false.
    */
   local_running?: boolean;
+  /**
+   * Whether Raven may start and stop the local EverOS server: false for a root the user manages, which Raven only reads. The section offers no Start button for that root, only the step that is the user's own.
+   */
+  local_owned?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6547,9 +6551,13 @@ export interface MemoryStartLocalResult {
   running: boolean;
   base_url: string;
   /**
-   * Why the start failed, or the probe's verdict when it did not answer.
+   * Why the server is not answering: what the local backend said while it started, or the probe's verdict; when state is queued, when it starts.
    */
   detail?: string | null;
+  /**
+   * How the start reached the running loop, which starts the server through the local backend: applied (started now), queued (a turn is running; it starts when that turn ends), or closed (the agent is shutting down). Null when nothing was attempted.
+   */
+  state?: 'applied' | 'queued' | 'closed' | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -6582,13 +6590,17 @@ export interface MemoryApplyRuntimeParams {}
 export interface MemoryApplyRuntimeResult {
   ok: boolean;
   /**
-   * memory.backend the running loop now uses.
+   * memory.backend the running loop uses now, or once the running turn ends when state is queued.
    */
   backend?: string | null;
   /**
-   * Why the loop could not be pointed at that backend.
+   * Why the loop could not be pointed at that backend; when state is queued, when it will be.
    */
   detail?: string | null;
+  /**
+   * applied: the loop serves the backend now. queued: a turn is running and the loop reaches it when that turn ends. closed: the agent is shutting down and the next start applies it.
+   */
+  state?: 'applied' | 'queued' | 'closed' | null;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

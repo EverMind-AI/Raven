@@ -572,28 +572,115 @@ describe('memory island', () => {
       expect(screen.queryByText('gui.mem.local_t')).toBeNull()
     })
 
-    /* Start fixes the server; it must also fix the loop, or a switch whose
-       applyRuntime failed leaves the section reading the new backend while
-       chat still answers from the old one. */
-    it('points the loop at the configured backend after the local server starts', async () => {
+    /* Start is the loop's switch to a freshly started local backend: the
+       server comes up through that backend's own start, so it is one call.
+       A second applyRuntime would build and start the backend again and retire
+       the one that just started the server. A successful Start also clears the
+       notice that said the file and the loop disagreed. */
+    it('starts through one call that also points the loop, and clears the disagreement', async () => {
       let running = false
+      let selected = 'everos-cloud'
       const applied = vi.fn(async () => ({ ok: true }))
       install(
         {
-          stats: async () => ({ ...both, backend: 'everos', local_running: running }),
+          stats: async () => ({ ...both, backend: selected, local_running: running }),
+          setBackend: async (name: string) => {
+            selected = name
+            return { applied: true, warning: 'applies at the next start' }
+          },
           startLocal: async () => {
             running = true
-            return { ok: true, running: true, base_url: 'http://localhost:18791' }
+            return { ok: true, running: true, base_url: 'http://localhost:18791', state: 'applied' }
           },
           applyRuntime: applied,
+        },
+        { ...both, backend: 'everos-cloud', local_running: false },
+      )
+      await mount()
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.src_local'))
+      })
+      expect(await screen.findByText('applies at the next start')).toBeTruthy()
+      running = false
+      await act(async () => {
+        fireEvent.click(await screen.findByText('gui.mem.local_start'))
+      })
+      await waitFor(() => expect(screen.queryByText('applies at the next start')).toBeNull())
+      expect(applied).not.toHaveBeenCalled()
+    })
+
+    /* A turn running when Start is pressed holds the switch until it ends, and
+       the server with it: that is a wait, not a failure, and not a success. */
+    it('says when a Start waits for the running turn', async () => {
+      const sentence = 'A turn is running; the local EverOS starts when that turn finishes.'
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos', local_running: false }),
+          startLocal: async () => ({ ok: false, running: false, base_url: '', detail: sentence, state: 'queued' }),
         },
         { ...both, backend: 'everos', local_running: false },
       )
       await mount()
       await act(async () => {
-        fireEvent.click(screen.getByText('gui.mem.local_start'))
+        fireEvent.click(await screen.findByText('gui.mem.local_start'))
       })
-      await waitFor(() => expect(applied).toHaveBeenCalledTimes(1))
+      const said = await screen.findByText(sentence)
+      expect(said.className).not.toContain('memerr')
+      expect(screen.queryByText('gui.mem.local_failed')).toBeNull()
+    })
+
+    /* A root the user manages is theirs to start: the backend never spawns it,
+       and the plugin refuses the address Raven would record. A Start button
+       there could only fail; the panel says whose step it is and offers the
+       check that finds the server once it answers. */
+    it('offers no Start for a local server the user manages', async () => {
+      let running = false
+      const starts = vi.fn(async () => ({ ok: false, running: false, base_url: '' }))
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos', local_running: running, local_owned: false }),
+          list: async () => ({ items: [item()], total: 1 }),
+          startLocal: starts,
+        },
+        { ...both, backend: 'everos', local_running: false, local_owned: false },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.local_foreign_sub')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.local_start')).toBeNull()
+      running = true
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.local_recheck'))
+      })
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(starts).not.toHaveBeenCalled()
+    })
+
+    /* A key saved while a turn runs reaches the loop when the turn ends. Read
+       as done, the notice cleared and the section drew the cloud store as
+       serving chat while the turn still used the old backend. */
+    it('keeps the queued sentence when the key is applied behind a running turn', async () => {
+      const sentence = 'A turn is running; the memory backend switches when that turn finishes.'
+      let keySet = false
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos-cloud', cloud_key_set: keySet }),
+          list: async () => ({ items: [item()], total: 1 }),
+          setCloudKey: async () => {
+            keySet = true
+            return { applied: true }
+          },
+          applyRuntime: async () => ({ ok: true, backend: 'everos-cloud', detail: sentence, state: 'queued' }),
+        },
+        { ...both, backend: 'everos-cloud', cloud_key_set: false },
+      )
+      await mount()
+      await act(async () => {
+        fireEvent.change(screen.getByLabelText('gui.mem.cloud_ph'), { target: { value: 'ecm-123456' } })
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.cloud_save'))
+      })
+      expect(await screen.findByText(sentence)).toBeTruthy()
     })
 
     /* The note is the one explanation of a selected backend whose plugin is

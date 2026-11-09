@@ -21,6 +21,8 @@ def fake_cfg(monkeypatch):
     # The section's start button is drawn off a real probe; a handler test must
     # not inherit the machine's local everos server.
     monkeypatch.setattr(memory, "_local_server_running", lambda: False)
+    # Nor the machine's own answer to whose root this is.
+    monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
     # A full server, so no test pays a real capability probe: ``http://x`` is
     # a hostname, and resolving it cost the one search test five seconds.
     monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
@@ -61,6 +63,7 @@ async def test_stats_reads_all_four_kinds(monkeypatch):
         "available_backends": ["everos", "everos-cloud"],
         "cloud_key_set": False,
         "local_running": False,
+        "local_owned": True,
     }
     kinds = [b["memory_type"] for _, b in calls]
     assert kinds == ["episode", "profile", "agent_case", "agent_skill"]
@@ -77,6 +80,25 @@ async def test_stats_degrades_when_everos_down(monkeypatch):
     out = await memory.memory_stats({})
     assert out["ok"] is False
     assert out["episodes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stats_says_when_the_local_server_is_not_ravens_to_start(monkeypatch):
+    """A root the user manages is read, never started: the backend says so and
+    never spawns it. The section has to know as well, or it offers a Start
+    button whose only answer is the write guard's refusal."""
+    monkeypatch.setattr(memory, "_configured_backend", lambda: "everos")
+    monkeypatch.setattr(memory, "_available_backends", lambda: ["everos"])
+    monkeypatch.setattr(memory, "_cloud_key_set", lambda: False)
+
+    for owned in (False, True):
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda owned=owned: owned)
+        post, _calls = _post_returning([{"data": {"total_count": 0}} for _ in range(4)])
+        monkeypatch.setattr(memory, "_post", post)
+
+        out = await memory.memory_stats({})
+
+        assert out["local_owned"] is owned
 
 
 def test_available_backends_follow_what_is_importable(monkeypatch):
@@ -474,44 +496,144 @@ def test_installed_cloud_distribution_means_the_page_is_available(monkeypatch):
 # ── memory.startLocal ────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_start_local_answers_its_probe(monkeypatch):
-    """The section's button reports success only after the server answers."""
-    from raven_everos import server as everos_server
+class _StartingBackend:
+    """A local backend whose ``start`` is where the server comes up."""
 
-    calls: list[str] = []
+    def __init__(self, notify, *, says: str | None = None) -> None:
+        self.notify = notify
+        self.says = says
+        self.starts = 0
 
-    async def _ensure(base_url, *, timeout=10.0):
-        calls.append(base_url)
-        return None
+    async def start(self) -> None:
+        self.starts += 1
+        if self.says is not None:
+            self.notify(self.says)
 
-    monkeypatch.setattr(everos_server, "ensure_everos_server", _ensure)
-    monkeypatch.setattr(everos_server, "probe_health", lambda _base: everos_server.ProbeVerdict.OK)
+
+def _local_selected(monkeypatch, backend: str | None = "everos") -> None:
     monkeypatch.setattr(
         "raven.config.raven.load_raven_config",
-        lambda: SimpleNamespace(plugins=SimpleNamespace(config={})),
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend=backend, user_id="u1", agent_id="a1", memory_top_k=5),
+            plugins=SimpleNamespace(config={}),
+        ),
     )
 
-    out = await memory.memory_start_local({})
 
-    assert out["ok"] is True and out["running"] is True
-    assert out["base_url"].startswith("http")
-    assert calls == [out["base_url"]]
+def _swapping_loop(state: str = "applied"):
+    """A loop whose switch starts the backend it installs, as the rebind does."""
+
+    class _Loop:
+        context = SimpleNamespace(workspace="WS")
+        installed: list = []
+        heard: list[str] = []
+        memory_assembly = SimpleNamespace(registry="REGISTRY", notify=heard.append)
+
+        async def apply_memory_backend(self, backend, **_kwargs):
+            if state == "applied":
+                await backend.start()
+                self.installed.append(backend)
+            return state
+
+    return _Loop
 
 
 @pytest.mark.asyncio
-async def test_start_local_reports_a_refusal(monkeypatch):
+async def test_start_local_starts_the_server_through_the_backends_own_start(monkeypatch):
+    """Start brings the server up the way boot does: the configured backend is
+    rebuilt and its own ``start`` spawns the server, so a backend owns the
+    child. Spawned here directly, no backend recorded it, and on Windows -- the
+    one platform where the last backend to leave stops the server -- it
+    outlived Raven."""
     from raven_everos import server as everos_server
 
-    async def _ensure(*_a, **_k):
-        raise RuntimeError("the LLM role is not configured")
+    async def _spawn_unowned(*_a, **_k):
+        raise AssertionError("the section must not spawn a server no backend owns")
 
-    monkeypatch.setattr(everos_server, "ensure_everos_server", _ensure)
+    built: list[_StartingBackend] = []
+    monkeypatch.setattr(everos_server, "ensure_everos_server", _spawn_unowned)
+    monkeypatch.setattr(everos_server, "probe_health", lambda _base: everos_server.ProbeVerdict.OK)
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda _w, _c, **kwargs: built.append(_StartingBackend(kwargs["notify"])) or built[-1],
+    )
+    _local_selected(monkeypatch)
+    loop = _swapping_loop()
 
-    out = await memory.memory_start_local({})
+    out = await memory.memory_start_local({}, agent_loop_factory=loop)
+
+    assert out["ok"] is True and out["running"] is True, out
+    assert out["base_url"].startswith("http")
+    assert out["state"] == "applied"
+    assert [b.starts for b in built] == [1]
+    assert loop.installed == built
+
+
+@pytest.mark.asyncio
+async def test_start_local_reports_what_the_backend_said_when_the_server_stays_down(monkeypatch):
+    """The backend does not raise when its server will not come up: it says why
+    through ``notify`` and keeps probing. That sentence is the section's detail,
+    and the host still hears it as it would from any other start."""
+    from raven_everos import server as everos_server
+
+    said = "Memory service unavailable: EverOS server exited with code 3 while starting."
+    monkeypatch.setattr(everos_server, "probe_health", lambda _base: everos_server.ProbeVerdict.REFUSED)
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda _w, _c, **kwargs: _StartingBackend(kwargs["notify"], says=said),
+    )
+    _local_selected(monkeypatch)
+    loop = _swapping_loop()
+
+    out = await memory.memory_start_local({}, agent_loop_factory=loop)
 
     assert out["ok"] is False and out["running"] is False
-    assert "LLM role" in out["detail"]
+    assert out["detail"] == said
+    assert loop.heard == [said]
+
+
+@pytest.mark.asyncio
+async def test_start_local_behind_a_running_turn_says_when_it_starts(monkeypatch):
+    from raven_everos import server as everos_server
+
+    monkeypatch.setattr(
+        everos_server, "probe_health", lambda _base: (_ for _ in ()).throw(AssertionError("nothing to probe yet"))
+    )
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda _w, _c, **kwargs: _StartingBackend(kwargs["notify"]),
+    )
+    _local_selected(monkeypatch)
+
+    out = await memory.memory_start_local({}, agent_loop_factory=_swapping_loop("queued"))
+
+    assert out["ok"] is False and out["running"] is False
+    assert out["state"] == "queued"
+    assert "turn" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_start_local_refuses_when_the_local_backend_is_not_selected(monkeypatch):
+    def _no_build(*_a, **_k):  # pragma: no cover - must not run
+        raise AssertionError("nothing to build")
+
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", _no_build)
+    _local_selected(monkeypatch, backend="everos-cloud")
+
+    out = await memory.memory_start_local({}, agent_loop_factory=_swapping_loop())
+
+    assert out["ok"] is False and out["running"] is False
+    assert "not the selected" in out["detail"]
+
+
+@pytest.mark.asyncio
+async def test_start_local_without_a_loop_is_reported(monkeypatch):
+    _local_selected(monkeypatch)
+
+    out = await memory.memory_start_local({}, agent_loop_factory=None)
+
+    assert out["ok"] is False and out["running"] is False
+    assert "no running agent loop" in out["detail"]
 
 
 # ── memory.applyRuntime ──────────────────────────────────────────────────
@@ -554,7 +676,7 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
 
     out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
 
-    assert out == {"ok": True, "backend": "everos", "detail": None}
+    assert out == {"ok": True, "backend": "everos", "detail": None, "state": "applied"}
     # The loop's own workspace: the gateway can serve a project other than the
     # one its config file names.
     assert built == ["LOOP-WS"]
@@ -565,6 +687,33 @@ async def test_apply_runtime_points_the_loop_at_the_configured_backend(monkeypat
         "agent_id": "a1",
         "memory_top_k": 5,
     }
+
+
+@pytest.mark.asyncio
+async def test_apply_runtime_says_a_switch_queued_behind_a_turn_is_not_done_yet(monkeypatch):
+    """A switch asked for while a turn runs lands when that turn ends. Answered
+    as a bare success, the section's Start and key panels cleared their notice
+    and drew the new backend as serving while chat still used the old one."""
+
+    class _Loop:
+        context = SimpleNamespace(workspace="WS")
+
+        async def apply_memory_backend(self, *_args, **_kwargs):
+            return "queued"
+
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos-cloud", user_id="u", agent_id="a", memory_top_k=5),
+        ),
+    )
+    monkeypatch.setattr("raven.core.plugin_stack.maybe_build_memory_backend", lambda _w, _c, **_kwargs: "BACKEND")
+
+    out = await memory.memory_apply_runtime({}, agent_loop_factory=_Loop)
+
+    assert out["ok"] is True
+    assert out["state"] == "queued"
+    assert "turn" in out["detail"]
 
 
 @pytest.mark.asyncio

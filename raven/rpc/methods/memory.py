@@ -22,6 +22,7 @@ stamps on stored turns, so the page sees exactly what recall sees.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -46,6 +47,10 @@ _CLOUD_BACKEND = "everos-cloud"
 # being one of its keys fails here at import rather than reporting a plugin
 # nobody ships.
 _CLOUD_DISTRIBUTION = MEMORY_BACKEND_DISTRIBUTIONS[_CLOUD_BACKEND]
+# The answer to a live apply asked for while a turn runs: the loop reaches the
+# backend when that turn ends, so neither "done" nor "failed" is true yet.
+_APPLY_QUEUED = "A turn is running; the memory backend switches when that turn finishes."
+_LOCAL_START_QUEUED = "A turn is running; the local EverOS starts when that turn finishes."
 
 _USER_KINDS = ("episode", "profile")
 _AGENT_KINDS = ("agent_case", "agent_skill")
@@ -123,6 +128,22 @@ def _local_server_running() -> bool:
         return probe_health(base_url) is ProbeVerdict.OK
     except Exception:  # noqa: BLE001 - a missing plugin or unreadable config is "not running here"
         return False
+
+
+def _local_owned() -> bool:
+    """Whether Raven may start the local EverOS server, or only reads it.
+
+    A root the user manages is theirs to start: the backend never spawns it and
+    the plugin's write guard refuses the address Raven would record. The
+    section draws that state instead of a Start button. An install that cannot
+    answer is treated as Raven's, the state the section drew before it asked.
+    """
+    try:
+        from raven_everos.config import everos_owned
+
+        return bool(everos_owned())
+    except Exception:  # noqa: BLE001 - a missing plugin or unreadable config keeps the old panel
+        return True
 
 
 def _cloud_key_set() -> bool:
@@ -324,8 +345,10 @@ async def memory_stats(params: dict) -> dict:
     available = _available_backends()
     cloud_key_set = _cloud_key_set()
     local_running = False
+    local_owned = True
     if backend == _EVEROS_BACKEND:
         local_running = await asyncio.to_thread(_local_server_running)
+        local_owned = await asyncio.to_thread(_local_owned)
     if note is None and backend == _CLOUD_BACKEND and not cloud_key_set:
         # A missing key is not an unreachable service: answer here instead of
         # sending four requests that can only come back 401, and leave the
@@ -351,6 +374,7 @@ async def memory_stats(params: dict) -> dict:
             "available_backends": available,
             "cloud_key_set": cloud_key_set,
             "local_running": local_running,
+            "local_owned": local_owned,
         }
     base_url, user_id, agent_id = _cfg()
     counts: dict[str, int] = {}
@@ -380,6 +404,7 @@ async def memory_stats(params: dict) -> dict:
         "available_backends": available,
         "cloud_key_set": cloud_key_set,
         "local_running": local_running,
+        "local_owned": local_owned,
     }
 
 
@@ -440,21 +465,23 @@ async def memory_list(params: dict) -> dict:
         raise InternalError(_everos_error(e)) from e
 
 
-async def memory_start_local(params: dict) -> dict:
-    """``memory.startLocal`` — start the local EverOS server from the section.
+async def memory_start_local(params: dict, *, agent_loop_factory: Any = None) -> dict:
+    """``memory.startLocal`` -- bring the local EverOS server back from the section.
 
-    The backend starts the same server when it boots; this is the path for a
-    section reading a local store whose server is not up (stopped, killed, or
-    never started), so the reader can fix it without restarting Raven.
+    The server comes up the way boot brings it up: the configured local
+    backend is rebuilt and the running loop is pointed at it, and that
+    backend's own ``start`` spawns the server and owns the child. The backend
+    that owns a child is what stops it once the last of ours lets go (on
+    Windows), so a server spawned here directly -- with no backend recording
+    it -- outlived Raven.
+
+    ``start`` does not raise when the server stays down: the backend says why
+    through ``notify`` and keeps probing. What it said during this start is the
+    detail, and the host still hears it as it would from any other start.
     """
     del params
     try:
-        from raven_everos.server import (
-            DEFAULT_EVEROS_BASE_URL,
-            ProbeVerdict,
-            ensure_everos_server,
-            probe_health,
-        )
+        from raven_everos.server import DEFAULT_EVEROS_BASE_URL, ProbeVerdict, probe_health
     except Exception as e:  # noqa: BLE001 - a missing/broken plugin is the answer, not a traceback
         return {
             "ok": False,
@@ -469,13 +496,35 @@ async def memory_start_local(params: dict) -> dict:
         cfg = load_raven_config()
         plug = (cfg.plugins.config or {}).get("everos-memory", {})
         base_url = str(plug.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
+        selected = cfg.memory.backend
     except Exception as e:  # noqa: BLE001 - the section shows the detail verbatim
         return {"ok": False, "running": False, "base_url": "", "detail": f"config unreadable: {e}"}
+    if selected != _EVEROS_BACKEND:
+        return {
+            "ok": False,
+            "running": False,
+            "base_url": base_url,
+            "detail": f"the local EverOS backend is not the selected one (memory.backend is {selected!r})",
+        }
+
+    heard: list[str] = []
+    listening = True
+
+    def _hear(message: str) -> None:
+        if listening:
+            heard.append(message)
 
     try:
-        await ensure_everos_server(base_url, timeout=15.0)
-    except Exception as e:  # noqa: BLE001 - the section shows the detail verbatim
-        return {"ok": False, "running": False, "base_url": base_url, "detail": str(e)}
+        applied = await apply_configured_backend(agent_loop_factory=agent_loop_factory, also_notify=_hear)
+    finally:
+        listening = False
+    state = applied["state"]
+    if not applied["ok"]:
+        return {"ok": False, "running": False, "base_url": base_url, "detail": applied["detail"], "state": state}
+    if state == "queued":
+        from raven.i18n import t
+
+        return {"ok": False, "running": False, "base_url": base_url, "detail": t(_LOCAL_START_QUEUED), "state": state}
 
     verdict = await asyncio.to_thread(probe_health, base_url)
     running = verdict is ProbeVerdict.OK
@@ -483,7 +532,8 @@ async def memory_start_local(params: dict) -> dict:
         "ok": running,
         "running": running,
         "base_url": base_url,
-        "detail": None if running else verdict.value,
+        "detail": None if running else (" ".join(heard) or verdict.value),
+        "state": state,
     }
 
 
@@ -517,10 +567,21 @@ async def memory_apply_runtime(params: dict, *, agent_loop_factory: Any = None) 
     """
     del params
     applied = await apply_configured_backend(agent_loop_factory=agent_loop_factory)
-    return {"ok": applied["ok"], "backend": applied["backend"], "detail": applied["detail"]}
+    detail = applied["detail"]
+    if applied["ok"] and applied["state"] == "queued":
+        # Not done yet, and the caller draws its notice from this: a turn is
+        # running and the loop reaches the backend when it ends.
+        from raven.i18n import t
+
+        detail = t(_APPLY_QUEUED)
+    return {"ok": applied["ok"], "backend": applied["backend"], "detail": detail, "state": applied["state"]}
 
 
-async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
+async def apply_configured_backend(
+    *,
+    agent_loop_factory: Any = None,
+    also_notify: Callable[[str], None] | None = None,
+) -> dict:
     """Point the running loop at the backend the config file names.
 
     ``{"ok": bool, "backend": str | None, "detail": str | None,
@@ -531,6 +592,10 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
     way a switch asked for mid-turn can happen at all. ``"closed"`` means the
     generation is already retiring; the durable write stays and the next
     start honors it.
+
+    ``also_notify`` hears what the new backend says through ``notify`` as well
+    as the host does -- a backend that cannot come up says why there rather
+    than by raising.
     """
     from raven.config.loader import load_config
     from raven.config.raven import load_raven_config
@@ -567,11 +632,14 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
         # fresh registry from whatever is on disk now. A harness loop has
         # neither, and falls back to the old build.
         assembly = getattr(loop, "memory_assembly", None)
+        notify = getattr(assembly, "notify", None)
+        if also_notify is not None:
+            notify = _tee_notify(notify, also_notify)
         backend = maybe_build_memory_backend(
             workspace or load_config().workspace_path,
             cfg,
             registry=getattr(assembly, "registry", None),
-            notify=getattr(assembly, "notify", None),
+            notify=notify,
         )
         if cfg.memory.backend is not None and backend is None:
             return {
@@ -602,6 +670,19 @@ async def apply_configured_backend(*, agent_loop_factory: Any = None) -> dict:
     return {"ok": True, "backend": cfg.memory.backend, "detail": None, "state": state}
 
 
+def _tee_notify(host: Callable[[str], None] | None, also: Callable[[str], None]) -> Callable[[str], None]:
+    """A backend notify that reaches the host as before, and ``also`` too."""
+
+    def _notify(message: str) -> None:
+        also(message)
+        if host is not None:
+            host(message)
+        else:
+            logger.warning("memory backend: {}", message)
+
+    return _notify
+
+
 def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any = None) -> None:
     async def _apply(params: dict) -> dict:
         return await memory_apply_runtime(params, agent_loop_factory=agent_loop_factory)
@@ -609,9 +690,12 @@ def register_memory_methods(dispatcher: "Dispatcher", *, agent_loop_factory: Any
     async def _status(params: dict) -> dict:
         return await memory_switch_status(params, agent_loop_factory=agent_loop_factory)
 
+    async def _start_local(params: dict) -> dict:
+        return await memory_start_local(params, agent_loop_factory=agent_loop_factory)
+
     dispatcher.register("memory.stats", memory_stats)
     dispatcher.register("memory.list", memory_list)
-    dispatcher.register("memory.startLocal", memory_start_local)
+    dispatcher.register("memory.startLocal", _start_local)
     dispatcher.register("memory.switchStatus", _status)
     dispatcher.register("memory.applyRuntime", _apply)
 

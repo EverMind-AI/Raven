@@ -2917,6 +2917,14 @@
       "en": "Could not start EverOS. See the detail below.",
       "zh": "无法启动 EverOS，请看下面的详情。"
     },
+    "gui.mem.local_foreign_sub": {
+      "en": "This EverOS is one you manage, so Raven does not start it. Start it yourself; Raven reads it as soon as it answers.",
+      "zh": "这个 EverOS 由你自己管理，Raven 不会启动它。请自行启动，它一响应 Raven 就会读取。"
+    },
+    "gui.mem.local_recheck": {
+      "en": "Check again",
+      "zh": "重新检查"
+    },
     "gui.mem.local_start": {
       "en": "Start EverOS",
       "zh": "启动 EverOS"

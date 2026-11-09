@@ -5245,6 +5245,14 @@ class MemoryStatsResult(_Strict):
             "draws its start panel when the local backend is selected and this is false."
         ),
     )
+    local_owned: bool = Field(
+        default=True,
+        description=(
+            "Whether Raven may start and stop the local EverOS server: false for a root the user "
+            "manages, which Raven only reads. The section offers no Start button for that root, "
+            "only the step that is the user's own."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -5298,7 +5306,18 @@ class MemoryStartLocalResult(_Strict):
     base_url: str
     detail: str | None = Field(
         None,
-        description="Why the start failed, or the probe's verdict when it did not answer.",
+        description=(
+            "Why the server is not answering: what the local backend said while it started, or the "
+            "probe's verdict; when state is queued, when it starts."
+        ),
+    )
+    state: Literal["applied", "queued", "closed"] | None = Field(
+        None,
+        description=(
+            "How the start reached the running loop, which starts the server through the local backend: "
+            "applied (started now), queued (a turn is running; it starts when that turn ends), or closed "
+            "(the agent is shutting down). Null when nothing was attempted."
+        ),
     )
 
 
@@ -5323,8 +5342,21 @@ class MemoryApplyRuntimeParams(_Strict):
 
 class MemoryApplyRuntimeResult(_Strict):
     ok: bool
-    backend: str | None = Field(None, description="memory.backend the running loop now uses.")
-    detail: str | None = Field(None, description="Why the loop could not be pointed at that backend.")
+    backend: str | None = Field(
+        None,
+        description="memory.backend the running loop uses now, or once the running turn ends when state is queued.",
+    )
+    detail: str | None = Field(
+        None,
+        description="Why the loop could not be pointed at that backend; when state is queued, when it will be.",
+    )
+    state: Literal["applied", "queued", "closed"] | None = Field(
+        None,
+        description=(
+            "applied: the loop serves the backend now. queued: a turn is running and the loop reaches it "
+            "when that turn ends. closed: the agent is shutting down and the next start applies it."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
