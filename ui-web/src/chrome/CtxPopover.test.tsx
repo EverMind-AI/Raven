@@ -9,7 +9,7 @@
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { resetTranslator, setCode } from '../i18n/t'
+import { resetTranslator, setCode, t } from '../i18n/t'
 import * as ctx from '../state/ctxWindow'
 import { CtxChip } from './CtxChip'
 import { CtxPopover } from './CtxPopover'
@@ -32,6 +32,7 @@ afterEach(() => {
   cleanup()
   ctx._resetForTests()
   resetTranslator()
+  setCode('en')
   document.body.innerHTML = ''
 })
 
@@ -120,12 +121,16 @@ describe('the context panel', () => {
     expect(cells.filter((c) => c.getAttribute('data-part') === 'skills')).toHaveLength(8)
   })
 
+  /* The catalogue's zh words, read rather than copied: the source stays English,
+     and the en strings taken first make the case show the zh column was read. */
   it('answers in the language the page is in', () => {
+    const en = { title: t('gui.ctx.title'), left: t('gui.ctx.left', { n: '100K' }) }
     setCode('zh')
     mount()
     act(() => { ctx.set(100_000, 200_000) })
-    expect(text('.chrome-ctx-title')).toBe('上下文窗口')
-    expect(text('.chrome-ctx-left')).toBe('还剩 100K')
-    setCode('en')
+    expect(text('.chrome-ctx-title')).toBe(t('gui.ctx.title'))
+    expect(text('.chrome-ctx-title')).not.toBe(en.title)
+    expect(text('.chrome-ctx-left')).toBe(t('gui.ctx.left', { n: '100K' }))
+    expect(text('.chrome-ctx-left')).not.toBe(en.left)
   })
 })
