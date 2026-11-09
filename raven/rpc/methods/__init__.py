@@ -198,7 +198,7 @@ def register_aligned_methods_except_system(
     # Not gated on ``emitter`` unlike the rest of turn.*: the legacy Ctrl+C path
     # needs no subscription channel, and gating it would leave exactly the
     # configurations that still use it on -32601.
-    register_session_interrupt_method(dispatcher)
+    register_session_interrupt_method(dispatcher, scheduler=scheduler, linked_turn_id=linked_turn_id)
     # Unlike generic stubs, approval.respond is a capability-bearing endpoint.
     # Register it only when this gateway owns an interactive approval broker.
     if approval_broker is not None:

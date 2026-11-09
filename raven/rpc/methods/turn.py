@@ -948,7 +948,12 @@ async def turn_cancel(
     return {"cancelled": True}
 
 
-async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
+async def session_interrupt(
+    params: dict[str, Any],
+    *,
+    scheduler: Scheduler | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
+) -> dict[str, Any]:
     """``session.interrupt`` -- Ctrl+C on the pre-typed-chat path.
 
     ui-tui's ``turnController.interruptTurn`` fires this when no
@@ -958,10 +963,23 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
 
     ``ok`` says a live turn was cancelled. False when there was none, which
     happens routinely -- Ctrl+C on an idle prompt -- and is not an error.
+
+    A linked Telegram turn runs on the same session's lane without passing
+    through ``turn.send``, so it is resolved through ``linked_turn_id`` first,
+    the way ``turn.cancel`` already does; the page's own registries are the
+    fallback.
     """
     session_key = str(params.get("session_id") or "").strip()
-    reach = _cancellable(session_key) if session_key else None
-    handle = reach[0] if reach is not None else None
+    handle = None
+    linked_id = linked_turn_id(session_key) if linked_turn_id is not None and session_key else None
+    if linked_id is not None and scheduler is not None:
+        probe = getattr(scheduler, "running_turn", None)
+        running = probe(session_key) if callable(probe) else None
+        if running is not None and running[0] == linked_id:
+            handle = running[1]
+    if handle is None:
+        reach = _cancellable(session_key) if session_key else None
+        handle = reach[0] if reach is not None else None
     if handle is None:
         return {"ok": False}
     await handle.cancel()
@@ -974,15 +992,28 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def register_session_interrupt_method(dispatcher: "Dispatcher") -> None:
+def register_session_interrupt_method(
+    dispatcher: "Dispatcher",
+    *,
+    scheduler: Scheduler | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
+) -> None:
     """Register ``session.interrupt``.
 
     Kept out of :func:`register_turn_methods` because that group is skipped
     when the caller owns no emitter, and this handler needs none -- gating it
     the same way would put the legacy Ctrl+C path back on -32601 in exactly the
     configurations that still use it.
+
+    ``scheduler`` and ``linked_turn_id`` are optional so the legacy path keeps
+    working without a spine bundle; they let the handler reach a linked turn
+    the page's own registries never bound.
     """
-    dispatcher.register("session.interrupt", session_interrupt)
+
+    async def _interrupt(params: dict[str, Any]) -> dict[str, Any]:
+        return await session_interrupt(params, scheduler=scheduler, linked_turn_id=linked_turn_id)
+
+    dispatcher.register("session.interrupt", _interrupt)
 
 
 def register_turn_methods(

@@ -144,6 +144,17 @@ async def test_page_turn_still_cancels_without_an_id(linked_page):
     assert_cleared(r)
 
 
+async def test_session_interrupt_cancels_a_linked_turn(linked_page):
+    """TUI Ctrl+C on the same session key must reach the turn a DM started."""
+    r = linked_page
+    await inbound(r, "linked work")
+    _host, handle = await running(r)
+    assert await rpc(r, "session.interrupt", session_id=KEY) == {"ok": True}
+    assert await asyncio.wait_for(handle.result(), 2) is None
+    assert r.loop.running == 0
+    assert_cleared(r)
+
+
 @pytest.mark.parametrize("pending_page", [False, True])
 async def test_page_stop_reaches_linked_turn_and_preserves_pending_inject(linked_page, pending_page):
     r = linked_page
