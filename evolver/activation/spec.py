@@ -87,6 +87,24 @@ _KNOWN_KINDS = _CORPUS_KINDS | {"skill_routing", "presence"}
 _DEFAULT_MAX_CHARS = 80
 
 
+def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> int:
+    """Parse ``d[key]`` as an int and require ``>= minimum``.
+
+    ``threshold=0`` (or negative) makes every run-based predicate match: the
+    first record satisfies ``run >= threshold``, and ``min_iterations`` counts
+    an empty trajectory as reachable. That would turn the zero-hit preflight
+    into a guaranteed PASS, so the boundary is enforced here rather than left
+    to the evaluator.
+    """
+    try:
+        value = int(d[key])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{kind} {key} must be an int: {d[key]!r}") from exc
+    if value < minimum:
+        raise ValueError(f"{kind} {key} must be >= {minimum}, got {value}")
+    return value
+
+
 def _normalize_record(r: dict) -> dict:
     """Coerce a logged session record into the predicate record shape
     (content as str, tool_calls as list) so the shared predicate functions
@@ -113,46 +131,12 @@ class ActivationSpec:
                 re.compile(d["pattern"])
             except re.error as exc:
                 raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
-        if kind == "consecutive_repeat" and "threshold" not in d:
-            raise ValueError("consecutive_repeat requires 'threshold'")
-        if kind == "consecutive_repeat":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"consecutive_repeat threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "short_content_run" and "threshold" not in d:
-            raise ValueError("short_content_run requires 'threshold'")
-        if kind == "short_content_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"short_content_run threshold must be an int: {d['threshold']!r}") from exc
-            if "max_chars" in d:
-                try:
-                    int(d["max_chars"])
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"short_content_run max_chars must be an int: {d['max_chars']!r}") from exc
-        if kind == "empty_run" and "threshold" not in d:
-            raise ValueError("empty_run requires 'threshold'")
-        if kind == "empty_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"empty_run threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "repeated_failure_run" and "threshold" not in d:
-            raise ValueError("repeated_failure_run requires 'threshold'")
-        if kind == "repeated_failure_run":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"repeated_failure_run threshold must be an int: {d['threshold']!r}") from exc
-        if kind == "min_iterations" and "threshold" not in d:
-            raise ValueError("min_iterations requires 'threshold'")
-        if kind == "min_iterations":
-            try:
-                int(d["threshold"])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(f"min_iterations threshold must be an int: {d['threshold']!r}") from exc
+        if kind in ("consecutive_repeat", "short_content_run", "empty_run", "repeated_failure_run", "min_iterations"):
+            if "threshold" not in d:
+                raise ValueError(f"{kind} requires 'threshold'")
+            _require_positive_int(d, "threshold", kind)
+        if kind == "short_content_run" and "max_chars" in d:
+            _require_positive_int(d, "max_chars", kind, minimum=0)
         if kind == "skill_routing" and "skill_name" not in d:
             raise ValueError("skill_routing requires 'skill_name'")
         if kind == "presence" and "needle" not in d:
