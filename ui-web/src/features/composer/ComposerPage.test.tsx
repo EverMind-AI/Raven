@@ -18,6 +18,7 @@ import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn';
 
+import type { TaskRow } from '../tasks/types'
 import type { ComposerSource, SlashCmd } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -51,7 +52,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部', 'gui.pill.prev': '上一条用户消息',
     'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
     'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
-    'gui.live.waiting_subagents': '等待子代理返回',
+    'gui.live.waiting_subagents': '等待子智能体返回',
   },
   en: {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
@@ -832,20 +833,35 @@ describe('the waiting row after the host turn ends', () => {
     expect(store.liveVisible()).toBe(false)
   })
 
-  it('leaves when the count is cleared for a session switch', () => {
+  it('leaves when a session reset empties the tasks the count is pushed from', async () => {
     lang = 'en'
     wire()
     mountLive()
     startHost()
-    setRuns(1)
+    /* The real seam: app/install.ts's subscription is what turns the tasks
+       store's rows into this row's count, so the reset below reaches the
+       component through production wiring rather than a hand-set number. */
+    const { installSubagentRuns } = await import('../../app/install')
+    const tasks = await import('../tasks/store')
+    const stop = installSubagentRuns()
+    act(() => {
+      tasks.set({
+        ...tasks.get(),
+        rows: [{ kind: 'spawn', id: 'run-a', status: 'running' } as TaskRow],
+        loaded: true,
+      })
+    })
     endHost()
+    expect(store.get().subagentRuns).toBe(1)
     expect(row()).not.toBeNull()
 
-    /* The wiring pushes the new conversation's count, which a reset makes 0;
-       nothing carries the previous conversation's work across. */
-    setRuns(0)
+    /* What a session switch does to this store: the reset empties the rows
+       before the new conversation's read lands. */
+    act(() => { tasks.reset() })
+    expect(store.get().subagentRuns).toBe(0)
     expect(row()).toBeNull()
     expect(store.liveVisible()).toBe(false)
+    stop()
   })
 
   it('gives way to the host row as soon as a new turn starts', () => {

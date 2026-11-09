@@ -4514,7 +4514,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.job.what': '指令',
     'gui.job.what_ph': '到点发给 Raven 的话，像平时对话一样写',
     'gui.live.busy': '输出中 · {t}',
-    'gui.live.waiting_subagents': '等待子代理返回',
+    'gui.live.waiting_subagents': '等待子智能体返回',
     'gui.mem.down': '长期记忆当前写不进去，这段时间的对话不会被记住。',
     'gui.mem.cloud_bad_key': '这个 Key 没有通过校验，请检查后重试。',
     'gui.mem.cloud_change': '更换 Key',

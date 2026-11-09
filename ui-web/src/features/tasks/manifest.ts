@@ -6,9 +6,8 @@
  *
  * One module page, the task board: every conversation's Task Groups, whose
  * root main.tsx mounts into its body. The rest of the domain is drawn in the
- * desk palette and in the panes that palette opens (features/desk/), plus the
- * strip above the composer -- `TasksPanel` is rendered by the palette, not
- * mounted.
+ * desk palette and in the panes that palette opens (features/desk/) --
+ * `TasksPanel` is rendered by the palette, not mounted.
  */
 
 import { TasksApp } from './BoardsPage'

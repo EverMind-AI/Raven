@@ -2867,7 +2867,7 @@
     },
     "gui.live.waiting_subagents": {
       "en": "waiting for subagents",
-      "zh": "等待子代理返回"
+      "zh": "等待子智能体返回"
     },
     "gui.mem.down": {
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
