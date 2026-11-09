@@ -19,6 +19,7 @@ from typing import Any, Protocol
 
 from loguru import logger
 
+from raven.agent.subagent.dag_carry import CarryPlan
 from raven.agent.subagent.dag_graph import DagNodeSpec
 
 # A failed report delivery is retried: an announcer is a transport, and an injected
@@ -62,31 +63,60 @@ DECISIONS = (CONTINUE, ABANDON, REPLAN, REASSIGN)
 
 
 @dataclass(frozen=True)
-class ReplanPlan:
-    """A validated replacement graph, on its way from the resolve call to the run.
+class ReplanProposal:
+    """A prepared replan, on its way from the resolve call to the runner that commits it.
 
-    Carries its own ``run_id`` because the run winding down names it: a node reason
-    saying it was superseded with no destination leaves the reader of that run
-    nowhere to go, and the id cannot be minted later than the wind-down that cites
-    it. ``backends`` travels here rather than being resolved by the runner because
-    the dispatch map is a closure owned by ``SubAgentDagTool._run``.
+    Posting one answers nothing. The node stays suspended until the runner, at the
+    top of a scheduling pass, plans ``entries`` again over the run as it stands
+    then and either applies the result or rejects it -- so a proposal that the run
+    has overtaken while the caller was validating or asking the user is refused
+    whole rather than half applied.
 
-    ``task_summary`` and ``confirm`` default so existing construction sites (a
-    chain of replans is not the only one) do not need updating, but a real
-    ``prepare_replan`` call fills both in: the successor's own submission has to
-    inherit them from the old run's spec the same way ``prepare_replan`` itself
-    does, or a second hop in the same chain loses its title and its confirm gate.
+    ``waiter`` and ``basis`` are what it was prepared against: the node's desk
+    waiter and the run's change counter. ``plan`` is the plan as it stood at
+    preparation; the runner's fresh plan must add and redefine the same nodes.
+    ``dispatch_nodes`` and ``backends`` cover only the new and redefined nodes,
+    which are all a replan builds. ``charge`` spends the hourly dispatch budget,
+    and is called only at commit. ``submission`` is the successor's admission
+    record, handed to the tool when the run switches to the successor.
     """
 
-    run_id: str
+    successor_run_id: str
     from_node: str
     reason: str
-    nodes: tuple[DagNodeSpec, ...]
+    waiter: asyncio.Event
+    basis: int
+    entries: tuple[DagNodeSpec, ...]
+    authored: dict[str, DagNodeSpec]
+    plan: CarryPlan
+    dispatch_nodes: dict[str, DagNodeSpec]
     backends: dict[str, Any]
     auto_instances: frozenset[str]
     notices: tuple[str, ...]
-    task_summary: str = ""
-    confirm: bool = False
+    task_summary: str
+    confirm: bool
+    charge: Callable[[], str | None]
+    submission: Any = None
+
+
+@dataclass(frozen=True)
+class ReplanOutcome:
+    """What the runner did with one replan proposal.
+
+    ``applied`` false means nothing changed; ``still_waiting`` then says whether the
+    answered node can still be answered. ``stopped_suspended`` names the suspended
+    nodes the replan stopped, whose reports a bound caller must retire.
+    """
+
+    applied: bool
+    successor_run_id: str | None = None
+    carried: tuple[str, ...] = ()
+    added: tuple[str, ...] = ()
+    redefined: tuple[str, ...] = ()
+    stopped: tuple[str, ...] = ()
+    stopped_suspended: tuple[str, ...] = ()
+    reason: str | None = None
+    still_waiting: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,7 +151,6 @@ class Adjudication:
 
     decision: str
     message: str | None = None
-    plan: ReplanPlan | None = None
     agent: str | None = None
     reassignment: ReassignPlan | None = None
 
@@ -132,9 +161,9 @@ class AdjudicationDesk:
     def __init__(self) -> None:
         self._waiting: dict[str, asyncio.Event] = {}
         self._answers: dict[str, Adjudication] = {}
-        self.replanned = asyncio.Event()
         self.continued = asyncio.Event()
-        self._plan: ReplanPlan | None = None
+        self.proposed = asyncio.Event()
+        self._proposal: tuple[ReplanProposal, asyncio.Future] | None = None
 
     def open(self, node_id: str) -> asyncio.Event:
         """Start waiting on ``node_id``. The event fires when an answer lands."""
@@ -160,7 +189,6 @@ class AdjudicationDesk:
         node_id: str,
         decision: str,
         message: str | None,
-        plan: ReplanPlan | None = None,
         *,
         agent: str | None = None,
         reassignment: ReassignPlan | None = None,
@@ -173,10 +201,8 @@ class AdjudicationDesk:
         have been cancelled, and a silently discarded decision looks to the model
         exactly like one that was applied.
 
-        A replan also fires ``replanned``, which is what lets the scheduling round
-        in flight be interrupted rather than drained -- but only once the answer
-        is recorded, so an answer nobody was waiting for cannot tear down a run
-        it was never going to reach.
+        A replan is never recorded here: it is posted with :meth:`propose`, and the
+        runner commits it, so ``resolve`` refuses one.
 
         A continue fires ``continued`` for the same reason and to the opposite
         effect on the round's other nodes: the round ends early so this node can
@@ -194,37 +220,85 @@ class AdjudicationDesk:
         now waits under the same node id.
 
         A reassign is refused before anything is recorded when it carries no
-        target agent or no message, or when a replan has already landed -- the
-        graph is being replaced, so the move could never be applied. A prepared
+        target agent or no message, or while a replan proposal is pending -- the
+        replan was prepared first and the move would race it. A prepared
         move must also name this node and the waiter it was prepared against, so
         a stale plan cannot be parked under a newer adjudication.
         """
         event = self._waiting.get(node_id)
-        if event is None:
+        if event is None or decision == REPLAN:
             return False
         if expected_waiter is not None and (event is not expected_waiter or node_id in self._answers):
             return False
         if decision == REASSIGN:
             if not (agent and agent.strip()) or not (message and message.strip()):
                 return False
-            if self.replanned.is_set():
+            if self._proposal is not None:
                 return False
         if reassignment is not None and (reassignment.node_id != node_id or reassignment.waiter is not event):
             return False
         self._answers[node_id] = Adjudication(
             decision=decision,
             message=message,
-            plan=plan,
             agent=agent,
             reassignment=reassignment,
         )
-        if decision == REPLAN:
-            self._plan = plan
-            self.replanned.set()
-        elif decision in (CONTINUE, REASSIGN):
+        if decision in (CONTINUE, REASSIGN):
             self.continued.set()
         event.set()
         return True
+
+    @property
+    def pending_proposal(self) -> ReplanProposal | None:
+        """The replan proposal waiting for the runner, if one is."""
+        return self._proposal[0] if self._proposal is not None else None
+
+    def propose(self, proposal: ReplanProposal) -> asyncio.Future | None:
+        """Hold a replan proposal for the runner, and wake it. ``None`` when refused.
+
+        Refused, recording nothing, when its node is not open, when the node's
+        waiter is not the one the proposal was prepared against, when the node
+        already has an answer, or while another proposal of this run is pending.
+        Accepted, it wakes a round in flight the way a continue does -- the round
+        ends early and every node still running is handed on, not cancelled -- and
+        wakes the adjudication wait through ``proposed``. The returned future is
+        resolved by the runner, with a :class:`ReplanOutcome`, exactly once.
+        """
+        event = self._waiting.get(proposal.from_node)
+        if event is None or event is not proposal.waiter or proposal.from_node in self._answers:
+            return None
+        if self._proposal is not None:
+            return None
+        future: asyncio.Future = asyncio.get_running_loop().create_future()
+        self._proposal = (proposal, future)
+        self.proposed.set()
+        self.continued.set()
+        return future
+
+    def take_proposal(self) -> tuple[ReplanProposal, asyncio.Future] | None:
+        """The pending proposal and its future, consumed by the runner that commits it."""
+        taken, self._proposal = self._proposal, None
+        return taken
+
+    def withdraw(self, proposal: ReplanProposal) -> bool:
+        """Take back a proposal the runner has not taken yet. False when it is gone already."""
+        if self._proposal is None or self._proposal[0] is not proposal:
+            return False
+        _, future = self._proposal
+        self._proposal = None
+        if not future.done():
+            future.set_result(
+                ReplanOutcome(
+                    applied=False, reason="the replan was withdrawn before it was applied", still_waiting=True
+                )
+            )
+        return True
+
+    def reject_pending(self, reason: str, *, still_waiting: bool) -> None:
+        """Refuse a pending proposal, resolving its future, when the run can no longer apply it."""
+        taken, self._proposal = self._proposal, None
+        if taken is not None and not taken[1].done():
+            taken[1].set_result(ReplanOutcome(applied=False, reason=reason, still_waiting=still_waiting))
 
     def peek(self, node_id: str) -> Adjudication | None:
         """The answer that has landed for ``node_id``, without consuming it."""
@@ -234,11 +308,6 @@ class AdjudicationDesk:
         """The answer for ``node_id``, consumed. ``None`` if none landed."""
         self._waiting.pop(node_id, None)
         return self._answers.pop(node_id, None)
-
-    def take_plan(self) -> ReplanPlan | None:
-        """The replacement graph a replan landed, consumed."""
-        plan, self._plan = self._plan, None
-        return plan
 
     def close(self, node_id: str) -> None:
         """Stop waiting on ``node_id`` without consuming an answer."""

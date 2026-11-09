@@ -199,11 +199,17 @@ export const DOT_OF: Record<string, string> = {
      failure cascaded past, so a run that skipped went wrong somewhere; this one the run chose away,
      and the run is none the worse for it. The tally says so in its own word. */
   not_executed: 'notx',
+  /* And its own value: a node a replan handed to the successor run went on, so it
+     is neither a failure nor a skip -- and it is settled here, because this run
+     has nothing left to do with it. The successor's own card carries its clock. */
+  carried: 'on',
 }
 
 /* A graph node that has stopped, whatever it stopped as. `pending` and
    `running` are the two that have not. */
-const NODE_SETTLED = new Set(['completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'not_executed'])
+const NODE_SETTLED = new Set([
+  'completed', 'failed', 'skipped', 'cancelled', 'interrupted', 'not_executed', 'carried',
+])
 
 /* Whether one node has stopped. Exported because the graph's own clock is not
    the only reader: the transcript card's state word is about the graph rather
@@ -612,9 +618,10 @@ export interface DagFeedPayload {
   status?: string
   started_at?: number
   ended_at?: number
-  files?: Array<{ node?: string; status?: string }>
+  files?: Array<{ node?: string; status?: string; carried_into?: string }>
   nodes?: Array<Record<string, unknown>>
   replan_run_id?: string
+  carried?: string[]
 }
 
 /* The trail's dag card is bound to its run through these.
@@ -694,10 +701,12 @@ export const _earlyForTests = (): Array<[string, string]> =>
    card's own nodes and need a seam of their own now that nothing is drawn. */
 export const _dagCallsForTests = (): Array<{
   runId: string | null
+  graphClosed: boolean
   nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
 }> => {
   const out: Array<{
     runId: string | null
+    graphClosed: boolean
     nodes: Array<{ id: string; status: string; started_at: number | null; ended_at: number | null }>
   }> = []
   for (const lane of lanes) {
@@ -707,6 +716,7 @@ export const _dagCallsForTests = (): Array<{
         if (call.kind !== 'dag') continue
         out.push({
           runId: call.runId,
+          graphClosed: Boolean(call.graphClosed),
           nodes: call.nodes.map((n) => (
             { id: n.id, status: String(n.status), started_at: n.started_at, ended_at: n.ended_at }
           )),
@@ -970,6 +980,16 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
   }
   const { lane, call } = f
   if (type === 'dag.run_started') {
+    /* A successor a replan started: the card follows its chain. It keeps what it
+       knew of the nodes the replan carried, drops the ones that stopped with the
+       old run, and asks for the new run's request afresh. */
+    if (call.runId && call.runId !== String(p.run_id)) {
+      const kept = new Set((p.nodes || []).map((n) => String(n.id)))
+      call.nodes = call.nodes.filter((n) => kept.has(n.id))
+      call.replannedInto = undefined
+      call.graphClosed = false
+      call.asked = false
+    }
     call.runId = String(p.run_id)
     call.live = true
     /* Merged, not assigned. A dag call the model made already holds the whole
@@ -987,6 +1007,12 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     call.nodes = dagNodes.applyUpdate(call.nodes, p)
     bump(lane, call)
   } else if (type === 'dag.run_completed') {
+    if (call.runId !== String(p.run_id)) {
+      /* The run this card followed out of. Its completion is that run's seal, and
+         says nothing about the successor the card shows now. */
+      dagLive.delete(String(p.run_id))
+      return
+    }
     ;(p.files || []).forEach((x) => { call.nodes = dagNodes.applyUpdate(call.nodes, x) })
     /* Before the files, not because of them: the event closes the run whether or
        not it brought a row per node, and a run closed by a backend error or a
@@ -998,12 +1024,14 @@ export function dagFeed(type: string, p: DagFeedPayload | null): void {
     if (call.callId) dagByCall.delete(call.callId)
     bump(lane, call)
   } else if (type === 'dag.run_replanned') {
-    /* Always arrives before this run's own `dag.run_completed` -- the backend
-       emits it right after the waiting node's decision is recorded, not once
-       the old run winds down -- so `dagLive` still holds this card by the time
-       it is looked up above; no early-buffer handling is needed here the way
-       `dag.run_started` needs one. */
-    if (p.replan_run_id) call.replannedInto = String(p.replan_run_id)
+    /* Arrives before the successor's own `dag.run_started` and before this run's
+       `dag.run_completed`, so `dagLive` still holds this card here. The
+       successor's id is filed under the same card now: its frames carry the
+       work this run carried on, and the card follows them. */
+    if (p.replan_run_id) {
+      call.replannedInto = String(p.replan_run_id)
+      dagLive.set(String(p.replan_run_id), f)
+    }
     bump(lane, call)
   }
 }

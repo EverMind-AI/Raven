@@ -73,6 +73,10 @@ class RunActivity:
     # inherited a finished run's tab and read another conversation's page.
     # Not in ``as_meta``: it identifies the object, not the work.
     uid: str = field(default_factory=lambda: uuid4().hex)
+    # The key the live index holds this activity under. Not always the key its
+    # block opened with: a replan moves a running node into the successor run,
+    # and the block's exit must release whichever key the node ended under.
+    live_key: str | None = None
     tool_calls: list[str] = field(default_factory=list)
     # The subset of those that reported failure, in order. Recorded because the
     # tally was the one fact about a run that nothing kept: a run whose calls all
@@ -298,7 +302,7 @@ def collecting(
     the lock is held instead; ``instance`` here stays for the lanes that already
     hold it when they open the block.
     """
-    activity = RunActivity(prompt=prompt)
+    activity = RunActivity(prompt=prompt, live_key=live_key or None)
     token = _current.set(activity)
     if live_key:
         _live[live_key] = activity
@@ -307,8 +311,8 @@ def collecting(
             yield activity
         finally:
             _current.reset(token)
-            if live_key:
-                _live.pop(live_key, None)
+            if activity.live_key and _live.get(activity.live_key) is activity:
+                _live.pop(activity.live_key, None)
 
 
 @contextmanager
@@ -347,6 +351,26 @@ def offer_steer(activity: RunActivity | None, steer: Callable[[str], Awaitable[s
     """Publish (or, with None, withdraw) the way to steer the run being collected."""
     if activity is not None:
         activity.steer = steer
+
+
+def rekey_live(old: str, new: str) -> None:
+    """Move a run in flight from one live key to another.
+
+    For a node a replan carried into its successor: the attempt is the same, its
+    run id is not. A no-op when nothing is held under ``old``, and never displaces
+    an activity already under ``new`` -- that one is newer than the move.
+    """
+    activity = _live.get(old)
+    if activity is None or new in _live:
+        return
+    _live[new] = _live.pop(old)
+    activity.live_key = new
+
+
+def rekey_settled(old: str, new: str) -> None:
+    """Move a finished node's account from one live key to another, on the terms of :func:`rekey_live`."""
+    if old in _settled and new not in _settled:
+        _settled[new] = _settled.pop(old)
 
 
 def live(key: str) -> RunActivity | None:

@@ -92,4 +92,28 @@ describe('a node a branch left out', () => {
     expect(store.DOT_OF.not_executed).toBe('notx')
     expect(Object.keys(store.DOT_OF).filter((status) => store.DOT_OF[status] === 'notx')).toEqual(['not_executed'])
   })
+
+/* A node a replan carried into its successor: the sealed record keeps its start
+   and leaves the end to the run that holds it now. Read back after a reload it
+   is the only evidence on the card that the node went anywhere. */
+describe('a node a replan carried on', () => {
+  it('is settled, so the sealed graph clock closes', () => {
+    expect(store.nodeSettled('carried')).toBe(true)
+    expect(store.dagSpan([{ status: 'carried', started_at: 1000, ended_at: null }]))
+      .toEqual({ from: 1000, to: null, open: false })
+  })
+
+  it('does not close a graph another node is still running', () => {
+    expect(store.dagSpan([
+      { status: 'completed', started_at: 1000, ended_at: 2000 },
+      { status: 'carried', started_at: 1200, ended_at: null },
+      { status: 'running', started_at: 1300, ended_at: null },
+    ])).toEqual({ from: 1000, to: null, open: true })
+  })
+
+  it('gets a tally class of its own, shared with no other status', () => {
+    expect(store.DOT_OF.carried).toBe('on')
+    expect(Object.keys(store.DOT_OF).filter((status) => store.DOT_OF[status] === 'on')).toEqual(['carried'])
+  })
+})
 })

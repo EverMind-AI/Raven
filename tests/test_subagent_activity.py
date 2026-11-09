@@ -372,3 +372,29 @@ def test_a_snapshot_can_be_recorded_into_a_run_it_is_not_running_inside(tmp_path
 
     assert current.files == []
     assert [entry["path"] for entry in theirs.files] == ["made.md"]
+
+
+def test_a_live_activity_rekeyed_mid_block_is_released_under_its_new_key():
+    with activity.collecting(live_key="run-A/r1") as running:
+        activity.rekey_live("run-A/r1", "run-B/r1")
+        assert activity.live("run-B/r1") is running
+        assert activity.live("run-A/r1") is None
+    assert activity.live("run-B/r1") is None
+    assert activity.live("run-A/r1") is None
+
+
+def test_rekeying_never_overwrites_an_entry_already_under_the_new_key():
+    with activity.collecting(live_key="run-A/r9") as old, activity.collecting(live_key="run-B/r9") as newer:
+        activity.rekey_live("run-A/r9", "run-B/r9")
+        assert activity.live("run-B/r9") is newer
+        assert activity.live("run-A/r9") is old
+    activity.rekey_live("run-A/absent", "run-B/absent")
+    assert activity.live("run-B/absent") is None
+
+
+def test_rekey_settled_moves_a_finished_account():
+    activity.record_settled("run-A/r2", {"tokens_in": 3})
+    activity.rekey_settled("run-A/r2", "run-B/r2")
+    assert activity.settled("run-B/r2") == {"tokens_in": 3}
+    assert activity.settled("run-A/r2") is None
+    activity.forget_settled(["run-B/r2"])

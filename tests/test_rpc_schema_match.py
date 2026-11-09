@@ -1082,3 +1082,54 @@ def test_a_model_is_built_when_first_used_not_at_import(tmp_path: Path) -> None:
     assert "built at import: []" in done.stdout, done.stdout + done.stderr
     assert "first use: 3 True" in done.stdout, done.stdout + done.stderr
     assert "refused: extra_forbidden" in done.stdout, done.stdout + done.stderr
+
+
+def test_the_carried_status_and_fields_are_in_the_contract_and_the_models(schema: dict[str, Any]) -> None:
+    """A replan seals the run it answers with each carried node read as `carried`,
+    naming the run that holds it now; both halves of the contract have to say so."""
+    from typing import get_args
+
+    from raven.rpc import models
+
+    schemas = schema["components"]["schemas"]
+    assert "carried" in schemas["DagNodeStatus"]["enum"] and "carried" in get_args(models.DagNodeStatus)
+    assert "carried" in schemas["DagSnapshotNodeStatus"]["enum"] and "carried" in get_args(models.DagSnapshotNodeStatus)
+    completed_file = schemas["DagRunCompletedEvent"]["properties"]["payload"]["properties"]["files"]["items"]
+    for published in (completed_file, schemas["DagSnapshotNode"], schemas["TaskNode"]):
+        assert "carried_into" in published["properties"]
+    for model in (models.DagRunFile, models.DagSnapshotNode, models.TaskNode):
+        assert "carried_into" in model.model_fields, model
+    replanned = schemas["DagRunReplannedEvent"]["properties"]["payload"]["properties"]
+    assert "carried" in replanned and "carried" in models.DagRunReplannedPayload.model_fields
+    assert "carried" in schemas["TaskReplan"]["properties"] and "carried" in models.TaskReplan.model_fields
+    assert "carried" in schemas["TaskCounts"]["required"] and models.TaskCounts.model_fields["carried"].is_required()
+    summary = schemas["DagRunCompletedEvent"]["properties"]["payload"]["properties"]["summary"]
+    summary = _resolve_ref(summary["$ref"], schema) if "$ref" in summary else summary
+    assert "carried" in summary["properties"] and "carried" in models.DagRunSummary.model_fields
+
+
+async def test_schema_match_the_frames_a_replan_emits(tmp_path: Path, schema: dict[str, Any]) -> None:
+    """Every frame a committed replan puts on the wire, as the runner really sends
+    them: the replanned frame with what it carried, the successor's start and its
+    carried nodes, and the sealed run's completion with `carried` entries."""
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TurnEvent
+    from raven.rpc.spine import _DAG_WIRE_EVENT, _dag_payload
+    from tests.test_subagent_dag_runner import _research_entries, _research_nodes, _run_with_replan
+
+    run = await _run_with_replan(
+        tmp_path, nodes=_research_nodes(), entries=_research_entries(), hold=frozenset({"r1", "r3"})
+    )
+
+    assert run.outcome.applied, run.outcome
+    mapping = schema["components"]["schemas"]["TurnEvent"]["discriminator"]["mapping"]
+    names = set()
+    for name, payload in run.frames:
+        event = {"type": _DAG_WIRE_EVENT[name], "payload": _dag_payload(name, payload)}
+        variant = {**_resolve_ref(mapping[event["type"]], schema), "components": schema["components"]}
+        jsonschema.validate(event, variant)
+        TypeAdapter(TurnEvent).validate_python(event)
+        names.add(name)
+    assert {"dag_run_replanned", "dag_run_started", "dag_node_updated", "dag_run_completed"} <= names

@@ -439,6 +439,43 @@ class InstanceRegistry:
                     self._records = None
                     raise
 
+    async def move_dag_node_run(
+        self, session_key: str, *, agent: str, node_id: str, old_run_id: str, new_run_id: str
+    ) -> None:
+        """Move a node's ``dag-node`` row from one run to its successor.
+
+        A replan carries a node into the successor run, and the row is keyed by
+        ``<run>/<node>``, so the old row is moved rather than copied: two rows
+        would list one node twice. Everything the row says about the node is
+        kept; only its run changes. A missing source row writes nothing. When the
+        successor already holds a row for the node -- it landed after the switch
+        and wrote one -- the newer of the two wins, so a move never overwrites an
+        outcome with an older status. One locked read-modify-write, as
+        ``move_dag_node`` does it.
+        """
+        agent = canonical_agent_name(agent)
+        old_handle = f"{old_run_id}/{node_id}"
+        new_handle = f"{new_run_id}/{node_id}"
+        async with self._lock:
+            with write_transaction(self._path):
+                records = self._load()
+                source = records.pop((session_key, agent, old_handle), None)
+                if source is None:
+                    return
+                held = records.get((session_key, agent, new_handle))
+                if held is None or int(held.get("updatedAtMs") or 0) < int(source.get("updatedAtMs") or 0):
+                    records[(session_key, agent, new_handle)] = {
+                        **source,
+                        "handle": new_handle,
+                        "runId": new_run_id,
+                        "updatedAtMs": int(time.time() * 1000),
+                    }
+                try:
+                    self._flush()
+                except OSError:
+                    self._records = None
+                    raise
+
     async def link_dag_node(self, session_key: str, agent: str, handle: str, run_id: str, node_id: str) -> None:
         """Mark the instance a DAG node is running on as belonging to that node.
 

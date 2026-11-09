@@ -1439,9 +1439,9 @@ class TestRunning:
         assert any("DONE-FOR-NOW" in line and line.strip() != "DONE-FOR-NOW" for line in lines), lines
         assert any(line.strip() == "DONE-FOR-NOW" for line in lines)
 
-    async def test_a_round_of_a_plan_cannot_be_replanned_into_another_graph(self, tmp_path: Path) -> None:
-        """A replanned run announces nothing and hands nothing on, so the plan
-        would wait for a hand-over that never comes and stop without saying so."""
+    async def test_a_round_of_a_plan_cannot_be_replanned(self, tmp_path: Path) -> None:
+        """A round is a compiled view of the role table, so the table is what has to
+        change: a replan of the round is refused before anything is prepared."""
         announced: list[str] = []
         executor = self._executor(tmp_path, announced, [])
 

@@ -75,7 +75,11 @@ async def dag_get(params: dict, *, agent_loop_factory: "AgentLoopFactory | None"
         )
     except (DagReadError, DagValidationError) as exc:
         raise InternalError(str(exc)) from exc
-    return {"run": run}
+    # The reader keeps the node-file root and each node's memory file for the graph
+    # tool's own status text; the snapshot the contract describes has neither, and
+    # forbids fields it does not name.
+    files = [{key: value for key, value in entry.items() if key != "memory_file"} for entry in run.get("files", [])]
+    return {"run": {**{key: value for key, value in run.items() if key != "nodes_root"}, "files": files}}
 
 
 async def dag_node(params: dict, *, agent_loop_factory: "AgentLoopFactory | None" = None) -> dict:

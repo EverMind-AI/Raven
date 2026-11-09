@@ -51,6 +51,7 @@ _COUNT_KEYS = (
     "interrupted",
     "exception",
     "not_executed",
+    "carried",
 )
 
 # The shape `DagRunStore` mints, matched rather than trusted: a run id off a
@@ -253,6 +254,8 @@ def _task_status(statuses: list[str]) -> str:
 
     ``not_executed`` is on no rung: a branch that was not taken is not a state
     that stopped the run, so a graph whose only oddity is one reads as completed.
+    ``carried`` is on none either: only a sealed run has one, and that run reads
+    as the hand-off its replan link says it was.
     """
     present = set(statuses)
     if "failed" in present:
@@ -398,13 +401,18 @@ def _replan_of(graph: dict[str, Any]) -> dict[str, Any] | None:
     replan = graph.get("replan")
     if not isinstance(replan, dict) or not replan.get("run_id"):
         return None
-    return {
+    link = {
         "run_id": str(replan["run_id"]),
         "from_node": replan.get("from_node"),
         "reason": replan.get("reason"),
         "started": bool(replan.get("started")),
         "error": replan.get("error"),
     }
+    # Only where the link says what it carried: a link written before carrying
+    # existed reads as it always did.
+    if isinstance(replan.get("carried"), list):
+        link["carried"] = [str(nid) for nid in replan["carried"]]
+    return link
 
 
 def _dag_row(
@@ -475,6 +483,8 @@ def _dag_row(
             "prompt_template": gnode.get("prompt_template") or None,
             "files": _files_of(account),
         }
+        if entry is not None and entry.get("carried_into"):
+            node["carried_into"] = str(entry["carried_into"])
         if gnode.get("inputs") is not None:
             node["inputs"] = gnode["inputs"]
         if gnode.get("skills") is not None:
@@ -500,10 +510,10 @@ def _dag_row(
 
     replan = _replan_of(graph)
     if replan is not None:
-        # `_apply_replan` marks the exception node(s) `failed` before
-        # `_finalize` runs, so the ladder below would already read this row
-        # `failed` -- but a replan that started reads as a hand-off, not a
-        # failure, and one that never started names why in `replan.error`.
+        # The replan gives up the node it answers, `failed`, so the ladder below
+        # would read this row `failed` -- but a replan that started reads as a
+        # hand-off, not a failure, and one that never started names why in
+        # `replan.error`.
         task_status = "cancelled" if replan["started"] else "failed"
     else:
         task_status = _task_status(statuses)

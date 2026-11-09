@@ -59,7 +59,7 @@ describe('a node a branch left out', () => {
   it('is counted on its own and in the total', () => {
     expect(countsOf(nodes)).toStrictEqual({
       total: 2, pending: 0, running: 0, completed: 1, failed: 0, skipped: 0, cancelled: 0, interrupted: 0,
-      exception: 0, not_executed: 1,
+      exception: 0, not_executed: 1, carried: 0,
     })
   })
 
@@ -81,7 +81,7 @@ describe('a node a branch left out', () => {
     const plain = [node({ node_id: 'a', status: 'completed' }), node({ node_id: 'b', status: 'running' })]
     expect(JSON.stringify(countsOf(plain))).toBe(
       '{"total":2,"pending":0,"running":1,"completed":1,"failed":0,"skipped":0,"cancelled":0,"interrupted":0,'
-      + '"exception":0,"not_executed":0}',
+      + '"exception":0,"not_executed":0,"carried":0}',
     )
   })
 })
@@ -449,6 +449,22 @@ describe('applyRunReplanned', () => {
     expect(result.rows[0]!.status).toBe('cancelled')
     expect(result.rows[0]!.replan).toEqual({ run_id: 'r2', from_node: 'a', reason: 'stuck', started: true })
     expect(result.refetch).toEqual({ kind: 'dag', id: 'r1' })
+  })
+})
+
+describe('a sealed row', () => {
+  it('a sealed row shows carried nodes and counts them', () => {
+    const base: TaskRow[] = [{
+      id: 'r1', kind: 'dag', task_summary: null, status: 'running', agent: null, handle: null,
+      started_at: null, ended_at: null, counts: countsOf([]), nodes: [],
+    }]
+    const result = applyRunReplanned(base, {
+      run_id: 'r1', replan_run_id: 'r2', from_node: 'a', reason: 'stuck', carried: ['b', 'c'],
+    })
+    expect(result.rows[0]!.replan).toEqual({ run_id: 'r2', from_node: 'a', reason: 'stuck', started: true, carried: ['b', 'c'] })
+
+    const sealed = [node({ node_id: 'b', status: 'carried' }), node({ node_id: 'a', status: 'failed' })]
+    expect(countsOf(sealed)).toMatchObject({ total: 2, carried: 1, failed: 1 })
   })
 })
 

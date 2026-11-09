@@ -42,11 +42,11 @@ def owning_tool(loop: Any, run_id: str) -> Any:
     """Whichever graph tool instance currently holds ``run_id`` live.
 
     A replan control step calls several tool methods in sequence
-    (``prepare_replan``, ``is_foreground``, ``emit_replanned``,
-    ``await_finalized``, ``start_replan``), and each one only answers correctly
-    from the instance whose ``_dispatch`` actually created this run's task,
-    desk and outbox -- the registered tool has none of that bookkeeping for a
-    run the playbook engine's private instance is running. Falling back to
+    (``prepare_replan``, ``is_foreground``, ``propose_replan``,
+    ``retire_reports``, ``await_run``), and each one only answers correctly from
+    the instance whose ``_dispatch`` actually created this run's task, desk and
+    outbox -- the registered tool has none of that bookkeeping for a run the
+    playbook engine's private instance is running. Falling back to
     ``_registered_tool`` when no instance claims the run any more matches every
     other helper here: the run has already ended in both, or ``loop`` is a test
     double with no ``dag_tools``.
@@ -124,8 +124,8 @@ def awaiting_decision(loop: Any, run_id: str, node_id: str) -> bool | None:
     return False if answered else None
 
 
-def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
-    """Answer one suspended node, whichever graph tool owns its run."""
+def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+    """Answer one suspended node, whichever graph tool owns its run. A replan is posted, not answered."""
     fn = getattr(loop, "resolve_dag_node", None)
     if fn is None:
         tool = _registered_tool(loop)
@@ -133,6 +133,6 @@ def resolve_node(loop: Any, run_id: str, node_id: str, decision: str, message: s
         if fn is None:
             return False
     try:
-        return bool(fn(run_id, node_id, decision, message, plan))
+        return bool(fn(run_id, node_id, decision, message))
     except Exception:  # noqa: BLE001 - a failed answer is reported, not raised
         return False

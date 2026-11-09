@@ -11,7 +11,7 @@
  */
 export type JsonValue = string | number | boolean | null | unknown[] | {};
 /**
- * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
+ * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal. 'carried' is a node a replan carried into a successor run: it appears only in the sealed record of the run it left, names that run in carried_into, and is terminal there -- no live run has one.
  */
 export type DagNodeStatus =
   | 'pending'
@@ -21,9 +21,10 @@ export type DagNodeStatus =
   | 'skipped'
   | 'cancelled'
   | 'exception'
-  | 'not_executed';
+  | 'not_executed'
+  | 'carried';
 /**
- * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
+ * Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal. 'carried' is a node a replan carried into a successor run: it appears only in the sealed record of the run it left, names that run in carried_into, and is terminal there -- no live run has one.
  */
 export type DagSnapshotNodeStatus =
   | 'pending'
@@ -34,7 +35,8 @@ export type DagSnapshotNodeStatus =
   | 'cancelled'
   | 'interrupted'
   | 'exception'
-  | 'not_executed';
+  | 'not_executed'
+  | 'carried';
 /**
  * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
  */
@@ -1748,6 +1750,10 @@ export interface DagSnapshotNode {
    * The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.
    */
   when?: string;
+  /**
+   * The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.
+   */
+  carried_into?: string;
 }
 /**
  * One run rebuilt from its run dir. 'finalized' is false while it is still executing, in which case per-node state came from the instance registry overlay rather than a manifest.
@@ -1775,6 +1781,10 @@ export interface DagRunSnapshot {
      * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
      */
     not_executed?: number;
+    /**
+     * Nodes a replan carried into its successor. Present only when there is at least one, which only a sealed run has.
+     */
+    carried?: number;
   };
 }
 /**
@@ -1790,7 +1800,7 @@ export interface DagNodeDetail {
   output_chars: number;
   output_truncated: boolean;
   /**
-   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.
+   * Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal. 'carried' is a node a replan carried into a successor run: it appears only in the sealed record of the run it left, names that run in carried_into, and is terminal there -- no live run has one.
    */
   status?:
     | 'pending'
@@ -1800,7 +1810,8 @@ export interface DagNodeDetail {
     | 'skipped'
     | 'cancelled'
     | 'exception'
-    | 'not_executed';
+    | 'not_executed'
+    | 'carried';
   /**
    * Why the node failed. A failed node has no output, so without this it reads as unanswered.
    */
@@ -1916,7 +1927,7 @@ export interface DagNodeUpdatedEvent {
   };
 }
 /**
- * A replan decision started a successor run for a node that could not proceed; replan_run_id names the new run.
+ * A replan decision sealed this run and started a successor for a node that could not proceed; replan_run_id names the new run, and carried lists the work it took over, still running or waiting.
  */
 export interface DagRunReplannedEvent {
   type: 'dag.run_replanned';
@@ -1926,6 +1937,10 @@ export interface DagRunReplannedEvent {
     replan_run_id: string;
     from_node: string;
     reason: string;
+    /**
+     * The unfinished nodes the replan carried into the successor run, which go on there as they were.
+     */
+    carried?: string[];
   };
 }
 /**
@@ -1971,6 +1986,10 @@ export interface DagRunCompletedEvent {
        * Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.
        */
       not_executed?: number;
+      /**
+       * Nodes a replan carried into its successor. Present only when there is at least one, which only a sealed run has.
+       */
+      carried?: number;
     };
     files: {
       node: string;
@@ -2005,6 +2024,10 @@ export interface DagRunCompletedEvent {
        * The agent of each attempt of this node, in order. Present only on a node that was reassigned.
        */
       attempt_agents?: string[];
+      /**
+       * The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.
+       */
+      carried_into?: string;
     }[];
   };
 }
@@ -2527,6 +2550,10 @@ export interface TaskCounts {
    * Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed.
    */
   not_executed: number;
+  /**
+   * Nodes a replan carried into the successor run. Only a sealed run has them, and they move no rung of the task's status: the run reads as the hand-off its replan link says it was.
+   */
+  carried: number;
 }
 /**
  * Present only on a run a replan superseded, read from graph.json's top-level replan entry. started=false means the successor never began; error says why.
@@ -2540,6 +2567,10 @@ export interface TaskReplan {
   reason?: string | null;
   started: boolean;
   error?: string | null;
+  /**
+   * The unfinished nodes the replan carried into the successor run, which go on there as they were.
+   */
+  carried?: string[] | null;
 }
 /**
  * One file a node wrote, as the lane that ran it recorded the tool result. The in-process lane records these; the acp and cli lanes record none yet. The diff body is not here: a client builds it from the node's messages.
@@ -2655,6 +2686,10 @@ export interface TaskNode {
    */
   when?: string;
   files: TaskFile[];
+  /**
+   * The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.
+   */
+  carried_into?: string | null;
 }
 /**
  * One unit of delegated work a conversation started, with its nodes inline.

@@ -119,6 +119,7 @@ def _dag_payload(name: str, payload: dict) -> dict:
             "replan_run_id": payload.get("replan_run_id"),
             "from_node": payload.get("from_node"),
             "reason": payload.get("reason"),
+            **_present(payload, ("carried",)),
         }
     if name == "dag_node_stalled":
         # Information, not a node status: the node stays `running` and no
@@ -139,7 +140,7 @@ def _dag_payload(name: str, payload: dict) -> dict:
         {
             "node": entry.get("node"),
             "status": entry.get("status"),
-            **_present(entry, ("output_file", "error", "reason", "selected_routes", "route_evidence")),
+            **_present(entry, ("output_file", "error", "reason", "selected_routes", "route_evidence", "carried_into")),
             # The runner stamps the agent, handle and flag on every file; only a
             # node it reassigned has more to say than its own start frame did,
             # and only that one is allowed to grow the payload.

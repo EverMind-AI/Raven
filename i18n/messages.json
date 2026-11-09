@@ -609,6 +609,10 @@
       "en": "{n} not executed",
       "zh": "未执行 {n}"
     },
+    "gui.deleg.dag_carried": {
+      "en": "{n} carried on",
+      "zh": "转入后续运行 {n}"
+    },
     "gui.act.ing.text_to_speech": {
       "en": "Generating speech",
       "zh": "正在生成语音"
@@ -9335,6 +9339,10 @@
       "en": "{n} not executed",
       "zh": "{n} 步未执行"
     },
+    "gui.tasks.step_carried": {
+      "en": "{n} carried on",
+      "zh": "{n} 步转入后续运行"
+    },
     "gui.tasks.running_n": {
       "en": "{n} running",
       "zh": "{n} 个任务在跑"
@@ -9390,6 +9398,10 @@
     "gui.tasks.node_st_not_executed": {
       "en": "Not executed",
       "zh": "未执行"
+    },
+    "gui.tasks.node_st_carried": {
+      "en": "Carried into the next run",
+      "zh": "已转入后续运行"
     },
     "gui.tasks.node_reason_when_false": {
       "en": "Not selected",

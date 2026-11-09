@@ -382,6 +382,8 @@ async def read_run(backend: Any, root: str, run_id: str, nodes_root: str) -> dic
                 **attempt,
                 **({"instance_auto": bool(entry.get("instance_auto"))} if attempt else {}),
                 **branch_fields(entry, node),
+                # Only on a node a replan carried on, in the sealed run it left.
+                **({"carried_into": entry["carried_into"]} if entry.get("carried_into") else {}),
             }
         )
 

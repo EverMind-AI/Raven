@@ -65,6 +65,9 @@ export interface DagRunNode {
   select?: 'many' | 'one'
   /** The guard: this node runs only if it holds once its dependencies settle. */
   when?: string
+  /** The run that holds this node now. Only on a `carried` node, in the sealed
+   * record of the run a replan carried it out of. */
+  carriedInto?: string
 }
 
 export interface DagRunSummary {
@@ -74,6 +77,7 @@ export interface DagRunSummary {
   skipped?: number
   cancelled?: number
   not_executed?: number
+  carried?: number
 }
 
 export interface DagRunState {
@@ -301,6 +305,7 @@ const fromCompletion = (run: DagRunState, payload: DagRunCompletedEvent['payload
         ...(folded ?? { ...node, status: node.status === 'running' ? 'interrupted' : node.status }),
         ...(file?.output_file ? { outputFile: file.output_file } : {}),
         ...(file?.error ? { error: file.error } : {}),
+        ...(file?.carried_into ? { carriedInto: file.carried_into } : {}),
         ...(file ? outcomeOf(file) : {})
       }
     })
@@ -440,6 +445,7 @@ export const foldDagSnapshot = (prev: DagRunState | null, snapshot: DagRunSnapsh
       ...(summary ? { nodeSummary: summary } : {}),
       ...(file.output_file ? { outputFile: file.output_file } : {}),
       ...(file.error ? { error: file.error } : {}),
+      ...(file.carried_into ? { carriedInto: file.carried_into } : {}),
       ...(file.routes !== undefined ? { routes: [...file.routes] } : {}),
       ...(file.select !== undefined ? { select: file.select } : {}),
       ...(file.when !== undefined ? { when: file.when } : {}),

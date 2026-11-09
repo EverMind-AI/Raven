@@ -34,6 +34,12 @@ All notable changes to Raven are documented here.
   row wraps between rungs rather than inside a word when a model declares more
   than one line holds.
 
+- A DAG `replan` now carries the unfinished nodes its new plan lists or
+  depends on into the successor run, which starts at once, so work still in
+  progress goes on instead of being cancelled with the replaced run; that
+  run's record is sealed, each carried node reading `carried` and naming the
+  run it went on in.
+
 ### Fixed
 
 - The *Mode* row of the WebUI's model picker (the sub-agent tier) read the

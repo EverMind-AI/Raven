@@ -19,7 +19,7 @@ const board = (groups: TaskGroup[]): TaskBoard => ({ version: 1, groups, unassig
 
 const row = (kind: TaskRow['kind'], id: string): TaskRow => ({
   id, kind, task_summary: id, status: 'running', started_at: null, ended_at: null, agent: null, handle: null,
-  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
+  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, carried: 0 },
   nodes: [],
 })
 

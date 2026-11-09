@@ -147,10 +147,11 @@ this page. What follows is what the four decisions mean, not how to spell them.
   everything it has already done.
 - `abandon` gives up on that node. Its dependents are skipped; every node that does not
   depend on it finishes normally.
-- `replan` replaces what is left of the graph: this run stops and a new one starts from the
-  nodes you supply. Nodes this run completed are referenced (`depends_on` plus
-  `{{ <id>.output }}`), never re-declared; every other node needs a new id, including a redo
-  of the node that failed.
+- `replan` replaces the plan: a new run starts from the nodes you supply, and the work in
+  progress your plan lists or depends on is carried into it without stopping -- a node that is
+  running keeps running. Everything else that has not finished stops with this run. The node
+  you are answering is given up; redo its work under a new id. A finished node is read through
+  `depends_on` and `{{ <id>.output }}`, never re-declared.
 - `reassign` hands the node to another sub-agent on the roster. The node keeps its id, its
   task and its place in the graph -- its next attempt runs on the agent you name, called
   `agent`, which is a roster name rather than a worker label. On a run dispatched from a
@@ -184,6 +185,15 @@ that turns out not to be needed. Replanning because a node is hard is how a grap
 without progressing -- each replan starts its nodes on a fresh attempt budget, and the only
 thing that stops the loop is the session's hourly dispatch limit.
 
+**Keep what should go on.** A replan carries only what its plan reaches. Depend on, or list,
+every node in progress and every not-started node whose work is still wanted -- including the
+leaf of every branch the replan is not about; the report lists both kinds. Everything else that
+has not finished stops with the old run. A node in progress or queued is carried only as it is:
+to change its work, add a node under a new id and leave that one out. A replan races the run --
+one that redefines a node that has started meanwhile is refused whole, and you prepare it again.
+After a replan the run to watch is the successor, whose id the result names; an answer to an
+earlier report may still name the old run, and is routed to the run that holds the node now.
+
 A `reassign` spends a continuation, like `continue`, and the attempt budget is not reset.
 When the node runs on an `instance`, the run's other unfinished nodes on that instance move
 to the same agent; a node running at that moment finishes its attempt first and joins only if
@@ -213,7 +223,7 @@ run: the report is re-sent to you as a message and the usual deadline starts.
 
 To stop the whole run rather than one node, call `cancel_dag` the same way, through
 `tool_call`. That discards the run outright and starts nothing in its place -- it is not
-`replan`, which keeps the completed work and chains a successor.
+`replan`, which carries the work still wanted into a successor run.
 
 Each run costs one unit of the same per-hour budget `spawn` draws on
 (`max_subagent_spawns_per_hour`), whatever its node count. Submitting graphs in a loop
@@ -323,12 +333,12 @@ that work under a new id too; where the run recorded no outcome for the node at 
 its file directly; and for a node of a run still in flight, submit again once that run
 reports its result.
 
-That last one inverts when you are replanning. A replan discards what is left of the run it
-replaces, so a node of that run which has not finished — one still waiting to start, or one
-suspended on a report of its own — will never write an output, and waiting for it is waiting
-for something the replan itself cancels. Those refusals say so, and ask for a new id: the
-same answer this guide already gives for every node of the replaced run except the ones it
-completed.
+That last one inverts when you are replanning. A replan carries the unfinished nodes of the
+run it replaces that your plan lists or depends on, so a node of that run which has not
+finished — one still waiting to start, running, or suspended on a report of its own — is not
+waited on: depending on one carries it into the new run, where it goes on and writes its
+output. Only the node you are answering is given up, and anything your plan neither lists nor
+depends on stops.
 
 Note what is *not* an option in any of these: re-creating that node here. Its id is
 taken, so a graph that repeats it is refused for the reuse instead. Re-running an upstream

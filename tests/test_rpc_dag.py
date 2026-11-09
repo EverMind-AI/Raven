@@ -870,3 +870,64 @@ def test_an_unmapped_progress_event_is_still_dropped() -> None:
     from raven.rpc.spine import _DAG_WIRE_EVENT
 
     assert "dag_node_started" not in _DAG_WIRE_EVENT
+
+
+async def test_a_snapshot_read_off_a_real_run_dir_is_what_the_contract_says(one_run_on_disk) -> None:
+    """The reader keeps its node-file root for the graph tool's own rendering; the
+    snapshot the contract describes has no such field, and forbids extra ones."""
+    import jsonschema
+
+    (one_run_on_disk.run / "manifest.json").write_text(
+        json.dumps({"survey": {"status": "completed", "subagent": "R", "started_at": 1, "ended_at": 2}}),
+        encoding="utf-8",
+    )
+    tool = _ReadsTheRunDir(one_run_on_disk.run, one_run_on_disk.nodes)
+
+    answer = await dag_get({"run_id": RUN_ID, "session_key": "tui:live"}, agent_loop_factory=_factory(tool))
+
+    contract = json.loads((Path(__file__).resolve().parents[1] / "rpc-schema" / "openrpc.json").read_text("utf-8"))
+    [entry] = [m for m in contract["methods"] if m["name"] == "dag.get"]
+    dumped = METHOD_MODELS["dag.get"][1].model_validate(answer).model_dump(exclude_none=True)
+    jsonschema.validate(dumped, {**entry["result"]["schema"], "components": contract["components"]})
+
+
+async def test_a_sealed_snapshot_keeps_carried_into(one_run_on_disk) -> None:
+    from raven.rpc.models import DagSnapshotNode
+
+    run_dir = one_run_on_disk.run
+    (run_dir / "graph.json").write_text(
+        json.dumps(
+            {
+                "nodes": [{"id": "r1", "subagent": "R"}, {"id": "r2", "subagent": "R"}],
+                "replan": {
+                    "run_id": "20261108T000000Z-0000000b",
+                    "from_node": "r2",
+                    "started": True,
+                    "carried": ["r1"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "r1": {
+                    "status": "carried",
+                    "subagent": "R",
+                    "carried_into": "20261108T000000Z-0000000b",
+                    "started_at": 1,
+                },
+                "r2": {"status": "failed", "subagent": "R", "error": "Superseded by replan"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    tool = _ReadsTheRunDir(run_dir, one_run_on_disk.nodes)
+
+    run = (await dag_get({"run_id": RUN_ID, "session_key": "tui:live"}, agent_loop_factory=_factory(tool)))["run"]
+
+    r1 = next(f for f in run["files"] if f["node"] == "r1")
+    assert (r1["status"], r1["carried_into"]) == ("carried", "20261108T000000Z-0000000b")
+    assert run["summary"]["carried"] == 1
+    DagSnapshotNode.model_validate({k: v for k, v in r1.items() if k in {"node", "status", "carried_into"}})

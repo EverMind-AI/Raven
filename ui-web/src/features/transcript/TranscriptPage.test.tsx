@@ -4729,6 +4729,41 @@ describe('transcript island, delegated calls', () => {
     expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
   })
 
+  it('counts a node a replan carried on in its own word, and does not read the sealed run as still going', () => {
+    /* The sealed run's completion, as the wire sends it: three files, one of them
+       `carried` -- the node went on in the successor, and this record keeps its
+       start with no end. Left out of `DOT_OF` it vanishes from the line; left out
+       of the settled set it reads as work still to come. Neither a stop (nothing
+       was cancelled) nor a skip (the node ran, and goes on running). */
+    act(() => {
+      const st = mount.step()
+      const h = st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'scan', subagent: 'scout' },
+          { id: 'brief', subagent: 'writer', depends_on: ['scan'] },
+          { id: 'write', subagent: 'writer', depends_on: ['scan'] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', { run_id: 'r11', nodes: [{ id: 'scan' }, { id: 'brief' }, { id: 'write' }] })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'scan', status: 'completed' })
+      mount.dagFeed('dag.node_updated', { run_id: 'r11', node: 'write', status: 'completed' })
+      mount.dagFeed('dag.run_completed', {
+        run_id: 'r11',
+        files: [
+          { node: 'scan', status: 'completed' },
+          { node: 'brief', status: 'carried', carried_into: 'r12' },
+          { node: 'write', status: 'completed' },
+        ],
+      })
+      h.done(true, 'DAG r11: replanned into r12', 40)
+      st.seal()
+    })
+    const card = openDagCard()
+    const nodeRow = dagField(card, 'gui.deleg.d_nodes') || ''
+    expect(bitsOf(nodeRow)).toEqual(['gui.deleg.dag_done {"ok":"2","n":"3"}', 'gui.deleg.dag_carried {"n":"1"}'])
+    expect(dagField(card, 'gui.deleg.d_state')).toContain('gui.deleg.st_ok')
+  })
+
   it('says what a branch left out before what is still to go, while the graph runs', () => {
     act(() => {
       const st = mount.step()
@@ -4900,6 +4935,48 @@ describe('transcript island, delegated calls', () => {
     })
     const card = openDagCard()
     expect(dagField(card, 'gui.dag.replanned_into')).toBe('r2')
+  })
+
+  it('a card follows its chain through a replan', () => {
+    /* A replan carries the run's live work into a successor, which the same card
+       goes on drawing: the successor starts before the old run's completion, so
+       the card binds to it, and the old run closing closes nothing the card shows. */
+    act(() => {
+      const st = mount.step()
+      st.tool('run_subagent_dag', {
+        nodes: [
+          { id: 'a', subagent: 'Raven', node_summary: 'first', depends_on: [] },
+          { id: 'b', subagent: 'Raven', node_summary: 'second', depends_on: [] },
+        ],
+      })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r1',
+        nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }, { id: 'b', subagent: 'Raven', depends_on: [] }],
+      })
+      mount.dagFeed('dag.node_updated', { run_id: 'r1', node: 'a', status: 'running' })
+      mount.dagFeed('dag.run_replanned', { run_id: 'r1', replan_run_id: 'r2', carried: ['a'] })
+      mount.dagFeed('dag.run_started', {
+        run_id: 'r2',
+        nodes: [{ id: 'a', subagent: 'Raven', depends_on: [] }, { id: 'c', subagent: 'Raven', depends_on: [] }],
+      })
+      mount.dagFeed('dag.node_updated', { run_id: 'r2', node: 'a', status: 'running' })
+      mount.dagFeed('dag.run_completed', {
+        run_id: 'r1',
+        files: [{ node: 'a', status: 'carried', carried_into: 'r2' }, { node: 'b', status: 'failed' }],
+      })
+    })
+    const [following] = store._dagCallsForTests()
+    expect(following!.runId).toBe('r2')
+    expect(following!.graphClosed).toBe(false)
+    expect(following!.nodes.map((n) => [n.id, n.status])).toEqual([['a', 'running'], ['c', 'pending']])
+
+    act(() => {
+      mount.dagFeed('dag.run_completed', {
+        run_id: 'r2',
+        files: [{ node: 'a', status: 'completed' }, { node: 'c', status: 'completed' }],
+      })
+    })
+    expect(store._dagCallsForTests()[0]!.graphClosed).toBe(true)
   })
 
   it('keeps the link once the old run finishes, in the order the backend guarantees', () => {

@@ -58,7 +58,7 @@ const boardWith = (...groups: TaskGroup[]): TaskBoard => ({ version: 1, groups, 
 
 const spawn = (id: string, status: TaskRow['status']): TaskRow => ({
   id, kind: 'spawn', status, task_summary: `summary of ${id}`, started_at: 1000, ended_at: null, agent: 'raven-code', handle: null,
-  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
+  counts: { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, carried: 0 },
   nodes: [],
 })
 

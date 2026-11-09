@@ -1025,7 +1025,7 @@ class SubagentStatusEvent(_Strict):
 
 
 DagNodeStatus = Literal[
-    "pending", "running", "completed", "failed", "skipped", "cancelled", "exception", "not_executed"
+    "pending", "running", "completed", "failed", "skipped", "cancelled", "exception", "not_executed", "carried"
 ]
 
 DagNotExecutedReason = Literal["when_false", "when_unknown", "upstream_not_executed"]
@@ -1167,6 +1167,10 @@ class DagRunReplannedPayload(_Strict):
     replan_run_id: str
     from_node: str
     reason: str
+    carried: list[str] | None = Field(
+        default=None,
+        description="The unfinished nodes the replan carried into the successor run, which go on there as they were.",
+    )
 
 
 class DagRunReplannedEvent(_Strict):
@@ -1200,6 +1204,13 @@ class DagRunSummary(_Strict):
         description=(
             "Nodes a branch left out. Present only when there is at least one, so a run that never "
             "branches carries the five counts it always did."
+        ),
+    )
+    carried: int | None = Field(
+        default=None,
+        description=(
+            "Nodes a replan carried into its successor. Present only when there is at least one, which "
+            "only a sealed run has."
         ),
     )
 
@@ -1248,6 +1259,10 @@ class DagRunFile(_Strict):
         default=None,
         description="The agent of each attempt of this node, in order. Present only on a node that was reassigned.",
     )
+    carried_into: str | None = Field(
+        default=None,
+        description="The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.",
+    )
 
 
 class DagRunCompletedPayload(_FromAStint):
@@ -1271,7 +1286,16 @@ class DagRunCompletedEvent(_Strict):
 # server infers for a node the registry still calls running on a run nothing is
 # executing. Nothing on the event wire may claim that.
 DagSnapshotNodeStatus = Literal[
-    "pending", "running", "completed", "failed", "skipped", "cancelled", "interrupted", "exception", "not_executed"
+    "pending",
+    "running",
+    "completed",
+    "failed",
+    "skipped",
+    "cancelled",
+    "interrupted",
+    "exception",
+    "not_executed",
+    "carried",
 ]
 
 
@@ -1295,6 +1319,10 @@ class DagSnapshotNode(_Strict):
         ),
     )
     status: DagSnapshotNodeStatus
+    carried_into: str | None = Field(
+        default=None,
+        description="The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.",
+    )
     started_at: int | None = None
     ended_at: int | None = None
     prompt_file: str | None = None
@@ -1456,6 +1484,13 @@ class TaskCounts(_Strict):
             "status: a run of completed and not_executed nodes is completed."
         ),
     )
+    carried: int = Field(
+        ...,
+        description=(
+            "Nodes a replan carried into the successor run. Only a sealed run has them, and they move no "
+            "rung of the task's status: the run reads as the hand-off its replan link says it was."
+        ),
+    )
 
 
 class TaskReplan(_Strict):
@@ -1466,6 +1501,10 @@ class TaskReplan(_Strict):
     reason: str | None = None
     started: bool
     error: str | None = None
+    carried: list[str] | None = Field(
+        default=None,
+        description="The unfinished nodes the replan carried into the successor run, which go on there as they were.",
+    )
 
 
 class TaskFile(_Strict):
@@ -1502,6 +1541,10 @@ class TaskNode(_Strict):
         ),
     )
     status: DagSnapshotNodeStatus
+    carried_into: str | None = Field(
+        default=None,
+        description="The run that holds this node now. Present only on a carried node, in the sealed record of the run it left.",
+    )
     depends_on: list[str]
     started_at: int | None = None
     ended_at: int | None = None

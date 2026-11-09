@@ -6,7 +6,7 @@ import json
 import time
 import uuid
 import weakref
-from collections.abc import AsyncIterator, Iterable, Mapping
+from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -394,7 +394,14 @@ async def read_session_nodes(backend: Any, root: str) -> SessionNodes:
 NOT_EXECUTED = "not_executed"
 """A node whose branch was not taken: terminal, never dispatched, and without output."""
 
-_TALLY_ORDER = ("completed", "failed", "skipped", "cancelled", NOT_EXECUTED)
+CARRIED = "carried"
+"""A node a replan carried into its successor run, as the sealed run it left records it.
+
+Only ever in a sealed run's record: the node belongs to the successor from the
+replan on, and no live run has one."""
+
+_TALLY_ORDER = ("completed", "failed", "skipped", "cancelled", NOT_EXECUTED, CARRIED)
+_COUNTED_WHEN_PRESENT = frozenset({NOT_EXECUTED, CARRIED})
 
 
 def tally_node_statuses(statuses: Iterable[str]) -> dict[str, int]:
@@ -416,7 +423,7 @@ def tally_node_statuses(statuses: Iterable[str]) -> dict[str, int]:
     tally: dict[str, int] = {"total": len(counted)}
     for status in _TALLY_ORDER:
         count = counted.count(status)
-        if status == NOT_EXECUTED and not count:
+        if status in _COUNTED_WHEN_PRESENT and not count:
             continue
         tally[status] = count
     return tally
@@ -441,6 +448,8 @@ def format_tally(summary: Mapping[str, int]) -> str:
     ]
     if summary.get(NOT_EXECUTED):
         parts.append(f"{summary[NOT_EXECUTED]} not executed")
+    if summary.get(CARRIED):
+        parts.append(f"{summary[CARRIED]} carried")
     return ", ".join(parts) + f" (of {summary.get('total', 0)})"
 
 
@@ -771,6 +780,50 @@ class DagRunStore:
         # running -- the whole window those tools exist for.
         if not any(run.get("run_id") == self.run_id for run in registry["runs"]):
             registry["runs"].append({"run_id": self.run_id, "nodes": sorted(node_ids)})
+        await self._write_registry(registry)
+
+    async def claim_successor(self, *, carried: Sequence[str], new: Sequence[str]) -> None:
+        """Make this run the owner of the nodes a replan carried, and claim its new ones.
+
+        A carried claim keeps every field it had -- when its work began included --
+        and only changes hands: the node keeps running, under this run now. A new id
+        is claimed as :meth:`record_nodes` claims one. Uniqueness is the caller's to
+        have checked, under the same guard.
+
+        The caller must hold :func:`index_guard` for ``registry_root``.
+        """
+        registry = await read_registry(self._backend, self._registry_root)
+        claimed_at = int(time.time() * 1000)
+        for node_id in carried:
+            entry = registry["nodes"].get(node_id) or {"kind": "dag", "started_at_ms": claimed_at}
+            registry["nodes"][node_id] = {**entry, "run_id": self.run_id, "status": RUNNING}
+        for node_id in new:
+            registry["nodes"][node_id] = {
+                "kind": "dag",
+                "run_id": self.run_id,
+                "status": RUNNING,
+                "started_at_ms": claimed_at,
+            }
+        registry["runs"] = [run for run in registry["runs"] if run.get("run_id") != self.run_id]
+        registry["runs"].append({"run_id": self.run_id, "nodes": sorted([*carried, *new])})
+        await self._write_registry(registry)
+
+    async def release_successor(self, *, carried: Sequence[str], new: Sequence[str], predecessor: str) -> None:
+        """Undo :meth:`claim_successor` for a replan that could not be persisted.
+
+        Only for that window: the new ids never started, and the carried ones go
+        back to the run they never left in fact.
+
+        The caller must hold :func:`index_guard` for ``registry_root``.
+        """
+        registry = await read_registry(self._backend, self._registry_root)
+        for node_id in new:
+            registry["nodes"].pop(node_id, None)
+        for node_id in carried:
+            entry = registry["nodes"].get(node_id)
+            if entry is not None:
+                registry["nodes"][node_id] = {**entry, "run_id": predecessor}
+        registry["runs"] = [run for run in registry["runs"] if run.get("run_id") != self.run_id]
         await self._write_registry(registry)
 
     async def wrote_output(self, node_id: str) -> bool:

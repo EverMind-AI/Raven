@@ -139,7 +139,7 @@ describe('fromSpawnContext', () => {
 describe('stop', () => {
   const row = (over: Partial<TaskRow> & Pick<TaskRow, 'id' | 'kind' | 'status'>): TaskRow => ({
     task_summary: null, started_at: null, ended_at: null, agent: null, handle: null,
-    counts: { total: 1, pending: 0, running: 1, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0 },
+    counts: { total: 1, pending: 0, running: 1, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, carried: 0 },
     nodes: [],
     ...over,
   })
