@@ -203,11 +203,34 @@ async def _live_gateway(home: Path, *, token: str | None = None):
     gateway = WsGateway()
     server = TestServer(build_app(gateway, None))
     await server.start_server()
+    import os
+
     home.mkdir(parents=True, exist_ok=True)
     (home / "serve.json").write_text(
-        json.dumps({"port": server.port, "token": token or gateway.session_token, "pid": 1}), encoding="utf-8"
+        # A live pid: the record is read as "a gateway recorded as running", and
+        # a pid that is gone is exactly what makes it stale (see
+        # `_read_serve_state`). The gateway here lives in this test process.
+        # The boot id is the generation's own, so a launch probe can tell this
+        # writer from a later process the OS handed the same pid to.
+        json.dumps(
+            {
+                "port": server.port,
+                "token": token or gateway.session_token,
+                "pid": os.getpid(),
+                "boot_id": gateway.boot_id,
+            }
+        ),
+        encoding="utf-8",
     )
     return server
+
+
+async def _attach_recorded() -> str | None:
+    """`_attach` against whatever serve.json names, the way the CLI calls it."""
+    target = serve_commands._read_serve_state()
+    assert target is not None, "no live record to attach to"
+    port, token, _pid, boot_id = target
+    return await serve_commands._attach(port, token, boot_id)
 
 
 class TestAttaching:
@@ -221,7 +244,7 @@ class TestAttaching:
 
         server = await _live_gateway(home)
         try:
-            url = await serve_commands._attach(*serve_commands._read_serve_state())
+            url = await _attach_recorded()
 
             assert url.startswith(f"http://127.0.0.1:{server.port}/auth#")
             nonce = url.rsplit("#", 1)[1]
@@ -238,7 +261,7 @@ class TestAttaching:
 
         server = await _live_gateway(home)
         try:
-            url = await serve_commands._attach(*serve_commands._read_serve_state())
+            url = await _attach_recorded()
             nonce = url.rsplit("#", 1)[1]
             async with aiohttp.ClientSession() as session:
                 async with session.post(server.make_url("/auth/exchange"), json={"nonce": nonce}):
@@ -249,14 +272,43 @@ class TestAttaching:
             await server.close()
 
     async def test_nothing_listening_is_nothing_to_attach_to(self, home: Path) -> None:
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "serve.json").write_text(json.dumps({"port": 1, "token": "t", "pid": 9}), encoding="utf-8")
+        import os
 
-        assert await serve_commands._attach(*serve_commands._read_serve_state()) is None
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 1, "token": "t", "pid": os.getpid()}), encoding="utf-8")
+
+        assert await _attach_recorded() is None
+
+    async def test_an_unhealthy_answer_is_not_attached_to(self, home: Path) -> None:
+        """A raven-shaped process that is still booting, or shutting down, is
+        not a gateway to mint against: the wait looks again."""
+        import os
+
+        from aiohttp import web as aiohttp_web
+        from aiohttp.test_utils import TestServer
+
+        app = aiohttp_web.Application()
+
+        async def _unhealthy(_request):
+            return aiohttp_web.json_response({"service": "raven-serve"}, status=503)
+
+        app.router.add_get("/health", _unhealthy)
+        server = TestServer(app)
+        await server.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": server.port, "token": "t", "pid": os.getpid()}), encoding="utf-8"
+        )
+        try:
+            assert await _attach_recorded() is None
+        finally:
+            await server.close()
 
     async def test_something_else_on_that_port_is_not_our_gateway(self, home: Path) -> None:
         """Ports get reused. Handing the token to whatever answers would be worse
         than starting a gateway of our own."""
+        import os
+
         from aiohttp import web as aiohttp_web
         from aiohttp.test_utils import TestServer
 
@@ -269,9 +321,36 @@ class TestAttaching:
         stranger = TestServer(app)
         await stranger.start_server()
         home.mkdir(parents=True, exist_ok=True)
-        (home / "serve.json").write_text(json.dumps({"port": stranger.port, "token": "t", "pid": 1}), encoding="utf-8")
+        (home / "serve.json").write_text(
+            json.dumps({"port": stranger.port, "token": "t", "pid": os.getpid()}), encoding="utf-8"
+        )
         try:
-            assert await serve_commands._attach(*serve_commands._read_serve_state()) is None
+            assert await _attach_recorded() is None
+        finally:
+            await stranger.close()
+
+    async def test_a_health_answer_that_is_not_an_object_is_not_attached_to(self, home: Path) -> None:
+        """A 200 carrying a JSON array names no service at all. Reading a field
+        off it is a traceback, not an answer, and the port is a stranger's."""
+        import os
+
+        from aiohttp import web as aiohttp_web
+        from aiohttp.test_utils import TestServer
+
+        app = aiohttp_web.Application()
+
+        async def _not_an_object(_request):
+            return aiohttp_web.json_response(["raven-serve"])
+
+        app.router.add_get("/health", _not_an_object)
+        stranger = TestServer(app)
+        await stranger.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": stranger.port, "token": "t", "pid": os.getpid()}), encoding="utf-8"
+        )
+        try:
+            assert await _attach_recorded() is None
         finally:
             await stranger.close()
 
@@ -280,9 +359,323 @@ class TestAttaching:
         server = await _live_gateway(home, token="not-its-token")
         try:
             with pytest.raises(PermissionError):
-                await serve_commands._attach(*serve_commands._read_serve_state())
+                await _attach_recorded()
         finally:
             await server.close()
+
+    async def test_health_names_the_generation_that_wrote_the_record(self, home: Path) -> None:
+        """The record and /health carry the same boot id. That agreement is what
+        lets the probe tell the writer from a later process holding its pid."""
+        import aiohttp
+
+        server = await _live_gateway(home)
+        try:
+            recorded = json.loads((home / "serve.json").read_text(encoding="utf-8"))
+            async with aiohttp.ClientSession() as session:
+                async with session.get(server.make_url("/health")) as health:
+                    assert (await health.json())["boot_id"] == recorded["boot_id"]
+        finally:
+            await server.close()
+
+
+def _dead_pid() -> int:
+    """A pid this test has watched exit: the one positive case for the liveness check."""
+    import subprocess
+
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
+
+
+class TestAStaleServeRecord:
+    """A record outlives the gateway that wrote it when the stop could not run
+    the teardown.
+
+    ``raven web --stop`` on Windows terminates the gateway -- the loop's SIGTERM
+    handler is not available there -- so ``serve.json`` keeps the dead
+    generation's token. The next generation answers the same port while it
+    boots, and a reader that trusts the old token posts it to its own fresh
+    gateway and is refused: a live engine reported as refusing the recorded
+    token, when the recorded token simply was not its own.
+    """
+
+    def test_a_record_whose_writer_is_gone_is_not_attached_to(self, home: Path) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": 18999, "token": "old", "pid": _dead_pid()}), encoding="utf-8"
+        )
+
+        assert serve_commands._read_serve_state() is None
+
+    def test_a_record_whose_writer_is_alive_is_still_read(self, home: Path) -> None:
+        import os
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": 18999, "token": "t", "pid": os.getpid()}), encoding="utf-8"
+        )
+
+        assert serve_commands._read_serve_state() == (18999, "t", os.getpid(), "")
+
+    def test_a_record_with_no_pid_is_read_as_before(self, home: Path) -> None:
+        """Older and hand-written records carry no pid. There is nothing to
+        check, and refusing them would break attaching where it used to work."""
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t"}), encoding="utf-8")
+
+        assert serve_commands._read_serve_state() == (18999, "t", 0, "")
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "not json at all",
+            "[]",
+            json.dumps({"port": 0, "token": "t", "pid": 1}),
+            json.dumps({"port": 18999, "token": "", "pid": 1}),
+        ],
+    )
+    def test_a_record_that_names_nothing_is_not_attached_to(self, home: Path, payload: str) -> None:
+        """Unreadable, non-object and incomplete records keep the reader's old
+        answer: there is nothing to attach to."""
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(payload, encoding="utf-8")
+
+        assert serve_commands._read_serve_record() is None
+        assert serve_commands._read_serve_state() is None
+
+    def test_the_wait_attaches_to_the_new_record_not_the_stale_one(self, home: Path, monkeypatch) -> None:
+        """The gateway writes its own token while the wait is already polling.
+        The wait must mint against that record, not the generation the file
+        still named when it started."""
+        import os
+        import threading
+        import time
+
+        home.mkdir(parents=True, exist_ok=True)
+        state = home / "serve.json"
+        state.write_text(
+            json.dumps({"port": 18999, "token": "old", "pid": _dead_pid(), "boot_id": "old-generation"}),
+            encoding="utf-8",
+        )
+
+        def _new_generation() -> None:
+            time.sleep(0.05)
+            state.write_text(
+                json.dumps({"port": 18999, "token": "new", "pid": os.getpid(), "boot_id": "new-generation"}),
+                encoding="utf-8",
+            )
+
+        threading.Thread(target=_new_generation, daemon=True).start()
+        minted: list[tuple[str, str]] = []
+
+        def _attach(port: int, token: str, boot_id: str = "") -> str:
+            minted.append((token, boot_id))
+            return f"http://127.0.0.1:{port}/auth#n"
+
+        monkeypatch.setattr(serve_commands, "_attach", _attach)
+        monkeypatch.setattr(serve_commands.asyncio, "run", lambda coro: coro)
+
+        assert serve_commands._await_attach(timeout_s=5.0) == "http://127.0.0.1:18999/auth#n"
+        assert minted == [("new", "new-generation")], minted
+
+    def test_the_pre_start_probe_does_not_mint_against_a_stale_record(self, home: Path, monkeypatch) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": 18999, "token": "old", "pid": _dead_pid()}), encoding="utf-8"
+        )
+        called: list[tuple[int, str, str]] = []
+        monkeypatch.setattr(
+            serve_commands, "_attach", lambda port, token, boot_id="": called.append((port, token, boot_id))
+        )
+        monkeypatch.setattr(serve_commands.asyncio, "run", lambda coro: coro)
+
+        assert serve_commands._attached_url() is None
+        assert called == []
+
+    def test_the_pre_start_probe_passes_the_recorded_boot_id(self, home: Path, monkeypatch) -> None:
+        """The probe must hand `_attach` the generation it read, or the health
+        answer has nothing to be compared against."""
+        import os
+
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": 18999, "token": "t", "pid": os.getpid(), "boot_id": "generation-7"}),
+            encoding="utf-8",
+        )
+        called: list[tuple[int, str, str]] = []
+        monkeypatch.setattr(
+            serve_commands, "_attach", lambda port, token, boot_id="": called.append((port, token, boot_id))
+        )
+        monkeypatch.setattr(serve_commands.asyncio, "run", lambda coro: coro)
+
+        assert serve_commands._read_serve_state() == (18999, "t", os.getpid(), "generation-7")
+        assert serve_commands._attached_url() is None
+        assert called == [(18999, "t", "generation-7")]
+
+    @pytest.mark.parametrize("pid", ["not-a-number", None, -5, {"nested": 1}, 2**40])
+    def test_an_unreadable_pid_is_read_as_no_pid(self, home: Path, pid: object) -> None:
+        """A pid the reader cannot use is nothing to check, not a reason to
+        throw away a port and token that are still good: dropping the record
+        would let `web` start a second engine beside the live one."""
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(json.dumps({"port": 18999, "token": "t", "pid": pid}), encoding="utf-8")
+
+        record = serve_commands._read_serve_record()
+        assert record is not None
+        assert record[:2] == (18999, "t") and record[2] == 0
+        assert serve_commands._read_serve_state() == (18999, "t", 0, "")
+
+    def test_an_infinite_pid_is_read_as_no_pid(self, home: Path) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text('{"port": 18999, "token": "t", "pid": Infinity}', encoding="utf-8")
+
+        record = serve_commands._read_serve_record()
+        assert record is not None and record[2] == 0
+        assert serve_commands._read_serve_state() == (18999, "t", 0, "")
+
+    def test_an_infinite_port_names_nothing(self, home: Path) -> None:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text('{"port": Infinity, "token": "t", "pid": 1}', encoding="utf-8")
+
+        assert serve_commands._read_serve_record() is None
+        assert serve_commands._read_serve_state() is None
+
+
+class TestAReusedPid:
+    """Liveness is not identity: the OS hands a dead gateway's pid to somebody
+    else, and that somebody is alive. The boot id is the part of the record a
+    later process cannot inherit."""
+
+    async def test_a_generation_with_a_different_boot_id_does_not_get_the_token(self, home: Path) -> None:
+        import os
+
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        gateway = WsGateway()
+        server = TestServer(build_app(gateway, None))
+        await server.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        # A live pid and the port the new generation answers on, but the token
+        # and boot id of the generation before it: a recycled pid, in one picture.
+        (home / "serve.json").write_text(
+            json.dumps(
+                {
+                    "port": server.port,
+                    "token": "old-token",
+                    "pid": os.getpid(),
+                    "boot_id": "the-generation-before",
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            assert await serve_commands._attach(server.port, "old-token", "the-generation-before") is None
+            assert gateway._nonces == {}, "the old token was minted against a generation that is not its own"
+            # The record's own generation still attaches: the check narrows the
+            # path, it does not disable it.
+            assert await serve_commands._attach(server.port, gateway.session_token, gateway.boot_id) is not None
+        finally:
+            await server.close()
+
+    async def test_a_record_without_a_boot_id_is_read_as_before(self, home: Path) -> None:
+        """Records written before boot ids existed cannot be checked. Refusing
+        them would break attaching to a gateway that is still running."""
+        import os
+
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        gateway = WsGateway()
+        server = TestServer(build_app(gateway, None))
+        await server.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": server.port, "token": gateway.session_token, "pid": os.getpid()}),
+            encoding="utf-8",
+        )
+        try:
+            target = serve_commands._read_serve_state()
+            assert target is not None and target[3] == ""
+            assert await serve_commands._attach(*target[:2]) is not None
+        finally:
+            await server.close()
+
+    async def test_a_record_with_a_boot_id_requires_the_answer_to_name_it(self, home: Path) -> None:
+        """An answer that names no generation cannot prove it is the record's
+        writer, so the token is not posted to it. The record's own generation
+        still attaches -- this narrows the path, it does not disable it."""
+        import os
+
+        from aiohttp import web as aiohttp_web
+        from aiohttp.test_utils import TestServer
+
+        app = aiohttp_web.Application()
+
+        async def _no_boot_id(_request):
+            return aiohttp_web.json_response({"ok": True, "service": "raven-serve"})
+
+        app.router.add_get("/health", _no_boot_id)
+        server = TestServer(app)
+        await server.start_server()
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "serve.json").write_text(
+            json.dumps({"port": server.port, "token": "t", "pid": os.getpid(), "boot_id": "record-boot"}),
+            encoding="utf-8",
+        )
+        try:
+            assert await _attach_recorded() is None
+        finally:
+            await server.close()
+
+    async def test_a_refusal_with_no_record_to_recheck_is_still_reported(self, home: Path, monkeypatch) -> None:
+        """A 403 with no live record behind it cannot be explained as a
+        generation switch. Reporting it is what keeps a second engine from
+        being started beside the one that answered."""
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        gateway = WsGateway()
+        server = TestServer(build_app(gateway, None))
+        await server.start_server()
+        monkeypatch.setattr(serve_commands, "_read_serve_state", lambda: None)
+        try:
+            with pytest.raises(PermissionError):
+                await serve_commands._attach(server.port, "not-its-token", gateway.boot_id)
+        finally:
+            await server.close()
+
+    async def test_a_record_that_changed_under_the_attach_is_retried_once(self, home: Path, monkeypatch) -> None:
+        """The generation can be replaced between the health check and the
+        nonce. The record names the new one; attaching to it once is cheaper
+        than reporting its token as refused."""
+        import os
+
+        from aiohttp.test_utils import TestServer
+
+        from raven.rpc.transports.ws import WsGateway, build_app
+
+        old = WsGateway()
+        old_server = TestServer(build_app(old, None))
+        await old_server.start_server()
+        new = WsGateway()
+        new_server = TestServer(build_app(new, None))
+        await new_server.start_server()
+        monkeypatch.setattr(
+            serve_commands,
+            "_read_serve_state",
+            lambda: (new_server.port, new.session_token, os.getpid(), new.boot_id),
+        )
+        try:
+            url = await serve_commands._attach(old_server.port, "old-token", old.boot_id)
+            assert url is not None and url.startswith(f"http://127.0.0.1:{new_server.port}/auth#")
+            assert old._nonces == {}, "the old generation was asked to mint after it stopped answering health"
+        finally:
+            await old_server.close()
+            await new_server.close()
 
 
 @pytest.fixture
@@ -1478,6 +1871,20 @@ class TestTheSessionSurvivesARestart:
 
         assert gw.session_cookie == "cookie-1"
 
+    def test_the_boot_id_is_written_beside_the_token(self, home: Path) -> None:
+        import os
+
+        serve_commands._write_serve_state(18792, "tok-1", "", "generation-7")
+
+        assert serve_commands._read_serve_record() == (18792, "tok-1", os.getpid(), "generation-7")
+
+    def test_a_record_without_a_boot_id_omits_the_field(self, home: Path) -> None:
+        """What older ravens wrote. There is no generation to compare, so the
+        reader must keep accepting the record."""
+        serve_commands._write_serve_state(18792, "tok-1")
+
+        assert "boot_id" not in json.loads((home / "serve.json").read_text(encoding="utf-8"))
+
     def test_the_env_override_still_wins(self, home: Path, monkeypatch) -> None:
         """`system.upgrade` hands the exact session to its replacement this way,
         so a stored value must not overrule it."""
@@ -1540,7 +1947,7 @@ class TestAFirstRunIsGivenTimeToCompile:
         monkeypatch.setattr(
             serve_commands,
             "_read_serve_state",
-            lambda: (18792, "tok") if poll[0] >= 28.0 else None,
+            lambda: (18792, "tok", 4242, "boot") if poll[0] >= 28.0 else None,
         )
         # Stubbed as a plain call so the loop never builds a real coroutine
         # for asyncio.run to leave unawaited.
@@ -1572,7 +1979,7 @@ class TestAFirstRunIsGivenTimeToCompile:
         monkeypatch.setattr(
             serve_commands,
             "_read_serve_state",
-            lambda: (18792, "tok") if poll[0] >= 9.0 else None,
+            lambda: (18792, "tok", 4242, "boot") if poll[0] >= 9.0 else None,
         )
         monkeypatch.setattr(serve_commands, "_attach", lambda *_a: "coro")
         monkeypatch.setattr(serve_commands.asyncio, "run", lambda coro: "http://127.0.0.1:18792/auth#n")
@@ -1912,6 +2319,12 @@ class TestAGatewayHostedPage:
     def test_no_gateway_running_reads_as_nothing_hosted(self, home: Path, monkeypatch) -> None:
         _record_hosted(home, pid=4321)
         self._lock_says(monkeypatch, None)
+        assert serve_commands._gateway_hosted_page() is None
+
+    def test_a_live_lock_with_no_record_is_nothing_hosted(self, home: Path, monkeypatch) -> None:
+        """A gateway still booting holds the lock before it writes serve.json.
+        There is no token to attach to, and starting is then correct."""
+        self._lock_says(monkeypatch, 4321)
         assert serve_commands._gateway_hosted_page() is None
 
 

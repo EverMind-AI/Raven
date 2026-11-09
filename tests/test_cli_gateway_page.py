@@ -71,11 +71,16 @@ async def test_the_mounted_page_answers_like_raven_serve(home: Path) -> None:
         state = json.loads((home / "serve.json").read_text(encoding="utf-8"))
         assert state["port"] == mount.port
         assert state["pid"] == os.getpid()
+        # The generation's own id, so a launch probe can tell this writer from a
+        # later process the OS handed the same pid to.
+        assert state["boot_id"]
 
         async with aiohttp.ClientSession() as session:
             async with session.get(f"{mount.url}/health") as resp:
                 assert resp.status == 200
-                assert (await resp.json())["service"] == "raven-serve"
+                health = await resp.json()
+                assert health["service"] == "raven-serve"
+                assert health["boot_id"] == state["boot_id"]
             # The dialect-A socket, opened with the recorded token the way
             # local tooling does.
             async with session.ws_connect(f"{mount.url}/rpc", headers={"X-Raven-Token": state["token"]}) as ws:
@@ -94,10 +99,13 @@ async def test_the_mounted_page_answers_like_raven_serve(home: Path) -> None:
     assert SERVE.port is None
 
 
-def _write_foreign_state(home: Path, *, pid: int, port: int) -> Path:
+def _write_foreign_state(home: Path, *, pid: int, port: int, boot_id: str | None = None) -> Path:
+    state: dict[str, object] = {"port": port, "token": "their-token", "pid": pid}
+    if boot_id is not None:
+        state["boot_id"] = boot_id
     path = home / "serve.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"port": port, "token": "their-token", "pid": pid}), encoding="utf-8")
+    path.write_text(json.dumps(state), encoding="utf-8")
     return path
 
 
@@ -132,6 +140,64 @@ async def test_mount_yields_to_a_live_standalone_serve(home: Path) -> None:
         await runner.cleanup()
 
 
+async def _standalone_owner_with_health(home: Path, *, boot_id: str | None, answer):
+    """A live foreign pid plus a health server, read the way the mount reads it."""
+    from aiohttp import web
+
+    from raven.cli._gateway_page import _standalone_serve_owner
+    from raven.rpc.transports.ws import pick_port
+
+    app = web.Application()
+    app.router.add_get("/health", answer)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = await pick_port(18960)
+    site = web.TCPSite(runner, "127.0.0.1", port)
+    await site.start()
+    try:
+        _write_foreign_state(home, pid=os.getppid(), port=port, boot_id=boot_id)
+        return port, await _standalone_serve_owner()
+    finally:
+        await runner.cleanup()
+
+
+async def test_the_standalone_owner_must_name_the_record_s_generation(home: Path) -> None:
+    """A recycled pid is alive, and something else can answer the recorded
+    port. The boot id is the part of the record that says whether the answer
+    is the generation that wrote it."""
+    from aiohttp import web
+
+    async def health(_request):
+        return web.json_response({"service": "raven-serve", "boot_id": "the-answering-generation"})
+
+    _port, owner = await _standalone_owner_with_health(home, boot_id="the-generation-before", answer=health)
+    assert owner is None
+
+
+async def test_the_standalone_owner_accepts_the_generation_that_wrote_the_record(home: Path) -> None:
+    """The match narrows the path, it does not disable it: the writer still
+    owns the page."""
+    from aiohttp import web
+
+    async def health(_request):
+        return web.json_response({"service": "raven-serve", "boot_id": "generation-7"})
+
+    port, owner = await _standalone_owner_with_health(home, boot_id="generation-7", answer=health)
+    assert owner == (os.getppid(), port)
+
+
+async def test_a_health_answer_that_is_not_an_object_is_not_a_standalone_owner(home: Path) -> None:
+    """A 200 carrying a JSON array names no service: reading a field off it is
+    a traceback, and the mount is then wrongly abandoned."""
+    from aiohttp import web
+
+    async def health(_request):
+        return web.json_response(["raven-serve"])
+
+    _port, owner = await _standalone_owner_with_health(home, boot_id=None, answer=health)
+    assert owner is None
+
+
 async def test_a_stale_serve_json_does_not_block_the_mount(home: Path) -> None:
     """serve.json naming a live pid whose port no longer answers /health is
     stale (the serve died and the pid is a stranger's); mounting over it is
@@ -148,6 +214,7 @@ async def test_a_stale_serve_json_does_not_block_the_mount(home: Path) -> None:
         state = json.loads((home / "serve.json").read_text(encoding="utf-8"))
         assert state["pid"] == os.getpid()
         assert state["port"] == mount.port
+        assert state["boot_id"]
     finally:
         await mount.teardown()
 

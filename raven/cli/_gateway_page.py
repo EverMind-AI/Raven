@@ -61,11 +61,13 @@ def _adopt_credentials(ws_gateway: Any, adopt_stored_cookie: Callable[[Any], Non
 async def _standalone_serve_owner() -> tuple[int, int] | None:
     """(pid, port) of a live standalone `raven serve` recorded in serve.json.
 
-    ``None`` unless three facts line up, mirroring ``_gateway_hosted_page``
+    ``None`` unless four facts line up, mirroring ``_gateway_hosted_page``
     read the other way: serve.json names a pid that is not ours, that pid is
-    alive, and the recorded port's /health answers as ``raven-serve``. A stale
+    alive, the recorded port's /health answers as ``raven-serve``, and -- when
+    the record carries one -- the answer names the same generation. A stale
     file (dead pid, or the port re-used by a stranger) reads as None, and
-    mounting over it is then correct.
+    mounting over it is then correct. A record without a boot id was written
+    before they existed and has nothing to compare; it is read as before.
     """
     import json
     import os
@@ -77,19 +79,26 @@ async def _standalone_serve_owner() -> tuple[int, int] | None:
     try:
         data = json.loads(_state_path().read_text(encoding="utf-8"))
         pid, port = int(data["pid"]), int(data["port"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except (OSError, ValueError, OverflowError, KeyError, TypeError):
         return None
+    boot = data.get("boot_id")
+    recorded_boot = boot if isinstance(boot, str) else ""
     if pid <= 0 or pid == os.getpid() or port <= 0 or not _pid_alive(pid):
         return None
     timeout = aiohttp.ClientTimeout(total=2)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(f"http://127.0.0.1:{port}/health") as health:
-                if health.status == 200 and (await health.json()).get("service") == "raven-serve":
-                    return (pid, port)
+                if health.status != 200:
+                    return None
+                answered = await health.json()
+                if not isinstance(answered, dict) or answered.get("service") != "raven-serve":
+                    return None
+                if recorded_boot and answered.get("boot_id") != recorded_boot:
+                    return None
+                return (pid, port)
     except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, KeyError):
         return None
-    return None
 
 
 async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
@@ -171,7 +180,7 @@ async def mount_page(agent_loop: Any, preferred_port: int) -> PageMount | None:
         await runner.cleanup()
         raise
 
-    state_path = _write_serve_state(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
+    state_path = _write_serve_state(bound_port, ws_gateway.session_token, ws_gateway.session_cookie, ws_gateway.boot_id)
     SERVE.arm_hosted(bound_port, ws_gateway.session_token, ws_gateway.session_cookie)
 
     try:

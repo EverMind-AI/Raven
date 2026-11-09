@@ -140,6 +140,13 @@ class WsGateway:
 
         self.session_token = os.environ.get("RAVEN_SERVE_TOKEN") or secrets.token_hex(32)
         self.session_cookie = os.environ.get("RAVEN_SERVE_COOKIE") or secrets.token_urlsafe(32)
+        # Names this generation, not this credential. serve.json carries it
+        # beside the token and /health reports it, so a launch probe can tell
+        # the process that wrote a record from a later one the OS handed the
+        # same pid to: a pid is recycled, this is not. It proves nothing on its
+        # own -- the token it is compared against stays in serve.json (0600) --
+        # and nothing is minted from it.
+        self.boot_id = secrets.token_hex(16)
         self._nonces: dict[str, float] = {}
         self._sockets: set[web.WebSocketResponse] = set()
         self.dispatcher: Any = None
@@ -263,6 +270,7 @@ class WsGateway:
             {
                 "ok": True,
                 "service": "raven-serve",
+                "boot_id": self.boot_id,
                 "server_version": SERVER_VERSION,
                 "schema_version": SCHEMA_VERSION,
                 # Whether this process serves the trajectory view; on unless
