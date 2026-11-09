@@ -116,6 +116,30 @@ def test_the_recalled_text_is_taken_out_of_the_system_prompt_too() -> None:
     assert parts[CONVERSATION] == 0
 
 
+def test_the_recalled_text_is_taken_out_of_a_message_sent_as_blocks() -> None:
+    """A message carrying a picture is a list of blocks: the recalled text is cut
+    out of its text block, the picture is left as it is, and a message with no
+    content at all passes through."""
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    with_recall = measure_parts(
+        [
+            {"role": "user", "content": [{"type": "text", "text": f"look\n\n{MEMORY_TEXT}"}, picture]},
+            {"role": "assistant", "content": None},
+        ],
+        None,
+        {"memory": MEMORY_TEXT},
+    )
+    without_recall = measure_parts(
+        [
+            {"role": "user", "content": [{"type": "text", "text": "look\n\n"}, picture]},
+            {"role": "assistant", "content": None},
+        ]
+    )
+
+    assert with_recall[MEMORY] > 0
+    assert with_recall[CONVERSATION] == without_recall[CONVERSATION]
+
+
 def test_the_parts_add_up_to_the_prompt() -> None:
     """Each part is measured on its own, so the five come to the whole within
     a few tokens -- the estimator's own boundaries, not a hole in the account."""
