@@ -126,7 +126,7 @@ describe('the legacy parked-turn adapter', () => {
     registry.park()
     const parked = parkedTurns.get('a')! as Parked
     expect(parked.phase).toEqual({ phase: 'streaming', cancellable: false, resume: null })
-    expect(parked.queue).toEqual(['queued'])
+    expect(parked.queue).toEqual([{ text: 'queued', moveOn: 'g_1' }])
     expect(parked.ws).toEqual({ changes: [], urls: [], file: null, turn: 1, unseen: 0 })
 
     turn.dispatch({ type: 'idle' })
