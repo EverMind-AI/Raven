@@ -15,8 +15,9 @@ runs. Three rules from the specification shape the whole thing:
   MCP for that package and leaves its skills alone (§10.1, §7.2.2);
 - one unusable server entry never takes the others with it -- the entry is
   skipped and reported, and the rest of the package still loads (§7.2.2);
-- a server's paths stay inside the package, and the two placeholders the
-  format defines are expanded in exactly the fields it names (§4.1, §9.2).
+- a server's paths stay inside the package, the two placeholders the format
+  defines are expanded in exactly the fields it names, and no argument or
+  environment value may carry a `..` path component (§4.1, §9.2).
 
 Starting a package's server is the operator's call, not this module's: the
 servers are composed here and handed over, and the caller decides which
@@ -63,6 +64,13 @@ _DATA_PLACEHOLDER = "${PLUGIN_DATA}"
 _ROOT_VAR = "PLUGIN_ROOT"
 _DATA_VAR = "PLUGIN_DATA"
 _RESERVED_ENV_NAMES = frozenset({_ROOT_VAR, _DATA_VAR})
+
+_PATH_COMPONENT_RE = re.compile(r"[/\\]")
+
+
+def _has_dotdot_component(text: str) -> bool:
+    """Whether *text* carries a `..` component on either platform's separator."""
+    return any(component == ".." for component in _PATH_COMPONENT_RE.split(text))
 
 
 class AgentPluginMcpError(ValueError):
@@ -298,6 +306,12 @@ def _build_stdio(
         key: expand_placeholders(value, plugin_root=root_text, plugin_data=data_text)
         for key, value in entry.env.items()
     }
+    for arg in args:
+        if _has_dotdot_component(arg):
+            raise ValueError(f"the argument {arg!r} carries a '..' path component")
+    for key, value in env.items():
+        if _has_dotdot_component(value):
+            raise ValueError(f"the environment value for {key!r} carries a '..' path component")
     # The client provides the two reserved variables, and it provides them
     # last (§9.1, §9.2).
     env[_ROOT_VAR] = root_text

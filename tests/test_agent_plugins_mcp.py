@@ -322,6 +322,50 @@ def test_stdio_expands_placeholders_in_args_and_env(tmp_path: Path) -> None:
     assert server.env["CONFIG"] == f"{root.resolve()}/config.json"
 
 
+@pytest.mark.parametrize(
+    "arg", ["../outside", "${PLUGIN_ROOT}/../../etc/passwd", "..", "x/..", "a/../b", "..\\outside"]
+)
+def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, arg: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.servers == {}
+    assert "'..' path component" in report.problems[0].reason
+
+
+def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path: Path) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(env={"CONFIG": "${PLUGIN_DATA}/../../secret"})}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.servers == {}
+    assert "'..' path component" in report.problems[0].reason
+
+
+@pytest.mark.parametrize("arg", ["a..b", "...", "./bin/tool", "..-ish"])
+def test_stdio_keeps_an_argument_without_a_dotdot_component(tmp_path: Path, arg: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.problems == ()
+    assert report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"].args == [arg]
+
+
+def test_a_dotdot_environment_value_does_not_take_other_entries_down(tmp_path: Path) -> None:
+    root = _package(
+        tmp_path,
+        mcp=_mcp(
+            {
+                "bad": _stdio(env={"CONFIG": "${PLUGIN_ROOT}/../../secret"}),
+                "good": _stdio(command="npx"),
+            }
+        ),
+    )
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert [problem.server for problem in report.problems] == ["bad"]
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}good"]
+
+
 def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio()}))
     data = tmp_path / "data"
