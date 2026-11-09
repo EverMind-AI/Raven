@@ -419,6 +419,7 @@ async def test_list_with_probe_false_skips_the_network_probe(config_path: Path, 
         "OpenClaw",
         "OpenCode",
         "Hermes Agent",
+        "DSH",
     } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # Their own group, not installed/uninstalled: there is nothing to install, and
     # a row that could only ever read "uninstalled" would say the opposite.

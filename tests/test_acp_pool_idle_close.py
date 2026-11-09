@@ -19,6 +19,7 @@ from raven.utils.commands import command_quote
 
 _STUB = Path(__file__).with_name("acp_stub_server.py")
 _LOADS = {"agentCapabilities": {"loadSession": True}}
+_RESUMES = {"agentCapabilities": {"sessionCapabilities": {"resume": {}}}}
 _RESIDENT = {"agentCapabilities": {"loadSession": True, "_meta": {"raven.residentWork": True}}}
 _NO_LOAD = {"agentCapabilities": {}}
 
@@ -76,6 +77,17 @@ async def test_a_quiet_agent_that_can_reload_its_sessions_is_closed() -> None:
     assert await pool.close_idle(60) == ["quiet"]
     assert client.closed
     assert pool.live("quiet") == []
+
+
+async def test_a_quiet_agent_that_can_resume_its_sessions_is_closed_too() -> None:
+    """``session/resume`` reopens a served session in the next process as
+    ``session/load`` does, so an agent declaring only that loses nothing by
+    closing. Kept, it held its process for the life of the host."""
+    client = _Client(idle=120)
+    pool = _pool_holding(quiet=_held(client, _RESUMES, seen=("s1",)))
+
+    assert await pool.close_idle(60) == ["quiet"]
+    assert client.closed
 
 
 async def test_an_agent_that_says_it_holds_resident_work_is_kept() -> None:

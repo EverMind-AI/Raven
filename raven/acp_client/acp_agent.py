@@ -47,6 +47,7 @@ from raven.acp_client.capabilities import (
     read_session_current_model,
     read_session_effort,
     relearn_session_menus,
+    reopens_sessions,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
@@ -1681,17 +1682,17 @@ class AcpAgentBackend:
 
         Read from the handshake snapshot, never declared: a cli entry derives this
         from ``resume_command`` because that is the mechanism that would have to
-        deliver it, and for acp the equivalent mechanism is the agent's own
-        ``session/load`` -- so the capability read here is ``loadSession``, the one
-        that method is gated on, and not ``sessionCapabilities.resume``.
+        deliver it, and for acp the equivalent mechanism is whichever reopening
+        call the agent declared -- ``session/load`` or ``session/resume``, see
+        :func:`~raven.acp_client.capabilities.reopens_sessions`.
 
         Measured 2026-09-07: github-copilot, codebuddy and pi-acp all report
         ``resume: false`` alongside ``loadSession: true`` and all three resume
-        correctly when ``session/load`` is called. Read from ``resume``, they were
-        stateless -- which never reached the load call, and cost them their strip
-        row and their place among the spawn schema's ``instance`` targets.
+        correctly when ``session/load`` is called. Read from ``resume`` alone, they
+        were stateless -- which never reached the load call, and cost them their
+        strip row and their place among the spawn schema's ``instance`` targets.
         """
-        return bool(self._snapshot and self._snapshot.can_load)
+        return self._snapshot is not None and reopens_sessions(self._snapshot)
 
     async def run(
         self,
@@ -2435,33 +2436,40 @@ class AcpAgentBackend:
         lost: str | None = None
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
-            if known is not None and (self._snapshot and self._snapshot.can_load):
+            if known is not None:
+                reopen = {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers}
                 try:
-                    # `session/load` is not a getter: the agent answers it by
-                    # replaying the whole transcript as `session/update` frames
-                    # (see the fork's `raven/acp/replay.py`). No run is attached
-                    # to this session yet, so those frames would fall through to
-                    # the connection's resident sink -- the unprompted recorder --
-                    # and every resumed turn would log its own history as work
-                    # the agent did on its own account, and stream it to the pane
-                    # a second time. A sink that drops them holds the session for
-                    # the length of the call; the turn's collector takes it over
-                    # immediately after.
-                    try:
-                        async with _replay_dropped(router, known):
-                            loaded = await request_or_busy(
-                                "session/load",
-                                {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                            )
-                    except AcpRemoteError as exc:
-                        if not _holds_session(exc):
-                            raise
-                        loaded = None
-                    if loaded is not None:
-                        self._relearn_menus(loaded)
-                        self._note_session_model(client, known, loaded)
-                        self._note_session_effort(client, known, loaded)
-                        self._note_session_mode(client, known, loaded)
+                    if self._snapshot is not None and self._snapshot.can_load:
+                        # `session/load` is not a getter: the agent answers it by
+                        # replaying the whole transcript as `session/update` frames
+                        # (see the fork's `raven/acp/replay.py`). No run is attached
+                        # to this session yet, so those frames would fall through to
+                        # the connection's resident sink -- the unprompted recorder --
+                        # and every resumed turn would log its own history as work
+                        # the agent did on its own account, and stream it to the pane
+                        # a second time. A sink that drops them holds the session for
+                        # the length of the call; the turn's collector takes it over
+                        # immediately after.
+                        try:
+                            async with _replay_dropped(router, known):
+                                reopened = await request_or_busy("session/load", reopen)
+                        except AcpRemoteError as exc:
+                            if not _holds_session(exc):
+                                raise
+                            reopened = None
+                    elif router is not None and known in router.seen:
+                        # `session/resume` reopens a session in a process that
+                        # does not hold it, and the one that does refuses it
+                        # (DeepSeek Harness: `-32602 session is already active`).
+                        # This connection served it, so it is live here as it is.
+                        reopened = None
+                    else:
+                        reopened = await request_or_busy("session/resume", reopen)
+                    if reopened is not None:
+                        self._relearn_menus(reopened)
+                        self._note_session_model(client, known, reopened)
+                        self._note_session_effort(client, known, reopened)
+                        self._note_session_mode(client, known, reopened)
                     await self._settle_session(
                         client,
                         known,
@@ -2472,11 +2480,11 @@ class AcpAgentBackend:
                     )
                     return known, True
                 except AcpRemoteError as exc:
-                    # The agent's own store may have pruned this id, and the
-                    # `session/load` param shape is not measured against a live
-                    # server. Either way a fresh session is a working outcome, so
-                    # drop the stale binding rather than fail the task -- the
-                    # instance itself stays on the strip, see `unbind`.
+                    # The agent's own store may have pruned this id, or refused
+                    # the reopen for a reason of its own. Either way a fresh
+                    # session is a working outcome, so drop the stale binding
+                    # rather than fail the task -- the instance itself stays on
+                    # the strip, see `unbind`.
                     logger.warning(
                         "acp agent {!r}: resuming {}/{!r} failed ({}); starting a fresh session",
                         self.name,

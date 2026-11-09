@@ -69,7 +69,12 @@ describe('the agent catalogue', () => {
     expect(shortOf(r)).toBe('gui.agent.short_mirasim')
     expect(byOf(r)).toBe('Anthropic')
     expect(installOf(r)).toEqual({ site: 'mirasim.ai/download', cmd: undefined })
-    expect(byOf(row({ name: 'DSH-Mirasim', preset: 'mirasim_dsh' }))).toBe('')
+    expect(byOf(row({ name: 'DSH-Mirasim', preset: 'mirasim_dsh' }))).toBe('DeepSeek')
+  })
+
+  it('credits DSH to DeepSeek, who publish it, on its own row and through Mirasim alike', () => {
+    expect(byOf(row({ name: 'DSH', preset: 'dsh' }))).toBe('DeepSeek')
+    expect(byOf(row({ name: 'DSH-Mirasim', preset: 'mirasim_dsh' }))).toBe(byOf(row({ name: 'DSH', preset: 'dsh' })))
   })
 
   it('tells a desktop-app reader that the CLI is a separate install', () => {

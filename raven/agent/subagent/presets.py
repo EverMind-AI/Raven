@@ -40,6 +40,12 @@ each transport below:
   directory, the handshake was ready.
 - ``MiroThinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
+- ``DSH`` (DeepSeek Harness) - ACP, native (``dsh --profile acp``, the profile
+  its own install ships), measured 2026-11-09 on 0.2.2-rc.1. resume + list +
+  close and **no load**: it continues a session through ``session/resume``,
+  which raven reopens with for exactly that reason -- a word planted in a
+  session came back from a second process that resumed it. It reads the
+  credentials DSH already holds and advertises no auth method of its own.
 
 What a row is allowed to fetch depends on what the package is. An **ACP shim** --
 a dedicated adapter whose product lives elsewhere, as ``Claude Code`` and
@@ -291,6 +297,13 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # runtime and SQLite before it answers `initialize`. The shared 30s leaves
         # less room on a colder machine than the other local executables need.
         "readyTimeoutMs": 60000,
+    },
+    "dsh": {
+        "name": "DSH",
+        "preset": "dsh",
+        "kind": "acp",
+        "description": "DeepSeek Harness, a coding agent on DeepSeek models.",
+        "command": "dsh --profile acp",
     },
     "mirothinker": {
         "name": "MiroThinker",

@@ -2826,6 +2826,7 @@ def test_presets_are_valid_and_complete() -> None:
         "OpenClaw",
         "Hermes Agent",
         "OpenCode",
+        "DSH",
     } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     # One row per key: a name collision would silently drop a preset here.
     assert len(presets) == len(THIRD_PARTY_SUBAGENT_PRESETS)
@@ -2850,6 +2851,7 @@ def test_presets_are_valid_and_complete() -> None:
         "OpenCode",
         "Hermes Agent",
         "OpenClaw",
+        "DSH",
     } | {p["name"] for p in ACP_REGISTRY_PRESETS.values()} | {p["name"] for p in MIRASIM_PRESETS.values()}
     assert presets["MiroThinker"]["kind"] == "openai"
 

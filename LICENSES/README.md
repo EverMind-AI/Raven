@@ -52,16 +52,19 @@ history.
   the artwork is unaltered in design or colour; only the embedded PNG is
   resampled to 96x96, which `cmp` will therefore not match for this file alone.
   Regenerate it with scripts/refresh_dmxapi_mark.py.
-- `MIT-lobe-icons.txt` - fifteen of the nineteen sub-agent brand marks under
-  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those fifteen keep
+- `MIT-lobe-icons.txt` - fourteen of the nineteen sub-agent brand marks under
+  `ui-web/src/assets/agents/`, and `providers/vllm.svg`. Those fourteen keep
   upstream's filenames, so each is byte-identical to the one
   `@lobehub/icons-static-svg@1.95.0` ships under that name and the attribution is checkable
-  with `cmp` rather than by trust. The other four on the same nominative basis as the
+  with `cmp` rather than by trust. The other five on the same nominative basis as the
   vendor marks above: `raven.svg` is this project's own mark, drawn here and not upstream's;
   `miromind.svg` is MiroMind's own favicon; `mirasim.svg` is the mark mirasim.ai serves for
   itself at `/icon.svg`, copied byte for byte from the drawing its `marks.tsx` shares; and
   `minimax-code.svg` is MiniMax Code's own product icon, the 256x256 app icon extracted
   from the desktop app and resampled to 96x96 inside an SVG wrapper for the 20px slot; the
-  artwork is unaltered in design or colour. No `cmp` applies to those four. The rest of
+  artwork is unaltered in design or colour. No `cmp` applies to those four. `dsh.svg` is
+  DSH's own mark, the favicon its web app serves, byte-identical to the `dist/favicon.svg`
+  that `@deepseek-ai/dsh-web-frontend@0.2.2-rc.1` (MIT) ships, so `cmp` checks it against
+  that package. The rest of
   `providers/` moved to the vendors' own colour marks; see the Cherry Studio entry above.
 - `MIT-nanobot.txt` - Nanobot license notice.

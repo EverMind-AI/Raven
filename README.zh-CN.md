@@ -205,13 +205,13 @@ Raven 采用模块化架构，专为 harness 自进化与子 Agent 创建而设�
 
 ## ❯❯ 连接第三方 Agent
 
-Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，并内置 14 个**第三方 Agent** 预设和 9 个经 **Mirasim** 路由的预设，简化接入配置、任务委派以及在共享工作流中的协作。欢迎在 Raven 的统一界面中体验这些 Agent！
+Raven 可以通过 ACP、CLI 或兼容 OpenAI 的 API 接入并编排 Agent，并内置 15 个**第三方 Agent** 预设和 9 个经 **Mirasim** 路由的预设，简化接入配置、任务委派以及在共享工作流中的协作。欢迎在 Raven 的统一界面中体验这些 Agent！
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/8c0fa925-2d08-4b16-aec8-0decb319c010" width="80%" alt="Third-party agents in Raven's Agent Hub">
+  <img src="https://github.com/user-attachments/assets/acd47004-c0b8-4079-87f0-9b77c6731e89" width="80%" alt="Third-party agents in Raven's Agent Hub">
 </p>
 
-名册还包含通过原生 ACP server 接入的 **MiniMax Code**（`mcode acp`），以及 9 个经 **Mirasim** 路由的预设（如 `Claude Code-Mirasim`），它们让同一个 Agent 跑在 Mirasim 的账号和模型路由上。
+名册还包含通过原生 ACP server 接入的 **MiniMax Code**（`mcode acp`）、通过自带 ACP profile 接入的 **DSH**（DeepSeek Harness，`dsh --profile acp`），以及 9 个经 **Mirasim** 路由的预设（如 `Claude Code-Mirasim`），它们让同一个 Agent 跑在 Mirasim 的账号和模型路由上。
 
 ## ❯❯ 新闻
 

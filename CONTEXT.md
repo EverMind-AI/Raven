@@ -3568,8 +3568,9 @@ or `transcript.jsonl`, not this.
 The pool ending a pooled ACP agent's process once the connection has been quiet for the
 configured budget: no request of the host's unanswered (a held wake is one), none of the agent's
 being answered, no frame from the agent and no lease for the whole budget. Only an agent that
-advertises `loadSession`, or one that never opened a session, is closed, so a stateful
-instance's next turn reopens its session in a fresh process with `session/load`. An agent that
+advertises `loadSession` or `sessionCapabilities.resume`, or one that never opened a session, is
+closed, so a stateful instance's next turn reopens its session in a fresh process with
+`session/load`, or `session/resume` where that is the only one declared. An agent that
 declares `raven.residentWork` is asked first and kept while it holds Resident work. Each event
 loop closes only the connections made on it, whose pipes are its own.
 _Avoid_: calling it a timeout - nothing in flight is cut short, nor anything held for later.

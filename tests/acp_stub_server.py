@@ -96,6 +96,10 @@ Behaviour is chosen by ``ACP_STUB_MODE``:
 - ``asks_user_then_streams`` - notifies the same question, does not wait, and streams
                      three chunks. Notifications are dispatched inline on raven's read
                      loop, so this is what fails if answering one blocks it.
+- ``resume_only``  - declares ``sessionCapabilities.resume`` and no ``loadSession``, the
+                     shape measured on DeepSeek Harness 0.2.2-rc.1: ``session/load`` is
+                     method-not-found, and ``session/resume`` of a session this process
+                     already holds is ``-32602 session is already active``.
 - ``two_messages`` - a preamble, the tool calls it announced, then the answer, in the
                      order measured on codex-acp. One turn, two messages, and no
                      boundary in the chunks themselves. ``ACP_STUB_REPLY`` replaces the answer.
@@ -192,6 +196,9 @@ _SESSION_MODELS: dict[str, str] = {}
 # The reasoning effort each session is on, for the same reason; the ACP option
 # that carries it has its own id (`effort`) and category (`thought_level`).
 _SESSION_EFFORTS: dict[str, str] = {}
+# The sessions this process holds, opened or reopened here, for the agent that
+# refuses to resume one of them.
+_HELD: set[str] = set()
 
 _SESSION_CAPS = {"fork": {}, "list": {}, "resume": {}}
 if MODE != "no_session_delete":
@@ -223,6 +230,8 @@ if os.environ.get("ACP_STUB_NO_STEER"):
     del CAPABILITIES["agentCapabilities"]["_meta"]
 if MODE == "resident":
     CAPABILITIES["agentCapabilities"]["_meta"]["raven.residentWork"] = True
+if MODE == "resume_only":
+    del CAPABILITIES["agentCapabilities"]["loadSession"]
 
 _WAKES: list = []
 
@@ -828,6 +837,39 @@ def handle_cancel(params) -> None:
         ok(held[0], {"stopReason": "cancelled"})
 
 
+def _reopened(sid: str) -> dict:
+    """What ``session/load`` and ``session/resume`` answer: the reopened session's options.
+
+    A resumed session reports the model it is actually on, which is whatever it
+    was last switched to. A host that read this as the session's original would
+    restore the override it meant to undo.
+    """
+    _HELD.add(sid)
+    return {
+        "configOptions": [
+            {
+                "id": "model",
+                "category": "model",
+                "type": "select",
+                "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
+                "options": [],
+            },
+            {
+                "id": "effort",
+                "category": "thought_level",
+                "type": "select",
+                "currentValue": _SESSION_EFFORTS.get(sid, "default"),
+                "options": [
+                    {"value": "low", "name": "low"},
+                    {"value": "high", "name": "high"},
+                    {"value": "max", "name": "max"},
+                    {"value": "default", "name": "default"},
+                ],
+            },
+        ]
+    }
+
+
 def _set_config_option(request_id, params) -> None:
     """One ``session/set_config_option`` frame: the model, or the reasoning effort.
 
@@ -975,6 +1017,7 @@ def main() -> None:
                 global _SESSIONS
                 _SESSIONS += 1
                 _SESSION_MODELS[f"stub-session-{_SESSIONS}"] = "stub:model-a"
+                _HELD.add(f"stub-session-{_SESSIONS}")
                 ok(
                     request_id,
                     {
@@ -1053,39 +1096,21 @@ def main() -> None:
                 print(f"stub: session/set_mode {params.get('modeId')}", file=sys.stderr, flush=True)
                 ok(request_id, {})
         elif method == "session/load":
-            if params.get("sessionId") == "pruned-session":
+            if MODE == "resume_only":
+                err(request_id, -32601, "session/load is not implemented")
+            elif params.get("sessionId") == "pruned-session":
                 err(request_id, -32001, "Session not found")
             else:
-                # A resumed session reports the model it is actually on, which is
-                # whatever it was last switched to. A host that read this as the
-                # session's original would restore the override it meant to undo.
-                sid = str(params.get("sessionId"))
-                ok(
-                    request_id,
-                    {
-                        "configOptions": [
-                            {
-                                "id": "model",
-                                "category": "model",
-                                "type": "select",
-                                "currentValue": _SESSION_MODELS.get(sid, "stub:model-a"),
-                                "options": [],
-                            },
-                            {
-                                "id": "effort",
-                                "category": "thought_level",
-                                "type": "select",
-                                "currentValue": _SESSION_EFFORTS.get(sid, "default"),
-                                "options": [
-                                    {"value": "low", "name": "low"},
-                                    {"value": "high", "name": "high"},
-                                    {"value": "max", "name": "max"},
-                                    {"value": "default", "name": "default"},
-                                ],
-                            },
-                        ]
-                    },
-                )
+                ok(request_id, _reopened(str(params.get("sessionId"))))
+        elif method == "session/resume":
+            sid = str(params.get("sessionId"))
+            if sid in _HELD:
+                err(request_id, -32602, f"Invalid params: session is already active: {sid}")
+            elif sid == "pruned-session":
+                err(request_id, -32602, f"Invalid params: session is not resumable: {sid}")
+            else:
+                print(f"stub: session/resume {sid}", file=sys.stderr, flush=True)
+                ok(request_id, _reopened(sid))
         elif method == "session/delete":
             if MODE == "delete_fails":
                 err(request_id, -32601, "session/delete is not implemented")
