@@ -128,7 +128,10 @@ async function harness(
       'src/lib/session': { current: () => current, setCurrent: (id: string | null) => { current = id; calls.push(['sessionSet', id]) } },
       'src/features/rail/title': { plainTitle: (s: unknown) => String(s) },
       'src/state/toast': { show: (text: string) => calls.push(['toast', text]) },
-      'src/state/ctxWindow': { set: (used: number) => calls.push(['setCtx', used]) },
+      'src/state/ctxWindow': {
+        set: (used: number) => calls.push(['setCtx', used]),
+        clearParts: () => calls.push(['clearParts']),
+      },
       'src/state/banner': { draw: () => {} },
       'src/state/tier': { load: (sid?: string | null, gen?: number) => calls.push(['loadTier', sid, gen]) },
       'src/state/effort': { load: (sid?: string | null, gen?: number) => calls.push(['loadEffort', sid, gen]) },
@@ -595,6 +598,68 @@ describe('the live session switch', () => {
     h.startDraft()
 
     expect(h.state.fresh).toBe('1')
+  })
+
+  /* The popover's parts describe one conversation's window, and a reopened
+     conversation's usage carries none: a report without parts keeps the last
+     ones, so leaving the conversation is what has to drop them, or the popover
+     draws the conversation left behind as the composition of the one opened. */
+  it('drops the window\'s parts when another conversation is opened', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    h.click({ id: 'b', title: 'Bravo' })
+    await h.settle('b')
+
+    const after = h.calls.slice(mark).map((c) => c[0])
+    expect(after).toContain('clearParts')
+    expect(after.indexOf('clearParts')).toBeLessThan(after.indexOf('setCtx'))
+  })
+
+  it('drops them for a conversation that kept its turn, which reads no usage back', async () => {
+    const h = await harness({ rows: [{ id: 'a' }, { id: 'b' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    h.env.subBySession.b = 'sub:b'
+    h.env.parkedTurns.set('b', { nodes: [] })
+    const mark = h.calls.length
+
+    await h.click({ id: 'b', title: 'Bravo' })
+
+    expect(h.calls.slice(mark)).toContainEqual(['restoreTurn'])
+    expect(h.calls.slice(mark)).toContainEqual(['clearParts'])
+    expect(h.calls.slice(mark).filter((c) => c[0] === 'setCtx')).toEqual([])
+  })
+
+  it('drops them for a new task', async () => {
+    const h = await harness({ rows: [{ id: 'a' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    h.startDraft()
+
+    expect(h.calls.slice(mark)).toContainEqual(['clearParts'])
+  })
+
+  /* The reconnect reopens the conversation already on screen: its parts are
+     still that conversation's, and dropping them would leave the popover
+     saying nothing is known until the next turn. */
+  it('keeps them when the reconnect reopens the conversation they describe', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    h.click({ id: 'a', title: 'Alpha' })
+    await h.settle('a')
+    const mark = h.calls.length
+
+    const reconnected = h.onReconnect()
+    await new Promise((r) => setTimeout(r, 0))
+    await h.settle('a')
+    await reconnected
+
+    expect(h.calls.slice(mark).map((c) => c[0])).toContain('setCtx')
+    expect(h.calls.slice(mark)).not.toContainEqual(['clearParts'])
   })
 
   it('takes the visible stream back with a parked turn, without a round trip', async () => {

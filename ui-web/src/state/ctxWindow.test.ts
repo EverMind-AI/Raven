@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setCode } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
-import { _resetForTests, draw, get, set, toggle } from './ctxWindow'
+import { _resetForTests, clearParts, draw, get, set, toggle } from './ctxWindow'
 import * as pageStore from './page'
 
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
@@ -124,6 +124,16 @@ describe('the window the popover reads', () => {
     set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
     set(180_000, 200_000)
     expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
+  })
+
+  it('drops the parts when the conversation they describe is left', () => {
+    set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
+    clearParts()
+    expect(get().parts).toBe(null)
+    /* The next conversation's report brings none, and must not bring these back. */
+    set(12_000, 64_000)
+    expect(get().parts).toBe(null)
+    expect(get().used).toBe(12_000)
   })
 
   it('opens and closes the popover on the ring\'s click', () => {

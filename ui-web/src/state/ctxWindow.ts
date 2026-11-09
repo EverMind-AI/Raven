@@ -149,6 +149,16 @@ export function set(
   draw()
 }
 
+/* The parts are one conversation's: `set` keeps them across a report that
+   brings none, which is right within a conversation and wrong across two, so
+   the switch drops them on the way out. Written to the store as well as the
+   module, because `draw` with no window spreads the store rather than reading
+   `parts` back. */
+export function clearParts(): void {
+  parts = null
+  if (get().parts !== null) store.set({ ...get(), parts: null })
+}
+
 /** The popover's up-or-down. The chip is the only way back out of it. */
 export function toggle(): void {
   if (!max) return
