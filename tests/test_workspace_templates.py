@@ -10,7 +10,7 @@ from raven.utils.workspace import _merge_soul, sync_workspace_templates
 # The 357-byte SOUL.md shipped through 2026-10-03, before the voice rules.
 _LEGACY_SOUL = (
     "# Soul\n\n"
-    "I am Raven \U0001F426‍⬛, a personal AI assistant.\n\n"
+    "I am Raven \U0001f426‍⬛, a personal AI assistant.\n\n"
     "## Personality\n\n"
     "- Helpful and friendly\n"
     "- Concise and to the point\n"
@@ -126,9 +126,10 @@ def test_an_old_copy_keeps_the_users_edit_while_the_rest_updates(tmp_path: Path)
 
     text = soul.read_text(encoding="utf-8")
     assert "- Concise and to the point, but mine" in text
-    assert "## How I talk" in text
+    assert "## Personality" in text
+    assert "## How I talk" not in text
     assert "## My stance" in text
-    assert any("not updated" in message for message in messages)
+    assert any("not updated: ## Personality" in message for message in messages)
 
 
 def test_a_base_file_merges_a_later_release(tmp_path: Path) -> None:
