@@ -71,11 +71,16 @@ def _note_defaulted_base(spec: RunSpec) -> None:
         f"base_sha not set — using repo HEAD {spec.base_sha[:12]} "
         "(pin base_sha in the yaml to freeze the root explicitly)"
     )
-    proc = subprocess.run(
-        ["git", "-C", str(spec.repo_root), "status", "--porcelain", "--untracked-files=no"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(spec.repo_root), "status", "--porcelain", "--untracked-files=no"],
+            capture_output=True,
+            text=True,
+            timeout=git_ops.GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        _say("warning: git status timed out; skipping the uncommitted-changes probe")
+        return
     if proc.stdout.strip():
         _say(
             "warning: repo_root has uncommitted changes — they are NOT part "
@@ -95,11 +100,15 @@ def _claim_ephemeral_root(spec: RunSpec) -> None:
     tmp_root = Path(spec.work_dir) / "tmp"
     if tmp_root.exists():
         shutil.rmtree(tmp_root, ignore_errors=True)
-        subprocess.run(
-            ["git", "-C", str(spec.repo_root), "worktree", "prune"],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            subprocess.run(
+                ["git", "-C", str(spec.repo_root), "worktree", "prune"],
+                capture_output=True,
+                text=True,
+                timeout=git_ops.GIT_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            _say("warning: git worktree prune timed out; stale worktrees may remain")
     git_ops.set_ephemeral_root(tmp_root)
 
 

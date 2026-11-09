@@ -122,3 +122,13 @@ class TestRefs:
         git_ops.delete_ref(repo_dir, "refs/evolver/n1")  # absent: no-op
         proc = subprocess.run(["git", "rev-parse", "refs/evolver/n1"], cwd=repo_dir, env=_ENV, capture_output=True)
         assert proc.returncode != 0
+
+
+class TestGitTimeouts:
+    def test_run_wraps_a_timeout_as_git_op_error(self, tmp_path, monkeypatch):
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", boom)
+        with pytest.raises(git_ops.GitOpError, match="timed out"):
+            git_ops._run(tmp_path, "status")

@@ -43,6 +43,7 @@ from evolver.orchestrator.config import (
     OrchestratorConfig,
     Termination,
 )
+from evolver.tree.git_ops import GIT_TIMEOUT
 
 SMOKE_BUILTIN: dict = {
     "funnel": {
@@ -221,7 +222,10 @@ def _resolve_head(repo_root: Path) -> str:
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
+            timeout=GIT_TIMEOUT,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RunSpecError(f"git rev-parse timed out after {GIT_TIMEOUT}s for {repo_root}") from exc
     except OSError as exc:
         raise RunSpecError(f"git is not runnable ({exc}) — install git") from exc
     if proc.returncode != 0:

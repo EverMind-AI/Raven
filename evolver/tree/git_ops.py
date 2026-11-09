@@ -92,29 +92,45 @@ class GitOpError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
+#: Bound every git call: a credential prompt, index lock or hung hook must not
+#: freeze an unattended evolution run.
+GIT_TIMEOUT = 60.0
+
+
 def _run(
     repo_root: Path,
     *args: str,
     env: Optional[dict[str, str]] = None,
     input_text: Optional[str] = None,
     check: bool = True,
+    timeout: float = GIT_TIMEOUT,
 ) -> str:
     """Run ``git <args>`` in ``repo_root`` and return stdout.
 
     :param env: extra env vars merged on top of os.environ
     :param input_text: passed to stdin (used by ``git apply``)
     :param check: raise :class:`GitOpError` on non-zero exit
+    :param timeout: seconds before the command is killed
     """
     cmd = ["git", *args]
     merged_env = {**os.environ, **(env or {})}
-    proc = subprocess.run(
-        cmd,
-        cwd=str(repo_root),
-        env=merged_env,
-        input=input_text,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            env=merged_env,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitOpError(
+            cmd=cmd,
+            returncode=-1,
+            stderr=f"timed out after {timeout}s",
+            stdout=str(exc.stdout or ""),
+        ) from exc
     if check and proc.returncode != 0:
         raise GitOpError(
             cmd=cmd,
@@ -161,7 +177,10 @@ def read_file_at(repo_root: Path, sha: str, rel_path: str) -> bytes:
     :class:`GitOpError` when the path does not exist in that commit.
     """
     cmd = ["git", "cat-file", "blob", f"{sha}:{rel_path}"]
-    proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True)
+    try:
+        proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired as exc:
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=f"timed out after {GIT_TIMEOUT}s") from exc
     if proc.returncode != 0:
         raise GitOpError(
             cmd=cmd,
@@ -391,12 +410,17 @@ def create_branch(repo_root: Path, branch_name: str, sha: str) -> None:
 
 def branch_exists(repo_root: Path, branch_name: str) -> bool:
     """True iff a local branch with this name exists."""
-    proc = subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-    )
+    cmd = ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=f"timed out after {GIT_TIMEOUT}s") from exc
     return proc.returncode == 0
 
 

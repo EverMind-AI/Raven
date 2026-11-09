@@ -20,6 +20,7 @@ from typing import Any, Callable, Optional
 
 from evolver.launch.config import RunSpec
 from evolver.launch.models import CallFn
+from evolver.tree.git_ops import GIT_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -69,12 +70,16 @@ def validate_whitelist(repo_root: Path, base_sha: str, prefixes: tuple[str, ...]
     """
     if not prefixes:
         raise ValueError("whitelist is empty: the designer would have no editable surface")
-    proc = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", base_sha],
-        cwd=str(repo_root),
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "ls-tree", "-r", "--name-only", base_sha],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f"git ls-tree timed out after {GIT_TIMEOUT}s for {repo_root}") from exc
     if proc.returncode != 0:
         raise ValueError(f"cannot list {base_sha} in {repo_root}: {proc.stderr.strip()}")
     paths = proc.stdout.splitlines()
