@@ -21,6 +21,11 @@ an unusually large prompt, and adjacent-duplicate detection racing a TUI write
 (a duplicate may survive; nothing is corrupted). A stale lock older than
 ``_LOCK_STALE_S`` is broken by the next writer, and a writer that cannot get
 the lock within ``_LOCK_TIMEOUT_S`` appends anyway rather than blocking a turn.
+
+Sharing the file is eventual consistency, not a live feed: each front end
+reads it once when it starts (the TUI at hook initialisation, the web page at
+boot), so an entry the other side writes while a front end is already running
+becomes visible there on its next reload, not on the next Up.
 """
 
 from __future__ import annotations
@@ -56,6 +61,9 @@ def history_path() -> Path:
     The two agree when ``RAVEN_HOME`` is unset or absolute. A ``~`` or a
     relative value does not: ``raven_home()`` expands it here while the TUI
     joins the literal string, so the two can name different files.
+    ``RAVEN_HOME=""`` is the extreme case: ``raven_home()`` strips it and
+    falls back to ``~/.raven``, while the TUI joins the empty string and reads
+    the file from the current directory.
     """
     return raven_home() / HISTORY_FILENAME
 
@@ -94,7 +102,8 @@ def read_entries(limit: int = MAX_ENTRIES) -> list[str]:
 
     ``Path.read_text`` applies universal-newline translation, so a CRLF file
     converted by an external editor yields clean entries here while the TUI
-    reader keeps the trailing ``\\r``. Both writers emit LF.
+    reader keeps the trailing ``\\r``. A lone ``\\r`` is folded to ``\\n`` here
+    as well; the TUI's ``readFileSync`` keeps it. Both writers emit LF.
     """
     if limit <= 0:
         return []
