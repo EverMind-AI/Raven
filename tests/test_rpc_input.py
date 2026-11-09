@@ -13,7 +13,9 @@ and registration are pinned.
 
 from __future__ import annotations
 
+import asyncio
 import struct
+import time
 import zlib
 from pathlib import Path
 
@@ -21,6 +23,7 @@ import pytest
 
 from raven import input_history
 from raven.rpc.dispatcher import Dispatcher
+from raven.rpc.methods import input as input_methods
 from raven.rpc.methods.input import (
     input_detect_drop,
     input_history_append,
@@ -172,6 +175,38 @@ async def test_history_list_caps_an_oversized_limit(history_home: Path, monkeypa
     assert (await input_history_list({"limit": 10**9}))["entries"] == ["e2", "e3", "e4"]
     # The default path is capped by the same constant.
     assert (await input_history_list({}))["entries"] == ["e2", "e3", "e4"]
+
+
+async def test_history_methods_do_not_block_the_event_loop(history_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """History I/O must run off the loop, or one append stalls every session.
+
+    The file read takes the lock, which can poll for up to ``_LOCK_TIMEOUT_S``;
+    on the loop that would freeze streaming tokens and every other RPC. The two
+    handlers are gathered together: on the loop they serialise (0.4 s), in
+    worker threads they overlap (0.2 s).
+    """
+
+    def slow_append(text: str) -> bool:
+        time.sleep(0.2)
+        return True
+
+    def slow_read(limit: int) -> list[str]:
+        time.sleep(0.2)
+        return []
+
+    monkeypatch.setattr(input_methods, "append_history", slow_append)
+    monkeypatch.setattr(input_methods, "read_entries", slow_read)
+
+    started = time.monotonic()
+    appended, listed = await asyncio.gather(
+        input_history_append({"text": "slow"}),
+        input_history_list({}),
+    )
+    elapsed = time.monotonic() - started
+
+    assert appended == {"ok": True, "appended": True}
+    assert listed == {"entries": []}
+    assert elapsed < 0.35, f"history handlers serialised on the event loop ({elapsed:.3f}s)"
 
 
 async def test_history_methods_are_registered_and_dispatch(history_home: Path) -> None:

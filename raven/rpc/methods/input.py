@@ -16,6 +16,7 @@ rewriting the user's message on that guess is worse than missing a drop.
 
 from __future__ import annotations
 
+import asyncio
 import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -135,18 +136,28 @@ async def input_history_list(params: dict) -> dict:
     ``limit`` is optional and capped, because the file grows without bound
     (the TUI only caps its in-memory copy) and a page asking for its history
     at boot must not pull an ever-growing answer over the socket.
+
+    The file read is blocking, so it runs in a worker thread: the dispatcher
+    awaits this handler on the gateway's event loop.
     """
     raw = params.get("limit")
     try:
         limit = MAX_ENTRIES if raw is None else int(raw)
     except (TypeError, ValueError):
         limit = MAX_ENTRIES
-    return {"entries": read_entries(max(0, min(limit, MAX_ENTRIES)))}
+    entries = await asyncio.to_thread(read_entries, max(0, min(limit, MAX_ENTRIES)))
+    return {"entries": entries}
 
 
 async def input_history_append(params: dict) -> dict:
-    """``input.history.append`` -- add one sent prompt to the shared history."""
-    return {"ok": True, "appended": append_history(str(params.get("text") or ""))}
+    """``input.history.append`` -- add one sent prompt to the shared history.
+
+    The append takes the file lock, which can poll for up to its timeout, and
+    reads the whole file before writing; it runs in a worker thread so a
+    contended history cannot stall every other RPC on the event loop.
+    """
+    appended = await asyncio.to_thread(append_history, str(params.get("text") or ""))
+    return {"ok": True, "appended": appended}
 
 
 def register_input_methods(dispatcher: "Dispatcher") -> None:

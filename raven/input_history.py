@@ -177,14 +177,17 @@ def _write_lock(path: Path) -> Iterator[None]:
     fd: int | None = None
     deadline = time.monotonic() + _LOCK_TIMEOUT_S
     while True:
+        # Checked before every attempt: a retry from ``_break_stale`` must not
+        # be able to skip the deadline the way it could when the check sat
+        # after it.
+        if time.monotonic() >= deadline:
+            break
         try:
             fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY, 0o600)
             break
         except FileExistsError:
             if _break_stale(lock):
                 continue
-            if time.monotonic() >= deadline:
-                break
             time.sleep(_LOCK_POLL_S)
         except OSError:
             break
@@ -209,20 +212,37 @@ def _write_lock(path: Path) -> Iterator[None]:
 
 
 def _break_stale(lock: Path) -> bool:
-    """Remove a lock old enough to be a dead writer's; say whether to retry."""
+    """Remove a lock old enough to be a dead writer's; say whether to retry.
+
+    ``True`` means the lock is gone, so the caller may retry the open at once.
+    A failed ``unlink`` is not that: the lock is still there -- on Windows the
+    other process may still hold the handle -- and telling the caller to retry
+    would spin it between ``open`` and ``unlink`` without ever reaching its
+    deadline. ``False`` sends it through the caller's poll and deadline
+    instead.
+    """
     try:
         before = lock.stat()
-    except OSError:
+    except FileNotFoundError:
         return True
+    except OSError:
+        return False
     if time.time() - before.st_mtime <= _LOCK_STALE_S:
         return False
     try:
         after = lock.stat()
         if (after.st_ino, after.st_mtime_ns) != (before.st_ino, before.st_mtime_ns):
             return False
-        lock.unlink()
-    except OSError:
+    except FileNotFoundError:
         return True
+    except OSError:
+        return False
+    try:
+        lock.unlink()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
     return True
 
 

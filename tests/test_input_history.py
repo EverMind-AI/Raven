@@ -447,6 +447,48 @@ def test_append_leaves_no_lock_behind(history_home: Path) -> None:
     assert not _lock_path().exists()
 
 
+# The probe runs in a child interpreter so the pre-fix hang is a timeout in the
+# assertion below, not a wedged test process. ``unlink`` keeps raising: on
+# Windows another process still holds the lock handle, on POSIX the directory
+# may have become read-only.
+_LOCK_PROBE = (
+    "import os, time\n"
+    "from pathlib import Path\n"
+    "from raven import input_history as ih\n"
+    "ih._LOCK_TIMEOUT_S = 0.05\n"
+    "lock = ih.history_path().with_name(ih.history_path().name + ih._LOCK_SUFFIX)\n"
+    "lock.parent.mkdir(parents=True, exist_ok=True)\n"
+    "lock.write_text('999999\\n', encoding='ascii')\n"
+    "old = time.time() - (ih._LOCK_STALE_S + 5)\n"
+    "os.utime(lock, (old, old))\n"
+    "def cannot_unlink(self, *args, **kwargs):\n"
+    "    raise OSError('another handle holds it')\n"
+    "Path.unlink = cannot_unlink\n"
+    "print('appended=%r' % ih.append('probe'))\n"
+)
+
+
+def test_a_stale_lock_that_cannot_be_unlinked_does_not_spin(history_home: Path) -> None:
+    """A stale lock that cannot be removed must not retry without a bound.
+
+    ``unlink`` failing means the lock is still there, so a writer that treats
+    it as "gone, retry now" spins between ``open`` and ``unlink`` and never
+    reaches its deadline. The append must fall back to its timeout instead.
+    """
+    env = os.environ.copy()
+    env["RAVEN_HOME"] = str(history_home)
+    proc = subprocess.run(
+        [sys.executable, "-c", _LOCK_PROBE],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "appended=True" in proc.stdout
+
+
 # ---------------------------------------------------------------------------
 # The failure branches: append reports, never raises, and a lock it cannot
 # manage must not take the append down with it.
@@ -508,8 +550,20 @@ def _old_stat(*, ino: int = 1) -> SimpleNamespace:
     return SimpleNamespace(st_ino=ino, st_mtime=old, st_mtime_ns=int(old * 1_000_000_000))
 
 
-def test_break_stale_returns_true_when_the_lock_stat_fails() -> None:
-    assert input_history._break_stale(_StubLock([OSError("vanished mid-check")])) is True
+def test_break_stale_retries_when_the_lock_vanished() -> None:
+    # ``stat`` raising ENOENT is the one stat failure that proves the lock is
+    # gone; retrying the open immediately is right.
+    assert input_history._break_stale(_StubLock([FileNotFoundError("vanished mid-check")])) is True
+
+
+def test_break_stale_waits_when_the_lock_cannot_be_stat_ed() -> None:
+    # Any other stat failure leaves the lock's existence unknown. Waiting for
+    # the caller's deadline is bounded; retrying at once is not.
+    assert input_history._break_stale(_StubLock([OSError("stale handle")])) is False
+
+
+def test_break_stale_retries_when_the_lock_vanished_before_the_second_stat() -> None:
+    assert input_history._break_stale(_StubLock([_old_stat(), FileNotFoundError("gone")])) is True
 
 
 def test_break_stale_returns_false_when_the_lock_changed() -> None:
@@ -518,10 +572,18 @@ def test_break_stale_returns_false_when_the_lock_changed() -> None:
     assert input_history._break_stale(_StubLock([_old_stat(ino=1), _old_stat(ino=2)])) is False
 
 
-def test_break_stale_returns_true_when_unlink_fails() -> None:
+def test_break_stale_retries_when_the_lock_vanished_before_unlink() -> None:
+    stat = _old_stat()
+    lock = _StubLock([stat, stat], unlink_error=FileNotFoundError("already gone"))
+    assert input_history._break_stale(lock) is True
+
+
+def test_break_stale_waits_when_unlink_fails() -> None:
+    # The lock is still there (on Windows another process holds the handle);
+    # this must not become "retry now" or ``_write_lock`` spins.
     stat = _old_stat()
     lock = _StubLock([stat, stat], unlink_error=OSError("another writer holds it"))
-    assert input_history._break_stale(lock) is True
+    assert input_history._break_stale(lock) is False
 
 
 def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_home: Path) -> None:
