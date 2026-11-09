@@ -5209,11 +5209,11 @@ export interface SystemLogsParams {
  */
 export interface SystemLogsResult {
   /**
-   * Absolute path of the tailed file, so the reader knows where the rest lives.
+   * Absolute path of the file this host's log sink writes, so the reader knows where the rest lives; empty when the host logs to no file.
    */
   path: string;
   /**
-   * The trailing lines joined with newlines; empty when the file does not exist yet.
+   * The trailing lines joined with newlines; empty when the host logs to no file or its file is absent or unreadable.
    */
   text: string;
 }

@@ -28,8 +28,11 @@ def tmp_logs(tmp_path: Path, monkeypatch):
     leak that mutation into sibling tests (notably the litellm-based
     regression guard).
     """
+    from raven.config import paths
+
     set_config_path(tmp_path / "config.json")
     monkeypatch.delenv("RAVEN_CLI_DEBUG", raising=False)
+    monkeypatch.setattr(paths, "_log_file", None)
 
     root = logging.getLogger()
     saved_handlers = list(root.handlers)
@@ -70,6 +73,15 @@ def test_writes_to_named_file_under_logs_dir(tmp_logs: Path) -> None:
 
     logger.info("hello-gateway-marker")
     assert "hello-gateway-marker" in _flush_and_read(log_path)
+
+
+def test_records_the_file_it_redirects_to(tmp_logs: Path) -> None:
+    from raven.config.paths import get_log_file
+
+    redirect_loguru_to_file("tui.log")
+    log_path = redirect_loguru_to_file("gateway.log")
+
+    assert get_log_file() == log_path == tmp_logs / "gateway.log"
 
 
 def test_agent_content_keeps_its_query_values_in_the_log(tmp_logs: Path) -> None:

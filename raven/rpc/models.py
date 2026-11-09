@@ -2832,9 +2832,13 @@ class SystemLogsParams(_Strict):
 
 
 class SystemLogsResult(_Strict):
-    path: str = Field(..., description="Absolute path of the tailed file, so the reader knows where the rest lives.")
+    path: str = Field(
+        ...,
+        description="Absolute path of the file this host's log sink writes, so the reader knows where the rest lives; empty when the host logs to no file.",
+    )
     text: str = Field(
-        ..., description="The trailing lines joined with newlines; empty when the file does not exist yet."
+        ...,
+        description="The trailing lines joined with newlines; empty when the host logs to no file or its file is absent or unreadable.",
     )
 
 

@@ -93,6 +93,25 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+_log_file: Path | None = None
+
+
+def set_log_file(path: Path | None) -> None:
+    """Record the file this process's loguru sink now writes."""
+    global _log_file
+    _log_file = path
+
+
+def get_log_file() -> Path | None:
+    """The file this process's loguru sink writes, or None when it writes none.
+
+    Each entrance names its own sink (``tui.log``, ``gateway.log``,
+    ``acp.log``), so a reader after this process's records asks here rather
+    than guessing the name inside the logs directory.
+    """
+    return _log_file
+
+
 def default_workspace() -> Path:
     """The workspace a config that never named one means: ``<home>/workspace``.
 

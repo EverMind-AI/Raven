@@ -172,9 +172,6 @@ async def system_ping(params: dict) -> dict:
 #: log's size.
 _LOG_TAIL_MAX_BYTES = 256 * 1024
 
-#: What `raven tui` names its loguru file sink (`redirect_loguru_to_file`).
-_LOG_TAIL_FILE = "tui.log"
-
 
 def _tail_text(path: Path, limit: int) -> str:
     """The last ``limit`` lines of ``path``, read from the end; empty when unreadable."""
@@ -200,19 +197,22 @@ async def system_logs(params: dict) -> dict:
 
     The surface that asks is the TUI's ``/logs``, which once paged a placeholder
     because the in-process-RPC path has no child-process stdout to tail. The
-    records it wants are the ones loguru already writes to
-    ``<logs>/tui.log``, so this answers from there. The home-directory
-    resolution stays on the Python side, where ``get_logs_dir`` already follows
-    ``--config`` instances, rather than in each client's expansion of
-    ``RAVEN_HOME``.
+    records it wants are the ones loguru already writes, so this answers from
+    the file this process's sink writes (``get_log_file``) rather than from a
+    name guessed here: an embedded ``raven tui`` answers from ``tui.log``,
+    while the gateway a TUI attaches to answers from ``gateway.log``, where its
+    engine's records are -- the attached TUI's own ``tui.log`` holds only the
+    relay's. The path stays on the Python side, under ``get_logs_dir``, which
+    already follows ``--config`` instances, rather than in each client's
+    expansion of ``RAVEN_HOME``.
 
-    A file that does not exist yet (a host that never started a TUI sink)
-    answers empty text rather than an error: the caller already has an honest
-    line for "nothing to show".
+    A host that logs to no file, or whose file does not exist yet, answers
+    empty text rather than an error: the caller already has an honest line for
+    "nothing to show".
     """
     import asyncio
 
-    from raven.config.paths import get_logs_dir
+    from raven.config.paths import get_log_file
 
     raw = params.get("lines", 20)
     if isinstance(raw, bool) or not isinstance(raw, int):
@@ -221,7 +221,9 @@ async def system_logs(params: dict) -> dict:
             data={"field": "lines", "reason": "wrong_type"},
         )
     limit = min(80, max(1, raw))
-    log_path = get_logs_dir() / _LOG_TAIL_FILE
+    log_path = get_log_file()
+    if log_path is None:
+        return {"path": "", "text": ""}
     text = await asyncio.to_thread(_tail_text, log_path, limit)
     return {"path": str(log_path), "text": text}
 
@@ -559,7 +561,7 @@ def register_system_methods(
     channel: str = LOCAL_CHANNEL,
     send_frame: Any = None,
 ) -> None:
-    """Register all 4 system.* methods on a dispatcher instance.
+    """Register all 5 system.* methods on a dispatcher instance.
 
     ``send_frame`` is the transport's broadcast sink, and only a transport that
     owns one should pass it: with it, an explicit ``system.version`` check that

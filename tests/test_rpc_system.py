@@ -90,12 +90,13 @@ async def test_version_returns_three_fields():
 # ---------------------------------------------------------------------------
 
 
-def _log_dir_with(monkeypatch: pytest.MonkeyPatch, tmp_path, lines: list[str]) -> Path:
-    """Point ``get_logs_dir`` at ``tmp_path`` and write ``lines`` as its tui.log."""
+def _log_dir_with(monkeypatch: pytest.MonkeyPatch, tmp_path, lines: list[str], name: str = "tui.log") -> Path:
+    """Record ``tmp_path/name`` as this process's log file and write ``lines`` to it."""
     from raven.config import paths
 
     monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
-    (tmp_path / "tui.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "_log_file", tmp_path / name)
+    (tmp_path / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return tmp_path
 
 
@@ -126,11 +127,39 @@ async def test_logs_answers_empty_text_when_the_file_is_absent(monkeypatch: pyte
     from raven.rpc.methods.system import system_logs
 
     monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_log_file", tmp_path / "tui.log")
 
     result = await system_logs({})
 
     assert result["text"] == ""
     assert result["path"] == str(tmp_path / "tui.log")
+
+
+async def test_logs_reads_the_file_this_process_logs_to(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """A gateway logs to gateway.log; a TUI attached to it leaves only relay
+    lines (or an earlier embedded run's) in tui.log, so that is not the tail."""
+    from raven.rpc.methods.system import system_logs
+
+    (tmp_path / "tui.log").write_text("stale-relay-line\n", encoding="utf-8")
+    _log_dir_with(monkeypatch, tmp_path, ["engine-000", "engine-001"], name="gateway.log")
+
+    result = await system_logs({})
+
+    assert result["text"] == "engine-000\nengine-001"
+    assert result["path"] == str(tmp_path / "gateway.log")
+
+
+async def test_logs_answers_empty_when_the_process_logs_to_no_file(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from raven.config import paths
+    from raven.rpc.methods.system import system_logs
+
+    (tmp_path / "tui.log").write_text("another-process-line\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_log_file", None)
+
+    result = await system_logs({})
+
+    assert result == {"path": "", "text": ""}
 
 
 @pytest.mark.parametrize("bad", ["20", 2.5, True, None])
