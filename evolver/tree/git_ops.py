@@ -308,12 +308,17 @@ def commit_files_as_child(
         wt = Path(tmp) / "wt"
         create_worktree(repo_root, wt, parent_sha)
         try:
+            wt_resolved = wt.resolve()
             for rel, data in files.items():
-                dest = wt / rel
+                dest = (wt / rel).resolve()
+                if not dest.is_relative_to(wt_resolved):
+                    raise ValueError(f"refusing to write outside the worktree: {rel!r}")
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data if isinstance(data, bytes) else str(data).encode())
             for rel in deletions:
-                fp = wt / rel
+                fp = (wt / rel).resolve()
+                if not fp.is_relative_to(wt_resolved):
+                    raise ValueError(f"refusing to delete outside the worktree: {rel!r}")
                 if fp.exists():
                     fp.unlink()
             _run(wt, "add", "-A")

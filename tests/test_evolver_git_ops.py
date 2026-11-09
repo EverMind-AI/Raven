@@ -122,3 +122,12 @@ class TestRefs:
         git_ops.delete_ref(repo_dir, "refs/evolver/n1")  # absent: no-op
         proc = subprocess.run(["git", "rev-parse", "refs/evolver/n1"], cwd=repo_dir, env=_ENV, capture_output=True)
         assert proc.returncode != 0
+
+
+class TestCommitFilesAsChildPathEscape:
+    @pytest.mark.parametrize("rel", ["/tmp/evolver-escape.txt", "../outside.txt"])
+    def test_refuses_to_write_outside_the_worktree(self, repo, rel, tmp_path, monkeypatch):
+        repo_dir, sha = repo
+        monkeypatch.setattr(git_ops, "set_ephemeral_root", lambda _: None)
+        with pytest.raises(ValueError, match="refusing to write outside the worktree"):
+            git_ops.commit_files_as_child(repo_dir, sha, {rel: b"pwned"}, "bad path")

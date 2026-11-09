@@ -32,6 +32,8 @@ Reference layers (spec §22.1, §22.2):
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath, PureWindowsPath
+
 # ---------------------------------------------------------------------------
 # Immutable pattern list (spec §22.2)
 # ---------------------------------------------------------------------------
@@ -121,6 +123,52 @@ class ImmutablePathError(ValueError):
     """
 
 
+class UnsafePathError(ValueError):
+    """Raised when a patch names a path that can escape the subject tree.
+
+    ``ImmutablePathError`` answers "may the evolver touch this file?"; this
+    answers "is this even a repo-relative file path?". Absolute paths,
+    drive-qualified paths, and any ``..`` component are rejected before a
+    caller can join them onto a worktree.
+    """
+
+
+def _unsafe_reason(path: str) -> str | None:
+    """Why ``path`` is not a safe repo-relative path, or None when it is."""
+    if not isinstance(path, str) or not path.strip():
+        return "empty path"
+    if "\x00" in path:
+        return "NUL byte"
+    # A Windows drive/UNC form is absolute even when it looks relative to
+    # PurePosixPath; check the Windows view before normalising separators.
+    windows = PureWindowsPath(path)
+    if windows.drive or windows.root:
+        return "absolute or drive-qualified path"
+    posix = PurePosixPath(path.replace("\\", "/"))
+    if posix.is_absolute():
+        return "absolute path"
+    if posix.as_posix() in ("", "."):
+        return "empty path"
+    if ".." in posix.parts:
+        return "'..' path component"
+    return None
+
+
+def assert_safe_relative_paths(target_files: list[str]) -> None:
+    """Reject absolute, drive-qualified, or ``..``-escaping patch paths.
+
+    Called by :func:`assert_patch_allowed` before the immutable check, so a
+    caller cannot hand a path like ``/etc/passwd`` or ``../outside`` to a
+    worktree join (`worktree / rel`) and write outside the subject tree.
+    """
+    bad = [(path, _unsafe_reason(path)) for path in target_files]
+    bad = [(path, why) for path, why in bad if why is not None]
+    if bad:
+        head = ", ".join(f"{path!r} ({why})" for path, why in bad[:5])
+        more = f" ... and {len(bad) - 5} more" if len(bad) > 5 else ""
+        raise UnsafePathError(f"patch contains unsafe path(s): {head}{more}")
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -204,8 +252,16 @@ def assert_patch_allowed(target_files: list[str]) -> None:
         assert_patch_allowed([c.target_file for c in patch.components])
         # ... proceed to apply patch only if no error
     """
+    assert_safe_relative_paths(target_files)
     offenders = check_patch_paths(target_files)
     if offenders:
+        head = offenders[:5]
+        more = f" ... and {len(offenders) - 5} more" if len(offenders) > 5 else ""
+        raise ImmutablePathError(
+            f"Patch targets {len(offenders)} evolver-immutable path(s): "
+            f"{head}{more}. The gates, ledgers, and eval glue may never be "
+            "edited by a candidate (see IMMUTABLE_PATTERNS in this module)."
+        )
         head = offenders[:5]
         more = f" ... and {len(offenders) - 5} more" if len(offenders) > 5 else ""
         raise ImmutablePathError(
@@ -219,7 +275,9 @@ __all__ = [
     "IMMUTABLE_PATTERNS",
     "MUTABLE_OVERRIDES",
     "ImmutablePathError",
+    "UnsafePathError",
     "assert_patch_allowed",
+    "assert_safe_relative_paths",
     "check_patch_paths",
     "is_immutable",
 ]
