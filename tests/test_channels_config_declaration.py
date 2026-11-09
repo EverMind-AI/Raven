@@ -20,7 +20,7 @@ from raven.config.schema import ChannelsConfig, ChannelSocket
 # Host-consumed fields: gating and workspace routing read these, adapters do
 # not. They stay with the host (socket config) and out of every cargo
 # declaration.
-SOCKET_FIELDS = {"enabled", "allow_from", "workspace"}
+SOCKET_FIELDS = {"enabled", "allow_from", "message_targets", "workspace"}
 
 SPECS = discover_specs()
 
@@ -108,7 +108,7 @@ def test_the_central_model_carries_no_cargo_fields():
     toggles and nothing per-channel; a cargo field class growing back here
     would put two truths back in play."""
     assert set(ChannelsConfig.model_fields) == {"send_progress", "send_tool_hints"}
-    assert set(ChannelSocket.model_fields) == {"workspace", "enabled", "allow_from"}
+    assert set(ChannelSocket.model_fields) == {"workspace", "enabled", "allow_from", "message_targets"}
 
 
 def test_dynamic_sections_answer_for_known_adapters():

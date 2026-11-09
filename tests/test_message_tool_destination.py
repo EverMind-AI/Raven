@@ -80,7 +80,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.stream = AsyncMock()
         self.tool = MessageTool(self.stream, default_channel="tui", default_chat_id="project")
-        config = SimpleNamespace(allow_from=[OWNER])
+        config = SimpleNamespace(allow_from=[OWNER], message_targets=[OWNER])
         self.channel = SimpleNamespace(
             name="telegram",
             config=config,
@@ -116,8 +116,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.channel.is_running = False
         self.assertTrue((await self.tool.execute("test", channel="telegram", chat_id=OWNER)).startswith("Error:"))
         self.channel.is_running = True
-        self.channel.config.allow_from = ["*"]
+        self.channel.config.message_targets = ["*"]
         self.assertTrue((await self.tool.execute("test", channel="telegram", chat_id=OWNER)).startswith("Error:"))
+        self.channel.send.assert_not_awaited()
+
+    async def test_allow_from_alone_does_not_authorize_sending(self):
+        """Being allowed to talk to the bot is not being allowed to receive its sends."""
+        self.channel.config.allow_from = [OWNER, "222"]
+        self.channel.config.message_targets = [OWNER]
+        result = await self.tool.execute("test", channel="telegram", chat_id="222")
+        self.assertTrue(result.startswith("Error:"), result)
+        self.channel.send.assert_not_awaited()
+
+    async def test_an_empty_message_targets_list_denies_every_send(self):
+        self.channel.config.message_targets = []
+        result = await self.tool.execute("test", channel="telegram", chat_id=OWNER)
+        self.assertTrue(result.startswith("Error:"), result)
+        self.channel.send.assert_not_awaited()
+
+    async def test_message_targets_does_not_widen_what_allow_from_receives(self):
+        self.channel.config.allow_from = [OWNER]
+        self.channel.config.message_targets = [OWNER, "222"]
+        result = await self.tool.execute("test", channel="telegram", chat_id="222")
+        self.assertTrue(result.startswith("Error:"), result)
         self.channel.send.assert_not_awaited()
 
     async def test_retired_outlet_does_not_claim_queue_acceptance(self):

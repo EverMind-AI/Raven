@@ -4,15 +4,15 @@ The gateway can bind one Telegram private chat to an existing page conversation.
 
 This is an opt-in, single-owner setup. Without the binding file, inbound Telegram conversations remain separate from page conversations. With it, other Telegram senders, groups and topics are refused.
 
-Linking requires POSIX file ownership checks and is not supported on Windows. If a binding file exists on an unsupported platform, the gateway logs a warning and refuses Telegram input to the agent without reading the binding or starting a separate conversation. The page and other channels remain available. Remove the file and restart at a safe checkpoint to restore standalone Telegram conversations; explicit outbound sends are unaffected.
+Linking requires POSIX file ownership checks and is not supported on Windows. If a binding file exists on an unsupported platform, the gateway logs a warning, replies with a platform-not-supported notice to each incoming Telegram message, and refuses it without reading the binding or starting a separate conversation. The page and other channels remain available. Remove the file and restart at a safe checkpoint to restore standalone Telegram conversations; explicit outbound sends are unaffected.
 
-Explicit cross-target `message` sends are a gateway-wide change, available with or without a link. They still require both destination fields and an explicitly allowlisted destination.
+Explicit cross-target `message` sends are a gateway-wide change, available with or without a link. They still require both destination fields and a destination listed explicitly in the channel's `message_targets`; `allow_from` governs only who may message the bot.
 
 ## Configure the link
 
 These steps apply only to platforms with POSIX ownership checks. On Windows, leave the binding file absent and use standalone Telegram conversations.
 
-1. Configure and enable Telegram normally. Put the owner's numeric Telegram user ID explicitly in the channel's `allow_from` list. A wildcard alone does not authorize explicit outbound sends.
+1. Configure and enable Telegram normally. Put the owner's numeric Telegram user ID explicitly in the channel's `allow_from` list so the bot accepts the DM, and in `message_targets` if the project should be able to send it messages. A wildcard does not authorize a send.
 2. Identify the exact existing page session key. Do not use its title or guess a key. The gateway must host the page that owns the conversation.
 3. Create `telegram-project-link.json` in the configured agent workspace. It must be a regular file owned by the gateway user, with no group or other permissions, for example mode `0600`. Symlinks are refused.
 4. Set these fields, replacing the synthetic values below with verified local values:
@@ -47,7 +47,7 @@ Linking does not broadcast background worker output, tool chatter, progress noti
 }
 ```
 
-Changing only one destination field is rejected rather than completed from the current reply address. The destination must be explicitly admitted and its adapter must be running. Same-target messages retain the existing streaming behavior.
+Changing only one destination field is rejected rather than completed from the current reply address. The destination must be listed in the channel's `message_targets` and its adapter must be running; the `allow_from` receive gate still applies. Same-target messages retain the existing streaming behavior.
 
 `Message queued ... (transport delivery pending)` means that the native delivery hub accepted the message, not that Telegram delivered it. Successful Telegram text and media sends log the returned message ID. Receipt logs contain chat/message identifiers, so treat them as private operational data.
 

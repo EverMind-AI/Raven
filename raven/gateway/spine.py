@@ -319,11 +319,13 @@ def build_gateway(
 
     async def queue_target(channel_name: str, chat_id: str, content: str, media: list[str]) -> str:
         target = channels.get(channel_name)
-        # Cross-target delivery is limited to an explicitly admitted private user.
+        # Sending is authorized by message_targets; allow_from only governs who
+        # may speak to the bot. Both the explicit target list and the receive
+        # gate must admit the chat, and only a running adapter can deliver.
         if (
             target is None
             or not target.is_running
-            or chat_id not in getattr(target.config, "allow_from", ())
+            or chat_id not in getattr(target.config, "message_targets", ())
             or not target.intake.is_allowed(chat_id)
         ):
             raise ValueError("Destination unavailable or not authorized")
