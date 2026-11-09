@@ -26,6 +26,7 @@ import { resetOverlayState } from '../app/overlayStore.js'
 import { patchUiState, resetUiState } from '../app/uiStore.js'
 import { useComposerState } from '../app/useComposerState.js'
 import { useInputHandlers } from '../app/useInputHandlers.js'
+import { buildAppComposer } from '../app/useMainApp.js'
 import { useSubmission } from '../app/useSubmission.js'
 import { shouldDetachEditedHistoryInput } from '../hooks/useInputHistory.js'
 import { DEFAULT_VOICE_RECORD_KEY } from '../lib/platform.js'
@@ -199,6 +200,33 @@ describe('shouldDetachEditedHistoryInput', () => {
 
   it('does not detach an ordinary draft', () => {
     expect(shouldDetachEditedHistoryInput(null, history, 'new draft')).toBe(false)
+  })
+})
+
+describe('the composer change handler the layout receives', () => {
+  it('is updateInput, not the raw setInput', () => {
+    const updateInput = vi.fn()
+    const setInput = vi.fn()
+    const composer = buildAppComposer({
+      cols: 80,
+      composerActions: { setInput, updateInput } as unknown as ComposerActions,
+      composerState: {
+        compIdx: 0,
+        completions: [],
+        input: 'recalled',
+        inputBuf: [],
+        queueEditIdx: null,
+        queuedDisplay: []
+      } as unknown as ComposerState,
+      empty: false,
+      pagerPageSize: 10,
+      submit: noop,
+      voiceRecordKey: DEFAULT_VOICE_RECORD_KEY
+    })
+
+    // setInput would move the caret without detaching the history index, so
+    // the next Up would throw the user's edit away.
+    expect(composer.updateInput).toBe(updateInput)
   })
 })
 
