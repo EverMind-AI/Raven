@@ -816,6 +816,10 @@ def build_chain(
                 constraint_rubric=cfg.verify.constraint_rubric,
                 strict_reject_only=cfg.verify.strict_reject_only,
                 fail_open_on_elided_evidence=cfg.verify.fail_open_on_elided_evidence,
+                evidence_items=cfg.verify.evidence_items,
+                evidence_item_chars=cfg.verify.evidence_item_chars,
+                evidence_select=cfg.verify.evidence_select,
+                evidence_keep_tail=cfg.verify.evidence_keep_tail,
                 evidence_round=evidence_round,
                 closing_tag_required=cfg.think_closing_tag_required,
             )

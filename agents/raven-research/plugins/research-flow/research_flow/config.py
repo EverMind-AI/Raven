@@ -75,6 +75,20 @@ class SearchConfig(_Base):
     saturation: SearchSaturationConfig = Field(default_factory=SearchSaturationConfig)
 
 
+class BenchmarkGuardConfig(_Base):
+    """Refuse published benchmark copies. Evaluation-only; off in every product profile.
+
+    A benchmark publishes its questions and its gold answers together, so a run can
+    score by reading its own answer off a dataset page. Enabling this declines those
+    pages and the searches that go looking for them. It is not a security control and
+    not a product behaviour -- someone asking about a dataset has every right to read
+    it -- which is why the default is off rather than merely unset.
+    """
+
+    enabled: bool = False
+    block_queries: bool = True
+
+
 class DigestConfig(_Base):
     """Targeted extraction for web_fetch: long pages distilled to the request."""
 
@@ -103,6 +117,26 @@ class VerifyConfig(_Base):
     evidence_round: bool = False
     evidence_round_searches: int = 6
     evidence_round_depth: int = 50
+    evidence_items: int = 8
+    evidence_item_chars: int = 2000
+    evidence_select: Literal["recent", "coverage"] = "recent"
+    """How the reviewer's evidence pack is chosen from the turn's tool results.
+
+    ``recent`` is a blind tail. On a long trajectory that is the wrong 11%: a run
+    that the reviewer wrongly passed averaged 73 tool calls, and the results that
+    located the entity were the early ones the tail had already dropped.
+
+    ``coverage`` keeps ``evidence_keep_tail`` recent results and fills the rest by
+    greedy coverage of the task's own terms. Measured offline on 535 drafts with a
+    separate reviewer model: at 16 x 4000 it stops 56.2% of wrong drafts against the
+    tail's 48.6% (paired +27/-11, p 0.014) while false stops go 9.2% -> 8.3%. The
+    same selection at the 8 x 2000 budget is not significant (p 0.34) and widening
+    the tail without changing the selection buys nothing at all (p 0.61), so the two
+    settings only pay together. The default stays ``recent`` because that result was
+    measured with one reviewer model on one benchmark's drafts, which is evidence for
+    an evaluation profile and not yet for a product default.
+    """
+    evidence_keep_tail: int = 6
 
 
 class BudgetNoteConfig(_Base):
@@ -632,6 +666,7 @@ class FlowConfig(_Base):
     measured_guidance: bool = True
     fetch_max_chars: int = 14_000
     search: SearchConfig = Field(default_factory=SearchConfig)
+    benchmark_guard: BenchmarkGuardConfig = Field(default_factory=BenchmarkGuardConfig)
     digest: DigestConfig = Field(default_factory=DigestConfig)
     verify: VerifyConfig = Field(default_factory=VerifyConfig)
     budget_note: BudgetNoteConfig = Field(default_factory=BudgetNoteConfig)

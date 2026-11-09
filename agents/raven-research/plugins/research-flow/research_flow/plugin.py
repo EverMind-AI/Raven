@@ -278,6 +278,8 @@ class _Shared:
                 evidence_round_factory=evidence_round_factory,
                 saturation_factory=saturation_factory,
                 corpus_endpoint=self.corpus_endpoint,
+                benchmark_guard=cfg.benchmark_guard.enabled,
+                benchmark_guard_queries=cfg.benchmark_guard.block_queries,
             )
             if tool.corpus_endpoint or tool.api_key:
                 self._web_search = tool
@@ -355,6 +357,7 @@ class _Shared:
                 api_key=fetch_keys.get(fetch_provider),
                 proxy=self.proxy,
                 provider=fetch_provider,
+                benchmark_guard=cfg.benchmark_guard.enabled,
                 **kwargs,
             )
         return self._web_fetch

@@ -25,6 +25,7 @@ from research_flow.gates.base import Gate, GateCtx
 from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.evidence_round import EvidenceRound
+from research_flow.support.evidence_select import choose_by_coverage, task_terms
 from research_flow.support.harness_text import harness_body_kind, is_elided_tool_output
 from research_flow.support.ledger import ledger_append
 from research_flow.support.turn_task import task_for
@@ -216,6 +217,8 @@ class DraftReviewerGate(Gate):
         review_final_draft: bool = False,
         evidence_items: int = 8,
         evidence_item_chars: int = 2000,
+        evidence_select: str = "recent",
+        evidence_keep_tail: int = 6,
         max_tokens: int = 8192,
         reasoning_effort: str | None = None,
         constraint_rubric: bool = False,
@@ -242,6 +245,8 @@ class DraftReviewerGate(Gate):
         self._review_final_draft = review_final_draft
         self._evidence_items = evidence_items
         self._evidence_item_chars = evidence_item_chars
+        self._evidence_select = evidence_select
+        self._evidence_keep_tail = evidence_keep_tail
         self._max_tokens = max_tokens
         self._reasoning_effort = reasoning_effort
         self._verdict_tool_choice: dict | str = _VERDICT_TOOL_CHOICE
@@ -488,7 +493,7 @@ class DraftReviewerGate(Gate):
     async def _review(self, ctx: GateCtx, draft: str) -> dict | None:
         task = task_for(ctx)
         messages = ctx.messages or []
-        evidence, elided_skipped = self._evidence_pack(messages)
+        evidence, elided_skipped = self._evidence_pack(messages, task)
         # Two different quantities, and only the second is a valid trigger.
         # elided_skipped counts bodies the pack walked PAST while filling its slots,
         # so a turn that kept working after an elision reports 0: measured on one
@@ -673,8 +678,8 @@ class DraftReviewerGate(Gate):
             )
         return verdict
 
-    def _evidence_pack(self, messages: list[dict]) -> tuple[str, int]:
-        """Last ``evidence_items`` tool results that still carry a body.
+    def _evidence_pack(self, messages: list[dict], task: str = "") -> tuple[str, int]:
+        """``evidence_items`` tool results that still carry a body, in turn order.
 
         Elided bodies are skipped rather than counted. The loop keeps only the
         most recent few tool results verbatim when it has to shrink a turn to
@@ -684,28 +689,53 @@ class DraftReviewerGate(Gate):
         the tail-truncation below could not repair it. Returns the pack and how
         many elided bodies were passed over, so the skip is observable instead
         of looking like a short trajectory.
+
+        ``evidence_select="coverage"`` keeps the recent tail and spends the rest of
+        the budget on the results that first cover the task's own terms; see
+        ``support.evidence_select`` for what that was measured to be worth. The
+        default remains the tail, so an unconfigured flow builds the same pack as
+        before, byte for byte.
         """
         results = [m for m in messages if isinstance(m, dict) and m.get("role") == "tool"]
-        items: list[str] = []
+        skipped = self._count_elided_in_slots(results)
+        # Chronological, every usable body, because the coverage selection has to
+        # see results the tail would already have dropped.
+        bodies: list[tuple[str, str]] = []
+        for m in results:
+            content = str(m.get("content") or "")
+            if harness_body_kind(content) is not None:
+                continue
+            bodies.append((content, str(m.get("name") or "tool")))
+        n = self._evidence_items
+        if self._evidence_select == "coverage":
+            picks = choose_by_coverage([b for b, _ in bodies], n, self._evidence_keep_tail, task_terms(task))
+        else:
+            picks = list(range(max(0, len(bodies) - n), len(bodies)))
+        items = [wrap_untrusted(bodies[i][0][-self._evidence_item_chars :], source=bodies[i][1]) for i in picks]
+        return "\n\n".join(items), skipped
+
+    def _count_elided_in_slots(self, results: list[dict]) -> int:
+        """Elided bodies walked past while filling the budget, newest first.
+
+        dr@3.2: skip every harness-authored body in the pack, not just elisions.
+        ``skipped`` feeds the published ``rejected_on_elided`` observer, so widening
+        what it counts would silently redefine a metric that already has readings on
+        disk. It is therefore still counted by this recency walk whichever selection
+        builds the pack — a count that moved with the selection would not be
+        comparable with those readings.
+        """
+        filled = 0
         skipped = 0
         for m in reversed(results):
-            if len(items) >= self._evidence_items:
+            if filled >= self._evidence_items:
                 break
-            content = str(m.get("content") or "")
-            # dr@3.2: skip every harness-authored body here, not just elisions.
-            # ``skipped`` feeds the published ``rejected_on_elided`` observer, so
-            # widening what it counts would silently redefine a metric that already
-            # has readings on disk. Count elisions separately from what is skipped.
-            kind = harness_body_kind(content)
+            kind = harness_body_kind(str(m.get("content") or ""))
             if kind is not None:
                 if kind == "tool_output_elided":
                     skipped += 1
                 continue
-            if len(content) > self._evidence_item_chars:
-                content = content[-self._evidence_item_chars :]
-            items.append(wrap_untrusted(content, source=str(m.get("name") or "tool")))
-        items.reverse()
-        return "\n\n".join(items), skipped
+            filled += 1
+        return skipped
 
     @staticmethod
     def _format_feedback(verdict: dict) -> str:

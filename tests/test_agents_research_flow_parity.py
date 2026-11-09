@@ -311,6 +311,38 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "answer judged or escalated to research (gates/plain_first.py). Off as a class "
         "default; the product's base slice turns it on and only the max overlay turns it off"
     ),
+    "benchmark_guard": (
+        "refuse published benchmark copies - a dataset page carries the question and its "
+        "gold answer together, so a scored run can read its own answer instead of "
+        "researching it (support/benchmark_guard.py). Off as a class default and in every "
+        "product profile: declining to read a dataset page is right for an evaluation and "
+        "wrong for someone who asked about the dataset. The fork blocked nothing, which is "
+        "why 21 of one 400-item run's 265 correct answers came from such a copy"
+    ),
+    "verify.evidence_items": (
+        "how many tool results the draft reviewer is shown. The fork fixed it in the gate's "
+        "signature; it is config here because the measured selection below only pays at a "
+        "wider budget, and an evaluation profile has to be able to ask for both"
+    ),
+    "verify.evidence_item_chars": (
+        "how much of each shown tool result the draft reviewer reads. Config here for the "
+        "same reason as evidence_items, and with the same fork default"
+    ),
+    "verify.evidence_select": (
+        "which tool results the draft reviewer is shown: the fork's recency tail, or "
+        "coverage of the task's own terms with a recent tail kept "
+        "(support/evidence_select.py). A wrongly passed draft averaged 73 tool calls, so a "
+        "tail carried about 11% of the turn and dropped the results that had located the "
+        "entity. Recent as a class default - the 535-draft result behind coverage was "
+        "measured with one reviewer model on one benchmark's drafts, which is evidence for "
+        "an evaluation profile and not yet for a product default"
+    ),
+    "verify.evidence_keep_tail": (
+        "how many recent tool results the coverage selection keeps regardless. Inert under "
+        "the default selection. Not zero: a pure-coverage pack stops more wrong drafts but "
+        "loses the gold on correct ones (59.7% -> 55.8% in a dry run), and a false stop is "
+        "this reviewer's expensive error"
+    ),
 }
 
 

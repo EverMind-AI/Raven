@@ -61,6 +61,7 @@ from loguru import logger
 
 from raven.contracts.tool import Tool
 from raven.security.network import judge_reader_target
+from research_flow.support.benchmark_guard import blocks_query, blocks_url, query_refusal, url_refusal
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.harness_text import search_closed_notice
 from research_flow.support.ledger import ledger_append as _ledger_append
@@ -618,6 +619,8 @@ class WebSearchTool(Tool):
         evidence_round_factory: Callable[[], EvidenceRound] | None = None,
         saturation_factory: Callable[[], SearchSaturation] | None = None,
         corpus_endpoint: str | None = None,
+        benchmark_guard: bool = False,
+        benchmark_guard_queries: bool = True,
     ):
         self._init_api_key = api_key
         self.max_results = max_results
@@ -645,6 +648,11 @@ class WebSearchTool(Tool):
         self.repeat_notice = repeat_notice
         self._evidence_round_factory = evidence_round_factory
         self._saturation_factory = saturation_factory
+        # Evaluation-only, and inert unless a profile asks for it: a published
+        # benchmark copy answers the question for the model, so neither its rows
+        # nor the queries that hunt for it are served.
+        self.benchmark_guard = benchmark_guard
+        self.benchmark_guard_queries = benchmark_guard_queries
         self._sessions: dict[str, _SearchTurnState] = {}
 
     @property
@@ -702,6 +710,25 @@ class WebSearchTool(Tool):
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         state = self._state()
+        # Before the replay cache and before the saturation rule, for the same reason
+        # the rule itself sits early: the point is that the call does not happen. A
+        # cached page served to a query that names the answer key would be the leak
+        # the guard exists to stop, arriving without a request.
+        if self.benchmark_guard and self.benchmark_guard_queries and blocks_query(query):
+            refusal = query_refusal()
+            self._log_search(
+                state,
+                query,
+                count or self.max_results,
+                [],
+                refusal,
+                dict(_NO_SHAPING),
+                replay=False,
+                k=None,
+                suppressed=True,
+                guard_refused=True,
+            )
+            return refusal
         saturation = state.saturation
         evidence_round = state.evidence_round
         # Rendered width and requested depth are two different numbers from dr@2.8
@@ -852,6 +879,7 @@ class WebSearchTool(Tool):
         replay: bool,
         k: int | None = None,
         suppressed: bool = False,
+        guard_refused: bool = False,
         page: int | None = None,
     ) -> None:
         """Record one search call.
@@ -932,6 +960,13 @@ class WebSearchTool(Tool):
                 # a reader can subtract the rule's refusals from an arm's call total instead
                 # of finding a search that mysteriously returned nothing.
                 "suppressed": suppressed,
+                # Which rule suppressed it. ``suppressed`` was dr@3.0's and its comment
+                # above reads "the rule's refusals" singular, so a second rule writing the
+                # same flag would make the saturation ladder's refusals and the benchmark
+                # guard's one number -- the ``dedup_skipped`` lesson again. Written on
+                # every row, False included, so "the guard did not fire" and "the guard
+                # was not built" are different rows.
+                "guard_refused": guard_refused,
                 # Written on EVERY search row, including the ones where nothing fired, and
                 # null-valued when the arm has no rule at all. That distinction is the whole
                 # lesson of ``dedup_skipped``, which reads 0 on every row of every landed
@@ -1093,6 +1128,11 @@ class WebSearchTool(Tool):
                 data = {}
             data = self._normalise_response(data)
             organic = data.get("organic", [])
+            # Dropped before ``_select_fresh`` so a blocked row does not spend a
+            # rendered slot or enter the turn's dedup identity set: the model must
+            # see the next real result, not a gap where the dataset page was.
+            if self.benchmark_guard:
+                organic = [row for row in organic if not blocks_url(str((row or {}).get("link") or ""))]
             results, n_skipped = self._select_fresh(state, organic, n, "link")
             if not results:
                 # A zero-hit search is the purest dry search, and it returns from
@@ -1614,6 +1654,7 @@ class WebFetchTool(Tool):
         digest_threshold_chars: int = 8000,
         digest_timeout_s: float = 30.0,
         corpus_endpoint: str | None = None,
+        benchmark_guard: bool = False,
     ):
         self._init_api_key = api_key
         self.max_chars = max_chars
@@ -1629,6 +1670,8 @@ class WebFetchTool(Tool):
         self.digest_fn = digest_fn
         self.digest_threshold_chars = digest_threshold_chars
         self.digest_timeout_s = digest_timeout_s
+        # Evaluation-only; see ``support.benchmark_guard``. Inert by default.
+        self.benchmark_guard = benchmark_guard
         self._sessions: dict[str, _FetchTurnState] = {}
 
     def _state(self) -> _FetchTurnState:
@@ -1879,6 +1922,12 @@ class WebFetchTool(Tool):
             )
         # Off the event loop: ``socket.getaddrinfo`` is synchronous and can hang for
         # seconds on a slow resolver, and one process serves every session's turn.
+        # Ahead of the egress check, and returned as plain text rather than as the
+        # ``URL validation failed`` envelope below: a refusal that reads like a
+        # transport fault gets retried, and this one has nothing to retry. Both
+        # BigBang-v1 and MiroFlow return a sentence here for the same reason.
+        if self.benchmark_guard and blocks_url(url):
+            return url_refusal()
         # Not asked of a corpus URL: it names a document in the collection, nothing
         # connects to its host, and a host that does not resolve here must not
         # refuse a page the service holds.
@@ -2020,6 +2069,10 @@ class WebFetchTool(Tool):
         best_text, best_status, served = text, status, url
         tried: list[str] = []
         for candidate in fetch_fallbacks(url)[:_FALLBACK_LIMIT]:
+            # The rewrites are derived URLs, so a guard applied only at ``execute``
+            # would let a thin page be recovered from the copy it was meant to refuse.
+            if self.benchmark_guard and blocks_url(candidate):
+                continue
             is_valid, _error = await asyncio.to_thread(_judge_fetch_target, candidate)
             if not is_valid:
                 continue
