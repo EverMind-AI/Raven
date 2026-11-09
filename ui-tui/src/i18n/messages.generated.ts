@@ -926,9 +926,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.mem.hint_profile': 'What the engine gathers about you',
     'gui.mem.hint_skill': 'Ways of working distilled from cases',
     'gui.mem.local_failed': 'Could not start EverOS. See the detail below.',
-    'gui.mem.local_foreign_sub':
-      'This EverOS is one you manage, so Raven does not start it. Start it yourself; Raven reads it as soon as it answers.',
-    'gui.mem.local_recheck': 'Check again',
     'gui.mem.local_start': 'Start EverOS',
     'gui.mem.local_starting': 'Starting...',
     'gui.mem.local_sub': 'Start it here; Raven uses it to keep long-term memory on this machine.',
@@ -4508,8 +4505,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.mem.hint_profile': '引擎归纳出的你的画像',
     'gui.mem.hint_skill': '从案例蒸馏出的做法',
     'gui.mem.local_failed': '无法启动 EverOS，请看下面的详情。',
-    'gui.mem.local_foreign_sub': '这个 EverOS 由你自己管理，Raven 不会启动它。请自行启动，它一响应 Raven 就会读取。',
-    'gui.mem.local_recheck': '重新检查',
     'gui.mem.local_start': '启动 EverOS',
     'gui.mem.local_starting': '启动中...',
     'gui.mem.local_sub': '在这里启动它，Raven 会用它在本地保存长期记忆。',

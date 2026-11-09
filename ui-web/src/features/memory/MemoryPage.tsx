@@ -164,10 +164,6 @@ function CloudConnect({ s }: { s: store.MemoryState }): JSX.Element {
    fixes it. The backend starts this server at boot; this is for after that
    process went away. */
 function LocalStart({ s }: { s: store.MemoryState }): JSX.Element {
-  /* A root the user manages is theirs to start: the backend never spawns it,
-     so a Start here could only be refused. The step is named as theirs, and
-     the button looks again once they have taken it. */
-  const theirs = s.stats?.local_owned === false
   return (
     <div className="memconnect">
       <div className="memconnect-inner">
@@ -179,24 +175,18 @@ function LocalStart({ s }: { s: store.MemoryState }): JSX.Element {
           </svg>
         </div>
         <div className="memconnect-t">{t('gui.mem.local_t')}</div>
-        <div className="memconnect-sub">{t(theirs ? 'gui.mem.local_foreign_sub' : 'gui.mem.local_sub')}</div>
+        <div className="memconnect-sub">{t('gui.mem.local_sub')}</div>
         <div className="memconnect-row memconnect-actions">
-          {theirs ? (
-            <button className="mini" onClick={() => store.recheckLocal()}>
-              {t('gui.mem.local_recheck')}
-            </button>
-          ) : (
-            <button className="mini" disabled={s.localBusy} onClick={() => store.startLocal()}>
-              {s.localBusy ? (
-                <>
-                  <span className="memconnect-spin" aria-hidden="true" />
-                  {t('gui.mem.local_starting')}
-                </>
-              ) : (
-                t('gui.mem.local_start')
-              )}
-            </button>
-          )}
+          <button className="mini" disabled={s.localBusy} onClick={() => store.startLocal()}>
+            {s.localBusy ? (
+              <>
+                <span className="memconnect-spin" aria-hidden="true" />
+                {t('gui.mem.local_starting')}
+              </>
+            ) : (
+              t('gui.mem.local_start')
+            )}
+          </button>
         </div>
         {s.localErr ? <div className="memnote memerr">{s.localErr}</div> : null}
       </div>

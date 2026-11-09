@@ -130,22 +130,6 @@ def _local_server_running() -> bool:
         return False
 
 
-def _local_owned() -> bool:
-    """Whether Raven may start the local EverOS server, or only reads it.
-
-    A root the user manages is theirs to start: the backend never spawns it and
-    the plugin's write guard refuses the address Raven would record. The
-    section draws that state instead of a Start button. An install that cannot
-    answer is treated as Raven's, the state the section drew before it asked.
-    """
-    try:
-        from raven_everos.config import everos_owned
-
-        return bool(everos_owned())
-    except Exception:  # noqa: BLE001 - a missing plugin or unreadable config keeps the old panel
-        return True
-
-
 def _cloud_key_set() -> bool:
     """Whether the hosted backend has a key on file, or in the environment.
 
@@ -345,10 +329,8 @@ async def memory_stats(params: dict) -> dict:
     available = _available_backends()
     cloud_key_set = _cloud_key_set()
     local_running = False
-    local_owned = True
     if backend == _EVEROS_BACKEND:
         local_running = await asyncio.to_thread(_local_server_running)
-        local_owned = await asyncio.to_thread(_local_owned)
     if note is None and backend == _CLOUD_BACKEND and not cloud_key_set:
         # A missing key is not an unreachable service: answer here instead of
         # sending four requests that can only come back 401, and leave the
@@ -374,7 +356,6 @@ async def memory_stats(params: dict) -> dict:
             "available_backends": available,
             "cloud_key_set": cloud_key_set,
             "local_running": local_running,
-            "local_owned": local_owned,
         }
     base_url, user_id, agent_id = _cfg()
     counts: dict[str, int] = {}
@@ -404,7 +385,6 @@ async def memory_stats(params: dict) -> dict:
         "available_backends": available,
         "cloud_key_set": cloud_key_set,
         "local_running": local_running,
-        "local_owned": local_owned,
     }
 
 

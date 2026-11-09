@@ -21,8 +21,6 @@ def fake_cfg(monkeypatch):
     # The section's start button is drawn off a real probe; a handler test must
     # not inherit the machine's local everos server.
     monkeypatch.setattr(memory, "_local_server_running", lambda: False)
-    # Nor the machine's own answer to whose root this is.
-    monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
     # A full server, so no test pays a real capability probe: ``http://x`` is
     # a hostname, and resolving it cost the one search test five seconds.
     monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
@@ -63,7 +61,6 @@ async def test_stats_reads_all_four_kinds(monkeypatch):
         "available_backends": ["everos", "everos-cloud"],
         "cloud_key_set": False,
         "local_running": False,
-        "local_owned": True,
     }
     kinds = [b["memory_type"] for _, b in calls]
     assert kinds == ["episode", "profile", "agent_case", "agent_skill"]
@@ -80,25 +77,6 @@ async def test_stats_degrades_when_everos_down(monkeypatch):
     out = await memory.memory_stats({})
     assert out["ok"] is False
     assert out["episodes"] == 0
-
-
-@pytest.mark.asyncio
-async def test_stats_says_when_the_local_server_is_not_ravens_to_start(monkeypatch):
-    """A root the user manages is read, never started: the backend says so and
-    never spawns it. The section has to know as well, or it offers a Start
-    button whose only answer is the write guard's refusal."""
-    monkeypatch.setattr(memory, "_configured_backend", lambda: "everos")
-    monkeypatch.setattr(memory, "_available_backends", lambda: ["everos"])
-    monkeypatch.setattr(memory, "_cloud_key_set", lambda: False)
-
-    for owned in (False, True):
-        monkeypatch.setattr("raven_everos.config.everos_owned", lambda owned=owned: owned)
-        post, _calls = _post_returning([{"data": {"total_count": 0}} for _ in range(4)])
-        monkeypatch.setattr(memory, "_post", post)
-
-        out = await memory.memory_stats({})
-
-        assert out["local_owned"] is owned
 
 
 def test_available_backends_follow_what_is_importable(monkeypatch):

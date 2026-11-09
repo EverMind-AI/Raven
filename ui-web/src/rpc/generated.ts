@@ -5035,10 +5035,6 @@ export interface MemoryStatsResult {
    * Whether the local EverOS server answers where the local backend reads. The section draws its start panel when the local backend is selected and this is false.
    */
   local_running?: boolean;
-  /**
-   * Whether Raven may start and stop the local EverOS server: false for a root the user manages, which Raven only reads. The section offers no Start button for that root, only the step that is the user's own.
-   */
-  local_owned?: boolean;
 }
 export interface MemoryListParams {
   kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';

@@ -629,30 +629,26 @@ describe('memory island', () => {
       expect(screen.queryByText('gui.mem.local_failed')).toBeNull()
     })
 
-    /* A root the user manages is theirs to start: the backend never spawns it,
-       and the plugin refuses the address Raven would record. A Start button
-       there could only fail; the panel says whose step it is and offers the
-       check that finds the server once it answers. */
-    it('offers no Start for a local server the user manages', async () => {
-      let running = false
-      const starts = vi.fn(async () => ({ ok: false, running: false, base_url: '' }))
+    /* A root the user manages is theirs to start: the backend's own start never
+       spawns it and says so through notify, and that sentence is the reply's
+       detail. The section shows it as written -- whose step it is -- rather
+       than a refusal from the plugin's write guard. */
+    it('shows what the backend said when Start cannot bring the server up', async () => {
+      const said = 'Long-term memory is off: the EverOS you manage is not running at http://127.0.0.1:18791. '
+        + 'Start it yourself and Raven will use it; Raven does not start or stop it.'
       install(
         {
-          stats: async () => ({ ...both, backend: 'everos', local_running: running, local_owned: false }),
-          list: async () => ({ items: [item()], total: 1 }),
-          startLocal: starts,
+          stats: async () => ({ ...both, backend: 'everos', local_running: false }),
+          startLocal: async () => ({ ok: false, running: false, base_url: '', detail: said, state: 'applied' }),
         },
-        { ...both, backend: 'everos', local_running: false, local_owned: false },
+        { ...both, backend: 'everos', local_running: false },
       )
       await mount()
-      expect(await screen.findByText('gui.mem.local_foreign_sub')).toBeTruthy()
-      expect(screen.queryByText('gui.mem.local_start')).toBeNull()
-      running = true
       await act(async () => {
-        fireEvent.click(screen.getByText('gui.mem.local_recheck'))
+        fireEvent.click(await screen.findByText('gui.mem.local_start'))
       })
-      expect(await screen.findByText('shipped the island')).toBeTruthy()
-      expect(starts).not.toHaveBeenCalled()
+      expect(await screen.findByText(said)).toBeTruthy()
+      expect(screen.getByText('gui.mem.local_start')).toBeTruthy()
     })
 
     /* A key saved while a turn runs reaches the loop when the turn ends. Read
