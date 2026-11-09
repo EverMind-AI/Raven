@@ -64,6 +64,7 @@ const ICONS: Record<string, string> = {
   qiniu: 'qiniu',
   siliconflow: 'siliconcloud',
   sophnet: 'sophnet',
+  standardcompute: 'standardcompute',
   stepfun: 'stepfun',
   together_ai: 'together',
   /* Tencent Cloud's product, and its mark is the one it ships under. */
@@ -179,6 +180,7 @@ const TONES: Record<string, 'mono' | 'hybrid' | 'mono-white'> = {
   anthropic: 'hybrid',
   mineru: 'hybrid',
   opper: 'mono',
+  standardcompute: 'mono',
   vllm: 'mono',
 }
 

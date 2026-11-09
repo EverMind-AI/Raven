@@ -25,6 +25,12 @@ history.
   that row on the same nominative basis. It is drawn in `currentColor`, so the
   dark theme inverts it the way it does `vllm.svg`. Neither icon set below
   carries an Opper mark, which is why this one comes straight from the vendor.
+- Standard Compute's mark, `ui-web/src/assets/providers/standardcompute.svg`,
+  is supplied by Standard Compute, the vendor, with the change that added the
+  Standard Compute row, and shown to identify that row on the same nominative
+  basis. It is drawn in `currentColor`, so the dark theme inverts it the way it
+  does `vllm.svg`. Neither icon set below carries a Standard Compute mark, which
+  is why this one comes straight from the vendor.
 - The channel marks under `ui-web/src/assets/channels/` come straight from the
   vendors too, on the same nominative basis: each identifies the channel row it
   sits on. Nine are the app icons the vendors publish on their App Store

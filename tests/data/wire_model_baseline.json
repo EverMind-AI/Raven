@@ -428,6 +428,14 @@
       "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
       "zz-probe-1": "openai/zz-probe-1"
     },
+    "standardcompute": {
+      "openai/zz-probe-1": "openai/zz-probe-1",
+      "standardcompute-probe": "openai/standardcompute-probe",
+      "standardcompute/vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "standardcompute/zz-probe-1": "openai/zz-probe-1",
+      "vendorx/zz-probe-1": "openai/vendorx/zz-probe-1",
+      "zz-probe-1": "openai/zz-probe-1"
+    },
     "stepfun": {
       "openai/zz-probe-1": "openai/zz-probe-1",
       "stepfun-probe": "openai/stepfun-probe",

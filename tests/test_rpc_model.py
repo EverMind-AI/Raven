@@ -1643,6 +1643,7 @@ NO_SHORTLIST_VENDORS = [
     "aionly",
     "radeon_cloud",
     "opper",
+    "standardcompute",
 ]
 
 
