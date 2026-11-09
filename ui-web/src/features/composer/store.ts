@@ -877,8 +877,10 @@ export function runSlash(x: SlashCmd | undefined): void {
   const ta = field()
   if (ta) {
     /* The TUI records the command line like any other submitted text; a
-       recalled slash command is still a thing the reader typed. */
-    history.append(ta.value)
+       recalled slash command is still a thing the reader typed. Record the
+       command that ran, not the prefix in the field: "/c" selected down to
+       gui.compress executes "/compress", and history must replay that. */
+    history.append(slashCmd(x))
     ta.value = ''
   }
   fitField()
@@ -997,6 +999,11 @@ function writeHistory(value: string): void {
   ta.setSelectionRange(value.length, value.length)
   fitField()
   goPaint()
+  /* A recall bypasses fieldInput, so the palette would not reopen on its own.
+     A recalled slash command must reopen it: otherwise Enter falls through to
+     fireSend and sends "/clear" to the model as prompt text. */
+  if (value.startsWith('/') && !value.includes(' ')) drawSlash(value)
+  else closeSlash()
 }
 
 export function fieldKeydown(e: KeyboardEvent): void {

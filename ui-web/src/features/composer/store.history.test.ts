@@ -213,6 +213,34 @@ describe('the send paths', () => {
     expect(ta().value).toBe('')
     expect(history.entries()).toEqual(['/clear'])
   })
+
+  it('records the command it ran, not the prefix that opened the palette', async () => {
+    const fn = vi.fn()
+    setSources({ composer: source({ slash: [{ id: 'gui.compress', fn }] }) })
+    await boot([])
+    type('/c')
+    store.fieldInput()
+    press('Enter')
+    expect(fn).toHaveBeenCalled()
+    expect(history.entries()).toEqual(['/compress'])
+  })
+})
+
+describe('a recalled slash command', () => {
+  it('reopens the palette, so Enter runs it instead of sending it as prompt text', async () => {
+    const fn = vi.fn()
+    const send = vi.fn()
+    setSources({ composer: source({ slash: [{ id: 'gui.clear', fn }], send }) })
+    await boot(['/clear'])
+
+    press('ArrowUp')
+    expect(ta().value).toBe('/clear')
+    expect(store.slashIsOpen()).toBe(true)
+
+    press('Enter')
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(send).not.toHaveBeenCalled()
+  })
 })
 
 describe('a conversation switch', () => {
