@@ -154,8 +154,8 @@ class _SessionRouter:
     def reserve(self, session_id: str) -> None:
         """Reserve a session before its turn sink is attached.
 
-        ACP agents may emit an update immediately after ``session/new`` or
-        ``session/load`` returns. Keeping that short handoff window explicit
+        ACP agents may emit an update immediately after ``session/new``,
+        ``session/load`` or ``session/resume`` returns. Keeping that short handoff window explicit
         prevents the first progress frame from being dropped as unrouted.
         """
         self._reserved.add(session_id)

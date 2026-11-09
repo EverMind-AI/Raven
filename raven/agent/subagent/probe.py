@@ -1497,8 +1497,8 @@ def _test_record(snapshot: Any, previous: Any) -> Any:
     unusable result keeps the previous record's capabilities under its own
     status and detail. Same reasoning as ``SnapshotStore.load`` gives for a
     stale row: the old capabilities are the weaker claim and self-heal, since a
-    session that really cannot be loaded fails at ``session/load`` and the
-    backend starts fresh. ``previous`` is the last record for this agent, stale
+    session that really cannot be reopened fails at ``session/load`` or
+    ``session/resume`` and the backend starts fresh. ``previous`` is the last record for this agent, stale
     or not -- the roster reads a stale row's capabilities too, so a failed test
     after a config edit must not erase what it was trusting -- or ``None``,
     with nothing to keep. The record takes this test's fingerprint: it is a

@@ -704,8 +704,8 @@ class SnapshotStore:
         chip and the ``instance`` parameter in the spawn schema, silently, until
         someone happened to press Test. Trusting the old capabilities is the
         weaker claim and it self-heals: if the edit really did swap in an agent
-        that cannot resume, the next ``session/load`` fails and the backend drops
-        the binding and starts fresh.
+        that cannot resume, the next reopen (``session/load`` or ``session/resume``)
+        fails and the backend drops the binding and starts fresh.
         """
         rows = {row.get("agent"): row for row in self._read()}
         found: dict[str, CapabilitySnapshot] = {}

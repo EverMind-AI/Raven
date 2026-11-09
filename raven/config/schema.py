@@ -2608,8 +2608,8 @@ class SubagentRuntimeConfig(Base):
     """Seconds a pooled ACP agent may sit with no request in flight and no frame
     either way before its process is closed. ``None`` or ``0`` keeps every agent
     until the host exits. Only an agent that can reopen its sessions
-    (``loadSession``) is closed, so a later turn resumes the conversation in a
-    fresh process. An agent that holds work nobody is asking for yet -- an armed
+    (``loadSession`` or ``sessionCapabilities.resume``) is closed, so a later
+    turn resumes the conversation in a fresh process. An agent that holds work nobody is asking for yet -- an armed
     cron job of its own, a running plugin service -- says so when asked
     (``_raven/residentWork``) and is kept."""
 

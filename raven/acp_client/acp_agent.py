@@ -17,9 +17,10 @@ Two consequences worth stating, because they are what the transport buys:
   answered, raven's outbound frames, notifications no session was listening for,
   stderr -- is written by :mod:`raven.acp_client.journal` for the life of the
   connection, and each call records the byte range it occupied there.
-- Resuming is the agent's own ``session/load``, not a second command template, so
-  whether an agent *can* resume is read from its handshake instead of inferred
-  from a config field a human filled in.
+- Resuming is the agent's own ``session/load``, or ``session/resume`` where that is
+  the one it declares, not a second command template, so whether an agent *can*
+  resume is read from its handshake instead of inferred from a config field a
+  human filled in.
 """
 
 from __future__ import annotations
