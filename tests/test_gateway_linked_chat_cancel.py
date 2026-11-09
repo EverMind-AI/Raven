@@ -17,7 +17,7 @@ from raven.rpc.question_broker import QuestionBroker
 from raven.rpc.spine import build_rpc_spine
 from raven.session.manager import SessionManager
 from raven.spine.delivery import DeliveryHub
-from tests.test_gateway_linked_chat import KEY, OWNER, Emitter, Loop, dm
+from tests.test_gateway_linked_chat import KEY, OWNER, Emitter, Loop, dm, fast_typing, typing_channel
 
 
 @pytest.fixture
@@ -302,3 +302,27 @@ async def test_an_overlapping_stop_keeps_the_first_stop_state(linked_page):
     assert r.link.stopping is False
     await r.hub.wait_idle("telegram")
     r.telegram.send.assert_any_await(OWNER, "A stop is already in progress.")
+
+
+async def test_a_page_stop_ends_the_linked_adapter_typing(linked_page):
+    """Page Stop stays silent on Telegram, but it must still stop the typing indicator."""
+    r = linked_page
+    async with fast_typing():
+        channel = typing_channel()
+        r.link.channels["telegram"] = channel
+        channel._start_typing(OWNER)
+        typing = channel._typing[OWNER]
+        for _ in range(100):
+            if channel._app.bot.send_chat_action.await_count:
+                break
+            await asyncio.sleep(0.005)
+        await inbound(r, "linked work")
+        _host, handle = await running(r)
+        assert await rpc(r, "turn.cancel", **page_stop_params(r)) == {"cancelled": True}
+        assert await asyncio.wait_for(handle.result(), 2) is None
+        await asyncio.sleep(0.02)
+        assert OWNER not in channel._typing
+        assert typing.done()
+        seen = channel._app.bot.send_chat_action.await_count
+        await asyncio.sleep(0.05)
+        assert channel._app.bot.send_chat_action.await_count == seen

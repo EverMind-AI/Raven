@@ -2,6 +2,7 @@
 
 import ast
 import asyncio
+import contextlib
 import json
 import os
 import tempfile
@@ -73,6 +74,7 @@ class Loop:
         self.maximum = 0
         self.notified = 0
         self.action = None
+        self.reply = True
 
     def notify_turn_complete(self):
         self.notified += 1
@@ -96,12 +98,42 @@ class Loop:
             await emit(Notice(NoticeKind.PROGRESS, detail="working"))
             if kwargs["stream"]:
                 await emit(StreamDelta("token"))
+            if not self.reply:
+                return TurnOutcome(Usage(1, 1, 2), explicit_reply=False)
             await emit(Text("reply:" + req.text))
             session.add_message("assistant", "reply:" + req.text)
             self.sessions.save(session)
             return TurnOutcome(Usage(1, 1, 2), explicit_reply=True)
         finally:
             self.running -= 1
+
+
+def typing_channel():
+    """A real adapter shell: its own typing loop over a fake transport."""
+    from raven.channels.adapters.telegram.channel import TelegramChannel
+
+    channel = object.__new__(TelegramChannel)
+    channel._typing = {}
+    channel._app = SimpleNamespace(
+        bot=SimpleNamespace(
+            send_chat_action=AsyncMock(),
+            send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)),
+        )
+    )
+    return channel
+
+
+@contextlib.asynccontextmanager
+async def fast_typing():
+    """Run the adapter's 4-second typing loop at a pace a test can observe."""
+    from raven.channels.adapters.telegram import channel as telegram_channel
+
+    async def sleep(_seconds):
+        await asyncio.sleep(0.01)
+
+    shim = SimpleNamespace(create_task=asyncio.create_task, sleep=sleep, CancelledError=asyncio.CancelledError)
+    with patch.object(telegram_channel, "asyncio", shim):
+        yield
 
 
 class PlatformTests(unittest.TestCase):
@@ -342,6 +374,28 @@ class NativeTests(unittest.IsolatedAsyncioTestCase):
         """The request is swallowed, but the typing indicator it started is not."""
         await self.dispatch(dm("hello", sender_id="222"))
         self.telegram.end_turn.assert_awaited_once_with(OWNER)
+
+    async def test_a_linked_turn_without_a_reply_ends_the_adapter_typing(self):
+        """The turn ended without a Text, so send() cannot be what stops typing."""
+        async with fast_typing():
+            channel = typing_channel()
+            self.link.channels["telegram"] = channel
+            channel._start_typing(OWNER)
+            typing = channel._typing[OWNER]
+            for _ in range(100):
+                if channel._app.bot.send_chat_action.await_count:
+                    break
+                await asyncio.sleep(0.005)
+            self.loop.reply = False
+            self.loop.release.set()
+            await self.dispatch(dm("silent"))
+            await self.idle()
+            await asyncio.sleep(0.02)
+            self.assertNotIn(OWNER, channel._typing)
+            self.assertTrue(typing.done())
+            seen = channel._app.bot.send_chat_action.await_count
+            await asyncio.sleep(0.05)
+            self.assertEqual(channel._app.bot.send_chat_action.await_count, seen)
 
     async def test_actual_gateway_dispatch_selects_page_not_gateway(self):
         tree = ast.parse((ROOT / "raven/cli/gateway_commands.py").read_text())

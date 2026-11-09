@@ -1,5 +1,6 @@
 """Owner-controlled Telegram DM binding; the page still owns the serial lane."""
 
+import asyncio
 import json
 import os
 import re
@@ -193,6 +194,8 @@ class LinkedChat:
         return Runner()
 
     def wrap_sink(self, page_sink, outlet):
+        ending: set[asyncio.Task[None]] = set()
+
         async def sink(event):
             if isinstance(event, (TurnEnded, TurnFailed)):
                 active = self.active.get(event.conversation_id)
@@ -201,6 +204,13 @@ class LinkedChat:
                     self.sources.pop(event.conversation_id, None)
                     if isinstance(event, TurnFailed) and not event.cancelled:
                         await self.hub.dispatch(Text(content="Sorry, I encountered an error.", source=active[1]))
+                    channel = self.channels.get(active[1].channel)
+                    if channel is not None:
+                        from raven.gateway.spine import end_channel_turn
+
+                        task = asyncio.create_task(end_channel_turn(channel, active[1].chat_id))
+                        ending.add(task)
+                        task.add_done_callback(ending.discard)
                     self.agent.notify_turn_complete()
                 await page_sink(event)
                 if (
