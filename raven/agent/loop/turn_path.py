@@ -145,6 +145,7 @@ from raven.session.manager import BUDGET_STOP_TURN_AT, OUTPUT_LIMIT_TURN_AT
 from raven.session.refs import TOOL_RESULT_TRUNCATION_MARKER, tool_result_view
 from raven.session.turn_shape import REPLIED_VIA_TOOL, TakeBack, TakeBackStep
 from raven.spine.events import bound_failure_text
+from raven.spine.scheduler import describe_failure
 from raven.spine.turn import AnswerlessTurnError
 from raven.token_wise import usage_context
 from raven.token_wise.turn_spend import TurnSpend
@@ -3591,7 +3592,7 @@ class TurnPathMixin:
                 # Bounded the way the lane bounds the same crash for its event:
                 # an arbitrary exception message is filed in a session a reader
                 # and a model both read back.
-                reason=bound_failure_text(str(exc)),
+                reason=describe_failure(exc),
                 full_detail=attach_full_detail(exc),
                 context_used=reading.get("context_used"),
             )
