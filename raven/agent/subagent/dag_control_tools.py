@@ -475,12 +475,13 @@ class ResolveDagNodeTool(_ControlTool):
         if decision == REPLAN:
             # Ahead of every step below, because each of them costs something a
             # refused replan must not spend: the reconciled read, then -- inside
-            # prepare_replan -- the confirm question, the dispatch quota and the
-            # minted instances, none of which is refunded when the hand-off later
-            # finds nobody waiting. An answer for an unwaited node is ordinary
-            # (a decision past the adjudication deadline, a stopped run, a
-            # mistyped id), so without this a handful of them exhausts the
-            # session's hourly budget having dispatched nothing.
+            # prepare_replan -- the confirm question and the minted instances,
+            # neither of which is refunded when the hand-off later finds nobody
+            # waiting. (The dispatch quota is charged at commit, so a proposal
+            # nobody takes spends none of it.) An answer for an unwaited node is
+            # ordinary (a decision past the adjudication deadline, a stopped run,
+            # a mistyped id), so without this a handful of them would walk the
+            # user through a confirmation and mint handles for nothing.
             #
             # Only when the answer is a definite no: `None` means no instance
             # here implements the question, and the hand-off below stays the

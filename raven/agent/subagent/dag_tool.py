@@ -1007,10 +1007,11 @@ class SubAgentDagTool(Tool):
         ``is_open`` answers False -- so asking first refuses nothing the hand-off
         would have accepted.
 
-        It is asked first because a replan's costs are paid before that hand-off,
-        inside ``prepare_replan``: the confirm question, the dispatch quota and
-        the minted instances, none of which is refunded when the hand-off then
-        finds nobody waiting. See the call site in
+        It is asked first because some of a replan's costs are paid before that
+        hand-off, inside ``prepare_replan``: the confirm question and the minted
+        instances, neither of which is refunded when the hand-off then finds
+        nobody waiting. The dispatch quota is charged only at commit, so a
+        proposal nobody takes spends none of it. See the call site in
         :mod:`raven.agent.subagent.dag_control_tools`.
         """
         desk = self._desks.get(run_id)
