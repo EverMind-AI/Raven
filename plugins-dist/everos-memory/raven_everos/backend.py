@@ -862,13 +862,20 @@ class EverosBackend:
         if users:
             # Somebody else of ours is still using the service, so it has to
             # outlive us: stopping it here would leave the replacement
-            # pointed at a dead server.
+            # pointed at a dead server. A live child of ours -- one our probe
+            # respawned after the recorded one died -- is handed to whoever
+            # leaves last, or nobody would stop it.
+            if self._proc is not None and self._proc.poll() is None:
+                _SERVICE_CHILD[self._service_key] = self._proc
             return None
         _SERVICE_USERS.pop(self._service_key, None)
-        # The child to stop is the one this backend owns; if it does not own
-        # one, it is the one another of ours started and has already left --
-        # this is the last user either way.
+        # The child to stop is the live one: this backend's own, or the one
+        # another of ours started (or respawned) and left behind -- this is the
+        # last user either way. A dead handle stops nothing.
         recorded = _SERVICE_CHILD.pop(self._service_key, None)
+        for child in (self._proc, recorded):
+            if child is not None and child.poll() is None:
+                return child
         return self._proc if self._proc is not None else recorded
 
     async def _start(self) -> None:

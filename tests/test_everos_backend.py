@@ -3351,3 +3351,30 @@ class TestAServiceTwoBackendsOfOursShare:
         await borrower.stop()
 
         assert asked == [4242], "the last user of ours stops the service it started"
+
+    async def test_a_server_respawned_by_one_of_ours_is_stopped_by_the_last_to_leave(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The child the owner recorded died, and the other backend's probe
+        brought the server back: that backend holds the live child now. It
+        leaving first must hand it over -- otherwise the last to leave knows
+        only the dead handle, skips the stop, and on Windows the server
+        outlives Raven."""
+        from raven_everos.server import StopOutcome
+
+        owner, borrower, child = await self._owner_and_borrower()
+        child.poll = lambda: 1
+        borrower._proc = SimpleNamespace(pid=5151, poll=lambda: None, returncode=None)
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        asked: list[int] = []
+        monkeypatch.setattr(
+            "raven_everos.server.stop_pid",
+            lambda pid, **kw: asked.append(pid) or StopOutcome.STOPPED,
+        )
+
+        await borrower.stop()
+        assert asked == [], "the owner is still using the server"
+        await owner.stop()
+
+        assert asked == [5151], "the live child is the one to stop, not the dead one the owner recorded"
