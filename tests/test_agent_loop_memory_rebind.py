@@ -643,6 +643,40 @@ async def test_a_switch_asked_for_during_a_turn_is_queued_and_lands_when_it_ends
 
 
 @pytest.mark.asyncio
+async def test_a_queued_switch_that_fails_to_start_says_so() -> None:
+    """The write that queued the switch answered "switches when that turn
+    finishes" and returned long ago, and nothing awaits the task that lands it.
+    A start that raises there was held on that task unseen, while the file
+    named a backend the loop never reached."""
+    from loguru import logger
+
+    class _Broken(_Backend):
+        async def start(self) -> None:
+            raise OSError("the everos root is not writable")
+
+    old, broken = _Backend(), _Broken()
+    loop = _loop(builders=[], router=None)
+    heard: list[str] = []
+    loop.memory_assembly = SimpleNamespace(registry=None, notify=heard.append)
+    loop.backend = old
+    loop._enter_turn()
+    assert await loop.apply_memory_backend(broken, name="x", user_id="u", agent_id="a", memory_top_k=5) == "queued"
+    logged: list[str] = []
+    sink = logger.add(lambda message: logged.append(str(message)), level="ERROR")
+    try:
+        loop._exit_turn()
+        await asyncio.gather(loop._queued_switch_task, return_exceptions=True)
+        await asyncio.sleep(0)
+    finally:
+        logger.remove(sink)
+
+    assert loop.backend is old
+    assert broken.stops == 1, "the partial start is still cleaned up"
+    assert any("not writable" in line for line in logged), logged
+    assert len(heard) == 1 and "not writable" in heard[0], heard
+
+
+@pytest.mark.asyncio
 async def test_a_queued_switch_does_not_land_after_the_generation_is_retired() -> None:
     """The teardown that would have retired the switched-to backend has
     already run by the time a queued switch could land, so landing it would

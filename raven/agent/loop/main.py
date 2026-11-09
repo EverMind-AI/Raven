@@ -1049,7 +1049,26 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 memory_top_k=memory_top_k,
             )
         )
+        task.add_done_callback(self._report_queued_switch)
         self._queued_switch_task = task
+
+    def _report_queued_switch(self, task: asyncio.Task) -> None:
+        """Say so when a switch that waited for a turn did not land.
+
+        The write that queued it answered "switches when that turn finishes"
+        and returned long ago, and nothing else awaits this task: a start that
+        raised here was held on the task unseen, while the file named a backend
+        the loop never reached.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        logger.opt(exception=exc).error("memory: the switch queued behind a turn did not land: {}", exc)
+        notify = getattr(getattr(self, "memory_assembly", None), "notify", None)
+        if notify is not None:
+            notify(f"Switching the memory backend failed: {exc}. This session keeps the previous one.")
 
     def _schedule_retire_backend(self, backend: "MemoryBackend") -> None:
         """Retire a backend this loop still owns without holding a caller on it.
