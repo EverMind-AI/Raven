@@ -6,10 +6,12 @@
  * below it is the fill as cells, coloured by the part each cell belongs to,
  * and the rows under the grid are those parts with their own counts.
  *
- * The parts are an estimate of one request, measured by the loop on the prompt
- * it sent, so they are absent until a turn has measured one. A window nobody
- * divided is still a window: the popover says so rather than inventing a
- * breakdown.
+ * The headline and the rows are two different measurements, and the card says
+ * so rather than leaving the reader to add them up: the loop measures the
+ * parts locally, from the prompt it sent, so they are an estimate that neither
+ * counts the answer nor uses the provider's tokenizer. The parts are absent
+ * until a turn has measured them. A window nobody divided is still a window:
+ * the popover says so rather than inventing a breakdown.
  *
  * WHERE this renders is not decided here. It is a child of the ring's anchor
  * (.chrome-anch, src/chrome/Dock.tsx), hung off the chip's top edge by the
@@ -72,7 +74,9 @@ export function CtxPopover(): JSX.Element {
   }, [s.open])
 
   const parts = s.parts
-  const pct = s.max > 0 ? Math.round((100 * s.used) / s.max) : 0
+  /* The store's own percentage, clamped there: this card and the ring read
+     one number rather than each rounding the raw fill. */
+  const pct = s.pct
   const cells = ctxCells(parts, s.used, s.max)
   const left = Math.max(0, s.max - s.used)
 
@@ -99,15 +103,20 @@ export function CtxPopover(): JSX.Element {
         ))}
       </div>
       {parts ? (
-        <ul className="chrome-ctx-rows">
-          {PARTS.map((part) => (
-            <li key={part} className="chrome-ctx-row">
-              <span className="chrome-ctx-dot" data-part={part} aria-hidden="true" />
-              <span className="chrome-ctx-name">{t(LABEL[part])}</span>
-              <span className="chrome-ctx-num">{fmt(parts[part] ?? 0)}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="chrome-ctx-rows">
+            {PARTS.map((part) => (
+              <li key={part} className="chrome-ctx-row">
+                <span className="chrome-ctx-dot" data-part={part} aria-hidden="true" />
+                <span className="chrome-ctx-name">{t(LABEL[part])}</span>
+                <span className="chrome-ctx-num">{fmt(parts[part] ?? 0)}</span>
+              </li>
+            ))}
+          </ul>
+          {/* Said in the card, not left to be inferred: these rows and the
+              headline above them are two measurements, not two halves of one. */}
+          <p className="chrome-ctx-note">{t('gui.ctx.estimate')}</p>
+        </>
       ) : (
         <p className="chrome-ctx-none">{t('gui.ctx.noparts')}</p>
       )}

@@ -66,6 +66,17 @@ describe('the context panel', () => {
     expect(text('.chrome-ctx-left')).toBe('24.4K left')
   })
 
+  /* The store clamps: a turn that reports more than the window fills the ring
+     and the card with the same sentence, rather than one saying 100% and the
+     other saying 200%. */
+  it('cannot say more than full, however much the turn reports', () => {
+    mount()
+    act(() => { ctx.set(400_000, 200_000) })
+    expect(text('.chrome-ctx-pct')).toBe('100%')
+    expect(text('.chrome-ctx-left')).toBe('0 left')
+    expect(chip().dataset.tip).toBe('Context 400k/200k 100%')
+  })
+
   it('lists the parts the turn divided', () => {
     mount()
     act(() => {
@@ -92,6 +103,26 @@ describe('the context panel', () => {
       '2.1K',
       '3.3K',
     ])
+    /* The rows are the loop's local estimate, not the headline's provider
+       count: the card has to say so where the rows are. */
+    expect(text('.chrome-ctx-note')).toBe(t('gui.ctx.estimate'))
+  })
+
+  it('says the rows are an estimate in the page\'s language', () => {
+    const en = t('gui.ctx.estimate')
+    setCode('zh')
+    mount()
+    act(() => {
+      ctx.set(100_000, 200_000, {
+        system: 10_000,
+        tools: 10_000,
+        conversation: 10_000,
+        memory: 10_000,
+        skills: 10_000,
+      })
+    })
+    expect(text('.chrome-ctx-note')).toBe(t('gui.ctx.estimate'))
+    expect(text('.chrome-ctx-note')).not.toBe(en)
   })
 
   it('says so when no turn has divided the window', () => {
@@ -99,6 +130,8 @@ describe('the context panel', () => {
     act(() => { ctx.set(100_000, 200_000) })
     expect(panel().querySelector('.chrome-ctx-none')?.textContent).toBeTruthy()
     expect(panel().querySelector('.chrome-ctx-rows')).toBe(null)
+    /* Nothing divided, so there is no estimate to qualify. */
+    expect(panel().querySelector('.chrome-ctx-note')).toBe(null)
   })
 
   it('draws the fill as cells, coloured by the part they belong to', () => {

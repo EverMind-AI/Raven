@@ -41,6 +41,10 @@ export interface CtxState {
   /** The window's fill and its size, in tokens. */
   readonly used: number
   readonly max: number
+  /** The fill as a percentage, clamped to the ring's world: full is full.
+      Derived here so the ring and the popover cannot each round it their own
+      way -- the card said 200% beside a ring that had stopped at 100. */
+  readonly pct: number
   /** The window divided, or null while nothing has divided it. */
   readonly parts: CtxParts | null
   /** The popover's up-or-down. */
@@ -55,6 +59,7 @@ const served: CtxState = {
   tip: null,
   used: 0,
   max: 0,
+  pct: 0,
   parts: null,
   open: false,
 }
@@ -83,15 +88,16 @@ function unchanged(next: CtxState): boolean {
   const now = get()
   return next.shown === now.shown && next.warm === now.warm && next.hot === now.hot
     && next.offset === now.offset && next.tip === now.tip
-    && next.used === now.used && next.max === now.max
+    && next.used === now.used && next.max === now.max && next.pct === now.pct
     && next.parts === now.parts && next.open === now.open
 }
 
 export function draw(): void {
   /* Only the showing goes when there is no window, which is what the write by
-     id did: the classes, the dash and the tooltip keep whatever they had. It
-     cannot be reached with any of them set, because no report ever takes a
-     window away again -- `set` below only ever raises one. */
+     id did: the classes, the dash and the tooltip keep whatever they had. A
+     window that is left is taken by `clear`, which writes the whole reading
+     back to nothing rather than reaching this branch with a stale sentence;
+     nothing else takes one away, since `set` below only ever raises one. */
   if (!max) {
     const off = { ...get(), shown: false, open: false }
     if (!unchanged(off)) store.set(off)
@@ -113,6 +119,7 @@ export function draw(): void {
     tip,
     used,
     max,
+    pct,
     parts,
     /* The popover belongs to a window: with none, it has nothing to say and
        nothing to stand open over. */
@@ -150,13 +157,19 @@ export function set(
 }
 
 /* The parts are one conversation's: `set` keeps them across a report that
-   brings none, which is right within a conversation and wrong across two, so
-   the switch drops them on the way out. Written to the store as well as the
-   module, because `draw` with no window spreads the store rather than reading
-   `parts` back. */
-export function clearParts(): void {
+   brings none, which is right within a conversation and wrong across two. What
+   is left behind is the whole reading, not only the parts -- the fill and the
+   window described that conversation as much as the breakdown did, and a new
+   task has measured nothing at all. The ring and the popover go with them: an
+   open card would otherwise show the conversation just left. */
+export function clear(): void {
+  used = 0
+  max = 0
   parts = null
-  if (get().parts !== null) store.set({ ...get(), parts: null })
+  /* `served` is the whole reading at nothing, so it takes the stale percentage
+     and sentence with it; `draw` cannot, because its no-window branch keeps
+     what it had. */
+  if (!unchanged(served)) store.set(served)
 }
 
 /** The popover's up-or-down. The chip is the only way back out of it. */

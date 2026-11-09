@@ -54,7 +54,14 @@ import { rows as sessionRows, sess } from './rows'
 import type { TurnEvent, TurnSnapshot } from '../../features/composer/turn'
 import type { Recent } from '../../features/model/recent'
 import type { SessRow } from '../../features/rail/types'
+import type { UsageReport } from './ctxReport'
 import type { Staging } from './staging'
+
+/* The usage a message.complete carries: the window's two counts and the parts
+   `applyUsage` reads, plus the token names its fallback measures here. Said as
+   one type rather than `Record<string, number>`, which typed the divided parts
+   as a count and let a reader of `usage.context_parts` believe it was one. */
+type TurnUsagePayload = UsageReport & { input_tokens?: number; prompt_tokens?: number }
 
 /* The composer island's stores hold the visible conversation's phase and
    queue, so a runtime that is NOT on screen keeps its own copies here and the
@@ -255,7 +262,7 @@ export const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(
 /* The turn folds ONCE, at message.complete: mid-stream nothing can tell the
    answer from another line of narration. */
 export function finishTurn(payload: unknown, rt: SessionRuntime = viewRuntime()): void {
-  const p = (payload || {}) as { usage?: Record<string, number>; duration_ms?: number }
+  const p = (payload || {}) as { usage?: TurnUsagePayload; duration_ms?: number }
   const usage = p.usage || {}
   transcript.killStatus()
   /* The island promotes the streamed prose into the answer block where the

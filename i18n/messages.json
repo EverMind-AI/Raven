@@ -1889,6 +1889,10 @@
       "en": "New schedule",
       "zh": "新建任务"
     },
+    "gui.ctx.estimate": {
+      "en": "Local estimate of this turn's prompt, without the reply.",
+      "zh": "本地估算的本轮提示词，不含回复。"
+    },
     "gui.ctx.label": {
       "en": "context {pct}%",
       "zh": "上下文 {pct}%"

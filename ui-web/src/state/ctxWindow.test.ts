@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setCode } from '../i18n/t'
 import { mountPageRoot } from '../test/pageRoot'
 import * as confirmStore from './confirm'
-import { _resetForTests, clearParts, draw, get, set, toggle } from './ctxWindow'
+import { _resetForTests, clear, draw, get, set, toggle } from './ctxWindow'
 import * as pageStore from './page'
 
 vi.spyOn(pageStore, 'show').mockImplementation(() => {})
@@ -85,6 +85,16 @@ describe('the context ring', () => {
     expect(offset()).toBeCloseTo(0, 5)
   })
 
+  /* The ring clamps at full, and the popover says the same percentage beside
+     the same headline: one derivation, so a turn that reports more than the
+     window cannot be 100% on the bar and 200% in the card. */
+  it('carries the clamped percentage both the ring and the popover say', () => {
+    set(400_000, 200_000)
+    expect(get().pct).toBe(100)
+    set(100_000, 200_000)
+    expect(get().pct).toBe(50)
+  })
+
   it('abbreviates a thousand once, and drops the decimal at ten', () => {
     set(1500, 9600)
     expect(chip().dataset.tip).toBe('Context 1.5k/9.6k 16%')
@@ -126,14 +136,20 @@ describe('the window the popover reads', () => {
     expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
   })
 
-  it('drops the parts when the conversation they describe is left', () => {
+  it('drops the whole reading when the conversation it describes is left', () => {
     set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
-    clearParts()
+    toggle()
+    clear()
     expect(get().parts).toBe(null)
+    expect(get().used).toBe(0)
+    expect(get().max).toBe(0)
+    expect(get().pct).toBe(0)
+    expect(get().open).toBe(false)
     /* The next conversation's report brings none, and must not bring these back. */
     set(12_000, 64_000)
     expect(get().parts).toBe(null)
     expect(get().used).toBe(12_000)
+    expect(get().pct).toBe(19)
   })
 
   it('opens and closes the popover on the ring\'s click', () => {

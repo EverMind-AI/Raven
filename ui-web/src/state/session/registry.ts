@@ -31,7 +31,7 @@ import { isImportedKey } from '../../lib/imported'
 import { current as sessionCurrent, setCurrent as sessionSet } from '../../lib/session'
 import { gateway } from '../../rpc/gateway'
 import { draw as drawBanner } from '../banner'
-import { clearParts as clearCtxParts } from '../ctxWindow'
+import { clear as clearCtx } from '../ctxWindow'
 import { load as loadEffort } from '../effort'
 import { adopt as adoptBases, clearStaged as clearStagedBases } from '../mentions'
 import { load as loadTier } from '../tier'
@@ -264,7 +264,10 @@ export function switchToDraft(): void {
      one conversation to another, and what a draft may search is exactly that
      -- nothing on screen says it once the menu is shut but the count. */
   clearStagedBases()
-  clearCtxParts()
+  /* And the window the conversation left behind: its fill, its size and its
+     parts. A draft is a conversation that has measured nothing, so carrying
+     any of them over would draw the one just left under the new task's name. */
+  clearCtx()
   const rt = draft()
   adoptRuntime(rt)
   resetView(rt)
@@ -302,11 +305,13 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   parkDraft(); loadDraft(s.id)
   const rt = ensure(s.id)
   adoptRuntime(rt)
-  /* The parts on screen are the conversation left behind's, and nothing on
-     either path below is sure to replace them -- a resume carries none, and a
-     kept turn brings its own only once it ends -- so they go here, ahead of
-     both. The reconnect reopens the same conversation and keeps its own. */
-  if (leaving !== rt) clearCtxParts()
+  /* The window on screen is the conversation left behind's -- its fill, its
+     size and its parts -- and nothing on either path below is sure to replace
+     it: a resume carries no usage for a session that measured none, and a kept
+     turn brings its own only once it ends -- so all of it goes here, ahead of
+     both. Whatever the new conversation has arrives from its own report. The
+     reconnect reopens the same conversation and keeps its own. */
+  if (leaving !== rt) clearCtx()
   // The model is per conversation now, so the chip must follow the one being
   // opened -- otherwise it keeps the model of the session left behind. Keyed to
   // s.id rather than sessionCurrent(): the current session is not switched over

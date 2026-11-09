@@ -146,10 +146,19 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
 async def test_usage_sink_carries_the_window_divided(workspace):
     """The window is divided as well as counted, so a page can say what fills it.
 
-    The three parts are the request the turn sent: the system prompt, the tool
-    schemas, and the conversation. A turn that measured a window measured it on
-    a request that had all three.
+    Four parts are the request the turn sent: the system prompt, the tool
+    schemas, the conversation, and the memory this turn recalled. The recalled
+    segment reaches ``measure_parts`` only through the stash the assembler
+    fills (``_last_turn_scoped_parts``); without it ``memory`` is always zero,
+    and a key-set assertion would pass on a window nobody divided. So the
+    profile on disk has to be counted here.
     """
+    profile = workspace / "user_memory" / "profile"
+    profile.mkdir(parents=True, exist_ok=True)
+    (profile / "user.md").write_text(
+        "# User profile\n\n## Preferences\n\nThe user prefers short answers.\n",
+        encoding="utf-8",
+    )
     provider = UsageProvider("stub", prompt_tokens=6000, completion_tokens=2000)
     agent = _make_agent(workspace, provider, model="stub", window=40000)
     sink: dict = {}
@@ -168,6 +177,8 @@ async def test_usage_sink_carries_the_window_divided(workspace):
     assert set(parts) == {"system", "tools", "conversation", "memory", "skills"}
     assert parts["system"] > 0
     assert parts["conversation"] > 0
+    assert parts["memory"] > 0
+    assert parts["memory"] + parts["skills"] > 0
 
 
 @pytest.mark.asyncio
