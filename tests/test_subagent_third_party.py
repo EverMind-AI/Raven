@@ -3014,6 +3014,33 @@ def test_the_minimax_row_runs_on_node_and_says_so() -> None:
     assert runs_on_node(cfg)
 
 
+def test_the_dsh_row_names_its_install_and_its_upgrade() -> None:
+    """A machine without ``dsh``, or with one too old to know ``--profile acp``,
+    is told what to run, not only the executable's name: DSH is published on npm
+    as ``@deepseek-ai/dsh``, which is what puts ``dsh`` on PATH."""
+    from raven.agent.subagent.presets import install_hint_for, upgrade_hint_for
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    cfg = ThirdPartyAcpSubagentConfig(name="DSH", preset="dsh", command="dsh --profile acp")
+    assert install_hint_for(cfg) == "npm install -g @deepseek-ai/dsh"
+    assert upgrade_hint_for(cfg) == "npm install -g @deepseek-ai/dsh@latest"
+
+
+def test_the_dsh_row_runs_on_node_and_says_so() -> None:
+    """DSH is a Node.js script with a floor its own package declares.
+
+    ``lib/bin.js`` starts with ``#!/usr/bin/env node`` and ``@deepseek-ai/dsh``
+    asks for ``>=24.9.0``, so an older Node.js ahead on the launch PATH is named
+    as the cause instead of leaving its import error unexplained.
+    """
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, runs_on_node
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    assert "dsh" in NODE_RUNTIME_PRESETS
+    cfg = ThirdPartyAcpSubagentConfig(name="DSH", preset="dsh", command="dsh --profile acp")
+    assert runs_on_node(cfg)
+
+
 def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes() -> None:
     """The two facts the sign-in command alone does not carry.
 

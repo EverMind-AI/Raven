@@ -403,6 +403,9 @@ INSTALL_HINTS: dict[str, str] = {
     # scripts by default, and without it `better-sqlite3`'s native binding is
     # never built, so the install reports success and `mcode` dies at startup.
     "minimax_code": "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3",
+    # Published on npm; the row names the `dsh` it puts on PATH, whose bundled
+    # `acp` profile the row launches.
+    "dsh": "npm install -g @deepseek-ai/dsh",
 }
 """How to install the agent a core preset defers to, by preset key.
 
@@ -811,6 +814,11 @@ NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
         # reads the lower bound of that range, so a Node 23 the package does
         # not list passes the check.
         "minimax_code",
+        # `#!/usr/bin/env node` (lib/bin.js) and `>=24.9.0` declared by the
+        # package itself, which the check finds one level above the script.
+        # Not measured on an old Node either (26.6 is what this machine has); a
+        # `node` answering v22.11.0 ahead on PATH is reported as too old for it.
+        "dsh",
     }
 )
 """Presets whose agent is a Node.js script, so a launch that quits may be the
