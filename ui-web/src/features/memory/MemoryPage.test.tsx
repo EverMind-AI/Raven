@@ -651,6 +651,31 @@ describe('memory island', () => {
       expect(screen.getByText('gui.mem.local_start')).toBeTruthy()
     })
 
+    /* The plugin says it never starts a root the user manages, so a Start there
+       could only fail. The panel names the step as the user's own and offers
+       the check that finds the server once they have taken it. */
+    it('offers no Start where the plugin does not start the server', async () => {
+      let running = false
+      const starts = vi.fn(async () => ({ ok: false, running: false, base_url: '' }))
+      install(
+        {
+          stats: async () => ({ ...both, backend: 'everos', local_running: running, local_startable: false }),
+          list: async () => ({ items: [item()], total: 1 }),
+          startLocal: starts,
+        },
+        { ...both, backend: 'everos', local_running: false, local_startable: false },
+      )
+      await mount()
+      expect(await screen.findByText('gui.mem.local_foreign_sub')).toBeTruthy()
+      expect(screen.queryByText('gui.mem.local_start')).toBeNull()
+      running = true
+      await act(async () => {
+        fireEvent.click(screen.getByText('gui.mem.local_recheck'))
+      })
+      expect(await screen.findByText('shipped the island')).toBeTruthy()
+      expect(starts).not.toHaveBeenCalled()
+    })
+
     /* A key saved while a turn runs reaches the loop when the turn ends. Read
        as done, the notice cleared and the section drew the cloud store as
        serving chat while the turn still used the old backend. */

@@ -6502,6 +6502,10 @@ export interface MemoryStatsResult {
    * Whether the local EverOS server answers where the local backend reads. The section draws its start panel when the local backend is selected and this is false.
    */
   local_running?: boolean;
+  /**
+   * Whether the plugin starts the local EverOS server when it is not running: false for a root the user manages, which Raven reads and never starts. The section offers no Start button there, only the step that is the user's own.
+   */
+  local_startable?: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

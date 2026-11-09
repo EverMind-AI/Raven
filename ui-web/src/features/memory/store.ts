@@ -251,6 +251,15 @@ export function startLocal(): void {
   })()
 }
 
+/* The panel for a local server the plugin does not start: the one action is to
+   look again once the user has started it. */
+export function recheckLocal(): void {
+  void (async () => {
+    await refreshStats()
+    await load()
+  })()
+}
+
 /* The hosted backend's key, from the panel the section draws in place of the
    store when there is none. The write is not the validation: a key can be
    saved and still be rejected, so the backend's own health check answers

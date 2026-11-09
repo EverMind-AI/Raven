@@ -21,6 +21,8 @@ def fake_cfg(monkeypatch):
     # The section's start button is drawn off a real probe; a handler test must
     # not inherit the machine's local everos server.
     monkeypatch.setattr(memory, "_local_server_running", lambda: False)
+    # Nor the machine's own answer to whether Raven starts that server.
+    monkeypatch.setattr("raven_everos.server.server_starts_on_demand", lambda: True)
     # A full server, so no test pays a real capability probe: ``http://x`` is
     # a hostname, and resolving it cost the one search test five seconds.
     monkeypatch.setattr("raven_everos.health.probe_capabilities", _server_that(embedding=True, rerank=True))
@@ -61,6 +63,7 @@ async def test_stats_reads_all_four_kinds(monkeypatch):
         "available_backends": ["everos", "everos-cloud"],
         "cloud_key_set": False,
         "local_running": False,
+        "local_startable": True,
     }
     kinds = [b["memory_type"] for _, b in calls]
     assert kinds == ["episode", "profile", "agent_case", "agent_skill"]
@@ -77,6 +80,25 @@ async def test_stats_degrades_when_everos_down(monkeypatch):
     out = await memory.memory_stats({})
     assert out["ok"] is False
     assert out["episodes"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stats_carries_the_plugins_answer_on_whether_it_starts_the_server(monkeypatch):
+    """A root the user manages is never started, so the section offers no Start
+    there -- but whose root it is stays the plugin's call
+    (tests/test_plugin_boundary.py): the host only relays what the plugin says."""
+    monkeypatch.setattr(memory, "_configured_backend", lambda: "everos")
+    monkeypatch.setattr(memory, "_available_backends", lambda: ["everos"])
+    monkeypatch.setattr(memory, "_cloud_key_set", lambda: False)
+
+    for starts in (False, True):
+        monkeypatch.setattr("raven_everos.server.server_starts_on_demand", lambda starts=starts: starts)
+        post, _calls = _post_returning([{"data": {"total_count": 0}} for _ in range(4)])
+        monkeypatch.setattr(memory, "_post", post)
+
+        out = await memory.memory_stats({})
+
+        assert out["local_startable"] is starts
 
 
 def test_available_backends_follow_what_is_importable(monkeypatch):

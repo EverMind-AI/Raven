@@ -2158,3 +2158,14 @@ class TestStaleServerRestart:
         everos_server.record_role_digest(root)
 
         assert (root / everos_server._ROLE_DIGEST_FILE).read_text(encoding="utf-8") == role_env_digest()
+
+
+@pytest.mark.parametrize("owned", [True, False])
+def test_the_plugin_says_whether_it_starts_the_server_on_demand(monkeypatch: pytest.MonkeyPatch, owned: bool) -> None:
+    """A host surface that offers a start asks the plugin rather than deciding
+    whose root it is: a root the user manages is read, never started, so a Start
+    there could only be refused. The judgement stays here, beside the spawn it
+    gates."""
+    monkeypatch.setattr("raven_everos.config.everos_owned", lambda: owned)
+
+    assert everos_server.server_starts_on_demand() is owned

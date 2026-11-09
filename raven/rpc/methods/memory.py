@@ -130,6 +130,22 @@ def _local_server_running() -> bool:
         return False
 
 
+def _local_startable() -> bool:
+    """Whether the plugin starts the local EverOS server when it is down.
+
+    Asked, not decided: whose root this is stays the plugin's judgement
+    (tests/test_plugin_boundary.py), and a root the user manages is never
+    started, so the section draws that state instead of a Start button. A
+    plugin that cannot answer keeps the panel the section drew before it asked.
+    """
+    try:
+        from raven_everos.server import server_starts_on_demand
+
+        return bool(server_starts_on_demand())
+    except Exception:  # noqa: BLE001 - a missing plugin or unreadable config keeps the Start panel
+        return True
+
+
 def _cloud_key_set() -> bool:
     """Whether the hosted backend has a key on file, or in the environment.
 
@@ -329,8 +345,10 @@ async def memory_stats(params: dict) -> dict:
     available = _available_backends()
     cloud_key_set = _cloud_key_set()
     local_running = False
+    local_startable = True
     if backend == _EVEROS_BACKEND:
         local_running = await asyncio.to_thread(_local_server_running)
+        local_startable = await asyncio.to_thread(_local_startable)
     if note is None and backend == _CLOUD_BACKEND and not cloud_key_set:
         # A missing key is not an unreachable service: answer here instead of
         # sending four requests that can only come back 401, and leave the
@@ -356,6 +374,7 @@ async def memory_stats(params: dict) -> dict:
             "available_backends": available,
             "cloud_key_set": cloud_key_set,
             "local_running": local_running,
+            "local_startable": local_startable,
         }
     base_url, user_id, agent_id = _cfg()
     counts: dict[str, int] = {}
@@ -385,6 +404,7 @@ async def memory_stats(params: dict) -> dict:
         "available_backends": available,
         "cloud_key_set": cloud_key_set,
         "local_running": local_running,
+        "local_startable": local_startable,
     }
 
 

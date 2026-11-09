@@ -5245,6 +5245,14 @@ class MemoryStatsResult(_Strict):
             "draws its start panel when the local backend is selected and this is false."
         ),
     )
+    local_startable: bool = Field(
+        default=True,
+        description=(
+            "Whether the plugin starts the local EverOS server when it is not running: false for "
+            "a root the user manages, which Raven reads and never starts. The section offers no "
+            "Start button there, only the step that is the user's own."
+        ),
+    )
 
 
 class MemoryItem(_Strict):

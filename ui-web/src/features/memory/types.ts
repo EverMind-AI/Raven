@@ -40,6 +40,10 @@ export interface MemStats {
   /* Whether the local server answers. False with the local backend selected is
      the one state the section replaces with its start panel. */
   local_running?: boolean
+  /* Whether the plugin starts the local server when it is down. False for a
+     root the user manages: the start panel says whose step it is instead of
+     offering Start. */
+  local_startable?: boolean
 }
 
 export interface MemListRequest {
