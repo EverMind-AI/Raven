@@ -437,6 +437,14 @@ class ReassignmentState:
     gate, or behind a sibling in its instance group -- so a caller deciding what a
     replan may still change must not treat it as free.
     """
+    replan_keep: frozenset[str] | None = None
+    """The nodes a replan in flight carries, once its successor is on disk.
+
+    Set by the commit the moment the successor is written and cleared at the
+    switch, so a task holding a node the plan dropped cannot begin a new attempt
+    between the stop and the tables changing: the node's outcome is already
+    sealed. Read-only by convention, like ``status``: the runner is its writer.
+    """
     dropped_moves: set[tuple[str, str]] = field(default_factory=set)
     """Keys of staged moves the run dropped without installing them.
 
@@ -1621,6 +1629,10 @@ async def _persist_successor(proposal: ReplanProposal, *, plan: CarryPlan, ctx: 
             if not isinstance(exc, Exception):
                 raise
             return f"the successor run could not be written: {exc}"
+        # From here the successor stands. A node it does not carry is already
+        # sealed, so no task may begin an attempt on one while the stop and the
+        # switch are still to come.
+        ctx.state.replan_keep = frozenset(plan.carried)
     return None
 
 
@@ -1773,6 +1785,9 @@ def _switch_tables(proposal: ReplanProposal, *, plan: CarryPlan, cut: set[str], 
     ctx.published_terminal.update(context)
     ctx.own[:] = own
     ctx.store.run_id = successor
+    # The successor's table now decides which nodes may run; the commit window
+    # this flag guarded is over.
+    state.replan_keep = None
     state.queued = _queued(ctx.owned, status, state)
     return seal
 
@@ -3697,6 +3712,12 @@ async def _run_node(
         # stop or carry off one it has not reached yet: such a node is no longer a
         # pending node of the run this task now serves, and must not be dispatched.
         if node_id not in by_id or status.get(node_id) != "pending":
+            return
+        # A replan's successor is on disk and has not taken this node: the stop
+        # that goes with the commit has already sealed its outcome, and the tables
+        # switch only after that stop returns. Starting here would run work the
+        # seal says the run stopped.
+        if state is not None and state.replan_keep is not None and node_id not in state.replan_keep:
             return
         if state is not None:
             node = state.effective(node_id, by_id[node_id])

@@ -17963,6 +17963,103 @@ async def test_a_stop_landing_in_the_commit_lets_it_finish_and_leaves_no_id_unre
     }
 
 
+async def test_a_dropped_group_member_that_starts_during_the_stop_is_never_dispatched(
+    tmp_path: Path,
+) -> None:
+    """A replan's stop awaits the tasks it cancelled. A surviving group task whose
+    carried member finishes inside that window must not start the member the plan
+    dropped next: once the successor is on disk, only the nodes it carries may
+    still begin an attempt."""
+    exec_ = _SlowToStop("cut_run")
+
+    started = _start_carry_run(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("cut_run"), _nd("keep", instance="i"), _nd("later", instance="i")],
+        hold=frozenset({"cut_run", "keep", "later"}),
+        exec_=exec_,
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.gates["cut_run"][0].is_set() and started.gates["keep"][0].is_set())
+        future = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh"), _nd("keep", instance="i")]))
+        assert future is not None, "the desk refused the proposal"
+        await asyncio.wait_for(exec_.winding.wait(), 10)
+        # `keep` finishes inside the reap, so its group task moves on to `later`
+        # while the successor is already on disk and the tables have not switched.
+        started.gates["keep"][1].set()
+        await _wait_until(
+            lambda: started.state.status.get("keep") == "completed" and "keep" not in started.state.active_attempts
+        )
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(started.gates["later"][0].wait(), 1.0)
+        exec_.let_go.set()
+        outcome = await asyncio.wait_for(future, 10)
+        started.gates["later"][1].set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        exec_.let_go.set()
+        for _entered, release in started.gates.values():
+            release.set()
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, outcome
+    assert result.run_id == _RUN_B
+    assert "later" not in [call["task_id"] for call in started.exec_.calls], (
+        "a member the plan dropped is not dispatched once the successor is on disk"
+    )
+    assert not [
+        value
+        for name, value in started.frames
+        if name == "dag_node_updated" and value.get("run_id") == _RUN_B and value.get("node") == "later"
+    ], "an attempt the stop passed over says nothing under the successor"
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["later"]["status"] in ("cancelled", "skipped")
+
+
+async def test_a_carried_group_member_that_starts_during_the_stop_still_runs(tmp_path: Path) -> None:
+    """The same window, from the other side: a member the plan carries may begin its
+    attempt while the stop is winding down, and the successor finishes it."""
+    exec_ = _SlowToStop("cut_run")
+
+    started = _start_carry_run(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("cut_run"), _nd("keep", instance="i"), _nd("later", instance="i")],
+        hold=frozenset({"cut_run", "keep", "later"}),
+        exec_=exec_,
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.gates["cut_run"][0].is_set() and started.gates["keep"][0].is_set())
+        future = started.desk.propose(
+            _carry_proposal(started, entries=[_nd("fresh"), _nd("keep", instance="i"), _nd("later", instance="i")])
+        )
+        assert future is not None, "the desk refused the proposal"
+        await asyncio.wait_for(exec_.winding.wait(), 10)
+        started.gates["keep"][1].set()
+        # The plan carries `later`, so the gate must let it start even though the
+        # successor is already on disk and the tables have not switched.
+        await _wait_until(lambda: started.gates["later"][0].is_set())
+        exec_.let_go.set()
+        outcome = await asyncio.wait_for(future, 10)
+        started.gates["later"][1].set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        exec_.let_go.set()
+        for _entered, release in started.gates.values():
+            release.set()
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, outcome
+    assert result.run_id == _RUN_B
+    assert "later" in [call["task_id"] for call in started.exec_.calls]
+    assert {entry["node"]: entry["status"] for entry in result.files}["later"] == "completed"
+
+
 async def test_a_carried_leaf_is_a_terminal_output_of_the_successor(tmp_path: Path) -> None:
     run = await _run_with_replan(
         tmp_path, nodes=[_nd("r2"), _nd("leaf")], entries=[_nd("leaf"), _nd("fresh")], hold=frozenset({"leaf"})
