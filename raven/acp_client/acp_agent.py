@@ -274,14 +274,20 @@ def _turn_cost(reported: Any, spent_before: float | None) -> tuple[float | None,
 
 
 def _holds_session(exc: AcpRemoteError) -> bool:
-    """Whether the agent refused ``session/load`` because this process already holds the session.
+    """Whether the agent refused a reopening call because this process already holds the session.
 
-    Measured on GitHub Copilot CLI 1.0.88: the refusal is ``-32602`` ``Session <id>
-    is already loaded``, it comes only from the process that holds the session (a
-    second process loads it without complaint), and the session keeps its context.
-    That is a live session, not a pruned one, and there is no replay to read.
+    Both reopening calls refuse the process that holds the session, and neither
+    refusal means the id was pruned: ``session/load`` answers ``-32602`` ``Session
+    <id> is already loaded`` (measured on GitHub Copilot CLI 1.0.88), and
+    ``session/resume`` answers ``-32602`` ``session is already active`` (measured
+    on DeepSeek Harness 0.2.2-rc.1). A second process reopens either one without
+    complaint, and the session keeps its context -- so this is a live session,
+    not a pruned one, and there is no replay to read.
     """
-    return exc.code == -32602 and "already loaded" in exc.message.lower()
+    if exc.code != -32602:
+        return False
+    message = exc.message.lower()
+    return "already loaded" in message or "already active" in message
 
 
 @asynccontextmanager
@@ -2462,10 +2468,23 @@ class AcpAgentBackend:
                         # `session/resume` reopens a session in a process that
                         # does not hold it, and the one that does refuses it
                         # (DeepSeek Harness: `-32602 session is already active`).
-                        # This connection served it, so it is live here as it is.
+                        # This connection served it, so it is live here as it
+                        # is. The refusal below covers an adopted connection,
+                        # whose process holds sessions this router never saw
+                        # opened.
                         reopened = None
                     else:
-                        reopened = await request_or_busy("session/resume", reopen)
+                        try:
+                            reopened = await request_or_busy("session/resume", reopen)
+                        except AcpRemoteError as exc:
+                            if not _holds_session(exc):
+                                raise
+                            # Live in a process this connection is not the
+                            # record of -- an adopted one, whose router holds
+                            # only the session the pick-up seeded. Reading the
+                            # refusal as a pruned id dropped a conversation
+                            # that was still there.
+                            reopened = None
                     if reopened is not None:
                         self._relearn_menus(reopened)
                         self._note_session_model(client, known, reopened)

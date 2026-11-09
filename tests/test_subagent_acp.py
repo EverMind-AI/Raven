@@ -4425,6 +4425,24 @@ async def test_a_refused_resume_starts_a_fresh_session_like_a_refused_load(tmp_p
     assert bound is None
 
 
+async def test_a_session_the_process_holds_but_this_connection_did_not_open_is_kept(tmp_path: Path) -> None:
+    """An adopted connection fronts a process the previous host started.
+
+    The pick-up seeds the router with the session of the run it adopts and no
+    other, so another instance handle's bound session is live in that process
+    while this connection never watched it open. DeepSeek Harness refuses to
+    resume a session its process holds, and reading that refusal as a pruned id
+    dropped a conversation a fresh process resumes without complaint.
+    """
+    held = AcpRemoteError("session/resume", -32602, "Invalid params: session is already active: held-session")
+
+    opened, calls, bound = await _open_resume_only(tmp_path, refusal=held)
+
+    assert opened == ("held-session", True)
+    assert [method for method, _params in calls] == ["session/resume"]
+    assert bound == "held-session"
+
+
 async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:
     """A failed resume learned the id is stale, not that the instance is gone.
 
