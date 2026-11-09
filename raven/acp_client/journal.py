@@ -81,7 +81,7 @@ than skipping it."""
 
 def redact_acp_frame(frame: dict[str, Any]) -> dict[str, Any]:
     """Return a journal-safe copy of a session frame carrying MCP secrets."""
-    if frame.get("method") not in ("session/new", "session/load"):
+    if frame.get("method") not in ("session/new", "session/load", "session/resume"):
         return frame
     copied = deepcopy(frame)
     params = copied.get("params")
