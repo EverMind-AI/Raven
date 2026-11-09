@@ -955,11 +955,11 @@ describe('connecting', () => {
       },
     })
     await mount()
-    /* Nineteen and not the agent catalogue's twenty-seven: the nine Mirasim presets
+    /* Twenty and not the agent catalogue's twenty-eight: the nine Mirasim presets
        are one card while none of them has been opened out, so the skeleton has
        to draw one cell for them or the grid jumps by eight when the roster
        lands -- which is the whole reason this count is pinned. */
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(19)
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(20)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
     /* Every tab waits with the roster: the machines are a module of their own now, not a tab. */
@@ -1994,6 +1994,60 @@ describe('an agent that is missing npx', () => {
     await openSheet('Claude Code')
     expect(inst()!.querySelector('.extAgents-about')).toBeNull()
     expect(inst()!.querySelector('.extAgents-cmd code')!.textContent).toBe('npm install -g @anthropic-ai/claude-code')
+  })
+})
+
+/* MiniMax Code's product and its CLI are separate installs, and its credential
+   needs the desktop app's data directory when one already exists. The catalogue
+   adds a sentence to each of those two fixes; these cases hold that sentence to
+   the sheet that draws it. */
+describe('the MiniMax Code notes', () => {
+  const inst = (): Element | null => sheet()?.querySelector('.extAgents-inst') ?? null
+  const note = (): Element | null => sheet()?.querySelector('.extAgents-note') ?? null
+
+  it('tells a reader without the CLI that the desktop app does not ship it', async () => {
+    install([
+      row({ name: 'MiniMax Code', preset: 'minimax_code', configured: false, enabled: false, probe_status: 'missing' }),
+    ])
+    await mount()
+    await openSheet('MiniMax Code')
+    expect(inst()!.querySelector('.extAgents-about')!.textContent).toBe('gui.agent.minimax_cli_note')
+    expect(inst()!.querySelector('.extAgents-cmd code')!.textContent).toBe(
+      'npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3',
+    )
+  })
+
+  it('adds the desktop data directory to a sign-in fix', async () => {
+    install([
+      row({
+        name: 'MiniMax Code',
+        preset: 'minimax_code',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: 'Authentication required',
+        last_test_remedy: { kind: 'sign_in', command: 'mcode login' },
+      }),
+    ])
+    await mount()
+    await openSheet('MiniMax Code')
+    expect(note()!.querySelector('.extAgents-about')!.textContent).toBe('gui.agent.minimax_sign_in_note')
+  })
+
+  it('leaves the data-directory sentence off a fix that is not about signing in', async () => {
+    install([
+      row({
+        name: 'MiniMax Code',
+        preset: 'minimax_code',
+        last_test_ok: false,
+        last_test_at_ms: 1,
+        last_test_detail: 'connection refused',
+        last_test_remedy: { kind: 'network', command: 'curl -v https://api.minimax.io' },
+      }),
+    ])
+    await mount()
+    await openSheet('MiniMax Code')
+    expect(note()).not.toBeNull()
+    expect(note()!.querySelector('.extAgents-about')).toBeNull()
   })
 })
 

@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { setTranslator } from '../../i18n/t'
-import { byOf, installOf, isOwnRow, shortOf } from './catalogue'
+import { byOf, installOf, isOwnRow, shortOf, signInNoteOf } from './catalogue'
 
 import type { ExtAgentRow } from './types'
 
@@ -70,6 +70,12 @@ describe('the agent catalogue', () => {
     expect(byOf(r)).toBe('Anthropic')
     expect(installOf(r)).toEqual({ site: 'mirasim.ai/download', cmd: undefined })
     expect(byOf(row({ name: 'DSH-Mirasim', preset: 'mirasim_dsh' }))).toBe('')
+  })
+
+  it('tells a desktop-app reader that the CLI is a separate install', () => {
+    const r = row({ preset: 'minimax_code' })
+    expect(installOf(r).note).toBe('gui.agent.minimax_cli_note')
+    expect(signInNoteOf(r)).toBe('gui.agent.minimax_sign_in_note')
   })
 
   it('says nothing about a row nobody catalogued', () => {

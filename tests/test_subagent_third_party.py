@@ -2821,6 +2821,7 @@ def test_presets_are_valid_and_complete() -> None:
     assert set(presets) == {
         "Claude Code",
         "Codex",
+        "MiniMax Code",
         "MiroThinker",
         "OpenClaw",
         "Hermes Agent",
@@ -2845,6 +2846,7 @@ def test_presets_are_valid_and_complete() -> None:
     assert {name for name, p in presets.items() if p["kind"] == "acp"} == {
         "Claude Code",
         "Codex",
+        "MiniMax Code",
         "OpenCode",
         "Hermes Agent",
         "OpenClaw",
@@ -2966,6 +2968,90 @@ def test_every_install_hint_names_a_row_that_defers_to_a_local_install() -> None
     assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
     for key, hint in ACP_REGISTRY_INSTALL_HINTS.items():
         assert hint.strip() == hint and hint, key
+
+
+def test_every_core_install_hint_names_a_row_that_defers_to_a_local_install() -> None:
+    """The same invariant for the hints this repo writes for its own presets.
+
+    The registry table above cannot hold these: its provenance is the registry,
+    and a core preset added there would make that statement untrue.
+    """
+    from raven.agent.subagent.presets import INSTALL_HINTS, SHIM_LAUNCHED_PRESETS
+
+    unknown = set(INSTALL_HINTS) - set(THIRD_PARTY_SUBAGENT_PRESETS)
+    assert not unknown, f"install hints for presets that do not exist: {sorted(unknown)}"
+    fetched = set(INSTALL_HINTS) & SHIM_LAUNCHED_PRESETS
+    assert not fetched, f"shim-launched rows declare their install in SHIM_REQUIRED_EXECUTABLES: {sorted(fetched)}"
+    for key, hint in INSTALL_HINTS.items():
+        assert hint.strip() == hint and hint, key
+
+
+def test_a_core_install_hint_reaches_its_row() -> None:
+    from raven.agent.subagent.presets import install_hint_for
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    cfg = ThirdPartyAcpSubagentConfig(name="MiniMax Code", preset="minimax_code", command="mcode acp")
+    assert install_hint_for(cfg) == "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3"
+    assert install_hint_for(ThirdPartyAcpSubagentConfig(name="mine", command="mcode acp")) is None
+
+
+def test_the_minimax_row_runs_on_node_and_says_so() -> None:
+    """MiniMax Code is a Node.js script with a floor its own package declares.
+
+    ``cli.js`` starts with ``#!/usr/bin/env node`` and ``@minimax-ai/code``
+    asks for ``>=22.19 <23 || >=24 <27``, so a Node.js that cannot run it dies
+    at import -- before the handshake, with nothing that names Node.js. The row
+    therefore gets the check ``qwen_code`` gets, and the floor it is compared
+    against is the package's own word.
+    """
+    from raven.agent.subagent.presets import NODE_RUNTIME_PRESETS, runs_on_node
+    from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+    assert "minimax_code" in NODE_RUNTIME_PRESETS
+    cfg = ThirdPartyAcpSubagentConfig(name="MiniMax Code", preset="minimax_code", command="mcode acp")
+    assert runs_on_node(cfg)
+
+
+def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes() -> None:
+    """The two facts the sign-in command alone does not carry.
+
+    ``mcode login`` signs into the cn account site unless ``--region`` says
+    otherwise, so a global account has to ask for its own; and the data
+    directory reaches the agent through the row's own ``env`` map, which no
+    page and no tool writes -- so the note has to name the file it goes in.
+    """
+    import json
+    from pathlib import Path
+
+    catalogue = json.loads(
+        (Path(__file__).resolve().parents[1] / "i18n" / "messages.json").read_text(encoding="utf-8")
+    )["ui"]
+    sign_in = catalogue["gui.agent.minimax_sign_in_note"]
+    assert "--region" in sign_in["en"]
+    assert "MINIMAX_DATA_DIR" in sign_in["en"]
+    assert "config.json" in sign_in["en"]
+    assert sign_in["zh"]
+
+
+def test_the_minimax_install_note_says_what_older_npm_does_with_the_approval() -> None:
+    """The command carries a flag only npm 12 needs.
+
+    npm 12 blocks install-time scripts, so the vendor's approval is what
+    builds `better-sqlite3`'s binding; npm 11 and older run the scripts
+    anyway, and the ones that do not know the flag say so and install all
+    the same. A reader on an older npm should not be left expecting the
+    warning, and one on npm 12 should know the approval is what they need.
+    """
+    import json
+    from pathlib import Path
+
+    catalogue = json.loads(
+        (Path(__file__).resolve().parents[1] / "i18n" / "messages.json").read_text(encoding="utf-8")
+    )["ui"]
+    install = catalogue["gui.agent.minimax_cli_note"]
+    assert "npm 12" in install["en"]
+    assert "npm 11" in install["en"]
+    assert install["zh"]
 
 
 def test_every_shim_requirement_names_a_shim_launched_row() -> None:
@@ -5408,8 +5494,11 @@ def test_a_launch_that_quit_is_named_by_what_it_said_on_its_way_out() -> None:
 def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyPatch) -> None:
     """Over an old copy a bare package name can leave it where it is; `@latest` moves it.
 
-    Only for an `npm i -g <package>` hint: a hint that pins a version already, or
-    installs some other way, is not one this can safely rewrite.
+    Only for an `npm i -g <package>` hint, with or without `--` flags after the
+    package: a hint that pins a version already, or installs some
+    other way, is not one this can safely rewrite. The flags stay, because a
+    hint carries one only when the install needs it -- MiniMax Code's script
+    approval is what builds its native binding on npm 12.
     """
     from types import SimpleNamespace
 
@@ -5420,14 +5509,45 @@ def test_the_upgrade_is_the_install_pinned_to_latest(monkeypatch: pytest.MonkeyP
     assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="pi")) == (
         "npm install -g @earendil-works/pi-coding-agent@latest"
     ), "a shim's upgrade is the agent it drives"
+    assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="minimax_code")) == (
+        "npm install -g @minimax-ai/code@latest --allow-scripts=@minimax-ai/code,better-sqlite3"
+    ), "the package is pinned and the approval it needs travels with it"
     for hint, upgrade in (
         ("npm install -g plain-agent", "npm install -g plain-agent@latest"),
+        ("npm i -g agent --allow-scripts=agent", "npm i -g agent@latest --allow-scripts=agent"),
         ("npm i -g @scope/agent@1.2.3", None),
         ("npm i -g agent@2", None),
+        ("npm i -g agent@2 --allow-scripts=agent", None),
+        ("npm i -g --allow-scripts=agent agent", None),
+        ("npm i -g --allow-scripts=agent", None),
+        ("npm i -g agent other-agent", None),
+        ("npm i -g agent --registry https://registry.example", None),
         ("curl -fsSL https://agent.example/install.sh | sh", None),
     ):
         monkeypatch.setitem(presets_mod.ACP_REGISTRY_INSTALL_HINTS, "stand_in", hint)
         assert presets_mod.upgrade_hint_for(SimpleNamespace(preset="stand_in")) == upgrade, hint
+
+
+def test_a_minimax_code_too_old_for_acp_is_told_the_upgrade_that_installs_it() -> None:
+    """The too-old reading names a command for MiniMax Code as it does for qwen.
+
+    Its install hint carries a flag, and an upgrade that cannot be read off a
+    flagged hint leaves the reader told to upgrade with nothing to run.
+    """
+    from types import SimpleNamespace
+
+    from raven.acp_client.protocol import AcpConnectionError
+    from raven.agent.subagent import probe as probe_mod
+    from raven.agent.subagent.probe_state import Remedy
+
+    mcode = SimpleNamespace(name="MiniMax Code", preset="minimax_code", kind="acp", command="mcode acp")
+    old = AcpConnectionError(
+        "acp agent 'MiniMax Code': connection ended (exit 1); stderr tail: error: unknown command 'acp'"
+    )
+    upgrade = "npm install -g @minimax-ai/code@latest --allow-scripts=@minimax-ai/code,better-sqlite3"
+    text, remedy = probe_mod._ping_refusal(mcode, old)
+    assert remedy == Remedy("upgrade", upgrade)
+    assert f"upgrade it with `{upgrade}` and connect again" in text
 
 
 async def test_a_connect_that_outlasted_its_wait_says_how_to_hear_why(monkeypatch: pytest.MonkeyPatch) -> None:

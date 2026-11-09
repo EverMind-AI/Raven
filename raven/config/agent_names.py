@@ -72,6 +72,7 @@ THIRD_PARTY_PRESET_NAMES: frozenset[str] = frozenset(
         "grok",
         "hermes",
         "kimi_code",
+        "minimax_code",
         "mirasim_antigravity",
         "mirasim_claude",
         "mirasim_codex",

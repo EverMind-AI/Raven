@@ -12,7 +12,8 @@ So connecting is: verify the one path this table names. If it fails, say why
 fallback to another transport, because a silent fallback would hand the user an
 agent with different capabilities than the one they asked for.
 
-Measured on 2026-08-11, which is what fixed each transport below:
+Measured on 2026-08-11 unless a bullet names a later date, which is what fixed
+each transport below:
 
 - ``Hermes Agent`` - ACP, native (``hermes acp``). resume + fork + load.
 - ``Claude Code`` - ACP through the ACP project's adapter. It reads the *local*
@@ -30,6 +31,13 @@ Measured on 2026-08-11, which is what fixed each transport below:
   the OpenClaw Gateway rather than a self-contained server: with no reachable
   gateway it never answers ``initialize``, so pass ``--url`` / ``--token`` when
   yours needs them.
+- ``MiniMax Code`` - ACP, native (``mcode acp``). Measured on 2026-11-08 with
+  0.6.12: resume + fork + load, four model variants (two thinking), ``default``
+  and ``plan`` modes. The ACP server reads the data dir named by
+  ``MINIMAX_DATA_DIR``; on a machine whose desktop app held the login under
+  ``~/.minimax``, launching it without that variable left the login unseen and
+  ``session/new`` answered "Authentication required". Pointed at the same
+  directory, the handshake was ready.
 - ``MiroThinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
 
@@ -269,6 +277,21 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # unreachable.
         "readyTimeoutMs": 45000,
     },
+    "minimax_code": {
+        "name": "MiniMax Code",
+        "preset": "minimax_code",
+        "kind": "acp",
+        "description": "MiniMax's terminal coding agent, reached over its native ACP server.",
+        "command": "mcode acp",
+        # Its package declares `node >=22.19 <23 || >=24 <27` and its launcher is
+        # `#!/usr/bin/env node`, so a machine on an older Node.js dies at import
+        # rather than at the handshake; `NODE_RUNTIME_PRESETS` below is what turns
+        # that into a named remedy instead of a bare crash.
+        # The first handshake took 9.0s on 0.6.12 here: a Node bundle loading its
+        # runtime and SQLite before it answers `initialize`. The shared 30s leaves
+        # less room on a colder machine than the other local executables need.
+        "readyTimeoutMs": 60000,
+    },
     "mirothinker": {
         "name": "MiroThinker",
         "preset": "mirothinker",
@@ -361,6 +384,22 @@ def session_mcp_for(cfg: Any) -> bool:
     return bool(preset.get("sessionMcp", True))
 
 
+INSTALL_HINTS: dict[str, str] = {
+    # Published on npm; the row names the `mcode` it puts on PATH. The
+    # script-approval flag is the vendor's own: npm 12 blocks install-time
+    # scripts by default, and without it `better-sqlite3`'s native binding is
+    # never built, so the install reports success and `mcode` dies at startup.
+    "minimax_code": "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3",
+}
+"""How to install the agent a core preset defers to, by preset key.
+
+The registry's own rows carry theirs beside the registry
+(``ACP_REGISTRY_INSTALL_HINTS``); these are the presets this repo names itself.
+Kept apart so the registry table stays a statement about that registry -- a core
+preset added there would make its provenance untrue.
+"""
+
+
 def install_hint_for(cfg: Any) -> str | None:
     """How to install the agent this row defers to, or ``None`` when unknown.
 
@@ -374,7 +413,9 @@ def install_hint_for(cfg: Any) -> str | None:
     executable name it already reports is what a person searches with.
     """
     preset = getattr(cfg, "preset", None)
-    return ACP_REGISTRY_INSTALL_HINTS.get(preset) if preset else None
+    if not preset:
+        return None
+    return INSTALL_HINTS.get(preset) or ACP_REGISTRY_INSTALL_HINTS.get(preset)
 
 
 class SignIn(NamedTuple):
@@ -486,6 +527,23 @@ SIGN_IN_HINTS: dict[str, SignIn] = {
     # credentials". `opencode auth list` is the check beside it: it prints the
     # credentials it holds ("0 credentials" on a machine that has none).
     "opencode": SignIn(exe="opencode", local="opencode auth login", check="opencode auth list"),
+    # `mcode login` is the sign-in the CLI documents; `mcode acp login --region
+    # <region>` is the same flow spelled for an ACP host. Measured 2026-11-08 on
+    # 0.6.12: a machine whose desktop app had signed in under ~/.minimax still
+    # reported "Authentication required" until MINIMAX_DATA_DIR named that
+    # directory, because the ACP server's default data dir did not carry that
+    # login.
+    #
+    # The command names no region because the CLI has one of its own:
+    # `mcode login --help` lists `--region <region>` ("cn or global"), and the
+    # region it falls back to is `cn` -- its account site is account.minimax.cn,
+    # the global one account.minimax.io -- so a global account has to ask for
+    # its own (`mcode login --region global`). Signing into the wrong site
+    # leaves the session unauthenticated on the ACP server as well. Which
+    # region a reader needs is a fact about their account and not about the
+    # agent, so the remedy names the command and the catalogue's note carries
+    # the flag beside it.
+    "minimax_code": SignIn(exe="mcode", local="mcode login"),
 }
 """How to sign in to the agent a row defers to, by preset key.
 
@@ -731,14 +789,24 @@ NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
         # Node 18.20.8 exits at import ("does not provide an export named
         # 'openAsBlob'") while 20.20.2 and 22 run; the package asks for >=22.
         "qwen_code",
+        # The same shape: `#!/usr/bin/env node` (cli.js) and a floor the package
+        # declares for itself (`>=22.19 <23 || >=24 <27`), with `node:sqlite`
+        # behind it -- a module that does not exist before Node 22.5, so an
+        # older Node dies at import with nothing that names Node.js. Not
+        # measured on an old Node here (only 25.9.0 was on this machine); the
+        # floor is the package's own word, which is what the check reads. It
+        # reads the lower bound of that range, so a Node 23 the package does
+        # not list passes the check.
+        "minimax_code",
     }
 )
 """Presets whose agent is a Node.js script, so a launch that quits may be the
 wrong Node.js rather than the agent (`node_runtime.node_too_old`).
 
-Only for an agent measured to die that way: the check runs ``node --version``
-on a failure, and naming Node.js for an agent that does not care about it would
-send its reader after the wrong fix."""
+Only for an agent that runs on Node.js and declares a floor for it: the check
+runs ``node --version`` on a failure and compares it with the floor the agent's
+own package declares, so naming Node.js for an agent that does not care about
+it would send its reader after the wrong fix."""
 
 
 def runs_on_node(cfg: Any) -> bool:
@@ -774,21 +842,31 @@ def upgrade_hint_for(cfg: Any) -> str | None:
     of a bare package name installs whatever is newest only when nothing is
     installed yet, so over an old copy the plain hint can leave it where it is.
     Only for an ``npm i -g <package>`` hint, the one shape whose version is known
-    to go on the package's own word. For a shim row the agent is the one the shim
-    drives (:func:`shim_requirement_for`), whose release is the user's to move.
+    to go on the package's own word, with any ``--`` flags after the package kept
+    as they are: a hint carries one only because the install needs it. For a shim
+    row the agent is the one the shim drives (:func:`shim_requirement_for`), whose
+    release is the user's to move.
     """
     requirement = shim_requirement_for(cfg)
     hint = install_hint_for(cfg) or (requirement[1] if requirement else None)
     if not hint:
         return None
     words = hint.split()
-    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) != 4:
+    if words[:3] not in (["npm", "i", "-g"], ["npm", "install", "-g"]) or len(words) < 4:
         return None
-    package = words[3]
+    package, flags = words[3], words[4:]
     # A scoped package keeps its leading "@"; a version is the "@" after that.
-    if "@" in package[1:]:
+    if package.startswith("-") or "@" in package[1:]:
         return None
-    return f"{hint}@latest"
+    # Any other word after the package may be a second package or a flag's
+    # value, neither of which this can pin.
+    if not all(flag.startswith("--") for flag in flags):
+        return None
+    # Pinning the package leaves an `--allow-scripts` approval in force: npm 12
+    # matches it against the installed package's registry name, not the spec
+    # asked for (measured 2026-11-09 on npm 12.2.2: `core-js@latest` ran its
+    # postinstall under `--allow-scripts=core-js` and was blocked without it).
+    return " ".join([*words[:3], f"{package}@latest", *flags])
 
 
 def sign_in_hint_for(cfg: Any) -> SignIn | None:

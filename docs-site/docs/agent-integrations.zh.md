@@ -173,6 +173,7 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `opencode` | `opencode acp` | 当前预设以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
+| `minimax_code` | `mcode acp` | 原生 ACP server；需要 Node.js 22.19-22.x 或 24-26.x。用 `npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3` 安装 CLI（npm 12 不批准安装脚本时会装出不完整的包；npm 11 及更早的版本照常执行安装脚本，其中不认识这个参数的版本会打印一条警告，但安装照样完成），再用 `mcode login` 登录——账号不在 cn 区（CLI 默认的账号站）时，加上 `--region global`（或 `--region cn`）。如果桌面端已经登录，把 `MINIMAX_DATA_DIR` 指向它数据目录的绝对路径（即 `~/.minimax` 展开后的目录，例如 `/Users/<you>/.minimax` 或 `C:\Users\<you>\.minimax`），可以写在这个 agent 在 `~/.raven/config.json` 里的 `env`，也可以写进 Raven 启动 agent 时读的环境变量（POSIX 上按“重新检测”会重新读一遍登录 shell 的环境；Windows 上子进程继承的是 Raven 自己的环境，需要重启 Raven）。 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
 | `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（Mirasim host 写出了令牌的端口，例如桌面应用或 `mirasim serve` 的端口，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用或启动 `mirasim serve`，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 

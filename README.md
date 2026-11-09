@@ -203,11 +203,13 @@ Raven's modular architecture is designed for harness self-evolution and subagent
 
 ## ❯❯ Connect Third-Party Agents
 
-Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 13 **third-party agents** to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
+Raven can connect to and orchestrate agents via ACP, CLI, or OpenAI-compatible APIs, with presets for 14 **third-party agents** and nine **Mirasim-routed** presets to simplify setup, task delegation, and coordination across shared workflows. Try these agents in Raven through a unified interface!
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/3370c883-00ac-4471-97ef-f4312df77202" width="80%" alt="Third-party agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, MiroThinker, GitHub Copilot, Qwen Code, CodeBuddy, Qoder, Grok Build, Kimi Code, and Pi">
+  <img src="https://github.com/user-attachments/assets/8c0fa925-2d08-4b16-aec8-0decb319c010" width="80%" alt="Third-party agents in Raven's Agent Hub">
 </p>
+
+The roster also includes **MiniMax Code** over its native ACP server (`mcode acp`), and nine **Mirasim-routed** presets such as `Claude Code-Mirasim`, which run the same agents on Mirasim's accounts and model routes.
 
 ## ❯❯ News
 
@@ -320,13 +322,13 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/572c6cfb-6659-44f9-98fd-5670e61623b8"><img src="https://github.com/user-attachments/assets/572c6cfb-6659-44f9-98fd-5670e61623b8" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a"><img src="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a" alt="Raven WebUI new task page" width="90%"></a>
 </p>
 
 <p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/a7be5dca-b65a-4dea-9d88-2a4cb55f74b3"><img src="https://github.com/user-attachments/assets/a7be5dca-b65a-4dea-9d88-2a4cb55f74b3" alt="Raven WebUI subagents page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139"><img src="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139" alt="Raven WebUI subagents page" width="90%"></a>
 </p>
 
 <p align="center"><em>Subagents: every connected agent in one roster, built-in and third-party alike.</em></p>
