@@ -302,19 +302,27 @@ class MemoryBackend(Protocol):
         """One-time / idempotent initialization (open connections,
         warm caches, run migrations).
 
-        The host calls this once at boot, but may not await it before the
-        first turn: the TUI and ``raven serve`` spawn it as a task, so
-        ``recall`` and ``store`` must tolerate being called while ``start``
-        is still running -- no hits and not landed are the expected answers
-        then. A raise leaves the session without this backend; it does not
-        abort the host.
+        The host calls this on every backend it builds -- the one it boots
+        with, and any a live switch installs in place of it -- but may not
+        await the boot one before the first turn: the TUI and ``raven
+        serve`` spawn it as a task, so ``recall`` and ``store`` must
+        tolerate being called while ``start`` is still running -- no hits
+        and not landed are the expected answers then. A raise leaves the
+        session without this backend; it does not abort the host.
         """
         ...
 
     async def stop(self) -> None:
         """One-time / idempotent teardown. Adapters should make this
         safe to call after a failed ``start`` (so partial-init state
-        cleans up)."""
+        cleans up).
+
+        Stopping a backend is not the same as the process ending: a live
+        memory-backend switch replaces the backend the loop serves and
+        stops the one it replaced, so an adapter that owns something
+        beyond its own client -- a server process, say -- has to keep it
+        alive for whoever uses it next.
+        """
         ...
 
     async def health(self) -> BackendHealth | None:

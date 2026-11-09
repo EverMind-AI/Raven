@@ -291,10 +291,15 @@ imported.
 - **Construction**: lazy — `make_backend(ctx)` runs only for the
   selected backend. `ctx` carries `config` (the `plugins.config` slice),
   `services`, `logger`.
-- **Lifecycle**: host calls `start()` once at boot but may not await
-  it before the first turn -- `recall` and `store` must tolerate being
-  called while `start` is still running -- and calls `stop()` at
-  shutdown.
+- **Lifecycle**: host calls `start()` on every backend it builds -- the
+  one it boots with, and any a live memory-backend switch installs in
+  place of it -- but may not await the boot one before the first turn:
+  `recall` and `store` must tolerate being called while `start` is still
+  running. The host calls `stop()` when it retires a backend: at
+  shutdown, or when a switch replaces the one that was serving. Stopping
+  a backend is not the process ending, so an adapter that owns something
+  beyond its own client -- a server process -- has to keep it alive for
+  whoever uses it next.
 - **Failure contract** (`raven/contracts/memory.py`): a session host --
   the agent loop, the TUI, the gateway, `raven serve` -- wraps every call
   into a backend and treats a raise as the loss of that one call: `recall`

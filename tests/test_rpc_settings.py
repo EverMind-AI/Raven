@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -98,12 +99,6 @@ async def test_enum_key(cfg):
     assert _read(cfg)["agents"]["defaults"]["reasoningEffort"] == "high"
     with pytest.raises(ConfigValidationError):
         await rpc_console.settings_set({"key": "agents.defaults.reasoningEffort", "value": "extreme"})
-
-
-async def test_memory_backend_not_writable(cfg):
-    """The backend is not a user choice - long-term memory is EverOS."""
-    with pytest.raises(ConfigValidationError, match="not writable"):
-        await rpc_console.settings_set({"key": "memory.backend", "value": None})
 
 
 @pytest.fixture()
@@ -1215,6 +1210,151 @@ async def test_settings_set_nullable_keys_accept_null(cfg, key):
     for part in key.split(".")[:-1]:
         node = node[part]
     assert node[key.split(".")[-1]] is None
+
+
+async def test_settings_set_memory_backend_writes_the_name(cfg, monkeypatch):
+    """The write is the whole change here.
+
+    The section follows the file per read, and the write points the loop
+    serving chat memory at the same file in place, so this answer needs no
+    reload sentence.
+    """
+    applied: list = []
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    class _Loop:
+        context = SimpleNamespace(workspace="WS")
+
+        async def apply_memory_backend(self, backend, *, name, user_id, agent_id, memory_top_k):
+            applied.append(name)
+            return "applied"
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda _w, cfg, **_kwargs: "BACKEND" if cfg.memory.backend else None,
+    )
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos-cloud", user_id="u", agent_id="a", memory_top_k=5)
+        ),
+    )
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path="WS"))
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"}, agent_loop_factory=_Loop)
+    assert r["applied"] is True
+    assert r["previous"] is None
+    assert "warning" not in r
+    assert applied == ["everos-cloud"], "the write points the running loop at the new backend"
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": None}, agent_loop_factory=_Loop)
+    assert r["applied"] is True
+    assert _read(cfg)["memory"]["backend"] is None
+
+
+async def test_settings_set_memory_backend_says_when_the_switch_waits_for_a_turn(cfg, monkeypatch):
+    """A switch asked for while a turn is running waits for it.
+
+    The write says so: the reader is told the switch lands when the running
+    turn finishes, which is what the section's confirmation promised.
+    """
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    class _Loop:
+        async def apply_memory_backend(self, *_args, **_kwargs):
+            return "queued"
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    monkeypatch.setattr(
+        "raven.core.plugin_stack.maybe_build_memory_backend",
+        lambda _w, _cfg, **_kwargs: "BACKEND",
+    )
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos-cloud", user_id="u", agent_id="a", memory_top_k=5)
+        ),
+    )
+    monkeypatch.setattr("raven.config.loader.load_config", lambda: SimpleNamespace(workspace_path="WS"))
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"}, agent_loop_factory=_Loop)
+
+    assert r["applied"] is True
+    assert "turn is running" in r["warning"]
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+
+async def test_settings_set_memory_backend_without_a_running_loop_says_so(cfg, monkeypatch):
+    """The file still names the backend; nothing is serving to follow it."""
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"})
+
+    assert r["applied"] is True
+    assert "no running agent loop" in r["warning"]
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+
+async def test_settings_set_memory_backend_says_the_next_start_applies_it(cfg, monkeypatch):
+    """A generation that is already retiring cannot install a backend.
+
+    The write still lands (it is the durable truth), and the reply says the
+    next start honors it instead of claiming the running loop switched --
+    and the retiring loop is never asked to build or install one.
+    """
+
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos", "everos-cloud"]
+
+    class _Loop:
+        memory_switch_closed = True
+
+        async def apply_memory_backend(self, *_args, **_kwargs):
+            raise AssertionError("a closed generation must not be reached")
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    monkeypatch.setattr(
+        "raven.config.raven.load_raven_config",
+        lambda: SimpleNamespace(
+            memory=SimpleNamespace(backend="everos-cloud", user_id="u", agent_id="a", memory_top_k=5)
+        ),
+    )
+
+    r = await rpc_console.settings_set({"key": "memory.backend", "value": "everos-cloud"}, agent_loop_factory=_Loop)
+
+    assert r["applied"] is True
+    assert "next start" in r["warning"]
+    assert _read(cfg)["memory"]["backend"] == "everos-cloud"
+
+
+async def test_settings_set_memory_backend_refuses_a_name_no_plugin_contributes(cfg, monkeypatch):
+    class _Registry:
+        def memory_backend_names(self):
+            return ["everos"]
+
+    monkeypatch.setattr("raven.core.plugin_stack.build_plugin_registry", lambda _config: _Registry())
+    with pytest.raises(ConfigValidationError, match="unknown memory backend"):
+        await rpc_console.settings_set({"key": "memory.backend", "value": "mem0"})
+    assert "memory" not in _read(cfg)
+
+
+@pytest.mark.parametrize("value", ["", 7, ["everos"]])
+async def test_settings_set_memory_backend_refuses_a_non_name(cfg, value):
+    with pytest.raises(ConfigValidationError, match="backend name or null"):
+        await rpc_console.settings_set({"key": "memory.backend", "value": value})
 
 
 @pytest.mark.parametrize(

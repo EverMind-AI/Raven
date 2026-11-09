@@ -25,6 +25,21 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class MemoryAssembly:
+    """How this generation built its memory backend.
+
+    The live switch is the memory backend's door and rebuilds it after the
+    config write. Handing the loop the same registry and host notify keeps
+    that rebuild identical to ``build_runtime``'s: the generation's activated
+    plugin set (not whatever a fresh disk read would find), and a notice
+    reaches the same host a boot-time warning would.
+    """
+
+    registry: Any
+    notify: Callable[[str], None] | None
+
+
+@dataclass(frozen=True)
 class RavenRuntime:
     """One assembled generation of the agent: the loop plus the parts an
     entrance still needs handles to after construction.
@@ -37,13 +52,13 @@ class RavenRuntime:
     generation is made of.
 
     Member identity is what FREEZE seals; a member's own data plane stays
-    that member's business, and exactly three doors reconcile it
-    mid-generation. What makes a door legal: it reconciles an organ's data
-    to the already-written durable truth, it is safe while turns run, and it
-    touches no member identity -- so a swap right after yields the same
-    config-derived composition state (membership and the registered tool
-    surface; deliberately NOT retry/attempt state, and NOT in-flight work,
-    whose preservation is a door's purpose):
+    that member's business, and four doors reconcile it mid-generation. What
+    makes a door legal: it reconciles an organ's data to the already-written
+    durable truth, it is safe while turns run, and it leaves the config-
+    derived composition state the same -- so a swap right after yields the
+    same membership and registered tool surface (deliberately NOT
+    retry/attempt state, and NOT in-flight work, whose preservation is a
+    door's purpose):
 
     - the agents table, ``loop.apply_agents``: the registry's one write
       path, shared with startup. Its durable truth is the config file plus
@@ -58,22 +73,43 @@ class RavenRuntime:
     - the default binding, ``loop.set_default_binding``: re-points the
       fallback the subagent manager, the context engine and the consolidator
       hold, after the config write that is its truth.
+    - the memory backend, ``loop.rebind_memory_backend``: reconciles the
+      backend the loop serves to ``memory.backend`` after the turn boundary,
+      starting the new one before retiring the old. The backend is the
+      loop's member, not this dataclass's: ``RavenRuntime.backend`` reads it
+      through, so retirement and the gateway's shutdown stop what is
+      actually serving. The loop retires the backends it replaces once their
+      queued writes settle; the one serving at disposal is stopped here.
+      Unlike the other three, this door changes member identity by design --
+      that is the ruling, and the reason the generation stores no backend
+      handle of its own.
 
     Not doors, by scope: session-owned state (a session's binding, modes,
     per-session MCP adoption), preferences read through ``config/live.py``
     (whose docstring is the recorded contrast class), and process-lifetime
-    globals outside the generation. Composition-level plugin contributions
-    (hooks, memory backends) cannot board mid-generation at all -- the
-    market refuses ``python``-kind pieces, so they arrive at the next
-    generation through ``build_runtime``. The door roster and its operators
-    are pinned by the guard in tests/test_core_runtime_swap.py.
+    globals outside the generation. Other composition-level plugin
+    contributions (hooks, and any non-memory backend) cannot board
+    mid-generation at all -- the market refuses ``python``-kind pieces, so
+    they arrive at the next generation through ``build_runtime``. The door
+    roster and its operators are pinned by the guard in
+    tests/test_core_runtime_swap.py.
     """
 
     loop: "AgentLoop"
     plugin_registry: Any
-    backend: Any
     strategies: Any
     deliverables: Any
+
+    @property
+    def backend(self) -> Any:
+        """The memory backend the loop serves now, read live.
+
+        Deliberately not a field: a handle captured at FREEZE would go stale
+        at the first live switch, and both owners that retire a generation
+        (``dispose`` below and the gateway's shutdown) must stop the backend
+        that is actually serving.
+        """
+        return self.loop.backend
 
     async def dispose(self) -> None:
         """Retire this generation: quiesce the loop, then its stores.
@@ -98,19 +134,39 @@ class RavenRuntime:
         # parked in native code, and Py_FinalizeEx tears the interpreter down
         # under that call whenever the process later exits.
         self.loop.context.skills.stop_file_watcher()
-        if self.backend is not None:
+        # The handle the pending-start cancel must reach, taken before the
+        # drain. The one stopped below is read again after the retirements:
+        # a switch can land while the drain runs (a queued one lands when its
+        # turn ends), so the backend serving then is not necessarily this one.
+        current = self.backend
+        if current is not None:
             # Awaited, and before the drain: a start still polling for
             # readiness would otherwise outlive the generation it belongs to,
             # and returning at ``cancel()`` would let ``stop()`` run while
             # ``start()`` is still inside the backend.
-            await plugin_stack.cancel_pending_backend_starts(self.backend)
-            await self.loop.drain_backend_stores()
+            await plugin_stack.cancel_pending_backend_starts(current)
+        # Outside the None check: a switch to memory-off leaves ``current``
+        # None while the backend it replaced still owns queued writes and a
+        # retirement task. The drain is a no-op on a generation that never
+        # had a backend, and the report prints nothing for zero.
+        await self.loop.drain_backend_stores()
+        # Backends a live switch replaced are retired by their own tasks; they
+        # must finish (or be force-stopped) before this generation goes, or
+        # their clients outlive it.
+        await self.loop.retire_pending_backends()
+        # Read live, after the retirements -- the same order the gateway, the
+        # TUI and the served stack keep. A switch that landed during the
+        # drain installed a backend this handle does not name; stopping the
+        # pre-drain one instead would stop the replaced backend a second time
+        # and leave the new one running past the generation that owns it.
+        current = self.backend
+        if current is not None:
             try:
-                await self.backend.stop()
+                await current.stop()
             except Exception:
                 logger.exception(
                     "memory backend stop failed ({}); continuing generation swap",
-                    type(self.backend).__name__,
+                    type(current).__name__,
                 )
 
     def discard(self) -> None:
@@ -320,6 +376,10 @@ def build_runtime(
         host=host,
     )
     loop.configure_personalization(config.agents.defaults.enable_personalization)
+    # The live memory-backend switch rebuilds this backend; give the loop the
+    # generation's own assembly inputs so the door builds it the way boot did
+    # instead of re-reading the plugin set from disk without the host notify.
+    loop.memory_assembly = MemoryAssembly(registry=plugin_registry, notify=notify)
     # Contributed background services ride the generation: built inert here,
     # started only by a resident host (loop.start_plugin_services), retired
     # first at disposal. A one-shot turn never starts them.
@@ -339,7 +399,6 @@ def build_runtime(
     return RavenRuntime(
         loop=loop,
         plugin_registry=plugin_registry,
-        backend=backend,
         strategies=strategies,
         deliverables=deliverables,
     )

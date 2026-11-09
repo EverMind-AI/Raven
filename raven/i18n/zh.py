@@ -8,6 +8,10 @@ MESSAGES: dict[str, str] = {
     "Saved. Applies after the next gateway reload or restart.": "已保存。下次网关重载或重启后生效。",
     # Skill Hub search: the reload wait, and what turning it on sends.
     "Saved. Skill Hub search starts after Raven reloads.": "已保存。Raven 重新加载后才会开始搜索 Skill Hub。",
+    # A memory-backend switch that waits for the running turn.
+    "Saved. A turn is running; the memory backend switches when that turn finishes.": "已保存。当前有一个对话正在进行，记忆后端会在该对话结束后切换。",
+    "A turn is running; the memory backend switches when that turn finishes.": "当前有一个对话正在进行，记忆后端会在该对话结束后切换。",
+    "A turn is running; the local EverOS starts when that turn finishes.": "当前有一个对话正在进行，本地 EverOS 会在该对话结束后启动。",
     "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
     "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.": "Skill Hub 搜索已开启，Raven 重新加载后生效：Raven 查找技能时，会把对话中的文字发送到 EverMind Skill Hub。可以在“设置 > 技能”中关闭。",
     "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set skillForge.router.hub.enabled to false.[/dim]": "  [dim]Skill Hub 搜索已开启：Raven 查找技能时，会把对话中的文字发送到 {endpoint}。可以在网页的“设置 > 技能”中关闭，或把 skillForge.router.hub.enabled 设为 false。[/dim]",

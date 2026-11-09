@@ -49,6 +49,14 @@ const EXEMPT = {
   'subagents.instance.forget': 'the desk canvas answers it, the base library has no instances',
   'subagents.instance.set_mode': 'the desk canvas answers it, the base library has no instances',
   'subagents.instance.set_model': 'the desk canvas answers it, the base library has no instances',
+  /* The memory section's backend switch and local-server start. The offline
+     stats answer carries neither a backend nor an available_backends list
+     (pinned in fixture-shape's UNSENT), so canSwitch() is false and neither
+     control is drawn on ?stub=1 or on a page opened from disk; the calls live
+     in the store for the live page. */
+  'memory.applyRuntime': 'the offline stats answer names no backend, so no switch is drawn',
+  'memory.switchStatus': 'the offline stats answer names no backend, so no switch is drawn',
+  'memory.startLocal': 'the offline stats answer names no backend, so no start panel is drawn',
 }
 
 describe('the offline library answers what the page asks', () => {

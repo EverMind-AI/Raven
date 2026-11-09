@@ -2865,6 +2865,50 @@
       "zh": "长期记忆当前写不进去，这段时间的对话不会被记住。",
       "en": "Long-term memory is not being written; nothing from here on will be remembered."
     },
+    "gui.mem.cloud_bad_key": {
+      "en": "That key was rejected. Check it and try again.",
+      "zh": "这个 Key 没有通过校验，请检查后重试。"
+    },
+    "gui.mem.cloud_change": {
+      "en": "Change key",
+      "zh": "更换 Key"
+    },
+    "gui.mem.cloud_change_sub": {
+      "en": "Paste a new key to replace the one on file.",
+      "zh": "填入新的 Key 来替换已保存的 Key。"
+    },
+    "gui.mem.cloud_change_t": {
+      "en": "Update EverOS Cloud key",
+      "zh": "更新 EverOS Cloud Key"
+    },
+    "gui.mem.cloud_checking": {
+      "en": "Checking...",
+      "zh": "校验中..."
+    },
+    "gui.mem.cloud_get": {
+      "en": "Get a key at everos.evermind.ai",
+      "zh": "在 everos.evermind.ai 获取 Key"
+    },
+    "gui.mem.cloud_ph": {
+      "en": "EverOS Cloud API key",
+      "zh": "EverOS Cloud API Key"
+    },
+    "gui.mem.cloud_save": {
+      "en": "Save",
+      "zh": "保存"
+    },
+    "gui.mem.reload_wait": {
+      "en": "Saved. It applies at the next start.",
+      "zh": "已保存。下次启动时生效。"
+    },
+    "gui.mem.cloud_sub": {
+      "en": "Long-term memory runs on the hosted EverOS. Paste an API key to turn it on.",
+      "zh": "长期记忆将保存在 EverOS 云端。填入 API Key 即可启用。"
+    },
+    "gui.mem.cloud_t": {
+      "en": "Connect EverOS Cloud",
+      "zh": "连接 EverOS 云端"
+    },
     "gui.mem.off_t": {
       "en": "Long-term memory is not connected",
       "zh": "长期记忆没有接上"
@@ -2908,6 +2952,34 @@
     "gui.mem.hint_skill": {
       "zh": "从案例蒸馏出的做法",
       "en": "Ways of working distilled from cases"
+    },
+    "gui.mem.local_failed": {
+      "en": "Could not start EverOS. See the detail below.",
+      "zh": "无法启动 EverOS，请看下面的详情。"
+    },
+    "gui.mem.local_foreign_sub": {
+      "en": "This EverOS is one you manage, so Raven does not start it. Start it yourself; Raven reads it as soon as it answers.",
+      "zh": "这个 EverOS 由你自己管理，Raven 不会启动它。请自行启动，它一响应 Raven 就会读取。"
+    },
+    "gui.mem.local_recheck": {
+      "en": "Check again",
+      "zh": "重新检查"
+    },
+    "gui.mem.local_start": {
+      "en": "Start EverOS",
+      "zh": "启动 EverOS"
+    },
+    "gui.mem.local_starting": {
+      "en": "Starting...",
+      "zh": "启动中..."
+    },
+    "gui.mem.local_sub": {
+      "en": "Start it here; Raven uses it to keep long-term memory on this machine.",
+      "zh": "在这里启动它，Raven 会用它在本地保存长期记忆。"
+    },
+    "gui.mem.local_t": {
+      "en": "Local EverOS is not running",
+      "zh": "本地 EverOS 没有运行"
     },
     "gui.mem.meta_confidence": {
       "zh": "信心",
@@ -2973,6 +3045,38 @@
       "zh": "关键洞察",
       "en": "Key insight"
     },
+    "gui.mem.src": {
+      "zh": "记忆位置",
+      "en": "Memory source"
+    },
+    "gui.mem.src_cloud": {
+      "zh": "EverOS 云端",
+      "en": "EverOS Cloud"
+    },
+    "gui.mem.src_local": {
+      "zh": "本地 EverOS",
+      "en": "Local EverOS"
+    },
+    "gui.mem.src_missing": {
+      "zh": "这个 Raven 未安装",
+      "en": "Not installed in this Raven"
+    },
+    "gui.mem.switch_busy_sub": {
+      "en": "Long-term memory switches when that turn finishes. Continue?",
+      "zh": "切换会在当前对话结束后生效。继续吗？"
+    },
+    "gui.mem.switch_busy_t": {
+      "en": "A conversation is in progress",
+      "zh": "有对话正在进行"
+    },
+    "gui.mem.switch_confirm": {
+      "en": "Switch anyway",
+      "zh": "仍然切换"
+    },
+    "gui.mem.switching": {
+      "en": "Switching...",
+      "zh": "切换中..."
+    },
     "gui.mem.tab_case": {
       "zh": "经验",
       "en": "Cases"
@@ -2986,8 +3090,8 @@
       "en": "Profile"
     },
     "gui.mem.tab_skill": {
-      "zh": "技艺",
-      "en": "Know-how"
+      "zh": "技能",
+      "en": "Skills"
     },
     "gui.meter.running": {
       "en": "running",

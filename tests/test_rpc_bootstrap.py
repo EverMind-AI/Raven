@@ -108,6 +108,12 @@ class _FakeLoop:
         self.mcp_closed += 1
         self.order.append("close_mcp")
 
+    async def drain_backend_stores(self) -> None:
+        pass
+
+    async def retire_pending_backends(self) -> None:
+        pass
+
 
 async def _sink(_frame: dict) -> None:
     pass
@@ -148,14 +154,78 @@ async def test_the_owning_stack_drains_queued_writes_before_stopping_the_backend
     async def _drain(*_a, **_kw) -> None:
         order.append("drain")
 
+    async def _retire(*_a, **_kw) -> None:
+        order.append("retire")
+
     loop.drain_backend_stores = _drain
+    loop.retire_pending_backends = _retire
     monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
     assert stack.agent_loop is loop
     await stack.teardown()
 
-    assert order == ["drain", "stop"], order
+    assert order == ["drain", "retire", "stop"], order
+
+
+async def test_the_owning_stack_retires_replaced_backends_when_memory_is_off(monkeypatch) -> None:
+    """A switch to memory-off leaves the loop serving None while the backend it
+    replaced still owns queued writes and a retirement task. The drain and the
+    retirement must run anyway, or the replaced backend's client outlives the
+    process -- the local one keeps the server it started on Windows."""
+    order: list[str] = []
+    loop = _FakeLoop(_FakeCron())
+    loop.backend = None
+
+    async def _drain(*_a, **_kw) -> None:
+        order.append("drain")
+
+    async def _retire(*_a, **_kw) -> None:
+        order.append("retire")
+
+    loop.drain_backend_stores = _drain
+    loop.retire_pending_backends = _retire
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
+    await stack.teardown()
+
+    assert order == ["drain", "retire"], order
+
+
+async def test_the_owning_stacks_boot_start_is_one_a_live_switch_can_cancel(monkeypatch) -> None:
+    """A live switch retires the boot backend through
+    ``cancel_pending_backend_starts`` before stopping it. A boot start the
+    registry does not hold is invisible to that call, so a switch landing while
+    the start still polls for readiness stops the backend under its own start."""
+    from raven.core import plugin_stack
+
+    order: list[str] = []
+    gate = asyncio.Event()
+
+    class _Gated(_RecordingBackend):
+        async def start(self) -> None:
+            order.append("start-enter")
+            try:
+                await gate.wait()
+            except asyncio.CancelledError:
+                order.append("start-cancelled")
+                raise
+            order.append("start-exit")
+
+    loop = _FakeLoop(_FakeCron())
+    boot = _Gated(order)
+    loop.backend = boot
+    monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
+
+    stack = await bootstrap.build_rpc_stack(_sink, agent_loop=None)
+    await asyncio.sleep(0)
+    await plugin_stack.cancel_pending_backend_starts(boot)
+    await boot.stop()
+    gate.set()
+    await stack.teardown()
+
+    assert order[:3] == ["start-enter", "start-cancelled", "stop"], order
 
 
 async def test_the_stack_sizes_its_turn_pools_from_the_config(monkeypatch) -> None:
@@ -533,9 +603,10 @@ def test_the_served_shutdown_stops_subagents_before_it_stops_the_backend() -> No
     that run's next write for a reason the service had no part in."""
     src = (Path(__file__).resolve().parents[1] / "raven" / "rpc" / "bootstrap.py").read_text(encoding="utf-8")
     cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
-    stop = src.index("await agent_loop.backend.stop()")
+    retire = src.index("await agent_loop.retire_pending_backends()")
+    stop = src.index("await current.stop()")
 
-    assert cancel < stop
+    assert cancel < retire < stop
 
 
 async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch) -> None:
@@ -558,7 +629,11 @@ async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch)
     async def _drain(*_a, **_kw) -> None:
         loop.order.append("drain")
 
+    async def _retire(*_a, **_kw) -> None:
+        loop.order.append("retire")
+
     loop.drain_backend_stores = _drain
+    loop.retire_pending_backends = _retire
     monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
 
     stack = await bootstrap.build_rpc_stack(_sink)
@@ -568,9 +643,11 @@ async def test_owning_teardown_closes_the_mcp_it_opened_at_assembly(monkeypatch)
     await stack.teardown()
     assert loop.mcp_closed == 1
     # Sub-agents first: a run still going can hand the backend another write, and
-    # it runs its tools through the executor close_mcp() tears down. MCP last of
-    # the engine's own resources, so the executor outlives everything using it.
-    assert loop.order == ["cancel_all", "drain", "stop", "close_mcp"]
+    # it runs its tools through the executor close_mcp() tears down. The replaced
+    # backends retire after the drain and before the live one is stopped, and MCP
+    # is last of the engine's own resources, so the executor outlives everything
+    # using it.
+    assert loop.order == ["cancel_all", "drain", "retire", "stop", "close_mcp"]
 
 
 async def test_a_mounted_stack_does_not_close_its_host_s_mcp(monkeypatch) -> None:
@@ -612,14 +689,18 @@ async def test_a_failed_watcher_stop_does_not_strand_the_owned_stores(monkeypatc
     async def drain():
         loop.order.append("drain")
 
+    async def retire():
+        loop.order.append("retire")
+
     loop.context = SimpleNamespace(skills=SimpleNamespace(stop_file_watcher=fail))
     loop.backend = _RecordingBackend(loop.order)
     loop.drain_backend_stores = drain
+    loop.retire_pending_backends = retire
     monkeypatch.setattr(bootstrap, "build_agent_loop", lambda **_: loop)
     stack = await bootstrap.build_rpc_stack(_sink)
     await stack.teardown()
 
-    assert loop.order == ["cancel_all", "watcher", "drain", "stop", "close_mcp"]
+    assert loop.order == ["cancel_all", "watcher", "drain", "retire", "stop", "close_mcp"]
 
 
 async def test_the_owning_path_builds_the_engine_for_the_channel_it_serves(monkeypatch) -> None:

@@ -561,23 +561,32 @@ async def _run_rpc_server_until_done(
 
                 _logger.exception("tui: plugin services failed to start; continuing without them")
         if agent_loop is not None and agent_loop.backend is not None:
+            from raven.core import plugin_stack
+
+            boot_backend = agent_loop.backend
 
             async def _start_backend() -> None:
                 try:
-                    await agent_loop.backend.start()  # type: ignore[union-attr]
+                    await boot_backend.start()
                 except Exception:
                     from loguru import logger as _logger
 
                     _logger.exception(
                         "tui: memory backend start failed; continuing with degraded memory path",
                     )
-                _strip_tty_stream_handlers()
+                finally:
+                    # Also when a live switch cancels this start: whatever it
+                    # attached to the TTY before the cancel still has to go.
+                    _strip_tty_stream_handlers()
 
             # Held, not dropped: the event loop keeps only a weak reference to
             # a bare task (the GC hazard the MCP event bridge already guards
             # against), and the teardown below must be able to settle a start
             # still spawning EverOS before it drains and stops the backend.
+            # Registered too, so a live switch that retires this backend
+            # cancels the start before stopping it.
             backend_start_task = asyncio.create_task(_start_backend())
+            plugin_stack.hold_backend_start(boot_backend, backend_start_task)
 
         await proc_done.wait()
         return True
@@ -658,11 +667,21 @@ async def _run_rpc_server_until_done(
             except (asyncio.CancelledError, Exception):
                 pass
         # Release the embedded index lock so the next process can start.
-        if agent_loop is not None and agent_loop.backend is not None:
+        if agent_loop is not None:
             try:
                 outcome = await agent_loop.drain_backend_stores()
                 report_memory_write_outcome(outcome)
-                await agent_loop.backend.stop()
+                # The backends a live switch replaced own queued writes of
+                # their own, and a switch to memory-off leaves them behind a
+                # None; retiring them is what stops them. It also closes the
+                # door on a switch that was queued behind a turn, so the
+                # backend read below is the last one serving.
+                await agent_loop.retire_pending_backends()
+                # Read live, after the retirement: a live switch replaced the
+                # handle this process booted with.
+                current = agent_loop.backend
+                if current is not None:
+                    await current.stop()
             except Exception:
                 from loguru import logger as _logger
 

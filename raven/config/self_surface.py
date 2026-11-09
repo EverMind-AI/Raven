@@ -6,10 +6,11 @@ it, what kind of value it takes, which writer owns it, and -- the part that is
 easy to get wrong -- when a change to it actually takes effect in the process
 that is serving. The effect is part of the entry rather than prose in a skill
 or a tool description, because it is a fact about the code: a live reader in
-``config/live.py``, one of the runtime's three doors, a generation swap, or a
-whole-process restart. ``tests/test_config_self_surface.py`` holds every entry
-against the schema and every next-turn claim against a real reader, so the
-catalog cannot promise what the runtime does not do.
+``config/live.py``, one of the runtime's generation doors (including the
+memory backend's live switch), a generation swap, or a whole-process restart.
+``tests/test_config_self_surface.py`` holds every entry against the schema and
+every next-turn claim against a real reader, so the catalog cannot promise what
+the runtime does not do.
 
 Writers are named, not called, here. ``raw`` is :func:`write_value`: a
 spelling-aware, locked read-modify-write that refuses a candidate the schema
@@ -118,6 +119,11 @@ class Setting:
     #: also needs an address), what the runtime runs on, read from the whole
     #: file: a read shows it beside the stored value, which alone misleads.
     in_effect: "Callable[[dict[str, Any]], Any] | None" = None
+    #: For a ``settings``-written setting whose file value is still honored by
+    #: the next start: where no settings service runs (a one-shot ``raven
+    #: agent``) it is written to the file directly and takes this effect,
+    #: rather than being read-only there.
+    unserved_effect: Effect | None = None
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -524,7 +530,20 @@ SECTIONS: tuple[Section, ...] = (
                 low=1,
                 high=50,
             ),
-            Setting("memory.backend", "Memory backend plugin", "str", _E.RELOAD, nullable=True),
+            Setting(
+                "memory.backend",
+                "Memory backend plugin",
+                "str",
+                _E.IMMEDIATE,
+                writer="settings",
+                nullable=True,
+                note=(
+                    "the running loop is pointed at the new backend in place, so nothing needs a "
+                    "reload; a switch asked for while a turn is running waits for that turn, and "
+                    "the write says so"
+                ),
+                unserved_effect=_E.RELOAD,
+            ),
             Setting(
                 "embedding",
                 "Embedding model for memory and the knowledge base",

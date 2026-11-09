@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 
 import {
   TwoPane, TwoPaneFind, TwoPaneHead, TwoPaneList, TwoPaneNoHit, TwoPaneNone, TwoPaneRow, TwoPaneWait,
@@ -49,6 +49,161 @@ const MEM_GLYPH = (
   <svg viewBox="0 0 24 24"><path d="m12 4.5 8 4-8 4-8-4z" /><path d="m4 12.5 8 4 8-4" /><path d="m4 16.5 8 4 8-4" /></svg>
 )
 
+/* Which EverOS this section reads. Two segments rather than a checkbox: the
+   question has two answers, and "off" is the wizard's choice, not this section's.
+   A backend whose plugin is not installed keeps its segment, disabled -- the
+   reason it cannot be picked is the useful part. */
+const BACKENDS: Array<{ name: string; label: string }> = [
+  { name: 'everos', label: 'gui.mem.src_local' },
+  { name: 'everos-cloud', label: 'gui.mem.src_cloud' },
+]
+
+/* Whether the install told us enough to draw a switch. A fixture or a failed
+   stats read answers nothing, and two segments over no data would offer a
+   write the section cannot justify. */
+const canSwitch = (s: store.MemoryState): boolean =>
+  Boolean(s.stats?.backend) || Boolean(s.stats?.available_backends?.length)
+
+function BackendSwitch({ s }: { s: store.MemoryState }): JSX.Element | null {
+  if (!canSwitch(s)) return null
+  const available = new Set(s.stats?.available_backends ?? [])
+  return (
+    <>
+      <div className="memsrc" role="group" aria-label={t('gui.mem.src')}>
+        {BACKENDS.map((b) => (
+          <button
+            key={b.name}
+            type="button"
+            className="memsrcbtn"
+            aria-pressed={s.stats?.backend === b.name}
+            disabled={s.backendBusy || !available.has(b.name)}
+            title={available.has(b.name) ? undefined : t('gui.mem.src_missing')}
+            onClick={() => store.switchBackend(b.name)}
+          >
+            {t(b.label)}
+          </button>
+        ))}
+      </div>
+      {s.backendNotice ? <div className="memnote">{s.backendNotice}</div> : null}
+      {s.backendErr ? <div className="memnote memerr">{s.backendErr}</div> : null}
+    </>
+  )
+}
+
+/* A working key can still be replaced: the link opens the same panel over a
+   store that already answers. Without it the only way to change the key would
+   be the settings card this section no longer draws. */
+function ChangeCloudKey({ s }: { s: store.MemoryState }): JSX.Element | null {
+  if (s.switching || s.stats?.backend !== 'everos-cloud' || s.stats?.cloud_key_set !== true || s.cloudRejected) return null
+  return (
+    <button type="button" className="memchange" onClick={() => store.startCloudEdit()}>
+      {t('gui.mem.cloud_change')}
+    </button>
+  )
+}
+
+/* The cloud backend with no key: the section has nothing to read, and the store's
+   error frame would blame the service for a step the reader has not taken.
+   One field, one button, one way to get a key -- the panel is the whole column
+   until the key is on file. */
+function CloudConnect({ s }: { s: store.MemoryState }): JSX.Element {
+  const [key, setKey] = useState('')
+  const save = () => store.saveCloudKey(key)
+  /* The same panel serves "there is no key" and "replace the one on file";
+     the copy is the only thing that changes. */
+  const editing = s.stats?.cloud_key_set === true
+  return (
+    <div className="memconnect">
+      <div className="memconnect-inner">
+        <div className="memconnect-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M7.5 18.5h9a4 4 0 0 0 .6-7.95A6 6 0 0 0 5.6 9.4a4.55 4.55 0 0 0 1.9 9.1Z" />
+          </svg>
+        </div>
+        <div className="memconnect-t">{t(editing ? 'gui.mem.cloud_change_t' : 'gui.mem.cloud_t')}</div>
+        <div className="memconnect-sub">{t(editing ? 'gui.mem.cloud_change_sub' : 'gui.mem.cloud_sub')}</div>
+        <div className="memconnect-row">
+          <input
+            className="memconnect-in"
+            type="password"
+            value={key}
+            placeholder={t('gui.mem.cloud_ph')}
+            aria-label={t('gui.mem.cloud_ph')}
+            autoComplete="off"
+            spellCheck={false}
+            disabled={s.cloudBusy}
+            onChange={(e) => setKey(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+            }}
+          />
+          <button className="mini" disabled={s.cloudBusy || !key.trim()} onClick={save}>
+            {s.cloudBusy ? (
+              <>
+                <span className="memconnect-spin" aria-hidden="true" />
+                {t('gui.mem.cloud_checking')}
+              </>
+            ) : (
+              t('gui.mem.cloud_save')
+            )}
+          </button>
+        </div>
+        {s.cloudErr ? <div className="memnote memerr">{s.cloudErr}</div> : null}
+        <div className="memnote memconnect-link">
+          <a href="https://everos.evermind.ai" target="_blank" rel="noreferrer">
+            {t('gui.mem.cloud_get')}
+          </a>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* The local backend with no server: the same shape as the cloud key panel,
+   because it is the same situation -- no store to read, and one action that
+   fixes it. The backend starts this server at boot; this is for after that
+   process went away. */
+function LocalStart({ s }: { s: store.MemoryState }): JSX.Element {
+  /* The plugin does not start a root the user manages, so a Start here could
+     only be refused. The step is named as theirs, and the button looks again
+     once they have taken it. Whose root it is stays the plugin's answer. */
+  const theirs = s.stats?.local_startable === false
+  return (
+    <div className="memconnect">
+      <div className="memconnect-inner">
+        <div className="memconnect-glyph" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M4.5 6.5h15v11h-15z" />
+            <path d="M4.5 10.5h15" />
+            <path d="M7 14h3" />
+          </svg>
+        </div>
+        <div className="memconnect-t">{t('gui.mem.local_t')}</div>
+        <div className="memconnect-sub">{t(theirs ? 'gui.mem.local_foreign_sub' : 'gui.mem.local_sub')}</div>
+        <div className="memconnect-row memconnect-actions">
+          {theirs ? (
+            <button className="mini" onClick={() => store.recheckLocal()}>
+              {t('gui.mem.local_recheck')}
+            </button>
+          ) : (
+            <button className="mini" disabled={s.localBusy} onClick={() => store.startLocal()}>
+              {s.localBusy ? (
+                <>
+                  <span className="memconnect-spin" aria-hidden="true" />
+                  {t('gui.mem.local_starting')}
+                </>
+              ) : (
+                t('gui.mem.local_start')
+              )}
+            </button>
+          )}
+        </div>
+        {s.localErr ? <div className="memnote memerr">{s.localErr}</div> : null}
+      </div>
+    </div>
+  )
+}
+
 export function MemoryApp(): JSX.Element {
   const s = useSyncExternalStore(store.subscribe, store.get)
   /* The language the page resolved, so a pick repaints this island: memWhen
@@ -56,21 +211,67 @@ export function MemoryApp(): JSX.Element {
      This subscription is what carries the repaint -- the whole-page redraw no
      longer lists this island. */
   useSyncExternalStore(langSubscribe, langTag)
+  /* The names this install can read through. A selected backend missing here
+     has no plugin behind it, and its note is the one thing to say: the key and
+     Start panels would offer steps for a client that cannot exist. */
+  const available = s.stats?.available_backends ?? []
   if (s.phase === 'down') {
-    return <TwoPane><TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{t('gui.mem.down')}</TwoPaneNone></TwoPane>
+    return (
+      <TwoPane>
+        <TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{t('gui.mem.down')}</TwoPaneNone>
+      </TwoPane>
+    )
+  }
+  /* The cloud backend with no key is not a service failure: every read would
+     answer 401, and the error frame would ask the reader to retry something
+     only a key can fix. The panel takes the whole column instead -- but only
+     when the cloud backend exists to take a key. */
+  if (
+    !s.switching
+    && s.stats?.backend === 'everos-cloud'
+    && available.includes('everos-cloud')
+    && (s.stats?.cloud_key_set === false || s.cloudRejected || s.cloudEditing)
+  ) {
+    return (
+      <TwoPane side={canSwitch(s) ? <BackendSwitch s={s} /> : undefined}>
+        <CloudConnect s={s} />
+      </TwoPane>
+    )
+  }
+  /* The local backend with no server: the store would answer only zeros, so
+     the column is the one action that brings it back -- when the plugin that
+     runs the server is actually installed. */
+  if (
+    !s.switching
+    && s.stats?.backend === 'everos'
+    && available.includes('everos')
+    && s.stats?.local_running === false
+  ) {
+    return (
+      <TwoPane side={canSwitch(s) ? <BackendSwitch s={s} /> : undefined}>
+        <LocalStart s={s} />
+      </TwoPane>
+    )
   }
   /* Not a failure and not an empty store: this install keeps its memories
      somewhere this page does not read. Saying so beats four zeros, which a
-     reader takes for loss. */
-  if (s.note) return <TwoPane><TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{s.note}</TwoPaneNone></TwoPane>
+     reader takes for loss. The switch stays beside it: leaving a backend that
+     is missing or turned off is exactly what a reader needs here. */
+  if (!s.switching && s.note) {
+    return (
+      <TwoPane side={canSwitch(s) ? <BackendSwitch s={s} /> : undefined}>
+        <TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.off_t')}>{s.note}</TwoPaneNone>
+      </TwoPane>
+    )
+  }
   /* A read that failed is the service being down, not an empty store -- an
      empty store answers, with no rows -- and it leaves the kind switch, the
      search and the list nothing to work on, their counts dashes. So it takes
      the whole frame, with the retry as its one control, instead of a red
      paragraph and a full-width button squeezed under a search box. */
-  if (s.phase === 'error') {
+  if (!s.switching && s.phase === 'error') {
     return (
-      <TwoPane>
+      <TwoPane side={canSwitch(s) ? <BackendSwitch s={s} /> : undefined}>
         <TwoPaneNone
           icon={MEM_GLYPH}
           title={t('gui.mem.err_t')}
@@ -85,7 +286,19 @@ export function MemoryApp(): JSX.Element {
   const none = <TwoPaneNone icon={MEM_GLYPH} title={t('gui.mem.empty_t')}>{t('gui.mem.empty')}</TwoPaneNone>
   return (
     <TwoPane side={<MemSide s={s} />}>
-      {s.kind === 'profile' ? (
+      {s.switching ? (
+        /* The switch's wait lives in the pane whose contents are changing; the
+           left column keeps the shape it had, so the switch and the counts do
+           not jump under the pointer. */
+        <div className="memconnect">
+          <div className="memconnect-inner">
+            <div className="memconnect-glyph" aria-hidden="true">
+              <span className="memconnect-spin" />
+            </div>
+            <div className="memconnect-t">{t('gui.mem.switching')}</div>
+          </div>
+        </div>
+      ) : s.kind === 'profile' ? (
         s.items[0] ? <ProfileCard it={s.items[0]} /> : s.phase === 'ready' ? none : null
       ) : s.detail ? (
         <MemDetail it={s.detail} />
@@ -93,6 +306,10 @@ export function MemoryApp(): JSX.Element {
         /* "Nothing here yet" is this column's, and the list says nothing: said
            in both columns it reads as two separate emptinesses. */
         none
+      ) : (s.phase === 'idle' || s.phase === 'loading') && !s.items.length ? (
+        /* The first read is still out: "Pick a memory" here flashed for a
+           moment before the key panel or the rows arrived, on every entry. */
+        null
       ) : (
         <TwoPaneNone>{t('gui.mem.pick')}</TwoPaneNone>
       )}
@@ -107,6 +324,8 @@ function MemSide({ s }: { s: store.MemoryState }): JSX.Element {
   const kindDef = MEM_KINDS.find((k) => k.kind === s.kind) ?? MEM_KINDS[0]!
   return (
     <>
+      <BackendSwitch s={s} />
+      <ChangeCloudKey s={s} />
       <div className="memstats">
         {MEM_KINDS.map((k) => (
           <button
@@ -116,7 +335,7 @@ function MemSide({ s }: { s: store.MemoryState }): JSX.Element {
             onClick={() => store.setKind(k.kind)}
           >
             <div className="k">{t(k.tab)}</div>
-            <div className="v">{s.stats ? String(s.stats[k.stat]) : '—'}</div>
+            <div className="v">{s.switching ? '—' : s.stats ? String(s.stats[k.stat]) : '—'}</div>
           </button>
         ))}
       </div>

@@ -32,6 +32,7 @@ import math
 import re
 import sys
 import time
+import weakref
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
@@ -206,6 +207,28 @@ class ServiceState(Enum):
 # process. Letting a probe promote out of them would hide a missing binary
 # behind somebody else's server answering on the same port.
 _TERMINAL_STATES = frozenset({ServiceState.UNCONFIGURED, ServiceState.NO_BINARY, ServiceState.BAD_IDENTITY})
+
+
+#: Which of our backends are using which service, and the child we started
+#: for it.
+#:
+#: Raven can swap a memory backend while the process runs, so two backends of
+#: ours can point at one server: the one being replaced and the one replacing
+#: it. The server belongs to the process that started it, but it must outlive
+#: the backend that started it for as long as another of ours is still using
+#: it -- stopping it early leaves the replacement pointed at a dead service,
+#: and every write through it is dropped until a probe brings the server back.
+#:
+#: The service is therefore stopped by the LAST of our backends to let go of
+#: it: the one that started it, or the one that replaced it. A service another
+#: process started is never ours to stop, and the table says so by having no
+#: child for it.
+#:
+#: The users are held weakly: a backend that is collected without being
+#: stopped is gone, and a service nobody of ours is using any more must not
+#: be kept alive by its own bookkeeping.
+_SERVICE_USERS: dict[str, "weakref.WeakSet[EverosBackend]"] = {}
+_SERVICE_CHILD: dict[str, Any] = {}
 
 # Minimum gap between out-of-band probes. Coarse on purpose: this exists to
 # stop a task per turn from piling up, not to schedule anything.
@@ -530,6 +553,9 @@ class EverosBackend:
         self.notify: Callable[[str], None] = getattr(ctx.services, "notify", None) or _log_notice
         self._agent_id: str = self._services.agent_id
         self._user_id: str = self._services.user_id
+        # Which service this backend talks to. See ``_SERVICE_USERS`` for why
+        # that is worth knowing.
+        self._service_key = str(self._config.get("base_url") or DEFAULT_EVEROS_BASE_URL).rstrip("/")
         self._warn_stale_identity_keys()
         # Every turn, because a flush no longer costs the turn anything: the
         # write left the turn's critical path, so the minute-scale extraction
@@ -805,8 +831,52 @@ class EverosBackend:
         # that was up and serving.
         try:
             await self._start()
+            self._join_service_users()
         finally:
             self._started = True
+
+    def _join_service_users(self) -> None:
+        """Record that this backend is one of ours using the service.
+
+        The one that started the server owns the child process; another of
+        ours that found it already running only borrows it. Both are listed,
+        because the server is stopped by the last of them to leave.
+        """
+        _SERVICE_USERS.setdefault(self._service_key, weakref.WeakSet()).add(self)
+        if self._proc is not None:
+            _SERVICE_CHILD[self._service_key] = self._proc
+
+    def _leave_service(self) -> Any:
+        """Let go of the service; return the child to stop, if we are the last.
+
+        ``None`` means the service is not ours to stop right now: another of
+        our backends is still using it (a live memory-backend swap puts two
+        of ours on one server), or another process started it and owns it.
+        """
+        users = _SERVICE_USERS.get(self._service_key)
+        if users is None:
+            # Never registered -- a backend that never started. Only the child
+            # this object spawned is ours to stop.
+            return self._proc
+        users.discard(self)
+        if users:
+            # Somebody else of ours is still using the service, so it has to
+            # outlive us: stopping it here would leave the replacement
+            # pointed at a dead server. A live child of ours -- one our probe
+            # respawned after the recorded one died -- is handed to whoever
+            # leaves last, or nobody would stop it.
+            if self._proc is not None and self._proc.poll() is None:
+                _SERVICE_CHILD[self._service_key] = self._proc
+            return None
+        _SERVICE_USERS.pop(self._service_key, None)
+        # The child to stop is the live one: this backend's own, or the one
+        # another of ours started (or respawned) and left behind -- this is the
+        # last user either way. A dead handle stops nothing.
+        recorded = _SERVICE_CHILD.pop(self._service_key, None)
+        for child in (self._proc, recorded):
+            if child is not None and child.poll() is None:
+                return child
+        return self._proc if self._proc is not None else recorded
 
     async def _start(self) -> None:
         try:
@@ -1068,7 +1138,11 @@ class EverosBackend:
         # (its ``_store_dropped`` is the only count that survives a retry
         # succeeding) -- this backend only still flushes what it buffered.
         await self._flush_unflushed_sessions()
-        if sys.platform == "win32" and self._proc is not None and self._proc.poll() is None:
+        # The service, if it is ours to stop: the last of our backends using it
+        # stops it, and a service another of ours is still using is left
+        # running. See ``_SERVICE_USERS``.
+        child = self._leave_service()
+        if child is not None and sys.platform == "win32" and child.poll() is None:
             from raven_everos.config import everos_owned
 
             if everos_owned():
@@ -1080,7 +1154,7 @@ class EverosBackend:
                 # block that or be terminated mid-write by the helper's sweep.
                 # Ctrl-Break reaches our own child, so it drains first.
                 outcome = await asyncio.to_thread(
-                    stop_pid, self._proc.pid, timeout=_WINDOWS_SHUTDOWN_DRAIN_S, grace=_WINDOWS_SHUTDOWN_DRAIN_S
+                    stop_pid, child.pid, timeout=_WINDOWS_SHUTDOWN_DRAIN_S, grace=_WINDOWS_SHUTDOWN_DRAIN_S
                 )
                 self._logger.info("EverosBackend: stopped the memory service this process started (%s)", outcome.value)
         aclose = getattr(self._adapter, "aclose", None)

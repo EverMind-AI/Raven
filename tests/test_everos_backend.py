@@ -35,6 +35,20 @@ def _fresh_notices():
     NOTICES.clear()
 
 
+@pytest.fixture(autouse=True)
+def _fresh_service_users():
+    """The service registry is process state, and this file's tests share one
+    address. A backend left registered by one test would keep the service
+    alive for the next one, so each test starts with the table empty."""
+    from raven_everos import backend as mod
+
+    for name in ("_SERVICE_USERS", "_SERVICE_CHILD"):
+        getattr(mod, name).clear()
+    yield
+    for name in ("_SERVICE_USERS", "_SERVICE_CHILD"):
+        getattr(mod, name).clear()
+
+
 from raven_everos.backend import (
     _PROFILE_MAX_CHARS,
     EverosBackend,
@@ -3245,3 +3259,122 @@ class TestAWindowsShutdownDrainsItsOwnServer:
         await b.stop()
 
         assert asked == []
+
+
+@pytest.mark.asyncio
+class TestAServiceTwoBackendsOfOursShare:
+    """Two of our backends can point at one server.
+
+    Raven can swap a memory backend while the process runs, so the backend
+    being replaced and the one replacing it can both be talking to the same
+    server. The server belongs to the process that started it -- but it must
+    outlive the backend that started it for as long as another of ours is
+    still using it. Stopping it early leaves the replacement pointed at a
+    dead service, and every write through it is dropped until the backend's
+    probe brings the server back.
+
+    The service is therefore stopped by the LAST of our backends to let go
+    of it: the one that started it, or the one that replaced it.
+    """
+
+    @staticmethod
+    def _http_backend(base_url: str) -> EverosBackend:
+        """A backend on the HTTP path -- the one that owns a server."""
+        ctx = MagicMock()
+        ctx.config = {"base_url": base_url}
+        ctx.services.agent_id = "default"
+        ctx.services.user_id = "default"
+        ctx.logger = MagicMock()
+        return EverosBackend(ctx)
+
+    async def _owner_and_borrower(self) -> tuple[EverosBackend, EverosBackend, Any]:
+        """The backend that started the server, and one that found it up.
+
+        The second ``ensure_everos_server`` returns None, which is what the
+        real one does when the server is already answering: the caller does
+        not own it, and must not stop it.
+        """
+        child = SimpleNamespace(pid=4242, poll=lambda: None, returncode=None)
+        calls: list[str] = []
+
+        async def _fake_ensure(base_url: str, **kw: Any):
+            calls.append(base_url)
+            report = kw.get("on_proc")
+            if len(calls) == 1:
+                if report is not None:
+                    report(child)
+                return child
+            return None
+
+        base_url = "http://localhost:18791"
+        owner = self._http_backend(base_url)
+        borrower = self._http_backend(base_url)
+        with patch("raven_everos.server.ensure_everos_server", new=_fake_ensure):
+            await owner.start()
+            await borrower.start()
+        assert owner._proc is child
+        assert borrower._proc is None
+        return owner, borrower, child
+
+    async def test_the_backend_that_started_the_service_leaves_it_running(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from raven_everos.server import StopOutcome
+
+        owner, _borrower, child = await self._owner_and_borrower()
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        asked: list[int] = []
+        monkeypatch.setattr(
+            "raven_everos.server.stop_pid",
+            lambda pid, **kw: asked.append(pid) or StopOutcome.STOPPED,
+        )
+
+        await owner.stop()
+
+        assert owner._proc is child
+        assert asked == [], "the replacement is still using this server"
+
+    async def test_the_last_of_our_backends_to_leave_stops_the_service(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from raven_everos.server import StopOutcome
+
+        owner, borrower, _child = await self._owner_and_borrower()
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        asked: list[int] = []
+        monkeypatch.setattr(
+            "raven_everos.server.stop_pid",
+            lambda pid, **kw: asked.append(pid) or StopOutcome.STOPPED,
+        )
+
+        await owner.stop()
+        await borrower.stop()
+
+        assert asked == [4242], "the last user of ours stops the service it started"
+
+    async def test_a_server_respawned_by_one_of_ours_is_stopped_by_the_last_to_leave(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The child the owner recorded died, and the other backend's probe
+        brought the server back: that backend holds the live child now. It
+        leaving first must hand it over -- otherwise the last to leave knows
+        only the dead handle, skips the stop, and on Windows the server
+        outlives Raven."""
+        from raven_everos.server import StopOutcome
+
+        owner, borrower, child = await self._owner_and_borrower()
+        child.poll = lambda: 1
+        borrower._proc = SimpleNamespace(pid=5151, poll=lambda: None, returncode=None)
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr("raven_everos.config.everos_owned", lambda: True)
+        asked: list[int] = []
+        monkeypatch.setattr(
+            "raven_everos.server.stop_pid",
+            lambda pid, **kw: asked.append(pid) or StopOutcome.STOPPED,
+        )
+
+        await borrower.stop()
+        assert asked == [], "the owner is still using the server"
+        await owner.stop()
+
+        assert asked == [5151], "the live child is the one to stop, not the dead one the owner recorded"

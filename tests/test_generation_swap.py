@@ -44,6 +44,7 @@ class _StubLoop:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.subagents = _StubSubagents(rec)
+        self.backend = None
 
     async def stop_plugin_services(self) -> None:
         self._rec.calls.append("stop_plugin_services")
@@ -57,6 +58,9 @@ class _StubLoop:
     async def drain_backend_stores(self) -> None:
         self._rec.calls.append("drain_backend_stores")
 
+    async def retire_pending_backends(self) -> None:
+        pass
+
 
 class _StubBackend:
     def __init__(self, rec: _Recorder) -> None:
@@ -67,10 +71,11 @@ class _StubBackend:
 
 
 def _runtime(rec: _Recorder, *, backend: bool) -> RavenRuntime:
+    loop = _StubLoop(rec)
+    loop.backend = _StubBackend(rec) if backend else None
     return RavenRuntime(
-        loop=_StubLoop(rec),
+        loop=loop,
         plugin_registry=None,
-        backend=_StubBackend(rec) if backend else None,
         strategies=None,
         deliverables=None,
     )
@@ -89,10 +94,19 @@ def test_dispose_order_with_backend() -> None:
     ]
 
 
-def test_dispose_without_backend_skips_the_drain() -> None:
+def test_dispose_without_backend_still_drains() -> None:
+    """A switch to memory-off leaves ``current`` None while the backend it
+    replaced still owns queued writes and a retirement task; skipping the
+    drain there lost them. It is a no-op when no backend ever existed."""
     rec = _Recorder()
     asyncio.run(_runtime(rec, backend=False).dispose())
-    assert rec.calls == ["stop_plugin_services", "subagents.cancel_all", "close_mcp", "stop"]
+    assert rec.calls == [
+        "stop_plugin_services",
+        "subagents.cancel_all",
+        "close_mcp",
+        "stop",
+        "drain_backend_stores",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +193,6 @@ def test_a_superseded_candidate_is_discarded_not_disposed() -> None:
         runtime=_DiscardSpy(
             loop=base.loop,
             plugin_registry=base.plugin_registry,
-            backend=base.backend,
             strategies=base.strategies,
             deliverables=base.deliverables,
         ),
@@ -261,7 +274,8 @@ def test_every_generation_organ_has_a_dispose_call() -> None:
         "the loop itself": "self.loop.stop",
         "the skill watcher": "self.loop.context.skills.stop_file_watcher",
         "in-flight store writes": "self.loop.drain_backend_stores",
-        "the memory backend": "self.backend.stop",
+        "replaced backends": "self.loop.retire_pending_backends",
+        "the memory backend": "current.stop",
     }
 
     def dotted(node: ast.expr) -> str:

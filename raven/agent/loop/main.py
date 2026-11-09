@@ -417,6 +417,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         from raven.context_engine import build_context_engine
 
         self.context_config = context_config
+        # Read again when a live switch changes which backend's skill source
+        # carries what weight; the router was built from this at boot.
+        self._skill_forge_router_config = skill_forge_router_config
         self._TOOL_RESULT_MAX_CHARS = max(0, int(context_config.tool_result_max_chars))
 
         # Skill Hub client — built once and shared by the HubSkillSource
@@ -680,6 +683,31 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # Consecutive backend.store failures; see _note_memory_failure.
         self._memory_fail_streak = 0
         self._processing_lock = asyncio.Lock()
+        # Turns in flight on this loop, and the event that fires when the last
+        # one ends. A live memory-backend switch replaces references a running
+        # turn reads and stops the backend it may still be calling, so it waits
+        # here first. Deliberately not ``_processing_lock`` above: that one's
+        # ``is_processing`` is the wake scheduler's, and holding it for a turn's
+        # duration would serialize every session.
+        self._active_turns = 0
+        self._turns_idle = asyncio.Event()
+        self._turns_idle.set()
+        # One switch at a time; the section guards its own click, but two
+        # clients can still call memory.applyRuntime concurrently.
+        self._memory_rebind_lock = asyncio.Lock()
+        # A switch asked for while a turn was running, and the task that
+        # landed it. A write made from inside a turn cannot wait for that
+        # turn to finish -- the turn is waiting for the write -- so the
+        # switch waits for the turn instead, and lands when it ends.
+        self._queued_memory_switch: tuple | None = None
+        self._queued_switch_task: asyncio.Task | None = None
+        # Set when the generation is retired: a switch queued behind a turn
+        # must not land after the teardown that would have retired it.
+        self._memory_switch_closed = False
+        # Replaced backends, keyed by the task that drains and stops each. The
+        # generation's teardown waits on these (or force-stops their backend);
+        # the value is the backend because a cancelled task never stops it.
+        self._backend_stop_tasks: dict[asyncio.Task, "MemoryBackend"] = {}
         # Fired after every dispatched turn (success, error, or cancel).
         # Used by the proactive-engine WakeScheduler to re-fire wakes that
         # were parked while the agent was busy. Callbacks must be cheap and
@@ -833,6 +861,286 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception as exc:  # noqa: BLE001 -- teardown must not die on bookkeeping
                 logger.warning("Error marking MCP servers after executor close: %s", exc)
 
+    async def rebind_memory_backend(
+        self,
+        backend: "MemoryBackend | None",
+        *,
+        name: str | None,
+        user_id: str,
+        agent_id: str,
+        memory_top_k: int,
+    ) -> bool:
+        """Point this running loop at a new memory backend, in place.
+
+        Returns True when the swap happened, and False when the generation was
+        retired while the new backend was starting: the swap is refused and
+        whatever the start opened is stopped, because nothing would retire a
+        backend installed into a generation that is gone.
+
+        A generation swap rebuilds the whole runtime and closes the document's
+        RPC socket -- what the settings switch used to do on every click, which
+        the section drew as "not connected". The backend is the one part of the
+        generation whose seam is a live reference: the store pipeline reads
+        ``self.backend`` per turn, and the context engine's memory segment and
+        skill source carry it. Replacing those references is enough; the prompt
+        layout and the tool array stay exactly as they were.
+
+        Every reader of the boot-time backend has to move with it. The skill
+        router's source is added or removed as the switch turns memory on or
+        off (a router built with no backend has no source to update), its
+        weight follows the new backend's configured share, and
+        ``memory_config`` is what the after-turn feedback routes its id
+        prefixes by.
+
+        The swap waits for the turns already in flight. Each RPC frame runs on
+        its own task, so a settings click can reach this while ``run_turn`` is
+        still recalling or storing through the backend -- and the cloud
+        backend's ``stop`` closes its HTTP client. Waiting here (the reference
+        swap itself is one synchronous block, so a turn entering at that
+        instant either counts first or reads the new backend) keeps a turn on
+        the backend it started with. A replaced backend is retired in its own
+        task only after the store records it already owns settle, because
+        stopping it early would interrupt a write this switch did not own;
+        the generation's teardown bounds that task. This is the memory
+        backend's generation door (see the ``RavenRuntime`` paper): the loop
+        owns the backend, and the runtime reads the current one through.
+        """
+        async with self._memory_rebind_lock:
+            # Read under the lock: two overlapping switches that both captured
+            # the pre-lock backend would stop it twice and retire neither
+            # other's intermediate backend.
+            old = self.backend
+            try:
+                if backend is not None:
+                    await backend.start()
+                while self._active_turns:
+                    await self._turns_idle.wait()
+                if self._memory_switch_closed:
+                    # The teardown ran while this start was in flight; the
+                    # generation is gone, so installing the backend now would
+                    # leave it running with nothing to retire it. Refuse the
+                    # swap and stop what the start opened. No await sits
+                    # between this check and the swap below, so a teardown
+                    # cannot close the door after the check and before it.
+                    if backend is not None and backend is not old:
+                        await self._stop_backend(backend)
+                    return False
+            except (asyncio.CancelledError, Exception):
+                # The start failed, or the request went away before the swap
+                # -- a page reload is one way. Either way the backend was
+                # never installed, so nothing else owns it: the contract asks
+                # stop() to be safe after a failed start, for the partial init
+                # to clean up.
+                if backend is not None and backend is not old:
+                    try:
+                        await self._stop_backend(backend)
+                    except asyncio.CancelledError:
+                        # A second cancellation landed inside the cleanup.
+                        # Own the stop in a retirement task so the partial
+                        # init still goes and the generation's teardown can
+                        # bound it.
+                        self._schedule_retire_backend(backend)
+                        raise
+                raise
+            self.backend = backend
+            has = backend is not None
+            self.context._has_memory_backend = has
+            self.memory_config.backend = name
+            self.memory_config.user_id = user_id
+            self.memory_config.agent_id = agent_id
+            self.memory_config.memory_top_k = memory_top_k
+
+            from raven.context_engine.segments.identity import IdentitySegmentBuilder
+            from raven.context_engine.segments.memory import MemorySegmentBuilder
+            from raven.memory_engine import BackendSkillSource
+
+            for builder in getattr(self.context_engine, "_builders", ()):
+                if isinstance(builder, MemorySegmentBuilder):
+                    builder._backend = backend
+                    builder._user_id = user_id
+                    builder._memory_top_k = memory_top_k
+                elif isinstance(builder, IdentitySegmentBuilder):
+                    builder._has_memory_backend = has
+            router = getattr(self.context_engine, "skills_router", None)
+            if router is not None:
+                source = next(
+                    (s for s in getattr(router, "_sources", ()) if isinstance(s, BackendSkillSource)),
+                    None,
+                )
+                if backend is None:
+                    if source is not None:
+                        router.remove_source(source)
+                elif source is not None:
+                    source._backend = backend
+                    source._agent_id = agent_id
+                    if name:
+                        source.name = name
+                        weights = getattr(self._skill_forge_router_config, "weights", None) or {}
+                        source.weight = float(weights.get(name, type(source).weight))
+                elif name:
+                    # Memory was off when the router was built, so the factory
+                    # added no backend source. The page can turn it on live,
+                    # and recall has to follow or the new backend feeds no
+                    # skills.
+                    source = BackendSkillSource(backend, agent_id=agent_id, name=name)
+                    weights = getattr(self._skill_forge_router_config, "weights", None) or {}
+                    source.weight = float(weights.get(name, type(source).weight))
+                    router.add_source(source)
+            if old is not None and old is not backend:
+                self._schedule_retire_backend(old)
+            return True
+
+    async def apply_memory_backend(
+        self,
+        backend: "MemoryBackend | None",
+        *,
+        name: str | None,
+        user_id: str,
+        agent_id: str,
+        memory_top_k: int,
+    ) -> str:
+        """Point this running loop at a new memory backend, or queue the switch.
+
+        ``"applied"`` when the swap happened before this returned, ``"queued"``
+        when a turn was running, and ``"closed"`` when this generation has
+        already been retired. A write made from inside a turn cannot wait for
+        that turn to finish -- the turn is waiting for the write -- so the
+        switch waits for the turn instead, and lands when the last turn ends.
+        That is the promise the section's confirmation makes the reader: the
+        switch lands when the running turn finishes.
+
+        :meth:`rebind_memory_backend` is the swap itself, and it waits for the
+        turns; this is the door above it, which knows when waiting is safe.
+        """
+        if self._memory_switch_closed:
+            # The generation is gone. Installing a backend now would leave it
+            # running with nothing to retire it; the durable write that asked
+            # for the switch stays, and the next generation honors it.
+            return "closed"
+        if self._active_turns:
+            self._queued_memory_switch = (backend, name, user_id, agent_id, memory_top_k)
+            return "queued"
+        applied = await self.rebind_memory_backend(
+            backend,
+            name=name,
+            user_id=user_id,
+            agent_id=agent_id,
+            memory_top_k=memory_top_k,
+        )
+        return "applied" if applied else "closed"
+
+    def _land_queued_switch(self) -> None:
+        """Apply the switch that was asked for while a turn was running.
+
+        Called when the last turn ends, so the swap happens at the boundary
+        the wait was for -- and off the turn's own stack, which is what lets
+        the turn finish first.
+        """
+        if self._memory_switch_closed:
+            # The generation is gone; a switch landing now would install a
+            # backend nothing retires.
+            self._queued_memory_switch = None
+            return
+        pending = self._queued_memory_switch
+        if pending is None:
+            return
+        self._queued_memory_switch = None
+        backend, name, user_id, agent_id, memory_top_k = pending
+        task = asyncio.get_running_loop().create_task(
+            self.rebind_memory_backend(
+                backend,
+                name=name,
+                user_id=user_id,
+                agent_id=agent_id,
+                memory_top_k=memory_top_k,
+            )
+        )
+        task.add_done_callback(self._report_queued_switch)
+        self._queued_switch_task = task
+
+    def _report_queued_switch(self, task: asyncio.Task) -> None:
+        """Say so when a switch that waited for a turn did not land.
+
+        The write that queued it answered "switches when that turn finishes"
+        and returned long ago, and nothing else awaits this task: a start that
+        raised here was held on the task unseen, while the file named a backend
+        the loop never reached.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        logger.opt(exception=exc).error("memory: the switch queued behind a turn did not land: {}", exc)
+        notify = getattr(getattr(self, "memory_assembly", None), "notify", None)
+        if notify is not None:
+            notify(f"Switching the memory backend failed: {exc}. This session keeps the previous one.")
+
+    def _schedule_retire_backend(self, backend: "MemoryBackend") -> None:
+        """Retire a backend this loop still owns without holding a caller on it.
+
+        Called synchronously inside the swap block, so a cancellation after
+        the swap cannot strand the retirement: by the time the request may be
+        cancelled, the task that owns the stop exists. Also the last resort
+        for a failed-start cleanup a second cancellation cut short.
+        """
+        task = asyncio.create_task(self._retire_backend(backend))
+        self._backend_stop_tasks[task] = backend
+        task.add_done_callback(lambda done: self._backend_stop_tasks.pop(done, None))
+
+    async def _retire_backend(self, backend: "MemoryBackend") -> None:
+        """Stop a replaced backend once the writes it already owns have settled.
+
+        Runs in its own task, so a failing write cannot hold the switch open;
+        the settle is unbounded there and bounded only by the owner that
+        retires the generation (``retire_pending_backends``).
+        """
+        from raven.core import plugin_stack
+
+        # The boot start is detached, so it may still be polling for
+        # readiness; stopping under it is the race ``dispose`` guards with the
+        # same call.
+        await plugin_stack.cancel_pending_backend_starts(backend)
+        await self._store_pipeline.settle_backend(backend, timeout=None)
+        await self._stop_backend(backend)
+
+    async def retire_pending_backends(self, timeout: float = 2.0) -> None:
+        """Settle every replaced backend's stop before the generation goes.
+
+        A task still waiting past ``timeout`` is waiting on a write this
+        teardown has already cut; stopping the backend anyway is the lesser
+        leak (its client would otherwise outlive the process/generation).
+
+        A switch queued behind a turn is dropped: landing it now would
+        install a backend nothing here retires, because the teardown that
+        would have retired it has already run. The door is closed as well, so
+        a turn that ends after this cannot land one either.
+        """
+        self._memory_switch_closed = True
+        self._queued_memory_switch = None
+        queued = self._queued_switch_task
+        if queued is not None and not queued.done():
+            queued.cancel()
+            await asyncio.gather(queued, return_exceptions=True)
+        self._queued_switch_task = None
+        pending = {task: backend for task, backend in self._backend_stop_tasks.items() if not task.done()}
+        if not pending:
+            return
+        done, _ = await asyncio.wait(set(pending), timeout=timeout)
+        leftover = set(pending) - done
+        for task in leftover:
+            task.cancel()
+            await self._stop_backend(pending[task])
+        if leftover:
+            # No dangling retirement task survives the generation that owns it.
+            await asyncio.gather(*leftover, return_exceptions=True)
+
+    async def _stop_backend(self, backend: "MemoryBackend") -> None:
+        try:
+            await backend.stop()
+        except Exception:  # noqa: BLE001 -- the new backend already serves; a bad stop is not a failed switch
+            logger.exception("memory rebind: the previous backend did not stop cleanly")
+
     async def run(self) -> None:
         """Bring the agent runtime up and stay alive.
 
@@ -863,6 +1171,37 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
     def is_processing(self) -> bool:
         """True while a turn is being dispatched under the global lock."""
         return self._processing_lock.locked()
+
+    @property
+    def active_turns(self) -> int:
+        """Turns in flight on this loop; a live backend switch waits for zero."""
+        return self._active_turns
+
+    @property
+    def memory_switch_closed(self) -> bool:
+        """Whether this generation's live-switch door is closed (it is retired)."""
+        return self._memory_switch_closed
+
+    def _enter_turn(self) -> None:
+        """Count a turn as in flight; ``_exit_turn`` is the other half.
+
+        Synchronous on purpose: the live memory-backend switch reads this
+        counter and does its reference swap in one block with no await between
+        the check and the swap, so a turn entering at that instant either
+        increments first (the switch waits) or runs after it (it sees the new
+        backend).
+        """
+        self._active_turns += 1
+        self._turns_idle.clear()
+
+    def _exit_turn(self) -> None:
+        self._active_turns -= 1
+        if self._active_turns == 0:
+            self._turns_idle.set()
+            # A switch asked for while that turn was running lands now, on
+            # its own task: the turn is finishing, and the swap must not
+            # happen on the turn's stack.
+            self._land_queued_switch()
 
     def notify_turn_complete(self) -> None:
         """Fire the turn-complete callbacks: the seam a host sink signals through."""
@@ -910,6 +1249,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         flush = True
         capture = None
         failure: BaseException | None = None
+        # Counted before the first await: from here until the finally below, a
+        # live memory-backend switch waits.
+        self._enter_turn()
         try:
             # The tools a session brought with it become visible here, for the same
             # reason the model binding does: this is where the turn's task begins.
@@ -1051,24 +1393,29 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 attach_full_detail(exc)
             raise
         finally:
-            if capture is not None and capture.status == "running" and self._playbooks is not None:
-                from raven.playbook.run_record import RunRecordStore
+            try:
+                if capture is not None and capture.status == "running" and self._playbooks is not None:
+                    from raven.playbook.run_record import RunRecordStore
 
-                capture.finish(
-                    status="cancelled" if not flush else "failed",
-                    error=None if failure is None else f"{type(failure).__name__}: {failure}",
-                )
-                try:
-                    RunRecordStore(self._playbooks.store.root).save(capture)
-                except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
-                    logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
-            # Every way a turn ends passes here, which is what makes this the
-            # place a foreground DAG run learns its turn is over. A direct chat
-            # runs on an instance's own lane, concurrently with the main agent's
-            # turn, and can own no graph, so its end must not release the main
-            # turn's runs.
-            if req.direct_target is None:
-                await self._release_dag_runs(session_key, flush=flush)
+                    capture.finish(
+                        status="cancelled" if not flush else "failed",
+                        error=None if failure is None else f"{type(failure).__name__}: {failure}",
+                    )
+                    try:
+                        RunRecordStore(self._playbooks.store.root).save(capture)
+                    except Exception:  # noqa: BLE001 - cleanup cannot replace the turn's error
+                        logger.opt(exception=True).warning("playbook: failed turn record could not be saved")
+                # Every way a turn ends passes here, which is what makes this
+                # the place a foreground DAG run learns its turn is over. A
+                # direct chat runs on an instance's own lane, concurrently with
+                # the main agent's turn, and can own no graph, so its end must
+                # not release the main turn's runs.
+                if req.direct_target is None:
+                    await self._release_dag_runs(session_key, flush=flush)
+            finally:
+                # Its own finally so a bookkeeping raise cannot leave the turn
+                # counted forever and wedge every later backend switch.
+                self._exit_turn()
 
     async def _release_dag_runs(self, session_key: str, *, flush: bool) -> None:
         """Release the foreground DAG runs the turn on ``session_key`` still binds.

@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 255 methods, 147 component schemas.
+// 258 methods, 147 component schemas.
 
 /* eslint-disable */
 /**
@@ -5031,6 +5031,26 @@ export interface MemoryStatsResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+  /**
+   * memory.backend as the file names it at read time; null when backend-driven memory is off. The section marks this name's segment as the selected one.
+   */
+  backend?: string | null;
+  /**
+   * The EverOS backends this install can select: the plugin is importable and not in plugins.disabled, in a stable order -- 'everos' for the local server, 'everos-cloud' for the hosted one. The section draws one segment per name, disabled for the names this list omits.
+   */
+  available_backends?: string[];
+  /**
+   * Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). The memory section draws its key-entry panel in place of the store when the cloud backend is selected and this is false.
+   */
+  cloud_key_set?: boolean;
+  /**
+   * Whether the local EverOS server answers where the local backend reads. The section draws its start panel when the local backend is selected and this is false.
+   */
+  local_running?: boolean;
+  /**
+   * Whether the plugin starts the local EverOS server when it is not running: false for a root the user manages, which Raven reads and never starts. The section offers no Start button there, only the step that is the user's own.
+   */
+  local_startable?: boolean;
 }
 export interface MemoryListParams {
   kind: 'episode' | 'profile' | 'agent_case' | 'agent_skill';
@@ -5053,6 +5073,47 @@ export interface MemoryListResult {
    * Why this page has nothing to show, when that is not a failure: the memory plugin is not installed, or it is installed but is not what memory.backend names. Null when the store was actually consulted.
    */
   note?: string | null;
+}
+export interface MemoryStartLocalParams {}
+export interface MemoryStartLocalResult {
+  ok: boolean;
+  running: boolean;
+  base_url: string;
+  /**
+   * Why the server is not answering: what the local backend said while it started, or the probe's verdict; when state is queued, when it starts.
+   */
+  detail?: string | null;
+  /**
+   * How the start reached the running loop, which starts the server through the local backend: applied (started now), queued (a turn is running; it starts when that turn ends), or closed (the agent is shutting down). Null when nothing was attempted.
+   */
+  state?: 'applied' | 'queued' | 'closed' | null;
+}
+export interface MemorySwitchStatusParams {}
+export interface MemorySwitchStatusResult {
+  /**
+   * Whether a turn is in flight and a live switch would wait for it to finish.
+   */
+  active: boolean;
+  /**
+   * How many turns are in flight; zero when the switch can apply at once.
+   */
+  turns: number;
+}
+export interface MemoryApplyRuntimeParams {}
+export interface MemoryApplyRuntimeResult {
+  ok: boolean;
+  /**
+   * memory.backend the running loop uses now, or once the running turn ends when state is queued.
+   */
+  backend?: string | null;
+  /**
+   * Why the loop could not be pointed at that backend; when state is queued, when it will be.
+   */
+  detail?: string | null;
+  /**
+   * applied: the loop serves the backend now. queued: a turn is running and the loop reaches it when that turn ends. closed: the agent is shutting down and the next start applies it.
+   */
+  state?: 'applied' | 'queued' | 'closed' | null;
 }
 export interface PlaybooksListParams {}
 export interface PlaybooksListResult {
@@ -6978,6 +7039,9 @@ export interface RpcMethods {
   'deliverables.list': { params: DeliverablesListParams; result: DeliverablesListResult };
   'memory.stats': { params: MemoryStatsParams; result: MemoryStatsResult };
   'memory.list': { params: MemoryListParams; result: MemoryListResult };
+  'memory.startLocal': { params: MemoryStartLocalParams; result: MemoryStartLocalResult };
+  'memory.switchStatus': { params: MemorySwitchStatusParams; result: MemorySwitchStatusResult };
+  'memory.applyRuntime': { params: MemoryApplyRuntimeParams; result: MemoryApplyRuntimeResult };
   'playbooks.list': { params: PlaybooksListParams; result: PlaybooksListResult };
   'playbooks.get': { params: PlaybooksGetParams; result: PlaybooksGetResult };
   'playbooks.credentials.get': { params: PlaybooksCredentialsGetParams; result: PlaybooksCredentialsGetResult };
@@ -7207,8 +7271,11 @@ export const RPC_METHODS = [
   "mcp.list",
   "mcp.test",
   "mcp.tools",
+  "memory.applyRuntime",
   "memory.list",
+  "memory.startLocal",
   "memory.stats",
+  "memory.switchStatus",
   "model.add_endpoint",
   "model.add_model",
   "model.add_models",

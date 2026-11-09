@@ -129,6 +129,20 @@ def server_log_path() -> Path:
     return get_logs_dir() / "everos-server.log"
 
 
+def server_starts_on_demand() -> bool:
+    """Whether Raven starts the local server when it is not running.
+
+    The answer a host surface that offers a start asks for, so it does not
+    decide whose root this is: a root the user manages is read and never
+    started (``EverosBackend.start`` leaves it alone, and the address write a
+    spawn needs is refused), so a Start there could only fail. The judgement
+    stays in the plugin, beside the spawn it gates.
+    """
+    from raven_everos.config import everos_owned
+
+    return bool(everos_owned())
+
+
 _INOTIFY_LIMIT_PATH = Path("/proc/sys/fs/inotify/max_user_instances")
 _INOTIFY_LIMIT_FLOOR = 1024
 _PROC_ROOT = Path("/proc")
@@ -1329,6 +1343,7 @@ __all__ = [
     "DEFAULT_EVEROS_BASE_URL",
     "ProbeVerdict",
     "probe_health",
+    "server_starts_on_demand",
     "EverosBinaryMissingError",
     "EverosNotConfiguredError",
     "LockHolder",

@@ -5221,6 +5221,45 @@ class MemoryStatsResult(_Strict):
             "names. Null when the store was actually consulted."
         ),
     )
+    backend: str | None = Field(
+        default=None,
+        description=(
+            "memory.backend as the file names it at read time; null when backend-driven "
+            "memory is off. The section marks this name's segment as the selected one."
+        ),
+    )
+    available_backends: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The EverOS backends this install can select: the plugin is importable and not "
+            "in plugins.disabled, in a stable order -- 'everos' for the local server, "
+            "'everos-cloud' for the hosted one. The section draws one segment per name, "
+            "disabled for the names this list omits."
+        ),
+    )
+    cloud_key_set: bool = Field(
+        default=False,
+        description=(
+            "Whether the hosted backend has an API key on file (or in EVEROS_CLOUD_API_KEY). "
+            "The memory section draws its key-entry panel in place of the store when the cloud "
+            "backend is selected and this is false."
+        ),
+    )
+    local_running: bool = Field(
+        default=False,
+        description=(
+            "Whether the local EverOS server answers where the local backend reads. The section "
+            "draws its start panel when the local backend is selected and this is false."
+        ),
+    )
+    local_startable: bool = Field(
+        default=True,
+        description=(
+            "Whether the plugin starts the local EverOS server when it is not running: false for "
+            "a root the user manages, which Raven reads and never starts. The section offers no "
+            "Start button there, only the step that is the user's own."
+        ),
+    )
 
 
 class MemoryItem(_Strict):
@@ -5260,6 +5299,69 @@ class MemoryListResult(_Strict):
             "Why this page has nothing to show, when that is not a failure: the memory "
             "plugin is not installed, or it is installed but is not what memory.backend "
             "names. Null when the store was actually consulted."
+        ),
+    )
+
+
+class MemoryStartLocalParams(_Strict):
+    pass
+
+
+class MemoryStartLocalResult(_Strict):
+    ok: bool
+    running: bool
+    base_url: str
+    detail: str | None = Field(
+        None,
+        description=(
+            "Why the server is not answering: what the local backend said while it started, or the "
+            "probe's verdict; when state is queued, when it starts."
+        ),
+    )
+    state: Literal["applied", "queued", "closed"] | None = Field(
+        None,
+        description=(
+            "How the start reached the running loop, which starts the server through the local backend: "
+            "applied (started now), queued (a turn is running; it starts when that turn ends), or closed "
+            "(the agent is shutting down). Null when nothing was attempted."
+        ),
+    )
+
+
+class MemorySwitchStatusParams(_Strict):
+    pass
+
+
+class MemorySwitchStatusResult(_Strict):
+    active: bool = Field(
+        ...,
+        description=("Whether a turn is in flight and a live switch would wait for it to finish."),
+    )
+    turns: int = Field(
+        ...,
+        description="How many turns are in flight; zero when the switch can apply at once.",
+    )
+
+
+class MemoryApplyRuntimeParams(_Strict):
+    pass
+
+
+class MemoryApplyRuntimeResult(_Strict):
+    ok: bool
+    backend: str | None = Field(
+        None,
+        description="memory.backend the running loop uses now, or once the running turn ends when state is queued.",
+    )
+    detail: str | None = Field(
+        None,
+        description="Why the loop could not be pointed at that backend; when state is queued, when it will be.",
+    )
+    state: Literal["applied", "queued", "closed"] | None = Field(
+        None,
+        description=(
+            "applied: the loop serves the backend now. queued: a turn is running and the loop reaches it "
+            "when that turn ends. closed: the agent is shutting down and the next start applies it."
         ),
     )
 
@@ -7473,6 +7575,9 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     # memory.*
     "memory.stats": (MemoryStatsParams, MemoryStatsResult),
     "memory.list": (MemoryListParams, MemoryListResult),
+    "memory.startLocal": (MemoryStartLocalParams, MemoryStartLocalResult),
+    "memory.switchStatus": (MemorySwitchStatusParams, MemorySwitchStatusResult),
+    "memory.applyRuntime": (MemoryApplyRuntimeParams, MemoryApplyRuntimeResult),
     # trajectory.* -- the Web trajectory view
     "trajectory.state": (TrajectoryStateParams, TrajectoryStateResult),
     "trajectory.list": (TrajectoryListParams, TrajectoryListResult),

@@ -397,6 +397,8 @@ def rpc_server_deps(monkeypatch: pytest.MonkeyPatch):
     # Awaited during teardown before backend.stop(); a bare MagicMock is not
     # awaitable and would swallow the stop it is supposed to precede.
     fake_agent_loop.drain_backend_stores = AsyncMock()
+    # The backends a live switch replaced are retired by the teardown too.
+    fake_agent_loop.retire_pending_backends = AsyncMock()
     fake_agent_loop.cron_service = None
     fake_agent_loop.tools.get.return_value = None
     fake_agent_loop.subagents.set_submit = MagicMock()
@@ -579,6 +581,54 @@ async def test_rpc_runner_calls_backend_stop_on_exit(rpc_server_deps, monkeypatc
     await _run_until_done_with_immediate_proc_done(monkeypatch, rpc_server_deps)
 
     assert rpc_server_deps["stop_calls"] == ["stop"], "backend.stop() must be called exactly once in the finally block"
+
+
+async def test_rpc_runner_retires_the_backends_a_live_switch_replaced(rpc_server_deps, monkeypatch) -> None:
+    """A backend a live switch replaced owns queued writes of its own, and the
+    teardown is what stops it. The TUI was the one host that left it running."""
+    ctx = rpc_server_deps
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert ctx["agent_loop"].retire_pending_backends.await_count == 1
+
+
+async def test_rpc_runner_drains_and_retires_even_when_the_loop_serves_no_backend(rpc_server_deps, monkeypatch) -> None:
+    """A switch to memory-off leaves the loop serving nothing while the backend
+    it replaced still owns queued writes. Gating the drain on a backend being
+    there would drop those writes without saying so."""
+    ctx = rpc_server_deps
+    ctx["agent_loop"].backend = None
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert ctx["agent_loop"].drain_backend_stores.await_count == 1
+    assert ctx["agent_loop"].retire_pending_backends.await_count == 1
+    assert ctx["stop_calls"] == [], "nothing is serving, so nothing is stopped"
+
+
+async def test_rpc_runner_stops_the_backend_the_loop_serves_now(rpc_server_deps, monkeypatch) -> None:
+    """The handle this process booted with is stale after a live switch; the
+    one that is serving is the one whose client has to close."""
+    ctx = rpc_server_deps
+
+    class _Switched:
+        def __init__(self) -> None:
+            self.stops = 0
+
+        async def start(self) -> None:
+            return None
+
+        async def stop(self) -> None:
+            self.stops += 1
+
+    switched = _Switched()
+    ctx["agent_loop"].backend = switched
+
+    await _run_until_done_with_immediate_proc_done(monkeypatch, ctx)
+
+    assert switched.stops == 1
+    assert ctx["stop_calls"] == [], "the handle this process booted with is stale"
 
 
 async def test_rpc_runner_cancels_subagents_before_the_spine_seals(rpc_server_deps, monkeypatch) -> None:
@@ -1025,9 +1075,10 @@ def test_the_tui_shutdown_stops_subagents_before_it_drains_memory() -> None:
     cancel = src.index("await agent_loop.subagents.cancel_all(reason=")
     pool = src.index("await close_pool()")
     drain = src.index("await agent_loop.drain_backend_stores()")
-    stop = src.index("await agent_loop.backend.stop()")
+    retire = src.index("await agent_loop.retire_pending_backends()")
+    stop = src.index("await current.stop()")
 
-    assert cancel < pool < drain < stop
+    assert cancel < pool < drain < retire < stop
 
 
 # ---------------------------------------------------------------------------
@@ -1232,6 +1283,27 @@ def test_backend_start_task_is_held_and_settled_before_the_drain() -> None:
     cancel_at = src.index("backend_start_task.cancel()")
     drain_at = src.index("drain_backend_stores()")
     assert cancel_at < drain_at, "the start must be settled before the backend is drained and stopped"
+
+
+def test_the_boot_start_is_registered_where_a_live_switch_cancels_it() -> None:
+    """A live switch retires the boot backend through
+    ``cancel_pending_backend_starts``, which only reaches a start the registry
+    holds. Unregistered, a switch landing in the up-to-30s EverOS spawn window
+    stopped the backend while its start was still running -- on Windows that
+    stop can end the child the start is waiting on. The start is a closure with
+    no seam, so this pins the registration and the handler strip that must
+    survive the cancel."""
+    import inspect
+
+    from raven.cli import tui_commands
+
+    src = inspect.getsource(tui_commands._run_rpc_server_until_done)
+    assert "plugin_stack.hold_backend_start(boot_backend, backend_start_task)" in src
+    start = src[src.index("async def _start_backend") : src.index("backend_start_task = asyncio.create_task")]
+    assert "await boot_backend.start()" in start, "the task must start the boot backend, not whatever serves later"
+    assert start.index("finally:") < start.index("_strip_tty_stream_handlers()"), (
+        "a cancelled start must still strip the TTY handlers it attached"
+    )
 
 
 def test_teardown_stops_the_skill_file_watcher() -> None:

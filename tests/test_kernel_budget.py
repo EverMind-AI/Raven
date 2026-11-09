@@ -299,6 +299,20 @@ registry's.
 
 Measured at 3,808.
 
+
+3,820 -> 3,850 (2026-11-09), for the memory backend's lifecycle. The memory
+paper said the host calls ``start()`` once at boot, and left ``stop()``
+reading like the teardown of a process on its way out. Both stopped being
+true when the memory backend became a live reference the settings page can
+swap in place: the host builds and starts a backend in place of the one it
+booted with, and stops the one it replaced while the process carries on.
+Eight lines of prose, and the one that matters to a plugin author is the
+second -- stopping a backend is not the process ending, so an adapter that
+owns something beyond its own client (a server process) has to keep it
+alive for whoever uses it next.
+
+Measured at 3,828.
+
 """
 
 from __future__ import annotations
@@ -309,7 +323,7 @@ import sys
 from pathlib import Path
 
 LINE_CEILING = 2_000
-CONTRACTS_LINE_CEILING = 3_820
+CONTRACTS_LINE_CEILING = 3_850
 THIRD_PARTY_ALLOWED = frozenset({"loguru"})
 DEBT_MARKER = re.compile(r"\b(TODO|FIXME|HACK)\b")
 

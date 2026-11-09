@@ -5005,6 +5005,62 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
    down the width of a column: same buttons, same counts, no room for the
    sentence under each -- which is one line under the switch now, for whichever
    kind is picked. */
+/* Which EverOS this section reads. The same band as the kind switch under it,
+   so the section reads as one set of switches rather than a form that
+   wandered in. */
+.memsrc {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px;
+  padding: 2px; background: var(--surface); border-radius: 9px;
+}
+.memsrcbtn {
+  min-width: 0; padding: 5px 4px; border-radius: 7px;
+  font-size: 11.5px; color: var(--muted); transition: background .15s ease;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.memsrcbtn:hover:not(:disabled) { background: var(--raised); }
+.memsrcbtn[aria-pressed="true"] { background: var(--paper); box-shadow: inset 0 0 0 1px var(--line-soft); color: var(--text); }
+.memsrcbtn:disabled { opacity: .45; cursor: default; }
+/* "Change key" under the source switch: a link, not a second control. */
+.memchange {
+  align-self: flex-start; margin: -4px 2px 0; padding: 0;
+  border: 0; background: none; font: inherit; font-size: 11.5px;
+  color: var(--faint); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.memchange:hover { color: var(--muted); }
+.memerr { color: var(--clay); }
+/* The cloud backend with no key: one panel, one field, one link. The column it
+   replaces was the store's error frame, which blamed the service for a step
+   the reader had not taken yet. */
+.memconnect {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100%; box-sizing: border-box; padding: 32px 24px 56px;
+}
+.memconnect-inner { width: min(400px, 100%); text-align: center; }
+.memconnect-glyph {
+  width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  margin: 0 auto 14px; background: var(--raised); color: var(--faint);
+}
+.memconnect-glyph svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; }
+.memconnect-t { font-size: 16px; font-weight: 600; }
+.memconnect-sub { font-size: 13px; line-height: 1.7; color: var(--muted); margin-top: 7px; }
+.memconnect-row { display: flex; gap: 8px; margin-top: 18px; }
+.memconnect-actions { justify-content: center; }
+.memconnect-in {
+  flex: 1; min-width: 0; height: var(--ctl-h); box-sizing: border-box;
+  border: 1px solid var(--line); border-radius: var(--ctl-r);
+  background: var(--paper); color: var(--text); padding: 0 11px; font: inherit; font-size: 13px;
+}
+.memconnect-in:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); outline: none; }
+.memconnect-link { margin-top: 12px; }
+.memconnect-link a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+/* The Save button while the key is being checked. */
+.memconnect-spin {
+  display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px;
+  border: 1.6px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: memconnect-spin .7s linear infinite;
+}
+@keyframes memconnect-spin { to { transform: rotate(360deg); } }
+.memconnect-glyph .memconnect-spin { margin-right: 0; }
 .memstats {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; margin: 0;
   padding: 2px; background: var(--surface); border-radius: 9px;
