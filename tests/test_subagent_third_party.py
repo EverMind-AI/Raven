@@ -3034,12 +3034,13 @@ def test_the_minimax_sign_in_note_names_the_region_and_where_the_data_dir_goes()
 
 
 def test_the_minimax_install_note_says_what_older_npm_does_with_the_approval() -> None:
-    """The command carries a flag npm 12 needs and npm 11 does not know.
+    """The command carries a flag only npm 12 needs.
 
     npm 12 blocks install-time scripts, so the vendor's approval is what
     builds `better-sqlite3`'s binding; npm 11 and older run the scripts
-    anyway and only warn that they do not know the flag. A reader on an
-    older npm should be told that the warning is expected.
+    anyway, and the ones that do not know the flag say so and install all
+    the same. A reader on an older npm should not be left expecting the
+    warning, and one on npm 12 should know the approval is what they need.
     """
     import json
     from pathlib import Path
