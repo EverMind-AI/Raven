@@ -64,11 +64,24 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
 
             # Use caller-provided reference time for deterministic scheduling
             base_time = now_ms / 1000
-            tz = ZoneInfo(schedule.tz) if schedule.tz else datetime.now().astimezone().tzinfo
-            base_dt = datetime.fromtimestamp(base_time, tz=tz)
+            # Without an explicit zone use a naive local datetime: the system zone's
+            # DST rules then apply to every occurrence, whereas a fixed offset taken
+            # from "now" would shift wall-clock times across a DST change.
+            if schedule.tz:
+                base_dt = datetime.fromtimestamp(base_time, tz=ZoneInfo(schedule.tz))
+            else:
+                base_dt = datetime.fromtimestamp(base_time)
             cron = croniter(schedule.expr, base_dt)
-            next_dt = cron.get_next(datetime)
-            return int(next_dt.timestamp() * 1000)
+            # A naive wall time in a repeated DST hour can map to the past.
+            # Allow second-level schedules to leave that hour, but fail closed
+            # if the iterator cannot produce a future occurrence.
+            for _ in range(10_000):
+                next_dt = cron.get_next(datetime)
+                next_ms = int(next_dt.timestamp() * 1000)
+                if next_ms > now_ms:
+                    return next_ms
+            logger.warning("Cron expression {!r} exhausted the future-slot search", schedule.expr)
+            return None
         except Exception:
             return None
 
