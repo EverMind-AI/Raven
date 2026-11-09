@@ -2046,3 +2046,33 @@ async def test_describe_names_registered_machines_without_a_debug_switch(config_
     assert "an acp or cli preset runs there" in line and "openai preset's endpoint is reached from there" in line
     # Bar the one family whose command is this host's own interpreter.
     assert "a mirasim_* preset runs only here" in line
+
+
+@pytest.mark.asyncio
+async def test_the_memory_backend_is_still_written_where_no_settings_service_runs(config_file):
+    """A one-shot ``raven agent`` lends no settings caller. ``memory.backend``
+    was a plain file write there that the next start honors; giving it the
+    settings service as its writer, for the live switch, must not leave it
+    read-only where that service does not run."""
+    tool = RavenConfigTool()
+
+    reply = await _run(tool, action="set", path="memory.backend", value="null")
+
+    assert json.loads(config_file.read_text())["memory"]["backend"] is None
+    assert "reload" in reply and "Pending" in reply
+
+    # Back to the default the same way: the file is the whole change here too.
+    reply = await _run(tool, action="unset", path="memory.backend")
+
+    assert "backend" not in json.loads(config_file.read_text()).get("memory", {})
+    assert "cannot be reset" not in reply and "reload" in reply
+
+    # Where the service runs, the switch goes through it and lands live.
+    calls = Calls({"settings.set": {"applied": True, "previous": None}})
+    served = RavenConfigTool()
+    served.set_rpc_caller(calls)
+
+    reply = await _run(served, action="set", path="memory.backend", value="null")
+
+    assert calls.calls == [("settings.set", {"key": "memory.backend", "value": None})]
+    assert "Pending" not in reply

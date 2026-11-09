@@ -119,6 +119,11 @@ class Setting:
     #: also needs an address), what the runtime runs on, read from the whole
     #: file: a read shows it beside the stored value, which alone misleads.
     in_effect: "Callable[[dict[str, Any]], Any] | None" = None
+    #: For a ``settings``-written setting whose file value is still honored by
+    #: the next start: where no settings service runs (a one-shot ``raven
+    #: agent``) it is written to the file directly and takes this effect,
+    #: rather than being read-only there.
+    unserved_effect: Effect | None = None
 
     def describe(self) -> dict[str, Any]:
         out: dict[str, Any] = {
@@ -537,6 +542,7 @@ SECTIONS: tuple[Section, ...] = (
                     "reload; a switch asked for while a turn is running waits for that turn, and "
                     "the write says so"
                 ),
+                unserved_effect=_E.RELOAD,
             ),
             Setting(
                 "embedding",

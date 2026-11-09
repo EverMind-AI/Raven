@@ -976,7 +976,9 @@ class RavenConfigTool(Tool):
             if not present:
                 raise LookupError(f"{instance} is not configured; describe {setting.path.split('.*')[0]} first")
         previous, warning = await self._write(setting, path, bound, value)
-        return self._report(path, setting.effect, previous, value, warning=warning) + self._unknown_tools(path, value)
+        return self._report(path, self._effect_here(setting), previous, value, warning=warning) + self._unknown_tools(
+            path, value
+        )
 
     async def _set_many(self, changes: dict[str, Any]) -> str:
         """Several settings under the one confirmation the user already gave.
@@ -1005,7 +1007,7 @@ class RavenConfigTool(Tool):
             setting, bound = found
             if setting.effect is Effect.INERT:
                 raise ValueError(f"{path} is not read by anything; nothing was changed")
-            if not setting.secret and setting.writer != "raw" and self._call is None:
+            if not setting.secret and setting.writer != "raw" and self._call is None and not self._unserved(setting):
                 raise ValueError(
                     f"{path} is changed through Raven's settings service, which this process does not serve; "
                     "nothing was changed"
@@ -1029,7 +1031,7 @@ class RavenConfigTool(Tool):
                     continue
                 previous, warning = await self._write(setting, path, bound, value)
                 lines.append(
-                    self._report(path, setting.effect, previous, value, warning=warning)
+                    self._report(path, self._effect_here(setting), previous, value, warning=warning)
                     + self._unknown_tools(path, value)
                 )
             for name, fields in channels.items():
@@ -1077,6 +1079,20 @@ class RavenConfigTool(Tool):
         model, own = self._session_model(conversation)
         return model if own else f"{model} (the default)"
 
+    def _unserved(self, setting: Setting) -> bool:
+        """Whether this settings-written value goes to the file directly here.
+
+        Only where no settings service runs, and only for a setting whose file
+        value the next start still honors (``unserved_effect``).
+        """
+        return setting.writer == "settings" and self._call is None and setting.unserved_effect is not None
+
+    def _effect_here(self, setting: Setting) -> Effect:
+        """When a write of ``setting`` takes effect in this process."""
+        if self._unserved(setting) and setting.unserved_effect is not None:
+            return setting.unserved_effect
+        return setting.effect
+
     async def _write(self, setting: Setting, path: str, bound: list[str], value: Any) -> tuple[Any, str]:
         """Write through the setting's owner: ``(previous, warning)``.
 
@@ -1085,7 +1101,7 @@ class RavenConfigTool(Tool):
         when it has nothing to add.
         """
         writer = setting.writer
-        if writer == "raw":
+        if writer == "raw" or self._unserved(setting):
             return await asyncio.to_thread(surface.write_value, path, value), ""
         if writer == "settings":
             result = await self._rpc("settings.set", {"key": path, "value": value})
@@ -1134,10 +1150,10 @@ class RavenConfigTool(Tool):
                 f"Cleared {path} (was {json.dumps(previous, ensure_ascii=False)}): {setting.unset_means}. "
                 f"It {EFFECT_TEXT[setting.effect]}."
             )
-        if setting.writer != "raw" or setting.secret:
+        if (setting.writer != "raw" and not self._unserved(setting)) or setting.secret:
             return f"{path} cannot be reset from here; set it to the value you want instead."
         previous = await asyncio.to_thread(surface.remove_value, path)
-        return self._report(path, setting.effect, previous, {"default": surface.default_of(path)})
+        return self._report(path, self._effect_here(setting), previous, {"default": surface.default_of(path)})
 
     async def _set_channel(self, path: str, value: Any) -> str:
         _, name, field_name = path.split(".")
