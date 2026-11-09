@@ -145,7 +145,9 @@ def _binding_key(binding: dict[str, str] | None) -> str:
 
 
 _LOOP_TOKENS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, str] = weakref.WeakKeyDictionary()
+_LOOP_REFS: dict[str, weakref.ref[asyncio.AbstractEventLoop]] = {}
 _LOOP_TOKEN_SEQ = itertools.count(1)
+_LOOP_TOKEN_LOCK = threading.Lock()
 
 
 def _loop_token(loop: asyncio.AbstractEventLoop) -> str:
@@ -157,11 +159,37 @@ def _loop_token(loop: asyncio.AbstractEventLoop) -> str:
     made it, and a loop that is gone takes its name with it: a new loop is a
     new process and a new set of records.
     """
-    token = _LOOP_TOKENS.get(loop)
-    if token is None:
-        token = f"loop-{next(_LOOP_TOKEN_SEQ)}"
-        _LOOP_TOKENS[loop] = token
-    return token
+    with _LOOP_TOKEN_LOCK:
+        token = _LOOP_TOKENS.get(loop)
+        if token is None:
+            token = f"loop-{next(_LOOP_TOKEN_SEQ)}"
+            _LOOP_TOKENS[loop] = token
+            _LOOP_REFS[token] = weakref.ref(loop)
+        return token
+
+
+def _gone_loop_tokens() -> list[str]:
+    """The tokens of loops that have closed or been collected.
+
+    The records kept under a slot are only useful to the loop that owns it, so
+    the token is held strongly here (a record names the string, not a loop)
+    while the loop is held weakly. A closed loop's token is reported until the
+    loop object itself is collected: another pool instance may still hold
+    slots to forget under it.
+    """
+    with _LOOP_TOKEN_LOCK:
+        gone: list[str] = []
+        collected: list[str] = []
+        for token, ref in _LOOP_REFS.items():
+            loop = ref()
+            if loop is None:
+                collected.append(token)
+                gone.append(token)
+            elif loop.is_closed():
+                gone.append(token)
+        for token in collected:
+            _LOOP_REFS.pop(token, None)
+        return gone
 
 
 def _usable_by(connection: _Connection, loop: asyncio.AbstractEventLoop) -> bool:
@@ -194,6 +222,17 @@ def set_session_state_forget(forget: SessionStateForget) -> None:
     _session_state_forget = forget
 
 
+def _forget_identity(identity: tuple[str, str, str]) -> None:
+    """Drop what this host recorded for one pool slot."""
+    forget = _session_state_forget
+    if forget is None:
+        return
+    try:
+        forget(identity)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a reap
+        logger.debug("acp agent {!r}: no session records to forget: {}", identity[0], exc)
+
+
 def _forget_session_state(connection: _Connection) -> None:
     """Drop the records kept for a slot whose loop is gone.
 
@@ -203,13 +242,8 @@ def _forget_session_state(connection: _Connection) -> None:
     grow -- and no process on that slot can resume it either.
     """
     identity = getattr(connection.client, "session_identity", None)
-    forget = _session_state_forget
-    if identity is None or forget is None:
-        return
-    try:
-        forget(identity)
-    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a reap
-        logger.debug("acp agent {!r}: no session records to forget: {}", connection.client.name, exc)
+    if identity is not None:
+        _forget_identity(identity)
 
 
 class _SessionRouter:
@@ -483,6 +517,16 @@ class AcpConnectionPool:
 
     def __init__(self) -> None:
         self._connections: dict[str, dict[tuple[str, str], _Connection]] = {}
+        self._loop_slots: dict[str, set[tuple[str, str]]] = {}
+        """The slots registered under each loop token, so their records can be
+        forgotten when that loop is gone.
+
+        A slot's session records outlive an idle close on purpose -- the same
+        loop relaunches into the same slot and reloads them -- so they may only
+        go when the loop itself has. By then the connection may already have
+        been retired, by ``drop``, an idle close, or a replacement whose launch
+        failed, and nothing is left in ``_connections`` to carry the identity
+        into the reap."""
         self._locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
             weakref.WeakKeyDictionary()
         )
@@ -556,6 +600,23 @@ class AcpConnectionPool:
             logger.info("acp agent {!r}: the loop that owned it is gone, ending its process", name)
             connection.client.abort()
             _forget_session_state(connection)
+        self._forget_gone_loops()
+
+    def _forget_gone_loops(self) -> None:
+        """Drop the session records of loops that have gone, connection or not.
+
+        The reap above catches a loop whose connection is still registered. One
+        whose connection was retired first -- by ``drop``, an idle close, or a
+        replacement whose launch failed -- has nothing left to walk, so the
+        slots each token was registered in are kept for this.
+        """
+        tokens = _gone_loop_tokens()
+        if not tokens:
+            return
+        with self._registry_lock:
+            identities = [(name, bkey, token) for token in tokens for name, bkey in self._loop_slots.pop(token, ())]
+        for identity in identities:
+            _forget_identity(identity)
 
     async def acquire(
         self,
@@ -738,6 +799,9 @@ class AcpConnectionPool:
                 # and writing into that dropped dict would leave the connection
                 # outside the pool's bookkeeping.
                 self._connections.setdefault(name, {})[slot] = connection
+                # The loop's token is what can still name this slot after the
+                # connection is gone; its session records are dropped then.
+                self._loop_slots.setdefault(token, set()).add((name, bkey))
             self._watch_idle()
             return connection
 
@@ -793,6 +857,9 @@ class AcpConnectionPool:
             client.session_identity = (name, bkey, token)
             with self._registry_lock:
                 held = self._connections.setdefault(name, {})
+                # The pick-up run below writes the slot's records too, so the
+                # token has to name it even when this connection only serves it.
+                self._loop_slots.setdefault(token, set()).add((name, bkey))
                 existing = held.get(slot)
                 if existing is not None and existing.alive:
                     return connection, False

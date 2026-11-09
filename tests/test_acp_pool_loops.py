@@ -15,6 +15,7 @@ process that ran outside the pool's bookkeeping was one no idle check and no
 from __future__ import annotations
 
 import asyncio
+import gc
 import sys
 import threading
 from collections.abc import Coroutine
@@ -188,6 +189,65 @@ async def test_a_connection_whose_loop_is_gone_is_ended_directly(tmp_path: Path)
     # A dead loop never relaunches on its slot's name, so its records can only
     # leak: nothing can resume a session of the agent process it owned.
     assert identity not in acp_agent._SESSION_STATE, "a dead loop's session records were left behind"
+
+
+async def test_a_dead_loops_slot_is_forgotten_after_its_connection_went_first(tmp_path: Path) -> None:
+    """A connection retired while its loop lived must not keep the slot's records forever.
+
+    ``drop`` retires a name's connections while the loop that owned them can go
+    on, and an idle close retires one the same loop may relaunch into. Only the
+    loop's death ends that reuse -- and by then no connection is left in the
+    pool to carry the identity into the reap.
+    """
+    pool = AcpConnectionPool()
+    command = _command()
+    env = {"ACP_STUB_MODE": "ok"}
+    thread = _LoopThread()
+    thread.start()
+    try:
+        connection = await thread.run(
+            pool.acquire(name="stub", command=command, cwd=str(tmp_path), env=env),
+        )
+        acp_agent._fresh_session_state(connection.client, "stub-session-1")
+        identity = connection.client.session_identity
+        await pool.drop("stub")
+        assert pool.connections("stub") == [], "the connection was not retired first"
+    finally:
+        thread.stop()
+    assert connection.loop.is_closed()
+
+    pool._reap_gone_loops()
+
+    assert identity not in acp_agent._SESSION_STATE, "a dead loop's records outlived its reaped connection"
+
+
+async def test_a_live_loops_slot_survives_a_reap(tmp_path: Path) -> None:
+    """The reap drops the slots of loops that have gone, and only those."""
+    pool = AcpConnectionPool()
+    command = _command()
+    env = {"ACP_STUB_MODE": "ok"}
+    connection = await pool.acquire(name="stub", command=command, cwd=str(tmp_path), env=env)
+    acp_agent._fresh_session_state(connection.client, "stub-session-1")
+    identity = connection.client.session_identity
+    try:
+        pool._reap_gone_loops()
+
+        assert identity in acp_agent._SESSION_STATE, "a live loop's records were dropped"
+    finally:
+        acp_agent._SESSION_STATE.pop(identity, None)
+        await pool.close_all()
+
+
+def test_a_collected_loops_token_is_reported_and_dropped() -> None:
+    """A loop gone before any reap is still named by its token, then forgotten."""
+    loop = asyncio.new_event_loop()
+    token = pool_mod._loop_token(loop)
+    loop.close()
+    del loop
+    gc.collect()
+
+    assert token in pool_mod._gone_loop_tokens()
+    assert token not in pool_mod._LOOP_REFS, "a collected loop's token stayed in the registry"
 
 
 class _QuietClient:
