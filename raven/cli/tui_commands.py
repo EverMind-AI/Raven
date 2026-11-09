@@ -355,6 +355,7 @@ async def _run_rpc_server_until_done(
         system_hello as _orig_hello,
     )
     from raven.rpc.methods.system import (
+        system_logs,
         system_ping,
         system_upgrade,
         system_version,
@@ -503,6 +504,7 @@ async def _run_rpc_server_until_done(
     # is picked up automatically — no more registration drift where new
     # handlers worked in the demo runner but returned -32601 in `raven tui`.
     dispatcher.register("system.hello", hello_then_signal)
+    dispatcher.register("system.logs", system_logs)
     dispatcher.register("system.ping", system_ping)
     dispatcher.register("system.version", system_version)
     # Registered here too, though it only acts inside `raven serve`: the handler

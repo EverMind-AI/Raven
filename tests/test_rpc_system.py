@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -82,6 +83,123 @@ async def test_version_returns_three_fields():
     assert "schema_version" in result
     assert "raven_version" in result
     assert all(isinstance(result[k], str) for k in ("server_version", "schema_version", "raven_version"))
+
+
+# ---------------------------------------------------------------------------
+# system.logs — the /logs tail
+# ---------------------------------------------------------------------------
+
+
+def _log_dir_with(monkeypatch: pytest.MonkeyPatch, tmp_path, lines: list[str], name: str = "tui.log") -> Path:
+    """Record ``tmp_path/name`` as this process's log file and write ``lines`` to it."""
+    from raven.config import paths
+
+    monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_log_file", tmp_path / name)
+    (tmp_path / name).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return tmp_path
+
+
+async def test_logs_returns_the_tail_of_the_tui_log(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from raven.rpc.methods.system import system_logs
+
+    written = [f"line-{i:03d}" for i in range(30)]
+    logs = _log_dir_with(monkeypatch, tmp_path, written)
+
+    result = await system_logs({"lines": 20})
+
+    assert result["text"].splitlines() == [f"line-{i:03d}" for i in range(10, 30)]
+    assert result["path"] == str(logs / "tui.log")
+
+
+async def test_logs_defaults_to_twenty_lines_and_clamps_out_of_range(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from raven.rpc.methods.system import system_logs
+
+    _log_dir_with(monkeypatch, tmp_path, [f"line-{i:03d}" for i in range(100)])
+
+    for params, expected in ({}, 20), ({"lines": 500}, 80), ({"lines": 0}, 1), ({"lines": -3}, 1):
+        result = await system_logs(params)
+        assert len(result["text"].splitlines()) == expected, params
+
+
+async def test_logs_answers_empty_text_when_the_file_is_absent(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from raven.config import paths
+    from raven.rpc.methods.system import system_logs
+
+    monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_log_file", tmp_path / "tui.log")
+
+    result = await system_logs({})
+
+    assert result["text"] == ""
+    assert result["path"] == str(tmp_path / "tui.log")
+
+
+async def test_logs_reads_the_file_this_process_logs_to(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """A gateway logs to gateway.log; a TUI attached to it leaves only relay
+    lines (or an earlier embedded run's) in tui.log, so that is not the tail."""
+    from raven.rpc.methods.system import system_logs
+
+    (tmp_path / "tui.log").write_text("stale-relay-line\n", encoding="utf-8")
+    _log_dir_with(monkeypatch, tmp_path, ["engine-000", "engine-001"], name="gateway.log")
+
+    result = await system_logs({})
+
+    assert result["text"] == "engine-000\nengine-001"
+    assert result["path"] == str(tmp_path / "gateway.log")
+
+
+async def test_logs_answers_empty_when_the_process_logs_to_no_file(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    from raven.config import paths
+    from raven.rpc.methods.system import system_logs
+
+    (tmp_path / "tui.log").write_text("another-process-line\n", encoding="utf-8")
+    monkeypatch.setattr(paths, "get_logs_dir", lambda: tmp_path)
+    monkeypatch.setattr(paths, "_log_file", None)
+
+    result = await system_logs({})
+
+    assert result == {"path": "", "text": ""}
+
+
+@pytest.mark.parametrize("bad", ["20", 2.5, True, None])
+async def test_logs_rejects_a_non_integer_lines(monkeypatch: pytest.MonkeyPatch, tmp_path, bad):
+    from raven.rpc.methods.system import system_logs
+
+    _log_dir_with(monkeypatch, tmp_path, ["line-000"])
+
+    with pytest.raises(ConfigValidationError) as excinfo:
+        await system_logs({"lines": bad})
+
+    assert excinfo.value.data["field"] == "lines"
+
+
+async def test_logs_drops_the_partial_first_line_of_a_truncated_window(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """The read window is capped well below the sink's rotation size, so a large
+    file starts mid-line: the fragment must not come back as a line."""
+    import re
+
+    from raven.rpc.methods.system import _LOG_TAIL_MAX_BYTES, system_logs
+
+    filler = "x" * 700
+    written = [f"line-{i:04d}-{filler}" for i in range(500)]  # ~350 KB, past the cap
+    _log_dir_with(monkeypatch, tmp_path, written)
+    assert (tmp_path / "tui.log").stat().st_size > _LOG_TAIL_MAX_BYTES
+
+    result = await system_logs({"lines": 80})
+
+    lines = result["text"].splitlines()
+    assert len(lines) == 80
+    assert all(re.fullmatch(r"line-\d{4}-x+", line) for line in lines)
+
+
+async def test_dispatcher_answers_system_logs(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    d = _build_dispatcher()
+    _log_dir_with(monkeypatch, tmp_path, ["line-000", "line-001"])
+
+    resp = await d.dispatch({"jsonrpc": "2.0", "id": 7, "method": "system.logs", "params": {"lines": 1}})
+
+    assert resp["result"]["text"] == "line-001"
 
 
 # ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from raven.config.paths import get_logs_dir
+from raven.config.paths import get_logs_dir, set_log_file
 
 _SECRET_QUERY = re.compile(
     r"([?&](?:api[_-]?key|key|token|secret|password|access[_-]?token|auth)=)[^&\s\"']+",
@@ -84,6 +84,7 @@ def redirect_loguru_to_file(
         backtrace=False,
         diagnose=False,
     )
+    set_log_file(log_path)
     if terminal_level is not None:
         # backtrace/diagnose off on the stderr sink too, and for one more
         # reason than on the file sink: an ACP client displays this stream (a

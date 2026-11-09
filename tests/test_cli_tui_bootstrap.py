@@ -410,6 +410,7 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     )
     from raven.rpc.methods.system import (
         system_hello,
+        system_logs,
         system_ping,
         system_upgrade,
         system_version,
@@ -423,6 +424,7 @@ def test_production_dispatcher_includes_all_umbrella_methods():
     # in step when either gains a method.
     production = Dispatcher()
     production.register("system.hello", system_hello)
+    production.register("system.logs", system_logs)
     production.register("system.ping", system_ping)
     production.register("system.version", system_version)
     production.register("system.upgrade", system_upgrade)

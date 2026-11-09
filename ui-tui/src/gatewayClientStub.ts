@@ -8,7 +8,7 @@
 // production constructs this class; `entry.tsx` always builds
 // `GatewayClientCompat` (the real RPC path). Tests construct the stub to
 // drive the UI without a Python backend: `start() / drain() /
-// request<T>(method, params) / kill() / getLogTail(limit?)` plus
+// request<T>(method, params) / kill()` plus
 // EventEmitter `event` and `exit` channels, every RPC answered from a
 // constant fixture in `./lib/stubGatewayFixtures.js`. Unknown methods log
 // once and resolve to `{}` so the UI renders empty data instead of
@@ -152,6 +152,9 @@ export class GatewayClientStub extends EventEmitter {
       case 'skills.manage':
         return { skills: {} } as unknown as T
 
+      case 'system.logs':
+        return { path: '(stub gateway has no log)', text: '' } as unknown as T
+
       default:
         if (!this.warnedMethods.has(method)) {
           this.warnedMethods.add(method)
@@ -165,10 +168,6 @@ export class GatewayClientStub extends EventEmitter {
   kill(): void {
     this.bufferedEvents = []
     this.subscribed = false
-  }
-
-  getLogTail(_limit = 20): string {
-    return '(stub gateway has no log)'
   }
 
   private publish(ev: GatewayEvent): void {

@@ -2822,6 +2822,26 @@ class SystemVersionResult(_Strict):
     raven_version: str
 
 
+class SystemLogsParams(_Strict):
+    lines: int = Field(
+        default=20,
+        ge=1,
+        le=80,
+        description="How many trailing lines to return; out-of-range values are clamped, not rejected.",
+    )
+
+
+class SystemLogsResult(_Strict):
+    path: str = Field(
+        ...,
+        description="Absolute path of the file this host's log sink writes, so the reader knows where the rest lives; empty when the host logs to no file.",
+    )
+    text: str = Field(
+        ...,
+        description="The trailing lines joined with newlines; empty when the host logs to no file or its file is absent or unreadable.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # cli.dispatch
 # ---------------------------------------------------------------------------
@@ -7676,6 +7696,7 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "subagents.instance.set_model": (SubagentsInstanceSetModelParams, SubagentsInstanceSetModelResult),
     # system.*
     "system.hello": (SystemHelloParams, SystemHelloResult),
+    "system.logs": (SystemLogsParams, SystemLogsResult),
     "system.ping": (SystemPingParams, SystemPingResult),
     "system.version": (SystemVersionParams, SystemVersionResult),
     "system.upgrade": (SystemUpgradeParams, SystemUpgradeResult),

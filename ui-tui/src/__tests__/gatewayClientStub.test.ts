@@ -97,11 +97,4 @@ describe('GatewayClientStub', () => {
     expect(() => c.start()).not.toThrow()
     c.kill()
   })
-
-  it('getLogTail(limit) returns a string', () => {
-    const c = new GatewayClientStub()
-    c.start()
-    expect(typeof c.getLogTail(10)).toBe('string')
-    c.kill()
-  })
 })

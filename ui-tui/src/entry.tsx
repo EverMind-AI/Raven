@@ -83,7 +83,7 @@ if (!socketPath) {
 
 // `GatewayClient` (= `GatewayClientStub`) has private fields that make
 // TypeScript treat the type nominally; `GatewayClientCompat` carries the
-// same public surface (`request` / `start` / `kill` / `getLogTail` /
+// same public surface (`request` / `start` / `kill` /
 // `drain` / EventEmitter `.on('event'|'exit', ...)`) but is not a subclass.
 // The cast is the adapter contract boundary — see gatewayClientCompat.ts
 // header comment for the retirement plan.

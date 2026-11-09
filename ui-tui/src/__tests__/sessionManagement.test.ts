@@ -26,7 +26,6 @@ const buildComposer = () => ({
 
 const buildGateway = () => ({
   gw: {
-    getLogTail: vi.fn(() => ''),
     request: vi.fn(() => Promise.resolve({}))
   },
   rpc: vi.fn(() => Promise.resolve({}))

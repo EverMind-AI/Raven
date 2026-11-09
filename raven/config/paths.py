@@ -93,6 +93,28 @@ def get_logs_dir() -> Path:
     return get_runtime_subdir("logs")
 
 
+_log_file: Path | None = None
+
+
+def set_log_file(path: Path | None) -> None:
+    """Record the file this process now routes loguru to."""
+    global _log_file
+    _log_file = path
+
+
+def get_log_file() -> Path | None:
+    """The file this process last routed loguru to, or None when it never did.
+
+    ``redirect_loguru_to_file`` records it. Each entrance names its own sink
+    (``tui.log``, ``gateway.log``, ``acp.log``), so a reader after this
+    process's records asks here rather than guessing the name inside the logs
+    directory. A one-shot command that later puts loguru back on stderr
+    (``raven import``) leaves the record in place, and answers no
+    ``system.logs`` call.
+    """
+    return _log_file
+
+
 def default_workspace() -> Path:
     """The workspace a config that never named one means: ``<home>/workspace``.
 
