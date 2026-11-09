@@ -193,6 +193,13 @@ class BindingTests(unittest.TestCase):
         with self.assertRaises((OSError, ValueError)):
             load_binding(self.path)
 
+    def test_an_oversized_file_is_refused_even_when_its_prefix_parses(self):
+        good = json.dumps({"chat_id": OWNER, "sender_id": OWNER, "session_key": KEY})
+        self.path.write_text(good + " " * (4097 - len(good)) + "{}")
+        self.path.chmod(0o600)
+        with self.assertRaises(ValueError):
+            load_binding(self.path)
+
 
 class NativeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

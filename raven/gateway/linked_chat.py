@@ -54,8 +54,11 @@ def load_binding(path: Path) -> Binding | None:
         info = os.fstat(f.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise ValueError("Telegram project binding must be an owner-only regular file")
+        raw = f.read(4097)
+        if len(raw) == 4097:
+            raise ValueError("Invalid Telegram project binding JSON")
         try:
-            data = json.loads(f.read(4097))
+            data = json.loads(raw)
         except (ValueError, UnicodeError):
             raise ValueError("Invalid Telegram project binding JSON") from None
     if not isinstance(data, dict) or set(data) != {"chat_id", "sender_id", "session_key"}:
