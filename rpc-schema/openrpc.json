@@ -554,7 +554,7 @@
     {
       "name": "session.history",
       "summary": "Paginated message history for a session.",
-      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md \u00a73 D7). Runtime routes through cli.dispatch(argv=['sessions', 'history', '<session_key>'], width=W).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['sessions', 'history', '<session_key>'], width=W).",
       "params": [
         {
           "name": "session_key",
@@ -851,7 +851,7 @@
     {
       "name": "mcp.list",
       "summary": "List MCP servers.",
-      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md \u00a73 D7). Runtime routes through cli.dispatch(argv=['mcp', 'list'], width=W).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'list'], width=W).",
       "params": [],
       "result": {
         "name": "McpListResult",
@@ -876,7 +876,7 @@
     {
       "name": "mcp.test",
       "summary": "Test connectivity to a single MCP server (handshake probe).",
-      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md \u00a73 D7). Runtime routes through cli.dispatch(argv=['mcp', 'test', '<server_name>'], width=W).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'test', '<server_name>'], width=W).",
       "params": [
         {
           "name": "server_name",
@@ -917,7 +917,7 @@
     {
       "name": "mcp.tools",
       "summary": "List tools exposed by an MCP server.",
-      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md \u00a73 D7). Runtime routes through cli.dispatch(argv=['mcp', 'tools', '<server_name>'], width=W).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['mcp', 'tools', '<server_name>'], width=W).",
       "params": [
         {
           "name": "server_name",
@@ -957,7 +957,7 @@
     {
       "name": "skill.list",
       "summary": "List skills.",
-      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md \u00a73 D7). Runtime routes through cli.dispatch(argv=['skill', 'list'], width=W).",
+      "description": "Routed via cli.dispatch at runtime in v0.1 (see design.md §3 D7). Runtime routes through cli.dispatch(argv=['skill', 'list'], width=W).",
       "params": [
         {
           "name": "source",
@@ -4068,7 +4068,7 @@
     {
       "name": "cli.dispatch",
       "summary": "Dispatch an Raven CLI command in-process, capture rich-rendered output.",
-      "description": "D7 mixed-mode main channel: read-only CLI commands route through cli.dispatch and reuse the Typer CLI's Rich rendering. width is contract-required (client measures Ink container, server cannot guess). See design.md \u00a73 D7.",
+      "description": "D7 mixed-mode main channel: read-only CLI commands route through cli.dispatch and reuse the Typer CLI's Rich rendering. width is contract-required (client measures Ink container, server cannot guess). See design.md §3 D7.",
       "params": [
         {
           "name": "argv",
@@ -4121,7 +4121,7 @@
     {
       "name": "setup.status",
       "summary": "Report whether an LLM provider is configured (hermes startup hook).",
-      "description": "Called by hermes UI useSessionLifecycle.ts / setupHandoff.ts at startup. v0.1 reads ~/.raven/config.json; if read fails, returns provider_configured=true as fallback (see design.md \u00a73a.1).",
+      "description": "Called by hermes UI useSessionLifecycle.ts / setupHandoff.ts at startup. v0.1 reads ~/.raven/config.json; if read fails, returns provider_configured=true as fallback (see design.md §3a.1).",
       "params": [],
       "result": {
         "name": "SetupStatusResult",
@@ -4201,7 +4201,7 @@
     {
       "name": "commands.catalog",
       "summary": "Dynamic CLI command catalog reflected from the Typer app (replaces v0.0.2 -32012 stub).",
-      "description": "Reflects raven.cli.commands.app to build a slash-command catalog consumed by ui-tui's alias / prefix-1-match / multi-match-ambiguous logic in createSlashHandler.ts. Filters out _DISPATCH_BLACKLIST entries (gateway / provider login / channels login / sandbox shell / tui / onboard / upgrade / tracing compact) and agent-without-message. See harness-command-catalog-dynamic design.md \u00a7D1-D2.",
+      "description": "Reflects raven.cli.commands.app to build a slash-command catalog consumed by ui-tui's alias / prefix-1-match / multi-match-ambiguous logic in createSlashHandler.ts. Filters out _DISPATCH_BLACKLIST entries (gateway / provider login / channels login / sandbox shell / tui / onboard / upgrade / tracing compact) and agent-without-message. See harness-command-catalog-dynamic design.md §D1-D2.",
       "params": [],
       "result": {
         "name": "CommandsCatalogResult",
@@ -13052,7 +13052,7 @@
       },
       "SessionUsage": {
         "additionalProperties": false,
-        "description": "``info.usage`` \u2014 the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`TurnUsage`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
+        "description": "``info.usage`` — the boot baseline, refreshed by each turn's completion.\n\nDistinct from :class:`TurnUsage`, which is the per-turn event payload:\nthis one carries the context-window fill a banner draws, and its counters\nare named for the session rather than for one LLM call.",
         "properties": {
           "input": {
             "type": "integer"
