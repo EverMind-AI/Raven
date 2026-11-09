@@ -88,6 +88,14 @@ describe('the board card', () => {
     expect(document.querySelector('.tkrunrt')?.textContent).toBe('gui.tasks.node_st_exception')
   })
 
+  /* A node a replan carried into its successor: the sealed run's hand-off record. It keeps the
+     corner word and, like every settled status but completed/failed/running, never a duration --
+     the clock belongs to the run that holds it now. */
+  it('carried: the word alone, never a duration even with both stamps', () => {
+    render(<BoardCard node={node({ status: 'carried', started_at: 1000, ended_at: 3000 })} now={9999} />)
+    expect(document.querySelector('.tkrunrt')?.textContent).toBe('gui.tasks.node_st_carried')
+  })
+
   /* A node a branch left out gets a dotted circle and its own word, in the slot a skipped node's
      word sits in -- and, like it, never a duration: it never started. */
   it('not executed: a dotted circle and the word, never a duration even with both stamps', () => {
