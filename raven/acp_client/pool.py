@@ -17,6 +17,16 @@ provider and protocol the invoking session runs on) reaches the worker as
 launch environment, so two bindings are two processes -- but they are not two
 configs, and a second binding must not close the first binding's connection
 the way an operator's config edit does: a turn was running on it.
+
+Under one binding, one connection per event loop. A connection's pipes and
+its reader task belong to the loop it was made on, so a connection handed to
+another loop answers nothing: the frames arrive on a reader that loop is not
+running, and the request that is waiting on them is waiting on a future
+another thread will settle. More than one loop does use this pool -- the RPC
+server runs a CLI command such as `raven agent -m` on a worker thread under
+its own ``asyncio.run``, beside the host's loop -- so a loop that holds
+nothing launches its own, and every connection the pool holds is the one its
+own loop can use.
 """
 
 from __future__ import annotations
@@ -24,7 +34,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import itertools
 import json
+import threading
 import time
 import weakref
 from collections.abc import Awaitable, Callable
@@ -130,6 +142,108 @@ def launch_key(
 
 def _binding_key(binding: dict[str, str] | None) -> str:
     return json.dumps(binding or {}, sort_keys=True, default=str)
+
+
+_LOOP_TOKENS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, str] = weakref.WeakKeyDictionary()
+_LOOP_REFS: dict[str, weakref.ref[asyncio.AbstractEventLoop]] = {}
+_LOOP_TOKEN_SEQ = itertools.count(1)
+_LOOP_TOKEN_LOCK = threading.Lock()
+
+
+def _loop_token(loop: asyncio.AbstractEventLoop) -> str:
+    """A name for ``loop``, the same one for as long as the loop lives.
+
+    A slot names the loop that owns it, so that the records keyed by a slot --
+    what an agent was pushed to, per session -- belong to one process and not
+    to two that happen to share a binding. The name outlives the call that
+    made it, and a loop that is gone takes its name with it: a new loop is a
+    new process and a new set of records.
+    """
+    with _LOOP_TOKEN_LOCK:
+        token = _LOOP_TOKENS.get(loop)
+        if token is None:
+            token = f"loop-{next(_LOOP_TOKEN_SEQ)}"
+            _LOOP_TOKENS[loop] = token
+            _LOOP_REFS[token] = weakref.ref(loop)
+        return token
+
+
+def _gone_loop_tokens() -> list[str]:
+    """The tokens of loops that have closed or been collected.
+
+    The records kept under a slot are only useful to the loop that owns it, so
+    the token is held strongly here (a record names the string, not a loop)
+    while the loop is held weakly. A closed loop's token is reported until the
+    loop object itself is collected: another pool instance may still hold
+    slots to forget under it.
+    """
+    with _LOOP_TOKEN_LOCK:
+        gone: list[str] = []
+        collected: list[str] = []
+        for token, ref in _LOOP_REFS.items():
+            loop = ref()
+            if loop is None:
+                collected.append(token)
+                gone.append(token)
+            elif loop.is_closed():
+                gone.append(token)
+        for token in collected:
+            _LOOP_REFS.pop(token, None)
+        return gone
+
+
+def _usable_by(connection: _Connection, loop: asyncio.AbstractEventLoop) -> bool:
+    """Whether this connection's streams belong to ``loop``.
+
+    A connection made outside any loop belongs to every one, the way ``_on``
+    already reads it. A connection made on another loop does not: its reader
+    task and its pipes are that loop's, and a request answered on them from
+    here would wait on a future nobody settles.
+    """
+    return connection.loop is None or connection.loop is loop
+
+
+SessionStateForget = Callable[[tuple[str, str, str]], None]
+"""Drops what an agent recorded for a pool slot whose loop has gone."""
+
+_session_state_forget: SessionStateForget | None = None
+
+
+def set_session_state_forget(forget: SessionStateForget) -> None:
+    """Take the module that can drop a slot's session records.
+
+    The records live in :mod:`raven.acp_client.acp_agent`, which already
+    imports this module. Importing it back would close one more pair in the
+    tree's import-cycle budget, and that budget counts a function-local import
+    the same as a top-level one, so the dependency points this way instead:
+    the module that owns the records registers the one function needed here.
+    """
+    global _session_state_forget
+    _session_state_forget = forget
+
+
+def _forget_identity(identity: tuple[str, str, str]) -> None:
+    """Drop what this host recorded for one pool slot."""
+    forget = _session_state_forget
+    if forget is None:
+        return
+    try:
+        forget(identity)
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail a reap
+        logger.debug("acp agent {!r}: no session records to forget: {}", identity[0], exc)
+
+
+def _forget_session_state(connection: _Connection) -> None:
+    """Drop the records kept for a slot whose loop is gone.
+
+    Session records outlive an idle close on purpose: the same loop relaunches
+    into the same slot and reloads the sessions it held. A loop that has
+    closed never relaunches on its slot's name, so what it recorded can only
+    grow -- and no process on that slot can resume it either.
+    """
+    identity = getattr(connection.client, "session_identity", None)
+    if identity is not None:
+        _forget_identity(identity)
 
 
 class _SessionRouter:
@@ -399,18 +513,40 @@ class _Connection:
 
 
 class AcpConnectionPool:
-    """Process-wide registry of live ACP connections, one per agent name and binding."""
+    """Process-wide registry of live ACP connections, one per agent name, binding and loop."""
 
     def __init__(self) -> None:
-        self._connections: dict[str, dict[str, _Connection]] = {}
+        self._connections: dict[str, dict[tuple[str, str], _Connection]] = {}
+        self._loop_slots: dict[str, set[tuple[str, str]]] = {}
+        """The slots registered under each loop token, so their records can be
+        forgotten when that loop is gone.
+
+        A slot's session records outlive an idle close on purpose -- the same
+        loop relaunches into the same slot and reloads them -- so they may only
+        go when the loop itself has. By then the connection may already have
+        been retired, by ``drop``, an idle close, or a replacement whose launch
+        failed, and nothing is left in ``_connections`` to carry the identity
+        into the reap."""
         self._locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]] = (
             weakref.WeakKeyDictionary()
         )
         self._idle_tasks: dict[asyncio.AbstractEventLoop, asyncio.Task] = {}
+        self._registry_lock = threading.Lock()
+        """Guards the three tables above, because more than one thread writes them.
+
+        ``_lock_for`` is per loop: it keeps two launches on one loop from
+        stacking, and it cannot serialise a change made by another loop's
+        thread (a CLI command runs under its own ``asyncio.run``). So the
+        registry itself needs a lock the threads share. It is taken only around
+        dict reads and writes -- never across an ``await`` -- so a launch
+        waiting seconds for a handshake holds nothing here, and another loop's
+        idle check is free to run meanwhile.
+        """
 
     def connections(self, name: str) -> list[_Connection]:
         """Every connection held under ``name``, live or not."""
-        return list(self._connections.get(name, {}).values())
+        with self._registry_lock:
+            return list(self._connections.get(name, {}).values())
 
     def _lock_for(self, name: str) -> asyncio.Lock:
         """The running loop's lock for ``name``.
@@ -420,14 +556,15 @@ class AcpConnectionPool:
         thread (a CLI command the RPC server runs) could be bound there, and every
         later wait on this loop would raise. A finished loop's table goes with it.
         """
-        per_loop = self._locks.setdefault(asyncio.get_running_loop(), {})
-        lock = per_loop.get(name)
-        if lock is None:
-            lock = per_loop[name] = asyncio.Lock()
-        return lock
+        with self._registry_lock:
+            per_loop = self._locks.setdefault(asyncio.get_running_loop(), {})
+            lock = per_loop.get(name)
+            if lock is None:
+                lock = per_loop[name] = asyncio.Lock()
+            return lock
 
     def live(self, name: str) -> "list[_Connection]":
-        """The live connections held for ``name`` (one per parent binding). Never launches one.
+        """The live connections held for ``name`` (one per parent binding and loop). Never launches one.
 
         For a caller that has something to hand each connection's resident state
         -- a new generation re-pointing the unprompted recorders at its own
@@ -435,6 +572,51 @@ class AcpConnectionPool:
         to hand it to.
         """
         return [conn for conn in self.connections(name) if conn.alive]
+
+    def _reap_gone_loops(self) -> None:
+        """End the agents of loops that have gone, and forget them.
+
+        A connection's pipes belong to the loop that made them, and a loop
+        that has closed cannot read them: the agent it was speaking to would
+        go on running with nobody on the other end, holding its memory until
+        this host exits. There is nothing left to wait on, so the process is
+        ended directly.
+
+        The name's own entry is left where it is, empty or not: another loop
+        may be halfway through an acquire of that name, and dropping the entry
+        under it would leave the connection it is about to make outside the
+        pool's bookkeeping.
+        """
+        gone: list[tuple[str, _Connection]] = []
+        with self._registry_lock:
+            for name, held in list(self._connections.items()):
+                for slot, connection in list(held.items()):
+                    loop = connection.loop
+                    if loop is None or not loop.is_closed():
+                        continue
+                    held.pop(slot, None)
+                    gone.append((name, connection))
+        for name, connection in gone:
+            logger.info("acp agent {!r}: the loop that owned it is gone, ending its process", name)
+            connection.client.abort()
+            _forget_session_state(connection)
+        self._forget_gone_loops()
+
+    def _forget_gone_loops(self) -> None:
+        """Drop the session records of loops that have gone, connection or not.
+
+        The reap above catches a loop whose connection is still registered. One
+        whose connection was retired first -- by ``drop``, an idle close, or a
+        replacement whose launch failed -- has nothing left to walk, so the
+        slots each token was registered in are kept for this.
+        """
+        tokens = _gone_loop_tokens()
+        if not tokens:
+            return
+        with self._registry_lock:
+            identities = [(name, bkey, token) for token in tokens for name, bkey in self._loop_slots.pop(token, ())]
+        for identity in identities:
+            _forget_identity(identity)
 
     async def acquire(
         self,
@@ -469,7 +651,15 @@ class AcpConnectionPool:
         bindings dispatch to the same agent at once. Each binding holds its own
         connection under the name, and a new binding leaves the others' turns
         running. A change to the config half (`command`, `cwd`, `env`,
-        `machine`) still retires every connection of the name, as it always did.
+        `machine`) still retires every connection of the name this loop holds,
+        as it always did.
+
+        The running loop is part of the slot too. A connection's pipes and its
+        reader task belong to the loop that made them, so a connection made on
+        another loop cannot answer from this one: this loop gets its own
+        connection for the same binding, and the pool keeps both. A connection
+        of another loop is that loop's to retire -- it cannot be closed from
+        here, and the next acquire on the loop that owns it retires its own.
 
         ``launcher`` opens the endpoint the connection runs over when the
         process is not started here: an agent on a registered machine is
@@ -481,29 +671,51 @@ class AcpConnectionPool:
         config = launch_key(command=command, cwd=cwd, env=env, machine=machine)
         key = launch_key(command=command, cwd=cwd, env=env, binding=binding, machine=machine)
         bkey = _binding_key(binding)
+        loop = asyncio.get_running_loop()
+        token = _loop_token(loop)
+        slot = (bkey, token)
         launch_env = {**(env or {}), **binding} if binding else env
+        # Before the lock: a loop that has gone leaves an agent running with
+        # nobody on the other end, and this is where that is noticed.
+        self._reap_gone_loops()
         if launcher is None:
             # Ahead of the lock, which `drop` waits on too: a first fetch can run for
             # minutes. Launches that overlap still share the one fetch (`npx_fetch`).
             await npx_fetch.ensure_fetched(name, command, env=launch_env, cwd=cwd)
         async with self._lock_for(name):
-            held = self._connections.setdefault(name, {})
-            existing = held.get(bkey)
-            if existing is not None and existing.alive and existing.launch_key == key:
-                if await self._responsive(existing):
-                    existing.leased_at = time.monotonic()
-                    return existing
-                # Alive by its process and unchanged by its key, yet not answering:
-                # a wedged worker is replaced rather than hit again (see _responsive).
-                logger.info("acp agent {!r}: connection is unresponsive, relaunching", name)
-                held.pop(bkey, None)
+            with self._registry_lock:
+                held = self._connections.setdefault(name, {})
+                existing = held.get(slot)
+            if existing is not None:
+                if existing.alive and existing.launch_key == key and _usable_by(existing, loop):
+                    if await self._responsive(existing):
+                        existing.leased_at = time.monotonic()
+                        return existing
+                    # Alive by its process and unchanged by its key, yet not answering:
+                    # a wedged worker is replaced rather than hit again (see _responsive).
+                    logger.info("acp agent {!r}: connection is unresponsive, relaunching", name)
+                else:
+                    reason = "connection is dead" if not existing.alive else "launch config changed"
+                    logger.info("acp agent {!r}: {}, relaunching", name, reason)
+                # The slot's own connection, replaced here: it is the one this
+                # call would otherwise hand out, and it no longer answers.
+                with self._registry_lock:
+                    if held.get(slot) is existing:
+                        held.pop(slot, None)
                 await existing.client.close()
-            for other_key, other in list(held.items()):
-                if other_key != bkey and other.alive and other.config_key == config:
-                    continue
+            replacing: list[_Connection] = []
+            with self._registry_lock:
+                for other_slot, other in list(held.items()):
+                    if other_slot == slot or not _usable_by(other, loop):
+                        # Another loop's connection is that loop's to retire.
+                        continue
+                    if other.alive and other.config_key == config:
+                        continue
+                    held.pop(other_slot, None)
+                    replacing.append(other)
+            for other in replacing:
                 reason = "connection is dead" if not other.alive else "launch config changed"
                 logger.info("acp agent {!r}: {}, relaunching", name, reason)
-                held.pop(other_key, None)
                 await other.client.close()
 
             router = _SessionRouter(name)
@@ -568,7 +780,7 @@ class AcpConnectionPool:
                 # shutdown cannot find it either.
                 await client.close()
                 raise
-            client.session_identity = (name, bkey)
+            client.session_identity = (name, bkey, token)
             # After the handshake, so a call's own range starts where its own
             # work does and a reader can still find the handshake at [0, here).
             connection = _Connection(
@@ -581,7 +793,15 @@ class AcpConnectionPool:
                 handshake_bytes=journal.offset if journal is not None else 0,
                 config=config,
             )
-            held[bkey] = connection
+            with self._registry_lock:
+                # The name's entry is read again, not reused: an idle check on
+                # another loop may have emptied it while this launch handshook,
+                # and writing into that dropped dict would leave the connection
+                # outside the pool's bookkeeping.
+                self._connections.setdefault(name, {})[slot] = connection
+                # The loop's token is what can still name this slot after the
+                # connection is gone; its session records are dropped then.
+                self._loop_slots.setdefault(token, set()).add((name, bkey))
             self._watch_idle()
             return connection
 
@@ -616,6 +836,8 @@ class AcpConnectionPool:
                 endpoint, name=name, on_request=answering, on_notification=notifying, journal=journal
             )
             client.continue_ids_from(next_id)
+            loop = asyncio.get_running_loop()
+            token = _loop_token(loop)
             connection = _Connection(
                 client,
                 router,
@@ -626,26 +848,79 @@ class AcpConnectionPool:
                 handshake_bytes=journal.offset if journal is not None else 0,
                 config=config,
             )
-            held = self._connections.setdefault(name, {})
             bkey = _binding_key(None)
+            slot = (bkey, token)
             # The slot this connection fills, as a launched one records it: the
             # next dispatch of a machine's agent acquires with no binding, so it
             # lands on this same key, and the session records written here are
             # what that dispatch -- after an idle close -- has to read back.
-            client.session_identity = (name, bkey)
-            existing = held.get(bkey)
-            if existing is not None and existing.alive:
-                return connection, False
-            held[bkey] = connection
+            client.session_identity = (name, bkey, token)
+            with self._registry_lock:
+                held = self._connections.setdefault(name, {})
+                # The pick-up run below writes the slot's records too, so the
+                # token has to name it even when this connection only serves it.
+                self._loop_slots.setdefault(token, set()).add((name, bkey))
+                existing = held.get(slot)
+                if existing is not None and existing.alive:
+                    return connection, False
+                held[slot] = connection
             self._watch_idle()
             return connection, True
 
     async def drop(self, name: str) -> None:
         """Close and forget one agent's connections, if any."""
         async with self._lock_for(name):
-            connections = list((self._connections.pop(name, None) or {}).values())
-        for connection in connections:
+            with self._registry_lock:
+                connections = list((self._connections.pop(name, None) or {}).values())
+        if not connections:
+            return
+        # Started together, not one after another: a close handed to another
+        # loop can use the whole timeout, and the connections behind it would
+        # never be started at all. `close_all` bounds the wait around this.
+        results = await asyncio.gather(*(self._end(connection) for connection in connections), return_exceptions=True)
+        for outcome in results:
+            if isinstance(outcome, Exception):
+                logger.warning("acp agent {!r}: a close in a drop did not finish: {}", name, outcome)
+
+    @staticmethod
+    async def _end(connection: _Connection) -> None:
+        """Close one connection, wherever the loop that owns it is.
+
+        A connection's reader task and its pipes belong to the loop it was made
+        on, and closing it waits on both. Handed to another loop, that wait is
+        a wait on tasks this loop is not running, so the close is given to the
+        loop that owns the connection. A connection whose loop has gone has
+        nothing left to wait on: its process is ended directly, so the agent
+        does not outlive the loop that was speaking to it.
+
+        A wait this call does not get to finish -- timed out, or cancelled
+        from outside -- also ends the process directly. The close handed to the
+        other loop is still running at that point, and nothing after this would
+        end it: ``close_all`` bounds a drop with the same budget this wait
+        gives the close, so its timer expires first and this is the last
+        moment the process can be ended.
+        """
+        owner = connection.loop
+        if owner is None or owner is asyncio.get_running_loop():
             await connection.client.close()
+            return
+        if owner.is_closed():
+            connection.client.abort()
+            _forget_session_state(connection)
+            return
+        try:
+            closing = asyncio.run_coroutine_threadsafe(connection.client.close(), owner)
+            await asyncio.wait_for(asyncio.wrap_future(closing), timeout=_CLOSE_TIMEOUT_S)
+        except asyncio.CancelledError:
+            connection.client.abort()
+            raise
+        except Exception as exc:  # noqa: BLE001 - a close that cannot be handed over must not skip the rest
+            logger.warning(
+                "acp agent {!r}: closing its connection on another loop failed: {}",
+                connection.client.name,
+                exc,
+            )
+            connection.client.abort()
 
     @staticmethod
     async def _responsive(existing: _Connection) -> bool:
@@ -732,12 +1007,18 @@ class AcpConnectionPool:
         if budget is None:
             return []
         loop = asyncio.get_running_loop()
+        self._reap_gone_loops()
         closing: list[tuple[str, _Connection]] = []
-        for name in [name for name, held in self._connections.items() if _on(held.values(), loop)]:
+        with self._registry_lock:
+            names = [name for name, held in self._connections.items() if _on(held.values(), loop)]
+        for name in names:
             async with self._lock_for(name):
-                held = self._connections.get(name, {})
+                with self._registry_lock:
+                    held = self._connections.get(name)
+                    candidates = list(held.items()) if held is not None else []
                 now = time.monotonic()
-                for bkey, connection in list(held.items()):
+                closing_here: list[_Connection] = []
+                for slot, connection in candidates:
                     if not _on((connection,), loop):
                         continue
                     # A connection whose agent already ended goes too: nothing
@@ -746,10 +1027,21 @@ class AcpConnectionPool:
                         continue
                     if connection.alive and await self._holds_resident_work(connection):
                         continue
-                    held.pop(bkey, None)
-                    closing.append((name, connection))
-                if not held:
-                    self._connections.pop(name, None)
+                    with self._registry_lock:
+                        current = self._connections.get(name)
+                        if current is None or current.get(slot) is not connection:
+                            # Another thread dropped the name or replaced the
+                            # slot while the resident-work answer was awaited.
+                            continue
+                        current.pop(slot, None)
+                    closing_here.append(connection)
+                with self._registry_lock:
+                    current = self._connections.get(name)
+                    if current is not None and not current:
+                        # The entry goes only while it is the one that was read:
+                        # a launch that registered meanwhile keeps its name.
+                        self._connections.pop(name, None)
+                closing.extend((name, connection) for connection in closing_here)
         for name, connection in closing:
             if connection.alive:
                 logger.info("acp agent {!r}: idle for {:.0f}s, closing its process", name, budget)
@@ -759,16 +1051,23 @@ class AcpConnectionPool:
     def _watch_idle(self) -> None:
         """Start this loop's idle check if it is not running; it ends once the loop holds nothing."""
         loop = asyncio.get_running_loop()
-        for other in [other for other in self._idle_tasks if other is not loop and other.is_closed()]:
-            del self._idle_tasks[other]
-        task = self._idle_tasks.get(loop)
-        if task is not None and not task.done():
-            return
-        self._idle_tasks[loop] = loop.create_task(self._idle_loop(), name="acp-idle-close")
+        with self._registry_lock:
+            # Two loops may prune the same closed loop's task at once; a pop
+            # that finds it gone is the other thread having done it.
+            for other in [other for other in self._idle_tasks if other is not loop and other.is_closed()]:
+                self._idle_tasks.pop(other, None)
+            task = self._idle_tasks.get(loop)
+            if task is not None and not task.done():
+                return
+            self._idle_tasks[loop] = loop.create_task(self._idle_loop(), name="acp-idle-close")
 
     async def _idle_loop(self) -> None:
         loop = asyncio.get_running_loop()
-        while any(_on(held.values(), loop) for held in list(self._connections.values())):
+        while True:
+            with self._registry_lock:
+                holding = any(_on(held.values(), loop) for held in list(self._connections.values()))
+            if not holding:
+                return
             budget = self._idle_budget()
             share = budget / _IDLE_CHECK_SHARE if budget is not None else _IDLE_CHECK_MAX_S
             await asyncio.sleep(min(max(share, _IDLE_CHECK_MIN_S), _IDLE_CHECK_MAX_S))
@@ -786,7 +1085,9 @@ class AcpConnectionPool:
         request runs. Serially and unbounded, one such connection held every
         other one -- and the exit waiting behind them -- for that whole time.
         """
-        tasks, self._idle_tasks = self._idle_tasks, {}
+        with self._registry_lock:
+            tasks, self._idle_tasks = self._idle_tasks, {}
+            names = list(self._connections)
         running = asyncio.get_running_loop()
         for loop, task in tasks.items():
             if loop is running:
@@ -795,7 +1096,6 @@ class AcpConnectionPool:
                 # Another thread's loop: its task is cancelled from that loop.
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(task.cancel)
-        names = list(self._connections)
         if not names:
             return
         await asyncio.gather(*(self._drop_bounded(name) for name in names))
@@ -806,7 +1106,7 @@ class AcpConnectionPool:
             await asyncio.wait_for(self.drop(name), timeout=_CLOSE_TIMEOUT_S)
         except asyncio.TimeoutError:
             logger.warning(
-                "acp agent {!r}: close did not finish within {}s; abandoning it (SIGKILL already sent)",
+                "acp agent {!r}: close did not finish within {}s; abandoning the wait",
                 name,
                 _CLOSE_TIMEOUT_S,
             )
@@ -814,11 +1114,19 @@ class AcpConnectionPool:
             logger.warning("acp agent {!r}: close failed: {}", name, exc)
 
     def live_agents(self) -> list[str]:
-        return [name for name, held in self._connections.items() if any(conn.alive for conn in held.values())]
+        with self._registry_lock:
+            return [name for name, held in self._connections.items() if any(conn.alive for conn in held.values())]
 
-    def _holder_of(self, name: str, session_id: str) -> _Connection | None:
-        """The live connection that has routed ``session_id``, else the only live one."""
-        live = [conn for conn in self._connections.get(name, {}).values() if conn.alive]
+    def _holder_of(self, name: str, session_id: str, loop: asyncio.AbstractEventLoop) -> _Connection | None:
+        """The live connection of ``loop`` that has routed ``session_id``, else its only live one.
+
+        A connection is answered on the loop that made it, so a connection of
+        another loop is not a holder: sending its ``session/delete`` from here
+        would wait on a future that loop's reader settles, and a router that
+        records the session for a process this loop cannot read is not a
+        route to that session either.
+        """
+        live = [conn for conn in self.connections(name) if conn.alive and (conn.loop is None or conn.loop is loop)]
         for connection in live:
             if session_id in connection.router.seen:
                 return connection
@@ -837,7 +1145,7 @@ class AcpConnectionPool:
         channel to deliver the delete on, and starting one just to delete a
         session would be worse than the leak.
         """
-        connection = self._holder_of(name, session_id)
+        connection = self._holder_of(name, session_id, asyncio.get_running_loop())
         if connection is None:
             return False
         if not handshake_of(connection.initialize).can_delete:

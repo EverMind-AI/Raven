@@ -453,6 +453,39 @@ def forget(pgid: int) -> None:
         _warn_once(exc)
 
 
+def end_group(pgid: int) -> bool:
+    """End a group this host launched, if it is still that group.
+
+    The same care the sweep takes, for a group that has to end now rather
+    than at the next host's: its leader must still carry the start time it
+    was launched with, and one of its members must carry this host's mark. A
+    group whose number has gone to another process is left alone.
+
+    False when the group is not known to this host, or is no longer the one it
+    launched.
+    """
+    with _lock:
+        record = _records.get(pgid)
+    if record is None:
+        return False
+    _, host, entry = record
+    try:
+        leader_start = int(entry["leader_start"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    started = _start_time(pgid)
+    if started is not None and started != leader_start:
+        return False
+    mark = f"{_MARK}={_stem(host['host_pid'], host['host_start'])}".encode()
+    if not any(_carries(pid, mark) for pid in _members(pgid)):
+        return False
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 def _write(path: Path) -> None:
     held = [(pgid, host, entry) for pgid, (where, host, entry) in _records.items() if where == path]
     if not held:

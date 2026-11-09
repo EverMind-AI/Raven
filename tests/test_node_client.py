@@ -1950,3 +1950,43 @@ async def test_a_password_machine_whose_password_is_not_kept_here_is_refused_bef
         await pool.hello("box")
 
     assert box.launches() == [], "ssh never ran"
+
+
+async def test_an_endpoint_ended_from_a_thread_without_its_loop_sends_the_cancel(monkeypatch) -> None:
+    """A reaped connection hands the cancel to the link's loop, which may still be running."""
+    monkeypatch.setattr(remote, "leaving", lambda: False)
+    link = _Client()
+    endpoint = ChannelEndpoint(link, 3, target=_box(), agent="echo@box")
+
+    assert endpoint.end_now() is True
+    for _ in range(100):
+        if link.asked:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [(method, params) for method, params, _ in link.asked] == [(protocol.AGENT_CANCEL, {"channel": 3})]
+
+
+async def test_end_now_is_false_when_the_links_loop_has_gone() -> None:
+    """There is nowhere to hand the request; the agent stays with its machine."""
+    link = _Client()
+    endpoint = ChannelEndpoint(link, 3, target=_box(), agent="echo@box")
+    gone = asyncio.new_event_loop()
+    gone.close()
+    endpoint._loop = gone
+
+    assert endpoint.end_now() is False
+
+
+async def test_end_now_reports_a_loop_that_closed_under_the_hand_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    link = _Client()
+    endpoint = ChannelEndpoint(link, 3, target=_box(), agent="echo@box")
+
+    def closed(coro, loop):
+        raise RuntimeError("the loop closed")
+
+    monkeypatch.setattr(node_client.asyncio, "run_coroutine_threadsafe", closed)
+
+    assert endpoint.end_now() is False

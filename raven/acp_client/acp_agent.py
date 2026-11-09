@@ -51,7 +51,7 @@ from raven.acp_client.capabilities import (
 )
 from raven.acp_client.elicitor import Elicitor
 from raven.acp_client.permissions import PERMISSION_METHOD
-from raven.acp_client.pool import get_pool
+from raven.acp_client.pool import get_pool, set_session_state_forget
 from raven.acp_client.protocol import (
     SESSION_MCP_CAPABILITY,
     STEER_METHOD,
@@ -1010,14 +1010,18 @@ class _SessionState:
     effort was never checked against."""
 
 
-_SESSION_STATE: dict[tuple[str, str], dict[str, _SessionState]] = {}
+_SESSION_STATE: dict[tuple[str, str, str], dict[str, _SessionState]] = {}
 """Pooled connections' session records, by pool slot and then by session id.
 
-The slot is the agent's name and the parent binding (``AcpClient.session_identity``).
+The slot is the agent's name, the parent binding and the loop that owns the
+connection (``AcpClient.session_identity``).
 Not the name alone: the pool holds one process per binding under a name, each
 numbering its own sessions, so two of them can both hold ``s1``, and a record
-shared between them let clearing one forget what was pushed to the other. Not
-the client either: the pool closes an idle agent that can reload its sessions
+shared between them let clearing one forget what was pushed to the other.
+Not the binding alone either: two loops hold two processes of the same agent
+and binding -- each loop's connection has pipes that loop can read -- so the
+records of one are not the records of the other. Not the client either: the
+pool closes an idle agent that can reload its sessions
 and relaunches it into the same slot, where the instance's next turn reloads
 the same session -- a record held by the closed client would be gone exactly
 when the clear that reads it arrives. A hot apply keeps the slot too, so the
@@ -1066,6 +1070,22 @@ def _forget_session(client: Any, session_id: str | None) -> None:
     """
     if session_id:
         _records_of(client).pop(session_id, None)
+
+
+def forget_session_state(identity: tuple[str, str, str]) -> None:
+    """Drop what this host recorded for a pool slot no connection can resume.
+
+    The pool calls this when the loop that owned the slot has gone: the
+    process it owned is gone with it, and a later loop holds its own slot and
+    its own session numbers. Kept separate from ``_forget_session`` because it
+    drops the slot itself, not one session in it.
+    """
+    _SESSION_STATE.pop(identity, None)
+
+
+# The pool may not import this module back (the import-cycle budget counts a
+# function-local import), so it takes this function instead.
+set_session_state_forget(forget_session_state)
 
 
 class AcpAgentBackend:
@@ -1244,8 +1264,9 @@ class AcpAgentBackend:
         if not connections:
             return
         emit, announce = self._resident_sinks()
-        # One connection per parent binding under the agent's name; every one
-        # of them may hold a recorder, and every one belongs to this generation now.
+        # One connection per parent binding and loop under the agent's name;
+        # every one of them may hold a recorder, and every one belongs to this
+        # generation now.
         for connection in connections:
             self._repoint_resident(connection, emit, announce)
 

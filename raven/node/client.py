@@ -202,6 +202,11 @@ class ChannelEndpoint:
         """What was written while the link was down, by method, to go out on the next link in order."""
         self._cancel_wanted = False
         self._done = asyncio.Event()
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - a test may build one outside a loop
+            self._loop = None
+        """The loop the link was made on, where an end asked from another thread runs."""
 
     @property
     def returncode(self) -> int | None:
@@ -321,6 +326,25 @@ class ChannelEndpoint:
 
     def release(self) -> None:
         """Nothing is held: the link is the pool's."""
+
+    def end_now(self) -> bool:
+        """Ask the node to end the agent from a thread without this endpoint's loop.
+
+        ``end`` is the only way to tell the node, and it runs on the loop the
+        link was made on -- which may not be the loop being reaped. The request
+        is handed there and not awaited. False when that loop is gone too: the
+        agent then stays with the machine's daemon, as a detached run does.
+        """
+        loop = self._loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return False
+        coro = self.end()
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except RuntimeError:
+            coro.close()
+            return False
+        return True
 
     # --- fed by the pool, off the link's notifications ---------------------------
 

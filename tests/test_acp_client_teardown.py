@@ -295,3 +295,118 @@ async def test_a_task_a_cancelled_close_leaves_behind_has_its_outcome_read():
     acp_client._retrieved(failed)
     acp_client._retrieved(cancelled)
     assert not failed._log_traceback
+
+
+class _AbortableEndpoint:
+    """An endpoint that can end itself from a thread that no longer has its loop."""
+
+    pid = None
+
+    def __init__(self) -> None:
+        self.ended = 0
+        self.released = 0
+
+    def end_now(self) -> bool:
+        self.ended += 1
+        return True
+
+    def release(self) -> None:
+        self.released += 1
+
+
+async def test_an_abort_asks_its_endpoint_to_end_without_the_loop() -> None:
+    endpoint = _AbortableEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
+
+
+class _FailingEndpoint(_AbortableEndpoint):
+    """An endpoint whose group check itself fails, as a /proc read can."""
+
+    def end_now(self) -> bool:
+        self.ended += 1
+        raise OSError("cannot read /proc")
+
+
+async def test_an_abort_whose_group_check_fails_still_releases_the_connection() -> None:
+    endpoint = _FailingEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
+
+
+class _RecordOnlyEndpoint:
+    """An endpoint with no ``end_now``: only the local child's launch record."""
+
+    pid = None
+    _pgid = 4242
+
+    def __init__(self) -> None:
+        self.released = 0
+
+    def release(self) -> None:
+        self.released += 1
+
+
+async def test_an_abort_without_end_now_ends_the_group_it_launched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ended: list[int] = []
+    monkeypatch.setattr(acp_client.leftovers, "end_group", lambda pgid: ended.append(pgid) or True)
+    endpoint = _RecordOnlyEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (ended, endpoint.released, held.closed) == ([4242], 1, True)
+
+
+class _ReleaseFailsEndpoint(_AbortableEndpoint):
+    """An endpoint whose release cannot finish, as a closed loop's cannot."""
+
+    def release(self) -> None:
+        self.released += 1
+        raise RuntimeError("the loop is gone")
+
+
+async def test_an_abort_whose_release_fails_is_still_closed() -> None:
+    endpoint = _ReleaseFailsEndpoint()
+    held = acp_client.AcpClient(name="aborts", endpoint=endpoint)
+
+    held.abort()
+
+    assert (endpoint.ended, endpoint.released, held.closed) == (1, 1, True)
+
+
+async def test_a_forked_agent_names_the_group_it_leads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``abort`` reaches a forked child by the same group ``end`` kills."""
+    from raven.acp_client import leftovers as leftovers_mod
+    from raven.acp_client.fork_template import ForkedEndpoint
+
+    class _Stream:
+        def close(self) -> None: ...
+
+    ended: list[int] = []
+    monkeypatch.setattr(leftovers_mod, "end_group", lambda pgid: ended.append(pgid) or True)
+    control = asyncio.StreamReader()
+    control.feed_eof()
+    endpoint = ForkedEndpoint(
+        4242,
+        stdin=_Stream(),  # type: ignore[arg-type]
+        stdout=_Stream(),  # type: ignore[arg-type]
+        stderr=_Stream(),  # type: ignore[arg-type]
+        control=(control, _Stream()),  # type: ignore[arg-type]
+        template=SimpleNamespace(forget=lambda child: None),  # type: ignore[arg-type]
+    )
+    try:
+        assert endpoint._pgid == endpoint.pid == 4242
+        assert endpoint.end_now() is True
+        assert ended == [4242]
+    finally:
+        endpoint.release()
+        await asyncio.sleep(0)

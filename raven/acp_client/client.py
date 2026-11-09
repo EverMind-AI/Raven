@@ -106,6 +106,14 @@ handshake), and the drain and the reap after the grace take up to two more.
 _GRACE_POLL_S = 0.02
 
 
+def _kill_group(pgid: int) -> None:
+    """End a process group, if it is still there to end."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 async def _end(pgid: int, proc: Any) -> None:
     """End the server and what it started: the process group where there is one, else the tree by pid.
 
@@ -118,10 +126,7 @@ async def _end(pgid: int, proc: Any) -> None:
     path.
     """
     if hasattr(os, "killpg"):
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        _kill_group(pgid)
         return
     taskkill = shutil.which("taskkill")
     if taskkill and proc.returncode is None:
@@ -341,6 +346,10 @@ class _ProcessEndpoint:
     def ended(self) -> str | None:
         return None
 
+    def end_now(self) -> bool:
+        """End the group this endpoint launched, from a thread without its loop."""
+        return leftovers.end_group(self._pgid)
+
     def release(self) -> None:
         """Close the subprocess transport while there is still a loop to close it on.
 
@@ -453,13 +462,16 @@ class AcpClient:
         journal: FrameJournal | None = None,
     ) -> None:
         self.name = name
-        self.session_identity: tuple[str, str] | None = None
-        """The pool slot this connection fills, as ``(agent name, binding)``, or ``None`` unpooled.
+        self.session_identity: tuple[str, str, str] | None = None
+        """The pool slot this connection fills, as ``(agent name, binding, loop)``, or ``None`` unpooled.
 
         Set by the pool. It names the process line a session lives on rather than
         this one process: an agent the pool closes while idle is relaunched into
         the same slot and reloads the sessions it held, so what this host
-        recorded about those sessions is kept under the slot, not the client."""
+        recorded about those sessions is kept under the slot, not the client.
+        The loop is part of it because a slot belongs to one process: two loops
+        hold two processes of the same agent and binding, each numbering its
+        own sessions."""
         if endpoint is None:
             if proc is None:
                 raise ValueError(f"acp agent {name!r}: a connection needs an endpoint or a process")
@@ -725,6 +737,44 @@ class AcpClient:
                     _TEARDOWN_REAP_S,
                 )
         self._let_go()
+
+    def abort(self) -> None:
+        """End the agent's process tree now, without this connection's loop.
+
+        For a connection whose loop has gone. ``close`` waits on this
+        connection's own tasks and on the child's exit, and both belong to a
+        loop that is no longer there to answer them -- waiting on them from
+        another loop is the cross-loop wait this connection cannot survive.
+        The tree is ended here instead, and the reader tasks are left to
+        whatever ends them.
+
+        Not a substitute for ``close`` where a loop is still running: it takes
+        the agent's grace away, and a turn in flight loses its answer.
+
+        The group is ended only while it is still the group this host
+        launched: a number that has gone to another process is left alone,
+        the same care the launch-record sweep takes. On Windows the tree ends
+        with the job object this connection holds, which is kill-on-close.
+        Each endpoint ends its own way: a local child through its launch
+        record, a forked child by the group it leads, and a remote agent by
+        asking its node over the link, which belongs to a loop of its own.
+        """
+        endpoint = self._endpoint
+        self._closed = True
+        try:
+            end_now = getattr(endpoint, "end_now", None)
+            if callable(end_now):
+                end_now()
+            else:
+                pgid = getattr(endpoint, "_pgid", None)
+                if pgid is not None:
+                    leftovers.end_group(pgid)
+        except Exception as exc:  # noqa: BLE001 - a check this connection cannot make must not escape
+            logger.debug("acp agent {!r}: ending its process failed: {}", self.name, exc)
+        try:
+            self._let_go()
+        except Exception as exc:  # noqa: BLE001 - a teardown that cannot finish must not raise here
+            logger.debug("acp agent {!r}: releasing after an abort failed: {}", self.name, exc)
 
     def _heard_initialize(self, result: Any) -> None:
         caps = result.get("agentCapabilities") if isinstance(result, dict) else None

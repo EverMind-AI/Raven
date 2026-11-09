@@ -488,6 +488,87 @@ def test_an_agent_is_launched_with_this_hosts_mark() -> None:
 
 
 @linux_or_macos
+def test_a_group_this_host_launched_can_be_ended_now(records_dir: Path) -> None:
+    """The sweep ends the groups of a host that has died; this ends one of this host's own."""
+    proc = _launch_group(os.getpid(), _own_start())
+    try:
+        leftovers.record(proc.pid, "stand-in")
+        assert leftovers.end_group(proc.pid)
+        assert _gone_within(proc.pid, 5.0)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
+def test_a_group_carrying_another_hosts_mark_is_left_alone(records_dir: Path) -> None:
+    """A group of another host's is that host's to end, not this one's."""
+    proc = _launch_group(*_dead_host())
+    try:
+        leftovers.record(proc.pid, "stand-in")
+        assert not leftovers.end_group(proc.pid)
+        assert _alive(proc.pid)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
+def test_a_group_that_is_not_on_record_is_left_alone(records_dir: Path) -> None:
+    """A group this host cannot name is a group it does not end."""
+    proc = _launch_group(os.getpid(), _own_start())
+    try:
+        assert not leftovers.end_group(proc.pid)
+        assert _alive(proc.pid)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
+def test_a_record_without_a_readable_leader_start_is_left_alone(records_dir: Path) -> None:
+    """A record this host cannot read is not a record it acts on."""
+    proc = _launch_group(os.getpid(), _own_start())
+    try:
+        leftovers.record(proc.pid, "stand-in")
+        where, host, _entry = leftovers._records[proc.pid]
+        leftovers._records[proc.pid] = (where, host, {})
+        assert not leftovers.end_group(proc.pid)
+        assert _alive(proc.pid)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
+def test_a_group_whose_leader_start_moved_is_left_alone(records_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The number now names a process that started at another time."""
+    proc = _launch_group(os.getpid(), _own_start())
+    try:
+        leftovers.record(proc.pid, "stand-in")
+        monkeypatch.setattr(leftovers, "_start_time", lambda pid: 123456)
+        assert not leftovers.end_group(proc.pid)
+        assert _alive(proc.pid)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
+def test_a_group_that_ends_between_the_check_and_the_kill_is_not_an_error(
+    records_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The kill losing the race is an answer, not a failure."""
+    proc = _launch_group(os.getpid(), _own_start())
+    try:
+        leftovers.record(proc.pid, "stand-in")
+
+        def gone(pgid: int, sig: int) -> None:
+            raise ProcessLookupError
+
+        monkeypatch.setattr(leftovers.os, "killpg", gone)
+        assert not leftovers.end_group(proc.pid)
+        assert _alive(proc.pid)
+    finally:
+        _end(proc)
+
+
+@linux_or_macos
 def test_a_group_left_by_a_dead_host_is_ended(records_dir: Path, group) -> None:
     path = _dead_host_file(records_dir, _entry(group.pid))
     leftovers._sweep()
