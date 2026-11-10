@@ -82,6 +82,27 @@ def test_plugin_data_is_spelled_through_a_resolved_data_root(tmp_path: Path) -> 
     assert server.env["PLUGIN_DATA"] == str(real / PACKAGE_NAME)
 
 
+def test_a_symlinked_package_data_dir_keeps_the_link_spelling(tmp_path: Path) -> None:
+    """PLUGIN_DATA names the caller's directory, not its symlink target."""
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio()}))
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    link = data_root / PACKAGE_NAME
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=link)
+
+    assert report.problems == ()
+    server = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert Path(server.env["PLUGIN_DATA"]) == link
+    assert Path(server.env["PLUGIN_DATA"]) != target
+
+
 def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path) -> None:
     """Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not ``OSError``."""
     root = _package(tmp_path, mcp=_mcp({"loop": _stdio(command="./loop")}))
