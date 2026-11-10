@@ -21,9 +21,13 @@
  * default with one exemption) and are not read here.
  */
 
+import { readFileSync } from 'node:fs'
+
 import { describe, expect, it } from 'vitest'
 
 import { rules } from './css.mjs'
+
+const featureCss = readFileSync(new URL('../../src/features/extAgents/styles.css', import.meta.url), 'utf8')
 
 describe('the agent mark plate', () => {
   /* A filter reaching a mark is the mistake this file exists to catch, and it
@@ -109,6 +113,33 @@ describe('the agent mark plate', () => {
       expect(got.width, `${slot} declares a width`).toBeTruthy()
       expect(got.height, `${slot} declares a height`).toBeTruthy()
       expect(got.radius, `${slot} declares a radius`).toBeTruthy()
+      expect(got.height, `${slot} is square`).toBe(got.width)
+    }
+  })
+
+  /* The own tile draws a larger box than the generic mark, and the card and
+     head slots override that box again. Each one has to be square: the four
+     agent marks are near-square while raven.svg is 34x43, so in a tall box the
+     raven fills by width and the four fill by height, and the four draw
+     shorter. In a square box every file fills by height and draws at one
+     height. Both stylesheets are read, not listed, for the reason above. */
+  const SIZED_MARK_IMAGES = [
+    ...rules(/\.agent-mark\s*>\s*(?:img|svg)\b/),
+    ...rules(/\.agent-mark\s*>\s*(?:img|svg)\b/, featureCss),
+  ]
+
+  it('draws every agent mark image in a square box', () => {
+    const sizeOf = (body) => ({
+      width: /(?:^|[;{\s])width:\s*([\d.]+)px/.exec(body)?.[1],
+      height: /(?:^|[;{\s])height:\s*([\d.]+)px/.exec(body)?.[1],
+    })
+    const sized = SIZED_MARK_IMAGES
+      .map(([slot, body]) => [slot, sizeOf(body)])
+      .filter(([, got]) => got.width && got.height)
+    /* Read, not assumed: a stylesheet that stopped sizing a mark image would
+       make the loop below pass over an empty set. */
+    expect(sized.length, 'some img rule sizes a mark').toBeGreaterThan(0)
+    for (const [slot, got] of sized) {
       expect(got.height, `${slot} is square`).toBe(got.width)
     }
   })
