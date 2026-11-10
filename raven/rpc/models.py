@@ -300,7 +300,7 @@ class InstanceRow(_Strict):
         default=None,
         alias="selectedRoutes",
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node "
             "row, or the ordinary row a stateful node is reported on."
         ),
@@ -1075,7 +1075,7 @@ class DagRunStartedNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -1120,7 +1120,7 @@ class DagNodeUpdatedPayload(_FromAStint):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected, on the frame that finishes it. An empty list is a decision "
+            "The routes a decision node selected, on the frame that finishes it. An empty list is a selection "
             "that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node "
             "failed to decide."
         ),
@@ -1232,7 +1232,7 @@ class DagRunFile(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, and on one that failed to decide."
         ),
     )
@@ -1344,7 +1344,7 @@ class DagSnapshotNode(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
             "and on one that failed to decide."
         ),
@@ -1365,7 +1365,7 @@ class DagSnapshotNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -1566,7 +1566,7 @@ class TaskNode(_Strict):
     selected_routes: list[str] | None = Field(
         default=None,
         description=(
-            "The routes a decision node selected. An empty list is a decision that chose nothing, which a "
+            "The routes a decision node selected. An empty list is a selection that chose nothing, which a "
             "'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, "
             "and on one that failed to decide."
         ),
@@ -1587,7 +1587,7 @@ class TaskNode(_Strict):
     select: Literal["one", "many"] | None = Field(
         default=None,
         description=(
-            "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). "
+            "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). "
             "Always sent with routes, 'one' where the graph left it unset."
         ),
     )
@@ -6493,13 +6493,13 @@ class PlaybookNode(_Strict):
     routes: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Makes this node a decision: route name -> the condition, in plain words, under which its "
+            "Makes this node a decision node: route name -> the condition, in plain words, under which its "
             "answer selects that route. Kept whole, because re-running the graph judges against the conditions."
         ),
     )
     select: Literal["one", "many"] | None = Field(
         default=None,
-        description="How many routes the decision selects, as the author wrote it. Absent means 'one'.",
+        description="How many routes the decision node selects, as the author wrote it. Absent means 'one'.",
     )
     when: str | None = Field(
         default=None,

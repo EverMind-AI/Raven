@@ -423,7 +423,7 @@ const fmtN = (n: number): string => n.toLocaleString('en-US')
    fact is there to push. A lane that never reported usage is a fact this
    line says nothing about, not a line that says "not reported"; the tool
    count is the board card's, and the calls themselves are the process
-   fold's, so neither is this line's. A decision's selection follows the
+   fold's, so neither is this line's. A decision node's selection follows the
    status word itself, being a fact about how the step ended. */
 function nodeSubtitleRest(node: TaskNode): string[] {
   const chosen = selectionText(node.selected_routes)

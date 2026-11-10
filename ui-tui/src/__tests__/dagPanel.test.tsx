@@ -693,7 +693,7 @@ describe('DagPanel on a branching run', () => {
 
   it.each([
     ['when_false', 'not selected'],
-    ['when_unknown', 'decision missing'],
+    ['when_unknown', 'selection missing'],
     ['upstream_not_executed', 'upstream not executed']
   ] as const)('says why it was left out, in words: %s reads %s', (reason, words) => {
     const all = rows(LEFT_OUT(reason))
@@ -706,7 +706,7 @@ describe('DagPanel on a branching run', () => {
     const line = under(rows(LEFT_OUT()), 'fix')
 
     expect(line).toContain('not executed')
-    expect(line).not.toMatch(/not selected|decision missing|upstream/)
+    expect(line).not.toMatch(/not selected|selection missing|upstream/)
   })
 
   it('shows what a decision node selected, under its status', () => {

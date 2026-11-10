@@ -409,7 +409,7 @@ describe('a frame that lands while the list read is in flight', () => {
   })
 })
 
-/* While a run goes, `tasks.list` takes a decision's selection and a left-out
+/* While a run goes, `tasks.list` takes a decision node's selection and a left-out
    node's reason from registry rows, a best-effort write that can be dropped, so
    any read taken then -- the beat on a running node, the palette opening, a
    node's own terminal frame -- can answer those nodes without them. The frames

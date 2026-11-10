@@ -674,7 +674,8 @@ def _render_run(run: dict[str, Any]) -> str:
             lines += _field("error", str(entry["error"]))
         if entry.get("reason"):
             lines += _field("reason", str(entry["reason"]))
-        # `is not None`, not truthiness: an empty selection is still a decision.
+        # `is not None`, not truthiness: an empty selection is still a decision
+        # node's answer.
         if entry.get("selected_routes") is not None:
             lines += _field("selected_routes", ", ".join(entry["selected_routes"]) or "(none)")
     if run.get("dir"):

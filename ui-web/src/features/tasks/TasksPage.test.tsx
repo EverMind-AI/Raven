@@ -1037,7 +1037,7 @@ describe('the node panel', () => {
       expect(document.querySelector('.tkbody')?.firstElementChild?.classList.contains('tkbranch')).toBe(false)
     })
 
-    /* Presence reaches the board too: a decision that chose nothing draws "none", and one that has
+    /* Presence reaches the board too: a selection that chose nothing draws "none", and one that has
        not decided draws no selection at all. */
     it('draws an empty selection on the board as none, and no selection before a decision is made', () => {
       render(<TaskPane task={run([
@@ -1105,7 +1105,7 @@ describe('the node panel', () => {
     it('reads in English as the words of the message catalogue', () => {
       expect(I18N.ui['gui.tasks.node_st_not_executed']?.en).toBe('Not executed')
       expect(I18N.ui['gui.tasks.node_reason_when_false']?.en).toBe('Not selected')
-      expect(I18N.ui['gui.tasks.node_reason_when_unknown']?.en).toBe('Decision missing')
+      expect(I18N.ui['gui.tasks.node_reason_when_unknown']?.en).toBe('Selection missing')
       expect(I18N.ui['gui.tasks.node_reason_upstream']?.en).toBe('Upstream not executed')
       expect(I18N.ui['gui.tasks.node_sel_none']?.en).toBe('(none)')
       expect(I18N.ui['gui.deleg.dag_not_executed']?.en).toBe('{n} not executed')

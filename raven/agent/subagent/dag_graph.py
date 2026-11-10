@@ -115,14 +115,14 @@ class DagNodeSpec(BaseModel):
             (e.g. ``researcher``) reused across nodes to continue one
             conversation.
         routes (`dict[str, str] | None`):
-            Makes this node a decision: route name -> the condition, in plain
-            words, under which its answer selects that route. Only the judge
-            reads the conditions and only the judge selects; the node's own
-            text selects nothing. ``None`` is an ordinary node.
+            Makes this node a decision node: route name -> the condition, in
+            plain words, under which its answer selects that route. Only the
+            judge reads the conditions and only the judge selects; the node's
+            own text selects nothing. ``None`` is an ordinary node.
         select (`Literal["one", "many"] | None`):
-            How many routes a decision selects: ``"one"`` -- exactly one, and
-            what ``None`` means once ``routes`` is set -- or ``"many"``, any
-            number, none included. Refused on a node with no ``routes``.
+            How many routes a decision node selects: ``"one"`` -- exactly one,
+            and what ``None`` means once ``routes`` is set -- or ``"many"``,
+            any number, none included. Refused on a node with no ``routes``.
         when (`str | None`):
             Guard: this node runs only if it holds once its dependencies
             settle. Atoms are ``<node>.<route>`` and ``<node>.done``, joined by
@@ -154,7 +154,7 @@ class DagNodeSpec(BaseModel):
     routes: dict[str, str] | None = Field(
         default=None,
         description=(
-            "Makes this node a decision. Route name -> the condition, in plain words, under "
+            "Makes this node a decision node. Route name -> the condition, in plain words, under "
             "which its answer selects that route. The judge picks; the node's own text selects nothing."
         ),
     )
@@ -757,7 +757,7 @@ def _guard_source(node: DagNodeSpec) -> str | None:
 
 
 def _branch_errors(nodes: list[DagNodeSpec], by_id: dict[str, DagNodeSpec]) -> list[str]:
-    """Check the fields that make a node a decision, and the guards that read one.
+    """Check the fields that make a node a decision node, and the guards that read one.
 
     Node by node, so one node's errors stay together. A guard that does not
     parse reports its syntax error and nothing more: its atoms are unknown, and

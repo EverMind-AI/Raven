@@ -1758,7 +1758,7 @@ class TestDagProgressSink:
         assert (decided["started_at"], decided["ended_at"]) == (10, 42)
 
     async def test_an_empty_selection_is_sent_as_a_selection(self):
-        """A `select: many` decision that chose nothing has still decided. The
+        """A `select: many` selection that chose nothing has still decided. The
         frame keeps `[]`, so a client can tell it from a node that carries no
         selection at all -- which is what dropping a falsy value would say."""
         emitter = FakeEmitter()
@@ -1858,7 +1858,7 @@ class TestDagProgressSink:
         """The completion frame closes the graph from `files`, so a file entry that
         dropped the reason and the selection would let a client overwrite what the
         node frames had already told it. `[]` is a selection: a `select: many`
-        decision that chose nothing has still decided."""
+        selection that chose nothing has still decided."""
         emitter = FakeEmitter()
         sink = make_dag_progress_sink(emitter)
 
