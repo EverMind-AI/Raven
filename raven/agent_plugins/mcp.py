@@ -404,8 +404,15 @@ def package_mcp_report(
             ),
         )
 
-    # Match the runtime: it expands PLUGIN_DATA from a resolved data root.
-    plugin_data = Path(plugin_data).resolve()
+    # Match the runtime, which expands PLUGIN_DATA from a resolved data root,
+    # but leave the package's own directory as the caller spelled it.
+    data_dir = Path(plugin_data)
+    try:
+        plugin_data = data_dir.parent.resolve() / data_dir.name
+    # Python 3.12 turns ELOOP into RuntimeError, not OSError; a data root the
+    # host cannot resolve must not crash the whole report.
+    except (OSError, RuntimeError):
+        plugin_data = data_dir
     taken = {str(name) for name in reserved_names}
     servers: dict[str, MCPServerConfig] = {}
     problems: list[McpServerProblem] = []

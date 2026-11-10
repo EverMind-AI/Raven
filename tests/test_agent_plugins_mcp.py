@@ -95,6 +95,44 @@ def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path)
     assert [problem.server for problem in report.problems] == ["loop"]
 
 
+def test_a_data_dir_loop_does_not_crash_the_report(tmp_path: Path) -> None:
+    """A remote server never reads the data directory, so its loop must not be fatal.
+
+    Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not
+    ``OSError``.
+    """
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=loop)
+
+    assert report.disabled == ""
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+
+def test_a_data_dir_loop_does_not_take_the_layer_down(tmp_path: Path) -> None:
+    """A package outside ``allowed`` is still parsed, so the loop reaches the layer."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, notes = package_mcp_layer([root], allowed=[], plugin_data_root=data)
+
+    assert servers == {}
+    assert notes == []
+
+
 # ---------------------------------------------------------------------------
 # read_mcp_config
 # ---------------------------------------------------------------------------
