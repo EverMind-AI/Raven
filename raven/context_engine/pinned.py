@@ -29,9 +29,30 @@ from raven.context_engine.history_trimmer import _tool_parents
 # the two the agent happened to call must not decide whether the pin holds.
 _SKILL_FETCH_TOOLS = frozenset({"use_skill", "read_skill"})
 
+# The meta-tool that forwards to any registered tool by name. Under tool-search
+# compaction it is how read_skill itself is reached, so a stored call through
+# it must be read as the call it forwards.
+_FORWARDER = "tool_call"
+
+
+def _arguments(raw: Any) -> dict[str, Any]:
+    """A stored call's arguments as an object, or ``{}`` when unreadable."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = None
+    return raw if isinstance(raw, dict) else {}
+
 
 def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
     """``(name, arguments)`` from one stored tool_call, or ``("", {})``.
+
+    A forwarded call is read as the call it forwards: the stored message names
+    ``tool_call``, and the target's own name and arguments are nested in it --
+    the same outer-name/produced-name rule the result path and the window split
+    follow. Otherwise a skill body the model loaded through the fold stays
+    unpinned and compaction may drop it.
 
     Arguments are serialized as a JSON *string* on the way into the session
     (OpenAI shape, see ``providers.tool_calls.openai_tool_call``) but arrive as a dict
@@ -43,13 +64,12 @@ def _tool_call_name_args(tool_call: Any) -> tuple[str, dict[str, Any]]:
         return ("", {})
     fn = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else tool_call
     name = fn.get("name") if isinstance(fn.get("name"), str) else ""
-    raw = fn.get("arguments")
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except json.JSONDecodeError:
-            raw = None
-    return (name or "", raw if isinstance(raw, dict) else {})
+    args = _arguments(fn.get("arguments"))
+    if name == _FORWARDER:
+        target = args.get("name")
+        if isinstance(target, str):
+            return (target, _arguments(args.get("arguments")))
+    return (name or "", args)
 
 
 def pinned_message_ids(messages: list[dict[str, Any]], skill_ids: list[str] | None) -> set[int]:
