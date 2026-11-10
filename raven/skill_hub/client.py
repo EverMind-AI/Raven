@@ -53,6 +53,19 @@ def resolve_hub_endpoint(configured: str | None) -> str:
         return fallback
 
 
+def hub_api_key(config: Any) -> str | None:
+    """The Bearer token, only when the config also names its endpoint.
+
+    ``endpoint`` carries the shared marketplace as a schema default, so a
+    truthy value does not mean the operator chose one. A key written without
+    an endpoint belongs to another Hub; carrying it to the fallback would
+    disclose it to the marketplace instead.
+    """
+    if "endpoint" not in getattr(config, "model_fields_set", frozenset()):
+        return None
+    return getattr(config, "api_key", None)
+
+
 _MAX_QUERY_STRING_BYTES = 2048
 """Hard cap on the whole query string of a catalog search.
 

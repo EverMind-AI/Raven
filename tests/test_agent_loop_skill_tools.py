@@ -92,6 +92,93 @@ def test_an_invalid_env_override_falls_back_to_the_configured_endpoint(tmp_path:
     asyncio.run(client.aclose())
 
 
+def test_a_key_without_a_configured_endpoint_is_not_sent_to_the_fallback(tmp_path: Path) -> None:
+    """The endpoint has a schema default, so a truthy value does not mean the
+    operator named one. A key written without an endpoint belongs to some
+    other Hub; carrying it to the marketplace would disclose it."""
+    client = WiringMixin._build_skill_hub_client(
+        tmp_path, SkillForgeRouterConfig(hub=HubSourceConfig(api_key="legacy-secret"))
+    )
+    assert client is not None
+    assert client._base == "https://skillhub.evermind.ai"
+    assert client._api_key is None
+    asyncio.run(client.aclose())
+
+
+def test_a_key_follows_an_explicitly_configured_endpoint(tmp_path: Path) -> None:
+    client = WiringMixin._build_skill_hub_client(
+        tmp_path,
+        SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="https://hub.internal.test", api_key="k")),
+    )
+    assert client is not None
+    assert (client._base, client._api_key) == ("https://hub.internal.test", "k")
+    asyncio.run(client.aclose())
+
+
+def test_a_key_loaded_without_an_endpoint_is_not_attached(tmp_path: Path) -> None:
+    """The loader tracks which fields the file supplied, and that is the signal
+    the client uses: a default endpoint is not a configured one."""
+    import json
+
+    from raven.config.raven import load_raven_config
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"skillForge": {"router": {"hub": {"apiKey": "legacy-secret"}}}}), encoding="utf-8")
+    hub = load_raven_config(cfg).skill_forge.router.hub
+
+    client = WiringMixin._build_skill_hub_client(tmp_path, SkillForgeRouterConfig(hub=hub))
+
+    assert client is not None
+    assert client._api_key is None
+    asyncio.run(client.aclose())
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}},
+        {"skill_forge": {"router": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}}},
+        {"skillRouter": {"hub": {"endpoint": "https://hub.internal.test", "apiKey": "k"}}},
+    ],
+    ids=["camel", "snake", "legacy-top-level-router"],
+)
+def test_a_key_survives_every_spelling_of_an_explicit_endpoint(tmp_path: Path, payload: dict) -> None:
+    """The loader nests a legacy top-level router in memory, so the endpoint is
+    still the file's: the guard must not drop the key for those shapes."""
+    import json
+
+    from raven.config.raven import load_raven_config
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(payload), encoding="utf-8")
+    hub = load_raven_config(cfg).skill_forge.router.hub
+
+    client = WiringMixin._build_skill_hub_client(tmp_path, SkillForgeRouterConfig(hub=hub))
+
+    assert client is not None
+    assert (client._base, client._api_key) == ("https://hub.internal.test", "k")
+    asyncio.run(client.aclose())
+
+
+def test_a_legacy_null_endpoint_does_not_carry_its_key(tmp_path: Path) -> None:
+    import json
+
+    from raven.config.raven import load_raven_config
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "apiKey": "legacy-secret"}}}}),
+        encoding="utf-8",
+    )
+    hub = load_raven_config(cfg).skill_forge.router.hub
+
+    client = WiringMixin._build_skill_hub_client(tmp_path, SkillForgeRouterConfig(hub=hub))
+
+    assert client is not None
+    assert client._api_key is None
+    asyncio.run(client.aclose())
+
+
 def test_find_skill_offers_the_hub_library_only_while_the_switch_is_on(tmp_path: Path, monkeypatch) -> None:
     """The schema the model receives, through the real registry: a loop built
     with the switch off still holds a client, and turning the switch on or off

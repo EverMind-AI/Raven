@@ -305,15 +305,14 @@ def _build_router(
     # the switch needs no rebuild in either direction. Its client outlives the
     # switch for the same reason; only the URL is fixed at construction.
     hub_cfg = skill_forge_router_config.hub
-    from raven.skill_hub import SkillHubClient, resolve_hub_endpoint
+    from raven.skill_hub import SkillHubClient, hub_api_key, resolve_hub_endpoint
 
     # Reuse the host-built client (shared with the read_skill / use_skill
     # tools) when provided, so discovery and retrieval share one connection
     # pool + identical config; build one here otherwise.
-    configured = hub_cfg.endpoint
     client = skill_hub_client or SkillHubClient(
-        resolve_hub_endpoint(configured),
-        api_key=hub_cfg.api_key if configured else None,
+        resolve_hub_endpoint(hub_cfg.endpoint),
+        api_key=hub_api_key(hub_cfg),
         timeout_s=hub_cfg.timeout_s,
         source=hub_cfg.source,
     )
