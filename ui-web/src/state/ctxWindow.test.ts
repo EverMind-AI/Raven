@@ -120,7 +120,7 @@ describe('the context ring', () => {
 describe('the window the popover reads', () => {
   it('carries the parts a turn divided it into', () => {
     set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
-    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
+    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, files: 0, memory: 0, skills: 0 })
     expect(get().used).toBe(175_600)
     expect(get().max).toBe(200_000)
   })
@@ -133,7 +133,7 @@ describe('the window the popover reads', () => {
   it('keeps the parts it was told when a later report brings none', () => {
     set(175_600, 200_000, { system: 4_200, tools: 12_800, conversation: 108_600 })
     set(180_000, 200_000)
-    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, memory: 0, skills: 0 })
+    expect(get().parts).toEqual({ system: 4_200, tools: 12_800, conversation: 108_600, files: 0, memory: 0, skills: 0 })
   })
 
   it('drops the whole reading when the conversation it describes is left', () => {

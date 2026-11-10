@@ -124,7 +124,7 @@ from raven.agent.tools.registry import call_failed
 from raven.agent.tools.removals import RemovalWatch
 from raven.agent.window import shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY, IMAGE_SOURCES_KEY, filed_image_note, image_sources
-from raven.agent.window.parts import measure_parts
+from raven.agent.window.parts import ATTACHMENT_NOTES_KEY, measure_parts
 from raven.agent.window.turn_log import TURN_LOG_KEY, TurnLog
 from raven.contracts.harness import (
     ActionRequest,
@@ -4316,7 +4316,13 @@ class TurnPathMixin:
                 if inbound_rewrite_pending:
                     inbound_rewrite_pending = False
                     if isinstance(entry.get("content"), str) and entry["content"] != inbound_original:
+                        # The user's own words, without what assembly put
+                        # around them -- and without the attachment notes
+                        # assembly appended. The record goes with them: a mark
+                        # whose text is no longer in the message would count
+                        # files the next request never carried.
                         entry["content"] = inbound_original
+                        entry.pop(ATTACHMENT_NOTES_KEY, None)
                 if isinstance(content, list):
                     filtered = [
                         c

@@ -444,7 +444,7 @@ class TurnUsage(_Strict):
         default=None,
         description=(
             "The window divided: tokens by part, keyed system / tools / conversation / "
-            "memory / skills. Absent when no breakdown was measured for this turn."
+            "files / memory / skills. Absent when no breakdown was measured for this turn."
         ),
     )
 

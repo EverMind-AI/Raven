@@ -84,6 +84,7 @@ describe('the context panel', () => {
         system: 4_200,
         tools: 12_800,
         conversation: 108_600,
+        files: 0,
         memory: 2_100,
         skills: 3_300,
       })
@@ -93,6 +94,7 @@ describe('the context panel', () => {
       'System prompt',
       'Tools',
       'Session',
+      'Files',
       'Memory',
       'Skills',
     ])
@@ -100,6 +102,7 @@ describe('the context panel', () => {
       '4.2K',
       '12.8K',
       '108.6K',
+      '0',
       '2.1K',
       '3.3K',
     ])
@@ -117,6 +120,7 @@ describe('the context panel', () => {
         system: 10_000,
         tools: 10_000,
         conversation: 10_000,
+        files: 10_000,
         memory: 10_000,
         skills: 10_000,
       })
@@ -141,6 +145,7 @@ describe('the context panel', () => {
         system: 50_000,
         tools: 50_000,
         conversation: 60_000,
+        files: 0,
         memory: 25_000,
         skills: 15_000,
       })

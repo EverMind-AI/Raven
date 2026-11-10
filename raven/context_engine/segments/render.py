@@ -991,6 +991,7 @@ def build_user_content(
     *,
     can_see_images: bool = True,
     describe_tool: str | None = None,
+    notes_sink: list[str] | None = None,
 ) -> str | list[dict[str, Any]]:
     """User message content with attachments.
 
@@ -1027,6 +1028,12 @@ def build_user_content(
     ceiling -- becomes a note as well. This runs deep inside turn assembly, where
     a raised ``OSError`` surfaces as a failed turn rather than as a sentence about
     one attachment.
+
+    ``notes_sink``, when given, receives every note string appended to the body,
+    in order: the caller records them on the message so the window measurement
+    can take them out of the conversation and count them as files, cutting by
+    the recorded text rather than by the ``[Attachment:`` shape a user could
+    paste.
     """
     if not media:
         return text
@@ -1091,6 +1098,8 @@ def build_user_content(
         if block is not None:
             images.append(block)
             inlined_bytes += len(block.get("image_url", {}).get("url", ""))
+    if notes_sink is not None:
+        notes_sink.extend(notes)
     body = text
     if notes:
         body = (f"{text}\n\n" if text else "") + "\n".join(notes)
