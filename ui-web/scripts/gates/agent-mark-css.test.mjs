@@ -22,7 +22,6 @@
  */
 
 import { readFileSync } from 'node:fs'
-
 import { describe, expect, it } from 'vitest'
 
 import { rules } from './css.mjs'
