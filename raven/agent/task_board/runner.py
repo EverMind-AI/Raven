@@ -118,8 +118,10 @@ def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
     return f"\n{prompt(template).strip().format(groups=', '.join(owners))}\n"
 
 
-_FENCED = re.compile(r"```.*?```", re.S)
-_EMPHASIS = re.compile(r"\*\*|__")
+_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_INLINE_CODE = re.compile(r"`[^`\n]+`")
+_STRONG_STAR = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
+_STRONG_UNDER = re.compile(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
 _SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
@@ -127,19 +129,48 @@ _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
 _QUESTION_RECORD_MARKER = re.compile(r"\[(?:BEGIN|END) QUESTION MARKS\]", re.IGNORECASE)
 
 
+def _without_emphasis(text: str) -> str:
+    """The text without its emphasis markers, inline code left as written: a marker inside
+    a backtick span or an identifier is content, not formatting."""
+    pieces = _INLINE_CODE.split(text)
+    code = _INLINE_CODE.findall(text)
+    out: list[str] = []
+    for index, piece in enumerate(pieces):
+        out.append(_STRONG_UNDER.sub(r"\1", _STRONG_STAR.sub(r"\1", piece)))
+        if index < len(code):
+            out.append(code[index])
+    return "".join(out)
+
+
 def _paragraphs(reply: str) -> list[str]:
     """The reply's prose, one entry per paragraph: soft-wrapped lines joined, and a blank
-    line, a list item or a quoted line starting a new one. Fenced blocks are left out."""
+    line, a list item or a quoted line starting a new one. A fenced code block -- backtick
+    or tilde, closed or not -- is left out."""
     paragraphs: list[str] = []
     current: list[str] = []
+    fence: tuple[str, int] | None = None
 
     def flush() -> None:
         if current:
             paragraphs.append(" ".join(current))
             current.clear()
 
-    for line in _FENCED.sub("", reply).splitlines():
+    for line in reply.splitlines():
         text = line.strip()
+        marker = _FENCE.match(text)
+        if fence is not None:
+            if (
+                marker
+                and marker.group(1)[0] == fence[0]
+                and len(marker.group(1)) >= fence[1]
+                and not marker.group(2).strip()
+            ):
+                fence = None
+            continue
+        if marker:
+            fence = (marker.group(1)[0], len(marker.group(1)))
+            flush()
+            continue
         if not text or line.lstrip().startswith(">"):
             flush()
         elif _LIST_MARK.match(text):
@@ -158,7 +189,7 @@ def asked(reply: str) -> list[str]:
     """
     found: list[str] = []
     for paragraph in _paragraphs(reply):
-        for part in _SENTENCE_END.split(_EMPHASIS.sub("", paragraph)):
+        for part in _SENTENCE_END.split(_without_emphasis(paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
             if sentence.endswith(_QUESTION_MARKS) and sentence.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)

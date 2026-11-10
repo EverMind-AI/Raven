@@ -525,6 +525,46 @@ def test_asked_keeps_list_items_and_paragraphs_apart():
     assert asked(reply) == ["Should I fix the five findings?", "Should I wait?", "Who reviews the fix?"]
 
 
+def test_asked_keeps_identifiers_inside_inline_code_and_urls():
+    assert asked("Should I rename `__init__` to `init`?") == ["Should I rename `__init__` to `init`?"]
+    assert asked("Is `a ** b` right?") == ["Is `a ** b` right?"]
+    assert asked("See https://example.com/a__b?") == ["See https://example.com/a__b?"]
+
+
+def test_asked_removes_bold_markers_and_keeps_inline_code():
+    assert asked("Should I **fix** the five findings?") == ["Should I fix the five findings?"]
+    assert asked("Should I **rename** `__init__`?") == ["Should I rename `__init__`?"]
+
+
+def test_asked_leaves_out_a_tilde_fence():
+    reply = "Here:\n~~~\nIs this code right?\n~~~\nDone."
+
+    assert asked(reply) == []
+
+
+def test_asked_leaves_out_an_unclosed_fence():
+    reply = "Here:\n```\nIs this code right?\nDone."
+
+    assert asked(reply) == []
+
+
+def test_asked_leaves_out_a_closed_fence_and_reads_what_follows():
+    reply = "Here:\n```\nIs this code right?\n```\nShould I ship?"
+
+    assert asked(reply) == ["Should I ship?"]
+
+
+def test_asked_leaves_out_a_fence_with_an_info_string():
+    reply = "```python\nIs this code right?\n```\nShould I ship?"
+
+    assert asked(reply) == ["Should I ship?"]
+
+
+def test_asked_reads_nothing_from_a_reply_that_is_one_fence():
+    assert asked("```\nIs this code right?\n```") == []
+    assert asked("~~~\nIs this code right?\n~~~") == []
+
+
 def test_asked_reads_a_long_reply_in_one_pass():
     """The reply is read on the event loop the whole gateway shares."""
     reply = " ".join(f"Question {n}?" for n in range(40_000))
