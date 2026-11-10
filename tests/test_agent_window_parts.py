@@ -234,3 +234,63 @@ def test_a_tool_message_whose_name_cannot_be_read_is_not_skill_bytes(name) -> No
     assert parts[SKILLS] == 0
 
 
+# A recorded segment only answers for a part when the prompt really carried it:
+# the sum closes when every byte moved out of one bucket was there to move.
+# These are the routes this split cuts material out of.
+SUM_CASES = [
+    pytest.param(
+        [
+            {"role": "system", "content": f"you are raven\n\n---\n\n{ACTIVE_SKILLS_TEXT}"},
+            {"role": "user", "content": "make a deck"},
+        ],
+        None,
+        {"active_skills": ACTIVE_SKILLS_TEXT},
+        id="resident-digest-in-the-system-prompt",
+    ),
+    pytest.param(
+        [{"role": "user", "content": f"make a deck\n{SCENT_TEXT}"}],
+        [{"type": "function", "function": {"name": "exec", "description": "run a command"}}],
+        {"scent": SCENT_TEXT},
+        id="pull-menu-in-the-user-envelope",
+    ),
+    pytest.param(
+        [
+            {"role": "user", "content": "make a deck"},
+            {"role": "tool", "tool_call_id": "c1", "name": "read_skill", "content": SKILL_BODY},
+        ],
+        None,
+        None,
+        id="skill-tool-result",
+    ),
+    pytest.param(
+        [
+            {"role": "system", "content": "you are raven"},
+            {"role": "user", "content": f"hello there\n\n{SCRATCH_TAG}\n\n{MEMORY_TEXT}\n\n---\n\n{SKILLS_TEXT}"},
+        ],
+        None,
+        {"memory": MEMORY_TEXT, "skills": SKILLS_TEXT},
+        id="turn-scratch-memory-and-routing-segment",
+    ),
+]
+
+
+@pytest.mark.parametrize(("messages", "tools", "window_parts"), SUM_CASES)
+def test_the_parts_add_up_when_the_recorded_text_is_in_the_prompt(messages, tools, window_parts) -> None:
+    """The five parts come to the whole within the estimator's own boundaries.
+    Each case pins one of the routes this split moves bytes out of, with the
+    recorded text actually in the prompt it measures."""
+    parts = measure_parts(messages, tools, window_parts)
+
+    whole = estimate_prompt_tokens(messages) + estimate_prompt_tokens([], tools)
+    assert abs(sum(parts.values()) - whole) <= 5
+
+
+def test_the_sum_guard_catches_a_recorded_segment_the_prompt_does_not_carry() -> None:
+    """The control for the guard above: a segment handed over by name but never
+    written into the prompt moves the same bytes twice, so the sum drifts far
+    past the bound and the guard has something to catch."""
+    messages = [{"role": "user", "content": "hello there"}]
+    parts = measure_parts(messages, None, {"scent": SCENT_TEXT})
+
+    whole = estimate_prompt_tokens(messages)
+    assert abs(sum(parts.values()) - whole) > 5
