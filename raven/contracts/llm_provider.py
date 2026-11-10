@@ -46,6 +46,14 @@ class ErrorClassification:
     #: whether ``str()`` carried that body is a property of the client that
     #: raised it. Deciding while the exception is alive makes it one answer.
     refuses_prompt_cache: bool = False
+    #: The upstream refused being told it must call a tool. Decided here for the
+    #: same reason: a gateway keeps its upstream's words in the response body,
+    #: and the rendered sentence that outlives the exception drops them.
+    refuses_forced_tool_choice: bool = False
+    #: The adapter already offered the tool under ``auto`` inside this call and
+    #: the call failed anyway. A later attempt that forced again would be
+    #: refused again before it could reach whatever failed this one.
+    relaxed_forced_tool_choice: bool = False
 
 
 #: Reasoning efforts this repo sends, strongest first: the set the Anthropic

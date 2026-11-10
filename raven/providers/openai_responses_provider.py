@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from raven.providers import forced_tool_choice
 from raven.providers.base import (
     ErrorClassification,
     LLMProvider,
@@ -39,11 +40,7 @@ def _relax_forced_tool_choice(body: dict[str, Any], error_text: str) -> bool:
     """
     if "tool_choice" not in (error_text or ""):
         return False
-    forced = body.get("tool_choice")
-    forcing = forced in ("required", "any") or (
-        isinstance(forced, dict) and forced.get("type") in {"function", "tool", "any"}
-    )
-    if not forcing:
+    if not forced_tool_choice.is_forcing(body.get("tool_choice")):
         return False
     body["tool_choice"] = "auto"
     return True
@@ -182,13 +179,18 @@ class OpenAIResponsesProvider(LLMProvider):
                     "responses body ended before completion",
                 )
             ):
+                # The tool-choice verdict rides along: it names a field to relax
+                # on the request, which holds whatever the failure is filed under.
                 classification = ErrorClassification(
                     "server",
                     retryable=True,
                     should_fallback=True,
+                    refuses_forced_tool_choice=classification.refuses_forced_tool_choice,
                 )
             if classification.category == "unknown" and not str(exc).strip():
                 classification = ErrorClassification("network", retryable=True)
+            if relaxed:
+                classification = forced_tool_choice.already_relaxed(classification)
             return LLMResponse(
                 content=format_llm_error(exc, classification, provider=self._provider_name),
                 finish_reason="error",

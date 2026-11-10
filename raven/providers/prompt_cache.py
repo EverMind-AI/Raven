@@ -291,7 +291,7 @@ _REFUSAL_MARKERS = ("cache_control", "prompt caching", "prompt_caching")
 _BODY_ATTRS = ("text", "message", "body")
 
 
-def _searchable(error: object) -> str:
+def error_text(error: object) -> str:
     """Everything this error says about itself, lowercased.
 
     Both layers paraphrase: the gateway paraphrases the upstream, and the client
@@ -322,9 +322,14 @@ def is_rejection(error: object) -> bool:
     Nothing is swallowed either way -- the retry sends the same request without
     the field, and if that fails too the second error surfaces unchanged.
     """
-    text = _searchable(error)
+    text = error_text(error)
     if not any(name in text for name in _REFUSAL_MARKERS):
         return False
+    return is_refused_request(text)
+
+
+def is_refused_request(text: str) -> bool:
+    """Does this lowercased error text say the request itself was refused as malformed?"""
     return bool(_STATUS_400.search(text)) or any(m in text for m in _BAD_REQUEST_MARKERS)
 
 

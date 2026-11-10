@@ -482,13 +482,17 @@ class LLMProvider(_LLMProviderPaper):
         Precise when given the live exception (status code + class names);
         degrades to substring matching when the provider already swallowed it
         into ``content`` -- which is why every verdict, including
-        ``refuses_prompt_cache``, is decided here rather than downstream.
+        ``refuses_prompt_cache`` and ``refuses_forced_tool_choice``, is decided
+        here rather than downstream.
         """
-        from raven.providers import prompt_cache
+        from raven.providers import forced_tool_choice, prompt_cache
 
         verdict = cls._classify(exc, content)
-        if prompt_cache.is_rejection(exc if exc is not None else (content or "")):
-            return replace(verdict, refuses_prompt_cache=True)
+        error = exc if exc is not None else (content or "")
+        if prompt_cache.is_rejection(error):
+            verdict = replace(verdict, refuses_prompt_cache=True)
+        if forced_tool_choice.is_rejection(error, cls._extract_status_code(exc)):
+            verdict = replace(verdict, refuses_forced_tool_choice=True)
         return verdict
 
     @classmethod
@@ -744,11 +748,12 @@ class LLMProvider(_LLMProviderPaper):
         always carries an ``error_classification`` so the caller (model-chain
         fallback) can decide without re-classifying.
         """
-        from raven.providers import prompt_cache
+        from raven.providers import forced_tool_choice, prompt_cache
 
         total_attempts = len(self._CHAT_RETRY_DELAYS) + 1
         last_response: LLMResponse | None = None
         dropped_cache_control = False
+        relaxed_tool_choice = False
         for attempt in range(1, total_attempts + 1):
             exc: Exception | None = None
             try:
@@ -786,6 +791,14 @@ class LLMProvider(_LLMProviderPaper):
                 response.content = format_llm_error(exc, classification, provider=getattr(self, "provider_name", None))
             last_response = response
 
+            # The adapter relaxed the choice itself and the call still failed:
+            # whatever this ladder sends next starts from where the adapter
+            # ended, not from the forced choice it would be refused on again.
+            # Before every recovery below, since each of them resends.
+            if classification.relaxed_forced_tool_choice and forced_tool_choice.is_forcing(tool_choice):
+                relaxed_tool_choice = True
+                tool_choice = "auto"
+
             # Why an upstream can refuse this at all: see
             # ``providers.prompt_cache.suppress``. Learned from the refusal, once
             # per model. The marks already in the payload were placed upstream by
@@ -797,6 +810,29 @@ class LLMProvider(_LLMProviderPaper):
                 dropped_cache_control = True
                 prompt_cache.suppress(model or getattr(self, "default_model", "") or "")
                 messages, tools = prompt_cache.strip(messages, tools)
+                continue
+
+            # A refused forced choice is answered by offering the tool instead:
+            # see ``providers.forced_tool_choice``. Once per call and never
+            # remembered, so a 400 that named the field for another reason
+            # costs this one resend and changes nothing for the next call.
+            # Not for a failure that has a recovery of its own: a gateway can
+            # echo the request into an overflow or an image refusal, and the
+            # resend would be the same oversized request.
+            if (
+                not relaxed_tool_choice
+                and attempt < total_attempts
+                and classification.refuses_forced_tool_choice
+                and not (
+                    classification.should_compress
+                    or classification.strip_images
+                    or classification.should_drop_tool_images
+                )
+                and forced_tool_choice.is_forcing(tool_choice)
+            ):
+                relaxed_tool_choice = True
+                tool_choice = "auto"
+                logger.info("{} refused a forced tool choice; retrying with tool_choice=auto", model)
                 continue
 
             if not classification.retryable or attempt == total_attempts:
