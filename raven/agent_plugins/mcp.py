@@ -15,10 +15,10 @@ runs. Three rules from the specification shape the whole thing:
   MCP for that package and leaves its skills alone (§10.1, §7.2.2);
 - one unusable server entry never takes the others with it -- the entry is
   skipped and reported, and the rest of the package still loads (§7.2.2);
-- a server's command and working directory stay inside the package, the two
-  placeholders the format defines are expanded in exactly the fields it names,
-  and no argument or environment value may carry a `..` path component
-  (§4.1, §9.2).
+- a server's path-shaped command and its working directory stay inside the
+  package, the two placeholders the format defines are expanded in exactly
+  the fields it names, and no argument or environment value may carry a `..`
+  path component (§4.1, §9.2).
 
 Starting a package's server is the operator's call, not this module's: the
 servers are composed here and handed over, and the caller decides which
@@ -466,8 +466,9 @@ def package_mcp_servers(
     already runs; a package entry that would compose to one of them is
     skipped and reported rather than replacing the operator's server.
 
-    An unusable data root skips every package and reports each one: the root
-    is shared, so no package's data directory can be composed.
+    A data directory that cannot be created skips that package and reports
+    it. A shared data root that is a symlink loop skips every package and
+    reports each one: no package's PLUGIN_DATA can be composed without it.
     """
     permitted = {str(name) for name in allowed}
     taken = {str(name) for name in reserved_names}
