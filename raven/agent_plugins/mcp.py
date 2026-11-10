@@ -80,11 +80,16 @@ def _has_dotdot_component(text: str) -> bool:
     Stripping an optional drive prefix first turns ``D:..`` and ``d:..`` into
     the ``..`` this refuses, and a trailing space before the next separator
     does not hide it (``D:.. ``); a plain drive-relative component like
-    ``D:foo`` stays allowed.
+    ``D:foo`` stays allowed. Application syntax can hide the ``..`` behind
+    an option or a list delimiter (``--config=../x``, ``-I../x``, ``a:../x``),
+    so a component that merely ends in ``..`` is refused as well; an all-dot
+    name (``...``) is not a traversal and stays allowed.
     """
     for component in _PATH_COMPONENT_RE.split(text):
-        rest = ntpath.splitdrive(component)[1]
-        if rest == ".." or rest.rstrip(" ") == "..":
+        rest = ntpath.splitdrive(component)[1].rstrip(" ")
+        if rest == "..":
+            return True
+        if rest.endswith("..") and rest[:-2].strip("."):
             return True
     return False
 
