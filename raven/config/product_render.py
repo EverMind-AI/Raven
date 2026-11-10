@@ -722,6 +722,15 @@ def _back_up(target: Path, raw: bytes) -> Path:
     raise AssertionError("unreachable: itertools.count does not end")
 
 
+def back_up_file(target: Path, raw: bytes) -> Path:
+    """Keep ``target``'s bytes beside it, never readable by more accounts.
+
+    The public spelling of :func:`_back_up` for callers outside this launcher
+    library that hold a file the operator owns.
+    """
+    return _back_up(target, raw)
+
+
 def write_generated(
     target: Path,
     product_text: str | None,

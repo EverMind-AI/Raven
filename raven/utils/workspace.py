@@ -12,9 +12,7 @@ rewritten.
 """
 
 import hashlib
-import os
 import sys
-import time
 from collections.abc import Callable
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -178,6 +176,7 @@ def _soul_templates(tpl) -> dict[str, str]:
 
 
 def _receipt_digest(target: Path) -> str | None:
+    """The product-text digest a previous release's generated-file receipt recorded."""
     receipt = target.with_name(f".{target.name}.generated.sha256")
     try:
         for line in receipt.read_text(encoding="ascii").splitlines():
@@ -263,9 +262,9 @@ def sync_workspace_templates(
         added.append(f"{dest.relative_to(workspace)} (migrated from {src.relative_to(workspace)})")
 
     def _back_up(target: Path) -> Path:
-        backup = target.with_name(f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
-        backup.write_bytes(target.read_bytes())
-        return backup
+        from raven.config.product_render import back_up_file
+
+        return back_up_file(target, target.read_bytes())
 
     def _write_base(target: Path, template: str) -> None:
         base_path = target.with_name(_SOUL_BASE)

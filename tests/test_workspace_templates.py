@@ -141,6 +141,9 @@ def test_an_old_copy_keeps_the_users_edit_while_the_rest_updates(tmp_path: Path)
     assert "## How I talk" not in text
     assert "## My stance" in text
     assert any("not updated: ## Personality" in message for message in messages)
+    backups = sorted(soul.parent.glob("soul.md.bak-*"))
+    assert backups
+    assert "- Concise and to the point, but mine" in backups[-1].read_text(encoding="utf-8")
 
 
 def test_a_base_file_merges_a_later_release(tmp_path: Path) -> None:
