@@ -116,6 +116,10 @@ the second is a directory Raven keeps for that package across updates
 `${PLUGIN_ROOT}` and `${PLUGIN_DATA}`, are expanded in a server's
 arguments, environment and working directory.
 
+After expansion, an argument or environment value that carries a `..` path
+component is refused and reported. The check splits on `/` and `\`, so a URL
+with a `..` segment, such as `https://example.com/a/../b`, is refused too.
+
 One bad server entry does not disable the package: the entry is skipped
 and reported, and the rest still run. A package whose `mcp.json` declares
 a different Agent Plugins version than its `plugin.json`, or whose file is

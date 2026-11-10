@@ -22,6 +22,7 @@ from raven.agent_plugins.mcp import (
     expand_placeholders,
     package_mcp_layer,
     package_mcp_report,
+    package_mcp_servers,
     read_mcp_config,
     schema_version,
 )
@@ -81,6 +82,27 @@ def test_plugin_data_is_spelled_through_a_resolved_data_root(tmp_path: Path) -> 
     assert server.env["PLUGIN_DATA"] == str(real / PACKAGE_NAME)
 
 
+def test_a_symlinked_package_data_dir_keeps_the_link_spelling(tmp_path: Path) -> None:
+    """PLUGIN_DATA names the caller's directory, not its symlink target."""
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio()}))
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    link = data_root / PACKAGE_NAME
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=link)
+
+    assert report.problems == ()
+    server = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert Path(server.env["PLUGIN_DATA"]) == link
+    assert Path(server.env["PLUGIN_DATA"]) != target
+
+
 def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path) -> None:
     """Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not ``OSError``."""
     root = _package(tmp_path, mcp=_mcp({"loop": _stdio(command="./loop")}))
@@ -93,6 +115,123 @@ def test_a_symlink_loop_in_a_package_command_is_a_server_problem(tmp_path: Path)
 
     assert report.servers == {}
     assert [problem.server for problem in report.problems] == ["loop"]
+
+
+def test_a_data_dir_loop_does_not_crash_the_report(tmp_path: Path) -> None:
+    """A remote server never reads the data directory, so its loop must not be fatal.
+
+    Python 3.12's ``Path.resolve`` raises ``RuntimeError`` on ELOOP, not
+    ``OSError``.
+    """
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=loop)
+
+    assert report.disabled == ""
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+
+def test_a_data_dir_loop_does_not_take_the_layer_down(tmp_path: Path) -> None:
+    """A package outside ``allowed`` is still parsed, so the loop reaches the layer."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, notes = package_mcp_layer([root], allowed=[], plugin_data_root=data)
+
+    assert servers == {}
+    assert notes == []
+
+
+def test_an_unresolvable_data_root_does_not_raise(tmp_path: Path) -> None:
+    """A data root the host cannot resolve falls back to the caller's spelling."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=loop / PACKAGE_NAME)
+
+    assert report.disabled == ""
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+
+def test_an_unresolvable_data_root_reports_every_package(tmp_path: Path) -> None:
+    """The data root is shared, so an unusable one stops every package's server."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, problems, entries = package_mcp_servers(
+        [load_package(root)], allowed=[PACKAGE_NAME], plugin_data_root=loop
+    )
+
+    assert servers == {}
+    assert entries == []
+    assert [problem.path for problem in problems] == [str(root)]
+    assert "cannot be resolved" in problems[0].reason
+
+
+def test_the_runtime_entry_reports_a_data_root_loop(tmp_path: Path, monkeypatch) -> None:
+    """The runtime helper must reach the guard instead of creating the root first."""
+    from types import SimpleNamespace
+
+    from raven.core.runtime import _package_mcp_servers
+
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+    monkeypatch.setattr("raven.config.paths.package_data_root_path", lambda: loop)
+    ec_config = SimpleNamespace(
+        agent_plugins=SimpleNamespace(packages=[str(root)], mcp_packages=[PACKAGE_NAME], disabled=[])
+    )
+
+    servers, notes = _package_mcp_servers(ec_config)
+
+    assert servers == {}
+    assert len(notes) == 1
+    assert "cannot be resolved" in notes[0]
+
+
+def test_an_uncreatable_package_data_dir_reports_its_package(tmp_path: Path) -> None:
+    """An allowed package whose data directory cannot be created is skipped, not fatal."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, problems, entries = package_mcp_servers(
+        [load_package(root)], allowed=[PACKAGE_NAME], plugin_data_root=data
+    )
+
+    assert servers == {}
+    assert entries == []
+    assert [problem.path for problem in problems] == [str(root)]
+    assert "cannot be created" in problems[0].reason
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +459,81 @@ def test_stdio_expands_placeholders_in_args_and_env(tmp_path: Path) -> None:
 
     assert server.args == ["--data", f"{data}/db", "--root", str(root.resolve())]
     assert server.env["CONFIG"] == f"{root.resolve()}/config.json"
+
+
+@pytest.mark.parametrize(
+    "arg",
+    [
+        "../outside",
+        "${PLUGIN_ROOT}/../../etc/passwd",
+        "..",
+        "x/..",
+        "a/../b",
+        "..\\outside",
+        "D:..\\target.txt",
+        "d:..\\target.txt",
+        "D:..",
+        "D:.. ",
+    ],
+)
+def test_stdio_refuses_an_argument_carrying_a_dotdot_component(tmp_path: Path, arg: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.servers == {}
+    assert "'..' path component" in report.problems[0].reason
+
+
+@pytest.mark.parametrize("value", ["${PLUGIN_DATA}/../../secret", "D:..\\secret"])
+def test_stdio_refuses_an_environment_value_carrying_a_dotdot_component(tmp_path: Path, value: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(env={"CONFIG": value})}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.servers == {}
+    assert "'..' path component" in report.problems[0].reason
+
+
+@pytest.mark.parametrize("arg", ["a..b", "...", "./bin/tool", "..-ish", "D:foo"])
+def test_stdio_keeps_an_argument_without_a_dotdot_component(tmp_path: Path, arg: str) -> None:
+    root = _package(tmp_path, mcp=_mcp({"local": _stdio(args=[arg])}))
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert report.problems == ()
+    assert report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"].args == [arg]
+
+
+def test_a_dotdot_environment_value_does_not_take_other_entries_down(tmp_path: Path) -> None:
+    root = _package(
+        tmp_path,
+        mcp=_mcp(
+            {
+                "bad": _stdio(env={"CONFIG": "${PLUGIN_ROOT}/../../secret"}),
+                "good": _stdio(command="npx"),
+            }
+        ),
+    )
+    report = package_mcp_report(load_package(root), plugin_data=tmp_path / "data")
+
+    assert [problem.server for problem in report.problems] == ["bad"]
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}good"]
+
+
+def test_a_dotdot_data_root_does_not_refuse_a_plugin_data_value(tmp_path: Path) -> None:
+    """RAVEN_HOME may spell the data root through '..'; the runtime resolves it first."""
+    root = _package(
+        tmp_path,
+        mcp=_mcp({"local": _stdio(env={"CONFIG": "${PLUGIN_DATA}/db.sqlite"})}),
+    )
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    plugin_data = tmp_path / "data" / ".." / "data" / PACKAGE_NAME
+
+    report = package_mcp_report(load_package(root), plugin_data=plugin_data)
+
+    assert report.problems == ()
+    server = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert Path(server.env["PLUGIN_DATA"]) == data_root / PACKAGE_NAME
+    assert Path(server.env["CONFIG"]) == data_root / PACKAGE_NAME / "db.sqlite"
 
 
 def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:

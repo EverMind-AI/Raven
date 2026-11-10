@@ -15,8 +15,10 @@ runs. Three rules from the specification shape the whole thing:
   MCP for that package and leaves its skills alone (§10.1, §7.2.2);
 - one unusable server entry never takes the others with it -- the entry is
   skipped and reported, and the rest of the package still loads (§7.2.2);
-- a server's paths stay inside the package, and the two placeholders the
-  format defines are expanded in exactly the fields it names (§4.1, §9.2).
+- a server's path-shaped command and its working directory stay inside the
+  package, the two placeholders the format defines are expanded in exactly
+  the fields it names, and no argument or environment value may carry a `..`
+  path component (§4.1, §9.2).
 
 Starting a package's server is the operator's call, not this module's: the
 servers are composed here and handed over, and the caller decides which
@@ -25,6 +27,8 @@ packages are allowed to run.
 
 from __future__ import annotations
 
+import ntpath
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -32,7 +36,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from raven.agent_plugins.package import AgentPluginPackage, PackageProblem, is_contained
+from raven.agent_plugins.package import AgentPluginPackage, PackageProblem, is_contained, is_symlink_loop
 from raven.config.schema import MCPServerConfig
 
 MCP_CONFIG_FILENAME = "mcp.json"
@@ -63,6 +67,26 @@ _DATA_PLACEHOLDER = "${PLUGIN_DATA}"
 _ROOT_VAR = "PLUGIN_ROOT"
 _DATA_VAR = "PLUGIN_DATA"
 _RESERVED_ENV_NAMES = frozenset({_ROOT_VAR, _DATA_VAR})
+
+_PATH_COMPONENT_RE = re.compile(r"[/\\]")
+
+
+def _has_dotdot_component(text: str) -> bool:
+    """Whether *text* carries a traversal component on either platform.
+
+    A Windows drive-relative ``<letter>:..`` is a traversal too: the launch
+    runs on the package root's drive, and Win32 resolves that form against
+    the drive's current directory, so it reaches the package root's parent.
+    Stripping an optional drive prefix first turns ``D:..`` and ``d:..`` into
+    the ``..`` this refuses, and a trailing space before the next separator
+    does not hide it (``D:.. ``); a plain drive-relative component like
+    ``D:foo`` stays allowed.
+    """
+    for component in _PATH_COMPONENT_RE.split(text):
+        rest = ntpath.splitdrive(component)[1]
+        if rest == ".." or rest.rstrip(" ") == "..":
+            return True
+    return False
 
 
 class AgentPluginMcpError(ValueError):
@@ -298,6 +322,12 @@ def _build_stdio(
         key: expand_placeholders(value, plugin_root=root_text, plugin_data=data_text)
         for key, value in entry.env.items()
     }
+    for authored, arg in zip(entry.args, args, strict=True):
+        if _has_dotdot_component(arg):
+            raise ValueError(f"the argument {authored!r} carries a '..' path component")
+    for key, value in env.items():
+        if _has_dotdot_component(value):
+            raise ValueError(f"the environment value for {key!r} carries a '..' path component")
     # The client provides the two reserved variables, and it provides them
     # last (§9.1, §9.2).
     env[_ROOT_VAR] = root_text
@@ -376,7 +406,15 @@ def package_mcp_report(
             ),
         )
 
-    plugin_data = Path(plugin_data)
+    # Match the runtime, which expands PLUGIN_DATA from a resolved data root,
+    # but leave the package's own directory as the caller spelled it.
+    data_dir = Path(plugin_data)
+    try:
+        plugin_data = data_dir.parent.resolve() / data_dir.name
+    # Python 3.12 turns ELOOP into RuntimeError, not OSError; a data root the
+    # host cannot resolve must not crash the whole report.
+    except (OSError, RuntimeError):
+        plugin_data = data_dir
     taken = {str(name) for name in reserved_names}
     servers: dict[str, MCPServerConfig] = {}
     problems: list[McpServerProblem] = []
@@ -427,6 +465,10 @@ def package_mcp_servers(
     their call to make. *reserved_names* are the server names this host
     already runs; a package entry that would compose to one of them is
     skipped and reported rather than replacing the operator's server.
+
+    A data directory that cannot be created skips that package and reports
+    it. A shared data root that is a symlink loop skips every package and
+    reports each one: no package's PLUGIN_DATA can be composed without it.
     """
     permitted = {str(name) for name in allowed}
     taken = {str(name) for name in reserved_names}
@@ -436,13 +478,46 @@ def package_mcp_servers(
 
     # The sandbox translator compares resolved roots; PLUGIN_DATA has to be
     # spelled the same way or a symlinked RAVEN_HOME leaves it a host path.
-    data_root = Path(plugin_data_root).resolve()
+    # `realpath(strict=True)` is the loop signal on both supported versions:
+    # 3.12's `resolve()` raises RuntimeError on ELOOP while 3.13 returns the
+    # loop path, but both raise OSError here. A root that does not exist yet
+    # is not a loop, so it keeps the non-strict spelling.
+    try:
+        resolved_root = os.path.realpath(plugin_data_root, strict=True)
+    except OSError as exc:
+        # Every package shares this root, so an unusable one leaves each
+        # PLUGIN_DATA unknown and each per-package directory impossible to
+        # create: report every package instead of starting a server on a path
+        # that cannot exist.
+        if is_symlink_loop(exc):
+            return (
+                {},
+                [
+                    PackageProblem(
+                        str(package.root),
+                        f"the shared package data root {plugin_data_root} cannot be resolved",
+                    )
+                    for package in packages
+                ],
+                [],
+            )
+        resolved_root = os.path.realpath(plugin_data_root)
+    data_root = Path(resolved_root)
     for package in packages:
         data_dir = data_root / package.name
         if package.name in permitted:
             # The client's persistent directory for this package, created
             # before any process of it starts (spec §9.1).
-            data_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                data_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                problems.append(
+                    PackageProblem(
+                        str(package.root),
+                        f"the package data directory {data_dir} cannot be created: {exc}",
+                    )
+                )
+                continue
         report = package_mcp_report(package, plugin_data=data_dir, reserved_names=taken)
         if report.disabled:
             problems.append(PackageProblem(str(package.root), report.disabled))

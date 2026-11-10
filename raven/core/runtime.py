@@ -199,16 +199,19 @@ def _package_mcp_servers(ec_config: Any, *, reserved_names: Any = ()) -> tuple[d
     which a package may not replace.
     """
     from raven.agent_plugins.mcp import package_mcp_layer
-    from raven.config.paths import get_package_data_root
+    from raven.config.paths import package_data_root_path
 
     agent_plugins = getattr(ec_config, "agent_plugins", None)
     if agent_plugins is None:
         return {}, []
+    # Not get_package_data_root(): creating the shared root here raises on a
+    # symlink loop before the layer can report the packages that need it.
+    # package_mcp_servers creates each allowed package's directory instead.
     servers, notes = package_mcp_layer(
         agent_plugins.packages,
         allowed=agent_plugins.mcp_packages,
         disabled=agent_plugins.disabled,
-        plugin_data_root=get_package_data_root(),
+        plugin_data_root=package_data_root_path(),
         reserved_names=reserved_names,
     )
     return servers, notes

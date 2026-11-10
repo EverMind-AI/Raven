@@ -8,6 +8,7 @@ root is the unit: every path the loader touches has to resolve inside it
 
 from __future__ import annotations
 
+import errno
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,20 @@ class AgentPluginPackage:
     def fingerprint(self) -> str:
         """A content hash of the package, for drift detection."""
         return package_fingerprint(self.root)
+
+
+# Windows reports a symlink loop as this error; its errno may not be ELOOP.
+_WINERROR_CANT_RESOLVE_FILENAME = 1921
+
+
+def is_symlink_loop(error: OSError) -> bool:
+    """Whether *error* is the platform's symlink-loop signal.
+
+    ``Path.resolve`` raises ``RuntimeError`` for ELOOP on CPython 3.12 and
+    returns the loop path on 3.13, so an exception is not a version-wide
+    signal; ``os.path.realpath(..., strict=True)`` raises this on both.
+    """
+    return error.errno == errno.ELOOP or getattr(error, "winerror", 0) == _WINERROR_CANT_RESOLVE_FILENAME
 
 
 def is_contained(root: Path, candidate: Path) -> bool:
@@ -188,6 +203,7 @@ __all__ = [
     "candidate_roots",
     "discover_packages",
     "is_contained",
+    "is_symlink_loop",
     "load_package",
     "package_fingerprint",
 ]

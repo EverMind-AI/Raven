@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
@@ -19,6 +20,7 @@ from raven.agent_plugins.package import (
     candidate_roots,
     discover_packages,
     is_contained,
+    is_symlink_loop,
     load_package,
     package_fingerprint,
 )
@@ -250,6 +252,25 @@ def test_a_symlink_that_stays_inside_the_root_is_contained(tmp_path: Path) -> No
     except (OSError, NotImplementedError) as exc:
         pytest.skip(f"this host cannot create a link: {exc}")
     assert is_contained(root, link)
+
+
+def test_is_symlink_loop_recognises_the_windows_error() -> None:
+    """Pin the Windows branch, which a POSIX run cannot reach.
+
+    Whether Windows really reports 1921 for a self-referential link can only
+    be confirmed on Windows; this test keeps the constant and the branch from
+    rotting between the platforms.
+    """
+    error = OSError(errno.EACCES, "synthetic")
+    object.__setattr__(error, "winerror", 1921)
+    assert is_symlink_loop(error) is True
+
+    other = OSError(errno.EACCES, "synthetic")
+    object.__setattr__(other, "winerror", 1922)
+    assert is_symlink_loop(other) is False
+
+    assert is_symlink_loop(OSError(errno.EACCES, "synthetic")) is False
+    assert is_symlink_loop(OSError(errno.ELOOP, "synthetic")) is True
 
 
 # ---------------------------------------------------------------------------
