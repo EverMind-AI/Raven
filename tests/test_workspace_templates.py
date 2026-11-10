@@ -335,8 +335,8 @@ def test_a_legacy_root_copy_is_migrated_and_refreshed_once(tmp_path: Path) -> No
 
     added = sync_workspace_templates(tmp_path, silent=True)
 
-    soul_entries = [entry for entry in added if "soul.md" in entry]
-    assert soul_entries == ["agent_memory/profile/soul.md"]
+    soul_entries = [Path(entry).as_posix() for entry in added if "soul.md" in entry]
+    assert soul_entries == [Path("agent_memory", "profile", "soul.md").as_posix()]
     assert _soul(tmp_path).read_text(encoding="utf-8") == _template("SOUL.md")
 
 
