@@ -464,8 +464,8 @@ function nodeWhyText(node: TaskNode, row: TaskRow): string {
    asked, as the bubble nobody typed, then what it did and said in the
    conversation's reply card -- the same rows, folds and detail the
    conversation draws for its own turns, so the two cannot drift apart. The
-   seam is optional: a page assembled without the transcript (this domain's
-   own tests) still draws the tab around it. */
+   seam is optional: an assembly without the transcript (this domain's own
+   tests) still draws the tab around it. */
 function RecordStage({ record, status, nodeKey }: {
   record: NodeRecord; status: TaskNode['status']; nodeKey: string
 }): JSX.Element {

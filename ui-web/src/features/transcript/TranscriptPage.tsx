@@ -1482,17 +1482,10 @@ function SenderMark({ seg, who }: { seg: DeliveredData; who: string }): ReactEle
   return <AgentMark preset={brand?.preset} own={brand?.own} agent={who} />
 }
 
-/* A delegated run's result, re-entering the conversation. It opens a turn the
-   way a question does, so it stands where a question stands -- on the reader's
-   side, in the bubble the runtime's own turns wear, between the reply before it
-   and the reply it sets off. It says who sent it, what it was asked to do (the
-   name opens the run), how it went, and folds what came back: the retelling in
-   the reply below is what the reader is meant to read, and the delivered text
-   is the receipt, there to be checked against. */
 /* The run's own row in this conversation's task list, through the tasks seam:
    it holds what the delivery itself does not carry -- a graph's title, who ran
    a spawn, when it started and stopped -- whether or not the call that started
-   it is in what this page read back. */
+   it is in the history read back. */
 const noWatch = (): (() => void) => () => {}
 function useRunRow(seg: DeliveredData): TaskRow | null {
   const tasks = sources.tasks
@@ -1501,6 +1494,13 @@ function useRunRow(seg: DeliveredData): TaskRow | null {
     () => (id && tasks?.rowOf ? tasks.rowOf(seg.isDag ? 'dag' : 'spawn', id) : null))
 }
 
+/* A delegated run's result, re-entering the conversation. It opens a turn the
+   way a question does, so it stands where a question stands -- on the reader's
+   side, in the bubble the runtime's own turns wear, between the reply before it
+   and the reply it sets off. It says who sent it, what it was asked to do (the
+   name opens the run), how it went, and folds what came back: the retelling in
+   the reply below is what the reader is meant to read, and the delivered text
+   is the receipt, there to be checked against. */
 const DeliveredView = memo(function DeliveredView({ lane, seg }: { lane: Lane; seg: DeliveredData }): ReactElement {
   useSeg(lane, seg)
   const row = useRunRow(seg)

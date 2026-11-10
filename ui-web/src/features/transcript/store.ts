@@ -2086,9 +2086,9 @@ export function callOfDelivery(lane: Lane, seg: DeliveredData): CallData | null 
 /* Which mark a named agent wears, for the row its result comes back as. A call
    names its agent by the name it was dispatched under, and only the roster says
    which package is behind that name -- the lookup the agents list makes, for
-   the reason AgentMark keys on a preset rather than on a name. Read once per
-   page and kept: the roster changes when someone adds an agent, not while a
-   conversation is being read. */
+   the reason AgentMark keys on a preset rather than on a name. Read once and
+   kept until a reload: the roster changes when someone adds an agent, not
+   while a conversation is being read. */
 export interface AgentBrand { preset: string | null; own: boolean }
 
 let brands: Map<string, AgentBrand> | null = null
