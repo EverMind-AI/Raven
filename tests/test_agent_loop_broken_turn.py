@@ -558,6 +558,42 @@ async def test_a_short_crash_files_no_second_copy(workspace, monkeypatch):
     assert "full_detail" not in _persisted(workspace)[-1]["turn_ended"]
 
 
+@pytest.mark.asyncio
+async def test_an_unhandled_crash_preserves_exception_class_in_failure_reason(workspace, monkeypatch):
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(ValueError):
+        await agent._process_message(_make_msg("hello"))
+
+    ended = _persisted(workspace)[-1]["turn_ended"]
+    assert ended.get("status") == "failed"
+    assert ended.get("reason") == "ValueError: boom"
+    assert "full_detail" not in ended
+
+
+@pytest.mark.asyncio
+async def test_a_crash_with_no_message_still_files_its_class(workspace, monkeypatch):
+    """A bare ``TimeoutError`` has an empty ``str``; the marker still names the
+    class, as the live event does, instead of filing no reason at all."""
+    agent = _agent(workspace, DyingProvider([LLMResponse(content="unused", finish_reason="stop")]))
+
+    async def explode(*args: Any, **kwargs: Any):
+        raise TimeoutError()
+
+    monkeypatch.setattr(agent, "_run_agent_loop", explode)
+    with pytest.raises(TimeoutError):
+        await agent._process_message(_make_msg("hello"))
+
+    ended = _persisted(workspace)[-1]["turn_ended"]
+    assert ended.get("status") == "failed"
+    assert ended.get("reason") == "TimeoutError"
+    assert "full_detail" not in ended
+
+
 class _RefusedWithABody(LLMProvider):
     """One final error response, whose call record kept the provider's whole body."""
 
