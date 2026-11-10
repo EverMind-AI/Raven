@@ -30,9 +30,9 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from research_flow.config import FlowConfig, ModelEndpointConfig
+from research_flow.config import DigestConfig, FlowConfig, ModelEndpointConfig
 from research_flow.flow import ResearchFlowHook, SessionGear, ToolHandles, evidence_round_for, saturation_for
-from research_flow.prompts import _DIGEST_SOURCE_CAP_CHARS, _DIGEST_SYSTEM
+from research_flow.prompts import _DIGEST_SYSTEM
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.guard_audit import set_audit_dir
@@ -66,6 +66,7 @@ def _make_digest_fn(
     model: str | None,
     verbatim_head_chars: int = 0,
     *,
+    source_cap_chars: int = DigestConfig.model_fields["source_cap_chars"].default,
     resolve: "Callable[[], tuple[str | None, int]] | None" = None,
 ):
     """The fork's digest closure: targeted extraction for web_fetch.
@@ -74,8 +75,9 @@ def _make_digest_fn(
     tool is built once from the base config, but a mode overlay may move
     ``digest.model`` / ``digest.verbatimHeadChars``; when given, ``resolve()`` is
     consulted per call and returns the pair in force for the current session,
-    falling back to the base values handed in here. The threshold and timeout
-    stay the tool's constructor arguments and therefore the base config's.
+    falling back to the base values handed in here. The threshold, the timeout
+    and ``source_cap_chars`` stay the tool's constructor arguments and
+    therefore the base config's.
     """
 
     async def digest(text: str, info_to_extract: str) -> str:
@@ -85,9 +87,7 @@ def _make_digest_fn(
                 {"role": "system", "content": _DIGEST_SYSTEM},
                 {
                     "role": "user",
-                    "content": (
-                        f"Information needed: {info_to_extract}\n\nPage content:\n{text[:_DIGEST_SOURCE_CAP_CHARS]}"
-                    ),
+                    "content": (f"Information needed: {info_to_extract}\n\nPage content:\n{text[:source_cap_chars]}"),
                 },
             ],
             model=use_model,
@@ -330,6 +330,7 @@ class _Shared:
                             provider,
                             cfg.digest.model,
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
+                            source_cap_chars=cfg.digest.source_cap_chars,
                             resolve=digest_knobs,
                         ),
                         digest_threshold_chars=cfg.digest.threshold_chars,

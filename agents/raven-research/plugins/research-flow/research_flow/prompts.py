@@ -20,7 +20,6 @@ from loguru import logger
 if TYPE_CHECKING:
     from research_flow.config import FlowConfig
 
-_DIGEST_SOURCE_CAP_CHARS = 60_000
 _DIGEST_SYSTEM = (
     "You extract exactly the requested information from a web page. Return "
     "the relevant facts, quotes and figures verbatim where possible, with "

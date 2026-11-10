@@ -346,6 +346,12 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "loses the gold on correct ones (59.7% -> 55.8% in a dry run), and a false stop is "
         "this reviewer's expensive error"
     ),
+    "digest.source_cap_chars": (
+        "how much of a page the digest model is shown. The fork hard-coded 60k chars in "
+        "its flow module, where no profile could reach it; measured on 55 long pages whose "
+        "answer the run missed, 17 held that answer past char 60,000, and the digest "
+        "recovered 59% of them once the page was shown past that cap against 24% capped"
+    ),
 }
 
 

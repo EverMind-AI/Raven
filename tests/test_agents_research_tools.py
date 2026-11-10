@@ -393,6 +393,38 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
     assert seen == ["deep/strong", "base/cheap"]
 
 
+def test_the_digest_sees_the_page_up_to_the_configured_cap(tmp_path):
+    """Everything past the cap is invisible to the digest and so to the turn:
+    a profile that reads long pages has to be able to move it, and the default
+    has to be the class default rather than a number frozen in the closure."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from research_flow.config import DigestConfig
+
+    sent: list[str] = []
+
+    class _Provider:
+        async def chat_with_retry(self, **kwargs):
+            sent.append(kwargs["messages"][-1]["content"])
+            return SimpleNamespace(content="the extracted facts")
+
+    def digest_with(cap: int | None) -> int:
+        digest = {"enabled": True, "model": "m", "verbatimHeadChars": 0}
+        if cap is not None:
+            digest["sourceCapChars"] = cap
+        root = tmp_path / f"cap-{cap}"
+        root.mkdir()
+        ctx = _ctx(root, {"enabled": True, "digest": digest, **_NO_LLM_GATES}, provider=_Provider())
+        tool = make_web_fetch(ctx)
+        page = "x" * 300_000
+        asyncio.run(tool._try_digest(page, "the founding date", "https://a.example/one"))
+        return sent.pop().count("x")
+
+    assert digest_with(1000) == 1000
+    assert digest_with(None) == DigestConfig().source_cap_chars == 200_000
+
+
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):
     """The fork refused to register it rather than advertise a tool whose every
     call is an error string; the contract this flow renders names the model's

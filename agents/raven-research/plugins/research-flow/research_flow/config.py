@@ -115,6 +115,16 @@ class DigestConfig(_Base):
     threshold_chars: int = 8000
     timeout_seconds: float = 120.0
     verbatim_head_chars: int = 800
+    #: How much of the page the digest model is shown. Everything past it is
+    #: invisible to the digest and therefore to the turn, so the cap is a
+    #: retrieval ceiling, not a cost knob only. Denominated in characters
+    #: because the flow has no tokenizer and the digest model is swappable, so
+    #: the default is set for the worst ratio rather than the usual one: an
+    #: English page runs about 8 characters per token and a CJK page about 3.3,
+    #: but a digit-dense page (a JSON price series) was measured at 1.01, where
+    #: 200k characters is already about 198k tokens. That leaves a 256k-context
+    #: model room for the prompt and the reply; a smaller one should lower it.
+    source_cap_chars: int = 200_000
 
 
 class VerifyConfig(_Base):
