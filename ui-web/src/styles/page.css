@@ -193,24 +193,24 @@
      is the current one" in the dialog. Rules and separators are hairlines
      over the sheet rather than boxes around it -- a line drawn on paper, not
      a panel mounted on a page. */
-  --set-paper:    #fbf8f0;   /* the sheet the pages are written on */
+  --set-paper:    #fdfbf5;   /* the sheet the pages are written on */
   --set-paper-2:  #fffdf8;   /* a raised card on that sheet */
-  --set-rail:     #f1ebdc;   /* the section rail beside it */
-  --set-rail-2:   #e9e2cf;   /* an icon tile in that rail */
-  --set-ink:      #241f17;   /* what the reader reads */
+  --set-rail:     #f8f5ec;   /* the section rail beside it */
+  --set-rail-2:   #f1eee4;   /* an icon tile in that rail */
+  --set-ink:      #2b2620;   /* what the reader reads */
   --set-ink-2:    #3b342a;
-  --set-muted:    #6e6558;
-  --set-faint:    #988e7c;
-  --set-rule:     rgba(60, 50, 30, .11);
-  --set-rule-soft:rgba(60, 50, 30, .06);
+  --set-muted:    #6f675c;
+  --set-faint:    #9d9587;
+  --set-rule:     rgba(60, 50, 30, .10);
+  --set-rule-soft:rgba(60, 50, 30, .05);
   --set-accent:   #b5791c;   /* the gold: one accent, used sparingly */
   --set-accent-2: #e0a63a;   /* the same gold, lighter -- a lit switch */
-  --set-accent-wash: rgba(181, 121, 28, .10);
+  --set-accent-wash: rgba(181, 121, 28, .09);
   --set-glow:     rgba(252, 191, 78, .58);
   --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
   /* The rail's own lamp: a warm wash in its top corner, so the eye lands on
      the section list first. */
-  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .10), rgba(224, 166, 58, 0) 62%);
   /* The one filled button the dialog has. In the light theme it is ink on
      paper, the way a printed form's submit is; in the dark one it is the lit
      amber, because in a room lit by a lamp the accent is what draws the eye. */
@@ -561,22 +561,22 @@
   /* The settings dialog, same as the base block's: an explicit light theme
      has to carry its own copy, because this block outranks the media query's
      dark one -- a reader who picked light on a dark system still gets paper. */
-  --set-paper:    #fbf8f0;
+  --set-paper:    #fdfbf5;
   --set-paper-2:  #fffdf8;
-  --set-rail:     #f1ebdc;
-  --set-rail-2:   #e9e2cf;
-  --set-ink:      #241f17;
+  --set-rail:     #f8f5ec;
+  --set-rail-2:   #f1eee4;
+  --set-ink:      #2b2620;
   --set-ink-2:    #3b342a;
-  --set-muted:    #6e6558;
-  --set-faint:    #988e7c;
-  --set-rule:     rgba(60, 50, 30, .11);
-  --set-rule-soft:rgba(60, 50, 30, .06);
+  --set-muted:    #6f675c;
+  --set-faint:    #9d9587;
+  --set-rule:     rgba(60, 50, 30, .10);
+  --set-rule-soft:rgba(60, 50, 30, .05);
   --set-accent:   #b5791c;
   --set-accent-2: #e0a63a;
-  --set-accent-wash: rgba(181, 121, 28, .10);
+  --set-accent-wash: rgba(181, 121, 28, .09);
   --set-glow:     rgba(252, 191, 78, .58);
   --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
-  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .10), rgba(224, 166, 58, 0) 62%);
   /* The one filled button the dialog has. In the light theme it is ink on
      paper, the way a printed form's submit is; in the dark one it is the lit
      amber, because in a room lit by a lamp the accent is what draws the eye. */
