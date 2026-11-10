@@ -395,7 +395,11 @@ def sync_workspace_templates(
 
     # Step 2 — fall back to bundled templates for anything still missing.
     # L4 pillar files first; root-level files (TOOLS / HEARTBEAT) stay put.
-    _refresh_soul()
+    try:
+        _refresh_soul()
+    except OSError as exc:
+        if say is not None:
+            say(f"could not refresh {workspace / 'agent_memory' / 'profile' / _SOUL}: {exc}")
     _write(tpl / "AGENTS.md", workspace / "agent_memory" / "profile" / "agent.md")
     _write(tpl / "USER.md", workspace / "user_memory" / "profile" / "user.md")
     _write(None, workspace / "user_memory" / "episodic" / "episodes.md")

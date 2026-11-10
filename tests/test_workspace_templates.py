@@ -249,6 +249,28 @@ def test_the_addendum_record_keeps_the_source_mode(tmp_path: Path) -> None:
     assert stat.S_IMODE(record.stat().st_mode) & 0o077 == 0
 
 
+def test_a_refused_soul_write_does_not_stop_the_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import raven.utils.workspace as workspace_module
+
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    soul.write_text(_LEGACY_SOUL, encoding="utf-8")
+    replace = workspace_module.atomic_replace
+
+    def refuse(path, *args, **kwargs):
+        if Path(path).name == "soul.md":
+            raise PermissionError("WinError 5")
+        return replace(path, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_module, "atomic_replace", refuse)
+    messages: list[str] = []
+
+    sync_workspace_templates(tmp_path, notify=messages.append)
+
+    assert soul.read_text(encoding="utf-8") == _LEGACY_SOUL
+    assert any("could not refresh" in message for message in messages)
+
+
 def test_a_non_utf8_soul_is_left_alone(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)
