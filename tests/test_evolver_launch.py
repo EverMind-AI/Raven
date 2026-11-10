@@ -227,7 +227,7 @@ class TestWhitelistValidation:
         def boom(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd="git", timeout=1)
 
-        monkeypatch.setattr("evolver.launch.contract.subprocess.run", boom)
+        monkeypatch.setattr("evolver.launch.contract.run_capture", boom)
         with pytest.raises(ValueError, match="timed out"):
             validate_whitelist(repo, sha, ("raven/agent/",))
 

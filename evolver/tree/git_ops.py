@@ -97,6 +97,45 @@ class GitOpError(RuntimeError):
 GIT_TIMEOUT = 60.0
 
 
+def run_capture(
+    cmd: list[str],
+    *,
+    cwd: Path | str,
+    env: Optional[dict[str, str]] = None,
+    input_text: Optional[str] = None,
+    timeout: float = GIT_TIMEOUT,
+) -> tuple[int, str, str]:
+    """Run ``cmd`` with a hard timeout, returning ``(returncode, stdout, stderr)``.
+
+    Output goes to temporary files rather than pipes. With ``capture_output`` a
+    git hook or credential helper (a grandchild) inherits the pipe handles, and
+    ``communicate`` waits for those handles to close even after the timeout has
+    killed the direct child. Regular files have no such EOF wait, so the bound
+    holds even when a hook outlives git. Stdin is ``DEVNULL`` unless a caller
+    supplies ``input_text`` (which becomes a pipe): an unattended run must not
+    wait on a credential prompt.
+    """
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        kwargs: dict = {"stdout": out, "stderr": err}
+        if input_text is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            kwargs["input"] = input_text.encode("utf-8")
+        try:
+            proc = subprocess.run(cmd, cwd=str(cwd), env=env, timeout=timeout, **kwargs)
+        except subprocess.TimeoutExpired as exc:
+            out.seek(0)
+            err.seek(0)
+            raise subprocess.TimeoutExpired(cmd, timeout, output=out.read(), stderr=err.read()) from exc
+        out.seek(0)
+        err.seek(0)
+        return (
+            proc.returncode,
+            out.read().decode("utf-8", "replace"),
+            err.read().decode("utf-8", "replace"),
+        )
+
+
 def _run(
     repo_root: Path,
     *args: str,
@@ -115,30 +154,31 @@ def _run(
     cmd = ["git", *args]
     merged_env = {**os.environ, **(env or {})}
     try:
-        proc = subprocess.run(
+        returncode, stdout, stderr = run_capture(
             cmd,
-            cwd=str(repo_root),
+            cwd=repo_root,
             env=merged_env,
-            input=input_text,
-            capture_output=True,
-            text=True,
+            input_text=input_text,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
+        partial = (
+            (exc.output or b"").decode("utf-8", "replace") if isinstance(exc.output, bytes) else str(exc.output or "")
+        )
         raise GitOpError(
             cmd=cmd,
             returncode=-1,
             stderr=f"timed out after {timeout}s",
-            stdout=str(exc.stdout or ""),
+            stdout=partial,
         ) from exc
-    if check and proc.returncode != 0:
+    if check and returncode != 0:
         raise GitOpError(
             cmd=cmd,
-            returncode=proc.returncode,
-            stderr=proc.stderr,
-            stdout=proc.stdout,
+            returncode=returncode,
+            stderr=stderr,
+            stdout=stdout,
         )
-    return proc.stdout
+    return stdout
 
 
 # ---------------------------------------------------------------------------

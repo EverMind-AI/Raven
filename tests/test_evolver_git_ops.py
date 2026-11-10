@@ -9,6 +9,8 @@ evolver commits stay reachable across git gc via plain refs.
 from __future__ import annotations
 
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -117,6 +119,16 @@ class TestGitTimeouts:
         monkeypatch.setattr(git_ops.subprocess, "run", boom)
         with pytest.raises(git_ops.GitOpError, match="timed out"):
             git_ops._run(tmp_path, "status")
+
+    def test_run_capture_returns_after_the_timeout(self, tmp_path):
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired):
+            git_ops.run_capture(
+                [sys.executable, "-c", "import time; time.sleep(5)"],
+                cwd=tmp_path,
+                timeout=0.3,
+            )
+        assert time.monotonic() - started < 2.0
 
 
 class TestRefs:
