@@ -89,7 +89,7 @@ function wire(): void {
        tab counts any more. */
     subagents: {
       list: async () => [],
-      instances: async (key: string) => { asked.push(key); return agentRows },
+      instances: async (key: string) => { asked.push(key); return { rows: agentRows, pendingHandoff: 0 } },
     },
     /* What the tasks tab counts. */
     tasks: {

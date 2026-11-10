@@ -6942,8 +6942,11 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 /* Room for the composer, and the glass the transcript scrolls under -- but only
    where there IS one. A finished node's record has nothing to type into, and
    reserving the composer's 150px there left a blank band under its last line
-   that read as the answer having been cut off. */
-.instance-conversation[data-composer="true"] .satx { padding-bottom: 176px; --glass: 140px; }
+   that read as the answer having been cut off. Sized for the dock as it rests
+   with the direct-chat hint row inside it (`.subagents-handoff`, 15px plus its
+   6px margin), so every number below moves if that row ever does -- including
+   the fullscreen reserve further down, which is cut to the same dock. */
+.instance-conversation[data-composer="true"] .satx { padding-bottom: 197px; --glass: 161px; }
 /* The record stops being painted before it reaches the composer, the way the
    conversation's own scroller does (see .scroll): a band painted over it would
    have to match the wash behind it, and a flat band on a gradient is a seam. */
@@ -6976,7 +6979,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .instance-qrow button { width: 20px; height: 20px; flex: none; border: 0; background: transparent; color: var(--faint); cursor: pointer; }
 
 @container desk-pane (max-height: 720px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 148px; --glass: 118px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 169px; --glass: 139px; }
   .instance-dock { bottom: 8px; }
   .instance-dock.sasend { padding: 0 12px; }
   .instance-dock .dock-in { padding: 8px 10px; border-radius: 14px; }
@@ -6987,7 +6990,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 }
 
 @container desk-pane (max-height: 500px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 120px; --glass: 94px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 141px; --glass: 115px; }
   .instance-dock { bottom: 6px; }
   .instance-dock.sasend { padding: 0 8px; }
   .instance-dock .dock-in { padding: 6px 8px; border-radius: 12px; }
@@ -7005,7 +7008,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .desk-grid[data-solo="true"] .desk-pane > header { height: 46px; padding: 0 14px 0 18px; }
 .desk-grid[data-solo="true"] .satx { padding: 26px 22px; }
 .desk-grid[data-solo="true"] .instance-conversation[data-composer="true"] .satx {
-  padding-bottom: calc(190px + 26px); }
+  padding-bottom: calc(211px + 26px); }
 
 /* The grid passes pointer events through so the chat behind it stays usable
    between panes; a divider has to take them back, or the seam a reader can see
