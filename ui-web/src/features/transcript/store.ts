@@ -5,17 +5,18 @@ import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { readingImported } from '../../lib/imported'
 import { md } from '../../lib/prose'
-import { ds } from '../../state/sources'
+import { ds, sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
 
+import type { SubagentRow } from '../../rpc/generated'
 import type { DeliveryRow } from '../workspace/types'
 import type {
   AnswerData, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
-  SpawnListRow, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
+  SpawnListRow, StageOpts, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
 
 /* Plain external store. The callers that drive the transcript are not React:
@@ -150,7 +151,7 @@ export function actLabel(name: string, a: Record<string, unknown>, display?: str
 }
 
 /* When an answer landed: today needs only a clock, older needs the date. */
-function stamp(when: number | string | Date): string {
+export function stamp(when: number | string | Date): string {
   const d = when instanceof Date ? when : new Date(when)
   if (!d || isNaN(d.getTime())) return ''
   const p = (n: number): string => String(n).padStart(2, '0')
@@ -255,7 +256,7 @@ export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
     key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, agentShut: false, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -354,12 +355,12 @@ function push(lane: Lane, seg: Seg): void {
 
 function ask(
   lane: Lane, body: string, atts: string[], when?: string | null,
-  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number } | null,
+  opts?: { auto?: { origin: string; note: string }; midTurn?: boolean; at?: number; md?: boolean } | null,
 ): AskData {
   const o = opts || {}
   const seg: AskData = {
     v: 0, id: nextId(), kind: 'ask', ...(o.auto ? { auto: o.auto } : {}),
-    ...(o.midTurn ? { midTurn: true } : {}), body, atts,
+    ...(o.midTurn ? { midTurn: true } : {}), ...(o.md ? { md: true } : {}), body, atts,
     when: when != null ? when : stamp(Date.now()),
     at: o.at != null ? o.at : when != null ? 0 : Date.now(), expanded: false,
     clipped: body.length > 640 || body.split('\n').length > 12,
@@ -435,6 +436,13 @@ export function cronReminder(text: string): { note: string; said: string } | nul
    which is the reader's own sentence. Every other origin has a shape of its
    own that nothing here reads, so the row is the chip alone. */
 export function askAuto(lane: Lane, origin: string, text: string, when?: string | null, at?: number): void {
+  /* A delegated record's first message: the brief its parent wrote, every word
+     of it meant for whoever reads the record. Never on the wire -- the painter
+     names it (`markDispatch`) -- so no stored entry can claim it. */
+  if (origin === DISPATCH) {
+    ask(lane, text, [], when, { auto: { origin, note: '' }, md: true, ...(at != null ? { at } : {}) })
+    return
+  }
   const said = origin === 'cron' ? cronReminder(text) : null
   ask(lane, said ? said.said : '', [], when, {
     auto: { origin, note: said ? said.note : '' }, ...(at != null ? { at } : {}),
@@ -497,12 +505,13 @@ const deliveredStatus = (v: unknown): DeliveredData['status'] =>
    then there is nothing to fold open. Absent is a server that never sent it. */
 export function delivered(lane: Lane, p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
 }): void {
   const said = typeof p.output === 'string'
   push(lane, {
     v: 0, id: nextId(), kind: 'sdlv', at: p.at ?? Date.now(), ...(p.turnId ? { turnId: p.turnId } : {}),
-    label: p.label, isDag: p.isDag, status: deliveredStatus(p.status), open: p.open,
+    label: p.label, isDag: p.isDag, runId: String(p.runId || ''), nodeId: String(p.nodeId || ''),
+    status: deliveredStatus(p.status), open: p.open,
     body: said ? (p.output as string).trim() : defence(p.body || ''), said, shown: false,
     outputTruncated: said && p.outputTruncated === true,
   } satisfies DeliveredData)
@@ -1397,7 +1406,7 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
      a long message or a delegation (`foldKeepsOpen`), and stays open across
      later turns because `shutAutoFolds` re-reads that rule rather than the one
      decision made here. */
-  const born = !lane.main
+  const born = !lane.main && !lane.agentShut
   const keepOpen = born || foldKeepsOpen(loose)
   const f: FoldData = {
     v: 0, id: nextId(), kind: 'fold', time: time || null, open: keepOpen, auto: true, steps: [],
@@ -1831,6 +1840,8 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
         delivered(lane, {
           label: String(d.label || ''),
           isDag,
+          runId: d.run_id,
+          nodeId: d.node_id,
           at: turnAt,
           status: d.status,
           body: m.text || '',
@@ -2027,6 +2038,80 @@ function agentFoldTime(lane: Lane, ctx: { started_at?: string; ended_at?: string
   }
 }
 
+/* The origin a delegated record's first message is drawn under, when the pane
+   says the record opens with its parent's brief. Client-side only: the wire's
+   origins are the runtime's own (`cron`, `heartbeat`, ...). */
+const DISPATCH = 'dispatch'
+
+/* The record with its opening brief marked as one. Only a plain user message
+   qualifies -- an entry that already says where it came from keeps saying it --
+   and only the first: a later user message in the same record is the reader's,
+   typed into the direct chat. A copy, so the caller's snapshot is untouched. */
+function markDispatch(msgs: HistoryMessage[], on: boolean): HistoryMessage[] {
+  const first = msgs[0]
+  if (!on || !first || first.role !== 'user' || first.origin || first.delegated) return msgs
+  return [{ ...first, origin: DISPATCH }, ...msgs.slice(1)]
+}
+
+/* The call in this lane that started the run a delivered result came back from:
+   the graph call bound to its run id, or the spawn whose record id it is. What
+   the row says about who ran it and how long it took is read off this. Null
+   when the conversation holds no such call -- a branched conversation replays
+   its parent's results, whose calls are in the parent. */
+export function callOfDelivery(lane: Lane, seg: DeliveredData): CallData | null {
+  for (const s of lane.segs) {
+    const steps = s.kind === 'step' ? [s] : s.kind === 'fold' ? s.steps : []
+    for (const st of steps) {
+      for (const c of st.calls) {
+        if (seg.isDag && c.kind === 'dag' && seg.runId && c.runId === seg.runId) return c
+        if (!seg.isDag && c.kind === 'spawn' && seg.nodeId
+          && (c.spawnId === seg.nodeId || String(c.args.node_id || '') === seg.nodeId)) return c
+      }
+    }
+  }
+  return null
+}
+
+/* Which mark a named agent wears, for the row its result comes back as. A call
+   names its agent by the name it was dispatched under, and only the roster says
+   which package is behind that name -- the lookup the agents list makes, for
+   the reason AgentMark keys on a preset rather than on a name. Read once per
+   page and kept: the roster changes when someone adds an agent, not while a
+   conversation is being read. */
+export interface AgentBrand { preset: string | null; own: boolean }
+
+let brands: Map<string, AgentBrand> | null = null
+let brandsAsked = false
+let brandsV = 0
+const brandListeners = new Set<() => void>()
+
+export function brandOf(name: string): AgentBrand | null {
+  if (!brands && !brandsAsked) askBrands()
+  return (brands && brands.get(name)) || null
+}
+
+function askBrands(): void {
+  const roster = sources.subagents?.roster
+  if (!roster) return
+  brandsAsked = true
+  roster()
+    .then((rows: SubagentRow[]) => {
+      brands = new Map(rows.map((r) => [r.name, { preset: r.preset ?? null, own: !!(r.builtin || r.vendored) }]))
+      brandsV += 1
+      brandListeners.forEach((fn) => fn())
+    })
+    /* Asked again on the next row that wants a mark: a roster that failed once
+       is not a roster with nobody in it. */
+    .catch(() => { brandsAsked = false })
+}
+
+export function subscribeBrands(fn: () => void): () => void {
+  brandListeners.add(fn)
+  return () => { brandListeners.delete(fn) }
+}
+
+export const brandsVersion = (): number => brandsV
+
 export interface AgentCtxLike {
   status?: string
   messages?: HistoryMessage[]
@@ -2120,11 +2205,11 @@ function writeToggles(lane: Lane, saved: FoldToggles[]): void {
   })
 }
 
-export function agentPaintLane(lane: Lane, r: AgentCtxLike | null,
-  opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
-  const msgs = (r && r.messages) || []
+export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageOpts | null): void {
+  const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
+  lane.agentShut = !!(opts && opts.shut)
   if (opts && opts.reset) lane.agentKey = null
   const fresh = lane.agentKey !== key
   if (fresh) {
@@ -2264,4 +2349,6 @@ export function _resetForTests(): void {
   dagEarly.clear()
   dagPending = null
   segId = 0
+  brands = null
+  brandsAsked = false
 }

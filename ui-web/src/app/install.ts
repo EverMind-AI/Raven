@@ -53,7 +53,7 @@ import * as trajectoryPoll from '../features/trajectory/poll'
 import { trajectorySource } from '../features/trajectory/source'
 import * as trajectoryStore from '../features/trajectory/store'
 import {
-  actLabel, branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList,
+  branch, cleanPreview, dagRun, okOf, openDagRun, openSpawn, spawnList, stagePaint,
 } from '../features/transcript/source'
 import {
   proseSource, setHostPlatformReader, setShortener, workspaceSource,
@@ -149,10 +149,9 @@ export function installSources(): void {
   transcript.dagRun = dagRun
   transcript.spawnList = spawnList
   transcript.openSpawn = openSpawn
-  /* Read by the tasks domain's own tool rows (features/tasks/NodeRecord.tsx)
-     through `ds('transcript').actLabel`, so a node's own transcript reads the
-     same one-line labels as this island's. */
-  transcript.actLabel = actLabel
+  /* The tasks domain's context tab paints a node's record through this, so a
+     run's record reads the way the conversation reads its own turns. */
+  transcript.stagePaint = stagePaint
 
   /* The four the settings dialog's own wiring used to assign. Here rather than
      there because this is the page's one assigner, and first in this list
@@ -253,6 +252,8 @@ export function installSources(): void {
       openDeskTask(row)
       return true
     },
+    rowOf: taskByKey,
+    watch: subscribeTasks,
     onRunStarted, onNodeUpdated, onRunCompleted, onRunReplanned, onSubagentStatus,
     /* The sidebar's board, and the Task Board page when it is open. */
     onBoardUpdated: (p) => {

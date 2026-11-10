@@ -15,6 +15,7 @@ import * as workspace from '../workspace/store'
 import * as store from './store'
 import { TaskPane, TasksPanel } from './TasksPage'
 
+import type { StageOpts, TranscriptSource } from '../transcript/types'
 import type { WsChange } from '../workspace/types'
 import type { NodeRecord, SubagentRow, TaskNode, TaskRow, TasksSource } from './types'
 
@@ -22,7 +23,35 @@ import type { NodeRecord, SubagentRow, TaskNode, TaskRow, TasksSource } from './
 
 let rows: TaskRow[] = []
 let roster: SubagentRow[] = []
-let record: NodeRecord = { dispatch: null, steps: [], answer: null, outputTruncated: false }
+/* A record as the tests write it: the three read-off fields, with the raw
+   messages derived from them unless a case spells its own. */
+type RecordIn = Omit<NodeRecord, 'messages'> & { messages?: NodeRecord['messages'] }
+let record: RecordIn = { dispatch: null, steps: [], answer: null, outputTruncated: false }
+function withMessages(r: RecordIn): NodeRecord {
+  if (r.messages) return { ...r, messages: r.messages }
+  const messages: NodeRecord['messages'] = []
+  if (r.dispatch) messages.push({ role: 'user', text: r.dispatch })
+  for (const st of r.steps) {
+    if (st.kind === 'think') messages.push({ role: 'assistant', reasoning_content: st.text })
+    else if (st.kind === 'say') messages.push({ role: 'assistant', text: st.text })
+    else if (st.kind === 'console') messages.push({ role: 'console', text: st.text })
+    else {
+      messages.push({ role: 'assistant', tool_calls: [{ id: st.id, name: st.name, arguments: st.args }] })
+      if (st.result != null) messages.push({ role: 'tool', tool_call_id: st.id, text: st.result })
+    }
+  }
+  if (r.answer) messages.push({ role: 'assistant', text: r.answer })
+  return { ...r, messages }
+}
+/* The transcript's painter, stood in for: the context tab hands it the record
+   and says how to draw it, and that hand-over is this domain's half. What the
+   record then looks like is the transcript's, and is tested there. */
+let painted: Array<{ ctx: { status?: string; messages?: Array<{ text?: string }> } | null; opts: StageOpts | null | undefined }> = []
+const stagePaint: TranscriptSource['stagePaint'] = (box, ctx, opts) => {
+  painted.push({ ctx, opts })
+  box.textContent = (ctx?.messages ?? []).map((m) => m.text ?? '').filter(Boolean).join(' | ')
+}
+const recordText = (): string => document.querySelector('.tkrecord')?.textContent ?? ''
 let stopped: TaskRow[] = []
 
 const counts = (over: Partial<TaskRow['counts']> = {}) => (
@@ -49,7 +78,7 @@ const source = (): TasksSource => ({
   list: async () => rows,
   one: async (kind, id) => rows.find((r) => r.kind === kind && r.id === id) || null,
   stop: async (r) => { stopped.push(r); return true },
-  node: async () => record,
+  node: async () => withMessages(record),
   roster: async () => roster,
 })
 
@@ -58,6 +87,7 @@ beforeEach(() => {
   roster = []
   stopped = []
   record = { dispatch: null, steps: [], answer: null, outputTruncated: false }
+  painted = []
   store._resetForTests()
   desk._resetForTests()
   installWsPane()
@@ -65,6 +95,7 @@ beforeEach(() => {
   setSources({
     tasks: source(),
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+    transcript: { clean: (x) => String(x ?? ''), okOf: () => true, stagePaint },
   })
   setCurrent('s1')
 })
@@ -763,7 +794,7 @@ describe('the node panel', () => {
     expect([...document.querySelectorAll('.tkph')].map((m) => m.textContent)).toEqual(['{{ inputs.week }}', '{{ n0.output }}'])
   })
 
-  it('shows the rendered dispatch and the answer for a node that ran', async () => {
+  it('hands a node that ran to the transcript\'s painter, opening with its dispatch', async () => {
     record = { dispatch: 'the rendered prompt', steps: [], answer: 'the answer', outputTruncated: false }
     const done = task({
       id: 'a', kind: 'dag', status: 'completed',
@@ -771,12 +802,16 @@ describe('the node panel', () => {
     })
     pick(done)
     await act(async () => {})
-    expect(document.querySelector('.tkdispb')?.textContent).toBe('the rendered prompt')
-    expect(document.querySelector('.tkans')?.textContent).toBe('the answer')
-    expect(document.querySelector('.tkcaret')).toBeNull()
+    const last = painted[painted.length - 1]
+    expect(last?.ctx?.messages?.map((m) => m.text)).toEqual(['the rendered prompt', 'the answer'])
+    expect(last?.ctx?.status).toBe('completed')
+    /* Drawn as the conversation draws a turn: the dispatch as the bubble
+       nobody typed, the settled work folded behind its one line. */
+    expect(last?.opts).toMatchObject({ dispatch: true, shut: true, key: 'dag:a:n1' })
+    expect(recordText()).toBe('the rendered prompt | the answer')
   })
 
-  it('trails the answer with the streaming caret while the node is still running', async () => {
+  it('paints a node still going as running, so its last line is held and the work glyph shows', async () => {
     record = { dispatch: 'the rendered prompt', steps: [], answer: 'still writ', outputTruncated: false }
     const running = task({
       id: 'a', kind: 'dag', status: 'running',
@@ -784,7 +819,7 @@ describe('the node panel', () => {
     })
     pick(running)
     await act(async () => {})
-    expect(document.querySelector('.tkans .tkcaret')).not.toBeNull()
+    expect(painted[painted.length - 1]?.ctx?.status).toBe('run')
   })
 
   it('says a step has not started rather than drawing an empty context', () => {
@@ -796,39 +831,7 @@ describe('the node panel', () => {
        the context tab explicitly is what this assertion is about. */
     act(() => { (document.querySelectorAll('.pane-head-seg button')[0] as HTMLElement).click() })
     expect(document.querySelector('.tkempty')?.textContent).toBe('gui.tasks.ctx_none')
-  })
-
-  it('marks only the fence lines, leaving the injected body as ordinary prose', async () => {
-    record = {
-      dispatch: 'Spot quotes:\n[BEGIN UNTRUSTED subagent #spot]\n4312.5\n[END UNTRUSTED subagent #spot]\n\nGo.',
-      steps: [], answer: null, outputTruncated: false,
-    }
-    const done = task({
-      id: 'a', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
-    })
-    pick(done)
-    await act(async () => {})
-    const fenced = [...document.querySelectorAll('.tkuntrusted')]
-    expect(fenced.map((f) => f.textContent)).toEqual([
-      '[BEGIN UNTRUSTED subagent #spot]', '[END UNTRUSTED subagent #spot]',
-    ])
-    /* The injected body between the two markers is not one of them. */
-    expect(document.querySelector('.tkdispb')?.textContent).toContain('4312.5')
-    expect([...document.querySelectorAll('.tkuntrusted')].some((f) => f.textContent?.includes('4312.5'))).toBe(false)
-  })
-
-  it('still marks a lone BEGIN marker whose matching END never arrived', async () => {
-    record = {
-      dispatch: 'Spot quotes:\n[BEGIN UNTRUSTED subagent #spot]\n4312.5 (truncated',
-      steps: [], answer: null, outputTruncated: false,
-    }
-    const running = task({
-      id: 'a', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
-    })
-    pick(running)
-    await act(async () => {})
-    expect([...document.querySelectorAll('.tkuntrusted')].map((f) => f.textContent))
-      .toEqual(['[BEGIN UNTRUSTED subagent #spot]'])
+    expect(painted).toEqual([])
   })
 
   it('footer names the run id for a dag and the call id for a spawn, each with a copy button', () => {
@@ -944,7 +947,7 @@ describe('the node panel', () => {
 
     it('never asks for a record of a node that never ran', async () => {
       let asked = 0
-      setSources({ tasks: { ...source(), node: async () => { asked += 1; return record } } })
+      setSources({ tasks: { ...source(), node: async () => { asked += 1; return withMessages(record) } } })
       pick(run([decider(), left({ reason: 'when_false' })]), 1)
       await act(async () => {})
       expect(asked).toBe(0)
@@ -1139,7 +1142,7 @@ describe('the node panel', () => {
       setSources({
         tasks: {
           ...source(),
-          node: async () => { calls.push('fetch'); return record },
+          node: async () => { calls.push('fetch'); return withMessages(record) },
         },
         workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
       })
@@ -1153,7 +1156,7 @@ describe('the node panel', () => {
       record = { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
       await act(async () => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c1' }) })
       expect(calls).toEqual(['fetch', 'fetch'])
-      expect(document.querySelector('.tkans')?.textContent).toBe('the answer')
+      expect(recordText()).toContain('the answer')
     })
 
     it('keeps the last record on screen while refetching, rather than flashing blank', async () => {
@@ -1164,7 +1167,7 @@ describe('the node panel', () => {
           ...source(),
           node: async () => {
             calls += 1
-            if (calls === 1) return { dispatch: 'go', steps: [], answer: 'first answer', outputTruncated: false }
+            if (calls === 1) return withMessages({ dispatch: 'go', steps: [], answer: 'first answer', outputTruncated: false })
             return new Promise((res) => { resolveSecond = res })
           },
         },
@@ -1175,14 +1178,14 @@ describe('the node panel', () => {
       })
       pick(running)
       await act(async () => {})
-      expect(document.querySelector('.tkans')?.textContent).toBe('first answer')
+      expect(recordText()).toContain('first answer')
 
       act(() => { store.onNodeUpdated({ run_id: 'r1', node: 'n1', status: 'running', tool_call_id: 'c2' }) })
       /* Still showing the old answer while the second fetch is in flight. */
       expect(calls).toBe(2)
-      expect(document.querySelector('.tkans')?.textContent).toBe('first answer')
-      await act(async () => { resolveSecond?.({ dispatch: 'go', steps: [], answer: 'second answer', outputTruncated: false }) })
-      expect(document.querySelector('.tkans')?.textContent).toBe('second answer')
+      expect(recordText()).toContain('first answer')
+      await act(async () => { resolveSecond?.(withMessages({ dispatch: 'go', steps: [], answer: 'second answer', outputTruncated: false })) })
+      expect(recordText()).toContain('second answer')
     })
 
     /* No lane sends a per-step event -- `subagent.status` moves on pending,
@@ -1196,7 +1199,7 @@ describe('the node panel', () => {
         const calls: string[] = []
         record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
-          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return withMessages(record) } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
         })
         const running = task({
@@ -1209,7 +1212,7 @@ describe('the node panel', () => {
         record = { dispatch: 'go', steps: [{ kind: 'say', text: 'first step' }], answer: null, outputTruncated: false }
         await act(async () => { vi.advanceTimersByTime(1000) })
         expect(calls).toEqual(['fetch', 'fetch'])
-        expect(document.querySelector('.tkprocb .tkans')?.textContent).toBe('first step')
+        expect(recordText()).toContain('first step')
 
         await act(async () => { vi.advanceTimersByTime(1000) })
         expect(calls).toEqual(['fetch', 'fetch', 'fetch'])
@@ -1247,7 +1250,7 @@ describe('the node panel', () => {
         const calls: string[] = []
         record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
-          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return withMessages(record) } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
         })
         const running = task({
@@ -1260,7 +1263,7 @@ describe('the node panel', () => {
         record = { dispatch: 'go', steps: [{ kind: 'say', text: 'first step' }], answer: null, outputTruncated: false }
         await act(async () => { vi.advanceTimersByTime(1000) })
         expect(calls).toEqual(['fetch', 'fetch'])
-        expect(document.querySelector('.tkprocb .tkans')?.textContent).toBe('first step')
+        expect(recordText()).toContain('first step')
 
         await act(async () => { vi.advanceTimersByTime(1000) })
         expect(calls).toEqual(['fetch', 'fetch', 'fetch'])
@@ -1275,7 +1278,7 @@ describe('the node panel', () => {
         const calls: string[] = []
         record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
-          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return withMessages(record) } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
         })
         const running = task({
@@ -1300,7 +1303,7 @@ describe('the node panel', () => {
            each re-run the effect); what matters here is that nothing follows. */
         const onSettle = calls.length
         expect(onSettle).toBeGreaterThan(2)
-        expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+        expect(recordText()).toContain('the answer')
 
         /* Settled: the beat has nothing left to follow. */
         await act(async () => { vi.advanceTimersByTime(3000) })
@@ -1316,7 +1319,7 @@ describe('the node panel', () => {
         const calls: string[] = []
         record = { dispatch: 'go', steps: [], answer: null, outputTruncated: false }
         setSources({
-          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return withMessages(record) } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
         })
         const running = task({
@@ -1333,7 +1336,7 @@ describe('the node panel', () => {
           store.onSubagentStatus({ task_id: 't1', call_id: 's1', agent: 'raven', label: 'x', status: 'completed', ended_at: 2000 })
         })
         expect(calls).toEqual(['fetch', 'fetch'])
-        expect(document.querySelector('.tkanswer .tkans')?.textContent).toBe('the answer')
+        expect(recordText()).toContain('the answer')
         expect(document.querySelector('.pane-head-meta')?.textContent).toBe('raven · gui.tasks.node_st_completed · 1s')
 
         /* Settled: the beat has nothing left to follow. */
@@ -1349,7 +1352,7 @@ describe('the node panel', () => {
       try {
         const calls: string[] = []
         setSources({
-          tasks: { ...source(), node: async () => { calls.push('fetch'); return record } },
+          tasks: { ...source(), node: async () => { calls.push('fetch'); return withMessages(record) } },
           workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
         })
         const running = task({
@@ -1486,7 +1489,7 @@ describe('the node panel', () => {
       })
       pick(running)
       expect(document.querySelector('.tkempty')?.textContent).toBe('gui.tasks.ctx_loading')
-      await act(async () => { release?.({ dispatch: 'go', steps: [], answer: null, outputTruncated: false }) })
+      await act(async () => { release?.(withMessages({ dispatch: 'go', steps: [], answer: null, outputTruncated: false })) })
       expect(document.querySelector('.tkempty')).toBeNull()
     })
 
@@ -1498,7 +1501,7 @@ describe('the node panel', () => {
           node: async () => {
             attempts += 1
             if (attempts === 1) throw new Error('gateway refused')
-            return { dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false }
+            return withMessages({ dispatch: 'go', steps: [], answer: 'the answer', outputTruncated: false })
           },
         },
         workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
@@ -1510,7 +1513,7 @@ describe('the node panel', () => {
       await act(async () => {})
       expect(document.querySelector('.tkretry')).not.toBeNull()
       await act(async () => { (document.querySelector('.tkretry') as HTMLElement).click() })
-      expect(document.querySelector('.tkans')?.textContent).toBe('the answer')
+      expect(recordText()).toContain('the answer')
     })
   })
 
@@ -1547,13 +1550,15 @@ describe('the node panel', () => {
         .find((f) => f.querySelector('.tkfk')?.textContent === 'gui.tasks.instruction')
       expect(instructionField?.querySelector('.tkfv')?.textContent).toBe('gui.tasks.instruction_loading')
       expect(document.querySelector('.tknote')).toBeNull()
-      await act(async () => { release?.({ dispatch: 'the rendered prompt', steps: [], answer: null, outputTruncated: false }) })
+      await act(async () => { release?.(withMessages({ dispatch: 'the rendered prompt', steps: [], answer: null, outputTruncated: false })) })
       expect(document.querySelector('.tkpv')?.textContent).toBe('the rendered prompt')
     })
   })
 
-  describe('fold memory across a node switch', () => {
-    it('does not carry one node\'s open thought onto a different node picked next', async () => {
+  /* Each node is its own record under its own key, so nothing the reader
+     opened on one is carried onto the next: the painter starts the box over. */
+  describe('a node switch', () => {
+    it('paints the next node under a key of its own', async () => {
       record = { dispatch: 'go', steps: [{ kind: 'think', text: 'first, check the dates' }], answer: null, outputTruncated: false }
       const withTwo = task({
         id: 'a', kind: 'dag', status: 'completed',
@@ -1564,28 +1569,24 @@ describe('the node panel', () => {
       })
       pick(withTwo, 0)
       await act(async () => {})
-      /* The process fold starts closed for a settled node (item 15), and a
-         node's own reasoning does too -- open both to read the thought. */
-      fireEvent.click(document.querySelector('.tkprock') as Element)
-      expect(document.querySelector('.tkthink blockquote')).toBeNull()
-      fireEvent.click(document.querySelector('.tkthh') as Element)
-      expect(document.querySelector('.tkthink blockquote')).not.toBeNull()
       fireEvent.click(document.querySelectorAll('.daggraph .nd')[1] as Element)
       await act(async () => {})
-      fireEvent.click(document.querySelector('.tkprock') as Element)
-      expect(document.querySelector('.tkthink blockquote')).toBeNull()
+      expect([...new Set(painted.map((p) => p.opts?.key))]).toEqual(['dag:a:n1', 'dag:a:n2'])
     })
   })
 
-  describe('the process fold\'s own default', () => {
-    it('recomputes from the node\'s status rather than freezing at mount', async () => {
+  /* Running, the record is painted as a turn still going -- its work in view,
+     its last line held. The moment the node settles it is painted settled,
+     which is what folds the work behind its one line. */
+  describe('a node watched from running to done', () => {
+    it('is repainted settled once the node is', async () => {
       record = { dispatch: 'go', steps: [{ kind: 'say', text: 'partial' }], answer: null, outputTruncated: false }
       const running = task({
         id: 'a', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'running' })],
       })
       pick(running)
       await act(async () => {})
-      expect(document.querySelector('.tkprock')?.getAttribute('aria-expanded')).toBe('true')
+      expect(painted[painted.length - 1]?.ctx?.status).toBe('run')
 
       await act(async () => {
         store.set((prev) => ({
@@ -1596,17 +1597,8 @@ describe('the node panel', () => {
           }],
         }))
       })
-      expect(document.querySelector('.tkprock')?.getAttribute('aria-expanded')).toBe('false')
-    })
-
-    it('is headed by the node\'s own status word once settled, not always "completed"', async () => {
-      record = { dispatch: 'go', steps: [{ kind: 'say', text: 'partial' }], answer: null, outputTruncated: false }
-      pick(task({
-        id: 'a', kind: 'spawn', status: 'failed',
-        nodes: [node({ node_id: 'n1', status: 'failed', started_at: 1000, ended_at: 56000 })],
-      }))
-      await act(async () => {})
-      expect(document.querySelector('.tkprock span')?.textContent).toBe('gui.tasks.node_st_failed')
+      expect(painted[painted.length - 1]?.ctx?.status).toBe('completed')
+      expect(painted[painted.length - 1]?.opts?.shut).toBe(true)
     })
   })
 
@@ -1880,19 +1872,6 @@ describe('a node record still being written', () => {
     expect(body().scrollTop).toBe(0)
   })
 
-  it('leaves a reader who opened a fold where they opened it', async () => {
-    /* The pin is scoped to a read landing, not to every render: this panel
-       reads the task store and every fold in the record writes to it, so a
-       reader parked at the end who opens a step above must be left there,
-       reading what they opened, rather than sent to the end of it. */
-    await opened({ steps: [{ kind: 'think', text: 'first, check the dates' }] })
-    sized(body(), 5090, 687)
-    act(() => { reader(4403) })
-
-    fireEvent.click(document.querySelector('.tkprock') as Element)
-    expect(body().scrollTop).toBe(4403)
-  })
-
   it('stops following when the reader turns to the work order', async () => {
     /* Another tab is a different thing to read, not a continuation: carrying
        the end over would open the order somewhere down its middle. */
@@ -1970,8 +1949,8 @@ describe('the task surfaces\' failure colour', () => {
   it('paints a failed task or step with the neutral tokens', () => {
     for (const sel of [
       '.tkmeta[data-st="error"] .dot {', '.tkwhy {', '.tkretry {',
-      '.tkexit.bad {', '.tkfork .nd[data-st="failed"] .tkrunrt {',
-      '.tkstep[data-st="error"] .tkmark {', '.tkstt .dot.bad {',
+      '.tkfork .nd[data-st="failed"] .tkrunrt {',
+      '.tkstep[data-st="error"] .tkmark {',
     ]) {
       expect(rule(sel), sel).not.toMatch(/--(?:clay|chat-danger)/)
     }

@@ -74,7 +74,7 @@ describe('the tasks seam installSources grows', () => {
     wiring.installSources()
     const { set: setTasks } = await import('../features/tasks/store')
     setTasks({
-      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {},
       board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
     })
 

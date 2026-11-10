@@ -94,7 +94,7 @@ function wire(): void {
     /* What the tasks tab counts. */
     tasks: {
       list: async () => taskRows, one: async () => null, stop: async () => false,
-      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
       roster: async () => [],
     },
   })

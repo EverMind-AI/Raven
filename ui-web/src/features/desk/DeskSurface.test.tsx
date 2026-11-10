@@ -35,7 +35,7 @@ const taskRow = (id: string): TaskRow => ({
 
 const stubTasks = (): TasksSource => ({
   list: async () => taskRows, one: async () => null, stop: async () => false,
-  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
   roster: async () => [],
 })
 

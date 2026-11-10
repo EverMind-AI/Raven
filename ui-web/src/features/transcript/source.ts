@@ -19,12 +19,11 @@ import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
-import { history as drawHistory, shownLane } from './mount'
-import { actLabel as storeActLabel } from './store'
+import { agentStage, history as drawHistory, shownLane } from './mount'
 import { bringUp, goTo as goToTurn } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
-import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg } from './types'
+import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg, StageOpts } from './types'
 
 /* Every delegation verb here is addressed to the conversation on screen, and
    the card that offers it only exists inside one. */
@@ -52,11 +51,11 @@ export function okOf(name: string, preview: string): boolean {
   return true
 }
 
-/* The same one-line-label table this island's own tool rows read, exposed so
-   a sibling domain that draws its own tool calls (features/tasks) can ask for
-   it through the seam rather than importing this island's private store. */
-export const actLabel = (name: string, args: Record<string, unknown>, display?: string | null): string =>
-  storeActLabel(name, args, display)
+/* One delegated run's record, painted by this island's renderer into a box a
+   sibling owns (features/tasks' context tab) -- reached through the seam, so
+   the sibling neither imports this island nor keeps a renderer of its own. */
+export const stagePaint = (box: HTMLElement, ctx: { status?: string; messages?: HistoryMessage[] } | null,
+  opts?: StageOpts | null): void => agentStage(box, ctx, opts)
 
 export function renderHistory(messages: HistoryMessage[]): void {
   /* Opening a stored conversation IS content: the new-task flag comes down

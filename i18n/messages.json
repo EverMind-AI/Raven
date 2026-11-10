@@ -545,6 +545,18 @@
       "en": "Sub-agent report",
       "zh": "子智能体回报"
     },
+    "gui.deleg.by_dispatch": {
+      "en": "From Raven",
+      "zh": "来自 Raven"
+    },
+    "gui.deleg.from": {
+      "en": "From {who}",
+      "zh": "来自 {who}"
+    },
+    "gui.deleg.from_subagent": {
+      "en": "From a subagent",
+      "zh": "来自子智能体"
+    },
     "gui.deleg.dlv_partial": {
       "en": "Partly done",
       "zh": "部分完成"

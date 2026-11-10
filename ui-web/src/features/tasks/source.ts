@@ -126,6 +126,9 @@ function fromMessages(messages: TranscriptMessage[] | undefined, promptFallback:
     dispatch: dispatch ? (dispatch.text ?? null) : promptFallback,
     steps: stepsOf(body),
     answer: answer ? (answer.text ?? null) : null,
+    /* Opening with the dispatch whichever field held it: a node whose record
+       has not been written yet still says what it was asked. */
+    messages: !dispatch && promptFallback != null ? [{ role: 'user', text: promptFallback }, ...all] : all,
   }
 }
 

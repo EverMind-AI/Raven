@@ -1904,11 +1904,11 @@ describe('a delegated result coming back', () => {
   })
 
   /* A graph's receipt is two kinds of text in one string, and the fold draws
-     them as two: the counts block a machine wrote, then one captioned section
-     per terminal node, which is what the sub-agent actually said. Through the
+     them as two: the node lines a machine wrote, then one captioned section
+     per terminal node, which is what the subagent actually said. Through the
      markdown reader the `- node [status]` lines fold into a bullet list and
      lose the alignment that makes them scannable. */
-  it('splits a graph receipt into the machine block and a section per node', () => {
+  it('splits a graph receipt into the node table and a section per node', () => {
     wireDelivery()
     const t0 = Date.now() - 20000
     const receipt = [
@@ -1935,11 +1935,11 @@ describe('a delegated result coming back', () => {
     })
     act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
     const body = $('.sdlv .sdbd') as HTMLElement
-    const raw = body.querySelector('.raw')?.textContent ?? ''
-    expect(raw).toContain('2 completed, 0 failed')
-    expect(raw).toContain('- read [completed]: nodes/read/.out.md')
+    const table = body.querySelector('.transcript-dlv-nodes')?.textContent ?? ''
+    expect(table).toContain('nodes/read/.out.md')
+    expect(table).toContain('nodes/write/.out.md')
     /* The node sections are below it, and not inside it. */
-    expect(raw).not.toContain('twelve files')
+    expect(table).not.toContain('twelve files')
     expect([...body.querySelectorAll('.cap')].map((n) => n.textContent))
       .toEqual(['en:gui.deleg.body_cap', 'read', 'write'])
     expect([...body.querySelectorAll('.prose')].map((n) => n.textContent))
@@ -2240,42 +2240,14 @@ describe('a delegated result coming back', () => {
     expect(bars.map((b) => b.file)).toEqual(['parent.md', 'delegated.md'])
     const order = [...document.querySelectorAll('.turn.me, .sdlv, .answer, .arts')]
       .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['turn', 'answer', 'arts', 'sdlv', 'answer', 'arts'])
+    expect(order).toEqual(['turn', 'answer', 'arts', 'turn', 'sdlv', 'answer', 'arts'])
   })
 
-  /* Every message the turn holds, in the order it arrived, inside one card:
-     a delivery is a message like any other, so it neither sits loose on the
-     page nor cuts the card in two where it lands. */
-  it('draws a delivery inside the card, without breaking the card in two', () => {
-    wireDelivery()
-    const t0 = Date.now() - 20000
-    act(() => {
-      mount.history([
-        { role: 'user', text: 'run the graph', timestamp: iso(t0) },
-        { role: 'assistant', text: 'dispatching it', timestamp: iso(t0 + 1000) },
-        {
-          role: 'user', text: fenced('3 completed, 0 failed'), timestamp: iso(t0 + 9000),
-          delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
-        },
-        { role: 'assistant', text: 'the graph came back clean', timestamp: iso(t0 + 11000) },
-      ])
-    })
-    const card = $('.sdlv')?.closest('.msg.ai')
-    expect(card).toBeTruthy()
-    expect($$('.msg.ai').length).toBe(1)
-    expect(card?.textContent).toContain('dispatching it')
-    expect(card?.textContent).toContain('the graph came back clean')
-    /* Arrival order, not grouped by kind. */
-    const order = [...(card as HTMLElement).querySelectorAll('.answer, .sdlv')]
-      .map((n) => n.className.split(' ')[0])
-    expect(order).toEqual(['answer', 'sdlv', 'answer'])
-  })
-
-  /* A card that holds several turns needs several footers. With one footer for
-     the whole card the copy button carried the FIRST answer's text whichever
-     answer the reader clicked it beside, and every later answer lost its
-     button altogether. */
-  it('gives every answer in a shared card its own footer', () => {
+  /* Every answer keeps a footer of its own. When one footer served a run of
+     answers, the copy button carried the FIRST answer's text whichever answer
+     the reader clicked it beside, and every later answer lost its button
+     altogether. */
+  it('gives every answer its own footer', () => {
     wireDelivery()
     const t0 = Date.now() - 30000
     act(() => {
@@ -2294,7 +2266,7 @@ describe('a delegated result coming back', () => {
         { role: 'assistant', text: 'third answer', timestamp: iso(t0 + 21000) },
       ])
     })
-    expect($$('.msg.ai').length).toBe(1)
+    expect($$('.msg.ai').length).toBe(3)
     expect($$('.turn.ai .answer').length).toBe(3)
     expect($$('.turn.ai .ansfoot').length).toBe(3)
     const copied: string[] = []
@@ -2347,6 +2319,182 @@ describe('a delegated result coming back', () => {
     expect(replay).toEqual(live)
     /* Not vacuously: the row and its body are actually in there. */
     expect(live.some((x) => x.startsWith('sdlv(en:gui.deleg.dag_title|3 completed, 0 failed'))).toBe(true)
+  })
+})
+
+describe('a delegated result, drawn as the message it is', () => {
+  const spawnCall = (args: Record<string, unknown>, t0: number): HistoryMessage[] => [
+    { role: 'assistant', text: '', timestamp: iso(t0), tool_calls: [{ id: 'sp1', name: 'spawn', arguments: JSON.stringify(args) }] },
+    { role: 'tool', tool_call_id: 'sp1', name: 'spawn', text: 'Subagent started' },
+  ]
+  const dagCall = (args: Record<string, unknown>, t0: number): HistoryMessage[] => [
+    { role: 'assistant', text: '', timestamp: iso(t0), tool_calls: [{ id: 'g1', name: 'run_subagent_dag', arguments: JSON.stringify(args) }] },
+    { role: 'tool', tool_call_id: 'g1', name: 'run_subagent_dag', text: 'DAG run run-7 submitted in the background' },
+  ]
+  const receipt = (tally: string, nodes: string[] = []): string => [
+    `DAG run run-7 finished: ${tally}.`, 'Run dir: ~/.raven/dag/run-7', '', 'Node output files:', ...nodes,
+  ].join('\n')
+  const graphBack = (body: string, t: number): HistoryMessage => ({
+    role: 'user', text: fenced(body), timestamp: iso(t),
+    delegated: { kind: 'dag', label: 'run-7', status: 'ok', run_id: 'run-7' },
+  })
+
+  /* It opens a turn the way a question does, so it stands where a question
+     stands: on the reader's side, between the reply before it and the reply it
+     set off. As a line inside the earlier reply's card it read as a footnote to
+     that reply, and the turn it opened had no visible start. */
+  it('stands on its own row between two replies, inside neither card', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'run the graph', timestamp: iso(t0) },
+        { role: 'assistant', text: 'dispatching it', timestamp: iso(t0 + 1000) },
+        graphBack(receipt('3 completed, 0 failed, 0 cancelled, 0 skipped'), t0 + 9000),
+        { role: 'assistant', text: 'the graph came back clean', timestamp: iso(t0 + 11000) },
+      ])
+    })
+    expect($('.sdlv')?.closest('.msg.ai')).toBeNull()
+    const turns = $$('#stage .turn')
+      .map((n) => (n.classList.contains('ai') ? 'reply' : n.querySelector('.sdlv') ? 'result' : 'ask'))
+    expect(turns).toEqual(['ask', 'reply', 'result', 'reply'])
+    expect($$('.msg.ai').map((n) => n.textContent)).toEqual([
+      expect.stringContaining('dispatching it'), expect.stringContaining('the graph came back clean'),
+    ])
+  })
+
+  it('names the agent that ran a spawn, read off the call that started it', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'look it up', timestamp: iso(t0) },
+        ...spawnCall({ agent: 'Coder', task: 'look it up', task_summary: 'lookup', node_id: 'lookup_node' }, t0 + 500),
+        { role: 'assistant', text: 'sent it off', timestamp: iso(t0 + 1000) },
+        {
+          role: 'user', text: spawnInjection('lookup', 'the answer is 42'), timestamp: iso(t0 + 9000),
+          delegated: { kind: 'spawn', label: 'lookup', status: 'ok', node_id: 'lookup_node' },
+        },
+      ])
+    })
+    expect($('.sdlv .transcript-dlv-from')?.textContent).toBe('en:gui.deleg.from {"who":"Coder"}')
+    expect($('.sdlv .nm')?.textContent).toBe('lookup')
+  })
+
+  /* Nothing to read it off -- a branched conversation replays its parent's
+     result, whose call is in the parent -- so the row says only what it knows. */
+  it('says a subagent sent it when no call in the conversation names the agent', () => {
+    wireDelivery()
+    act(() => {
+      mount.history([{
+        role: 'user', text: spawnInjection('lookup', 'the answer is 42'), timestamp: iso(Date.now() - 9000),
+        delegated: { kind: 'spawn', label: 'lookup', status: 'ok', node_id: 'elsewhere' },
+      }])
+    })
+    expect($('.sdlv .transcript-dlv-from')?.textContent).toBe('en:gui.deleg.from_subagent')
+  })
+
+  /* A graph's label is its run id, a timestamp; the graph's own line is what the
+     reader asked for, and it is on the call that dispatched it. */
+  it('titles a graph result with the graph\'s own line and counts its nodes', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'review it', timestamp: iso(t0) },
+        ...dagCall({ task_summary: 'Review the agent icons', nodes: [] }, t0 + 500),
+        graphBack(receipt('3 completed, 1 failed, 0 cancelled, 0 skipped'), t0 + 9000),
+      ])
+    })
+    const row = $('.sdlv') as HTMLElement
+    expect(row.querySelector('.nm')?.textContent).toBe('Review the agent icons')
+    expect(row.querySelector('.transcript-dlv-from')?.textContent)
+      .toBe('en:gui.deleg.from {"who":"en:gui.deleg.dag_title"}')
+    expect(row.querySelector('.transcript-dlv-tally')?.textContent)
+      .toBe('en:gui.deleg.dag_done {"ok":"3","n":"4"} · en:gui.deleg.dag_bad {"n":"1"}')
+    expect([...row.querySelectorAll('.transcript-dlv-bar i')].map((i) => i.getAttribute('data-tone'))).toEqual(['ok', 'ok', 'ok', 'bad'])
+    /* And it still opens the run, by the run id it came back under. */
+    act(() => { (row.querySelector('.nm') as HTMLElement).click() })
+    expect(opened).toEqual(['dag:run-7'])
+  })
+
+  /* The conversation does not always hold the call -- a result replayed into a
+     branch, a call older than what was read back -- and the run's own row in
+     this conversation's task list says the same things: the graph's line, who
+     ran the spawn, and when each started and stopped. */
+  it('reads the run\'s own task row when no call in the conversation names it', () => {
+    wireDelivery()
+    const rows: Record<string, unknown> = {
+      'dag:run-7': { kind: 'dag', id: 'run-7', task_summary: 'Review the agent icons', agent: null, started_at: 1000, ended_at: 1000 + 700000 },
+      'spawn:lookup_node': { kind: 'spawn', id: 'lookup_node', task_summary: 'lookup', agent: 'Researcher', started_at: 5000, ended_at: 5000 + 372000 },
+    }
+    setSources({
+      tasks: {
+        rowOf: (kind: string, id: string) => (rows[`${kind}:${id}`] ?? null),
+        watch: () => () => {},
+      } as never,
+    })
+    act(() => {
+      mount.history([
+        graphBack(receipt('3 completed, 0 failed, 0 cancelled, 0 skipped'), Date.now() - 20000),
+        {
+          role: 'user', text: spawnInjection('lookup', 'the answer is 42'), timestamp: iso(Date.now() - 9000),
+          delegated: { kind: 'spawn', label: 'lookup', status: 'ok', node_id: 'lookup_node' },
+        },
+      ])
+    })
+    const [graph, spawn] = $$('.sdlv')
+    expect(graph?.querySelector('.nm')?.textContent).toBe('Review the agent icons')
+    expect(graph?.querySelector('.transcript-dlv-span')?.textContent).toBe(store.durText(700000))
+    expect(spawn?.querySelector('.transcript-dlv-from')?.textContent).toBe('en:gui.deleg.from {"who":"Researcher"}')
+    expect(spawn?.querySelector('.transcript-dlv-span')?.textContent).toBe(store.durText(372000))
+  })
+
+  /* The live path names the run it came back from, so a result drawn while it
+     arrives reads the same call a reload reads. */
+  it('reads the same call live as it does after a reload', () => {
+    wireDelivery()
+    const t0 = Date.now() - 20000
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'look it up', timestamp: iso(t0) },
+        ...spawnCall({ agent: 'Coder', task: 'look it up', task_summary: 'lookup', node_id: 'lookup_node' }, t0 + 500),
+        { role: 'assistant', text: 'sent it off', timestamp: iso(t0 + 1000) },
+      ])
+    })
+    act(() => {
+      mount.delivered({
+        label: 'lookup', isDag: false, status: 'ok', nodeId: 'lookup_node',
+        body: spawnInjection('lookup', 'the answer is 42'), open: () => {},
+      })
+    })
+    expect($('.sdlv .transcript-dlv-from')?.textContent).toBe('en:gui.deleg.from {"who":"Coder"}')
+  })
+
+  /* The receipt's node lines are a table someone scans for the one that did not
+     finish, so they are drawn as one: a row per node, its status, and where its
+     output went or why it has none. The counts line is not repeated in the
+     fold -- the row above it already counts. */
+  it('draws a graph receipt\'s node lines as a table', () => {
+    wireDelivery()
+    const body = [
+      receipt('1 completed, 1 failed, 0 cancelled, 0 skipped', [
+        '- read [completed]: nodes/read/.out.md',
+        '- shoot [failed] (instance: cc-1): (no output file)',
+        '    error: Chromium did not start',
+      ]),
+      '', 'Terminal outputs:', '### read', 'twelve files, none stale',
+    ].join('\n')
+    act(() => { mount.history([graphBack(body, Date.now() - 9000)]) })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    const rows = $$('.sdlv .sdbd .transcript-dlv-nodes > div')
+      .map((r) => [...r.children].map((c) => c.textContent))
+    expect(rows).toEqual([
+      ['read', 'completed', 'nodes/read/.out.md'],
+      ['shoot', 'failed', 'Chromium did not start'],
+    ])
+    expect($('.sdlv .sdbd')?.textContent).not.toContain('1 completed, 1 failed')
+    expect($('.sdlv .sdbd .raw')).toBeNull()
   })
 })
 
@@ -2681,6 +2829,82 @@ describe("the turn's delivered files", () => {
     const again = [...box.querySelectorAll('.tfold .step')]
     expect(again.slice(0, steps.length)).toEqual(steps)
     expect(again.length).toBe(steps.length + 1)
+  })
+
+  /* A delegated run is a conversation of its own, so it reads like one: what it
+     was asked on the asker's side, what it did and said in a reply card. */
+  it('draws a delegated run in the cards the conversation draws', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [
+          { role: 'user', text: 'job' },
+          { role: 'assistant', reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+          { role: 'assistant', text: 'all done' },
+        ],
+      }, { key: 'cards-1', reset: true })
+    })
+    expect(box.querySelector('.turn.me .msg.me')?.textContent).toBe('job')
+    const card = box.querySelector('.turn.ai > .msg.ai') as HTMLElement
+    expect(card.querySelector('.tfold')).toBeTruthy()
+    expect(card.querySelector('.answer')?.textContent).toContain('all done')
+  })
+
+  /* A record's first message is the task its parent wrote, not anything the
+     reader typed: it wears the runtime's bubble and says who sent it, and it is
+     read as the markdown it was written in. A later message in the same record
+     is the reader's own and keeps the reader's bubble. */
+  it('draws a record\'s dispatch as the bubble nobody typed', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [
+          { role: 'user', text: 'Fix **five** findings.\n\n[BEGIN UNTRUSTED subagent #ab]\n4312\n[END UNTRUSTED subagent #ab]' },
+          { role: 'assistant', text: 'done' },
+          { role: 'user', text: 'and one more' },
+          { role: 'assistant', text: 'ok' },
+        ],
+      }, { key: 'dispatch-1', reset: true, dispatch: true })
+    })
+    const bubbles = [...box.querySelectorAll('.msg.me')]
+    expect(bubbles).toHaveLength(2)
+    expect(bubbles[0]?.getAttribute('data-auto')).toBe('true')
+    expect(bubbles[0]?.querySelector('.transcript-auto')?.textContent).toBe('en:gui.deleg.by_dispatch')
+    expect(bubbles[0]?.querySelector('.prose strong')?.textContent).toBe('five')
+    expect([...(bubbles[0] as Element).querySelectorAll('.transcript-untrusted')].map((n) => n.textContent)).toEqual([
+      '[BEGIN UNTRUSTED subagent #ab]', '[END UNTRUSTED subagent #ab]',
+    ])
+    expect(bubbles[1]?.hasAttribute('data-auto')).toBe(false)
+    expect(bubbles[1]?.textContent).toBe('and one more')
+  })
+
+  /* A settled record's work folds behind its one line once there is an answer
+     to read, when the pane asks for that -- the task pane does, the direct chat
+     keeps its steps open. */
+  it('folds a settled record\'s work only when asked to', () => {
+    const ctx = {
+      status: 'completed',
+      messages: [
+        { role: 'user' as const, text: 'job' },
+        { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+        { role: 'assistant' as const, text: 'all done' },
+      ],
+    }
+    const open = document.createElement('div')
+    const shut = document.createElement('div')
+    document.body.append(open, shut)
+    act(() => {
+      mount.agentStage(open, ctx, { key: 'fold-open', reset: true })
+      mount.agentStage(shut, ctx, { key: 'fold-shut', reset: true, shut: true })
+    })
+    expect(open.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('true')
+    expect(shut.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('shows a file the agent explicitly delivered', async () => {
@@ -3463,7 +3687,7 @@ describe('transcript island, tool episodes', () => {
       return css.slice(at, css.indexOf('}', at) + 1)
     }
     for (const sel of [
-      '.dlg .dgr .v.err {', '.dlg .dot.bad {', '.sdlv.bad .st {', '.sdlv.bad .st .dot {',
+      '.dlg .dgr .v.err {', '.dlg .dot.bad {', '.sdlv .st {', '.sdlv.bad .st .dot {',
       '.dtl .exit.bad {', '.sarow.task[data-st="error"] .dot {', '.sarow.task .st.fail {',
       '.tkerr {', '.tkfail {', '.tkstop {',
     ]) {
