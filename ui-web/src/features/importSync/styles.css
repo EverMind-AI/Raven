@@ -10,7 +10,7 @@
   background: none; color: inherit; font: inherit; text-align: left; cursor: default; }
 .importSync-main:not(:disabled) { cursor: pointer; }
 .importSync-main:not(:disabled):hover .importSync-nm { color: var(--text); }
-.importSync-main:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 4px; }
+.importSync-main:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; border-radius: 4px; }
 .importSync-led { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); flex: none; }
 .importSync-scan .importSync-led, .importSync-run .importSync-led, .importSync-wrap .importSync-led {
   animation: breathe 1.4s ease-in-out infinite; }
