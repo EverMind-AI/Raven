@@ -1520,7 +1520,7 @@ async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
         IN_SUBAGENT_RUN.reset(token)
 
     assert blocked.startswith("Error:")
-    assert "not available inside a sub-agent run" in blocked
+    assert "not available inside a subagent run" in blocked
 
     # Same call from the main agent's context is accepted (empty graph → no-op).
     # A refusal is a plain error string; an accepted run comes back as a

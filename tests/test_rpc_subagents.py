@@ -3815,7 +3815,7 @@ async def test_a_builtin_row_cannot_be_switched_off(config_path: Path) -> None:
     assert rows[GENERIC_AGENT]["group"] == "builtin"
     # The description still comes from the package's row, which is the only line
     # the model reads about this agent.
-    assert "in-process sub-agent" in rows[GENERIC_AGENT]["description"]
+    assert "in-process subagent" in rows[GENERIC_AGENT]["description"]
 
 
 async def test_a_switch_off_hand_written_into_config_does_not_take_it_off_the_roster(

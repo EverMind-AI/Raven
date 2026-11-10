@@ -1847,7 +1847,7 @@ async def _refusal_scene(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: 
             "blank_agent": "needs an `agent`",
             "missing_message": "needs a message",
             "blank_message": "needs a message",
-            "unknown_target": "no sub-agent by that name",
+            "unknown_target": "no subagent by that name",
         }[case]
         return _Scene(tool, run_id, agent, message, expected, fakes, ask, charge)
 

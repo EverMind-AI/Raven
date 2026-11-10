@@ -178,7 +178,7 @@ class TestTheLegacyNamesStillNameTheSeed:
         assert merged[0].skills == ["x"]
         # And it is an override, not a replacement: the seed's description is the
         # only line the model reads about this agent.
-        assert "in-process sub-agent" in merged[0].description
+        assert "in-process subagent" in merged[0].description
 
     def test_the_current_row_wins_when_config_holds_both(self) -> None:
         legacy = BuiltinAgentConfig.model_validate({"name": "raven", "kind": "builtin", "skills": ["old"]})
@@ -267,7 +267,7 @@ class TestTheDescriptionStatesWhatTheAgentCannotDo:
     """
 
     def test_it_says_sub_agents_are_out_of_reach(self) -> None:
-        assert "cannot call sub-agents" in builtin_agent_seeds()[0].description
+        assert "cannot call subagents" in builtin_agent_seeds()[0].description
 
     def test_and_no_longer_claims_the_whole_tool_set(self) -> None:
         # The claim that produced the mismatch: `spawn` is part of "the whole tool

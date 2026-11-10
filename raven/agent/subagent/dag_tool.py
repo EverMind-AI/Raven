@@ -623,7 +623,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "prompt_template": {
             "type": "string",
             "description": (
-                "Node prompt. {{ <node>.output }} / .output_path a node's output, {{ inputs.<k> }} / .path an input, {{ ref:<path> }} a file; the _path forms need a [local-files] agent naming an existing file, not a [no-local-files] one. A node is readable if it is this graph's and listed in its depends_on, or a task this conversation completed and left an output; a failed, skipped, cancelled, not-executed or still-running one is refused, saying which. A node of this graph that was not executed (see when) leaves no output file, and its placeholders render \"<This task is not executed and the output is missing, please go on without this output.>\" instead: write one titled block per output that may be missing. A node may not run with a when of its own (<node>.done included), or when its in-graph dependencies all may not run; reach it with {{ <node>.output }} rather than a ref:@nodes/ path, which is refused. Every key in inputs must be referenced by a placeholder. A long prompt belongs in a file."
+                "Node prompt. {{ <node>.output }} / .output_path a node's output, {{ inputs.<k> }} / .path an input, {{ ref:<path> }} / {{ ref_path:<path> }} a file (a node's output is @nodes/<node>.out.md); the _path forms need a [local-files] agent naming an existing file, not a [no-local-files] one. A node is readable if it is this graph's and listed in its depends_on, or a task this conversation completed and left an output; a failed, skipped, cancelled, not-executed or still-running one is refused, saying which. How to read a node that may not run is in the guide's Conditional branches. Every key in inputs must be referenced by a placeholder. A long prompt belongs in a file."
             ),
         },
         "depends_on": {
@@ -634,7 +634,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "inputs": {
             "type": "object",
             "description": (
-                'Per-key literal string, {"file": <path>}, or {"node": <id>} for a node completed with an output. Exactly one of those three and nothing else in the object: no second key beside file or node, no empty path or id, and a number, boolean or list is refused. {{ inputs.<k> }} injects the text, .path the path.'
+                'Per-key literal string, {"file": <path>}, or {"node": <id>} for a node completed with an output. Exactly one of those three and nothing else in the object: no second key beside file or node, no empty path or id, and a number, boolean or list is refused.'
             ),
         },
         "instance": {
@@ -642,7 +642,7 @@ _NODE_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "pattern": r"^\S(?:.*\S)?$",
             "description": (
-                "Optional handle: nodes sharing it run in sequence. Only on a [stateful] sub-agent; omitted, its nodes get one automatically, reported and continuable; others get none."
+                "Optional handle: nodes sharing it run in sequence. Only on a [stateful] subagent; omitted, its nodes get one automatically, reported and continuable; others get none. A handle never stands in for the agent: every node still names its subagent."
             ),
         },
         "routes": {
@@ -662,7 +662,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "when": {
             "type": "string",
             "description": (
-                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here. A branch node needs no guard beyond naming any decision node it depends on; a node of the branch that also depends on something outside it, the decision node included, needs the branch's route, not <node>.done. A merge node that should run on every route keeps <node>.done."
+                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here; which atom each node needs is in the guide's Conditional branches."
             ),
         },
     },
@@ -1556,13 +1556,14 @@ class SubAgentDagTool(Tool):
         # and two resident surfaces stating the trigger differently is how they
         # drift. What stays here is how to call it.
         return (
-            "Orchestrate two or more sub-agent tasks as a single DAG instead of calling sub-agents "
+            "Orchestrate two or more subagent tasks as a single DAG instead of calling subagents "
             "one at a time. Independent nodes run concurrently; a node's output is passed to its "
             "dependents through files (large outputs never enter your context). One call carries the "
-            "whole graph -- do not issue a separate call per node. The graph runs in the background and "
-            "its result is announced to you when it finishes, so do not poll it and do not re-submit it. "
+            "whole graph -- do not issue a separate call per node. By default the graph runs in the "
+            "background and its result is announced to you when it finishes, so do not poll it and do "
+            "not re-submit it. "
             f"{guide}{capture_note}"
-            f"Available sub-agents for the `subagent` field: {names}."
+            f"Available subagents for the `subagent` field: {names}."
         )
 
     @property
@@ -1749,7 +1750,7 @@ class SubAgentDagTool(Tool):
         detail = str(exc).rstrip()
         if detail and detail[-1] not in ".!?":
             detail += "."
-        message = f"Error: invalid DAG — {detail} No sub-agent was run."
+        message = f"Error: invalid DAG — {detail} No subagent was run."
         if self._guide_skill_id:
             message += (
                 f' Call `read_skill("{self._guide_skill_id}")` for the wiring rules, then retry '
@@ -1809,7 +1810,7 @@ class SubAgentDagTool(Tool):
         # failure is a refusal rather than a silent recursive fan-out.
         if IN_SUBAGENT_RUN.get():
             return (
-                "Error: run_subagent_dag is not available inside a sub-agent run — "
+                "Error: run_subagent_dag is not available inside a subagent run — "
                 "only the main agent orchestrates DAGs. Complete the assigned task directly."
             )
         from raven.playbook.run_record import current_capture
@@ -1914,7 +1915,7 @@ class SubAgentDagTool(Tool):
         # sub-agent dispatches.
         if self._is_paused is not None and self._is_paused():
             return (
-                "Error: delegation is paused. The user paused sub-agent spawning; "
+                "Error: delegation is paused. The user paused subagent spawning; "
                 "do the work in this turn instead, or ask them to resume."
             )
         # Validation is a distinct phase, ahead of the run, in both modes: a
@@ -2213,7 +2214,7 @@ class SubAgentDagTool(Tool):
             )
         if self._is_paused is not None and self._is_paused():
             return (
-                "Error: delegation is paused. The user paused sub-agent spawning; do the work in this "
+                "Error: delegation is paused. The user paused subagent spawning; do the work in this "
                 "turn instead, or ask them to resume. No decision was recorded, so the node is still waiting."
             )
         desk = self._desks.get(run_id)
@@ -2526,7 +2527,7 @@ class SubAgentDagTool(Tool):
                 node.subagent,
                 reads_local_files=False,
                 subject=f"node '{node.id}'",
-                escape_hatch=", or choose a sub-agent tagged [local-files] for this reassign",
+                escape_hatch=", or choose a subagent tagged [local-files] for this reassign",
             )
 
     def _machine_notice(self, source_agent: str, target_agent: str) -> str | None:
@@ -2538,12 +2539,12 @@ class SubAgentDagTool(Tool):
         if source_machine:
             return (
                 f"the earlier attempts ran on machine '{source_machine}', so the files they wrote stay "
-                "there -- put what the new sub-agent needs into your message"
+                "there -- put what the new subagent needs into your message"
             )
         if target_machine:
             return (
                 f"agent '{target_agent}' runs on machine '{target_machine}', while the earlier attempts ran "
-                "on this computer, so the files they wrote stay here -- put what the new sub-agent needs "
+                "on this computer, so the files they wrote stay here -- put what the new subagent needs "
                 "into your message"
             )
         return None
@@ -2658,11 +2659,11 @@ class SubAgentDagTool(Tool):
         if not target:
             return (
                 f"Error: reassigning node '{node_id}' needs an `agent` -- the roster name of the "
-                "sub-agent that should run it next. No decision was recorded, so the node is still waiting."
+                "subagent that should run it next. No decision was recorded, so the node is still waiting."
             )
         if not text:
             return (
-                f"Error: reassigning node '{node_id}' needs a message telling the new sub-agent what to "
+                f"Error: reassigning node '{node_id}' needs a message telling the new subagent what to "
                 "do next. No decision was recorded, so the node is still waiting."
             )
         try:
@@ -2686,7 +2687,7 @@ class SubAgentDagTool(Tool):
             )
         if self._is_paused is not None and self._is_paused():
             return (
-                "Error: delegation is paused. The user paused sub-agent spawning; resume it before "
+                "Error: delegation is paused. The user paused subagent spawning; resume it before "
                 "reassigning this node. No decision was recorded, so the node is still waiting."
             )
         state = admission.state
@@ -2709,7 +2710,7 @@ class SubAgentDagTool(Tool):
             if table is not None and target in table.labels():
                 label_note = " -- that is a worker label of this turn, not a roster agent"
             return (
-                f"Error: cannot reassign node '{node_id}' to '{target}': no sub-agent by that name is "
+                f"Error: cannot reassign node '{node_id}' to '{target}': no subagent by that name is "
                 f"on this machine's roster{label_note}. Choose an enabled agent from the roster. "
                 "No decision was recorded, so the node is still waiting."
             )
@@ -2724,7 +2725,7 @@ class SubAgentDagTool(Tool):
         if target_agent not in live:
             return (
                 f"Error: cannot reassign node '{node_id}' to '{target_agent}': it is no longer an enabled "
-                "sub-agent on this machine. No decision was recorded, so the node is still waiting."
+                "subagent on this machine. No decision was recorded, so the node is still waiting."
             )
         source_node = state.effective(node_id, authored[node_id])
         source_agent = source_node.subagent
@@ -2777,7 +2778,7 @@ class SubAgentDagTool(Tool):
             return (
                 f"Error: node '{node_id}' shares instance '{source_instance}' with "
                 f"{len(members | {node_id}) - 1} other node(s) in this run, so it can only be reassigned to "
-                f"a [stateful] sub-agent; '{target_agent}' is not one. No decision was recorded, so the "
+                f"a [stateful] subagent; '{target_agent}' is not one. No decision was recorded, so the "
                 "node is still waiting."
             )
         if target_instance is not None and not instance_auto:
@@ -2861,7 +2862,7 @@ class SubAgentDagTool(Tool):
         # since been used. Done for every proposal, not only a confirmed one.
         if self._registry.get(target_agent) != row or target_agent not in self._capability_map():
             return (
-                f"Error: sub-agent '{target_agent}' changed while the reassign was being prepared, so "
+                f"Error: subagent '{target_agent}' changed while the reassign was being prepared, so "
                 "nothing was applied. Request the reassignment again. No decision was recorded, so the "
                 "node is still waiting."
             )
@@ -2873,7 +2874,7 @@ class SubAgentDagTool(Tool):
                 target_instance,
             ):
                 return (
-                    f"Error: instance '{target_instance}' on sub-agent '{target_agent}' became occupied "
+                    f"Error: instance '{target_instance}' on subagent '{target_agent}' became occupied "
                     "while the reassign was being prepared, so nothing was applied. Choose another "
                     "agent. No decision was recorded, so the node is still waiting."
                 )
@@ -3030,7 +3031,7 @@ class SubAgentDagTool(Tool):
         """
         row = self._registry.get(node.subagent)
         if row is None:
-            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+            raise DagValidationError(f"node '{node.id}' names unknown subagent '{node.subagent}'")
         if not row.enabled:
             raise DagValidationError(
                 f"node '{node.id}' names agent '{node.subagent}', which is turned off on this "
@@ -3038,7 +3039,7 @@ class SubAgentDagTool(Tool):
             )
         backend = self._resolve_node(node)
         if backend is None:
-            raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+            raise DagValidationError(f"node '{node.id}' names unknown subagent '{node.subagent}'")
         notices: list[str] = []
         resolver = getattr(backend, "resolve_mcp_grant", None)
         if row.injectable.mcps and resolver is not None:
