@@ -8,7 +8,9 @@ root is the unit: every path the loader touches has to resolve inside it
 
 from __future__ import annotations
 
+import errno
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -54,6 +56,20 @@ class AgentPluginPackage:
         return package_fingerprint(self.root)
 
 
+# Windows reports a symlink loop as this error; its errno may not be ELOOP.
+_WINERROR_CANT_RESOLVE_FILENAME = 1921
+
+
+def is_symlink_loop(error: OSError) -> bool:
+    """Whether *error* is the platform's symlink-loop signal.
+
+    ``Path.resolve`` raises ``RuntimeError`` for ELOOP on CPython 3.12 and
+    returns the loop path on 3.13, so an exception is not a version-wide
+    signal; ``os.path.realpath(..., strict=True)`` raises this on both.
+    """
+    return error.errno == errno.ELOOP or getattr(error, "winerror", 0) == _WINERROR_CANT_RESOLVE_FILENAME
+
+
 def is_contained(root: Path, candidate: Path) -> bool:
     """True when *candidate* resolves inside *root*.
 
@@ -67,6 +83,12 @@ def is_contained(root: Path, candidate: Path) -> bool:
     # link is a containment failure, never a crash for the whole process.
     except (ValueError, OSError, RuntimeError):
         return False
+    # 3.13 returns the loop path instead of raising, and the relative-to check
+    # then passes; the strict realpath is the loop signal both versions share.
+    try:
+        os.path.realpath(candidate, strict=True)
+    except OSError as exc:
+        return not is_symlink_loop(exc)
     return True
 
 
@@ -188,6 +210,7 @@ __all__ = [
     "candidate_roots",
     "discover_packages",
     "is_contained",
+    "is_symlink_loop",
     "load_package",
     "package_fingerprint",
 ]

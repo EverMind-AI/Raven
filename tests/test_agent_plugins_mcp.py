@@ -168,6 +168,27 @@ def test_an_unresolvable_data_root_reports_every_package(tmp_path: Path) -> None
     assert "cannot be resolved" in problems[0].reason
 
 
+def test_an_uncreatable_package_data_dir_reports_its_package(tmp_path: Path) -> None:
+    """An allowed package whose data directory cannot be created is skipped, not fatal."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    data = tmp_path / "data"
+    data.mkdir()
+    loop = data / PACKAGE_NAME
+    try:
+        loop.symlink_to(PACKAGE_NAME)
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, problems, entries = package_mcp_servers(
+        [load_package(root)], allowed=[PACKAGE_NAME], plugin_data_root=data
+    )
+
+    assert servers == {}
+    assert entries == []
+    assert [problem.path for problem in problems] == [str(root)]
+    assert "cannot be created" in problems[0].reason
+
+
 # ---------------------------------------------------------------------------
 # read_mcp_config
 # ---------------------------------------------------------------------------

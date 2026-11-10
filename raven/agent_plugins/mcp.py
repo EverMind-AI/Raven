@@ -28,6 +28,7 @@ packages are allowed to run.
 from __future__ import annotations
 
 import ntpath
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,7 +36,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from raven.agent_plugins.package import AgentPluginPackage, PackageProblem, is_contained
+from raven.agent_plugins.package import AgentPluginPackage, PackageProblem, is_contained, is_symlink_loop
 from raven.config.schema import MCPServerConfig
 
 MCP_CONFIG_FILENAME = "mcp.json"
@@ -476,30 +477,46 @@ def package_mcp_servers(
 
     # The sandbox translator compares resolved roots; PLUGIN_DATA has to be
     # spelled the same way or a symlinked RAVEN_HOME leaves it a host path.
+    # `realpath(strict=True)` is the loop signal on both supported versions:
+    # 3.12's `resolve()` raises RuntimeError on ELOOP while 3.13 returns the
+    # loop path, but both raise OSError here. A root that does not exist yet
+    # is not a loop, so it keeps the non-strict spelling.
     try:
-        data_root = Path(plugin_data_root).resolve()
-    # Python 3.12 turns ELOOP into RuntimeError, not OSError. Every package
-    # shares this root, so an unusable one leaves each PLUGIN_DATA unknown and
-    # each per-package directory impossible to create: report every package
-    # instead of starting a server on a path that cannot exist.
-    except (OSError, RuntimeError):
-        return (
-            {},
-            [
-                PackageProblem(
-                    str(package.root),
-                    f"the shared package data root {plugin_data_root} cannot be resolved",
-                )
-                for package in packages
-            ],
-            [],
-        )
+        resolved_root = os.path.realpath(plugin_data_root, strict=True)
+    except OSError as exc:
+        # Every package shares this root, so an unusable one leaves each
+        # PLUGIN_DATA unknown and each per-package directory impossible to
+        # create: report every package instead of starting a server on a path
+        # that cannot exist.
+        if is_symlink_loop(exc):
+            return (
+                {},
+                [
+                    PackageProblem(
+                        str(package.root),
+                        f"the shared package data root {plugin_data_root} cannot be resolved",
+                    )
+                    for package in packages
+                ],
+                [],
+            )
+        resolved_root = os.path.realpath(plugin_data_root)
+    data_root = Path(resolved_root)
     for package in packages:
         data_dir = data_root / package.name
         if package.name in permitted:
             # The client's persistent directory for this package, created
             # before any process of it starts (spec §9.1).
-            data_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                data_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                problems.append(
+                    PackageProblem(
+                        str(package.root),
+                        f"the package data directory {data_dir} cannot be created: {exc}",
+                    )
+                )
+                continue
         report = package_mcp_report(package, plugin_data=data_dir, reserved_names=taken)
         if report.disabled:
             problems.append(PackageProblem(str(package.root), report.disabled))
