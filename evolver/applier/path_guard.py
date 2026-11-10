@@ -123,6 +123,11 @@ class ImmutablePathError(ValueError):
     """
 
 
+_WINDOWS_RESERVED = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+
+
 class UnsafePathError(ValueError):
     """Raised when a patch names a path that can escape the subject tree.
 
@@ -151,6 +156,12 @@ def _unsafe_reason(path: str) -> str | None:
         return "empty path"
     if ".." in posix.parts:
         return "'..' path component"
+    # Windows resolves these base names to devices, not files. ``NUL.txt``
+    # and trailing dots/spaces are the same device, and the check is
+    # case-insensitive.
+    base = posix.name.rstrip(" .").split(".", 1)[0].upper()
+    if base in _WINDOWS_RESERVED:
+        return "Windows reserved device name"
     return None
 
 
@@ -255,13 +266,6 @@ def assert_patch_allowed(target_files: list[str]) -> None:
     assert_safe_relative_paths(target_files)
     offenders = check_patch_paths(target_files)
     if offenders:
-        head = offenders[:5]
-        more = f" ... and {len(offenders) - 5} more" if len(offenders) > 5 else ""
-        raise ImmutablePathError(
-            f"Patch targets {len(offenders)} evolver-immutable path(s): "
-            f"{head}{more}. The gates, ledgers, and eval glue may never be "
-            "edited by a candidate (see IMMUTABLE_PATTERNS in this module)."
-        )
         head = offenders[:5]
         more = f" ... and {len(offenders) - 5} more" if len(offenders) > 5 else ""
         raise ImmutablePathError(

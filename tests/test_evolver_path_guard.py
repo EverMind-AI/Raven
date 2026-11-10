@@ -24,6 +24,11 @@ from evolver.applier.path_guard import (
         ".",
         "",
         "bad\x00path",
+        "NUL",
+        "nul.txt",
+        "CON",
+        "COM1",
+        "LPT9.log",
     ],
 )
 def test_unsafe_paths_are_rejected(path: str):
@@ -41,6 +46,8 @@ def test_unsafe_paths_are_rejected(path: str):
         "benchmarks/appworld/evolve/adapter.py",
         "a.txt",
         "./file.txt",
+        "nulish.txt",
+        "console.txt",
     ],
 )
 def test_relative_repo_paths_are_allowed(path: str):
