@@ -95,6 +95,13 @@ class BenchmarkGuardConfig(_Base):
     # and what the ~3% of clean items it also stops turn out to be.
     block_question_pages: bool = True
     question_run_chars: int = QUESTION_RUN_CHARS
+    # Shadow: judge the page, record the verdict, serve it anyway. It exists because
+    # the other way to learn what this rule would have stopped -- scanning the stored
+    # trajectory afterwards -- reads the digest and not the page. On the smoke's three
+    # decisive fetches the digest carried the question for two and not for the third,
+    # and the third is the one the run scored off. Shadow measures a run the guard did
+    # not change; it is not a softer guard, and it leaves the copy in the transcript.
+    question_pages_shadow: bool = False
     # Dropping a result row leaves no trace in the transcript by construction, so
     # without this nobody can say afterwards whether the guard fired at all.
     audit: bool = True

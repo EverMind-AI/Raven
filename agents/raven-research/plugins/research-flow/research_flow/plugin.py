@@ -366,6 +366,7 @@ class _Shared:
                 benchmark_guard=cfg.benchmark_guard.enabled,
                 benchmark_guard_question=cfg.benchmark_guard.block_question_pages,
                 benchmark_guard_question_chars=cfg.benchmark_guard.question_run_chars,
+                benchmark_guard_question_shadow=cfg.benchmark_guard.question_pages_shadow,
                 **kwargs,
             )
         return self._web_fetch

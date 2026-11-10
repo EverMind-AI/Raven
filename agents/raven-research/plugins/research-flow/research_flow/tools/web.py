@@ -1701,6 +1701,7 @@ class WebFetchTool(Tool):
         benchmark_guard: bool = False,
         benchmark_guard_question: bool = True,
         benchmark_guard_question_chars: int = QUESTION_RUN_CHARS,
+        benchmark_guard_question_shadow: bool = False,
     ):
         self._init_api_key = api_key
         self.max_chars = max_chars
@@ -1723,6 +1724,11 @@ class WebFetchTool(Tool):
         # alone to compare against the published one.
         self.benchmark_guard_question = benchmark_guard_question
         self.benchmark_guard_question_chars = benchmark_guard_question_chars
+        # Shadow is a modifier on the question rule, not a third half: it is inert when
+        # that rule is off, because there is no verdict to record. Deciding it here
+        # rather than leaving it implicit -- a run configured shadow-on/question-off
+        # audits nothing, and that is the intended reading, not an oversight.
+        self.benchmark_guard_question_shadow = benchmark_guard_question_shadow
         self._sessions: dict[str, _FetchTurnState] = {}
 
     def _state(self) -> _FetchTurnState:
@@ -2043,20 +2049,25 @@ class WebFetchTool(Tool):
         # characters of raw trace and not in its digest; before the recording because
         # a copy admitted to the source store would reach the reviewer's evidence pack
         # even though the model never saw it.
+        # Shadow runs the same verdict and records it, then serves the page: it measures
+        # what this rule would stop on a run the rule did not change. One predicate, two
+        # outcomes, so the judgement cannot drift between the audited and the served case.
         if (
             self.benchmark_guard
             and self.benchmark_guard_question
             and blocks_page(current_task(), text, run_chars=self.benchmark_guard_question_chars)
         ):
+            shadow = self.benchmark_guard_question_shadow
             _guard_audit(
-                "page_refused",
+                "page_shadowed" if shadow else "page_refused",
                 session=_SESSION.get(),
                 url=url,
                 rule="question_verbatim",
                 page_chars=len(text),
                 run_chars=self.benchmark_guard_question_chars,
             )
-            return page_refusal()
+            if not shadow:
+                return page_refusal()
 
         encoding_lost = _encoding_lost(text)
         source_chars = len(text)

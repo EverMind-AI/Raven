@@ -148,11 +148,13 @@ class TestOffByDefault:
         assert g.enabled is False
         assert g.block_question_pages is True and g.question_run_chars == QUESTION_RUN_CHARS
         assert g.audit is True
+        assert g.question_pages_shadow is False, "an evaluation gets the guard, not a measurement"
 
     def test_the_sub_flags_are_inert_while_the_guard_is_off(self):
         tool = WebFetchTool(api_key="k")
         assert tool.benchmark_guard is False
         assert tool.benchmark_guard_question is True
+        assert tool.benchmark_guard_question_shadow is False
 
 
 class TestTheTaskContextVar:
@@ -241,6 +243,84 @@ class TestTheLivePath:
         await tool.execute(url="https://example.org/trace/1")
 
         assert recorded == []
+
+    @pytest.mark.asyncio
+    async def test_shadow_serves_the_page_and_records_the_verdict(self, transport, tmp_path):
+        """Shadow exists to measure what the rule would stop on a run it did not change.
+
+        Scanning the stored trajectory afterwards cannot do that job: it reads the
+        digest, and on the smoke's three decisive fetches the digest carried the
+        question for two of them and not for the third -- the one the run scored off.
+        """
+        t = transport(_PageTransport(f"prompt: {QUESTION}\n\ncorrect_answer: Michael Cullen"))
+        set_current_session("page-guard-shadow")
+        set_current_task(QUESTION)
+        guard_audit.set_audit_dir(tmp_path)
+        tool = WebFetchTool(api_key="k", benchmark_guard=True, benchmark_guard_question_shadow=True)
+
+        out = await tool.execute(url="https://example.org/trace/1")
+
+        assert out != page_refusal(), "shadow must not change the run"
+        assert "Michael Cullen" in out
+        assert t.calls
+        rows = [json.loads(x) for x in (tmp_path / "benchmark_guard.jsonl").read_text().splitlines()]
+        assert [r["event"] for r in rows] == ["page_shadowed"]
+        assert rows[0]["rule"] == "question_verbatim"
+        assert rows[0]["url"] == "https://example.org/trace/1"
+        guard_audit.set_audit_dir(None)
+
+    @pytest.mark.asyncio
+    async def test_shadow_keeps_the_page_as_evidence(self, transport, tmp_path, monkeypatch):
+        """The blocking path drops the page from the source store on purpose. Shadow must
+        not, or the measured run is not the unguarded one it claims to be."""
+        transport(_PageTransport(f"prompt: {QUESTION}\n\ncorrect_answer: Michael Cullen"))
+        set_current_session("page-guard-shadow-source")
+        set_current_task(QUESTION)
+        guard_audit.set_audit_dir(tmp_path)
+        recorded: list[str] = []
+        tool = WebFetchTool(api_key="k", benchmark_guard=True, benchmark_guard_question_shadow=True)
+        monkeypatch.setattr(type(tool), "_record_source", lambda self, url, text, ex: recorded.append(url))
+
+        await tool.execute(url="https://example.org/trace/1")
+
+        assert recorded == ["https://example.org/trace/1"]
+        guard_audit.set_audit_dir(None)
+
+    @pytest.mark.asyncio
+    async def test_shadow_is_inert_when_the_question_rule_is_off(self, transport, tmp_path):
+        """The decided reading: shadow is a modifier on the question rule, not a third
+        half. With the rule off there is no verdict, so there is nothing to record."""
+        transport(_PageTransport(f"prompt: {QUESTION}\n\ncorrect_answer: Michael Cullen"))
+        set_current_session("page-guard-shadow-off")
+        set_current_task(QUESTION)
+        guard_audit.set_audit_dir(tmp_path)
+        tool = WebFetchTool(
+            api_key="k",
+            benchmark_guard=True,
+            benchmark_guard_question=False,
+            benchmark_guard_question_shadow=True,
+        )
+
+        out = await tool.execute(url="https://example.org/trace/1")
+
+        assert out != page_refusal()
+        assert not (tmp_path / "benchmark_guard.jsonl").exists()
+        guard_audit.set_audit_dir(None)
+
+    @pytest.mark.asyncio
+    async def test_shadow_writes_nothing_for_an_ordinary_page(self, transport, tmp_path):
+        """Not vacuous: a shadow row has to mean the rule fired, not that a fetch happened."""
+        transport(_PageTransport("Enniscorthy is a town in County Wexford, on the River Slaney. " * 20))
+        set_current_session("page-guard-shadow-ok")
+        set_current_task(QUESTION)
+        guard_audit.set_audit_dir(tmp_path)
+        tool = WebFetchTool(api_key="k", benchmark_guard=True, benchmark_guard_question_shadow=True)
+
+        out = await tool.execute(url="https://en.wikipedia.org/wiki/Enniscorthy")
+
+        assert "River Slaney" in out
+        assert not (tmp_path / "benchmark_guard.jsonl").exists()
+        guard_audit.set_audit_dir(None)
 
     @pytest.mark.asyncio
     async def test_a_turn_with_no_task_set_blocks_nothing(self, transport):
