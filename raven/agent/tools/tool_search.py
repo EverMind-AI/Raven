@@ -443,6 +443,10 @@ class ToolCallTool(Tool):
     def metadata_owner(self, params: dict[str, Any]) -> Tool:
         return self._ctrl.resolve_target(params.get("name")).tool or self
 
+    def forwarded_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        forwarded = params.get("arguments")
+        return forwarded if isinstance(forwarded, dict) else {}
+
     async def execute(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         return await self._ctrl.call(name, arguments)
 

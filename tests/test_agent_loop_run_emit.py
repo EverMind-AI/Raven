@@ -504,12 +504,13 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     assert start.display == "Which base?"
 
 
-def _call_by_route(call_id: str, name: str, route: str) -> ChatDelta:
+def _call_by_route(call_id: str, name: str, route: str, arguments: dict | None = None) -> ChatDelta:
     """One model call to ``name``, made directly or forwarded through ``tool_call``."""
+    args = arguments or {}
     function = (
-        {"name": name, "arguments": "{}"}
+        {"name": name, "arguments": json.dumps(args)}
         if route == "direct"
-        else {"name": "tool_call", "arguments": json.dumps({"name": name, "arguments": {}})}
+        else {"name": "tool_call", "arguments": json.dumps({"name": name, "arguments": args})}
     )
     return ChatDelta(content=None, tool_call_delta={"tool_calls": [{"index": 0, "id": call_id, "function": function}]})
 
@@ -566,6 +567,71 @@ async def test_a_forwarded_skill_read_is_named_for_the_tool_that_produced_it(tmp
     assert parts[SKILLS] > 0
     assert as_talk[SKILLS] == 0
     assert parts[CONVERSATION] < as_talk[CONVERSATION]
+
+
+class _SkillSink:
+    """Records what ``set_skills_sink`` reports to the skill panel."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    async def __call__(self, conversation: str, name: str, payload: dict) -> None:
+        self.events.append((conversation, name, payload))
+
+    def read_skills(self) -> list[dict]:
+        return [
+            skill
+            for _, name, payload in self.events
+            if name == "skills_injected"
+            for skill in payload["skills"]
+            if skill["kind"] in ("read_skill", "use_skill")
+        ]
+
+
+async def test_a_forwarded_skill_read_reaches_the_skill_panel(tmp_path):
+    """The outer call is ``tool_call``; the panel must still hear about the
+    skill the model loaded through it."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "tool_call", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["name"] == "deck-engine"
+    assert reported[0]["kind"] == "read_skill"
+
+
+async def test_a_direct_skill_read_still_reaches_the_skill_panel(tmp_path):
+    """The control for the forwarded case: a direct call reports unchanged."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "direct", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["kind"] == "read_skill"
 
 
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
