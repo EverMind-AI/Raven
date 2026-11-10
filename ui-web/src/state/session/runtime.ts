@@ -359,7 +359,7 @@ export function sendMidTurn(text: string): void {
       queuePush(text)
       const err = e as { message?: string }
       noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
-        { retry: () => resend(text) })
+        { retry: () => send(text) })
     })
 }
 
