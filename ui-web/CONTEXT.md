@@ -610,7 +610,9 @@ Opened, one is read-only. The session registry sets `.chat[data-readonly]`
 (`state/session/conversation.ts`'s `readOnly`) as a switch begins, before
 `session.resume` answers, from the key's own prefix (`lib/imported.ts`); the
 stylesheet then takes away the composer dock, the workdir tag and the
-conversation menu (its slot kept), and the name stops being a rename control.
+conversation menu -- which leaves the capsule, closing it up around the chip
+and moving the anchored palette's notch to 11.5px from the palette's right
+edge -- and the name stops being a rename control.
 Sending, branching, the header editor and exporting refuse in their own code
 too. What the package does not carry degrades quietly instead of failing: a
 graph card reads no run record and shows no node count, an agent card asks
