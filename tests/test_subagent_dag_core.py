@@ -4792,6 +4792,26 @@ def test_the_skills_worked_example_is_a_graph_the_runtime_accepts() -> None:
     assert "ref:@nodes/" not in by_id["reply"].prompt_template
 
 
+def test_every_graph_example_in_the_skill_is_a_call_the_runtime_accepts() -> None:
+    """A model copies the guide's examples as written, so every graph the guide shows
+    has to be a whole `run_subagent_dag` call -- `task_summary` included, not a bare
+    node list -- that the pre-dispatch checks accept. A node list without its
+    `node_summary`s parses, and is then refused whole by those checks, which is what
+    copying an example used to earn. The worked example's own test covers one graph;
+    this covers every one."""
+    graphs = []
+    for block in re.findall(r"```json\n(.*?)```", _repo_text(_SKILL), re.S):
+        value = json.loads(block)
+        if isinstance(value, list) or (isinstance(value, dict) and "nodes" in value):
+            graphs.append(value)
+    assert len(graphs) >= 3, "the guide's graph examples are no longer found"
+    for graph in graphs:
+        assert isinstance(graph, dict), "a graph example is a whole call, task_summary included"
+        spec = parse_dag_spec(graph)
+        errors = collect_static_graph_errors(spec.nodes, check_paths=False)
+        assert errors == [], (sorted(node.id for node in spec.nodes), errors)
+
+
 def test_context_md_defines_the_branch_terms() -> None:
     """`CONTEXT.md` is where a new domain term is defined, and these four carry
     meanings a reader cannot guess: which node decides, what a guard may read, and
