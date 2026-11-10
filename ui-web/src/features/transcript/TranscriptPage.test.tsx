@@ -2471,6 +2471,45 @@ describe('a delegated result, drawn as the message it is', () => {
     expect($('.sdlv .transcript-dlv-from')?.textContent).toBe('en:gui.deleg.from {"who":"Coder"}')
   })
 
+  /* The mark the agents list draws for the sender: a preset's own mark, and for
+     one of raven's own agents the mark that agent wears -- which AgentMark picks
+     by the name, so the name has to reach it as well as the roster's flags. */
+  it('wears the mark the agents list draws for the agent that sent it', async () => {
+    wireDelivery()
+    setSources({
+      subagents: {
+        roster: async () => [
+          { name: 'Raven-Code', builtin: true, vendored: false, preset: null },
+          { name: 'Coder', builtin: false, vendored: false, preset: 'claude_code' },
+        ],
+      } as never,
+    })
+    const t0 = Date.now() - 20000
+    const back = (node: string, t: number): HistoryMessage => ({
+      role: 'user', text: spawnInjection(node, 'done'), timestamp: iso(t),
+      delegated: { kind: 'spawn', label: node, status: 'ok', node_id: node },
+    })
+    act(() => {
+      mount.history([
+        { role: 'user', text: 'two jobs', timestamp: iso(t0) },
+        {
+          role: 'assistant', text: '', timestamp: iso(t0 + 500), tool_calls: [
+            { id: 'sp1', name: 'spawn', arguments: JSON.stringify({ agent: 'Raven-Code', task: 'fix it', task_summary: 'fix', node_id: 'fix' }) },
+            { id: 'sp2', name: 'spawn', arguments: JSON.stringify({ agent: 'Coder', task: 'test it', task_summary: 'test', node_id: 'test' }) },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'sp1', name: 'spawn', text: 'Subagent started' },
+        { role: 'tool', tool_call_id: 'sp2', name: 'spawn', text: 'Subagent started' },
+        { role: 'assistant', text: 'sent both', timestamp: iso(t0 + 1000) },
+        back('fix', t0 + 9000),
+        back('test', t0 + 9500),
+      ])
+    })
+    await act(async () => { await Promise.resolve() })
+    const marks = $$('.sdlv .transcript-dlv-from .agent-mark img').map((i) => i.getAttribute('src'))
+    expect(marks).toEqual(['assets/agents/raven-code.svg', 'assets/agents/claudecode-color.svg'])
+  })
+
   /* The receipt's node lines are a table someone scans for the one that did not
      finish, so they are drawn as one: a row per node, its status, and where its
      output went or why it has none. The counts line is not repeated in the

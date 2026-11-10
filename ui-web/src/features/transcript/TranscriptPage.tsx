@@ -1486,7 +1486,7 @@ function SenderMark({ seg, who }: { seg: DeliveredData; who: string }): ReactEle
   useSyncExternalStore(store.subscribeBrands, store.brandsVersion)
   if (seg.isDag) return <span className="transcript-dlv-glyph"><Ico d={ACT_ICO.dag as string} /></span>
   const brand = who ? store.brandOf(who) : null
-  return <AgentMark preset={brand?.preset} own={brand?.own} />
+  return <AgentMark preset={brand?.preset} own={brand?.own} agent={who} />
 }
 
 /* A delegated run's result, re-entering the conversation. It opens a turn the
