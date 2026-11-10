@@ -491,13 +491,76 @@ async def test_the_post_turn_call_is_shown_what_its_reply_asked(tmp_path):
 
 
 async def test_a_question_an_earlier_turn_asked_is_never_shown_as_this_turns(tmp_path):
-    """A turn the message tool answered has no words of its own here; the reply before the
-    user's last message belongs to an earlier turn."""
+    """The reply before the user's last message answered an earlier turn, and is not this one's."""
     call = Scripted(GOOD)
-    sent = {"id": "m1", "type": "function", "function": {"name": "message", "arguments": "{}"}}
+    sent = {
+        "id": "m1",
+        "type": "function",
+        "function": {"name": "message", "arguments": json.dumps({"content": "Deployed; the logs are clean."})},
+    }
     window = [
         {"role": "assistant", "content": "Shall I deploy it?"},
         {"role": "user", "content": "Not yet; read the logs first."},
+        {"role": "assistant", "content": "", "tool_calls": [sent]},
+        {"role": "tool", "tool_call_id": "m1", "name": "message", "content": "sent"},
+    ]
+
+    await _run(_service(tmp_path), call, window=window)
+
+    instruction = call.seen[0][-1]["content"]
+    assert "QUESTION MARKS" not in instruction
+    assert "Shall I deploy it?" not in instruction
+
+
+async def test_a_reply_the_message_tool_sent_is_read_for_its_question(tmp_path):
+    call = Scripted(GOOD)
+    sent = {
+        "id": "m1",
+        "type": "function",
+        "function": {
+            "name": "message",
+            "arguments": json.dumps({"content": "The token is empty. Which fix should I apply?"}),
+        },
+    }
+    window = [
+        {"role": "user", "content": "Why is the page blank?"},
+        {"role": "assistant", "content": "", "tool_calls": [sent]},
+        {"role": "tool", "tool_call_id": "m1", "name": "message", "content": "sent"},
+    ]
+
+    await _run(_service(tmp_path), call, window=window)
+
+    instruction = call.seen[0][-1]["content"]
+    listed = instruction[instruction.index("[BEGIN QUESTION MARKS]") : instruction.index("[END QUESTION MARKS]")]
+    assert listed.splitlines()[1:] == ["- Which fix should I apply?"]
+
+
+async def test_the_turns_assistant_segments_are_read_together_in_order(tmp_path):
+    call = Scripted(GOOD)
+    spawn = {"id": "s1", "type": "function", "function": {"name": "spawn", "arguments": "{}"}}
+    window = [
+        {"role": "user", "content": "Fix the five findings."},
+        {"role": "assistant", "content": "Should I fix all five findings?", "tool_calls": [spawn]},
+        {"role": "tool", "tool_call_id": "s1", "name": "spawn", "content": "started"},
+        {"role": "assistant", "content": "F5 is fixed. Should I re-run the suite?"},
+    ]
+
+    await _run(_service(tmp_path), call, window=window)
+
+    instruction = call.seen[0][-1]["content"]
+    listed = instruction[instruction.index("[BEGIN QUESTION MARKS]") : instruction.index("[END QUESTION MARKS]")]
+    assert listed.splitlines()[1:] == ["- Should I fix all five findings?", "- Should I re-run the suite?"]
+
+
+async def test_a_message_with_no_question_lists_none(tmp_path):
+    call = Scripted(GOOD)
+    sent = {
+        "id": "m1",
+        "type": "function",
+        "function": {"name": "message", "arguments": json.dumps({"content": "Deployed. Logs are clean."})},
+    }
+    window = [
+        {"role": "user", "content": "Deploy it."},
         {"role": "assistant", "content": "", "tool_calls": [sent]},
         {"role": "tool", "tool_call_id": "m1", "name": "message", "content": "sent"},
     ]

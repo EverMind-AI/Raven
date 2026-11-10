@@ -86,6 +86,10 @@ def test_asked_splits_a_chinese_reply_at_each_full_width_question_mark():
     assert asked(reply) == ["#1232 那五条要不要修？", "修完要另起 agent 重审吗？", "还是你自己看一遍？"]
 
 
+def test_asked_keeps_a_two_character_question_but_not_a_bare_mark():
+    assert asked("Who?\n谁？\n行？\n?\n？\n??") == ["Who?", "谁？", "行？"]
+
+
 def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     board = Board([_group("g_1", "修复登录白屏", "定位到 bug")], [])
 

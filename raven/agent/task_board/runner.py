@@ -122,12 +122,13 @@ _EMPHASIS = re.compile(r"\*\*|__")
 _SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
+_QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
 
 
 def asked(reply: str) -> list[str]:
     """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
 
-    A code block and a quoted line are left out: neither was put to the user.
+    A fenced code block and a quoted line are left out: neither was put to the user.
     """
     found: list[str] = []
     for line in _FENCED.sub("", reply).splitlines():
@@ -135,7 +136,7 @@ def asked(reply: str) -> list[str]:
             continue
         for part in _SENTENCE_END.split(_EMPHASIS.sub("", line)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
-            if sentence.endswith(_QUESTION_MARKS) and len(sentence) > 2:
+            if sentence.endswith(_QUESTION_MARKS) and sentence.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)
     return list(dict.fromkeys(found))[-ASKED_SHOWN:]
 
@@ -148,15 +149,38 @@ def _text(content: Any) -> str:
     return ""
 
 
+def _message_tool_words(call: Any) -> str:
+    """What a ``message`` tool call sent, if that is the call: only this tool's argument is
+    words put to the user -- another tool's arguments hold code, URLs or paths."""
+    function = call.get("function") if isinstance(call, dict) else None
+    if not isinstance(function, dict) or function.get("name") != "message":
+        return ""
+    arguments = function.get("arguments")
+    if not isinstance(arguments, str):
+        return ""
+    try:
+        parsed = json.loads(arguments)
+    except (ValueError, RecursionError):
+        return ""
+    content = parsed.get("content") if isinstance(parsed, dict) else None
+    return content.strip() if isinstance(content, str) else ""
+
+
 def _reply(window: Sequence[dict]) -> str:
-    """The words of the turn's reply: its last assistant message that has any, looked for back
-    to the last message from the user -- a reply before that one answered an earlier turn."""
-    for message in reversed(window):
+    """The words of the turn's reply: every assistant message after the last message from the
+    user, in the order it wrote them, with what the message tool sent -- a reply before that
+    one answered an earlier turn."""
+    words: list[str] = []
+    for message in window:
         if message.get("role") == "user":
-            return ""
-        if message.get("role") == "assistant" and (text := _text(message.get("content"))).strip():
-            return text
-    return ""
+            words.clear()
+        elif message.get("role") == "assistant":
+            if text := _text(message.get("content")).strip():
+                words.append(text)
+            for call in message.get("tool_calls") or ():
+                if sent := _message_tool_words(call):
+                    words.append(sent)
+    return "\n".join(words)
 
 
 def _asked_block(questions: Sequence[str]) -> str:
