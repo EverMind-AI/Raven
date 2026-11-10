@@ -61,8 +61,17 @@ from loguru import logger
 
 from raven.contracts.tool import Tool
 from raven.security.network import judge_reader_target
-from research_flow.support.benchmark_guard import blocks_query, blocks_url, query_refusal, url_refusal
+from research_flow.support.benchmark_guard import (
+    QUESTION_RUN_CHARS,
+    blocks_page,
+    blocks_query,
+    blocks_url,
+    page_refusal,
+    query_refusal,
+    url_refusal,
+)
 from research_flow.support.evidence_round import EvidenceRound
+from research_flow.support.guard_audit import audit as _guard_audit
 from research_flow.support.harness_text import search_closed_notice
 from research_flow.support.ledger import ledger_append as _ledger_append
 from research_flow.support.ledger import verbatim_append as _verbatim_append
@@ -128,6 +137,24 @@ def set_current_session(key: str) -> Token[str]:
 def current_session() -> str:
     """The session key the current task's tool calls are attributed to."""
     return _SESSION.get()
+
+
+_TASK: ContextVar[str] = ContextVar("research_flow_task", default="")
+"""This turn's question, for the benchmark guard's content rule and nothing else.
+
+Set beside :data:`_SESSION` by the same hook, because a tool call otherwise has no way
+back to what was asked. It is read only by the guard and never shown to the model.
+"""
+
+
+def set_current_task(text: str) -> Token[str]:
+    """Record the turn's question for the guard. Returns the restore token."""
+    return _TASK.set(text or "")
+
+
+def current_task() -> str:
+    """The question this turn was asked, or ``""`` when nothing set it."""
+    return _TASK.get()
 
 
 # Retry policy, shared by both web tools so one outage is answered one way. These
@@ -728,6 +755,7 @@ class WebSearchTool(Tool):
                 suppressed=True,
                 guard_refused=True,
             )
+            _guard_audit("query_refused", session=_SESSION.get(), query=query)
             return refusal
         saturation = state.saturation
         evidence_round = state.evidence_round
@@ -1132,7 +1160,23 @@ class WebSearchTool(Tool):
             # rendered slot or enter the turn's dedup identity set: the model must
             # see the next real result, not a gap where the dataset page was.
             if self.benchmark_guard:
-                organic = [row for row in organic if not blocks_url(str((row or {}).get("link") or ""))]
+                verdicts = [(row, blocks_url(str((row or {}).get("link") or ""))) for row in organic]
+                dropped = [str((row or {}).get("link") or "") for row, bad in verdicts if bad]
+                # The audit exists for exactly this drop. It leaves no trace in the
+                # transcript -- the model is shown a list, not a list with a hole --
+                # so without a row here nobody can say afterwards whether the guard
+                # fired, and on the smoke run establishing that took re-issuing the
+                # model's own queries against the vendor from outside the run.
+                if dropped:
+                    _guard_audit(
+                        "search_rows_dropped",
+                        session=_SESSION.get(),
+                        query=query,
+                        dropped=len(dropped),
+                        organic=len(verdicts),
+                        urls=dropped[:10],
+                    )
+                organic = [row for row, bad in verdicts if not bad]
             results, n_skipped = self._select_fresh(state, organic, n, "link")
             if not results:
                 # A zero-hit search is the purest dry search, and it returns from
@@ -1655,6 +1699,8 @@ class WebFetchTool(Tool):
         digest_timeout_s: float = 30.0,
         corpus_endpoint: str | None = None,
         benchmark_guard: bool = False,
+        benchmark_guard_question: bool = True,
+        benchmark_guard_question_chars: int = QUESTION_RUN_CHARS,
     ):
         self._init_api_key = api_key
         self.max_chars = max_chars
@@ -1672,6 +1718,11 @@ class WebFetchTool(Tool):
         self.digest_timeout_s = digest_timeout_s
         # Evaluation-only; see ``support.benchmark_guard``. Inert by default.
         self.benchmark_guard = benchmark_guard
+        # Both sub-flags are inert while ``benchmark_guard`` is off; they select which
+        # half of the rule runs when it is on, so an evaluation can keep the host rule
+        # alone to compare against the published one.
+        self.benchmark_guard_question = benchmark_guard_question
+        self.benchmark_guard_question_chars = benchmark_guard_question_chars
         self._sessions: dict[str, _FetchTurnState] = {}
 
     def _state(self) -> _FetchTurnState:
@@ -1927,6 +1978,7 @@ class WebFetchTool(Tool):
         # transport fault gets retried, and this one has nothing to retry. Both
         # BigBang-v1 and MiroFlow return a sentence here for the same reason.
         if self.benchmark_guard and blocks_url(url):
+            _guard_audit("fetch_refused", session=_SESSION.get(), url=url, rule="host")
             return url_refusal()
         # Not asked of a corpus URL: it names a document in the collection, nothing
         # connects to its host, and a host that does not resolve here must not
@@ -1984,6 +2036,27 @@ class WebFetchTool(Tool):
         # address to read it at.
         if len(text) < _THIN_PAGE_CHARS and not self.corpus_endpoint:
             text, status, served_url, fallbacks_tried = await self._recover_thin(url, text, status)
+
+        # The content half of the guard, on the page as extracted and BEFORE both the
+        # digest and ``_record_source``. Before the digest because the page that
+        # defeated the host rule in the smoke quoted the question in its 112k
+        # characters of raw trace and not in its digest; before the recording because
+        # a copy admitted to the source store would reach the reviewer's evidence pack
+        # even though the model never saw it.
+        if (
+            self.benchmark_guard
+            and self.benchmark_guard_question
+            and blocks_page(current_task(), text, run_chars=self.benchmark_guard_question_chars)
+        ):
+            _guard_audit(
+                "page_refused",
+                session=_SESSION.get(),
+                url=url,
+                rule="question_verbatim",
+                page_chars=len(text),
+                run_chars=self.benchmark_guard_question_chars,
+            )
+            return page_refusal()
 
         encoding_lost = _encoding_lost(text)
         source_chars = len(text)
@@ -2297,8 +2370,10 @@ __all__ = [
     "WebFetchTool",
     "WebSearchTool",
     "current_session",
+    "current_task",
     "fetch_result_ok",
     "resolve_fetch_provider",
     "resolve_search_provider",
     "set_current_session",
+    "set_current_task",
 ]

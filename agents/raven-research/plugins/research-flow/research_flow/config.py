@@ -39,6 +39,8 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
+from research_flow.support.benchmark_guard import QUESTION_RUN_CHARS
+
 
 class _Base(BaseModel):
     """Accepts both camelCase and snake_case keys; unknown keys are ignored."""
@@ -87,6 +89,14 @@ class BenchmarkGuardConfig(_Base):
 
     enabled: bool = False
     block_queries: bool = True
+    # The host half reaches 13 of 21 measured leaks; refusing a page that reproduces
+    # the question reaches 18, and is the only half that sees a copy on a mirror host
+    # or inside a trajectory dump. ``support.benchmark_guard`` carries the sweep.
+    block_question_pages: bool = True
+    question_run_chars: int = QUESTION_RUN_CHARS
+    # Dropping a result row leaves no trace in the transcript by construction, so
+    # without this nobody can say afterwards whether the guard fired at all.
+    audit: bool = True
 
 
 class DigestConfig(_Base):

@@ -35,6 +35,7 @@ from research_flow.flow import ResearchFlowHook, SessionGear, ToolHandles, evide
 from research_flow.prompts import _DIGEST_SOURCE_CAP_CHARS, _DIGEST_SYSTEM
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
+from research_flow.support.guard_audit import set_audit_dir
 from research_flow.support.ledger import set_ledger_dir
 from research_flow.tools.ask_user import DRAskUserTool
 from research_flow.tools.web import (
@@ -179,6 +180,11 @@ class _Shared:
         root = Path(state_root) if state_root else Path(ctx.services.workspace) / "research_flow"
         self.store = SessionStore(root)
         set_ledger_dir(self.store.ledger_dir)
+        # Beside the ledger, not in it: the ledger writes only between
+        # open_product_ledger and close_product_ledger, which the evaluation path
+        # never calls -- so a guard row routed through it would have gone nowhere.
+        _guard_cfg = self.cfg.benchmark_guard
+        set_audit_dir(self.store.ledger_dir if _guard_cfg.enabled and _guard_cfg.audit else None)
         self.session_gear: dict[str, SessionGear] = {}
         self._web_search: WebSearchTool | None = None
         self._search_built = False
@@ -358,6 +364,8 @@ class _Shared:
                 proxy=self.proxy,
                 provider=fetch_provider,
                 benchmark_guard=cfg.benchmark_guard.enabled,
+                benchmark_guard_question=cfg.benchmark_guard.block_question_pages,
+                benchmark_guard_question_chars=cfg.benchmark_guard.question_run_chars,
                 **kwargs,
             )
         return self._web_fetch

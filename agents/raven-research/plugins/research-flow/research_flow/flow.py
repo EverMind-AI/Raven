@@ -106,7 +106,8 @@ from research_flow.support.process_appendix import build_appendix, read_ledger
 from research_flow.support.report_file import file_digest, still_held, sync_report_file, written_markdown
 from research_flow.support.search_saturation import SearchSaturation
 from research_flow.support.turn_observers import turn_observers
-from research_flow.tools.web import set_current_session
+from research_flow.support.turn_task import task_for
+from research_flow.tools.web import set_current_session, set_current_task
 
 if TYPE_CHECKING:
     from raven.contracts.llm_provider import LLMProvider
@@ -1116,6 +1117,11 @@ class ResearchFlowParticipant(AgentParticipant):
         slot = self._flow._resolve(ctx)
         if phase == "before_iteration":
             set_current_session(step.session_key)
+            # Beside the session key, and on every iteration rather than only the
+            # first: the benchmark guard's content rule has no other route back to
+            # what this turn was asked, and a tool call on iteration 2 needs it as
+            # much as one on iteration 1.
+            set_current_task(task_for(ctx))
             if step.iteration == 1:
                 self._flow._start_turn(slot)
         if phase == "after_send":

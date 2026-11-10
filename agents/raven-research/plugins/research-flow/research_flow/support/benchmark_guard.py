@@ -22,9 +22,39 @@ whose query names the host at all. Three departures from it:
   ``huggingface.com`` -- and a wrongly blocked source is invisible to the model,
   indistinguishable from a page that does not exist.
 
-What this does not reach: a host rule cannot see a gold answer inside a paper's
-case study, a trajectory dump on a code host, or a forum post quoting the
-question. Of the 21 leaked items above this rule reaches 13, so a run under it
+A host rule alone reaches 13 of those 21, and a smoke run showed exactly how the
+other 8 arrive. With the host rule on, the model's three answer-seeking queries
+returned 21 organic rows of which 17 were Hugging Face copies; every one was
+dropped and none reached the model. It then scored anyway off
+``openevalz.com/trace/<id>`` -- a judge-prompt dump carrying ``[correct_answer]``
+verbatim -- and opened a second copy through ``cdn-avatars.qwak.ai/datasets/...``,
+which is a Hugging Face dataset page served under a hostname the rule cannot see.
+A host list cannot be made long enough to fix that.
+
+So there is a second, host-independent rule: :func:`blocks_page` refuses a fetched
+page that reproduces the question it was asked. Quoting the prompt is what makes a
+published copy findable in the first place, so it is the one thing every copy has
+in common whatever host it sits on. Measured over the same 400-item evaluation, at
+a 60-character verbatim run:
+
+* leaks prevented rise from 13/21 to 18/21 (the content rule alone reaches 15;
+  5 of those are ones the host rule misses, and 3 leaks escape both)
+* 24 of the 244 clean correct items lose at least one non-Hugging-Face page (51
+  pages). On 5 of those the lost page carried the gold, so they were unlabelled
+  leaks rather than false stops, leaving ~19 items exposed
+* a question shorter than the run length puts the rule out of reach entirely --
+  44 of the 400 questions here, which is the deliberate cost of not blocking
+  pages on a short, unspecific string
+
+The run length is 60 because the sweep flattens there: 50 prevents the same 18
+leaks but costs 38 items instead of 24, and 80 prevents one fewer.
+
+This rule has to run on the page as extracted and **before the digest**. The
+smoke's decisive page is why: its digest did not quote the question, its 112k
+characters of raw trace did, at every run length up to 120.
+
+What still escapes both rules: a gold answer paraphrased rather than quoted, or a
+page that carries the answer without the question -- 3 of the 21. A run under this
 is less contaminated, not clean, and the per-item leak review still applies.
 
 Nothing here is a security control. Egress policy lives in ``raven.security``;
@@ -35,12 +65,16 @@ model, and it is inert unless an evaluation profile turns it on.
 from __future__ import annotations
 
 import re
+import unicodedata
 from urllib.parse import parse_qsl, unquote, urlparse
 
 __all__ = [
     "BENCHMARK_HOSTS",
+    "QUESTION_RUN_CHARS",
+    "blocks_page",
     "blocks_query",
     "blocks_url",
+    "page_refusal",
     "query_refusal",
     "unwrap_url",
     "url_refusal",
@@ -83,6 +117,18 @@ _QUERY_REFUSAL = (
     "Blocked: this query searches for a published benchmark copy rather than for the "
     "subject of the question. Search for the subject instead."
 )
+_PAGE_REFUSAL = (
+    "Blocked: this page reproduces the question you were asked, so it is a published "
+    "copy of the benchmark rather than a source for it. Research the question instead."
+)
+
+# A verbatim run this long shared between the question and the page. See the module
+# docstring for the sweep that chose it; it is a knob on BenchmarkGuardConfig because
+# a benchmark of much shorter questions would want a different one, not because this
+# value is unsettled.
+QUESTION_RUN_CHARS = 60
+
+_WS_RE = re.compile(r"\s+")
 
 
 def url_refusal() -> str:
@@ -163,3 +209,37 @@ def blocks_url(value: str) -> bool:
 def blocks_query(value: str) -> bool:
     """Whether this search query names a benchmark host."""
     return bool(_QUERY_RE.search(value or ""))
+
+
+def page_refusal() -> str:
+    """The tool-result text for a page that reproduces the question."""
+    return _PAGE_REFUSAL
+
+
+def _flatten(value: str) -> str:
+    """Case, Unicode form and whitespace folded, so a reflowed quote still matches.
+
+    Whitespace is collapsed rather than stripped: dropping it entirely would let a
+    60-character run match across word boundaries that are not in the question, and
+    the width folding NFKC does is what makes a full-width CJK quote comparable.
+    """
+    return _WS_RE.sub(" ", unicodedata.normalize("NFKC", value or "")).strip().lower()
+
+
+def blocks_page(task: str, body: str, *, run_chars: int = QUESTION_RUN_CHARS) -> bool:
+    """Whether this page reproduces the question, i.e. is a published copy of it.
+
+    True when some ``run_chars``-character run of the question appears verbatim in
+    the page. A question shorter than ``run_chars`` is never matched: the rule has
+    to be able to tell a benchmark copy from a page that happens to share a short
+    phrase, and below that length it cannot.
+
+    Both sides are flattened first, so a copy that reflowed the prompt across lines
+    still matches. The scan is every offset rather than a fixed window, because the
+    copies seen truncate the prompt at arbitrary points -- one ended mid-word with
+    an ellipsis, and a first-window-only test would have missed it.
+    """
+    q, page = _flatten(task), _flatten(body)
+    if run_chars <= 0 or len(q) < run_chars or not page:
+        return False
+    return any(q[i : i + run_chars] in page for i in range(len(q) - run_chars + 1))
