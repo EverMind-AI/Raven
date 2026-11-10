@@ -150,6 +150,26 @@ describe('the session-pointer reload (installActions)', () => {
     expect(asked).toContain('s1')
     _resetForTests()
   })
+
+  /* The composer's waiting row reads a count, not the tasks store: this is
+     the edge that keeps the two domain graphs apart, so it has to carry both
+     a run that starts and the reset that empties the rows on a switch. */
+  it('pushes the running delegated count into the composer, and clears it on a reset', async () => {
+    const wiring = await harness()
+    const { setSources } = await import('../state/sources')
+    setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
+
+    wiring.installPushes()
+    const tasks = await import('../features/tasks/store')
+    const composer = await import('../features/composer/store')
+    const running = { kind: 'spawn', id: 'a', status: 'running' } as TaskRow
+
+    act(() => tasks.set({ ...tasks.get(), rows: [running], loaded: true }))
+    expect(composer.get().subagentRuns).toBe(1)
+
+    act(() => tasks.reset())
+    expect(composer.get().subagentRuns).toBe(0)
+  })
 })
 
 describe('the working-directory menu after reconnect', () => {

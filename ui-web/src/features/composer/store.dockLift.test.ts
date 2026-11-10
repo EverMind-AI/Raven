@@ -7,9 +7,9 @@ import { dockLift } from './store'
  * up to the top of the highest thing docked over it. The chat reserves it as
  * bottom padding and fades its tail from it (styles/page.css), so anything
  * docked that this misses is something that covers the transcript instead of
- * moving it up. The running-task chip did exactly that -- it sits above the
- * composer card, and the measurement named the card's classes rather than
- * counting what is docked.
+ * moving it up. A strip docked above the composer card did exactly that --
+ * it sits above the card, and the measurement named the card's classes rather
+ * than counting what is docked.
  *
  * happy-dom does no layout and reports every rect as zero, so the rects are
  * stubbed per element; the numbers are the only thing being asserted, and a
@@ -30,7 +30,7 @@ beforeEach(() => {
   document.body.innerHTML =
     '<div class="chat"><div class="dock">'
     + '<div class="sheets" id="sheetRack"></div>'
-    + '<div class="tkruns"><button class="tkrunhint"></button></div>'
+    + '<div class="dockstrip"></div>'
     + '<div class="dock-in"></div>'
     + '</div></div>'
   box(document.querySelector('.chat')!, 0, CHAT_BOTTOM)
@@ -40,28 +40,28 @@ beforeEach(() => {
 
 describe('the dock lift', () => {
   it('reaches the top of the composer card when nothing else is docked', () => {
-    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.dockstrip')!, 0, 0)
     box(document.querySelector('.sheets')!, 0, 0)
     dockLift()
     expect(lift()).toBe('100px')
   })
 
-  it('reaches over the running-task chip, so the transcript moves up by its height', () => {
-    box(document.querySelector('.tkruns')!, 470, 26)
+  it('reaches over a strip docked above the card, so the transcript moves up by its height', () => {
+    box(document.querySelector('.dockstrip')!, 470, 26)
     box(document.querySelector('.sheets')!, 0, 0)
     dockLift()
     expect(lift()).toBe('130px')
   })
 
   it('reaches over a sheet stacked above both', () => {
-    box(document.querySelector('.tkruns')!, 470, 26)
+    box(document.querySelector('.dockstrip')!, 470, 26)
     box(document.querySelector('.sheets')!, 400, 60)
     dockLift()
     expect(lift()).toBe('200px')
   })
 
   it('writes nothing when nothing moved, since it also runs on every scroll event', () => {
-    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.dockstrip')!, 0, 0)
     box(document.querySelector('.sheets')!, 0, 0)
     dockLift()
     const chat = document.querySelector('.chat') as HTMLElement
@@ -74,7 +74,7 @@ describe('the dock lift', () => {
   })
 
   it('ignores a docked thing with no height, which is how an empty sheet rack reads', () => {
-    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.dockstrip')!, 0, 0)
     box(document.querySelector('.sheets')!, 0, 0)
     dockLift()
     expect(lift()).toBe('100px')
@@ -103,7 +103,7 @@ describe('the resting lift', () => {
     ta.style.minHeight = '52px'
     box(ta, 420, 152)
     box(card, 400, 200)
-    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.dockstrip')!, 0, 0)
     box(document.querySelector('.sheets')!, 300, 60)
     dockLift()
     expect(lift()).toBe('300px')
@@ -117,7 +117,7 @@ describe('the resting lift', () => {
     ta.style.minHeight = '52px'
     box(ta, 0, 0)
     box(card, 0, 0)
-    box(document.querySelector('.tkruns')!, 0, 0)
+    box(document.querySelector('.dockstrip')!, 0, 0)
     box(document.querySelector('.sheets')!, 300, 60)
     dockLift()
     expect(lift()).toBe('300px')

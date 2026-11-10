@@ -13,7 +13,7 @@ import { installWsPane } from '../../test/wsPaneHarness'
 import * as desk from '../desk/store'
 import * as workspace from '../workspace/store'
 import * as store from './store'
-import { TaskPane, TaskRuns, TasksPanel } from './TasksPage'
+import { TaskPane, TasksPanel } from './TasksPage'
 
 import type { WsChange } from '../workspace/types'
 import type { NodeRecord, SubagentRow, TaskNode, TaskRow, TasksSource } from './types'
@@ -264,64 +264,6 @@ describe('the tasks list', () => {
     expect(store.byKey('spawn', 'a')?.status).toBe('cancelled')
     expect(document.querySelector('.tkhalt')).toBeNull()
     toasts.remove()
-  })
-})
-
-describe('the running strip', () => {
-  const draw = async (): Promise<void> => {
-    render(<TaskRuns />)
-    await act(async () => { await store.refresh() })
-  }
-  const chip = (): HTMLElement | null => document.querySelector('.tkrunhint')
-
-  it('draws nothing when nothing is running', async () => {
-    rows = [task({ id: 'a', kind: 'dag', status: 'completed' })]
-    await draw()
-    expect(document.querySelector('.tkruns')).toBeNull()
-  })
-
-  it('says how many are running in one chip, and names them only in its title', async () => {
-    rows = [
-      task({ id: 'a', kind: 'dag', status: 'running', task_summary: 'First' }),
-      task({ id: 'b', kind: 'spawn', status: 'running', task_summary: null }),
-      task({ id: 'c', kind: 'dag', status: 'completed', task_summary: 'Third' }),
-    ]
-    await draw()
-    expect(document.querySelectorAll('.tkruns .tkrunhint')).toHaveLength(1)
-    expect(chip()!.querySelector('.tkrundot')).not.toBeNull()
-    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":2}')
-    expect(chip()!.getAttribute('title')).toBe('First\nb')
-  })
-
-  it('opens the desk on the tasks tab, not a pane of any one task', async () => {
-    rows = [task({ id: 'a', kind: 'spawn', status: 'running' })]
-    await draw()
-    desk.set({ paletteOpen: false, tab: 'diff' })
-    await act(async () => { chip()!.click() })
-    expect(desk.get().paletteOpen).toBe(true)
-    expect(desk.get().tab).toBe('tasks')
-    expect(desk.get().panes).toHaveLength(0)
-  })
-
-  it('follows the rows while it is on screen, and leaves with the last one', async () => {
-    rows = [
-      task({ id: 'a', kind: 'dag', status: 'running' }),
-      task({ id: 'b', kind: 'spawn', status: 'running' }),
-    ]
-    await draw()
-    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":2}')
-    act(() => { store.set({ ...store.get(), rows: [rows[0]!, { ...rows[1]!, status: 'completed' }] }) })
-    expect(chip()!.textContent).toBe('gui.tasks.running_n {"n":1}')
-    act(() => { store.set({ ...store.get(), rows: rows.map((r) => ({ ...r, status: 'completed' })) }) })
-    expect(document.querySelector('.tkruns')).toBeNull()
-  })
-
-  it('repaints when a language is picked', async () => {
-    rows = [task({ id: 'a', kind: 'dag', status: 'running' })]
-    await draw()
-    setTranslator((key, vars) => `picked:${key} ${JSON.stringify(vars)}`)
-    act(() => { lang.set('en') })
-    expect(chip()!.textContent).toBe('picked:gui.tasks.running_n {"n":1}')
   })
 })
 

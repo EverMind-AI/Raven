@@ -47,6 +47,10 @@ export interface ComposerState {
      `liveT0` and ticking through `tick`. */
   live: boolean
   tick: number
+  /* How many delegated runs are still live, pushed in by app/install.ts from
+     the tasks store. Kept as a number here rather than importing the sibling
+     store: the page's wiring owns the one edge between the two domains. */
+  subagentRuns: number
   /* Bumped by every paint asked for through features/composer/mount.tsx. The
      views read the page's own arrays through the source, so one counter is the
      whole subscription. */
@@ -55,7 +59,7 @@ export interface ComposerState {
 
 const initial: ComposerState = {
   atts: [], queue: [], editing: null, slashOpen: false, slashRows: [], slashSel: 0,
-  live: false, tick: 0, v: 0,
+  live: false, tick: 0, subagentRuns: 0, v: 0,
 }
 
 const store = makeStore<ComposerState>({ ...initial })
@@ -400,10 +404,9 @@ export function dockLift(): void {
      and measuring only its children parked the pill 6px into the glass.
 
      Every direct child counts, rather than a list of classes to keep in step.
-     The running-task chip is one of them (`.tkruns`, which chrome/Dock mounts
-     above the card) and it was not on the list, so the height it added went
-     unmeasured: the chat reserved and faded for the card alone and the chip
-     covered the tail of the transcript instead of moving it up. */
+     A strip docked above the card was not on the list, so the height it added
+     went unmeasured: the chat reserved and faded for the card alone and the
+     strip covered the tail of the transcript instead of moving it up. */
   const boxes = [...dock.children, ...dock.querySelectorAll('.dock-in > *, .sheets > *')]
   boxes.forEach((n) => {
     const r = n.getBoundingClientRect()
@@ -598,6 +601,28 @@ export function setLiveAnchor(ms: number): void {
 }
 
 export const liveMs = (): number => (liveT0 ? Date.now() - liveT0 : 0)
+
+/* The tasks store's live count, pushed in from the page's wiring
+   (app/install.ts) on every change and on a session reset. One-directional:
+   the composer never imports the tasks domain, and the two graphs stay out
+   of each other's closure. */
+export function setSubagentRuns(n: number): void {
+  if (get().subagentRuns === n) return
+  set({ subagentRuns: n })
+}
+
+/* Whether delegated work is still running after the host's turn ended. The
+   host has said everything it is going to say, but Raven is not done: the
+   transcript tail keeps one row saying what the reader is waiting on. Gated on
+   the turn being idle as well -- a host turn that is still streaming shows its
+   own row, never this one. */
+export const waitingForSubagents = (): boolean => !turn.busy() && get().subagentRuns > 0
+
+/* Whether the transcript-tail host draws anything at all: the live row while
+   the host works, the waiting row once only its sub-agents are left. One
+   predicate for both readers (the component and the host that mounts it), so
+   the row can never be attached and empty or detached and alive. */
+export const liveVisible = (): boolean => get().live || waitingForSubagents()
 
 export function drawTurnLive(): void {
   if (!turn.busy()) {

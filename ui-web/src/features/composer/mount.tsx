@@ -24,11 +24,12 @@ import type { Root } from 'react-dom/client'
 let roots: Root[] = []
 let liveHost: HTMLElement | null = null
 
-/* The live turn row rides the tail of #stage, which the transcript island owns
- * a lane host in and the session modules still wipe and park wholesale
+/* The tail row rides the end of #stage, which the transcript island owns a
+ * lane host in and the session modules still wipe and park wholesale
  * (state/session/registry.ts, state/session/runtime.ts). So it gets a host of
- * its own, one `display: contents` element appended after the
- * transcript's, and the host is only attached while a turn is alive -- the row
+ * its own, one `display: contents` element appended after the transcript's,
+ * and the host is only attached while the row has something to say: a live
+ * host turn, or delegated work still running after that turn ended. The row
  * used to be appended and removed the same way.
  *
  * Moved only when something new landed after it: re-inserting a node restarts
@@ -38,7 +39,7 @@ let liveHost: HTMLElement | null = null
 function syncLiveHost(): void {
   const host = liveHost
   if (!host) return
-  if (!store.get().live) {
+  if (!store.liveVisible()) {
     host.remove()
     return
   }

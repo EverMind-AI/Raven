@@ -18,6 +18,7 @@ import { AttTray, QueueList, SlashList, TurnLive } from './ComposerPage'
 import * as store from './store'
 import * as turn from './turn';
 
+import type { TaskRow } from '../tasks/types'
 import type { ComposerSource, SlashCmd } from './types'
 
 /* React refuses act() outside a test runner it recognizes unless told. */
@@ -51,6 +52,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.live.busy': '进行中 {t}', 'gui.pill.bottom': '回到底部', 'gui.pill.prev': '上一条用户消息',
     'gui.att.note': '我给你的文件：', 'gui.att.pending': '还有文件在上传',
     'gui.att.pending_body': '{n} 个文件还没传完，传完再发。',
+    'gui.live.waiting_subagents': '等待子智能体返回',
   },
   en: {
     'gui.send': 'Send', 'gui.stop': 'Stop', 'gui.q.edit': 'Edit', 'gui.q.remove': 'Remove',
@@ -59,6 +61,7 @@ const WORDS: Record<string, Record<string, string>> = {
     'gui.pill.prev': 'previous user message',
     'gui.att.note': 'Files for you:', 'gui.att.pending': 'a file is still uploading',
     'gui.att.pending_body': '{n} still going; send once they land.',
+    'gui.live.waiting_subagents': 'waiting for subagents',
   },
 }
 
@@ -762,6 +765,117 @@ describe('the live turn row', () => {
     mountLive()
     act(() => { store.drawMeter() })
     expect(document.getElementById('meter')!.textContent).toBe('3 calls')
+  })
+})
+
+/* The host's turn ending does not mean Raven is finished: a spawn or a
+   background graph may still be out. The row that rode the turn keeps its
+   place at the tail and changes what it says -- one row, never a second
+   card over the transcript, and never while the host itself is still
+   streaming. */
+describe('the waiting row after the host turn ends', () => {
+  /* What app/install.ts pushes from the tasks store: how many delegated runs
+     are still live. The component only reads the count. */
+  const setRuns = (n: number): void => { act(() => { store.setSubagentRuns(n) }) }
+  const startHost = (): void => {
+    turn.dispatch({ type: 'stream', cancellable: true })
+    act(() => { store.drawTurnLive() })
+  }
+  const endHost = (): void => {
+    turn.dispatch({ type: 'idle' })
+    act(() => { store.drawTurnLive() })
+  }
+  const row = (): HTMLElement | null => document.querySelector('.turnlive')
+
+  it('says waiting for subagents once the host is done and one is still running', () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    startHost()
+    setRuns(1)
+    expect(row()!.classList.contains('cp-waiting')).toBe(false)
+
+    endHost()
+    const waiting = row() as HTMLElement
+    expect(waiting.classList.contains('cp-waiting')).toBe(true)
+    expect(waiting.getAttribute('role')).toBe('status')
+    expect(waiting.textContent).toBe('waiting for subagents')
+    expect(waiting.querySelectorAll('.wkg i')).toHaveLength(3)
+    /* A visual state only: the turn stays idle and uncancellable, so Escape
+       has nothing to stop and the next message is not a mid-turn injection. */
+    expect(turn.busy()).toBe(false)
+    expect(turn.cancellable()).toBe(false)
+    expect(store.liveVisible()).toBe(true)
+  })
+
+  it('appears when a run starts after the host has already ended', () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    endHost()
+    expect(row()).toBeNull()
+
+    setRuns(1)
+    expect(row()!.textContent).toBe('waiting for subagents')
+  })
+
+  it('leaves when the last subagent settles', () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    startHost()
+    setRuns(1)
+    endHost()
+    expect(row()).not.toBeNull()
+
+    setRuns(0)
+    expect(row()).toBeNull()
+    expect(store.liveVisible()).toBe(false)
+  })
+
+  it('leaves when a session reset empties the tasks the count is pushed from', async () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    startHost()
+    /* The real seam: app/install.ts's subscription is what turns the tasks
+       store's rows into this row's count, so the reset below reaches the
+       component through production wiring rather than a hand-set number. */
+    const { installSubagentRuns } = await import('../../app/install')
+    const tasks = await import('../tasks/store')
+    const stop = installSubagentRuns()
+    act(() => {
+      tasks.set({
+        ...tasks.get(),
+        rows: [{ kind: 'spawn', id: 'run-a', status: 'running' } as TaskRow],
+        loaded: true,
+      })
+    })
+    endHost()
+    expect(store.get().subagentRuns).toBe(1)
+    expect(row()).not.toBeNull()
+
+    /* What a session switch does to this store: the reset empties the rows
+       before the new conversation's read lands. */
+    act(() => { tasks.reset() })
+    expect(store.get().subagentRuns).toBe(0)
+    expect(row()).toBeNull()
+    expect(store.liveVisible()).toBe(false)
+    stop()
+  })
+
+  it('gives way to the host row as soon as a new turn starts', () => {
+    lang = 'en'
+    wire()
+    mountLive()
+    startHost()
+    setRuns(1)
+    endHost()
+    expect(row()!.classList.contains('cp-waiting')).toBe(true)
+
+    startHost()
+    expect(row()!.classList.contains('cp-waiting')).toBe(false)
+    expect(row()!.querySelector('.lb')).not.toBeNull()
   })
 })
 

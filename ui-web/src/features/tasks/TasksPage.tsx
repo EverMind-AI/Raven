@@ -251,36 +251,6 @@ export function TasksPanel(): JSX.Element {
   return <BoardList flat={(only) => <List only={only} />} openTask={desk.openDeskTask} />
 }
 
-/* ── the strip above the composer ─────────────────────────────────────── */
-
-/* One reminder, not a list: that work is under way in the background, and how
-   much of it -- the prototype's `taskStrip`. Which tasks, and how far each has
-   got, is what the desk's tasks tab says, and it is not said again over the
-   box the reader types in; so the chip is one door, to that tab, and the names
-   ride along only as its hover title. */
-export function TaskRuns(): JSX.Element | null {
-  const s = useSyncExternalStore(store.subscribe, store.get)
-  /* The whole chip is a t(key), so a language pick has to repaint it -- the
-     dock around it subscribes for its own words, not for this one. */
-  useSyncExternalStore(lang.subscribe, lang.get)
-  useEffect(() => { if (!s.loaded) void store.refresh() }, [s.loaded])
-  const live = store.running(s.rows)
-  if (!live.length) return null
-  return (
-    <div className="tkruns">
-      <button
-        type="button"
-        className="tkrunhint"
-        title={live.map((r) => r.task_summary || r.id).join('\n')}
-        onClick={() => desk.openDeskTab('tasks')}
-      >
-        <span className="tkrundot" />
-        <span>{t('gui.tasks.running_n', { n: live.length })}</span>
-      </button>
-    </div>
-  )
-}
-
 /* ── the board ─────────────────────────────────────────────────────────── */
 
 /* The prototype's own `RT_DIMS` (proto.js:3386): taller than the shared dag

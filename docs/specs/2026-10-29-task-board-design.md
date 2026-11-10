@@ -440,8 +440,10 @@ generated into `ui-web/src/rpc/generated` (`npm run gen`); `tests/test_rpc_schem
 ### 5. The page
 
 The tasks tab's list view in `features/tasks/TasksPage.tsx` becomes the board. The rest of
-the domain stays: the docked task pane with its graph and node record, the task strip above
-the composer, and the tab's running-count badge. The desk's tab shows its empty state only with
+the domain stays: the docked task pane with its graph and node record and the tab's
+running-count badge. The composer's running-count strip is gone: delegated work that
+outlives its host turn is now said by one waiting row at the transcript's tail instead.
+The desk's tab shows its empty state only with
 no Task and no group, reading the board itself: a conversation that delegated nothing still has
 its matters, and the Task Board page opens them there.
 

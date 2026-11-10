@@ -1,8 +1,8 @@
 /* The tasks panel's state, outside React.
  *
  * The page drives this panel imperatively -- a tab click draws it, a session
- * switch resets it, the strip above the composer reads the same rows -- so
- * the state lives where those callers can reach it and the component
+ * switch resets it, the composer's waiting row is painted from the same rows --
+ * so the state lives where those callers can reach it and the component
  * subscribes. Rows are addressed by (kind, id): a spawn's id and a dag's run
  * id share no namespace and can theoretically collide.
  */
@@ -339,9 +339,9 @@ function liveRows(next: TaskRow[]): void {
 export async function refresh(): Promise<void> {
   const src = source()
   const key = sessionCurrent()
-  /* No source or no open conversation reads as no tasks, not as an error: the
-     strip above the composer is in the first frame, before the wiring runs,
-     and a draft has no session for a task to be filed under. */
+  /* No source or no open conversation reads as no tasks, not as an error: a
+     draft has no session for a task to be filed under, and a read asked before
+     the seam is on has no list to ask. */
   if (!src || !key) { patch({ rows: [], loaded: true }); return }
   const tick = liveTick
   const got = await src.list(key)
