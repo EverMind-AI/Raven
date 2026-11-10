@@ -37,12 +37,14 @@ SEGMENTS = {
     SKILLS: ("active_skills", "scent", "skills"),
 }
 
-# Tool results made of skill material, by tool name. A body a turn pulled in
-# reaches the request as an ordinary tool message; counted as conversation,
-# the cost of a skill would be put on the talk that used it. ``find_skill``
-# belongs here because its hits are the same catalogue lines the scent menu
-# spends -- the rule is what the skill subsystem put in the prompt, not
-# whether a body was read yet.
+# Tool results made of skill material, by the name of the tool that produced
+# them. A body a turn pulled in reaches the request as an ordinary tool
+# message, and one the model reached through ``tool_call`` is named for the
+# target that forwarding resolved to; counted as conversation, the cost of a
+# skill would be put on the talk that used it. ``find_skill`` belongs here
+# because its hits are the same catalogue lines the scent menu spends -- the
+# rule is what the skill subsystem put in the prompt, not whether a body was
+# read yet.
 SKILL_TOOLS = frozenset({"find_skill", "read_skill", "use_skill"})
 
 

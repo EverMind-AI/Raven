@@ -21,6 +21,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _MID_TURN_HEADER
 from raven.agent.loop.bundles import HostWiring
 from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
+from raven.agent.window.parts import CONVERSATION, SKILLS, measure_parts
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
@@ -118,6 +119,28 @@ class _SplitTool(Tool):
 
     async def execute(self, **kwargs) -> ToolResult:
         return ToolResult(model_text=self.MODEL_TEXT, display_text=self.DISPLAY_TEXT)
+
+
+class _ReadSkillTool(Tool):
+    """Stands in for ``read_skill``: its result is the skill material the window
+    splits out of the conversation."""
+
+    BODY = "### Skill: deck-engine\n\n" + "Build the deck from the outline. " * 40
+
+    @property
+    def name(self) -> str:
+        return "read_skill"
+
+    @property
+    def description(self) -> str:
+        return "skill body stand-in"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> str:
+        return self.BODY
 
 
 class _FakeChatProvider:
@@ -509,6 +532,42 @@ def _record_tool_results(loop: AgentLoop) -> tuple[dict[str, str], dict[str, str
     return notes, contents
 
 
+async def test_a_forwarded_skill_read_is_named_for_the_tool_that_produced_it(tmp_path):
+    """Through ``tool_call`` the model names ``read_skill``; the result is the
+    skill's, so the window must see that name and count the body as skill
+    bytes rather than as the talk that read it."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "tool_call")],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+
+    recorded: list[tuple[str, str]] = []
+    written: list[dict] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, *, trusted_note=""):
+        recorded.append((tool_call_id, tool_name))
+        out = original_add(messages, tool_call_id, tool_name, result, trusted_note=trusted_note)
+        written[:] = [dict(m) for m in out]
+        return out
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert recorded == [("s1", "read_skill")]
+    prompt = [m for m in written if m.get("role") != "system"]
+    parts = measure_parts(prompt)
+    as_talk = measure_parts([{**m, "name": "tool_call"} if m.get("role") == "tool" else m for m in prompt])
+    assert parts[SKILLS] > 0
+    assert as_talk[SKILLS] == 0
+    assert parts[CONVERSATION] < as_talk[CONVERSATION]
+
+
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
 @pytest.mark.parametrize("receipt", [_SpawnReceiptTool, _DagReceiptTool], ids=["spawn", "run_subagent_dag"])
 async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(tmp_path, receipt, route):
@@ -532,7 +591,9 @@ async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(t
 
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
-    fence_end = f"[END UNTRUSTED {dispatch if route == 'direct' else 'tool_call'}"
+    # The fence names the tool that produced the result, not the forwarder, on
+    # either route.
+    fence_end = f"[END UNTRUSTED {dispatch}"
     rule = "decisions you put to the user that are still open close this reply too"
     sections = "gives each task its own `### <task>` section"
     assert "started" in contents["s1"]

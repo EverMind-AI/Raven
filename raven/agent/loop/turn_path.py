@@ -2096,11 +2096,19 @@ class TurnPathMixin:
                     # window reads it back when it withdraws them.
                     sources = image_sources(tool_call.name, result_blocks or [], iteration) if result_blocks else []
                     provenance = {"agent_output": True} if agent_output else {}
+                    # The result belongs to the tool that produced it: through
+                    # tool_call the model names a target, and the window reads
+                    # this name to tell a skill's bytes from the talk that read
+                    # them.
+                    arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+                    producing = self.tools.get(tool_call.name)
+                    owner = producing.metadata_owner(arguments) if producing is not None else None
+                    result_name = owner.name if owner is not None else tool_call.name
                     if blocks:
                         messages = self.context.add_tool_result(
                             messages,
                             tool_call.id,
-                            tool_call.name,
+                            result_name,
                             model_text,
                             blocks,
                             trusted_note=watch_note,
@@ -2112,7 +2120,7 @@ class TurnPathMixin:
                         # Keep the long-standing 4-arg call for text results so no
                         # existing caller or test double sees a signature change.
                         messages = self.context.add_tool_result(
-                            messages, tool_call.id, tool_call.name, model_text, trusted_note=watch_note, **provenance
+                            messages, tool_call.id, result_name, model_text, trusted_note=watch_note, **provenance
                         )
                     if messages:
                         # Dispatch to result, on the entry that answers the call.
