@@ -524,7 +524,7 @@ class WebSearchTool(Tool):
             )
         if vendor == "firecrawl":
             return await client.post(
-                "https://api.firecrawl.dev/v1/search",
+                "https://api.firecrawl.dev/v2/search",
                 json={"query": query, "limit": n},
                 headers={
                     "Accept": "application/json",
@@ -618,7 +618,7 @@ class WebSearchTool(Tool):
             # A refusal inside a 200 must read as an error, not as a dry search.
             if data.get("success") is False:
                 raise ValueError(f"Firecrawl: {data.get('error') or 'search failed'}")
-            return {"organic": _rows(data.get("data"), url="url", snippet="description")}
+            return {"organic": _rows((data.get("data") or {}).get("web"), url="url", snippet="description")}
         if vendor == "serply":
             # Google SERP rows under ``results``; the snippet is ``description``.
             return {"organic": _rows(data.get("results"), url="link", snippet="description")}
@@ -1316,7 +1316,7 @@ class WebFetchTool(Tool):
         if vendor == "firecrawl":
             async with httpx.AsyncClient(timeout=30.0, proxy=self.proxy) as client:
                 r = await client.post(
-                    "https://api.firecrawl.dev/v1/scrape",
+                    "https://api.firecrawl.dev/v2/scrape",
                     json={"url": url, "formats": ["markdown"]},
                     headers={**json_headers, "Authorization": f"Bearer {key}"},
                 )

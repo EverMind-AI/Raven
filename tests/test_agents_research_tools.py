@@ -642,7 +642,7 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
     "firecrawl": (
-        {"success": True, "data": [{"title": "T", "url": "https://e.com/a", "description": "S"}]},
+        {"success": True, "data": {"web": [{"title": "T", "url": "https://e.com/a", "description": "S"}]}},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
     "anysearch": (
@@ -716,6 +716,21 @@ async def test_each_search_vendor_is_called_on_its_own_endpoint(monkeypatch, ven
     # production while this test passed on a request that carried no auth.
     carried = "K" in str(sent.url) or "K" in " ".join(sent.headers.values())
     assert carried, f"{vendor} request carries no credential"
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_searches_on_the_v2_endpoint(monkeypatch):
+    """The URL is the behaviour here: v1 answers HTTP 410 after 2026-12-10, and
+    the payload fixture above only proves the v2 envelope parses."""
+    transport = _CaptureTransport(_SEARCH_PAYLOADS["firecrawl"][0])
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    await WebSearchTool(api_key="K", provider="firecrawl").execute(query="q", count=3)
+
+    sent = transport.seen[0]
+    assert str(sent.url) == "https://api.firecrawl.dev/v2/search"
+    assert json.loads(sent.content) == {"query": "q", "limit": 3}
 
 
 @pytest.mark.parametrize("vendor", sorted(SEARCH_PROVIDERS))
@@ -903,6 +918,22 @@ async def test_each_fetch_vendor_reads_a_page_its_own_way(monkeypatch, vendor, p
     # The extractor column is an instrument, not a label: the backends are not
     # interchangeable, so a row must say which one served the page.
     assert answer["extractor"] == FETCH_PROVIDERS[vendor].extractor
+
+
+@pytest.mark.asyncio
+async def test_firecrawl_reads_pages_on_the_v2_endpoint(monkeypatch):
+    """Same reason as the search URL: v1 is retired on 2026-12-10, so a revert
+    to it must fail here rather than in production."""
+    transport = _CaptureTransport({"success": True, "data": {"markdown": "page body"}})
+    _patch_client(monkeypatch, transport)
+    set_current_session("t")
+
+    answer = json.loads(await WebFetchTool(api_key="K", provider="firecrawl").execute(url="https://example.com/a"))
+
+    assert answer["text"] == "page body"
+    sent = transport.seen[0]
+    assert str(sent.url) == "https://api.firecrawl.dev/v2/scrape"
+    assert json.loads(sent.content) == {"url": "https://example.com/a", "formats": ["markdown"]}
 
 
 @pytest.mark.asyncio
