@@ -379,3 +379,45 @@ def test_write_transaction_excludes_other_processes(tmp_path: Path):
     proc2.start()
     assert q2.get(timeout=10) == "acquired"
     proc2.join(10)
+
+
+class TestReplaceRetry:
+    def test_retries_a_transient_sharing_violation(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError("sharing violation")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(atomic_io.os, "replace", flaky)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert path.read_text(encoding="utf-8") == "new"
+        assert calls["n"] == 3
+
+    def test_raises_after_the_retry_budget(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def always_denied(src, dst):
+            calls["n"] += 1
+            raise PermissionError("sharing violation")
+
+        monkeypatch.setattr(atomic_io.os, "replace", always_denied)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(PermissionError):
+            atomic_replace(path, "new")
+        assert calls["n"] == atomic_io._REPLACE_ATTEMPTS
+        assert path.read_text(encoding="utf-8") == "old"

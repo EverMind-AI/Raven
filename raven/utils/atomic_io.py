@@ -23,6 +23,25 @@ T = TypeVar("T")
 
 _held = threading.local()
 
+#: A reader on Windows holds the target open without delete sharing, so a
+#: concurrent ``os.replace`` fails with a sharing violation (WinError 32/5).
+#: The hold is normally brief; retry instead of losing the write.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF = 0.05
+
+
+def _replace_with_retry(tmp_path: Path, path: Path) -> None:
+    delay = _REPLACE_BACKOFF
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            if attempt + 1 == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
 
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
@@ -234,7 +253,7 @@ def _replace_unlocked(
         # after every save. Carry the target's own mode onto the replacement.
         if preserve is not None:
             os.chmod(tmp_path, preserve)
-        os.replace(tmp_path, path)
+        _replace_with_retry(tmp_path, path)
     except BaseException:
         # Windows refuses to replace a read-only target after the tmp has
         # taken its mode; the tmp goes too, so making the target writable is
