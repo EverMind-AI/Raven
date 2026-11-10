@@ -5326,9 +5326,16 @@ async def test_a_run_cancelled_while_its_steps_go_to_disk_gets_no_second_copy_fr
     so a cancel can land half way. The run's count is on it before the first
     step is, so a backfill still leaves the run alone instead of writing every
     step again beside the ones that reached the log."""
+    from raven.agent.subagent.backends import observability
     from raven.tracing import spans as tracing_spans
     from raven.trajectory import frames_backfill
 
+    # The live writer fires from the read loop and from its own loop callbacks,
+    # so a cancel aimed at the run cannot stop it: on a loaded box its interval
+    # expires mid-burst and it writes every step itself, leaving the run with
+    # nothing to interrupt. Held off, `finish` writes the steps in the run task,
+    # and the cancel lands between its batches.
+    monkeypatch.setattr(observability.LiveSteps, "touch", lambda self, events: None)
     backend = build_third_party_backend(stub_config("a", mode="many_steps"))
     run = asyncio.create_task(backend.run("ping", task_id="t1", workspace=tmp_path, executor=None))
     emit = tracing_spans.emit
@@ -5350,8 +5357,8 @@ async def test_a_run_cancelled_while_its_steps_go_to_disk_gets_no_second_copy_fr
     ext, steps = _steps_of_the_run(trace_dir)
     assert 30 <= len(steps) < 202
     # The count is the run's plan at the moment it settles, not a promise that
-    # the stub delivered all 202 updates before the cancel: the live writer can
-    # now emit the thirtieth step while the tail is still on the wire.
+    # every step reached the log: it goes on the run before the first batch,
+    # and the cancel stops the rest between batches.
     assert ext["attributes"]["subagent.external.steps"] >= len(steps)
     assert frames_backfill.backfill(trace_dir)["written"] == 0
 
