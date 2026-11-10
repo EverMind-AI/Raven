@@ -1855,12 +1855,14 @@ conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
-`enabled` / `api_key` / `timeout_s` / `min_safety`; `endpoint=None` disables it, and
-`enabled=false` switches it off without clearing the URL -- off is read live). Both
-onboarding wizards seed the shared catalog URL and say what that sends; the settings page's
-Skill Hub switch is `enabled`, drawn from `settings.get`'s answer rather than the raw file.
-While on, text from the conversation (a turn's message, or a `find_skill` query) is sent as
-the catalog query.
+`enabled` / `api_key` / `timeout_s` / `min_safety`). `enabled` is the only switch and defaults
+to on; `endpoint` defaults to the shared catalog and may name an internal one, and
+`RAVEN_SKILLHUB_URL` overrides both for this source and the SkillHub page. A legacy explicit
+`endpoint: null` is migrated to `enabled: false`. Onboarding records the opt-in and says what
+that sends; the settings page's Skill Hub switch is `enabled`, drawn from `settings.get`'s
+answer rather than the raw file. Either direction applies on the next search -- the loop always
+holds the client, so nothing waits for a reload. While on, text from the conversation (a turn's
+message, or a `find_skill` query) is sent as the catalog query.
 `SkillHubClient` offers
 progressive disclosure — `search()` (metadata-only discovery), `get()` (skill body),
 `install()` (download + safe extract); during routing `HubSkillSource` feeds metadata-only
