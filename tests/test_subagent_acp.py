@@ -788,7 +788,7 @@ async def test_a_snapshot_remembers_that_the_refusal_was_about_a_credential() ->
     later reader cannot recover it: the surviving evidence is ``auth_methods``,
     and a perfectly usable agent advertises those too (CodeBuddy names four),
     so the pair "not ready and has auth methods" is a guess where this is a
-    measurement. The agents page renders it as ``Unauthorized``.
+    measurement. The agents page renders it as ``Sign-in needed``.
     """
     refused = await verify_agent(stub_config(mode="no_session"))
     assert refused.needs_auth is True
@@ -805,7 +805,7 @@ async def test_a_refusal_about_anything_else_is_not_a_credential_verdict() -> No
     works lists them too -- the stub does, and so does every measured one. So a
     session refusal on an agent that advertises auth is not thereby a refusal
     ABOUT auth: any unrelated remote error would take the same branch, and the
-    page would present a disabled "Unauthorized" for a transient model or
+    page would present a disabled "Sign-in needed" for a transient model or
     configuration failure with no way back.
 
     The coarse status keeps its old reading, which the advertisement is good
@@ -827,7 +827,7 @@ async def test_the_roster_and_the_connect_button_read_one_answer() -> None:
     in data.details. The connect button came to read data while the
     roster still read the message alone, and on the measured hermes refusal the
     two disagreed: Connect said "no usable credential", the row did not say
-    Unauthorized, and Test showed the placeholder. Both read `reason_of` now,
+    Sign-in needed, and Test showed the placeholder. Both read `reason_of` now,
     through the same rule, so this runs one agent process through both.
     """
     from raven.agent.subagent.probe import ping_agent
@@ -1341,7 +1341,7 @@ async def test_the_credential_verdict_outlives_the_process_that_measured_it(tmp_
 
 
 async def test_a_passing_test_clears_a_recorded_credential_refusal(tmp_path: Path, monkeypatch) -> None:
-    """The way out of `Unauthorized`, and the only one there is.
+    """The way out of `Sign-in needed`, and the only one there is.
 
     The page offers no press on a row whose agent asked to be signed in -- the
     remedy is not on the page -- so the row's whole recovery path is: sign in,
@@ -1375,7 +1375,7 @@ async def test_a_passing_test_clears_a_recorded_credential_refusal(tmp_path: Pat
     assert result.ok is True
 
     after = store.load([cfg])["signed-in"]
-    assert after.needs_auth is False, "the page would still be showing Unauthorized"
+    assert after.needs_auth is False, "the page would still be showing Sign-in needed"
     assert after.status == "ready"
 
 

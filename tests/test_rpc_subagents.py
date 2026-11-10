@@ -4199,7 +4199,7 @@ async def test_a_reserved_name_entry_is_reported_once_and_as_ignored(config_path
 async def test_a_row_carries_the_credential_verdict_its_snapshot_measured(
     config_path: Path, monkeypatch: pytest.MonkeyPatch, stale: bool
 ) -> None:
-    """The agents page draws `Unauthorized` off this and nothing else.
+    """The agents page draws `Sign-in needed` off this and nothing else.
 
     It cannot be derived client-side: what survives on the wire otherwise is
     ``probe_status``, which is ``attention`` for "wants signing in" and equally
