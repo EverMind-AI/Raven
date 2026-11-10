@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from raven.contracts.llm_provider import ChatDelta
 from raven.providers.minimax_oauth import (
     CLIENT_ID,
     DEVICE_GRANT_TYPE,
@@ -255,4 +256,52 @@ async def test_provider_refreshes_and_injects_headers(monkeypatch: pytest.Monkey
     assert seen["extra_headers"] == {
         "x-api-key": "access",
         "Authorization": "Bearer access",
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_forwards_every_argument_to_the_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The usage seam reads the parent's keyword ``model``; a positional forward
+    leaves it reading the tools list instead. Every argument keeps its name."""
+    token = MiniMaxOAuthToken(
+        "access",
+        "refresh",
+        int(time.time() * 1000) + 3_600_000,
+        "https://api.minimax.io/anthropic/v1",
+    )
+    monkeypatch.setattr("raven.providers.minimax_oauth_provider.get_token", lambda _: token)
+    seen: dict[str, object] = {}
+
+    async def fake_parent_stream(self, *args, **kwargs):
+        seen.update(args=args, **kwargs)
+        yield ChatDelta(content="ok", finish_reason="stop")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider.chat_stream", fake_parent_stream)
+    provider = MiniMaxOAuthProvider("global", "minimax-global/MiniMax-M3")
+    messages = [{"role": "user", "content": "hello"}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    deltas = [
+        delta
+        async for delta in provider.chat_stream(
+            messages=messages,
+            tools=tools,
+            model="minimax-global/MiniMax-M3",
+            max_tokens=123,
+            temperature=0.2,
+            reasoning_effort="high",
+            tool_choice="auto",
+        )
+    ]
+
+    assert [delta.content for delta in deltas] == ["ok"]
+    assert seen == {
+        "args": (),
+        "messages": messages,
+        "tools": tools,
+        "model": "minimax-global/MiniMax-M3",
+        "max_tokens": 123,
+        "temperature": 0.2,
+        "reasoning_effort": "high",
+        "tool_choice": "auto",
     }
