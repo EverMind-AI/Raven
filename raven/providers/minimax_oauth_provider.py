@@ -46,7 +46,15 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
         tool_choice: str | dict[str, Any] | None = None,
     ) -> LLMResponse:
         await self._prepare_token()
-        return await super().chat(messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice)
+        return await super().chat(
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
+        )
 
     async def chat_stream(
         self,
@@ -63,6 +71,12 @@ class MiniMaxOAuthProvider(LiteLLMProvider):
     ) -> AsyncIterator[ChatDelta]:
         await self._prepare_token()
         async for delta in super().chat_stream(
-            messages, tools, model, max_tokens, temperature, reasoning_effort, tool_choice
+            messages=messages,
+            tools=tools,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            tool_choice=tool_choice,
         ):
             yield delta

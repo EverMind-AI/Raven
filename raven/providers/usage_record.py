@@ -170,13 +170,15 @@ async def _record(response: dict[str, Any], model: str | None) -> None:
 def _model_of(provider: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
     model = kwargs.get("model")
     if model is None and len(args) >= 3:
+        # ``args`` excludes ``self``: every entry point is (messages, tools, model).
         model = args[2]
-    if model:
-        return str(model)
+    if isinstance(model, str) and model:
+        return model
     try:
-        return provider.get_default_model()
+        default = provider.get_default_model()
     except Exception:  # noqa: BLE001 - a name for the row, not a reason to fail
         return None
+    return default if isinstance(default, str) and default else None
 
 
 def _wrap_call(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
@@ -195,7 +197,7 @@ def _wrap_call(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable
                 "finish_reason": getattr(response, "finish_reason", None),
                 "usage": getattr(response, "usage", None),
             },
-            _model_of(self, (self, *args), kwargs),
+            _model_of(self, args, kwargs),
         )
         return response
 
@@ -220,7 +222,7 @@ def _wrap_stream(method: Callable[..., AsyncIterator[Any]]) -> Callable[..., Asy
         # runs in whichever context steps it, so a value set across a yield
         # would leak into the consumer and could not be reset once it closed.
         # The mark on the deltas is what keeps a wrapper from recording twice.
-        model = _model_of(self, (self, *args), kwargs)
+        model = _model_of(self, args, kwargs)
         deltas = method(self, *args, **kwargs)
         owner: bool | None = None
         usage: dict[str, Any] | None = None

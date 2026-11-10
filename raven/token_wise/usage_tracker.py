@@ -61,6 +61,21 @@ def row_root(row: dict[str, Any]) -> Any:
     return row.get("root_session_key") or row.get("session_key")
 
 
+#: The longest a model name can be and still be one. A tools-list repr reached
+#: this field once, through the seam's model lookup; a row is not the place to
+#: carry that.
+_MODEL_NAME_MAX = 200
+
+
+def _model_name(value: Any) -> str:
+    """The row's model name, or the unknown marker for a value that cannot be one."""
+    if isinstance(value, str) and value and len(value) <= _MODEL_NAME_MAX and "\n" not in value and "\r" not in value:
+        return value
+    if value not in (None, ""):
+        logger.warning("usage: implausible model name {!r}", str(value)[:120])
+    return "?"
+
+
 def delegated_usage(
     root: str,
     since: datetime,
@@ -196,6 +211,7 @@ class UsageTracker(TokenStrategy):
         session = usage.session_key or usage_context.session_key()
         usage = replace(
             usage,
+            model=_model_name(usage.model),
             session_key=session,
             root_session_key=usage.root_session_key or usage_context.root_session_key(session),
         )

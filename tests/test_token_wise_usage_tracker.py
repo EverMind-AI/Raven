@@ -528,6 +528,14 @@ class _SplitStreamProvider(_DirectProvider):
         yield ChatDelta(content=None, finish_reason="stop")
 
 
+class _PositionalStreamProvider(_DirectProvider):
+    """Forwards to its parent by position, as ``MiniMaxOAuthProvider`` does."""
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kwargs):
+        async for delta in super().chat_stream(messages, tools, model):
+            yield delta
+
+
 def _listening() -> UsageTracker:
     """A tracker the seam reports to for the length of one block."""
     return UsageTracker(persist=False)
@@ -604,6 +612,66 @@ async def test_a_stream_whose_usage_and_finish_arrive_apart_is_one_row():
     assert text == "hello"
     assert tracker.total.calls == 1
     assert (tracker.total.input_tokens, tracker.total.output_tokens) == (120, 30)
+
+
+async def test_a_stream_forwarded_positionally_is_billed_under_its_model(tmp_path: Path):
+    """A subclass that forwards messages/tools/model positionally, as the MiniMax
+    OAuth provider does, is recorded by the parent's stream wrapper. That wrapper
+    must read the model from the third argument, not mistake the tools list for it.
+    """
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalStreamProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                messages=[{"role": "user", "content": "hi"}], tools=tools, model="direct/model"
+            )
+        ]
+
+    assert deltas
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/model"]
+
+
+async def test_a_stream_forwarded_positionally_without_a_model_is_billed_under_the_default(tmp_path: Path):
+    """With no model in the call, the positional slot is None and the provider's
+    default names the row. The tools list is not a name."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalStreamProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [
+            delta async for delta in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], tools=tools)
+        ]
+
+    assert deltas
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/model"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["", "line\nbreak", "x" * 5000, [{"type": "function", "function": {"name": "read_file"}}]],
+    ids=["empty", "multiline", "oversized", "not-a-string"],
+)
+async def test_a_usage_row_normalizes_an_implausible_model_name(tmp_path: Path, model):
+    """The file is the one account every consumer reads; a value that cannot be a
+    model name is written as the unknown marker, never stringified into the row."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    await tracker.after_llm_call({}, UsageSnapshot(model=model, session_key="sess1"))
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["?"]
 
 
 async def test_an_error_that_reached_no_model_is_not_a_row():
