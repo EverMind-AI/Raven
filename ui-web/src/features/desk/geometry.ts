@@ -27,7 +27,7 @@ export const DESK_COMPOSER_GAP = 12
 /* The default is the smallest desk that shows a tab's contents, not the
    smallest one that renders -- it used to be 250x260 against a 250 minimum,
    which left a five-file shelf scrolling: 210px of body for 265px of rows.
-   Width stays the cautious axis: the desk hangs UNDER the launcher and keeps
+   Width stays the cautious axis: the desk hangs UNDER the capsule and keeps
    its right edge there, so widening it reaches further back across the centred
    transcript column, which is what put the default at the minimum in the first
    place. Anchored below rather than beside, it covers the top of that column
@@ -124,7 +124,7 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
   const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_WIDTH, value.w, window.innerWidth - 16))
   const limit = deskBottomLimit()
   /* The height is the room between the top edge and the limit. Anchored, the
-     stylesheet holds that edge under the launcher. Detached, the edge is
+     stylesheet holds that edge under the capsule. Detached, the edge is
      wherever the palette was put, so the room is measured from the window's
      top instead: measured from the palette's own top, a downward move would
      shrink the palette rather than stop it. */

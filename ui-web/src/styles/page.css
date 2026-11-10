@@ -6136,7 +6136,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
 .desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
-   one: the right edge is pinned under the launcher and hard against the
+   one: the right edge is pinned under the capsule and hard against the
    window's own gutter, so a corner there is both the hardest place on screen
    to grab and backwards to pull -- the hand goes left to make the panel
    bigger. Detached pins the left edge instead, and the handle goes back to the
