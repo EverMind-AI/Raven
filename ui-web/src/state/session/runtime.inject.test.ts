@@ -227,7 +227,9 @@ describe('a message typed while the turn is running', () => {
     await h.tick()
 
     expect(h.queue).toEqual([{ text: 'only the last quarter' }])
-    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'gui.err.disconnected', null]])
+    /* A dropped socket can take the turn with it, so this note promises the
+       message, not the end of a turn the page can no longer see. */
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued_offline', '', null]])
   })
 })
 
@@ -264,6 +266,39 @@ describe('a mid-turn send the gateway refused', () => {
     h.runtime.drain()
     await h.tick()
 
+    expect(h.delivered()).toEqual(['only the last quarter'])
+  })
+})
+
+/* The refusal can land after the turn it was aimed at has folded: the send saw
+   a turn, the completion was handled first, and the catch queues into an idle
+   engine. The queue holds the only copy, so the engine has to pick it up rather
+   than wait for a next turn that may never come. */
+describe('a refusal that lands after its turn ended', () => {
+  it('sends the queued text once, not twice', async () => {
+    const h = await harness({ failSends: 1 })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    /* No await: the rejection is still in flight when the turn folds. */
+    h.runtime.send('only the last quarter')
+    h.runtime.finishTurn({})
+    await h.tick()
+
+    /* The race, as it stands: the queue holds the message, the engine is idle,
+       and nothing has sent it. */
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    expect(turn.phase()).toBe('idle')
+    expect(h.delivered()).toEqual([])
+
+    /* The fallback drain lets the engine pick it up once the server has
+       unwound the turn that ended. */
+    await new Promise((r) => setTimeout(r, 450))
+    expect(h.delivered()).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([])
+
+    /* A later turn end has nothing left to release. */
+    h.runtime.finishTurn({})
+    await h.tick()
     expect(h.delivered()).toEqual(['only the last quarter'])
   })
 })

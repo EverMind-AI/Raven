@@ -358,9 +358,17 @@ export function sendMidTurn(text: string): void {
     .catch((e: unknown) => {
       queuePush(text)
       const err = e as { message?: string }
+      const dropped = err.message === 'not connected'
       /* The queue is the recovery: the message already waits there, and a retry
-         would send it a second time beside that copy. */
-      noteRow(t('gui.err.queued'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)))
+         would send it a second time beside that copy. A dropped socket can take
+         the turn with it, so that branch promises the message, never the turn. */
+      noteRow(t(dropped ? 'gui.err.queued_offline' : 'gui.err.queued'), dropped ? '' : (err.message || String(e)))
+      /* The completion can fold the turn between the busy check and this
+         refusal: the queue is all that is left of the message, so let the engine
+         pick it up once the server has unwound the turn that ended -- the same
+         delay a cancelled turn's drain uses. */
+      const was = sessionCurrent()
+      setTimeout(() => { if (sessionCurrent() === was) drain() }, 400)
     })
 }
 
