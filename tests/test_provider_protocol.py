@@ -847,6 +847,23 @@ def test_a_cut_tool_call_reads_length(stop_reason: str) -> None:
     assert response.tool_calls[-1].run_meta.truncation is not None
 
 
+def test_a_completed_tool_call_still_reads_tool_calls() -> None:
+    """The cut-finish exception must not swallow the ordinary case: a reply that
+    carries calls under a plain ``end_turn`` still reports ``tool_calls``."""
+    from raven.providers.anthropic_messages_provider import parse_message
+
+    response = parse_message(
+        {
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+
+    assert response.finish_reason == "tool_calls"
+    assert response.tool_calls
+
+
 async def test_context_window_exceeded_reads_length_from_a_stream() -> None:
     """The mapping answers for both response paths; a streamed cut must read
     ``length`` too, or the last tool call it carries is dispatched."""
