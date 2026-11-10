@@ -49,21 +49,22 @@ _LOCK_POLL_S = 0.02
 
 # Windows opens a file descriptor in text mode unless ``O_BINARY`` is set, and
 # the CRT then translates every ``\n`` written with ``os.write`` into ``\r\n``.
-# The TUI writes LF and its reader does not normalise line endings, so a CRLF
-# block would show a trailing ``\r`` there and defeat adjacent-duplicate
-# detection. On POSIX the flag does not exist and this is 0.
+# The TUI writes LF, and a CRLF block from here would leave the shared file's
+# line endings up to whichever writer appended last; ``parse`` on raw text also
+# keeps the trailing ``\r``. On POSIX the flag does not exist and this is 0.
 _O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 def history_path() -> Path:
     """The file both front ends share.
 
-    The two agree when ``RAVEN_HOME`` is unset or absolute. A ``~`` or a
-    relative value does not: ``raven_home()`` expands it here while the TUI
-    joins the literal string, so the two can name different files.
-    ``RAVEN_HOME=""`` is the extreme case: ``raven_home()`` strips it and
-    falls back to ``~/.raven``, while the TUI joins the empty string and reads
-    the file from the current directory.
+    The two agree when ``RAVEN_HOME`` is unset, blank or absolute, and when it
+    is ``~`` or starts with ``~/``. ``~\\`` is the Windows spelling of ``~/``:
+    both sides expand it on Windows, and the TUI also expands it on other
+    platforms. Two forms still diverge: a relative value names a
+    directory under each process's own working directory, and ``~name`` is
+    expanded by ``raven_home()`` while the TUI keeps it literal -- so the two
+    can name different files.
     """
     return raven_home() / HISTORY_FILENAME
 
@@ -72,9 +73,10 @@ def parse(text: str) -> list[str]:
     """The entries in ``text``, oldest first, exactly as the TUI's ``load()``.
 
     A run of ``+`` lines is one entry. Any other line ends the run; trailing
-    and leading separators do not create empty entries. Line endings are left
-    alone (a CRLF file yields ``\\r`` at the end of each line), matching the TUI
-    reader rather than inventing a cleaner one.
+    and leading separators do not create empty entries. This function splits
+    on ``\\n`` only, so a CRLF string keeps ``\\r`` at the end of each line;
+    the TUI's ``load()`` splits on ``/\\r?\\n/`` and drops it. The two agree on
+    the LF text both writers emit.
     """
     entries: list[str] = []
     current: list[str] = []
@@ -101,9 +103,10 @@ def read_entries(limit: int = MAX_ENTRIES) -> list[str]:
     so the cap belongs at this read boundary, before the answer reaches a page.
 
     ``Path.read_text`` applies universal-newline translation, so a CRLF file
-    converted by an external editor yields clean entries here while the TUI
-    reader keeps the trailing ``\\r``. A lone ``\\r`` is folded to ``\\n`` here
-    as well; the TUI's ``readFileSync`` keeps it. Both writers emit LF.
+    converted by an external editor yields clean entries here, as it does in
+    the TUI after its ``/\\r?\\n/`` split. A lone ``\\r`` is folded to ``\\n``
+    here; the TUI's split does not treat it as a line ending, so that file
+    stays one line there. Both writers emit LF.
     """
     if limit <= 0:
         return []
