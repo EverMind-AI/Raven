@@ -37,7 +37,7 @@ import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
 import { rereadChips, viewRuntime } from './registry'
 import {
-  drain, dropStaleSteps, duration, ensureStep, finishTurn, flushSay, reset, send,
+  drain, dropStaleSteps, duration, ensureStep, finishTurn, flushSay, reset, resend,
   softStop,
 } from './runtime'
 
@@ -329,7 +329,7 @@ export const STAGES: readonly Stage[] = [
     rt.dispatch({ type: 'idle' })
     noteRow(p.message === 'turn_failed' ? transcript.failedTurnLabel() : (p.message || 'error'),
       p.detail || p.reason || '', {
-        ...(rt.lastAsk ? { retry: () => send(rt.lastAsk) } : {}),
+        ...(rt.lastAsk ? { retry: () => resend(rt.lastAsk, rt.lastAskMoveOn) } : {}),
         ...(p.full_detail ? { full: p.full_detail } : {}),
       })
     transcript.artifacts(wsCurrentTurn())

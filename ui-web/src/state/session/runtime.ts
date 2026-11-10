@@ -142,6 +142,10 @@ export class SessionRuntime {
      conversation. */
   lastAsk = ''
 
+  /* The group that message was sent with, so its retry carries the same one
+     rather than a bar the reader picked since. */
+  lastAskMoveOn: string | undefined
+
   /* The bubble a send drew for a turn whose `message.start` has not arrived:
      that frame files the turn's id on it, and a task board step finds the
      turn by that id. Null once filed. */
@@ -355,7 +359,7 @@ export function sendMidTurn(text: string): void {
       queuePush(text)
       const err = e as { message?: string }
       noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
-        { retry: () => send(text) })
+        { retry: () => resend(text) })
     })
 }
 
@@ -372,6 +376,14 @@ export function send(text: string): void {
 export function sendQueued(queued: QueuedMessage): void {
   if (isImportedKey(sessionCurrent())) return
   route(queued)
+}
+
+/* A retry re-sends the message that failed, as it first went out: it keeps
+   that message's group and never takes the bar, which by now may belong to
+   another message. */
+export function resend(text: string, moveOn?: string): void {
+  if (isImportedKey(sessionCurrent())) return
+  route(moveOn ? { text, moveOn } : { text })
 }
 
 function route({ text, moveOn }: QueuedMessage): void {
@@ -391,6 +403,7 @@ function route({ text, moveOn }: QueuedMessage): void {
   /* What a retry re-sends. Recorded after the attachment note is folded in, so
      the second attempt carries the same message as the first. */
   rt.lastAsk = text
+  rt.lastAskMoveOn = moveOn
   rt.asked = ask(text)
   turn.dispatch({ type: 'send' })
   dropStaleSteps(rt)
@@ -401,7 +414,7 @@ function route({ text, moveOn }: QueuedMessage): void {
     transcript.killStatus()
     turn.dispatch({ type: 'idle' })
     noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
-      { retry: () => send(text) })
+      { retry: () => resend(text, moveOn) })
     goState(); drawMeter()
   }
   if (!registryIsDraft()) {
@@ -417,7 +430,9 @@ function route({ text, moveOn }: QueuedMessage): void {
        the two differ only when the reader opened another conversation inside
        the promotion above, and making them agree is a fix about where a raced
        first message lands, not about this one. Left alone deliberately. */
-    const sent = await gateway().call('turn.send', { session_key: sessionCurrent() as string, content: text, ...mediaOf(text) })
+    const sent = await gateway().call('turn.send', {
+      session_key: sessionCurrent() as string, content: text, ...mediaOf(text), ...(moveOn ? { move_on: moveOn } : {}),
+    })
     if (ran && sent.accepted !== false) rememberUsed(ran)
     if (hasNamingFlag(sent) && sent.naming === false) namingDeclined(id as string)
   })().catch(failed)
