@@ -4,11 +4,12 @@
 // See NOTICES.md and LICENSES/MIT-hermes-agent.txt.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 
+import { ravenHomeDir } from './ravenHome.js'
+
 const MAX = 1000
-const dir = process.env.RAVEN_HOME ?? join(homedir(), '.raven')
+const dir = ravenHomeDir()
 const file = join(dir, '.raven_history')
 
 let cache: string[] | null = null
@@ -28,7 +29,7 @@ export function load() {
     const entries: string[] = []
     let current: string[] = []
 
-    for (const line of readFileSync(file, 'utf8').split('\n')) {
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
       if (line.startsWith('+')) {
         current.push(line.slice(1))
       } else if (current.length) {

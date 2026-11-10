@@ -74,7 +74,7 @@ def _tui_load(text: str, max_entries: int = MAX_ENTRIES) -> list[str]:
     """
     entries: list[str] = []
     current: list[str] = []
-    for line in text.split("\n"):
+    for line in re.split(r"\r?\n", text):
         if line.startswith("+"):
             current.append(line[1:])
         elif current:
@@ -587,14 +587,16 @@ def test_break_stale_waits_when_unlink_fails() -> None:
 
 
 def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_home: Path) -> None:
-    """Pin a real divergence from the TUI for externally converted files.
+    """Pin how the two Python readers treat ``\\r`` in an externally converted file.
 
     ``parse`` leaves ``\\r`` alone, as its docstring says. But ``read_entries``
     (and ``append``'s dedupe read) go through ``Path.read_text``, whose text
-    mode translates ``\\r\\n`` and lone ``\\r`` to ``\\n``; the TUI's
-    ``readFileSync`` does not translate. Both writers emit LF, so this only
-    shows for a history converted by something else or for content pasted
-    with CRLF. The entry text is otherwise identical.
+    mode translates ``\\r\\n`` and lone ``\\r`` to ``\\n``. The TUI's ``load()``
+    splits on ``/\\r?\\n/``, so it drops the ``\\r`` of a CRLF file too and
+    agrees with ``read_entries`` there; a lone ``\\r`` is where they still
+    differ -- ``read_text`` folds it to ``\\n`` while the TUI's split does not
+    consume it. Both writers emit LF, so this only shows for a history
+    converted by something else or for content pasted with CRLF.
     """
     raw = "+line one\r\n+line two\r\n"
     assert parse(raw) == ["line one\r\nline two\r"]
@@ -659,9 +661,11 @@ def test_append_writes_the_tui_bytes_exactly(history_home: Path, monkeypatch: py
 
     ``os.open`` without ``O_BINARY`` is text mode on Windows, and the CRT turns
     every LF written through the descriptor into CRLF. That made the Python
-    writer produce a file the TUI reads with a trailing ``\\r`` on each entry,
-    which breaks its adjacent-duplicate check. Pinned as exact bytes rather
-    than a "no \\r" search so a future encoding change cannot slip through.
+    writer produce a file whose entries the TUI read with a trailing ``\\r`` on
+    each one, which broke its adjacent-duplicate check. The writer now passes
+    this flag, so the bytes are LF, and the TUI's ``load()`` also drops a
+    CRLF's ``\\r``. Pinned as exact bytes rather than a "no \\r" search so a
+    future encoding change cannot slip through.
     """
 
     class _FixedDatetime:
@@ -701,6 +705,6 @@ def test_history_path_follows_raven_home(history_home: Path) -> None:
 
 
 def test_history_path_defaults_to_the_tui_location(monkeypatch: pytest.MonkeyPatch) -> None:
-    # history.ts: `process.env.RAVEN_HOME ?? join(homedir(), '.raven')`.
+    # The TUI resolves RAVEN_HOME in ravenHomeDir() (ui-tui/src/lib/ravenHome.ts).
     monkeypatch.delenv("RAVEN_HOME", raising=False)
     assert history_path() == Path.home() / ".raven" / ".raven_history"
