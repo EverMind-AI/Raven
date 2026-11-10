@@ -15,9 +15,10 @@ runs. Three rules from the specification shape the whole thing:
   MCP for that package and leaves its skills alone (§10.1, §7.2.2);
 - one unusable server entry never takes the others with it -- the entry is
   skipped and reported, and the rest of the package still loads (§7.2.2);
-- a server's paths stay inside the package, the two placeholders the format
-  defines are expanded in exactly the fields it names, and no argument or
-  environment value may carry a `..` path component (§4.1, §9.2).
+- a server's command and working directory stay inside the package, the two
+  placeholders the format defines are expanded in exactly the fields it names,
+  and no argument or environment value may carry a `..` path component
+  (§4.1, §9.2).
 
 Starting a package's server is the operator's call, not this module's: the
 servers are composed here and handed over, and the caller decides which
@@ -320,9 +321,9 @@ def _build_stdio(
         key: expand_placeholders(value, plugin_root=root_text, plugin_data=data_text)
         for key, value in entry.env.items()
     }
-    for arg in args:
+    for authored, arg in zip(entry.args, args, strict=True):
         if _has_dotdot_component(arg):
-            raise ValueError(f"the argument {arg!r} carries a '..' path component")
+            raise ValueError(f"the argument {authored!r} carries a '..' path component")
     for key, value in env.items():
         if _has_dotdot_component(value):
             raise ValueError(f"the environment value for {key!r} carries a '..' path component")

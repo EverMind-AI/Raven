@@ -431,8 +431,8 @@ def test_a_dotdot_data_root_does_not_refuse_a_plugin_data_value(tmp_path: Path) 
 
     assert report.problems == ()
     server = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
-    assert server.env["PLUGIN_DATA"] == str(data_root / PACKAGE_NAME)
-    assert server.env["CONFIG"] == str(data_root / PACKAGE_NAME / "db.sqlite")
+    assert Path(server.env["PLUGIN_DATA"]) == data_root / PACKAGE_NAME
+    assert Path(server.env["CONFIG"]) == data_root / PACKAGE_NAME / "db.sqlite"
 
 
 def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:
