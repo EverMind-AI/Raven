@@ -5146,8 +5146,8 @@
       "zh": "{n} 项新的"
     },
     "gui.ws.needs_you_n": {
-      "en": "{n} waiting on you",
-      "zh": "{n} 项等你回答"
+      "en": "Needs you · {n}",
+      "zh": "需要你回答 · {n}"
     },
     "gui.ws.agents_working": {
       "en": "Subagents working",
