@@ -590,6 +590,26 @@ def test_asked_reads_past_a_line_that_opens_with_inline_code():
     assert asked("```make lint``` first, or skip it?") == ["```make lint``` first, or skip it?"]
 
 
+@pytest.mark.parametrize(
+    ("reply", "question"),
+    [
+        ("*Should I proceed?*", "*Should I proceed?*"),
+        ("_Should I proceed?_", "_Should I proceed?_"),
+        ("Tests pass. (Should I also update the docs?)", "(Should I also update the docs?)"),
+        ('Ask them: "Can you share the logs?"', 'Ask them: "Can you share the logs?"'),
+        ("(Should I also update the docs?) The suite passed.", "(Should I also update the docs?)"),
+        ('He asked ("is it safe?") twice.', 'He asked ("is it safe?")'),
+    ],
+    ids=["star", "underscore", "bracket", "quote", "mid-paragraph", "two-closers"],
+)
+def test_asked_reads_a_question_mark_a_closing_mark_follows(reply, question):
+    assert asked(reply) == [question]
+
+
+def test_asked_leaves_out_a_closing_mark_after_a_statement():
+    assert asked("*Done.* (See the log.) The suite passed!") == []
+
+
 def test_asked_reads_a_long_reply_in_one_pass():
     """The reply is read on the event loop the whole gateway shares."""
     reply = " ".join(f"Question {n}?" for n in range(40_000))

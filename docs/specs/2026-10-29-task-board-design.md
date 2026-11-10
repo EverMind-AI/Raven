@@ -304,9 +304,11 @@ one instruction"). The instruction carries:
   matter no existing group covers, reopening a completed one instead of duplicating it; no
   step for a turn that advanced nothing; mark a group completed when it is done or the user
   dropped it; place every listed handle exactly once;
-- last, when the reply has any, its sentences that end in a question mark, quoted from it
-  without its list or emphasis markers, each once and at most the last eight, fenced code
-  blocks and quoted lines left out, for the model to sort: each that asks the user to
+- last, when the reply has any, its sentences that end in a question mark -- closing
+  emphasis, a bracket or a quote after the mark allowed -- quoted from it without its list
+  markers or strong emphasis (single emphasis stays as written), each once and at most the
+  last eight, fenced code blocks and quoted lines left out, for the model to sort: each
+  that asks the user to
   answer, confirm or decide goes in the `questions` of its matter's step, which makes that
   step `needs_you`; one not put to the user, or that only repeats a question still open
   from an earlier turn, is skipped (`task_board_asked.md`). Left to recall them from a

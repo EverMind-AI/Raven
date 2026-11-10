@@ -122,7 +122,10 @@ def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
 # with a triple-backtick code span is prose rather than a fence.
 _FENCE = re.compile(r"^(`{3,}(?=[^`]*$)|~{3,})(.*)$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
-_SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
+_CLOSERS = "*_)]\"'\u201d\u2019\u300d\u300f\u3011\uff09"
+_CLOSER = f"[{re.escape(_CLOSERS)}]"
+# A question mark that closing emphasis, a bracket or a quote follows still ends its sentence.
+_SENTENCE_END = re.compile(rf"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+|(?<=\?{_CLOSER})\s+|(?<=\?{_CLOSER}{_CLOSER})\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
@@ -160,8 +163,8 @@ def _without_strong(text: str, marker: str) -> str:
 
 
 def _without_emphasis(text: str) -> str:
-    """The text without its emphasis markers, inline code left as written: a marker inside
-    a backtick span or an identifier is content, not formatting."""
+    """The text without its strong emphasis markers, inline code and single emphasis left as
+    written: a marker inside a backtick span or an identifier is content, not formatting."""
     pieces = _INLINE_CODE.split(text)
     code = _INLINE_CODE.findall(text)
     out: list[str] = []
@@ -215,13 +218,15 @@ def _paragraphs(reply: str) -> list[str]:
 def asked(reply: str) -> list[str]:
     """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
 
-    A fenced code block and a quoted line are left out: neither was put to the user.
+    A question mark still ends one when closing emphasis, a bracket or a quote follows it. A
+    fenced code block and a quoted line are left out: neither was put to the user.
     """
     found: list[str] = []
     for paragraph in _paragraphs(reply):
         for part in _SENTENCE_END.split(_without_emphasis(paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
-            if sentence.endswith(_QUESTION_MARKS) and sentence.rstrip(_QUESTION_MARK_CHARS).strip():
+            closed = sentence.rstrip(_CLOSERS)
+            if closed.endswith(_QUESTION_MARKS) and closed.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)
     return list(dict.fromkeys(found))[-ASKED_SHOWN:]
 
