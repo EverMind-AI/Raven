@@ -39,6 +39,11 @@ _SOCKET_SCHEMA: dict[str, dict[str, Any]] = {
         "sensitive": "turning a channel on lets whoever its allow list admits instruct Raven there",
     },
     "allow_from": {"type": "array", "default": ["*"], "sensitive": "widening it lets more people instruct Raven"},
+    "message_targets": {
+        "type": "array",
+        "default": [],
+        "sensitive": "widening it lets this process message more chats outside a user turn",
+    },
     "workspace": {
         "type": "string",
         "default": "",

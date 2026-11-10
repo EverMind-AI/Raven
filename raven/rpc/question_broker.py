@@ -356,12 +356,27 @@ class RoutingQuestionBroker:
     the question is actually pending.
     """
 
-    def __init__(self, page: QuestionBroker, channel: QuestionBroker, *, page_prefix: str = "tui:") -> None:
+    def __init__(
+        self,
+        page: QuestionBroker,
+        channel: QuestionBroker,
+        *,
+        page_prefix: str = "tui:",
+        channel_route: Callable[[str], bool | None] | None = None,
+    ) -> None:
         self._page = page
         self._channel = channel
         self._page_prefix = page_prefix
+        self._channel_route = channel_route
 
-    def _route(self, conversation_id: str) -> QuestionBroker:
+    def _route(self, conversation_id: str) -> QuestionBroker | None:
+        if self._channel_route is not None:
+            # None refuses an expired turn instead of redirecting its question.
+            channel = self._channel_route(conversation_id)
+            if channel is None:
+                return None
+            if channel:
+                return self._channel
         return self._page if conversation_id.startswith(self._page_prefix) else self._channel
 
     def pending_count(self) -> int:
@@ -382,7 +397,10 @@ class RoutingQuestionBroker:
         total: int = 1,
         batch: list[dict[str, Any]] | None = None,
     ) -> str:
-        return await self._route(conversation_id).await_question(
+        broker = self._route(conversation_id)
+        if broker is None:
+            return default
+        return await broker.await_question(
             conversation_id,
             prompt=prompt,
             choices=choices,

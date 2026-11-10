@@ -16,13 +16,14 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from raven.agent.spine_runner import AgentTurnRunner
+from raven.agent.tools.message import MessageTool
 from raven.contracts.asking import SupportsDirectAsk
 from raven.gateway.outlet import ChannelOutletAdapter
 from raven.providers.base import bound_llm_detail, llm_error_summary, parse_llm_error
 from raven.spine import OriginPools, Scheduler, session_key_for
 from raven.spine.delivery import DeliveryHub
-from raven.spine.events import Text, TurnEnded, TurnFailed, TurnStarted
-from raven.spine.message import Source
+from raven.spine.events import MediaOut, Text, TurnEnded, TurnFailed, TurnStarted
+from raven.spine.message import ChatType, Media, Source
 from raven.spine.turn import Origin
 
 if TYPE_CHECKING:
@@ -245,7 +246,7 @@ def _make_gateway_sink(
                 if origin is Origin.USER and source is not None:
                     people = [source, *people]
                 for channel_name, chat_id in dict.fromkeys((person.channel, person.chat_id) for person in people):
-                    task = asyncio.create_task(_end_turn((channels or {}).get(channel_name), chat_id))
+                    task = asyncio.create_task(end_channel_turn((channels or {}).get(channel_name), chat_id))
                     ending.add(task)
                     task.add_done_callback(ending.discard)
             agent_loop.notify_turn_complete()
@@ -255,7 +256,7 @@ def _make_gateway_sink(
     return sink
 
 
-async def _end_turn(channel: Channel | None, chat_id: str) -> None:
+async def end_channel_turn(channel: Channel | None, chat_id: str) -> None:
     """Best-effort: the turn is already over, so a channel that cannot be told
     so costs a log line, not the turn."""
     end = getattr(channel, "end_turn", None)
@@ -315,6 +316,39 @@ def build_gateway(
     hub = DeliveryHub(send_max_retries=send_max_retries)
     for channel in channels.values():
         hub.register(ChannelOutletAdapter(channel))
+
+    async def queue_target(channel_name: str, chat_id: str, content: str, media: list[str]) -> str:
+        target = channels.get(channel_name)
+        # Sending is authorized by message_targets; allow_from only governs who
+        # may speak to the bot. Both the explicit target list and the receive
+        # gate must admit the chat, and only a running adapter can deliver.
+        if (
+            target is None
+            or not target.is_running
+            or chat_id not in getattr(target.config, "message_targets", ())
+            or not target.intake.is_allowed(chat_id)
+        ):
+            raise ValueError("Destination unavailable or not authorized")
+        if not content.strip() and not media:
+            raise ValueError("Empty message")
+        source = Source(channel=channel_name, chat_id=chat_id, sender_id="raven", chat_type=ChatType.DM)
+        if media:
+            accepted = await hub.post(
+                MediaOut(
+                    source=source,
+                    media=tuple(Media(path=p, mime="application/octet-stream", kind="file") for p in media),
+                )
+            )
+            if not accepted:
+                raise RuntimeError("Channel outlet unavailable")
+        if content:
+            if not await hub.post(Text(content=content, source=source)):
+                raise RuntimeError("Channel outlet unavailable")
+        return f"Message queued to {channel_name}:{chat_id} (transport delivery pending)"
+
+    message_tool = getattr(agent_loop, "tools", {}).get("message")
+    if isinstance(message_tool, MessageTool):
+        message_tool.set_target_sender(queue_target)
     readback_texts: dict[str, str] = {}
     sources: dict[str, Source] = {}
     ending: set[asyncio.Task[None]] = set()

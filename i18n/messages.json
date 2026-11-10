@@ -6747,6 +6747,10 @@
       "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
       "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
     },
+    "gui.confirm.cfg.why.channels.dingtalk.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.dingtalk.workspace": {
       "en": "moves where this channel's conversations read and write files",
       "zh": "改变此通道的对话读写文件的位置"
@@ -6766,6 +6770,10 @@
     "gui.confirm.cfg.why.channels.discord.group_policy": {
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.discord.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.discord.workspace": {
       "en": "moves where this channel's conversations read and write files",
@@ -6795,6 +6803,10 @@
       "en": "turning it off sends this channel's credentials or messages unencrypted",
       "zh": "关闭它会让此通道的凭据或消息以未加密方式发送"
     },
+    "gui.confirm.cfg.why.channels.email.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.email.smtp_host": {
       "en": "sends this channel's credentials and messages to the address given",
       "zh": "会把此通道的凭据和消息发往所给地址"
@@ -6822,6 +6834,10 @@
     "gui.confirm.cfg.why.channels.feishu.group_policy": {
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.feishu.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.feishu.workspace": {
       "en": "moves where this channel's conversations read and write files",
@@ -6855,6 +6871,10 @@
       "en": "sends this channel's credentials and messages to the address given",
       "zh": "会把此通道的凭据和消息发往所给地址"
     },
+    "gui.confirm.cfg.why.channels.matrix.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.matrix.workspace": {
       "en": "moves where this channel's conversations read and write files",
       "zh": "改变此通道的对话读写文件的位置"
@@ -6879,6 +6899,10 @@
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
     },
+    "gui.confirm.cfg.why.channels.mochat.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.mochat.panels": {
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
@@ -6902,6 +6926,10 @@
     "gui.confirm.cfg.why.channels.qq.enabled": {
       "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
       "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.qq.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.qq.workspace": {
       "en": "moves where this channel's conversations read and write files",
@@ -6935,6 +6963,10 @@
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
     },
+    "gui.confirm.cfg.why.channels.slack.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.slack.user_token_read_only": {
       "en": "turning it off lets Raven act as you on Slack",
       "zh": "关闭它会让 Raven 以你的身份在 Slack 上行事"
@@ -6955,6 +6987,10 @@
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
     },
+    "gui.confirm.cfg.why.channels.telegram.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
+    },
     "gui.confirm.cfg.why.channels.telegram.proxy": {
       "en": "sends this channel's credentials and messages to the address given",
       "zh": "会把此通道的凭据和消息发往所给地址"
@@ -6970,6 +7006,10 @@
     "gui.confirm.cfg.why.channels.wecom.enabled": {
       "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
       "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.wecom.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.wecom.workspace": {
       "en": "moves where this channel's conversations read and write files",
@@ -6990,6 +7030,10 @@
     "gui.confirm.cfg.why.channels.weixin.enabled": {
       "en": "turning a channel on lets whoever its allow list admits instruct Raven there",
       "zh": "开启通道后，其允许名单放行的任何人都能在那里指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.weixin.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.weixin.state_dir": {
       "en": "moves where this channel keeps its login, which decides whose account it runs as",
@@ -7014,6 +7058,10 @@
     "gui.confirm.cfg.why.channels.whatsapp.group_policy": {
       "en": "widening it lets more people instruct Raven",
       "zh": "放宽它会让更多人能指挥 Raven"
+    },
+    "gui.confirm.cfg.why.channels.whatsapp.message_targets": {
+      "en": "widening it lets this process message more chats outside a user turn",
+      "zh": "放宽它会让这个进程在用户回合之外向更多聊天发消息"
     },
     "gui.confirm.cfg.why.channels.whatsapp.workspace": {
       "en": "moves where this channel's conversations read and write files",

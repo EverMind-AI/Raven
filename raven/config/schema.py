@@ -67,6 +67,7 @@ class ChannelSocket(ChannelBase):
 
     enabled: bool = False
     allow_from: list[str] = Field(default_factory=lambda: ["*"])
+    message_targets: list[str] = Field(default_factory=list)
 
 
 class ChannelsConfig(Base):

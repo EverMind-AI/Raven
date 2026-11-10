@@ -2038,6 +2038,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.dingtalk.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.dingtalk.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
+    'gui.confirm.cfg.why.channels.dingtalk.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.dingtalk.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.discord.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.discord.enabled':
@@ -2045,6 +2047,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.discord.gateway_url':
       "sends this channel's credentials and messages to the address given",
     'gui.confirm.cfg.why.channels.discord.group_policy': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.discord.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.discord.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.email.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.email.auto_reply_enabled': 'lets Raven send mail on its own',
@@ -2055,6 +2059,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       "sends this channel's credentials and messages to the address given",
     'gui.confirm.cfg.why.channels.email.imap_use_ssl':
       "turning it off sends this channel's credentials or messages unencrypted",
+    'gui.confirm.cfg.why.channels.email.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.email.smtp_host':
       "sends this channel's credentials and messages to the address given",
     'gui.confirm.cfg.why.channels.email.smtp_use_ssl':
@@ -2066,6 +2072,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.feishu.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
     'gui.confirm.cfg.why.channels.feishu.group_policy': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.feishu.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.feishu.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.matrix.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.matrix.allow_room_mentions': 'widening it lets more people instruct Raven',
@@ -2077,6 +2085,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.matrix.group_policy': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.matrix.homeserver':
       "sends this channel's credentials and messages to the address given",
+    'gui.confirm.cfg.why.channels.matrix.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.matrix.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.mochat.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.mochat.base_url':
@@ -2085,6 +2095,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'turning a channel on lets whoever its allow list admits instruct Raven there',
     'gui.confirm.cfg.why.channels.mochat.groups': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.mochat.mention.require_in_groups': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.mochat.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.mochat.panels': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.mochat.sessions': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.mochat.socket_url':
@@ -2093,6 +2105,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.qq.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.qq.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
+    'gui.confirm.cfg.why.channels.qq.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.qq.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.slack.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.slack.dm.allow_from': 'widening it lets more people instruct Raven',
@@ -2102,17 +2116,23 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'turning a channel on lets whoever its allow list admits instruct Raven there',
     'gui.confirm.cfg.why.channels.slack.group_allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.slack.group_policy': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.slack.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.slack.user_token_read_only': 'turning it off lets Raven act as you on Slack',
     'gui.confirm.cfg.why.channels.slack.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.telegram.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.telegram.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
     'gui.confirm.cfg.why.channels.telegram.group_policy': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.telegram.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.telegram.proxy': "sends this channel's credentials and messages to the address given",
     'gui.confirm.cfg.why.channels.telegram.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.wecom.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.wecom.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
+    'gui.confirm.cfg.why.channels.wecom.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.wecom.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.channels.weixin.allow_from': 'widening it lets more people instruct Raven',
     'gui.confirm.cfg.why.channels.weixin.base_url':
@@ -2121,6 +2141,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       "sends this channel's credentials and messages to the address given",
     'gui.confirm.cfg.why.channels.weixin.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
+    'gui.confirm.cfg.why.channels.weixin.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.weixin.state_dir':
       'moves where this channel keeps its login, which decides whose account it runs as',
     'gui.confirm.cfg.why.channels.weixin.workspace': "moves where this channel's conversations read and write files",
@@ -2130,6 +2152,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.whatsapp.enabled':
       'turning a channel on lets whoever its allow list admits instruct Raven there',
     'gui.confirm.cfg.why.channels.whatsapp.group_policy': 'widening it lets more people instruct Raven',
+    'gui.confirm.cfg.why.channels.whatsapp.message_targets':
+      'widening it lets this process message more chats outside a user turn',
     'gui.confirm.cfg.why.channels.whatsapp.workspace': "moves where this channel's conversations read and write files",
     'gui.confirm.cfg.why.embedding': 'a different embedding model invalidates every vector already stored',
     'gui.confirm.cfg.why.permissions.judgeModel': 'picks the model that decides which calls run without asking you',
@@ -5587,11 +5611,13 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.*.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.dingtalk.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.dingtalk.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
+    'gui.confirm.cfg.why.channels.dingtalk.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.dingtalk.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.discord.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.discord.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.discord.gateway_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.discord.group_policy': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.discord.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.discord.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.email.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.email.auto_reply_enabled': '允许 Raven 自行发送邮件',
@@ -5599,6 +5625,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.email.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.email.imap_host': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.email.imap_use_ssl': '关闭它会让此通道的凭据或消息以未加密方式发送',
+    'gui.confirm.cfg.why.channels.email.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.email.smtp_host': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.email.smtp_use_ssl': '关闭它会让此通道的凭据或消息以未加密方式发送',
     'gui.confirm.cfg.why.channels.email.smtp_use_tls': '关闭它会让此通道的凭据或消息以未加密方式发送',
@@ -5606,6 +5633,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.feishu.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.feishu.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.feishu.group_policy': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.feishu.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.feishu.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.matrix.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.matrix.allow_room_mentions': '放宽它会让更多人能指挥 Raven',
@@ -5614,18 +5642,21 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.matrix.group_allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.matrix.group_policy': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.matrix.homeserver': '会把此通道的凭据和消息发往所给地址',
+    'gui.confirm.cfg.why.channels.matrix.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.matrix.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.mochat.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.mochat.base_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.mochat.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.mochat.groups': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.mochat.mention.require_in_groups': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.mochat.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.mochat.panels': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.mochat.sessions': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.mochat.socket_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.mochat.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.qq.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.qq.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
+    'gui.confirm.cfg.why.channels.qq.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.qq.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.slack.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.slack.dm.allow_from': '放宽它会让更多人能指挥 Raven',
@@ -5634,26 +5665,31 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.confirm.cfg.why.channels.slack.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.slack.group_allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.slack.group_policy': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.slack.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.slack.user_token_read_only': '关闭它会让 Raven 以你的身份在 Slack 上行事',
     'gui.confirm.cfg.why.channels.slack.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.telegram.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.telegram.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.telegram.group_policy': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.telegram.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.telegram.proxy': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.telegram.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.wecom.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.wecom.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
+    'gui.confirm.cfg.why.channels.wecom.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.wecom.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.weixin.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.weixin.base_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.weixin.cdn_base_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.weixin.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
+    'gui.confirm.cfg.why.channels.weixin.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.weixin.state_dir': '改变此通道登录信息的存放位置，这决定它以哪个账号的身份运行',
     'gui.confirm.cfg.why.channels.weixin.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.channels.whatsapp.allow_from': '放宽它会让更多人能指挥 Raven',
     'gui.confirm.cfg.why.channels.whatsapp.bridge_url': '会把此通道的凭据和消息发往所给地址',
     'gui.confirm.cfg.why.channels.whatsapp.enabled': '开启通道后，其允许名单放行的任何人都能在那里指挥 Raven',
     'gui.confirm.cfg.why.channels.whatsapp.group_policy': '放宽它会让更多人能指挥 Raven',
+    'gui.confirm.cfg.why.channels.whatsapp.message_targets': '放宽它会让这个进程在用户回合之外向更多聊天发消息',
     'gui.confirm.cfg.why.channels.whatsapp.workspace': '改变此通道的对话读写文件的位置',
     'gui.confirm.cfg.why.embedding': '换用别的嵌入模型会让已存储的全部向量失效',
     'gui.confirm.cfg.why.permissions.judgeModel': '决定由哪个模型来判定哪些调用无需询问你即可执行',

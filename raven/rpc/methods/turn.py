@@ -18,6 +18,7 @@ single-argument dispatcher handlers.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -826,6 +827,7 @@ async def turn_cancel(
     direct_targets: dict[str, dict[str, str]] | None = None,
     turn_ids: dict[str, str] | None = None,
     live_usages: dict[str, dict[str, Any]] | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
 ) -> dict[str, Any]:
     """``turn.cancel`` — cancel the in-flight turn + notify subscribers.
 
@@ -857,6 +859,9 @@ async def turn_cancel(
     started, and reaching for whatever the lane happens to be running would
     stop a cron wake, or a delegated turn that began after the request left.
 
+    A linked Telegram turn supplies its id through ``linked_turn_id`` without
+    replacing the cancellation binding of an ordinary page turn queued behind it.
+
     The subscription is SESSION-scoped, not turn-scoped: a per-turn cancel ends
     only the turn and MUST leave the session's subscriptions open so the next
     turn's events still reach the client.
@@ -882,15 +887,18 @@ async def turn_cancel(
         else parsed.session_key
     )
 
-    if parsed.turn_id is not None:
+    turn_id = parsed.turn_id
+    if turn_id is None and linked_turn_id is not None:
+        turn_id = linked_turn_id(lane)
+    if turn_id is not None:
         # Probed, not assumed, like ``_lane_in_flight``: a scheduler without
         # the seam (a test fake) has no running turn to name.
         probe = getattr(_scheduler, "running_turn", None)
         running = probe(lane) if callable(probe) else None
-        if running is None or running[0] != parsed.turn_id:
+        if running is None or running[0] != turn_id:
             return _refused(lane)
         handle = running[1]
-        measured = _stopped_usage(live_usages, parsed.turn_id)
+        measured = _stopped_usage(live_usages, turn_id)
         await handle.cancel()
         if emitter is not None:
             await emitter.emit(
@@ -898,7 +906,7 @@ async def turn_cancel(
                 {
                     "type": "error",
                     "payload": _tag(
-                        _cancel_payload(parsed.turn_id, reported_usage(measured)),
+                        _cancel_payload(turn_id, reported_usage(measured)),
                         (direct_targets or {}).get(lane),
                     ),
                 },
@@ -940,7 +948,12 @@ async def turn_cancel(
     return {"cancelled": True}
 
 
-async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
+async def session_interrupt(
+    params: dict[str, Any],
+    *,
+    scheduler: Scheduler | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
+) -> dict[str, Any]:
     """``session.interrupt`` -- Ctrl+C on the pre-typed-chat path.
 
     ui-tui's ``turnController.interruptTurn`` fires this when no
@@ -950,10 +963,23 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
 
     ``ok`` says a live turn was cancelled. False when there was none, which
     happens routinely -- Ctrl+C on an idle prompt -- and is not an error.
+
+    A linked Telegram turn runs on the same session's lane without passing
+    through ``turn.send``, so it is resolved through ``linked_turn_id`` first,
+    the way ``turn.cancel`` already does; the page's own registries are the
+    fallback.
     """
     session_key = str(params.get("session_id") or "").strip()
-    reach = _cancellable(session_key) if session_key else None
-    handle = reach[0] if reach is not None else None
+    handle = None
+    linked_id = linked_turn_id(session_key) if linked_turn_id is not None and session_key else None
+    if linked_id is not None and scheduler is not None:
+        probe = getattr(scheduler, "running_turn", None)
+        running = probe(session_key) if callable(probe) else None
+        if running is not None and running[0] == linked_id:
+            handle = running[1]
+    if handle is None:
+        reach = _cancellable(session_key) if session_key else None
+        handle = reach[0] if reach is not None else None
     if handle is None:
         return {"ok": False}
     await handle.cancel()
@@ -966,15 +992,28 @@ async def session_interrupt(params: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def register_session_interrupt_method(dispatcher: "Dispatcher") -> None:
+def register_session_interrupt_method(
+    dispatcher: "Dispatcher",
+    *,
+    scheduler: Scheduler | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
+) -> None:
     """Register ``session.interrupt``.
 
     Kept out of :func:`register_turn_methods` because that group is skipped
     when the caller owns no emitter, and this handler needs none -- gating it
     the same way would put the legacy Ctrl+C path back on -32601 in exactly the
     configurations that still use it.
+
+    ``scheduler`` and ``linked_turn_id`` are optional so the legacy path keeps
+    working without a spine bundle; they let the handler reach a linked turn
+    the page's own registries never bound.
     """
-    dispatcher.register("session.interrupt", session_interrupt)
+
+    async def _interrupt(params: dict[str, Any]) -> dict[str, Any]:
+        return await session_interrupt(params, scheduler=scheduler, linked_turn_id=linked_turn_id)
+
+    dispatcher.register("session.interrupt", _interrupt)
 
 
 def register_turn_methods(
@@ -989,6 +1028,7 @@ def register_turn_methods(
     agent_loop_factory: "AgentLoopFactory | None" = None,
     question_broker: "QuestionBroker | None" = None,
     live_usages: dict[str, dict[str, Any]] | None = None,
+    linked_turn_id: Callable[[str], str | None] | None = None,
 ) -> None:
     """Register ``turn.{send,subscribe,unsubscribe,cancel}`` on a dispatcher.
 
@@ -1029,7 +1069,12 @@ def register_turn_methods(
 
     async def _cancel(params: dict[str, Any]) -> dict[str, Any]:
         return await turn_cancel(
-            params, emitter=emitter, direct_targets=direct_targets, turn_ids=turn_ids, live_usages=live_usages
+            params,
+            emitter=emitter,
+            direct_targets=direct_targets,
+            turn_ids=turn_ids,
+            live_usages=live_usages,
+            linked_turn_id=linked_turn_id,
         )
 
     dispatcher.register("turn.send", _send)
