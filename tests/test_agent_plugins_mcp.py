@@ -133,6 +133,21 @@ def test_a_data_dir_loop_does_not_take_the_layer_down(tmp_path: Path) -> None:
     assert notes == []
 
 
+def test_an_unresolvable_data_root_does_not_raise(tmp_path: Path) -> None:
+    """A data root the host cannot resolve falls back to the caller's spelling."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    report = package_mcp_report(load_package(root), plugin_data=loop / PACKAGE_NAME)
+
+    assert report.disabled == ""
+    assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+
 # ---------------------------------------------------------------------------
 # read_mcp_config
 # ---------------------------------------------------------------------------
