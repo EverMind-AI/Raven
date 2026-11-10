@@ -634,6 +634,48 @@ async def test_a_direct_skill_read_still_reaches_the_skill_panel(tmp_path):
     assert reported[0]["kind"] == "read_skill"
 
 
+async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
+    """A ``tool_call`` whose target does not resolve reports no skill at all.
+
+    Both gates stay shut: ``metadata_owner`` falls back to the forwarder when
+    the target does not resolve, so the result is filed under ``tool_call``
+    rather than a skill tool, and the refusal text starts with ``Error``. The
+    forwarded arguments here carry a ``skill_id``, so a guard that keyed on the
+    arguments rather than the resolved target would report and turn this red.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "no_such_tool", "tool_call", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    events = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), events, _drain)
+
+    # The turn answered: a refusal is a tool result, never a raised exception.
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in events.events)
+    assert results and results[0][0] == "tool_call"
+    assert results[0][1].startswith("Error: tool 'no_such_tool' is not available")
+    assert sink.events == []
+
+
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
 @pytest.mark.parametrize("receipt", [_SpawnReceiptTool, _DagReceiptTool], ids=["spawn", "run_subagent_dag"])
 async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(tmp_path, receipt, route):
