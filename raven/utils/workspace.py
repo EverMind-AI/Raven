@@ -21,7 +21,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from raven.utils.atomic_io import atomic_replace
+from raven.utils.atomic_io import atomic_replace, back_up_file
 
 # Workspace sync runs before the CLI decides logger.enable/disable("raven"),
 # so an unscoped debug in this module would spam stderr through loguru's
@@ -298,8 +298,6 @@ def sync_workspace_templates(
         added.append(f"{dest.relative_to(workspace)} (migrated from {src.relative_to(workspace)})")
 
     def _back_up(target: Path) -> Path:
-        from raven.config.product_render import back_up_file
-
         return back_up_file(target, target.read_bytes())
 
     def _write_base(target: Path, template: str) -> None:
