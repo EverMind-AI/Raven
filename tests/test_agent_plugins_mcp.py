@@ -168,6 +168,30 @@ def test_an_unresolvable_data_root_reports_every_package(tmp_path: Path) -> None
     assert "cannot be resolved" in problems[0].reason
 
 
+def test_the_runtime_entry_reports_a_data_root_loop(tmp_path: Path, monkeypatch) -> None:
+    """The runtime helper must reach the guard instead of creating the root first."""
+    from types import SimpleNamespace
+
+    from raven.core.runtime import _package_mcp_servers
+
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+    monkeypatch.setattr("raven.config.paths.package_data_root_path", lambda: loop)
+    ec_config = SimpleNamespace(
+        agent_plugins=SimpleNamespace(packages=[str(root)], mcp_packages=[PACKAGE_NAME], disabled=[])
+    )
+
+    servers, notes = _package_mcp_servers(ec_config)
+
+    assert servers == {}
+    assert len(notes) == 1
+    assert "cannot be resolved" in notes[0]
+
+
 def test_an_uncreatable_package_data_dir_reports_its_package(tmp_path: Path) -> None:
     """An allowed package whose data directory cannot be created is skipped, not fatal."""
     root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
