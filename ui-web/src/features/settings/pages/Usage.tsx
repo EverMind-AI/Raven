@@ -58,10 +58,17 @@ function Bars({ u }: { u: UsageStats }): JSX.Element {
       <div className="settings-bars">
         {u.daily.map((d) => {
           const v = d.cost_usd || 0
+          const label = `${d.date} · ${money(v)}`
           return (
-            <div key={d.date} className={v === 0 ? 'settings-bb settings-dim' : 'settings-bb'}
-              style={{ height: `${Math.max(2, Math.round((v / mx) * 82))}px` }}
-              title={`${d.date} · ${money(v)}`} data-date={d.date} />
+            /* The column is the day's, and the bar sits in it: the column takes
+               the pointer and carries the grey band, the bar carries the label
+               and the card that names it. */
+            <div key={d.date} className="settings-bcol">
+              <div className={v === 0 ? 'settings-bb settings-dim' : 'settings-bb'}
+                style={{ height: `${Math.max(2, Math.round((v / mx) * 82))}px` }}
+                data-tip={label} data-tip-card="" aria-label={label} role="img"
+                data-date={d.date} />
+            </div>
           )
         })}
       </div>

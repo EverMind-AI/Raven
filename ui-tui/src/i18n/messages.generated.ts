@@ -2473,6 +2473,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.about.version': 'Version',
     'gui.settings.about.version_unknown': 'Unknown',
     'gui.settings.about.update': 'Update',
+    'gui.settings.about.github': 'GitHub',
     'gui.settings.about.check': 'Check for updates',
     'gui.settings.about.checking': 'Checking',
     'gui.settings.about.latest': 'Up to date',
@@ -2685,10 +2686,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
       'Help me find a skill on Skill Hub and install it. My requirements are as follows:',
     'gui.settings.skills.hub_card': 'Skill Hub',
     'gui.settings.skills.hub_title': 'Use 110k+ skills from EverMind Skill Hub',
-    'gui.settings.skills.hub_sub':
-      'While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill.',
-    'gui.settings.skills.hub_sub_reload':
-      'While on, Raven sends text from your conversation to the Skill Hub when it looks for a skill. Search starts after Raven reloads.',
     'gui.settings.skills.builtin': 'Built-in',
     'gui.settings.skills.workspace': 'Workspace',
     'gui.settings.skills.on_of': '{on} of {total} on',
@@ -5993,6 +5990,7 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.about.version': '版本',
     'gui.settings.about.version_unknown': '未知',
     'gui.settings.about.update': '更新',
+    'gui.settings.about.github': 'GitHub',
     'gui.settings.about.check': '检查更新',
     'gui.settings.about.checking': '检查中',
     'gui.settings.about.latest': '已是最新',
@@ -6198,9 +6196,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.skills.add_prompt': '帮我在 Skill Hub 找一个技能并安装，我的要求如下：',
     'gui.settings.skills.hub_card': 'Skill Hub',
     'gui.settings.skills.hub_title': '使用 EverMind Skill Hub 的 11 万+ 技能',
-    'gui.settings.skills.hub_sub': '开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。',
-    'gui.settings.skills.hub_sub_reload':
-      '开启时，Raven 查找技能会把对话中的文字发送到 Skill Hub。Raven 重新加载后才会开始搜索。',
     'gui.settings.skills.builtin': '内置',
     'gui.settings.skills.workspace': '工作区',
     'gui.settings.skills.on_of': '开 {on} / {total}',

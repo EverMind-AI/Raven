@@ -18,7 +18,7 @@
 }
 .su-tab:hover { color: var(--text); }
 .su-tab[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
-.su-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.su-tab:focus-visible { outline: 2px solid var(--warm); outline-offset: -2px; }
 .su-tn { font-size: 11.5px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
 .su-tn::before { content: "("; }
 .su-tn::after { content: ")"; }
@@ -54,7 +54,7 @@
   border-color: color-mix(in oklab, var(--line) 60%, var(--muted));
   box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
 }
-.su-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.su-card:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 .su-card .channel-mark { width: 32px; height: 32px; border-radius: 9px; }
 .su-card .channel-mark-inset img, .su-card .channel-mark-inset svg { width: 19px; height: 19px; }
 .su-ctop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
@@ -83,7 +83,7 @@
 }
 .su-cbtn svg { width: 14px; height: 14px; }
 .su-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
-.su-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.su-cbtn:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 
 /* The wait: bars where a card's parts go, at the sizes they take. */
 .su-wbar {
@@ -137,7 +137,7 @@
   transition: border-color .12s ease, box-shadow .12s ease;
 }
 .su-sheet .sufield > input:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
-.su-sheet .sufield > input:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); background: var(--paper); }
+.su-sheet .sufield > input:focus { border-color: var(--warm); box-shadow: var(--ctl-focus); background: var(--paper); }
 .su-sheet .sugsub { font-size: 12px; font-weight: 600; color: var(--muted); }
 .su-sheet .sucap { font-family: inherit; font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--muted); }
 

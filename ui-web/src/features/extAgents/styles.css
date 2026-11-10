@@ -43,7 +43,7 @@
    hover. */
 .extAgents-row[role="button"] { cursor: pointer; }
 .extAgents-row[role="button"]:hover { background: var(--surface); }
-.extAgents-row:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-row:focus-visible { outline: 2px solid var(--warm); outline-offset: -2px; }
 .extAgents-row[aria-current="true"] { background: var(--surface); }
 
 /* The brand mark is the tile: the shared component, sized inside this box. */
@@ -150,7 +150,7 @@
 }
 .extAgents-tab:hover { color: var(--text); }
 .extAgents-tab[aria-selected="true"] { background: var(--raised); color: var(--text); font-weight: 500; }
-.extAgents-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.extAgents-tab:focus-visible { outline: 2px solid var(--warm); outline-offset: -2px; }
 .extAgents-tn { font-size: 11.5px; color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
 .extAgents-tn::before { content: "("; }
 .extAgents-tn::after { content: ")"; }
@@ -200,7 +200,7 @@
   border-color: color-mix(in oklab, var(--line) 60%, var(--muted));
   box-shadow: 0 4px 14px rgba(0, 0, 0, .06);
 }
-.extAgents-card:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-card:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 .extAgents-ctop { display: flex; align-items: center; gap: 10px; min-height: 32px; }
 .extAgents-ctop .extAgents-nm { flex: 1; }
 .extAgents-ctop .extAgents-t { font-size: 14px; font-weight: 600; }
@@ -220,7 +220,7 @@
 }
 .extAgents-cbtn svg { width: 14px; height: 14px; }
 .extAgents-cbtn:hover { color: var(--text); background: color-mix(in oklab, var(--raised) 70%, var(--line)); }
-.extAgents-cbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-cbtn:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 .extAgents-ctag { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
 
 /* The wizard's agents step: a scanning placeholder before the first
@@ -295,7 +295,7 @@
   font: inherit; font-size: 12px; font-weight: 500; line-height: 18px; color: var(--text); white-space: nowrap; cursor: pointer;
 }
 .extAgents-note-ask:hover { background: color-mix(in oklab, var(--clay) 8%, transparent); }
-.extAgents-note-ask:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.extAgents-note-ask:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
 .extAgents-note .extAgents-cmd { margin-top: 9px; background: var(--paper); }
 .extAgents-note-raw { margin-top: 9px; font-size: 11.5px; color: var(--faint); }
 .extAgents-note-raw summary { cursor: pointer; }
@@ -325,7 +325,7 @@
 /* The eye sits in the input's right end, so the text stops short of it. */
 .extAgents-fld .keyfield input { font-family: var(--mono); font-size: 12.5px; height: var(--ctl-h); padding: 0 32px 0 10px; }
 .extAgents-fld > textarea:hover, .extAgents-fld .keyfield input:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
-.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.extAgents-fld > textarea:focus, .extAgents-fld .keyfield input:focus { border-color: var(--warm); box-shadow: var(--ctl-focus); }
 .extAgents-ro { margin: 0; font-size: 12.5px; line-height: 1.65; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The key field is the shared component; its eye button keeps its own styling. */
 .extAgents-fld .keyfield { display: flex; width: 100%; }
@@ -366,7 +366,7 @@
 }
 .extAgents-pill:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
 .extAgents-pill:has(.extAgents-pm[aria-expanded="true"]), .extAgents-pill:has(.extAgents-pm:focus-visible) {
-  border-color: var(--amber); box-shadow: var(--ctl-focus);
+  border-color: var(--warm); box-shadow: var(--ctl-focus);
 }
 .extAgents-pm {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
@@ -462,7 +462,7 @@
 }
 .extAgents-fld > .extAgents-in-mono { font-family: var(--mono); font-size: 12.5px; }
 .extAgents-fld > .extAgents-in:hover { border-color: color-mix(in oklab, var(--line) 50%, var(--muted)); }
-.extAgents-fld > .extAgents-in:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.extAgents-fld > .extAgents-in:focus { border-color: var(--warm); box-shadow: var(--ctl-focus); }
 .extAgents-fld > .extAgents-about { margin-top: 6px; }
 .extAgents-body > .extAgents-about + .extAgents-fld { margin-top: 16px; }
 .extAgents-tabs .extAgents-tabs-end { margin-left: auto; align-self: center; }

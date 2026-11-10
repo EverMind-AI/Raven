@@ -143,7 +143,7 @@ export function Tools(): JSX.Element {
     /* Turning on a tool that still lacks its key or model opens its panel, so
        the switch lands the reader where the missing piece goes. */
     if (on && blocker(id, raw)) store.set({ toolOpen: id })
-    void store.write('tools.disabledTools', next)
+    void store.write('tools.disabledTools', next, { remount: false })
   }
   let on = 0
   let total = 0

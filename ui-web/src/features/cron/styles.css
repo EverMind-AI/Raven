@@ -39,7 +39,7 @@
   height: auto;
 }
 .cronsay:focus {
-  border-color: var(--amber);
+  border-color: var(--warm);
   box-shadow: var(--ctl-focus);
 }
 

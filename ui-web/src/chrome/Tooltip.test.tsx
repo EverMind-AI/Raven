@@ -100,6 +100,25 @@ describe('the hover pill', () => {
     expect(pill().style.left).toBe('4px')
   })
 
+  it('marks the label as a card when the control asks for one', () => {
+    setup()
+    const btn = control('2026-11-05 · $0.01', { top: 200, left: 100 })
+    btn.setAttribute('data-tip-card', '')
+    box(pill(), { top: 0, left: 0, height: 24, width: 140 })
+    point(btn)
+    /* The card is the cost chart's hover card: the same layer, told to wear
+       the page's paper and a hairline edge instead of the pill's ink. */
+    expect(pill().dataset.card).toBe('true')
+  })
+
+  it('leaves the label a pill when no control asks for a card', () => {
+    setup()
+    const btn = control('Expand workspace', { top: 200, left: 100 })
+    box(pill(), { top: 0, left: 0, height: 24, width: 140 })
+    point(btn)
+    expect(pill().dataset.card).toBe('false')
+  })
+
   it('re-reads a control that rewrites its own label while hovered', () => {
     setup()
     watch()

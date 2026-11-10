@@ -24,6 +24,11 @@
   --link:     #3b6fd4;
   --amber:    #a8801c;
   --amber-dp: #eee4c8;
+  /* The warm yellow this palette speaks in: the ring that marks a selected
+     item, and the accent on the data marks. It is a token of its own because
+     --amber is also the error colour and the focus ring, and those two want
+     the deeper, more legible shade. */
+  --warm: #e8b317;
   --moss:     #3f7d2c;
   --clay:     #b4402f;
   --gold:     #9a7016;
@@ -69,10 +74,10 @@
   --topbar-halo: rgba(255, 255, 255, .75);
   --topbar-plate: rgba(250, 250, 248, .82);
   /* One height and one radius for a row of controls, and the focus glow that
-     goes with the amber edge (the control standard above input[type]). */
+     goes with the focused edge (the control standard above input[type]). */
   --ctl-h: 32px;
   --ctl-r: 8px;
-  --ctl-focus: 0 0 0 3px color-mix(in srgb, var(--amber) 16%, transparent);
+  --ctl-focus: 0 0 0 3px color-mix(in srgb, var(--warm) 16%, transparent);
   /* The ground a CONVERSATION is read on: the same paper, with a cool cast
      falling from the top right and a warm one rising from the bottom left. It
      is a gradient rather than a flat fill because the column that sits on it is
@@ -306,6 +311,7 @@
     --link:     #86abe4;
     --amber:    #e8cf49;
     --amber-dp: #6f6114;
+    --warm: #f5c518;
     --moss:     #7fbf6a;
     --clay:     #d96a5b;
     --gold:     #e0a030;
@@ -403,7 +409,7 @@
   --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
   --ink: #1d1d1d; --surface: #262626; --raised: #303030; --line: #333333;
   --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
-  --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --moss: #7fbf6a;
+  --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --warm: #f5c518; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
 
   /* The context parts' colours in the dark -- see the media query above. */
@@ -450,7 +456,7 @@
   --bdg-ink: #faf7ee;
   --ink: #ffffff; --surface: #f7f7f7; --raised: #f0f0f0; --line: #e7e7e7;
   --line-soft: #f0f0f0; --text: #1f1f1f; --muted: #6b6b6b; --faint: #9d9d9d;
-  --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --moss: #3f7d2c;
+  --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --warm: #e8b317; --moss: #3f7d2c;
   --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
   --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
   --traj-glass: rgba(255, 255, 255, .85); --traj-edge: rgba(255, 255, 255, .72);
@@ -547,10 +553,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
    (answers, code, logs), never inside a button. */
 button { background: none; border: 0; cursor: pointer; }
 button, [role="button"] { -webkit-user-select: none; user-select: none; }
-/* One quiet focus ring for the whole page: the amber hairline the rail and
+/* One quiet focus ring for the whole page: the warm hairline the rail and
    the changes list already wear. The old 2px text-colour band read as an
    error box everywhere it landed, worst of all around a dag node. */
-:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
+:focus-visible { outline: 1px solid var(--warm); outline-offset: 2px; border-radius: 6px; }
 
 /* ── scrollbars ─────────────────────────────────────────────────────────
    Every scroller in the app is scrolled the same way, so it gets the same bar:
@@ -730,7 +736,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* The caret carries the push to the far end of the row, now that the hairline
    which used to do it is gone -- one element fewer than a spacer would be. */
 .list .grp .car { margin-right: auto; }
-.list .grp:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
+.list .grp:focus-visible { outline: 1px solid var(--warm); outline-offset: 2px; }
 .list .sess + .sess { margin-top: 2px; }
 /* An empty group's heading folds nothing: no hand and no hover ground, and
    with no caret to push the Manage verb to the far end, the label does it. */
@@ -1200,7 +1206,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .provider-link > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-link::after { content: '↗'; flex: none; color: var(--faint); font-size: .78em; font-weight: 500; }
 .provider-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 3px; }
-.provider-link:focus-visible { outline: 1px solid var(--amber); outline-offset: 3px; border-radius: 2px; }
+.provider-link:focus-visible { outline: 1px solid var(--warm); outline-offset: 3px; border-radius: 2px; }
 .model-provider-row { position: relative; }
 .model-provider-row > :not(.model-provider-action) { position: relative; z-index: 1; pointer-events: none; }
 .model-provider-row .provider-link { pointer-events: auto; }
@@ -1217,7 +1223,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .row:hover .model-tag, [aria-selected="true"] ~ .model-tags .model-tag { color: var(--muted); }
 .model-window { flex: none; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px;
   color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 15px; }
-.model-provider-row:has(> .model-provider-action:focus-visible) { outline: 1px solid var(--amber);
+.model-provider-row:has(> .model-provider-action:focus-visible) { outline: 1px solid var(--warm);
   outline-offset: 1px; }
 /* Only ever drawn for a connected provider -- see `ProviderStatus`, which
    renders nothing for the rest. The `.on` class is kept on the element so the
@@ -1355,7 +1361,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
 #plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
-#wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--amber); }
+#wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--warm); }
 /* The tier with no brakes says so in its row too, in the chip's colour. */
 #permPop .prow.risk .nm { color: var(--clay); }
 #plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
@@ -1847,7 +1853,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   position: absolute; inset: 0; border: 0; background: none; padding: 0;
   cursor: pointer; border-radius: inherit;
 }
-.atile .hit:focus-visible { outline: 1px solid var(--amber); outline-offset: -2px; }
+.atile .hit:focus-visible { outline: 1px solid var(--warm); outline-offset: -2px; }
 .atile .hit:disabled { cursor: default; }
 /* The file's mark, or its picture at the mark's height: an image as itself, a
    deck or a pdf by its first page. */
@@ -1905,7 +1911,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   transition: color .12s, background .12s;
 }
 .transcript-act:hover { color: var(--text); background: var(--surface); }
-.transcript-act:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
+.transcript-act:focus-visible { outline: 1px solid var(--warm); outline-offset: 1px; }
 .amore {
   display: inline-flex; margin: 8px 0 0; padding: 2px 0; border: 0; background: none;
   font-size: 12px; line-height: 1.5; color: var(--faint); cursor: pointer;
@@ -2306,6 +2312,12 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 /* A sentence rather than a name: wrapped at a reading width, set a little
    looser, instead of one line across the window (state/tooltip.ts). */
 .tipp[data-wrap="true"] { white-space: normal; max-width: 240px; line-height: 1.5; padding: 5px 8px; text-align: left; }
+/* A label that is a card rather than a pill: the cost chart's hover card
+   wants the page's own paper and a hairline edge, not the pill's ink. */
+.tipp[data-card="true"] {
+  background: var(--paper); color: var(--text); border: 1px solid var(--line);
+  border-radius: 9px; padding: 6px 10px; font-size: 12px; box-shadow: var(--elev-up);
+}
 
 /* The shared icon button: a quiet square that shows its verb on hover. */
 .icb {
@@ -2518,7 +2530,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   background: color-mix(in oklab, var(--amber) 26%, var(--amber-dp));
   border-color: color-mix(in oklab, var(--amber) 55%, transparent);
 }
-.prose code.pth:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
+.prose code.pth:focus-visible { outline: 1px solid var(--warm); outline-offset: 1px; }
 /* The deliverable chip: a linked FILE wearing the author's words. Bigger than
    an inline path chip on purpose -- the answer is handing something over, and
    the hand-off should be the most clickable thing in the paragraph. Amber
@@ -2548,7 +2560,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   background: color-mix(in oklab, var(--amber) 26%, var(--amber-dp));
   border-color: color-mix(in oklab, var(--amber) 55%, transparent);
 }
-.prose .artf:focus-visible { outline: 1px solid var(--amber); outline-offset: 1px; }
+.prose .artf:focus-visible { outline: 1px solid var(--warm); outline-offset: 1px; }
 /* Web links are blue -- the one colour every reader already parses as "goes
    somewhere else". Amber stays on workspace paths, which open in-app. */
 .prose a {
@@ -2979,11 +2991,11 @@ textarea:focus, textarea:focus-visible,
 .model-picker-model {display:flex; align-items:center; gap:10px; width:100%; text-align:left; font-family:var(--mono); font-size:13px;
   background:none; border:0; color:var(--text); padding:7px 10px; border-radius:8px; cursor:pointer}
 .model-picker-model:hover {background:var(--surface)}
-.model-picker-model .model-picker-tick {margin-left:auto; color:var(--amber); font-size:14px}
+.model-picker-model .model-picker-tick {margin-left:auto; color:var(--warm); font-size:14px}
 .model-picker-model .model-picker-win {margin-left:auto; color:var(--faint); font-size:11.5px; font-family:var(--sans)}
 .model-picker-model .model-picker-tick + .model-picker-win {margin-left:8px}
 .model-picker-empty {padding:18px 14px; color:var(--faint); font-size:12.5px; text-align:center}
-.model-picker-prov:focus-visible,.model-picker-model:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
+.model-picker-prov:focus-visible,.model-picker-model:focus-visible {outline:2px solid var(--warm); outline-offset:-2px}
 .model-picker-hr {height:1px; background:var(--line-soft); margin:6px 4px}
 .model-picker-model.model-picker-opt {font-family:var(--sans)}
 .model-picker-model[disabled] {opacity:.4; cursor:not-allowed}
@@ -3028,7 +3040,7 @@ textarea:focus, textarea:focus-visible,
 .mpick .row .nm > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mpick .row .ct, .mpick .model-group-hd .ct { font-size: 11px; color: var(--faint); flex: none;
   font-variant-numeric: tabular-nums; }
-.mpick .row .tick { color: var(--amber); flex: none; font-size: 12px; }
+.mpick .row .tick { color: var(--warm); flex: none; font-size: 12px; }
 /* Names in the page's own face: a list of names is not code, and the mono face
    made every row heavier than the head above it. */
 .mpick .models .row { font-size: 13px; }
@@ -3302,7 +3314,7 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 .chghd { display: flex; align-items: center; gap: 8px; padding: 7px 12px; cursor: pointer;
   min-width: 0; width: 100%; border: 0; background: none; font: inherit; text-align: left; }
 .chghd:hover { background: var(--raised); }
-.chghd:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
+.chghd:focus-visible { outline: 1px solid var(--warm); outline-offset: -1px; }
 /* Reserved, not injected on hover: appearing space would nudge the counts
    sideways every time the pointer crossed a row. */
 .chgm { flex: none; width: 20px; height: 20px; margin-left: -2px; border-radius: 5px;
@@ -3424,8 +3436,8 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
   transition: border-color .13s ease, box-shadow .13s ease, background .13s ease;
 }
 .bbar .url:focus {
-  border-color: var(--amber); background: var(--ink);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 13%, transparent);
+  border-color: var(--warm); background: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warm) 13%, transparent);
 }
 /* loading progress: an indeterminate amber sweep pinned under the toolbar */
 .bprog { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; z-index: 2; }
@@ -3700,18 +3712,19 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 
 /* ── switch ────────────────────────────────────────────────────────── */
 .swi, .two-pane-swi {
-  flex: 0 0 auto; width: 38px; height: 22px; border-radius: 99px; background: var(--raised);
+  flex: 0 0 auto; width: 36px; height: 20px; border-radius: 99px; background: var(--raised);
   border: 1px solid var(--line); padding: 0; cursor: pointer;
   position: relative; transition: background .16s;
 }
 .swi::after, .two-pane-swi::after {
-  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  content: ""; position: absolute; top: .5px; left: .5px; width: 17px; height: 17px;
   border-radius: 99px; background: var(--paper); box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
-  transition: transform .16s;
+  transition: transform .22s cubic-bezier(.25, .8, .25, 1);
 }
+@media (prefers-reduced-motion: reduce) { .swi::after, .two-pane-swi::after { transition: none; } }
 .swi[aria-checked="true"], .two-pane-swi[aria-checked="true"] { background: var(--amber); border-color: var(--amber); }
 .swi[aria-checked="true"]::after,
-.two-pane-swi[aria-checked="true"]::after { transform: translateX(16px); }
+.two-pane-swi[aria-checked="true"]::after { transform: translateX(16px); box-shadow: none; }
 .two-pane-swi:disabled { opacity: .45; }
 
 .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line-soft);
@@ -3808,8 +3821,8 @@ details[open] summary { margin-bottom: 8px; }
   transition: border-color .14s ease, box-shadow .14s ease, background .14s ease;
 }
 .cfind input:focus {
-  border-color: var(--amber); background: var(--ink);
-  box-shadow: 0 0 0 3px color-mix(in oklab, var(--amber) 14%, transparent);
+  border-color: var(--warm); background: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warm) 14%, transparent);
 }
 .cfind .ic { position: absolute; left: 10px; top: 10px; color: var(--faint); pointer-events: none; }
 .pills { display: flex; gap: 5px; }
@@ -3833,7 +3846,7 @@ details[open] summary { margin-bottom: 8px; }
   transition: transform .28s cubic-bezier(.22, .61, .36, 1), box-shadow .28s cubic-bezier(.22, .61, .36, 1);
 }
 .hubcard:hover { transform: translateY(-1px); box-shadow: var(--elev-up); }
-.hubcard:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.hubcard:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .hubcard { transition: none; }
   .hubcard:hover { transform: none; }
@@ -3935,7 +3948,7 @@ details[open] summary { margin-bottom: 8px; }
 .hub-head-tab[aria-selected="true"]::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px; background: var(--text);
 }
-.hub-head-tab:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 4px; }
+.hub-head-tab:focus-visible { outline: 2px solid var(--warm); outline-offset: 3px; border-radius: 4px; }
 .hub-head-sub { margin: -4px 0 16px; font-size: 12.5px; line-height: 1.55; color: var(--muted); }
 .pmchips { display: flex; gap: 7px; flex-wrap: wrap; margin: 14px 0 18px; }
 .pmcard { cursor: pointer; }
@@ -4076,7 +4089,7 @@ details[open] summary { margin-bottom: 8px; }
   width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
   padding: 7px 10px; color: var(--text); font: 12.5px var(--mono); outline: none;
 }
-.pminp:focus { border-color: var(--amber); }
+.pminp:focus { border-color: var(--warm); }
 .pmrow { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 .pmwarn { border-left: 2px solid var(--amber); background: var(--surface);
   border-radius: 0 10px 10px 0; padding: 12px 14px; margin-top: 12px; }
@@ -4112,7 +4125,7 @@ details[open] summary { margin-bottom: 8px; }
 }
 .chrow + .chrow { border-top: 1px solid var(--line); }
 .chrow:hover { background: var(--raised); }
-.chrow:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
+.chrow:focus-visible { outline: 1px solid var(--warm); outline-offset: -1px; }
 .chrow > .bd { flex: 1; min-width: 0; }
 .chrow .nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .chrow .nm .tt { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4157,8 +4170,8 @@ details[open] summary { margin-bottom: 8px; }
 }
 .surow + .surow { border-top: 1px solid var(--line); }
 .surow:hover { background: var(--raised); }
-.surow:focus-visible { outline: 1px solid var(--amber); outline-offset: -1px; }
-.surow[aria-current="true"] { background: var(--raised); box-shadow: inset 2px 0 0 var(--amber); }
+.surow:focus-visible { outline: 1px solid var(--warm); outline-offset: -1px; }
+.surow[aria-current="true"] { background: var(--raised); box-shadow: inset 2px 0 0 var(--warm); }
 /* A row that cannot run wears the mark on its edge, not as a red wash: the
    state line already says what is wrong, in words. */
 .surow.bad { box-shadow: inset 2px 0 0 var(--clay); }
@@ -4204,7 +4217,7 @@ details[open] summary { margin-bottom: 8px; }
 .tabbar button { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
   margin-bottom: -1px; padding: 8px 11px; font: inherit; font-size: 13px; color: var(--muted); cursor: pointer; }
 .tabbar button:hover { color: var(--text); }
-.tabbar button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--amber); font-weight: 600; }
+.tabbar button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--warm); font-weight: 600; }
 .tabbar button .n { margin-left: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
   font-variant-numeric: tabular-nums; }
 .seg.cronfilter { margin: 0 0 14px; }
@@ -4231,7 +4244,7 @@ details[open] summary { margin-bottom: 8px; }
   width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
   padding: 7px 10px; font: inherit; font-size: 12.5px; color: var(--text); outline: 0;
 }
-.sufield > input:focus, .sufield > textarea:focus { border-color: var(--amber); background: var(--ink); }
+.sufield > input:focus, .sufield > textarea:focus { border-color: var(--warm); background: var(--ink); }
 .sufield > textarea { resize: vertical; min-height: 62px; }
 /* The only thing that may sit under a field, which is what makes it read. */
 .sufield > .e { font-size: 11.5px; color: var(--gold); margin-top: 4px; }
@@ -4569,7 +4582,7 @@ details[open] summary { margin-bottom: 8px; }
   border: 1px solid var(--line); border-radius: var(--ctl-r); background: var(--paper);
   padding: 0 11px; height: var(--ctl-h); box-sizing: border-box;
 }
-.two-pane-search:focus-within { border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.two-pane-search:focus-within { border-color: var(--warm); box-shadow: var(--ctl-focus); }
 .two-pane-search svg { width: 15px; height: 15px; flex: none; fill: none; stroke: var(--faint); stroke-width: 1.7; stroke-linecap: round; }
 .two-pane-search input { flex: 1; min-width: 0; font: inherit; font-size: 13px; border: 0; background: none; color: var(--text); outline: none; }
 .two-pane-add {
@@ -4613,7 +4626,7 @@ details[open] summary { margin-bottom: 8px; }
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
   font: inherit; text-align: left; padding: 8px 9px; border-radius: 8px; color: var(--text);
 }
-.two-pane-hit:focus-visible { outline: 2px solid var(--amber); outline-offset: -2px; }
+.two-pane-hit:focus-visible { outline: 2px solid var(--warm); outline-offset: -2px; }
 .two-pane-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .two-pane-txt .nm { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .two-pane-row[aria-current="true"] .two-pane-txt .nm { font-weight: 500; }
@@ -4727,9 +4740,9 @@ details[open] summary { margin-bottom: 8px; }
   transition: border-color .12s, background .12s;
 }
 .spick .pk:hover { background: var(--surface); }
-.spick .pk[aria-pressed="true"] { border-color: var(--amber); background: var(--amber-dp); }
+.spick .pk[aria-pressed="true"] { border-color: var(--warm); background: var(--amber-dp); }
 .spick .pk .n { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.spick .pk .n .tick { width: 13px; height: 13px; margin-left: auto; color: var(--amber); flex: none;
+.spick .pk .n .tick { width: 13px; height: 13px; margin-left: auto; color: var(--warm); flex: none;
   fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
   opacity: 0; }
 .spick .pk[aria-pressed="true"] .n .tick { opacity: 1; }
@@ -4779,7 +4792,7 @@ details[open] summary { margin-bottom: 8px; }
 .thpick .shot .bar.w70 { width: 70%; }
 .thpick .shot .bar.w45 { width: 45%; }
 .thpick .lb { padding: 8px 10px; font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
-.thpick .lb .tick { width: 13px; height: 13px; margin-left: auto; color: var(--amber); flex: none;
+.thpick .lb .tick { width: 13px; height: 13px; margin-left: auto; color: var(--warm); flex: none;
   fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; opacity: 0; }
 .thpick .pk[aria-pressed="true"] .lb .tick { opacity: 1; }
 /* Both grounds are drawn with fixed values, not tokens: the point of the
@@ -4903,7 +4916,7 @@ input[type="text"], input[type="password"], select {
   height: var(--ctl-h); box-sizing: border-box;
 }
 input[type="text"]:focus, input[type="password"]:focus, select:focus {
-  border-color: var(--amber); box-shadow: var(--ctl-focus);
+  border-color: var(--warm); box-shadow: var(--ctl-focus);
 }
 /* The dropdown, page vocabulary rather than any one section's: the native
    arrow is replaced by one caret so a select reads as the same control as the
@@ -4916,7 +4929,7 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus {
   appearance: none; -webkit-appearance: none; cursor: pointer; min-width: 140px;
   height: var(--ctl-h); box-sizing: border-box;
 }
-.sel:focus { outline: none; border-color: var(--amber); box-shadow: var(--ctl-focus); }
+.sel:focus { outline: none; border-color: var(--warm); box-shadow: var(--ctl-focus); }
 .selw::after {
   content: "\2304"; position: absolute; right: 9px; top: 50%; transform: translateY(-60%);
   color: var(--faint); font-size: 11px; pointer-events: none;
@@ -4943,7 +4956,7 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus {
   font-size: 13px; color: var(--link); text-decoration: none; border-radius: 5px;
 }
 .exlink:hover { text-decoration: underline; }
-.exlink:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.exlink:focus-visible { outline: 2px solid var(--warm); outline-offset: 3px; }
 .exlink svg {
   width: 13px; height: 13px; fill: none; stroke: currentColor;
   stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
@@ -4954,7 +4967,7 @@ input[type="text"]:focus, input[type="password"]:focus, select:focus {
   cursor: pointer; border-radius: 6px;
 }
 .foldcap:hover { color: var(--text); }
-.foldcap:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+.foldcap:focus-visible { outline: 2px solid var(--warm); outline-offset: 3px; }
 .foldcap svg {
   width: 11px; height: 11px; fill: none; stroke: currentColor;
   stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease;
@@ -5054,7 +5067,7 @@ input[type="range"] { accent-color: var(--amber); width: 190px; }
   border: 1px solid var(--line); border-radius: var(--ctl-r);
   background: var(--paper); color: var(--text); padding: 0 11px; font: inherit; font-size: 13px;
 }
-.memconnect-in:focus { border-color: var(--amber); box-shadow: var(--ctl-focus); outline: none; }
+.memconnect-in:focus { border-color: var(--warm); box-shadow: var(--ctl-focus); outline: none; }
 .memconnect-link { margin-top: 12px; }
 .memconnect-link a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 /* The Save button while the key is being checked. */
@@ -5310,8 +5323,8 @@ button.mtog:hover:not([disabled]) { border-color: var(--faint); color: var(--tex
    would be a state the form let a person build and the icon row then drew. */
 button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .mdrawer .grp[data-off] .gt { opacity: .5; }
-.mtog[aria-pressed="true"] { border-color: var(--amber); color: var(--text);
-  background: color-mix(in oklab, var(--amber) 12%, transparent); }
+.mtog[aria-pressed="true"] { border-color: var(--warm); color: var(--text);
+  background: color-mix(in oklab, var(--warm) 12%, transparent); }
 .mdrawer footer { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px;
   padding: 12px 16px; border-top: 1px solid var(--line-soft); }
 .mdrawer footer .pnote { margin-right: auto; }
@@ -5751,7 +5764,7 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    gutter the other rows leave empty, so the rows still line up. */
 .menu button[role="menuitemradio"] { padding-left: 26px; position: relative; }
 .menu button[aria-checked="true"]::before {
-  content: "\2713"; position: absolute; left: 10px; color: var(--amber); font-size: 11px;
+  content: "\2713"; position: absolute; left: 10px; color: var(--warm); font-size: 11px;
 }
 .menu hr { border: 0; border-top: 1px solid color-mix(in oklab, var(--line) 70%, transparent);
   margin: 5px 8px; }
@@ -6701,7 +6714,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
   padding: 10px 12px; color: var(--text); font: 13px var(--sans); outline: none;
 }
-.kbdlg .kbname:focus { border-color: var(--amber); }
+.kbdlg .kbname:focus { border-color: var(--warm); }
 .kbdlg select.mini { width: 100%; text-align: left; }
 /* A note is written, not filled in: the dialog that holds one is sized for
    paragraphs rather than for a name and a picker. */
@@ -6711,7 +6724,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   padding: 10px 12px; color: var(--text); font: 13px/1.55 var(--mono); outline: none;
   min-height: 260px; resize: vertical;
 }
-.kbdlg .kbnote:focus { border-color: var(--amber); }
+.kbdlg .kbnote:focus { border-color: var(--warm); }
 .kbdlg .kbnote:disabled { color: var(--faint); }
 
 /* The drop target covers the panel it belongs to rather than a strip of it: a
@@ -6971,7 +6984,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   transition: transform .26s cubic-bezier(.22, .61, .36, 1), box-shadow .26s cubic-bezier(.22, .61, .36, 1);
 }
 .pbcard:hover { transform: translateY(-1px); box-shadow: var(--elev-up); }
-.pbcard:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.pbcard:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
   .pbcard { transition: none; }
   .pbcard:hover { transform: none; }
@@ -7051,7 +7064,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
 }
 .pbtab[aria-selected="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--text); }
 .pbtab:hover { color: var(--text); }
-.pbtab:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.pbtab:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
 .pbsec { margin-bottom: 30px; }
 .pbsec > h2 { margin: 0 0 12px; font-size: var(--step-0); font-weight: 600; }
 .pbsec .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -7083,7 +7096,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
     var(--ink);
 }
 .gstage:active { cursor: grabbing; }
-.gstage:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 2px; }
+.gstage:focus-visible { outline: 1.5px solid var(--warm); outline-offset: 2px; }
 .gview { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 .gzoom {
   position: absolute; right: 10px; bottom: 10px; display: flex; align-items: center; gap: 1px;
@@ -7508,7 +7521,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   line-height: 1.6; background: var(--surface); border: 1px solid transparent; border-radius: 8px;
   padding: 4px 10px; cursor: pointer; }
 .wchip:hover { background: var(--raised); }
-.wchip:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
+.wchip:focus-visible { outline: 1.5px solid var(--warm); outline-offset: 1px; }
 /* Every output chip leads with a small faint glyph, the way the prototype's
    `.wchip svg` does -- a written file's document icon, a change's diff icon. */
 .wchip svg { flex: none; width: 13px; height: 13px; color: var(--faint); }

@@ -934,7 +934,7 @@
 
 /* The piece the file beside it is open at. */
 .knowledge-chunk.knowledge-cur {
-  border-color: var(--amber);
+  border-color: var(--warm);
 }
 
 .knowledge-chunksheet {

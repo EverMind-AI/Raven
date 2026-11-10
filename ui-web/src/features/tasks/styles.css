@@ -644,8 +644,8 @@
    group, and the only box inside that group is the one this domain hands
    `DagGraph` through `renderNode` -- so the tabbing ring is drawn there. */
 .tkfork .nd:focus-visible .tkrun {
-  border-color: var(--amber);
-  outline: 1px solid var(--amber);
+  border-color: var(--warm);
+  outline: 1px solid var(--warm);
   /* Inward, like the ring above: at `2px` the whole outline sat outside the
      clip and tabbing to a node showed nothing at all. It stays an `outline`
      rather than becoming a third shadow because forced-colors mode keeps an
@@ -906,7 +906,7 @@
   transition: color .14s ease;
 }
 .tkless:hover { color: var(--text); }
-.tkless:focus-visible { outline: 1.5px solid var(--amber); outline-offset: 1px; }
+.tkless:focus-visible { outline: 1.5px solid var(--warm); outline-offset: 1px; }
 .tkless svg { transform: rotate(180deg); }
 
 /* ── the task board (BoardList.tsx) ───────────────────────────────────────

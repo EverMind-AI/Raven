@@ -96,6 +96,21 @@ describe('usage page', () => {
     expect(screen.getByText('exec').nextElementSibling!.textContent).toBe('2')
   })
 
+  /* The browser's own title box is the OS's, and it says nothing the card
+     does not: the bar carries the house hover card instead, and the day it
+     stands in is a column of its own, so the pointer's day can be marked. */
+  it('gives every bar the house hover card, and each day a column', async () => {
+    const days = ['2026-09-10', '2026-09-11', '2026-09-12']
+    install(undefined, { usage: async () => stats(days) })
+    await mount('usage')
+    expect(document.querySelectorAll('.settings-bars .settings-bcol')).toHaveLength(3)
+    const bar = document.querySelector('.settings-bb')!
+    expect(bar.getAttribute('title')).toBeNull()
+    expect(bar.getAttribute('data-tip')).toBe('2026-09-10 · $0.00')
+    expect(bar.hasAttribute('data-tip-card')).toBe(true)
+    expect(bar.getAttribute('aria-label')).toBe('2026-09-10 · $0.00')
+  })
+
   /* A catalogue with no rates prices nothing, and every cost surface then read
      $0.00 -- a number where the honest answer is that there is none. The whole
      range unpriced takes the cost tile, the per-day bars and the cost column

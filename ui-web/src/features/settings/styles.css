@@ -43,8 +43,8 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-tbtn {font:inherit; font-size:13px; border:1px solid var(--line); background:var(--paper); color:var(--muted);
   padding:6px 13px; border-radius:99px; cursor:pointer; display:inline-flex; align-items:center; gap:7px}
 .settings-tbtn:hover {color:var(--text); border-color:var(--amber)}
-.settings-tbtn[aria-pressed="true"] {background:var(--amber-dp); border-color:var(--amber); color:var(--gold); font-weight:600}
-.settings-tbtn:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-tbtn[aria-pressed="true"] {background:var(--amber-dp); border-color:var(--warm); color:var(--gold); font-weight:600}
+.settings-tbtn:focus-visible {outline:2px solid var(--warm); outline-offset:2px}
 .settings-stage {background:transparent; border:0; border-radius:0; padding:0; box-shadow:none}
 .settings-dlg {display:grid; grid-template-columns:214px 1fr; min-height:min(720px, calc(100vh - 80px)); background:var(--paper); border:1px solid var(--line);
   border-radius:12px; box-shadow:var(--elev-up); overflow:hidden; min-height:620px}
@@ -80,11 +80,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-row.settings-stack {grid-template-columns:1fr}
 .settings-row.settings-stack .settings-ctl {margin-top:8px}
 .settings-row .settings-kk {font-family:var(--mono); font-size:11px; color:var(--faint)}
-.settings-swi {width:38px; height:22px; border-radius:99px; border:1px solid var(--line); background:var(--raised); position:relative; cursor:pointer; padding:0; flex:0 0 auto}
-.settings-swi::after {content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:99px; background:var(--paper); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .16s}
+.settings-swi {width:36px; height:20px; border-radius:99px; border:1px solid var(--line); background:var(--raised); position:relative; cursor:pointer; padding:0; flex:0 0 auto}
+.settings-swi::after {content:""; position:absolute; top:.5px; left:.5px; width:17px; height:17px; border-radius:99px; background:var(--paper); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .22s cubic-bezier(.25,.8,.25,1)}
+@media (prefers-reduced-motion: reduce) { .settings-swi::after {transition:none} }
 .settings-swi[aria-checked="true"] {background:var(--amber); border-color:var(--amber)}
-.settings-swi[aria-checked="true"]::after {transform:translateX(16px)}
-.settings-swi:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-swi[aria-checked="true"]::after {transform:translateX(16px); box-shadow:none}
+.settings-swi:focus-visible {outline:2px solid var(--warm); outline-offset:2px}
 /* Built in: the row is here so the tool is not invisible, and there is
    nothing to set. `aria-disabled` alone says so only to a screen reader --
    drawn like every other switch, with a pointer cursor, it reads as a
@@ -103,7 +104,7 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
   background:var(--paper); color:var(--text); padding:5px 10px; min-width:170px; height:var(--ctl-h); box-sizing:border-box}
 /* The web key row's field: twice the base width, so a pasted key stays readable. */
 .settings-tbox.settings-tbox-wide {min-width:340px; max-width:100%}
-.settings-tbox:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-tbox:focus {outline:none; border-color:var(--warm); box-shadow:var(--ctl-focus)}
 textarea.settings-tbox {height:auto}
 /* page.css pins bare `input[type=text]`/`select` at 13px with type selectors
    (0,1,1) that a lone class loses to; naming the element too repeats that
@@ -189,8 +190,15 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-tl .settings-l {font-size:12px; color:var(--faint); margin-top:2px}
 .settings-tl.settings-good .settings-n {color:var(--moss)}
 .settings-bars {display:flex; align-items:flex-end; gap:3px; height:96px; padding:14px 15px 0}
-.settings-bars .settings-bb {flex:1; background:var(--amber); border-radius:2px 2px 0 0; min-height:2px; opacity:.85}
+/* One column per day: the band the pointer's day is marked with, and the
+   gutter the bar stands in. */
+.settings-bars .settings-bcol {flex:1; height:100%; display:flex; align-items:flex-end; border-radius:8px}
+.settings-bars .settings-bcol:hover {background:var(--raised)}
+.settings-bars .settings-bb {flex:1; position:relative; background:var(--warm); border-radius:2px 2px 0 0; min-height:2px; opacity:.85}
 .settings-bars .settings-bb.settings-dim {background:var(--line); opacity:1}
+/* A bar two pixels tall is a thin thing to aim at, so it reaches a little
+   above itself to be pointed at. */
+.settings-bars .settings-bb::before {content:''; position:absolute; left:0; right:0; bottom:0; top:-7px}
 .settings-bax {display:flex; justify-content:space-between; padding:6px 15px 12px; color:var(--faint); font-size:11px}
 .settings-utab {width:100%; border-collapse:collapse; font-size:13px}
 .settings-utab th {font-family:var(--disp); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint);
@@ -199,7 +207,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-utab td {padding:8px 12px; border-bottom:1px solid var(--line-soft); text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 .settings-utab td:first-child {text-align:left; font-family:var(--mono); font-size:12px; white-space:normal}
 .settings-utab tr:last-child td {border-bottom:none}
-.settings-share {display:block; height:3px; border-radius:2px; background:var(--amber); margin-top:4px}
+.settings-share {display:block; height:3px; border-radius:2px; background:var(--warm); margin-top:4px}
 .settings-gap {display:flex; gap:9px; padding:11px 15px; border-bottom:1px solid var(--line-soft); font-size:13px; color:var(--muted); align-items:flex-start}
 .settings-gap:last-child {border-bottom:none}
 .settings-gap .settings-dot {width:6px; height:6px; border-radius:99px; background:var(--clay); flex:0 0 6px; margin-top:7px}
@@ -229,11 +237,11 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-tkrow input {flex:1; min-width:150px; font:inherit; font-size:14px; font-family:var(--mono); border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px;
   height:var(--ctl-h); box-sizing:border-box}
-.settings-tkrow input:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-tkrow input:focus {outline:none; border-color:var(--warm); box-shadow:var(--ctl-focus)}
 .settings-ff {display:flex; flex-direction:column; gap:8px; padding:10px 0 2px}
 .settings-ff input,.settings-ff select {font:inherit; font-size:13px; border:1px solid var(--line); border-radius:var(--ctl-r);
   background:var(--paper); color:var(--text); padding:0 9px; height:var(--ctl-h); box-sizing:border-box}
-.settings-ff input:focus,.settings-ff select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-ff input:focus,.settings-ff select:focus {outline:none; border-color:var(--warm); box-shadow:var(--ctl-focus)}
 .settings-ff input {font-family:var(--mono)}
 .settings-ff .settings-acts2 {display:flex; gap:8px}
 .settings-mnote {color:var(--faint); font-size:12px}
@@ -256,7 +264,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-kvform input,.settings-kvform select {font:inherit; font-family:var(--mono); font-size:14px; border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); padding:0 9px; flex:1; min-width:110px;
   height:var(--ctl-h); box-sizing:border-box}
-.settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-kvform input:focus,.settings-kvform select:focus {outline:none; border-color:var(--warm); box-shadow:var(--ctl-focus)}
 .settings-kvform select {font-family:var(--mono)}
 .settings-mlist {border-top:1px solid var(--line-soft); background:var(--paper)}
 .settings-mls {display:flex; align-items:center; gap:9px; padding:9px 15px; border-bottom:1px solid var(--line-soft)}
@@ -314,12 +322,14 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-arow .settings-ameta {display:flex; gap:10px; align-items:center; color:var(--faint); font-size:12px; margin-top:3px}
 .settings-arow .settings-ameta .settings-kd {font-family:var(--mono); border:1px solid var(--line); border-radius:4px; padding:0 5px}
 .settings-arow .settings-aacts {display:flex; gap:7px; flex:0 0 auto}
+.settings-ghlink {font-family:var(--mono); font-size:13px; color:var(--link); text-decoration:none}
+.settings-ghlink:hover {text-decoration:underline}
 .settings-pathv {display:inline-flex; align-items:center; gap:7px; min-width:0}
 .settings-pathv .settings-pp {font-family:var(--mono); font-size:13px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
 .settings-iconbtn {display:inline-grid; place-items:center; width:24px; height:24px; flex:0 0 24px; padding:0; cursor:pointer;
   background:none; border:1px solid transparent; border-radius:6px; color:var(--faint)}
 .settings-iconbtn:hover {color:var(--text); border-color:var(--line); background:var(--raised)}
-.settings-iconbtn:focus-visible {outline:2px solid var(--amber); outline-offset:1px}
+.settings-iconbtn:focus-visible {outline:2px solid var(--warm); outline-offset:1px}
 .settings-iconbtn svg {width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; stroke-linejoin:round}
 .settings-warnmark {color:var(--clay); font-weight:600}
 .settings-req {font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.04em; color:var(--gold); background:var(--amber-dp); border-radius:4px; padding:0 5px}
@@ -484,7 +494,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-xrow.settings-dim .settings-chev {opacity:.5}
 .settings-srch {display:flex; align-items:center; gap:9px; border:1px solid var(--line); border-radius:var(--ctl-r);
   background:var(--paper); padding:0 11px; height:var(--ctl-h); box-sizing:border-box; margin-bottom:14px}
-.settings-srch:focus-within {border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-srch:focus-within {border-color:var(--warm); box-shadow:var(--ctl-focus)}
 .settings-srch svg {width:15px; height:15px; fill:none; stroke:var(--faint); stroke-width:1.7; stroke-linecap:round}
 .settings-srch input {flex:1; font:inherit; font-size:14px; border:0; background:none; color:var(--text); outline:none}
 .settings-skrow {display:flex; align-items:center; gap:14px; border-bottom:1px solid var(--line-soft); padding:0 15px 0 0}
@@ -503,7 +513,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-ftags {display:flex; flex-wrap:wrap; gap:6px; margin-top:12px}
 .settings-ftag {display:inline-flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:6px; background:var(--raised); padding:1px 2px 1px 8px}
 .settings-ftag .settings-fn {font-family:var(--mono); font-size:12px; color:var(--muted)}
-.settings-ftag.settings-cur {background:var(--amber-dp); border-color:color-mix(in srgb, var(--amber) 40%, transparent)}
+.settings-ftag.settings-cur {background:var(--amber-dp); border-color:color-mix(in srgb, var(--warm) 40%, transparent)}
 .settings-ftag.settings-cur .settings-fn {color:var(--gold); font-weight:600}
 .settings-ftag .settings-iconbtn {width:20px; height:20px; flex-basis:20px}
 .settings-ftag .settings-iconbtn svg {width:12px; height:12px}
@@ -538,7 +548,7 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-mpill:hover {border-color:var(--amber)}
 .settings-mpill .settings-pm {flex:1; min-width:0; display:flex; align-items:center; gap:7px; font:inherit; color:inherit; background:none; border:0;
   padding:5px 8px 5px 10px; cursor:pointer; text-align:left}
-.settings-mpill .settings-pm:focus-visible {outline:2px solid var(--amber); outline-offset:-2px}
+.settings-mpill .settings-pm:focus-visible {outline:2px solid var(--warm); outline-offset:-2px}
 .settings-mpill .settings-px {position:absolute; top:0; right:0; bottom:0; width:30px; font:inherit; font-size:14px; line-height:1; border:0; background:var(--paper); color:var(--faint); cursor:pointer; display:none}
 .settings-mpill.settings-clearable:hover .settings-px,.settings-mpill.settings-clearable:focus-within .settings-px {display:block}
 /* The clear control lies over the pill's right edge, so on hover the chevron
@@ -609,7 +619,7 @@ button.settings-xname {cursor:pointer}
 .settings-tp-find input {flex:1; min-width:0; font:inherit; font-size:14px; padding:0 11px; border:1px solid var(--line);
   border-radius:var(--ctl-r); background:var(--paper); color:var(--text); outline:none;
   height:var(--ctl-h); box-sizing:border-box}
-.settings-tp-find input:focus {border-color:var(--amber); box-shadow:var(--ctl-focus)}
+.settings-tp-find input:focus {border-color:var(--warm); box-shadow:var(--ctl-focus)}
 .settings-tp-filt {flex:none; width:var(--ctl-h); height:var(--ctl-h); border-radius:var(--ctl-r);
   display:grid; place-items:center; border:1px solid var(--line); background:var(--paper); color:var(--muted); cursor:pointer}
 .settings-tp-filt:hover {border-color:var(--amber); color:var(--text)}
@@ -800,11 +810,11 @@ button.settings-xname {cursor:pointer}
   transition:border-color .15s ease, box-shadow .15s ease;
 }
 .settings-theme:hover {border-color:color-mix(in oklab, var(--line) 50%, var(--muted))}
-.settings-theme[aria-checked="true"] {border-color:var(--amber); box-shadow:0 0 0 1px var(--amber)}
-.settings-theme:focus-visible {outline:2px solid var(--amber); outline-offset:2px}
+.settings-theme[aria-checked="true"] {border-color:var(--warm); box-shadow:0 0 0 1px var(--warm)}
+.settings-theme:focus-visible {outline:2px solid var(--warm); outline-offset:2px}
 .settings-theme-foot {display:flex; align-items:center; justify-content:space-between; font-size:14px; padding:0 2px}
 .settings-theme-dot {width:16px; height:16px; border-radius:50%; border:1.5px solid var(--line); box-sizing:border-box; flex:none}
-.settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--amber)}
+.settings-theme[aria-checked="true"] .settings-theme-dot {border:4.5px solid var(--warm)}
 
 .settings-shotbox {position:relative; display:block; height:96px; border-radius:7px; overflow:hidden; border:1px solid var(--line-soft)}
 .settings-shot {
