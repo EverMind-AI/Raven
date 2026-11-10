@@ -1,7 +1,7 @@
-/* Move on is always on a folded task card.
+/* Move on is always on a folded group card.
  *
  * The desk's Tasks board (features/tasks/BoardList.tsx) renders Move on in
- * every folded card's foot, and the reader reaches for it without first
+ * every folded Task Group card's foot, and the reader reaches for it without first
  * pointing at the card: it is the card's one verb, so it is drawn whether or
  * not the pointer or the focus is on the card, in the foot's own flow at the
  * line's right end. A stylesheet that faded it, hid it or lifted it out of the
@@ -20,7 +20,7 @@ const sheet = readFileSync(new URL('../../src/features/tasks/styles.css', import
 const moveOn = rules(null, sheet).filter(([selector]) =>
   selector.split(',').some((part) => /\.tkmove(?:$|[:[])/.test(part.trim().split(/[\s>+~]+/).pop() || '')))
 
-describe('Move on on a folded task card', () => {
+describe('Move on on a folded group card', () => {
   it('is styled at all, so the checks below are reading something', () => {
     expect(moveOn.some(([selector]) => selector.includes('.tkgfoot'))).toBe(true)
   })

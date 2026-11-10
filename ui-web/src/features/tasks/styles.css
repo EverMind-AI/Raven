@@ -1033,7 +1033,7 @@
 /* Move on is the card's verb, and on every folded card it is there: plain
    words at the line's right, in the line's own flow, never waiting for the
    pointer. On a narrow card whose counts fill the line it wraps to the right
-   of a second one (scripts/gates/task-card-move-on-css.test.mjs). */
+   of a second one (scripts/gates/group-card-move-on-css.test.mjs). */
 .tkgfoot .tkmove { margin-left: auto; border-color: transparent; background: none; color: var(--text); font-weight: 500; }
 .tkgfoot .tkmove:hover { border-color: transparent; background: var(--raised); }
 /* Move on: a quiet button whose arrow says the next message goes on with the
