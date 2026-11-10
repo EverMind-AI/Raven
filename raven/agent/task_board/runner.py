@@ -130,6 +130,7 @@ _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
 _QUESTION_RECORD_MARKER = re.compile(r"\[(?:BEGIN|END) QUESTION MARKS\]", re.IGNORECASE)
+_RECOVERY_MARK = "_recovery_synthetic"
 
 
 def _without_strong(text: str, marker: str) -> str:
@@ -215,20 +216,27 @@ def _paragraphs(reply: str) -> list[str]:
     return paragraphs
 
 
-def asked(reply: str) -> list[str]:
-    """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
-
-    A question mark still ends one when closing emphasis, a bracket or a quote follows it. A
-    fenced code block and a quoted line are left out: neither was put to the user.
-    """
+def _questions(message: str) -> list[str]:
     found: list[str] = []
-    for paragraph in _paragraphs(reply):
+    for paragraph in _paragraphs(message):
         for part in _SENTENCE_END.split(_without_emphasis(paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
             closed = sentence.rstrip(_CLOSERS)
             if closed.endswith(_QUESTION_MARKS) and closed.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)
-    return list(dict.fromkeys(found))[-ASKED_SHOWN:]
+    return found
+
+
+def asked(reply: str | Sequence[str]) -> list[str]:
+    """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
+
+    A question mark still ends one when closing emphasis, a bracket or a quote follows it. A
+    reply given as its messages is read one message at a time, the way the reader was shown
+    it: a line with no closing mark, or a fence left open, ends with its message. A fenced
+    code block and a quoted line are left out: neither was put to the user.
+    """
+    messages = [reply] if isinstance(reply, str) else reply
+    return list(dict.fromkeys(q for message in messages for q in _questions(message)))[-ASKED_SHOWN:]
 
 
 def _text(content: Any) -> str:
@@ -252,21 +260,35 @@ def _message_tool_words(call: Any, answered: Collection[str]) -> str:
     return content.strip() if isinstance(content, str) else ""
 
 
-def _reply(rows: Sequence[dict], answered: Collection[str]) -> str:
-    """The words of the turn's reply: every assistant message among ``rows``, in the order
-    it wrote them, with what a message call that answered this conversation sent. The rows
-    are the turn's own (``TurnLog.added``), so a user message among them was sent while the
-    turn ran and does not open a new one."""
-    words: list[str] = []
+def _reply(rows: Sequence[dict], answered: Collection[str]) -> list[str]:
+    """The turn's reply, one entry per message the reader was shown: every assistant message
+    among ``rows``, in the order it wrote them, and what each message call that answered this
+    conversation sent. The rows are the turn's own (``TurnLog.added``), so a user message among
+    them was sent while the turn ran and does not open a new one. What the loop wrote to get an
+    answer going again (``_recovery_synthetic``: the part of an answer a cut stream left, or an
+    empty placeholder) opens the entry of the message that follows it, the way the reader saw a
+    cut answer and its continuation as one."""
+    entries: list[str] = []
+    carried: list[str] = []
     for message in rows:
         if message.get("role") != "assistant":
             continue
-        if text := _text(message.get("content")).strip():
-            words.append(text)
+        text = _text(message.get("content")).strip()
+        if message.get(_RECOVERY_MARK):
+            if text:
+                carried.append(text)
+            continue
+        if text:
+            carried.append(text)
+        if carried:
+            entries.append("\n\n".join(carried))
+            carried = []
         for call in message.get("tool_calls") or ():
             if sent := _message_tool_words(call, answered):
-                words.append(sent)
-    return "\n".join(words)
+                entries.append(sent)
+    if carried:
+        entries.append("\n\n".join(carried))
+    return entries
 
 
 def _asked_block(questions: Sequence[str]) -> str:

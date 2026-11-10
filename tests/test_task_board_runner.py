@@ -781,6 +781,75 @@ async def test_the_turns_assistant_segments_are_read_together_in_order(tmp_path)
     assert listed.splitlines()[1:] == ["- Should I fix all five findings?", "- Should I re-run the suite?"]
 
 
+def _shown(call: Scripted) -> list[str]:
+    """The questions the first ask listed for the model to sort, none when it listed no record."""
+    instruction = call.seen[0][-1]["content"]
+    if "[BEGIN QUESTION MARKS]" not in instruction:
+        return []
+    listed = instruction[instruction.index("[BEGIN QUESTION MARKS]") : instruction.index("[END QUESTION MARKS]")]
+    return listed.splitlines()[1:]
+
+
+async def _shown_for(tmp_path, reply_rows: list[dict], **scope) -> list[str]:
+    call = Scripted(GOOD)
+    window = [{"role": "user", "content": "Fix the five findings."}, *reply_rows]
+
+    await _run(_service(tmp_path), call, window=window, reply_rows=reply_rows, **scope)
+
+    return _shown(call)
+
+
+@pytest.mark.parametrize("first", ["All tests pass", "## Summary", "Next I ran the suite:"])
+async def test_a_message_with_no_closing_mark_does_not_run_into_the_next_ones_question(tmp_path, first):
+    reply_rows = [
+        {"role": "assistant", "content": first},
+        {"role": "assistant", "content": "Should I merge it?"},
+    ]
+
+    assert await _shown_for(tmp_path, reply_rows) == ["- Should I merge it?"]
+
+
+async def test_what_a_message_call_sent_does_not_run_into_the_text_beside_it(tmp_path):
+    tool = _message_tool()
+    rows = await _message_rows(tool, "m1", "Which fix should I apply?")
+    rows[0]["content"] = "Sending the summary now"
+
+    shown = await _shown_for(tmp_path, rows, answered_message_calls=tool.answered_calls_in_turn)
+
+    assert shown == ["- Which fix should I apply?"]
+
+
+async def test_the_loops_empty_placeholder_does_not_run_into_the_answer_after_it(tmp_path):
+    reply_rows = [
+        {"role": "assistant", "content": "(empty)", "_recovery_synthetic": True},
+        {"role": "user", "content": "Give your final answer now.", "_recovery_synthetic": True},
+        {"role": "assistant", "content": "Which fix should I apply?"},
+    ]
+
+    assert await _shown_for(tmp_path, reply_rows) == ["- Which fix should I apply?"]
+
+
+async def test_a_fence_left_open_in_one_message_does_not_hide_the_next_ones_question(tmp_path):
+    reply_rows = [
+        {"role": "assistant", "content": "The patch:\n```diff\n- old\n+ new"},
+        {"role": "assistant", "content": "Should I apply it?"},
+    ]
+
+    assert await _shown_for(tmp_path, reply_rows) == ["- Should I apply it?"]
+
+
+async def test_an_answer_a_cut_stream_left_is_read_with_its_continuation(tmp_path):
+    """The reader was shown the cut answer and its continuation as one answer: a fence the
+    cut left open closes in the continuation, and the code inside it is not a question."""
+    reply_rows = [
+        {"role": "assistant", "content": "The patch:\n```diff\n- old", "_recovery_synthetic": True},
+        {"role": "user", "content": "Continue exactly where you left off.", "_recovery_synthetic": True},
+        {"role": "assistant", "content": "+ new  # why?\n```\nShould I apply it?"},
+    ]
+
+    assert await _shown_for(tmp_path, reply_rows) == ["- Should I apply it?"]
+
+
 async def test_a_message_with_no_question_lists_none(tmp_path):
     tool = _message_tool()
     rows = await _message_rows(tool, "m1", "Deployed. Logs are clean.")
