@@ -329,7 +329,12 @@ def sync_workspace_templates(
             addendum_mode = 0o600
         if target.exists():
             existed += 1
-            current = target.read_text(encoding="utf-8", errors="replace")
+            try:
+                current = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                if say is not None:
+                    say(f"could not read {target}: it is not UTF-8 text; save it as UTF-8")
+                return
         else:
             current = None
         if current is None:

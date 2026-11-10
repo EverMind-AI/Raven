@@ -249,6 +249,19 @@ def test_the_addendum_record_keeps_the_source_mode(tmp_path: Path) -> None:
     assert stat.S_IMODE(record.stat().st_mode) & 0o077 == 0
 
 
+def test_a_non_utf8_soul_is_left_alone(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    raw = (_LEGACY_SOUL.replace("\U0001f426‍⬛", "") + "\n- 中文 rule\n").encode("gbk")
+    soul.write_bytes(raw)
+    messages: list[str] = []
+
+    sync_workspace_templates(tmp_path, notify=messages.append)
+
+    assert soul.read_bytes() == raw
+    assert any("not UTF-8" in message for message in messages)
+
+
 def test_a_non_utf8_local_file_does_not_stop_the_sync(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)
