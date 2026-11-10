@@ -4804,7 +4804,7 @@ def test_every_graph_example_in_the_skill_is_a_call_the_runtime_accepts() -> Non
     for language, block in re.findall(r"^```(\w*)\n(.*?)^```", _repo_text(_SKILL), re.S | re.M):
         if "prompt_template" not in block:
             continue
-        assert language == "json", f"a graph example sits in a {language or 'untagged'} fence; tag it json"
+        assert language == "json", f"a graph example's fence is tagged {language!r}, not 'json'"
         graphs.append(json.loads(block))
     assert len(graphs) >= 3, "the guide's graph examples are no longer found"
     for graph in graphs:
