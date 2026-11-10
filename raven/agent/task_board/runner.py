@@ -124,8 +124,14 @@ _FENCE = re.compile(r"^(`{3,}(?=[^`]*$)|~{3,})(.*)$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _CLOSERS = "*_)]\"'\u201d\u2019\u300d\u300f\u3011\uff09"
 _CLOSER = f"[{re.escape(_CLOSERS)}]"
-# A question mark that closing emphasis, a bracket or a quote follows still ends its sentence.
-_SENTENCE_END = re.compile(rf"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+|(?<=\?{_CLOSER})\s+|(?<=\?{_CLOSER}{_CLOSER})\s+")
+# Closing emphasis, a bracket or a quote right after a full-width sentence mark, or after an
+# ASCII question mark, stays with that sentence, two of them at most.
+_SENTENCE_END = re.compile(
+    rf"(?<=[\u3002\uff01\uff1f])(?!{_CLOSER})"
+    rf"|(?<=[\u3002\uff01\uff1f]{_CLOSER})(?!{_CLOSER})"
+    rf"|(?<=[\u3002\uff01\uff1f]{_CLOSER}{_CLOSER})"
+    rf"|(?<=[.!?])\s+|(?<=\?{_CLOSER})\s+|(?<=\?{_CLOSER}{_CLOSER})\s+"
+)
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)

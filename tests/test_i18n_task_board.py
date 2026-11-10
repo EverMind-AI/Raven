@@ -90,6 +90,22 @@ def test_asked_keeps_a_two_character_question_but_not_a_bare_mark():
     assert asked("Who?\n谁？\n行？\n?\n？\n??") == ["Who?", "谁？", "行？"]
 
 
+@pytest.mark.parametrize(
+    ("reply", "question"),
+    [
+        ("*可以继续吗？* 后面。", "*可以继续吗？*"),
+        ("*可以继续吗？*后面。", "*可以继续吗？*"),
+        ("“可以继续吗？”后面。", "“可以继续吗？”"),
+        ("（可以继续吗？）后面。", "（可以继续吗？）"),
+        ("「*可以继续吗？*」后面。", "「*可以继续吗？*」"),
+        ("（见日志。）下一步做什么？", "下一步做什么？"),
+    ],
+    ids=["star", "star-no-space", "quote", "bracket", "two-closers", "closed-statement"],
+)
+def test_asked_keeps_the_closing_mark_after_a_full_width_sentence_mark(reply, question):
+    assert asked(reply) == [question]
+
+
 def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     board = Board([_group("g_1", "修复登录白屏", "定位到 bug")], [])
 
