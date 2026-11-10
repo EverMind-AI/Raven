@@ -211,6 +211,11 @@
   /* The rail's own lamp: a warm wash in its top corner, so the eye lands on
      the section list first. */
   --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
+  /* The one filled button the dialog has. In the light theme it is ink on
+     paper, the way a printed form's submit is; in the dark one it is the lit
+     amber, because in a room lit by a lamp the accent is what draws the eye. */
+  --set-go:       var(--set-ink);
+  --set-go-ink:   var(--set-paper);
 
   /* Inset of the two panel toggles from their window edge. Both sides read it,
      so the buttons stay put when the panel they control opens or closes. */
@@ -413,27 +418,6 @@
     --snav-bg:        #262626;
     --settings-nav-on:  #333333;
     --settings-nav-ico: #999999;
-    /* The settings dialog, same as the media query's: an explicit dark theme
-       has to carry its own copy, because this block outranks that one. */
-    --set-paper:    #141210;
-    --set-paper-2:  #1e1a16;
-    --set-rail:     #171410;
-    --set-rail-2:   #241f19;
-    --set-ink:      #f1e9da;
-    --set-ink-2:    #d8cdb8;
-    --set-muted:    #a2988a;
-    --set-faint:    #7c7367;
-    --set-rule:     rgba(255, 225, 180, .09);
-    --set-rule-soft:rgba(255, 225, 180, .05);
-    --set-accent:   #e9b44c;
-    --set-accent-2: #f5c46a;
-    --set-accent-wash: rgba(233, 180, 76, .11);
-    --set-glow:     rgba(233, 180, 76, .58);
-    --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
-                     0 0 90px -30px rgba(233, 180, 76, .18);
-    --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
-    --set-go:       var(--set-accent);
-    --set-go-ink:   #241b0c;
     --composer-bg:    rgba(32, 32, 32, .85);
     --composer-line:  #333333;
     --composer-sh:    rgba(0, 0, 0, .45);
@@ -487,6 +471,30 @@
   --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
   --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --warm: #f5c518; --moss: #7fbf6a;
   --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+
+  /* The settings dialog, same as the media query's: an explicit dark theme
+     has to carry its own copy, because this block outranks that one -- and
+     because a reader who picked dark on a light system never matches that
+     one at all. */
+  --set-paper:    #141210;
+  --set-paper-2:  #1e1a16;
+  --set-rail:     #171410;
+  --set-rail-2:   #241f19;
+  --set-ink:      #f1e9da;
+  --set-ink-2:    #d8cdb8;
+  --set-muted:    #a2988a;
+  --set-faint:    #7c7367;
+  --set-rule:     rgba(255, 225, 180, .09);
+  --set-rule-soft:rgba(255, 225, 180, .05);
+  --set-accent:   #e9b44c;
+  --set-accent-2: #f5c46a;
+  --set-accent-wash: rgba(233, 180, 76, .11);
+  --set-glow:     rgba(233, 180, 76, .58);
+  --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
+                   0 0 90px -30px rgba(233, 180, 76, .18);
+  --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
+  --set-go:       var(--set-accent);
+  --set-go-ink:   #241b0c;
 
   /* The context parts' colours in the dark -- see the media query above. */
   --ctx-system: #cdd6dc;
@@ -551,7 +559,8 @@
   --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
   /* The settings dialog, same as the base block's: an explicit light theme
-     has to carry its own copy, because this block outranks that one. */
+     has to carry its own copy, because this block outranks the media query's
+     dark one -- a reader who picked light on a dark system still gets paper. */
   --set-paper:    #fbf8f0;
   --set-paper-2:  #fffdf8;
   --set-rail:     #f1ebdc;
@@ -568,8 +577,6 @@
   --set-glow:     rgba(252, 191, 78, .58);
   --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
   --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
-  --set-go:       var(--set-ink);
-  --set-go-ink:   var(--set-paper);
   /* The one filled button the dialog has. In the light theme it is ink on
      paper, the way a printed form's submit is; in the dark one it is the lit
      amber, because in a room lit by a lamp the accent is what draws the eye. */
