@@ -22,6 +22,7 @@ import { buildApprovalRespond } from '../lib/approval.js'
 import { isAction, isCopyShortcut, isMac, isVoiceToggleKey } from '../lib/platform.js'
 import { computePrecisionWheelStep, initPrecisionWheel } from '../lib/precisionWheel.js'
 import { computeWheelStep, initWheelAccelForHost } from '../lib/wheelAccel.js'
+import { expandSnips } from '../protocol/paste.js'
 import {
   armEscape,
   cycleTarget,
@@ -517,6 +518,14 @@ export function useInputHandlers(ctx: InputHandlerContext): InputHandlerResult {
 
       if (action === 'clear-input') {
         disarmEscClear()
+
+        // The clear is a discard, not a delete: keep the line recoverable with
+        // Up. Upstream does this in runDoubleEsc's clear branch. Expand first:
+        // ``clearIn`` drops the snippets, so a label pushed here could never be
+        // expanded again and the next send would submit it literally.
+        if (cState.input.trim()) {
+          cActions.pushHistory(expandSnips(cState.pasteSnips)(cState.input))
+        }
 
         return cActions.clearIn()
       }

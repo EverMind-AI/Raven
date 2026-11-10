@@ -13,14 +13,14 @@ import type {
   ShellExecResponse
 } from '../gatewayTypes.js'
 import type { Msg } from '../types.js'
-import type { ComposerActions, ComposerRefs, ComposerState, PasteSnippet } from './interfaces.js'
+import type { ComposerActions, ComposerRefs, ComposerState } from './interfaces.js'
 
 import { TYPING_IDLE_MS } from '../config/timing.js'
 import { attachedImageNotice } from '../domain/messages.js'
 import { looksLikeSlashCommand } from '../domain/slash.js'
 import { asRpcResult } from '../lib/rpc.js'
 import { hasInterpolation, INTERPOLATION_RE } from '../protocol/interpolation.js'
-import { PASTE_SNIPPET_RE } from '../protocol/paste.js'
+import { expandSnips } from '../protocol/paste.js'
 import { appendDirectMessage, directKey, getDirectChat, sendingPausedReason } from './directChatStore.js'
 import { turnController } from './turnController.js'
 import { getUiState, patchUiState } from './uiStore.js'
@@ -29,17 +29,6 @@ const DOUBLE_ENTER_MS = 450
 const SESSION_BUSY_RE = /session busy|waiting for model response/i
 
 const isSessionBusyError = (e: unknown) => e instanceof Error && SESSION_BUSY_RE.test(e.message)
-
-const expandSnips = (snips: PasteSnippet[]) => {
-  const byLabel = new Map<string, string[]>()
-
-  for (const { label, text } of snips) {
-    const hit = byLabel.get(label)
-    hit ? hit.push(text) : byLabel.set(label, [text])
-  }
-
-  return (value: string) => value.replace(PASTE_SNIPPET_RE, tok => byLabel.get(tok)?.shift() ?? tok)
-}
 
 const spliceMatches = (text: string, matches: RegExpMatchArray[], results: string[]) =>
   matches.reduceRight((acc, m, i) => acc.slice(0, m.index!) + results[i] + acc.slice(m.index! + m[0].length), text)
@@ -361,6 +350,14 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return
       }
 
+      // History stores resolved content, not `[[…]]` labels: the paste
+      // snippets are cleared on submit, so a recalled entry has to carry the
+      // pasted body itself. This is the same expander `send()` runs, fed the
+      // same snapshot -- each call builds its own label map, and `send()`
+      // still receives the original label text, so the message the agent gets
+      // is expanded exactly once while the transcript keeps the compact form.
+      const toHistory = expandSnips(composerState.pasteSnips)(full)
+
       // Sending is the one act that means "I am done reading back there". A
       // reader scrolled up has broken the transcript's stickiness, and every
       // path below writes to the bottom of it -- the prompt echo, the slash
@@ -382,7 +379,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
           appendDirectMessage(directKey(activeChat.agent, activeChat.handle), echo)
         }
 
-        composerActions.pushHistory(full)
+        composerActions.pushHistory(toHistory)
         slashRef.current(full)
         composerActions.clearIn()
 
@@ -398,7 +395,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       const live = getUiState()
 
       if (!live.sid) {
-        composerActions.pushHistory(full)
+        composerActions.pushHistory(toHistory)
         composerActions.enqueue(full)
         composerActions.clearIn()
 
@@ -447,7 +444,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
         return sendQueued(picked)
       }
 
-      composerActions.pushHistory(full)
+      composerActions.pushHistory(toHistory)
 
       if (getUiState().busy) {
         return handleBusyInput(full)
@@ -465,6 +462,7 @@ export function useSubmission(opts: UseSubmissionOptions) {
       appendMessage,
       composerActions,
       composerRefs,
+      composerState.pasteSnips,
       handleBusyInput,
       interpolate,
       revealLatest,

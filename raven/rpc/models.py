@@ -7027,6 +7027,23 @@ class InputDetectDropResult(_Strict):
     token_estimate: int | None = None
 
 
+class InputHistoryListParams(_Strict):
+    limit: int | None = Field(default=None, description="How many of the newest entries to return; capped at 1000.")
+
+
+class InputHistoryListResult(_Strict):
+    entries: list[str]
+
+
+class InputHistoryAppendParams(_Strict):
+    text: str
+
+
+class InputHistoryAppendResult(_Strict):
+    ok: bool
+    appended: bool = Field(..., description="False when the text was blank or repeated the newest entry.")
+
+
 class SessionInterruptParams(_Strict):
     session_id: str
 
@@ -7614,6 +7631,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "delegation.status": (DelegationStatusParams, DelegationStatusResult),
     "delegation.pause": (DelegationPauseParams, DelegationPauseResult),
     "input.detect_drop": (InputDetectDropParams, InputDetectDropResult),
+    "input.history.list": (InputHistoryListParams, InputHistoryListResult),
+    "input.history.append": (InputHistoryAppendParams, InputHistoryAppendResult),
     "session.interrupt": (SessionInterruptParams, SessionInterruptResult),
     "shell.exec": (ShellExecParams, ShellExecResult),
     "skills.manage": (SkillsManageParams, SkillsManageResult),

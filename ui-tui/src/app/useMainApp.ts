@@ -58,7 +58,14 @@ import { bindInstanceRefresh, fetchDirectHistory, fetchInstances } from './direc
 import { bindDirectSender } from './directSend.js'
 import { $folds, callFolds, type CallFolds } from './foldStore.js'
 import { getInputSelection } from './inputSelectionStore.js'
-import { type GatewayRpc, type RpcOptions, type TranscriptRow } from './interfaces.js'
+import {
+  type AppLayoutComposerProps,
+  type ComposerActions,
+  type ComposerState,
+  type GatewayRpc,
+  type RpcOptions,
+  type TranscriptRow
+} from './interfaces.js'
 import { bindLiveAgentsRefresh, fetchLiveAgents } from './liveAgentsSync.js'
 import { $overlayState, getOverlayState, patchOverlayState } from './overlayStore.js'
 import { scrollWithSelectionBy } from './scroll.js'
@@ -125,6 +132,44 @@ const statusColorOf = (status: string, t: { error: string; muted: string; ok: st
  */
 export const modelSelectCommand = (model: string, providerSlug: string, pending: boolean | 'default'): string =>
   `/model ${model} --provider ${providerSlug}${pending === 'default' ? ' --default' : ''}`
+
+/** The composer props handed to the layout.
+ *
+ * Separate from the hook so the wiring can be pinned without mounting the
+ * app: the input's ``onChange`` must be ``updateInput`` (which detaches an
+ * edited history entry), and only this function says so.
+ */
+export const buildAppComposer = ({
+  cols,
+  composerActions,
+  composerState,
+  empty,
+  pagerPageSize,
+  submit,
+  voiceRecordKey
+}: {
+  cols: number
+  composerActions: ComposerActions
+  composerState: ComposerState
+  empty: boolean
+  pagerPageSize: number
+  submit: (value: string) => void
+  voiceRecordKey: AppLayoutComposerProps['voiceRecordKey']
+}): AppLayoutComposerProps => ({
+  cols,
+  compIdx: composerState.compIdx,
+  completions: composerState.completions,
+  empty,
+  handleTextPaste: composerActions.handleTextPaste,
+  input: composerState.input,
+  inputBuf: composerState.inputBuf,
+  pagerPageSize,
+  queueEditIdx: composerState.queueEditIdx,
+  queuedDisplay: composerState.queuedDisplay,
+  submit,
+  updateInput: composerActions.updateInput,
+  voiceRecordKey
+})
 
 export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   const { exit } = useApp()
@@ -1246,21 +1291,7 @@ export function useMainApp(gw: GatewayClient, rpcClient?: ChatStreamRpcClient) {
   )
 
   const appComposer = useMemo(
-    () => ({
-      cols,
-      compIdx: composerState.compIdx,
-      completions: composerState.completions,
-      empty,
-      handleTextPaste: composerActions.handleTextPaste,
-      input: composerState.input,
-      inputBuf: composerState.inputBuf,
-      pagerPageSize,
-      queueEditIdx: composerState.queueEditIdx,
-      queuedDisplay: composerState.queuedDisplay,
-      submit,
-      updateInput: composerActions.setInput,
-      voiceRecordKey
-    }),
+    () => buildAppComposer({ cols, composerActions, composerState, empty, pagerPageSize, submit, voiceRecordKey }),
     [cols, composerActions, composerState, empty, pagerPageSize, submit, voiceRecordKey]
   )
 
