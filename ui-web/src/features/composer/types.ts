@@ -17,6 +17,14 @@ export interface Attachment {
   url: string | null
 }
 
+/* A message waiting for the turn under way to end. `moveOn` is the Task Group
+   it was sent about: the Move on bar it took as it left the field, which goes
+   out with this message and no other. */
+export interface QueuedMessage {
+  readonly text: string
+  readonly moveOn?: string
+}
+
 /* One palette command. `id` is the catalogue key both spellings render from,
    never a spelling itself. */
 export interface SlashCmd {

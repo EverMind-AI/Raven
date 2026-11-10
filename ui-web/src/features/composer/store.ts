@@ -17,7 +17,7 @@ import * as history from './history'
 import * as turn from './turn'
 import { previousUserTop } from './userjump'
 
-import type { Attachment, ComposerSource, SlashCmd, TemplateRow } from './types'
+import type { Attachment, ComposerSource, QueuedMessage, SlashCmd, TemplateRow } from './types'
 
 /* Plain external store, same shape as the other islands: the dock is driven
  * by callers that are not React. The turn machine advances the phase, the
@@ -35,7 +35,7 @@ export interface ComposerState {
   /* The open conversation's tray, mirrored for the views: what is staged
      belongs to `trays`, keyed like the text draft. */
   atts: Attachment[]
-  queue: string[]
+  queue: QueuedMessage[]
   /* The queue row being edited, by index, or null. The text itself stays in
      the uncontrolled input until it is committed, exactly as before: a store
      write per keystroke would repaint the row the reader is typing in. */
@@ -527,13 +527,13 @@ export function wheeled(up: boolean): void {
 
 /* ── the queue ────────────────────────────────────────────────────────── */
 
-export const queue = (): string[] => get().queue
+export const queue = (): QueuedMessage[] => get().queue
 
-export function queuePush(text: string): void {
-  set({ queue: [...get().queue, text], editing: null })
+export function queuePush(text: string, moveOn?: string): void {
+  set({ queue: [...get().queue, moveOn ? { text, moveOn } : { text }], editing: null })
 }
 
-export function queueShift(): string | undefined {
+export function queueShift(): QueuedMessage | undefined {
   if (!get().queue.length) return undefined
   const [first, ...rest] = get().queue
   set({ queue: rest, editing: null })
@@ -544,9 +544,9 @@ export function queueClear(): void {
   set({ queue: [], editing: null })
 }
 
-export const queueSnapshot = (): string[] => [...get().queue]
+export const queueSnapshot = (): QueuedMessage[] => [...get().queue]
 
-export function queueRestore(items: string[]): void {
+export function queueRestore(items: QueuedMessage[]): void {
   set({ queue: [...items], editing: null })
 }
 
@@ -560,7 +560,8 @@ export function editRow(i: number): void {
 
 export function commitRow(i: number, text: string): void {
   const next = [...get().queue]
-  if (text.trim()) next[i] = text.trim()
+  const row = next[i]
+  if (row && text.trim()) next[i] = { ...row, text: text.trim() }
   set({ queue: next, editing: null })
 }
 

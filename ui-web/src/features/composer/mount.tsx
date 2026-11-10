@@ -7,6 +7,7 @@ import './styles.css'
 import { open as openTemplates } from './templates'
 export * as turn from './turn'
 
+import type { QueuedMessage } from './types'
 import type { Root } from 'react-dom/client'
 
 /* The composer island's face: the roots over the dock's containers, the
@@ -92,12 +93,12 @@ export function drawQueue(): void {
   store.drawQueue()
 }
 
-export const queuePush = (text: string): void => store.queuePush(text)
+export const queuePush = (text: string, moveOn?: string): void => store.queuePush(text, moveOn)
 export const say = (text: string): void => store.say(text)
-export const queueShift = (): string | undefined => store.queueShift()
+export const queueShift = (): QueuedMessage | undefined => store.queueShift()
 export const queueClear = (): void => store.queueClear()
-export const queueSnapshot = (): string[] => store.queueSnapshot()
-export const queueRestore = (items: string[]): void => store.queueRestore(items)
+export const queueSnapshot = (): QueuedMessage[] => store.queueSnapshot()
+export const queueRestore = (items: QueuedMessage[]): void => store.queueRestore(items)
 export const parkDraft = (): void => store.parkDraft()
 export const loadDraft = (id: string | null): void => store.loadDraft(id)
 export const dropDraft = (id: string | null): void => store.dropDraft(id)

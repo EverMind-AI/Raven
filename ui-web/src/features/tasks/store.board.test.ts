@@ -290,9 +290,8 @@ describe('moving a group on', () => {
   it('is taken once, by the message about it, and is spent', () => {
     store.moveOn('s1', fix)
 
-    expect(store.moveOnPending('s2')).toBe(false)
     expect(store.takeMoveOn('s2')).toBeNull()
-    expect(store.moveOnPending('s1')).toBe(true)
+    expect(store.moveOnFor('s1')?.groupId).toBe('g_1')
     expect(store.takeMoveOn('s1')).toBe('g_1')
     expect(store.takeMoveOn('s1')).toBeNull()
 

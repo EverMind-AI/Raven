@@ -14,6 +14,7 @@ import { fakeGateway, loadPart, looseQuery } from '../../../scripts/module-harne
 import * as turn from '../../features/composer/turn'
 import { readMessage } from '../../lib/attachments'
 
+import type { QueuedMessage } from '../../features/composer/types'
 import type { Sources } from '../sources'
 
 type Runtime = typeof import('./runtime')
@@ -22,10 +23,13 @@ interface Row { id: string; title?: string }
 
 async function harness({
   reject = null as { code?: number; message?: string } | null, draft = false, current = 's1',
+  create = false, failSends = 0,
 } = {}) {
   const log: unknown[][] = []
-  const queue: string[] = []
+  const notes: Array<Record<string, unknown> | undefined> = []
+  const queue: QueuedMessage[] = []
   const asked: Array<[string, unknown]> = []
+  const delivered: string[] = []
   const rows: Row[] = [{ id: 's1' }]
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   await loadPart(async () => {
@@ -38,8 +42,10 @@ async function harness({
       'src/state/session/conversation': {
         ask: (text: string) => log.push(['ask', text]),
         unask: (id: number) => log.push(['unask', id]),
-        noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) =>
-          log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null]),
+        noteRow: (labelText: string, detail: string, opts?: Record<string, unknown>) => {
+          log.push(['noteRow', labelText, detail, opts ? Object.keys(opts).sort() : null])
+          notes.push(opts)
+        },
         pitch: () => {},
         /* The real reader, which is what the production stub delegates to: a
            message's note is where the send recovers its files from. */
@@ -60,8 +66,8 @@ async function harness({
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => { queue.length = 0 },
-        queuePush: (text: string) => { queue.push(text) },
-        queueRestore: (next: string[]) => { queue.length = 0; queue.push(...next) },
+        queuePush: (text: string, moveOn?: string) => { queue.push(moveOn ? { text, moveOn } : { text }) },
+        queueRestore: (next: QueuedMessage[]) => { queue.length = 0; queue.push(...next) },
         queueShift: () => queue.shift(),
         queueSnapshot: () => [...queue],
         turn,
@@ -98,12 +104,22 @@ async function harness({
   })
   const runtime = (await import('./runtime')) as Runtime
   const registry = await import('./registry')
+  const pipeline = await import('./pipeline')
+  let turnSends = 0
   await fakeGateway((method: string, params: unknown) => {
     asked.push([method, params])
-    if (method === 'turn.send' && reject) return Promise.reject(Object.assign(new Error(reject.message || 'no'), reject))
+    if (method === 'turn.send') {
+      turnSends += 1
+      const refusal = reject || (turnSends <= failSends ? { code: -32602, message: 'unknown field: busy' } : null)
+      if (refusal) return Promise.reject(Object.assign(new Error(refusal.message || 'no'), refusal))
+      delivered.push(String((params as Record<string, unknown>).content))
+    }
     /* The promotion hangs here, which is the window under test: the draft is
-       becoming a conversation and there is no session key yet. */
-    if (method === 'session.create') return new Promise<Record<string, unknown>>(() => {})
+       becoming a conversation and there is no session key yet. A case that
+       needs the promotion to finish asks for `create`. */
+    if (method === 'session.create') {
+      return create ? { session_id: 's1', info: { cwd: '/w' } } : new Promise<Record<string, unknown>>(() => {})
+    }
     return Promise.resolve({})
   })
   const { setSources } = await import('../sources')
@@ -115,9 +131,12 @@ async function harness({
     runtime,
     registry,
     log,
+    notes,
     queue,
     asked,
+    dispatch: pipeline.dispatch,
     sends: () => asked.filter(([m]) => m === 'turn.send').map(([, p]) => p as Record<string, unknown>),
+    delivered: () => [...delivered],
     did: (name: string) => log.filter((c) => c[0] === name),
     tick: () => new Promise((r) => setTimeout(r, 0)),
   }
@@ -173,15 +192,16 @@ describe('a message typed while the turn is running', () => {
 
   it('falls back to the queue when a gateway does not know the field', async () => {
     /* -32602: an older gateway. The message must not vanish, so it lands where
-       a mid-turn message has always landed, with the retry row beside it. */
+       a mid-turn message has always landed, with the note that says it waits
+       in the queue. */
     const h = await harness({ reject: { code: -32602, message: 'unknown field: busy' } })
     turn.dispatch({ type: 'stream', cancellable: true })
 
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
-    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'unknown field: busy', ['retry']]])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'unknown field: busy', null]])
     expect(turn.phase()).toBe('streaming')
   })
 
@@ -195,7 +215,7 @@ describe('a message typed while the turn is running', () => {
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toHaveLength(1)
   })
 
@@ -206,8 +226,80 @@ describe('a message typed while the turn is running', () => {
     h.runtime.send('only the last quarter')
     await h.tick()
 
-    expect(h.queue).toEqual(['only the last quarter'])
-    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'gui.err.disconnected', ['retry']]])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    /* A dropped socket can take the turn with it, so this note promises the
+       message, not the end of a turn the page can no longer see. */
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued_offline', '', null]])
+  })
+})
+
+/* The queue is the whole recovery for a message the running turn refused: it
+   goes out when the turn ends. A retry beside it sent the same text a second
+   time, on top of the copy already waiting -- the two paths did not know about
+   each other -- so the note now says where the message went and offers nothing
+   to press. */
+describe('a mid-turn send the gateway refused', () => {
+  it('leaves the text in the queue with no retry to send it again', async () => {
+    const h = await harness({ reject: { code: -32602, message: 'unknown field: busy' } })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    expect(h.notes).toHaveLength(1)
+    expect(h.notes[0]?.retry).toBeUndefined()
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'unknown field: busy', null]])
+  })
+
+  it('delivers the text once when the turn ends', async () => {
+    const h = await harness({ failSends: 1 })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    /* The queue is the only copy: there is no second send to make. */
+    expect(h.notes[0]?.retry).toBeUndefined()
+
+    turn.dispatch({ type: 'idle' })
+    h.runtime.drain()
+    await h.tick()
+
+    expect(h.delivered()).toEqual(['only the last quarter'])
+  })
+})
+
+/* The refusal can land after the turn it was aimed at has folded: the send saw
+   a turn, the completion was handled first, and the catch queues into an idle
+   engine. The queue holds the only copy, so the engine has to pick it up rather
+   than wait for a next turn that may never come. */
+describe('a refusal that lands after its turn ended', () => {
+  it('sends the queued text once, not twice', async () => {
+    const h = await harness({ failSends: 1 })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    /* No await: the rejection is still in flight when the turn folds. */
+    h.runtime.send('only the last quarter')
+    h.runtime.finishTurn({})
+    await h.tick()
+
+    /* The race, as it stands: the queue holds the message, the engine is idle,
+       and nothing has sent it. */
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    expect(turn.phase()).toBe('idle')
+    expect(h.delivered()).toEqual([])
+
+    /* The fallback drain lets the engine pick it up once the server has
+       unwound the turn that ended. */
+    await new Promise((r) => setTimeout(r, 450))
+    expect(h.delivered()).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([])
+
+    /* A later turn end has nothing left to release. */
+    h.runtime.finishTurn({})
+    await h.tick()
+    expect(h.delivered()).toEqual(['only the last quarter'])
   })
 })
 
@@ -225,7 +317,7 @@ describe('a message typed while a brand-new conversation is being made', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
     expect(h.did('noteRow')).toEqual([])
   })
 
@@ -243,7 +335,7 @@ describe('a message typed while a brand-new conversation is being made', () => {
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['only the last quarter'])
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
   })
 })
 
@@ -324,7 +416,7 @@ describe('an imported conversation', () => {
 describe('a message that moves a task on', () => {
   it('goes at once, carrying the group it moves on', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ pending: (key) => key === 's1', take: (key) => (key === 's1' ? 'g_1' : null) })
+    h.runtime.lendBeforeSend({ take: (key) => (key === 's1' ? 'g_1' : null) })
 
     h.runtime.send('the next step')
 
@@ -334,14 +426,189 @@ describe('a message that moves a task on', () => {
 
   it('waits for a turn of its own instead of joining the one running', async () => {
     const h = await harness()
-    h.runtime.lendBeforeSend({ pending: () => true, take: () => 'g_1' })
+    h.runtime.lendBeforeSend({ take: () => 'g_1' })
     turn.dispatch({ type: 'stream', cancellable: true })
 
     h.runtime.send('the next step')
     await h.tick()
 
     expect(h.sends()).toEqual([])
-    expect(h.queue).toEqual(['the next step'])
+    expect(h.queue).toEqual([{ text: 'the next step', moveOn: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+})
+
+/* The same, with the Task Board's own bar lent as it is at boot. The bar goes
+   with its message (the Task Board spec, 5.1.1), so a message that waits for a
+   turn of its own waits with its group: the bar is gone the moment it is sent,
+   the next message is free to join the turn that is running, and the queue
+   lets each message go with the group it was sent with. */
+describe('a message that moves a group on, sent while a turn runs', () => {
+  async function busyWithBar() {
+    const h = await harness()
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+    turn.dispatch({ type: 'stream', cancellable: true })
+    return { h, tasks }
+  }
+  const group = (id: string) => ({ id, title: `Matter ${id}`, summary: '' })
+
+  it('takes the bar into the queue with it', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+
+    h.runtime.send('about a')
+    await h.tick()
+
+    expect(h.sends()).toEqual([])
+    expect(tasks.moveOnFor('s1')).toBeNull()
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('leaves the next message free to join the turn that is running', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+    h.runtime.send('about a')
+
+    h.runtime.send('and one thing more')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'and one thing more', busy: 'inject' }])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  /* Released both ways the queue is: by the turn finishing, then by a stop. */
+  it('leaves the queue with the group it was sent with, not the one held last', async () => {
+    const { h, tasks } = await busyWithBar()
+    tasks.moveOn('s1', group('g_a'))
+    h.runtime.send('about a')
+    tasks.moveOn('s1', group('g_b'))
+    h.runtime.send('about b')
+
+    h.runtime.finishTurn({})
+    await h.tick()
+    turn.dispatch({ type: 'idle' })
+    h.runtime.drain()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'about b', move_on: 'g_b' },
+    ])
+    h.runtime.lendBeforeSend(null)
+  })
+})
+
+/* The draft's first message mints the conversation it goes to, and it leaves
+   through a branch of its own. A group taken as the message left the field has
+   to travel through that branch too: the bar is gone by then, so a send that
+   does not carry it loses the move-on without a trace. */
+describe('a message that moves a group on, sent before the conversation exists', () => {
+  it('carries the group through the branch that mints the conversation', async () => {
+    const h = await harness({ draft: true, create: true })
+    h.runtime.lendBeforeSend({ take: () => 'g_1' })
+
+    h.runtime.send('the next step')
+    await h.tick()
+
+    expect(h.sends()).toEqual([{ session_key: 's1', content: 'the next step', move_on: 'g_1' }])
+    h.runtime.lendBeforeSend(null)
+  })
+})
+
+const groupOf = (id: string) => ({ id, title: `Matter ${id}`, summary: '' })
+
+/* A retry re-sends the message that failed, with the group it first went out
+   with. It must never take the bar again: by the time the reader presses
+   Retry, the Move on above the composer may belong to another message, and
+   sending this one with that group is the very mix-up the queue fix removes. */
+describe('a retry after a send the gateway refused', () => {
+  it('keeps the group the message was sent with, not one picked after the failure', async () => {
+    const h = await harness({ reject: { code: -32003, message: 'refused' } })
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+    tasks.moveOn('s1', groupOf('g_a'))
+
+    h.runtime.send('about a')
+    await h.tick()
+    const retry = h.notes[0]!.retry as () => void
+
+    tasks.moveOn('s1', groupOf('g_b'))
+    retry()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+    ])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('sends no group when the message that failed had none', async () => {
+    const h = await harness({ reject: { code: -32003, message: 'refused' } })
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+
+    h.runtime.send('about nothing')
+    await h.tick()
+    const retry = h.notes[0]!.retry as () => void
+
+    tasks.moveOn('s1', groupOf('g_b'))
+    retry()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about nothing' },
+      { session_key: 's1', content: 'about nothing' },
+    ])
+    h.runtime.lendBeforeSend(null)
+  })
+})
+
+/* The same retry, offered by the turn the message opened when that turn dies
+   as it runs. Its message keeps its own group here too, rather than whatever
+   bar the reader picked since. */
+describe('a retry after a turn that failed', () => {
+  it('keeps the group that message was sent with, not one picked after the failure', async () => {
+    const h = await harness()
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+    tasks.moveOn('s1', groupOf('g_a'))
+
+    h.runtime.send('about a')
+    await h.tick()
+
+    tasks.moveOn('s1', groupOf('g_b'))
+    h.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal' } })
+    const retry = h.notes[0]!.retry as () => void
+    retry()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+      { session_key: 's1', content: 'about a', move_on: 'g_a' },
+    ])
+    h.runtime.lendBeforeSend(null)
+  })
+
+  it('sends no group when the message that opened the turn had none', async () => {
+    const h = await harness()
+    const tasks = await import('../../features/tasks/store')
+    h.runtime.lendBeforeSend({ take: tasks.takeMoveOn })
+
+    h.runtime.send('about nothing')
+    await h.tick()
+
+    tasks.moveOn('s1', groupOf('g_b'))
+    h.dispatch({ type: 'error', payload: { message: 'turn_failed', reason: 'internal' } })
+    const retry = h.notes[0]!.retry as () => void
+    retry()
+    await h.tick()
+
+    expect(h.sends()).toEqual([
+      { session_key: 's1', content: 'about nothing' },
+      { session_key: 's1', content: 'about nothing' },
+    ])
     h.runtime.lendBeforeSend(null)
   })
 })

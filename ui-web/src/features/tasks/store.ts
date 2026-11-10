@@ -217,15 +217,14 @@ export function moveOnFor(sessionKey: string | null): MoveOn | null {
   return held && held.sessionKey === sessionKey ? held : null
 }
 
-export const moveOnPending = (sessionKey: string | null): boolean => moveOnFor(sessionKey) !== null
-
 export function clearMoveOn(): void {
   if (store.get().moveOn) patch({ moveOn: null })
 }
 
 /* Lent to the send (src/app/install.ts): the message about the group is going
-   and carries it, so the bar is put away. The server notes it as the turn the
-   message opens is submitted; one that cannot costs the note, never the message. */
+   -- out at once, or into the queue behind a running turn -- and carries it, so
+   the bar is put away. The server notes it as the turn the message opens is
+   submitted; one that cannot costs the note, never the message. */
 export function takeMoveOn(sessionKey: string | null): string | null {
   const held = moveOnFor(sessionKey)
   if (!held) return null

@@ -499,6 +499,37 @@ describe('the bar under the field', () => {
   })
 })
 
+/* A queued message is one line of the card, cut short with an ellipsis, its
+ * edit and remove at the end of it. The rows are a grid's items, and a grid
+ * item is as wide as its text until it is told it may be less: a long message
+ * would take its row past the card's edge, and the two buttons with it, out of
+ * reach. As above, this reads the mechanism; only a browser shows the row.
+ */
+describe('a queued message', () => {
+  let sheet: HTMLStyleElement | null = null
+
+  afterEach(() => {
+    sheet?.remove()
+    sheet = null
+  })
+
+  it('gives its row to the card and ends its text in an ellipsis', () => {
+    render()
+    act(() => {
+      store.queuePush('a message long enough to want the whole row, and more than the row has')
+      composer.drawQueue()
+    })
+    sheet = document.createElement('style')
+    sheet.textContent = readFileSync('src/styles/page.css', 'utf8') as string
+    document.head.append(sheet)
+
+    const row = document.querySelector('#queued .qrow') as HTMLElement
+    expect(getComputedStyle(row).minWidth).toMatch(/^0(px)?$/)
+    const text = getComputedStyle(row.querySelector('.v') as Element)
+    expect([text.overflow, text.textOverflow, text.whiteSpace]).toEqual(['hidden', 'ellipsis', 'nowrap'])
+  })
+})
+
 /* The three popovers off the bar, and the one thing about them a golden of
  * the band cannot see: where each stands.
  *

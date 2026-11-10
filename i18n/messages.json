@@ -2157,6 +2157,14 @@
       "en": "The connection dropped; it will retry once reconnected.",
       "zh": "连接已断开，等待重连后重试。"
     },
+    "gui.err.queued": {
+      "en": "Kept in the queue; it will be sent",
+      "zh": "已放入队列，稍后会发送"
+    },
+    "gui.err.queued_offline": {
+      "en": "The connection dropped; the message is queued and will be sent",
+      "zh": "连接已断开，消息已放入队列，稍后会发送"
+    },
     "gui.err.send": {
       "en": "Send failed",
       "zh": "发送失败"

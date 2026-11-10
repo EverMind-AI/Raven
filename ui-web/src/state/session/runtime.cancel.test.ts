@@ -68,10 +68,12 @@ async function harness({ turnKept = true, rows = [{ id: 's1' }] as Row[] } = {})
         loadDraft: () => {},
         parkDraft: () => {},
         queueClear: () => { queue.length = 0 },
+        /* The texts waiting, handed over as the composer's queued messages: a
+           stop is about which frame releases the queue, never what it carries. */
         queuePush: (text: string) => { queue.push(text) },
-        queueRestore: (next: string[]) => { queue.length = 0; queue.push(...next) },
-        queueShift: () => queue.shift(),
-        queueSnapshot: () => [...queue],
+        queueRestore: (next: Array<{ text: string }>) => { queue.length = 0; queue.push(...next.map((q) => q.text)) },
+        queueShift: () => { const text = queue.shift(); return text === undefined ? undefined : { text } },
+        queueSnapshot: () => queue.map((text) => ({ text })),
         /* The island's own phase machine: what `cancellable` and `busy` mean is
            its answer, and the decisions under test read them. */
         turn,

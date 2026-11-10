@@ -52,12 +52,14 @@ const laneHost = (): HTMLElement | null => {
 export function park(): void {
   const rt = viewRuntime()
   release()
+  /* The queue is the reader's typing, not turn state: it travels with the
+     conversation whether or not a turn is running. */
+  rt.queue = queueSnapshot()
   if (!turn.busy()) return
   stopStream()
   const s = sess(rt.key)
   if (s) s.status = 'run'
   rt.phase = turn.snapshot()
-  rt.queue = queueSnapshot()
   /* The live clock's anchor. It is the composer island's own state, and the
      away conversation's idle turn-live paint zeroes it -- without carrying it
      here, a turn ten minutes in read "2s" after a round trip through another

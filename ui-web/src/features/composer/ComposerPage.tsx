@@ -80,7 +80,7 @@ export function QueueList(): ReactElement {
   const editing = store.get().editing
   return (
     <>
-      {store.queue().map((text, i) => (
+      {store.queue().map(({ text }, i) => (
         <div className="qrow" key={i}>
           {editing === i ? <QueueEdit text={text} i={i} /> : <span className="v">{text}</span>}
           <IcBtn label={t('gui.q.edit')} path={PEN} onClick={() => store.editRow(i)} />
