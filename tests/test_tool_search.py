@@ -323,10 +323,11 @@ async def test_tool_call_rejects_unparseable_arguments() -> None:
         ({"skill_id": "local/guide"}, {"skill_id": "local/guide"}),
         ('{"skill_id": "local/guide"}', {"skill_id": "local/guide"}),
         ("not json {", {}),
+        ("[" * 10_000, {}),
         ('["local/guide"]', {}),
         (None, {}),
     ],
-    ids=["object", "json-string", "invalid", "non-object", "absent"],
+    ids=["object", "json-string", "invalid", "deeply-nested", "non-object", "absent"],
 )
 def test_forwarded_params_reads_the_arguments_the_call_accepts(arguments, expected) -> None:
     """The hook promises what the target saw; ``call`` accepts a JSON string,

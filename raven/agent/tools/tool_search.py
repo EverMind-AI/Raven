@@ -103,7 +103,7 @@ def _forwarded_arguments(raw: Any) -> dict[str, Any] | None:
         return None
     try:
         parsed = json.loads(raw)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     return parsed if isinstance(parsed, dict) else None
 

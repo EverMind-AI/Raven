@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from raven.agent.task_board.board import Dispatch
 from raven.agent.task_board.dispatches import dag_run_id_of, delegated_handle, spawn_task_id_of, turn_dispatches
 
@@ -142,6 +144,18 @@ def test_a_forwarded_dispatch_whose_inner_arguments_are_a_json_string_counts():
         Dispatch("spawn:write_notes", "Notes"),
         Dispatch(f"dag:{RUN}", "Review fixes"),
     ]
+
+
+@pytest.mark.parametrize("name", ["message", "spawn"])
+def test_a_rejected_deeply_nested_forward_does_not_hide_other_dispatches(name):
+    turn = [
+        _call("bad", "tool_call", {"name": name, "arguments": "[" * 10_000}),
+        _result("bad", "tool_call", "Error: arguments are nested too deeply to read as JSON"),
+        _call("good", "spawn", {"node_id": "write_notes", "task_summary": "Notes"}),
+        _result("good", "spawn", "Subagent [Notes] started (id: 0000beef)."),
+    ]
+
+    assert turn_dispatches(turn) == [Dispatch("spawn:write_notes", "Notes")]
 
 
 def test_a_delegated_result_names_the_run_it_brings_back():

@@ -444,6 +444,27 @@ async def test_a_turn_the_message_tool_answered_keeps_the_board_though_it_ends_o
     assert "- Which fix should I apply?" in _text(provider.requests[2]["messages"][-1])
 
 
+async def test_a_rejected_deeply_nested_forward_does_not_fail_the_turn(tmp_path):
+    rejected = LLMResponse(
+        content="",
+        tool_calls=[
+            ToolCallRequest(id="bad", name="tool_call", arguments={"name": "message", "arguments": "[" * 10_000})
+        ],
+    )
+    provider = Recording([rejected, LLMResponse(content=ANSWER), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+
+    result = await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    assert result is not None and ANSWER in str(result)
+    receipt = next(row for row in provider.requests[1]["messages"] if row.get("tool_call_id") == "bad")
+    assert "Error: Invalid parameters for tool 'tool_call':" in _text(receipt)
+    assert "nested too deeply to read as JSON" in _text(receipt)
+    assert [r["purpose"] for r in provider.requests] == ["main", "main", "task_board"]
+    assert load_board(agent.sessions.session_dir(KEY)).groups[0].steps[0].questions == ["Which fix should I apply?"]
+
+
 async def test_a_silent_turn_makes_no_board_call(tmp_path):
     """The host answered with its silence marker and started nothing: no step can
     say what moved, so the post-turn call is not made at all."""

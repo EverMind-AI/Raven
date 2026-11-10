@@ -55,7 +55,7 @@ def _object(raw: Any) -> dict[str, Any]:
         return dict(raw)
     try:
         parsed = json.loads(raw or "{}")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
