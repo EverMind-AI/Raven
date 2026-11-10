@@ -99,7 +99,8 @@ def _texts_tokens(texts: tuple[str, ...]) -> int:
 
 
 def _is_skill_result(message: dict[str, Any]) -> bool:
-    return message.get("role") == "tool" and message.get("name") in SKILL_TOOLS
+    name = message.get("name")
+    return message.get("role") == "tool" and isinstance(name, str) and name in SKILL_TOOLS
 
 
 def _cut(message: dict[str, Any], cut: tuple[str, ...]) -> dict[str, Any]:

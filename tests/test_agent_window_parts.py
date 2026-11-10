@@ -222,3 +222,15 @@ def test_a_tool_result_that_is_not_a_skill_stays_conversation() -> None:
     ]
 
     assert measure_parts(messages)[SKILLS] == 0
+
+
+@pytest.mark.parametrize("name", [["read_skill"], {"tool": "read_skill"}, 3], ids=["list", "dict", "int"])
+def test_a_tool_message_whose_name_cannot_be_read_is_not_skill_bytes(name) -> None:
+    """A replay hands recorded shapes back through this split, so a ``name`` that
+    is not a string is no skill result -- and never an exception after a turn
+    has already answered."""
+    parts = measure_parts([{"role": "tool", "tool_call_id": "c1", "name": name, "content": "x"}])
+
+    assert parts[SKILLS] == 0
+
+
