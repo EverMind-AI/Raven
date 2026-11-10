@@ -120,6 +120,30 @@ def test_a_dispatch_forwarded_through_tool_call_counts():
     assert turn_dispatches(turn) == [Dispatch(f"dag:{RUN}", "Review fixes"), Dispatch("spawn:write_notes", "Notes")]
 
 
+def test_a_forwarded_dispatch_whose_inner_arguments_are_a_json_string_counts():
+    """The forwarder parses a JSON string before dispatch, so the call runs and its receipt
+    is real; the reader has to parse the same shape or the dispatch is silently dropped."""
+    turn = [
+        _call(
+            "c1",
+            "tool_call",
+            {"name": "spawn", "arguments": json.dumps({"node_id": "write_notes", "task_summary": "Notes"})},
+        ),
+        _result("c1", "tool_call", "Subagent [Notes] started (id: 0000beef)."),
+        _call(
+            "c2",
+            "tool_call",
+            {"name": "run_subagent_dag", "arguments": json.dumps({"task_summary": "Review fixes"})},
+        ),
+        _result("c2", "tool_call", f"DAG run {RUN} started in the background (3 nodes)."),
+    ]
+
+    assert turn_dispatches(turn) == [
+        Dispatch("spawn:write_notes", "Notes"),
+        Dispatch(f"dag:{RUN}", "Review fixes"),
+    ]
+
+
 def test_a_delegated_result_names_the_run_it_brings_back():
     """The handle the turn that dispatched the run placed: a graph is placed whole, so a
     node's report names its run."""
