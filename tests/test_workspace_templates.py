@@ -186,6 +186,51 @@ def test_soul_local_is_applied_once(tmp_path: Path) -> None:
     assert soul.read_text(encoding="utf-8") == first
 
 
+def test_a_changed_soul_local_replaces_the_old_block(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    local = soul.parent / "soul.local.md"
+    local.write_text("## Mine\n\n- old rule\n", encoding="utf-8")
+    sync_workspace_templates(tmp_path, silent=True)
+    local.write_text("## Mine\n\n- new rule\n", encoding="utf-8")
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    text = soul.read_text(encoding="utf-8")
+    assert "old rule" not in text
+    assert "- new rule" in text
+    assert text.count("## Mine") == 1
+
+
+def test_a_removed_soul_local_withdraws_the_block(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    local = soul.parent / "soul.local.md"
+    local.write_text("## Mine\n\n- old rule\n", encoding="utf-8")
+    sync_workspace_templates(tmp_path, silent=True)
+    local.unlink()
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    assert "old rule" not in soul.read_text(encoding="utf-8")
+
+
+def test_the_applied_addendum_is_recorded(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    local = soul.parent / "soul.local.md"
+    record = soul.with_name(".soul.md.addendum")
+    local.write_text("## Mine\n\n- old rule\n", encoding="utf-8")
+    sync_workspace_templates(tmp_path, silent=True)
+    assert "- old rule" in record.read_text(encoding="utf-8")
+    local.write_text("## Mine\n\n- new rule\n", encoding="utf-8")
+    sync_workspace_templates(tmp_path, silent=True)
+    assert "- new rule" in record.read_text(encoding="utf-8")
+    local.unlink()
+    sync_workspace_templates(tmp_path, silent=True)
+    assert not record.exists()
+
+
 def test_a_non_utf8_local_file_does_not_stop_the_sync(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)

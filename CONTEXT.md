@@ -4203,7 +4203,8 @@ every other change follows the new release. A copy that no
 shipped template or base record attributes to the product is left alone and named. The
 historical texts under `templates/legacy/` give the first merge a base, so a release that
 changes `SOUL.md` copies the outgoing text there. The operator's own lines may also live in
-`soul.local.md` beside it, appended after the product text. The set is `SOUL.md` (agent persona), `AGENTS.md`
+`soul.local.md` beside it; the sync records the block it appended and withdraws that block on the
+next sync, so editing or deleting `soul.local.md` takes effect. The set is `SOUL.md` (agent persona), `AGENTS.md`
 (agent operating instructions), `USER.md` (user profile), `HEARTBEAT.md` (periodic-task
 list read by the heartbeat Scheduler), `TOOLS.md` (tool-usage notes), `memory/MEMORY.md`
 (legacy memory seed). On the L4 layout these map under `agent_memory/profile/` (soul.md,

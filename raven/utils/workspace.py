@@ -7,8 +7,9 @@ The sync keeps the product text it last wrote beside the file
 product's changes into the user's copy. A product change that conflicts with a
 user edit keeps that section as the user has it and is named in the notice;
 every other change follows the new release. The operator's own lines may also
-live in ``soul.local.md``, which is appended after the product text and never
-rewritten.
+live in ``soul.local.md``; the sync records the block it appended, withdraws
+that block on the next sync, and appends the file's current contents, so edits
+and removal take effect.
 """
 
 import hashlib
@@ -32,6 +33,7 @@ logger.disable(__name__)
 
 _SOUL = "soul.md"
 _SOUL_BASE = ".soul.md.template"
+_SOUL_ADDENDUM = ".soul.md.addendum"
 _SOUL_LOCAL = "soul.local.md"
 
 
@@ -153,6 +155,39 @@ def _with_addendum(text: str, addendum: str | None) -> str:
     if not block or block in text:
         return text
     return text.rstrip("\n") + "\n\n" + block + "\n"
+
+
+def _strip_block(text: str, block: str | None) -> str:
+    """Remove one managed addendum block from the file's tail, if it is there."""
+    if not block:
+        return text
+    block = block.strip("\n")
+    if not block:
+        return text
+    for suffix in (f"\n\n{block}\n", f"\n\n{block}"):
+        if text.endswith(suffix):
+            return text[: -len(suffix)] + "\n"
+    return text
+
+
+def _read_optional(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _write_addendum_record(target: Path, addendum: str | None) -> None:
+    """Record the block appended this sync, so the next one can withdraw it."""
+    record = target.with_name(_SOUL_ADDENDUM)
+    block = (addendum or "").strip("\n")
+    if not block:
+        record.unlink(missing_ok=True)
+        return
+    wanted = block + "\n"
+    if _read_optional(record) == wanted:
+        return
+    atomic_replace(record, wanted, newline="")
 
 
 def _soul_templates(tpl) -> dict[str, str]:
@@ -295,13 +330,19 @@ def sync_workspace_templates(
         if current is None:
             atomic_replace(target, _with_addendum(template, addendum), newline="")
             _write_base(target, template)
+            _write_addendum_record(target, addendum)
             added.append(str(target.relative_to(workspace)))
             return
         wanted = _with_addendum(template, addendum)
         if current.replace("\r\n", "\n") == wanted:
             _write_base(target, template)
+            _write_addendum_record(target, addendum)
             return
-        base = _soul_base(target, current, _soul_templates(tpl))
+        previous = _read_optional(target.with_name(_SOUL_ADDENDUM))
+        body = _strip_block(current, previous)
+        if body == current and addendum:
+            body = _strip_block(current, addendum)
+        base = _soul_base(target, body, _soul_templates(tpl))
         if base is None:
             if say is not None:
                 say(
@@ -309,7 +350,7 @@ def sync_workspace_templates(
                     f"If you edited a Raven prompt, move those lines into {local} and delete it."
                 )
             return
-        merged, conflicts = _merge_soul(base, current, template)
+        merged, conflicts = _merge_soul(base, body, template)
         merged = _with_addendum(merged, addendum)
         if merged != current:
             backup = _back_up(target)
@@ -320,6 +361,7 @@ def sync_workspace_templates(
             if say is not None and current != base:
                 say(f"{target} was edited; backed up to {backup}. Your lines stay in place.")
         _write_base(target, template)
+        _write_addendum_record(target, addendum)
         if conflicts and say is not None:
             say(
                 f"{target} kept your edits where the new voice changed the same lines; not updated: {', '.join(conflicts)}"
