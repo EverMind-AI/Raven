@@ -88,16 +88,21 @@ describe('input history store (backs cycleHistory)', () => {
 
   it('loads a CRLF file with the same entries an LF one yields', async () => {
     const crlfDir = mkdtempSync(join(tmpdir(), 'raven-hist-crlf-'))
+    const suiteHome = process.env.RAVEN_HOME
 
     vi.stubEnv('RAVEN_HOME', crlfDir)
-    writeFileSync(
-      join(crlfDir, '.raven_history'),
-      '# 2026-11-09 00:00:00\r\n+first command\r\n# 2026-11-09 00:00:01\r\n+second command\r\n# 2026-11-09 00:00:02\r\n+line a\r\n+line b\r\n'
-    )
+    try {
+      writeFileSync(
+        join(crlfDir, '.raven_history'),
+        '# 2026-11-09 00:00:00\r\n+first command\r\n# 2026-11-09 00:00:01\r\n+second command\r\n# 2026-11-09 00:00:02\r\n+line a\r\n+line b\r\n'
+      )
 
-    vi.resetModules()
-    const reloaded: HistoryModule = await import('../lib/history.js')
+      vi.resetModules()
+      const reloaded: HistoryModule = await import('../lib/history.js')
 
-    expect(reloaded.load()).toEqual(['first command', 'second command', 'line a\nline b'])
+      expect(reloaded.load()).toEqual(['first command', 'second command', 'line a\nline b'])
+    } finally {
+      vi.stubEnv('RAVEN_HOME', suiteHome)
+    }
   })
 })

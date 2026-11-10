@@ -60,11 +60,11 @@ def history_path() -> Path:
 
     The two agree when ``RAVEN_HOME`` is unset, blank or absolute, and when it
     is ``~`` or starts with ``~/``. ``~\\`` is the Windows spelling of ``~/``:
-    both sides expand it on Windows, and the TUI also expands it on other
-    platforms. Two forms still diverge: a relative value names a
-    directory under each process's own working directory, and ``~name`` is
-    expanded by ``raven_home()`` while the TUI keeps it literal -- so the two
-    can name different files.
+    both sides expand it on Windows, and only the TUI expands it on other
+    platforms (there ``raven_home()`` raises instead). Two forms still diverge:
+    a relative value names a directory under each process's own working
+    directory, and ``~name`` is expanded by ``raven_home()`` while the TUI
+    keeps it literal -- so the two can name different files.
     """
     return raven_home() / HISTORY_FILENAME
 
