@@ -13,6 +13,7 @@ and removal take effect.
 """
 
 import hashlib
+import stat
 import sys
 from collections.abc import Callable
 from difflib import SequenceMatcher
@@ -177,7 +178,7 @@ def _read_optional(path: Path) -> str | None:
         return None
 
 
-def _write_addendum_record(target: Path, addendum: str | None) -> None:
+def _write_addendum_record(target: Path, addendum: str | None, mode: int) -> None:
     """Record the block appended this sync, so the next one can withdraw it."""
     record = target.with_name(_SOUL_ADDENDUM)
     block = (addendum or "").strip("\n")
@@ -187,7 +188,7 @@ def _write_addendum_record(target: Path, addendum: str | None) -> None:
     wanted = block + "\n"
     if _read_optional(record) == wanted:
         return
-    atomic_replace(record, wanted, newline="")
+    atomic_replace(record, wanted, mode=mode, newline="")
 
 
 def _soul_templates(tpl) -> dict[str, str]:
@@ -322,6 +323,10 @@ def sync_workspace_templates(
             except UnicodeDecodeError:
                 if say is not None:
                     say(f"could not read {local}: it is not UTF-8 text; save it as UTF-8")
+        try:
+            addendum_mode = stat.S_IMODE(local.stat().st_mode)
+        except OSError:
+            addendum_mode = 0o600
         if target.exists():
             existed += 1
             current = target.read_text(encoding="utf-8", errors="replace")
@@ -330,13 +335,13 @@ def sync_workspace_templates(
         if current is None:
             atomic_replace(target, _with_addendum(template, addendum), newline="")
             _write_base(target, template)
-            _write_addendum_record(target, addendum)
+            _write_addendum_record(target, addendum, addendum_mode)
             added.append(str(target.relative_to(workspace)))
             return
         wanted = _with_addendum(template, addendum)
         if current.replace("\r\n", "\n") == wanted:
             _write_base(target, template)
-            _write_addendum_record(target, addendum)
+            _write_addendum_record(target, addendum, addendum_mode)
             return
         previous = _read_optional(target.with_name(_SOUL_ADDENDUM))
         body = _strip_block(current, previous)
@@ -361,7 +366,7 @@ def sync_workspace_templates(
             if say is not None and current != base:
                 say(f"{target} was edited; backed up to {backup}. Your lines stay in place.")
         _write_base(target, template)
-        _write_addendum_record(target, addendum)
+        _write_addendum_record(target, addendum, addendum_mode)
         if conflicts and say is not None:
             say(
                 f"{target} kept your edits where the new voice changed the same lines; not updated: {', '.join(conflicts)}"

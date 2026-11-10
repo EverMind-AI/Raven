@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import stat
 from importlib.resources import files
 from pathlib import Path
+
+import pytest
 
 from raven.utils.workspace import _merge_soul, sync_workspace_templates
 
@@ -229,6 +233,20 @@ def test_the_applied_addendum_is_recorded(tmp_path: Path) -> None:
     local.unlink()
     sync_workspace_templates(tmp_path, silent=True)
     assert not record.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits")
+def test_the_addendum_record_keeps_the_source_mode(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    local = soul.parent / "soul.local.md"
+    local.write_text("## Mine\n\n- private rule\n", encoding="utf-8")
+    os.chmod(local, 0o600)
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    record = soul.with_name(".soul.md.addendum")
+    assert stat.S_IMODE(record.stat().st_mode) & 0o077 == 0
 
 
 def test_a_non_utf8_local_file_does_not_stop_the_sync(tmp_path: Path) -> None:
