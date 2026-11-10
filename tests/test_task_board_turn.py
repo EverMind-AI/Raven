@@ -441,6 +441,7 @@ async def test_a_turn_the_message_tool_answered_keeps_the_board_though_it_ends_o
 
     assert sent == ["Which fix should I apply?"]
     assert [r["purpose"] for r in provider.requests] == ["main", "main", "task_board"]
+    assert "- Which fix should I apply?" in _text(provider.requests[2]["messages"][-1])
 
 
 async def test_a_silent_turn_makes_no_board_call(tmp_path):
