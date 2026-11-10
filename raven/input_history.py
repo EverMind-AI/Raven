@@ -63,14 +63,16 @@ def history_path() -> Path:
     both sides expand it on Windows, and only the TUI expands it on other
     platforms (there ``raven_home()`` raises instead). Two forms still diverge:
     a relative value names a directory under each process's own working
-    directory, and ``~name`` is expanded by ``raven_home()`` while the TUI
-    keeps it literal -- so the two can name different files.
+    directory, and ``~name`` is expanded by ``raven_home()`` when a user of
+    that name exists and raises otherwise, while the TUI keeps it literal --
+    so the two can name different files.
     """
     return raven_home() / HISTORY_FILENAME
 
 
 def parse(text: str) -> list[str]:
-    """The entries in ``text``, oldest first, exactly as the TUI's ``load()``.
+    """The entries in ``text``, oldest first, exactly as the TUI's ``load()``
+    for the LF text both writers emit.
 
     A run of ``+`` lines is one entry. Any other line ends the run; trailing
     and leading separators do not create empty entries. This function splits

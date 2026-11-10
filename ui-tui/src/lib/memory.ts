@@ -5,10 +5,11 @@
 
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { getHeapSnapshot, getHeapSpaceStatistics, getHeapStatistics } from 'node:v8'
+
+import { ravenHomeDir } from './ravenHome.js'
 
 export type MemoryTrigger = 'auto-critical' | 'auto-high' | 'manual'
 
@@ -145,12 +146,16 @@ export async function captureMemoryDiagnostics(trigger: MemoryTrigger): Promise<
   }
 }
 
+export function heapdumpDir(): string {
+  return process.env.RAVEN_HEAPDUMP_DIR?.trim() || join(ravenHomeDir(), 'heapdumps')
+}
+
 export async function performHeapDump(trigger: MemoryTrigger = 'manual'): Promise<HeapDumpResult> {
   try {
     // Diagnostics first — heap-snapshot serialization can crash on very large
     // heaps, and the JSON sidecar is the most actionable artifact if so.
     const diagnostics = await captureMemoryDiagnostics(trigger)
-    const dir = process.env.RAVEN_HEAPDUMP_DIR?.trim() || join(homedir() || tmpdir(), '.raven', 'heapdumps')
+    const dir = heapdumpDir()
 
     await mkdir(dir, { recursive: true })
 
