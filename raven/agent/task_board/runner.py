@@ -120,13 +120,41 @@ def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
 
 _FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
-_STRONG_STAR = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
-_STRONG_UNDER = re.compile(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)")
 _SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
 _QUESTION_RECORD_MARKER = re.compile(r"\[(?:BEGIN|END) QUESTION MARKS\]", re.IGNORECASE)
+
+
+def _without_strong(text: str, marker: str) -> str:
+    """Remove paired strong markers in one forward scan, keeping unpaired markers and identifier underscores."""
+    out: list[str] = []
+    opening: int | None = None
+    copied = position = 0
+    underscore = marker == "__"
+    while (position := text.find(marker, position)) >= 0:
+        end = position + len(marker)
+        if opening is None:
+            if (
+                end < len(text)
+                and not text[end].isspace()
+                and (not underscore or position == 0 or not (text[position - 1].isalnum() or text[position - 1] == "_"))
+            ):
+                opening = position
+                position = end + 1
+                continue
+        elif not text[position - 1].isspace() and (
+            not underscore or end == len(text) or not (text[end].isalnum() or text[end] == "_")
+        ):
+            out.extend((text[copied:opening], text[opening + len(marker) : position]))
+            copied = end
+            opening = None
+            position = end
+            continue
+        position += 1
+    out.append(text[copied:])
+    return "".join(out)
 
 
 def _without_emphasis(text: str) -> str:
@@ -136,7 +164,7 @@ def _without_emphasis(text: str) -> str:
     code = _INLINE_CODE.findall(text)
     out: list[str] = []
     for index, piece in enumerate(pieces):
-        out.append(_STRONG_UNDER.sub(r"\1", _STRONG_STAR.sub(r"\1", piece)))
+        out.append(_without_strong(_without_strong(piece, "**"), "__"))
         if index < len(code):
             out.append(code[index])
     return "".join(out)

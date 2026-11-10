@@ -536,6 +536,24 @@ def test_asked_removes_bold_markers_and_keeps_inline_code():
     assert asked("Should I **rename** `__init__`?") == ["Should I rename `__init__`?"]
 
 
+def test_asked_keeps_surplus_bold_markers_as_written():
+    assert asked("Should I ***ship***?") == ["Should I *ship*?"]
+    assert asked("Should I __ship__?") == ["Should I ship?"]
+    assert asked("Is **** right?") == ["Is **** right?"]
+    assert asked("Is ***** right?") == ["Is * right?"]
+
+
+@pytest.mark.parametrize("marker", ["**", "__"])
+def test_asked_reads_many_unclosed_bold_markers_in_one_pass(marker):
+    reply = f" {marker}a" * 8_000 + "?"
+
+    started = time.perf_counter()
+    found = asked(reply)
+
+    assert time.perf_counter() - started < 1.0
+    assert found == [reply.strip()]
+
+
 def test_asked_leaves_out_a_tilde_fence():
     reply = "Here:\n~~~\nIs this code right?\n~~~\nDone."
 
