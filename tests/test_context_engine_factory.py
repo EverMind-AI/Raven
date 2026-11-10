@@ -218,9 +218,14 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=None))
         assert BackendSkillSource not in types
 
-    def test_hub_source_omitted_when_endpoint_unset(self, tmp_path: Path) -> None:
-        types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint=None))
-        assert HubSkillSource not in types
+    def test_hub_source_mounted_whatever_the_config_names(self, tmp_path: Path) -> None:
+        """The source is part of the router from the start; the per-search
+        reader decides whether it may run, and the URL falls back to the
+        shared marketplace."""
+        types, sources = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint=None))
+        assert HubSkillSource in types
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._client._base == "https://skillhub.evermind.ai"
 
     def test_hub_source_present_when_endpoint_set(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))

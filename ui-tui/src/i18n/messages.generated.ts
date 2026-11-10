@@ -2682,8 +2682,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.skills.hub_title': 'Use 110k+ skills from EverMind Skill Hub',
     'gui.settings.skills.hub_sub':
       'While on, Raven sends text from your session to the Skill Hub when it looks for a skill.',
-    'gui.settings.skills.hub_sub_reload':
-      'While on, Raven sends text from your session to the Skill Hub when it looks for a skill. Search starts after Raven reloads.',
     'gui.settings.skills.builtin': 'Built-in',
     'gui.settings.skills.workspace': 'Workspace',
     'gui.settings.skills.on_of': '{on} of {total} on',
@@ -6185,8 +6183,6 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.skills.hub_card': 'Skill Hub',
     'gui.settings.skills.hub_title': '使用 EverMind Skill Hub 的 11 万+ 技能',
     'gui.settings.skills.hub_sub': '开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。',
-    'gui.settings.skills.hub_sub_reload':
-      '开启时，Raven 查找技能会把会话中的文字发送到 Skill Hub。Raven 重新加载后才会开始搜索。',
     'gui.settings.skills.builtin': '内置',
     'gui.settings.skills.workspace': '工作区',
     'gui.settings.skills.on_of': '开 {on} / {total}',

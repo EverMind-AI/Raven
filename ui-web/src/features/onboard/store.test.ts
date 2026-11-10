@@ -302,12 +302,14 @@ describe('the Hub opt-in', () => {
     expect(seed).toHaveBeenCalledTimes(1)
   })
 
-  it('shows the reload notice the server returns for a seeded endpoint', async () => {
-    await readyToFinish(async () => 'Saved. Skill Hub search starts after Raven reloads.')
+  it('shows the Skill Hub notice the server returns at the wizard finish', async () => {
+    const notice =
+      'Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.'
+    await readyToFinish(async () => notice)
 
     store.set({ step: store.visibleSteps().at(-1)! })
     await store.finish()
 
-    expect(toasts).toEqual(['Saved. Skill Hub search starts after Raven reloads.'])
+    expect(toasts).toEqual([notice])
   })
 })

@@ -52,7 +52,7 @@ describe('skills page', () => {
     ])
   })
 
-  it('the Skill Hub switch writes the enabled flag and starts off without an endpoint', async () => {
+  it('the Skill Hub switch writes the enabled flag', async () => {
     const { calls } = install()
     await mount('skills')
     const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
@@ -66,7 +66,7 @@ describe('skills page', () => {
        endpoint the server reads as off (a hand-written value the loader
        refuses), and below it names none while the loader nests a legacy router
        under skillForge and searches it. */
-    const off = snap({ skillHub: { on: false, awaitingReload: false } })
+    const off = snap({ skillHub: { on: false } })
     off.raw.skillForge = { blocklist: [], router: { hub: { endpoint: 'https://hub.internal.test', enabled: ' true ' } } }
     install(off)
     await mount('skills')
@@ -74,7 +74,7 @@ describe('skills page', () => {
     cleanup()
     store._resetForTests()
 
-    const on = snap({ skillHub: { on: true, awaitingReload: false } })
+    const on = snap({ skillHub: { on: true } })
     on.raw.skillRouter = { hub: { endpoint: 'https://hub.internal.test' } }
     const { calls } = install(on)
     await mount('skills')
@@ -86,22 +86,18 @@ describe('skills page', () => {
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
   })
 
-  it('the Skill Hub row says what it sends, and when the serving loop cannot search yet', async () => {
-    /* The switch reads on as soon as the endpoint is written, but a loop that
-       started without one holds no Hub client until a reload; a toast is gone
-       before the reader looks at the switch again. What the switch sends is
-       said either way, on or off: it is what the reader is deciding. */
-    install(snap({ skillHub: { on: true, awaitingReload: true } }))
+  it('the Skill Hub row says what it sends, on or off', async () => {
+    /* What the switch sends is what the reader is deciding, so the sentence
+       stays put whichever way the switch points. */
+    install(snap({ skillHub: { on: true } }))
     await mount('skills')
-    expect(screen.getByText('gui.settings.skills.hub_sub_reload')).toBeTruthy()
-    expect(screen.queryByText('gui.settings.skills.hub_sub')).toBeNull()
+    expect(screen.getByText('gui.settings.skills.hub_sub')).toBeTruthy()
     cleanup()
     store._resetForTests()
 
-    install(snap({ skillHub: { on: false, awaitingReload: false } }))
+    install(snap({ skillHub: { on: false } }))
     await mount('skills')
     expect(screen.getByText('gui.settings.skills.hub_sub')).toBeTruthy()
-    expect(screen.queryByText('gui.settings.skills.hub_sub_reload')).toBeNull()
   })
 
   /* The knob slides rather than jumping. A write that remounts the page
@@ -109,7 +105,7 @@ describe('skills page', () => {
      its new place -- so the knob's transition never got to run. A switch's
      write leaves the page standing. */
   it('keeps the switch on the page across its write, so the knob can slide', async () => {
-    install(snap({ skillHub: { on: true, awaitingReload: false } }))
+    install(snap({ skillHub: { on: true } }))
     await mount('skills')
     const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
     await act(async () => { fireEvent.click(hub) })

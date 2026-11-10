@@ -134,11 +134,14 @@ function pick(from: Record<string, Json>, key: string): Json | undefined {
   ), from)
 }
 
-/* The server's Skill Hub answer for the canvas's own store, which only ever
-   holds what the page wrote: an endpoint, and `enabled` as a boolean. */
+/* The server's Skill Hub answer for the canvas's own store: `enabled` with the
+   shared marketplace as the default, and a legacy falsy endpoint read as off. */
 const hubOn = (config: Record<string, Json>): boolean => {
-  const endpoint = pick(config, 'skillForge.router.hub.endpoint')
-  return typeof endpoint === 'string' && endpoint !== '' && pick(config, 'skillForge.router.hub.enabled') !== false
+  const hub = pick(config, 'skillForge.router.hub') ?? pick(config, 'skill_forge.router.hub')
+  if (!hub || typeof hub !== 'object') return true
+  const block = hub as Record<string, Json>
+  if ('endpoint' in block && !block.endpoint) return false
+  return block.enabled !== false
 }
 
 /* A ledger with nothing in it. The four `*_missing_calls` counts are part of
@@ -201,7 +204,6 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         config_path: '~/.raven/config.json',
         raven_version: '0.1.0',
         skill_hub_on: hubOn(config),
-        skill_hub_awaiting_reload: false,
       }),
       'settings.set': (p) => {
         put(config, p.key, p.value)

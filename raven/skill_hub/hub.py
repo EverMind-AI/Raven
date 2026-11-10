@@ -28,6 +28,7 @@ import httpx
 from loguru import logger
 
 from raven.config.loader import load_config
+from raven.config.raven import SKILL_HUB_ENDPOINT
 from raven.skill_hub.audit import INSTALL_META, write_install_meta
 from raven.skill_hub.client import ALLOWED_SUFFIXES, MAX_ZIP_ENTRY_BYTES, MAX_ZIP_TOTAL_BYTES
 
@@ -46,9 +47,6 @@ class SkillHubRequestError(SkillHubError):
 
 class SkillHubUnavailableError(SkillHubError):
     """Raven's own failure, or a hub that could not be reached (-32603 on the wire)."""
-
-
-DEFAULT_BASE_URL = "https://skillhub.evermind.ai"
 
 
 MARKER = ".skillhub.json"
@@ -87,7 +85,11 @@ def _base_url() -> str:
     from raven.security.urls import HubTrustError, hub_endpoint
 
     try:
-        return hub_endpoint(os.environ.get("RAVEN_SKILLHUB_URL"), DEFAULT_BASE_URL, what="RAVEN_SKILLHUB_URL")
+        return hub_endpoint(
+            os.environ.get("RAVEN_SKILLHUB_URL"),
+            SKILL_HUB_ENDPOINT,
+            what="RAVEN_SKILLHUB_URL",
+        )
     except HubTrustError as exc:
         raise SkillHubRequestError(str(exc)) from exc
 

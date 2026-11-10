@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import uuid
 import zipfile
 from pathlib import Path
@@ -31,6 +32,27 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 2.0
+
+
+def resolve_hub_endpoint(configured: str | None) -> str:
+    """The base URL for a Hub client: env override, else the configured URL,
+    else the shared marketplace.
+
+    A malformed override is ignored with a warning rather than taking the
+    source down with it -- the page path refuses it outright, but a loop that
+    cannot start is a worse answer than one that names why it fell back.
+    """
+    from raven.config.raven import SKILL_HUB_ENDPOINT
+    from raven.security.urls import HubTrustError, hub_endpoint
+
+    fallback = (configured or SKILL_HUB_ENDPOINT).rstrip("/")
+    try:
+        return hub_endpoint(os.environ.get("RAVEN_SKILLHUB_URL"), fallback, what="RAVEN_SKILLHUB_URL")
+    except HubTrustError as exc:
+        logger.warning("ignoring RAVEN_SKILLHUB_URL: %s", exc)
+        return fallback
+
+
 _MAX_QUERY_STRING_BYTES = 2048
 """Hard cap on the whole query string of a catalog search.
 

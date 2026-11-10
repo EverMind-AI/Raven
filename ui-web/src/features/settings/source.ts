@@ -43,7 +43,7 @@ import type { AuthField, ProviderOp, SettingsSnapshot, SettingsSource, SkillDeta
 let RAW: Record<string, unknown> = {}
 
 let configPathLive = '~/.raven/config.json'
-let skillHub = { on: false, awaitingReload: false }
+let skillHub = { on: false }
 let everosLive: ResultOf<'settings.everos'> | null = null
 let everosCloudLive: ResultOf<'settings.everosCloud'> | null = null
 let cloudProbe: Promise<ResultOf<'settings.everosCloud'> | null> = Promise.resolve(null)
@@ -140,7 +140,7 @@ export async function loadSettings(): Promise<void> {
   const r = await gateway().call('settings.get', {})
   RAW = (r.settings || {}) as Record<string, unknown>
   configPathLive = r.config_path || configPathLive
-  skillHub = { on: r.skill_hub_on === true, awaitingReload: r.skill_hub_awaiting_reload === true }
+  skillHub = { on: r.skill_hub_on === true }
   drawBanner()
   const agents = RAW.agents as { defaults?: { model?: string; provider?: string } } | undefined
   const defaults = (agents && agents.defaults) || {}
@@ -548,7 +548,7 @@ export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mc
 export function _resetForTests(): void {
   RAW = {}
   configPathLive = '~/.raven/config.json'
-  skillHub = { on: false, awaitingReload: false }
+  skillHub = { on: false }
   everosLive = null
   everosCloudLive = null
   cloudProbe = Promise.resolve(null)

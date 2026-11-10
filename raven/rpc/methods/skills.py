@@ -50,10 +50,11 @@ def _registry(agent_loop_factory: "AgentLoopFactory | None") -> Any:
 
 
 def _hub(agent_loop_factory: "AgentLoopFactory | None") -> Any:
-    """The shared Skill Hub client, or ``None`` when no endpoint is configured.
+    """The shared Skill Hub client, or ``None`` while no loop is serving.
 
-    Unconfigured is a normal state, not a fault: the caller decides whether its
-    action can degrade (``search``) or has to report it (``browse``/``install``).
+    Every loop builds one whatever the switch says; the callers that reach the
+    Hub ask the live config before each call, so "off" is a gated client rather
+    than an absent one.
     """
     loop = _loop(agent_loop_factory)
     return getattr(loop, "_skill_hub_client", None) if loop is not None else None

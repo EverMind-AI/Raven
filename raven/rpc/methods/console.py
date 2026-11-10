@@ -615,56 +615,31 @@ async def cron_runs(params: dict, *, agent_loop_factory=None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-_SKILL_HUB_RELOAD_WARNING = "Saved. Skill Hub search starts after Raven reloads."
 # A memory-backend switch asked for while a turn is running waits for that
 # turn: swapping under it would move the references the turn reads. The
 # section's confirmation promises the reader exactly this, so the write says
 # it too.
 _MEMORY_SWITCH_QUEUED = "Saved. A turn is running; the memory backend switches when that turn finishes."
-# Finishing the web wizard turns the source on, and no screen on the way says
-# what that sends; the page shows the answer as a toast.
+# Finishing the web wizard is the opt-in moment, and no screen on the way says
+# what the source sends; the page shows the answer as a toast.
 _SKILL_HUB_ON_NOTICE = (
     "Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation "
     "to EverMind Skill Hub. You can turn it off in Settings > Skills."
 )
-_SKILL_HUB_ON_RELOAD_NOTICE = (
-    "Skill Hub search is on and starts after Raven reloads: when Raven looks for a skill, it sends "
-    "text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills."
-)
 
 
-def _skill_hub_awaits_reload(on: bool, agent_loop_factory: Any) -> bool:
-    """Whether the source reads on while the loop serving now cannot search.
-
-    A loop builds its Hub client from the endpoint it started with, and only
-    the endpoint is fixed there: ``enabled`` is read live. So the wait is a
-    property of that loop, not of the write that ended it -- a later switch-on
-    finds the endpoint already written and the loop still without a client.
-    No loop at all is no wait, because the first one is built from this file.
-    """
-    if not on or agent_loop_factory is None:
-        return False
-    try:
-        loop = agent_loop_factory()
-    except Exception:  # noqa: BLE001 - the stack raises its build error: nothing is serving
-        return False
-    return loop is not None and getattr(loop, "_skill_hub_client", None) is None
-
-
-def _skill_hub_reply(previous: Any, agent_loop_factory: Any, *, seeded: bool = False) -> dict[str, Any]:
-    """A Skill Hub write's answer: what a seed that left the source on sends,
-    and whether the serving loop cannot search yet."""
-    from raven.config.live import skill_hub_on
-    from raven.config.loader import get_config_path, read_raw_or_raise
-    from raven.i18n import t
-
-    on = skill_hub_on(read_raw_or_raise(get_config_path()))
-    waits = _skill_hub_awaits_reload(on, agent_loop_factory)
+def _skill_hub_reply(previous: Any, *, notice: bool = False) -> dict[str, Any]:
+    """A Skill Hub write's answer: the previous state, and what a wizard finish
+    sends. That finish is the opt-in moment, and no screen on the way says what
+    the source sends, so the page shows the answer as a toast."""
     reply: dict[str, Any] = {"applied": True, "previous": previous}
-    if seeded and on:
-        reply["warning"] = t(_SKILL_HUB_ON_RELOAD_NOTICE if waits else _SKILL_HUB_ON_NOTICE)
-    elif waits:
-        reply["warning"] = t(_SKILL_HUB_RELOAD_WARNING)
+    if notice:
+        from raven.config.live import skill_hub_on
+        from raven.config.loader import get_config_path, read_raw_or_raise
+        from raven.i18n import t
+
+        if skill_hub_on(read_raw_or_raise(get_config_path())):
+            reply["warning"] = t(_SKILL_HUB_ON_NOTICE)
     return reply
 
 
@@ -679,6 +654,7 @@ def _mask_secrets(node: Any, key_hint: str = "") -> Any:
 
 
 async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
+    del agent_loop_factory  # the answer no longer depends on the serving loop
     from importlib.metadata import version as pkg_version
 
     from raven.config.live import skill_hub_on
@@ -702,7 +678,6 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         "config_path": str(path),
         "raven_version": ver,
         "skill_hub_on": hub_on,
-        "skill_hub_awaiting_reload": _skill_hub_awaits_reload(hub_on, agent_loop_factory),
     }
 
 
@@ -772,24 +747,24 @@ async def settings_set(params: dict, *, agent_loop_factory=None) -> dict:
         from raven.config.update import set_skill_hub_enabled
 
         try:
-            change = set_skill_hub_enabled(value)
+            previous = set_skill_hub_enabled(value)
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        return _skill_hub_reply(change.previous, agent_loop_factory)
+        return {"applied": True, "previous": previous}
 
     if key == "skillForge.router.hub.init":
-        # The web wizard's finish. It seeds the endpoint the way the CLI
+        # The web wizard's finish. It records the opt-in the way the CLI
         # onboarding does -- never re-enabling a config that turned the source
         # off -- because the wizard is the page's only opt-in moment.
         if value is not True:
             raise ConfigValidationError("init takes true")
-        from raven.config.update import initialize_skill_hub_endpoint
+        from raven.config.update import enable_skill_hub_if_unset
 
         try:
-            seeded = initialize_skill_hub_endpoint()
+            enable_skill_hub_if_unset()
         except ValueError as exc:
             raise ConfigValidationError(str(exc)) from exc
-        return _skill_hub_reply(None, agent_loop_factory, seeded=seeded is not None)
+        return _skill_hub_reply(None, notice=True)
 
     if key in ("plugins.disabled", "tools.disabledTools", "skillForge.blocklist"):
         if not isinstance(value, list) or not all(isinstance(x, str) for x in value):

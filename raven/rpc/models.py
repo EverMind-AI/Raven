@@ -4750,14 +4750,7 @@ class SettingsGetResult(_Strict):
         ...,
         description=(
             "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: "
-            "an endpoint is required, and enabled=false turns it off."
-        ),
-    )
-    skill_hub_awaiting_reload: bool = Field(
-        ...,
-        description=(
-            "skill_hub_on, while the agent loop serving now was built without a Hub client: "
-            "retrieval starts after a reload."
+            "enabled=false turns it off, and the default is on."
         ),
     )
 

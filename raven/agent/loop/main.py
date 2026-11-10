@@ -426,9 +426,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # (catalog discovery) and the read_skill / use_skill tools (body /
         # bundle), so both lanes use one connection pool + identical config.
         # ``cache_dir`` points into the workspace skill tree so a use_skill'd
-        # Hub skill is registry-discoverable on later turns. ``None`` when no
-        # Hub endpoint is configured — read_skill is then not registered and
-        # use_skill serves local/everos only.
+        # Hub skill is registry-discoverable on later turns. Built whatever
+        # the switch says; every caller asks the live config first.
         self._skill_hub_client = self._build_skill_hub_client(
             workspace,
             skill_forge_router_config,

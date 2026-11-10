@@ -245,8 +245,16 @@ class TestTheHubSwitch:
         _write(path, payload)
         return LiveConfig(path)
 
-    def test_no_block_is_off(self, tmp_path: Path) -> None:
-        assert skill_hub_enabled(self._live(tmp_path, {})) is False
+    def test_no_block_is_on(self, tmp_path: Path) -> None:
+        """The shared marketplace is the schema default now, so a config that
+        never mentioned the Hub reads as on."""
+        assert skill_hub_enabled(self._live(tmp_path, {})) is True
+
+    def test_a_legacy_null_endpoint_is_off(self, tmp_path: Path) -> None:
+        """The pre-default off marker survives as intent: the loader turns it
+        into ``enabled: false``."""
+        live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": None}}}})
+        assert skill_hub_enabled(live) is False
 
     def test_an_endpoint_is_on(self, tmp_path: Path) -> None:
         live = self._live(tmp_path, {"skillForge": {"router": {"hub": {"endpoint": "https://hub.test"}}}})
