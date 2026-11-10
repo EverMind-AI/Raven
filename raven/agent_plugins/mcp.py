@@ -464,6 +464,9 @@ def package_mcp_servers(
     their call to make. *reserved_names* are the server names this host
     already runs; a package entry that would compose to one of them is
     skipped and reported rather than replacing the operator's server.
+
+    An unusable data root skips every package and reports each one: the root
+    is shared, so no package's data directory can be composed.
     """
     permitted = {str(name) for name in allowed}
     taken = {str(name) for name in reserved_names}
@@ -473,7 +476,24 @@ def package_mcp_servers(
 
     # The sandbox translator compares resolved roots; PLUGIN_DATA has to be
     # spelled the same way or a symlinked RAVEN_HOME leaves it a host path.
-    data_root = Path(plugin_data_root).resolve()
+    try:
+        data_root = Path(plugin_data_root).resolve()
+    # Python 3.12 turns ELOOP into RuntimeError, not OSError. Every package
+    # shares this root, so an unusable one leaves each PLUGIN_DATA unknown and
+    # each per-package directory impossible to create: report every package
+    # instead of starting a server on a path that cannot exist.
+    except (OSError, RuntimeError):
+        return (
+            {},
+            [
+                PackageProblem(
+                    str(package.root),
+                    f"the shared package data root {plugin_data_root} cannot be resolved",
+                )
+                for package in packages
+            ],
+            [],
+        )
     for package in packages:
         data_dir = data_root / package.name
         if package.name in permitted:

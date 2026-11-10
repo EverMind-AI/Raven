@@ -22,6 +22,7 @@ from raven.agent_plugins.mcp import (
     expand_placeholders,
     package_mcp_layer,
     package_mcp_report,
+    package_mcp_servers,
     read_mcp_config,
     schema_version,
 )
@@ -146,6 +147,25 @@ def test_an_unresolvable_data_root_does_not_raise(tmp_path: Path) -> None:
 
     assert report.disabled == ""
     assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}remote"]
+
+
+def test_an_unresolvable_data_root_reports_every_package(tmp_path: Path) -> None:
+    """The data root is shared, so an unusable one stops every package's server."""
+    root = _package(tmp_path, mcp=_mcp({"remote": _http()}))
+    loop = tmp_path / "data"
+    try:
+        loop.symlink_to("data")
+    except OSError:
+        pytest.skip("this platform cannot create a symlink")
+
+    servers, problems, entries = package_mcp_servers(
+        [load_package(root)], allowed=[PACKAGE_NAME], plugin_data_root=loop
+    )
+
+    assert servers == {}
+    assert entries == []
+    assert [problem.path for problem in problems] == [str(root)]
+    assert "cannot be resolved" in problems[0].reason
 
 
 # ---------------------------------------------------------------------------
