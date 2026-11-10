@@ -228,7 +228,7 @@ _SEARCH_REQUESTS: dict[str, tuple[str, str, dict[str, Any], dict[str, str]]] = {
     ),
     "firecrawl": (
         "POST",
-        "https://api.firecrawl.dev/v1/search",
+        "https://api.firecrawl.dev/v2/search",
         {"json": {"query": "q1", "limit": 4}},
         {"Authorization": "Bearer k"},
     ),
@@ -376,7 +376,7 @@ _SEARCH_PAYLOADS: dict[str, Any] = {
     "tavily": {"results": [{"title": "T1", "url": "https://a.example", "content": "S1"}]},
     "exa": {"results": [{"title": "T1", "url": "https://a.example", "highlights": ["S1\n\nmore"], "text": "x" * 500}]},
     "brave": {"web": {"results": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}},
-    "firecrawl": {"success": True, "data": [{"title": "T1", "url": "https://a.example", "description": "S1"}]},
+    "firecrawl": {"success": True, "data": {"web": [{"title": "T1", "url": "https://a.example", "description": "S1"}]}},
     "serply": {"results": [{"title": "T1", "link": "https://a.example", "description": "S1"}]},
     "keenable": {"results": [{"title": "T1", "url": "https://a.example", "description": "", "snippet": "S1"}]},
     "deepseek": {"results": [{"title": "T1", "url": "https://a.example", "snippet": "SHORT", "summary": "S1"}]},
@@ -505,7 +505,7 @@ _FETCH_CASES: dict[str, tuple[str, str, dict[str, Any], Any]] = {
     ),
     "firecrawl": (
         "POST",
-        "https://api.firecrawl.dev/v1/scrape",
+        "https://api.firecrawl.dev/v2/scrape",
         {"json": {"url": "https://a.example", "formats": ["markdown"]}},
         {"success": True, "data": {"markdown": "PAGE", "metadata": {"title": "T"}}},
     ),

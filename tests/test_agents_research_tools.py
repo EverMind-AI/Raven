@@ -642,7 +642,7 @@ _SEARCH_PAYLOADS: dict[str, tuple[dict, dict]] = {
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
     "firecrawl": (
-        {"success": True, "data": [{"title": "T", "url": "https://e.com/a", "description": "S"}]},
+        {"success": True, "data": {"web": [{"title": "T", "url": "https://e.com/a", "description": "S"}]}},
         {"title": "T", "link": "https://e.com/a", "snippet": "S"},
     ),
     "anysearch": (
