@@ -37,6 +37,12 @@ describe('ravenHomeDir (the TUI reader of RAVEN_HOME)', () => {
     expect(ravenHomeDir()).toBe(join(homedir(), 'state'))
   })
 
+  it('expands a leading ~\\ (the Windows spelling)', () => {
+    vi.stubEnv('RAVEN_HOME', '~\\state')
+
+    expect(ravenHomeDir()).toBe(join(homedir(), 'state'))
+  })
+
   it('expands a bare ~', () => {
     vi.stubEnv('RAVEN_HOME', '~')
 
