@@ -36,6 +36,11 @@ async function harness(
   /* What the context store was told, kept in the fake's own numbers so a case
      can ask what percentage the ring and the popover would read off it. */
   const ring = { used: 0, max: 0 }
+  /* The queue snapshot the island's stores hold, so a case can move it across
+     a switch the way the page does. */
+  const queueNow: Array<{ text: string; moveOn?: string }> = []
+  /* The engine coming free after a reload, which the reconnect asks about. */
+  const drainSpy = vi.fn()
   const IDLE: TurnSnapshot = { phase: 'idle', cancellable: false, resume: null }
   /* Where the island's turn machine has been driven to, read off the traffic
      the switch put through it rather than off the machine itself: the fake
@@ -114,8 +119,13 @@ async function harness(
         goPaint: () => calls.push(['goPaint']),
         loadDraft: (id: string) => calls.push(['loadDraft', id]),
         parkDraft: () => {},
-        queueClear: () => {},
-        queueRestore: () => {},
+        queueClear: () => { queueNow.length = 0 },
+        queueRestore: (next: Array<{ text: string; moveOn?: string }>) => {
+          queueNow.length = 0
+          queueNow.push(...next)
+          calls.push(['queueRestore', next])
+        },
+        queueSnapshot: () => [...queueNow],
         queueShift: () => undefined,
         liveAnchor: () => anchor.ms,
         setLiveAnchor: (ms: number) => { anchor.ms = ms; calls.push(['setLiveAnchor', ms]) },
@@ -183,6 +193,10 @@ async function harness(
         resume: (id: string) => calls.push(['viewResume', id]),
         refreshDag: (id: string) => calls.push(['viewRefreshDag', id]),
       },
+      /* Only the engine-free question is stood in for here: what `drain` does
+         is the runtime's own, and the reconnect's trigger is what this file
+         can see. */
+      'src/state/session/runtime': { drain: drainSpy },
     },
   })
   const registry = (await import('./registry')) as Registry
@@ -249,6 +263,12 @@ async function harness(
     env,
     state,
     asked,
+    drainSpy,
+    queue: () => [...queueNow],
+    setQueue: (next: Array<{ text: string; moveOn?: string }>) => {
+      queueNow.length = 0
+      queueNow.push(...next)
+    },
     /** The percentage the ring and the popover read, clamped as the store does. */
     ringPct: () => (ring.max > 0 ? Math.min(100, Math.max(0, Math.round((100 * ring.used) / ring.max))) : 0),
     title: () => (boxes['#title'] ? boxes['#title']!.textContent : null),
@@ -461,6 +481,24 @@ describe('the live session switch', () => {
     expect(h.liveAnchor()).toBe(0)
   })
 
+  /* A refusal can land after its turn folded, leaving the queue holding a
+     message while the machine is idle. The queue is the reader's typing, not
+     turn state: an idle park used to return before it saved anything, and the
+     switch's queue clear then took the only copy. */
+  it('keeps an idle conversation queue across a switch', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }, { id: 'b', title: 'Beta' }], realResidency: true })
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: false } })
+    h.setQueue([{ text: 'queued', moveOn: 'g_1' }])
+
+    h.openLiveSession({ id: 'b', title: 'Beta' })
+    await h.settle('b', { session_id: 'b', messages: [], info: { running: false } })
+
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    expect(h.queue()).toEqual([{ text: 'queued', moveOn: 'g_1' }])
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: false } })
+  })
+
   it('leaves a conversation alone when only the subscription reports the turn', async () => {
     /* Nothing was missed: the reader arrived while the turn was between its
        start and this page, and the replay the subscription is handed opens it
@@ -554,6 +592,39 @@ describe('the live session switch', () => {
     expect(h.calls).toContainEqual(['endRename', null])
     expect(h.title()).toBe('reconciliation audit')
     expect(h.env.sess('a')!.title).toBe('reconciliation audit')
+  })
+
+  /* A reconnect reloads the conversation and keeps the queue (an idle park and
+     the switch both carry it now); the message waited for the engine, and the
+     socket coming back to an idle conversation is the moment it is free. */
+  it('drains the queue once a reconnect has reloaded an idle conversation', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: false } })
+    h.drainSpy.mockClear()
+
+    const reconnected = h.onReconnect()
+    await new Promise((r) => setTimeout(r, 0))
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: false } })
+    await reconnected
+
+    expect(h.drainSpy).toHaveBeenCalled()
+  })
+
+  /* A turn the server still has is not the queue's to jump ahead of: the
+     message waits for that turn's end, which is what drains it. */
+  it('leaves the queue to a turn the reconnect finds still running', async () => {
+    const h = await harness({ rows: [{ id: 'a', title: 'Alpha' }] })
+    h.openLiveSession({ id: 'a', title: 'Alpha' })
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: false } })
+    h.drainSpy.mockClear()
+
+    const reconnected = h.onReconnect()
+    await new Promise((r) => setTimeout(r, 0))
+    await h.settle('a', { session_id: 'a', messages: [], info: { running: true } })
+    await reconnected
+
+    expect(h.drainSpy).not.toHaveBeenCalled()
   })
 
   it('drops the answer to an open the reader left for a new task', async () => {

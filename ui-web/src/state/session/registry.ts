@@ -13,7 +13,7 @@
  * painted over the conversation that overtook it.
  */
 
-import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, setLiveAnchor, turn } from '../../features/composer/mount'
+import { drawMeter, goPaint as goState, loadDraft, parkDraft, queueClear, queueRestore, setLiveAnchor, turn } from '../../features/composer/mount'
 import { loadProviders } from '../../features/model/source'
 import { rowFrom, SESS_CHANNELS } from '../../features/rail/source'
 import { draw as sessionDraw, endRename, markNew as markNewCurrent, reconcileRows } from '../../features/rail/store'
@@ -347,6 +347,10 @@ export async function switchTo(s: SessRow, turnOver = false): Promise<void> {
   if (row && (row.status === 'done' || row.status === 'ask')) row.status = null
   markNewCurrent()
   resetView(rt)
+  /* A conversation that waited with an idle turn keeps its queue across the
+     switch, exactly as a kept turn's `resume` hands its own back; the disk
+     reload below is the transcript's, not the queue's. */
+  if (!rt.events && rt.queue.length) queueRestore(rt.queue)
   /* Before the conversation is asked for: the composer must not stand there for
      the length of a round trip on a conversation it can never send to. */
   readOnly(isImportedKey(s.id))
@@ -535,6 +539,12 @@ export async function reconnect(): Promise<void> {
     await sessionOpen({ id: current, title })
     transcriptStatus(t('gui.reconnected'))
     setTimeout(() => killStatus(), 2500)
+    /* The queue survived the reload (a parked conversation keeps it), so a
+       message that waited for the engine goes out now that the turn state is
+       the server's again. A running turn still owns the lane: its own end
+       drains the queue, as it always has. A reader who moved on while the
+       reload ran left the queue to the conversation they are on now. */
+    if (sessionCurrent() === current && !turn.busy()) drain()
   } else if (current) {
     void subscribe(current)
   }
