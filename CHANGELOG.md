@@ -49,6 +49,13 @@ All notable changes to Raven are documented here.
 
 ### Fixed
 
+- A model that refuses a forced tool choice is asked again with the tool on
+  offer instead of failing the call, on every provider wire rather than only
+  the Responses and Anthropic adapters. DeepSeek in thinking mode answers a
+  forced choice with a 400, which over the chat wire reached callers as an
+  error; the refusal is now also recognised when a gateway wraps it.
+  `CONTRACTS_VERSION` moves to 42.
+
 - The *Mode* row of the WebUI's model picker (the sub-agent tier) read the
   conversation being left rather than the one being opened: a switch asked
   before the page's current session had moved over, so opening B from A

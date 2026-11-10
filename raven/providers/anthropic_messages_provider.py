@@ -21,6 +21,7 @@ import httpx
 import json_repair
 from loguru import logger
 
+from raven.providers import forced_tool_choice
 from raven.providers.base import (
     ChatDelta,
     LLMProvider,
@@ -505,7 +506,7 @@ def rewrite_on_400(body: dict[str, Any], error_text: str) -> str | None:
     if clamp_to_model_limit(body, text):
         return "ceiling"
     forced = body.get("tool_choice")
-    if "tool_choice" in text and isinstance(forced, dict) and forced.get("type") in {"tool", "any"}:
+    if "tool_choice" in text and forced_tool_choice.is_forcing(forced):
         # A model can refuse a forced call; under ``auto`` the tool stays on offer
         # and a model that declines it answers in plain text.
         body["tool_choice"] = {"type": "auto"}
@@ -1016,6 +1017,7 @@ class AnthropicMessagesProvider(LLMProvider):
             tool_choice=tool_choice,
             stream=False,
         )
+        relaxed_tool_choice = False
         try:
             # A non-streaming completion's first response byte and its last are
             # the same byte, so the wait stays on the whole-call budget; what is
@@ -1035,6 +1037,7 @@ class AnthropicMessagesProvider(LLMProvider):
                     if repair:
                         if repair == "ceiling":
                             self._remember_ceiling(body)
+                        relaxed_tool_choice = relaxed_tool_choice or repair == "tool_choice"
                         continue
                     break
             if response.status_code != 200:
@@ -1050,7 +1053,10 @@ class AnthropicMessagesProvider(LLMProvider):
                 raise RuntimeError(f"Anthropic Messages returned an error: {detail or payload}")
             return self._parse_response(payload)
         except Exception as exc:
-            return self._error_response(exc)
+            failed = self._error_response(exc)
+            if relaxed_tool_choice and failed.error_classification is not None:
+                failed.error_classification = forced_tool_choice.already_relaxed(failed.error_classification)
+            return failed
 
     async def chat_stream(
         self,
