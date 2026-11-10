@@ -43,23 +43,35 @@ that arrived in a search result is out of its reach:
 * leaks prevented rise from 14/21 to 17/21. The content rule alone reaches 12,
   3 of them ones the host rule misses. Of the 4 that escape both, 3 took their
   gold from a search result and 1 never had the gold in a tool result at all
-* 13 of the 243 clean correct items lose at least one fetched page (18 pages).
-  On 5 the lost page carried the gold, so they were unlabelled leaks rather than
-  false stops, leaving ~8 items exposed, about 3%
+* 13 of the 243 clean correct items lose at least one fetched page (18 pages),
+  so the cost is somewhere between 8 and 13 items; see below for why it is a
+  range and not a number
 * a question shorter than the run length puts the rule out of reach entirely --
   44 of the 400 questions here, which is the deliberate cost of not blocking
   pages on a short, unspecific string
 
-Those 18 stopped pages are worth knowing by kind, because the rate alone hides
-what the rule is doing. Seven were themselves dumps nobody had labelled (a
-``harbor-datasets`` file on raw.githubusercontent, ``autobenchaudit.com`` twice,
-an ``hle_bio_chem_med`` wiki page, and three eval sites). Nine were primary
-sources the question was written from -- arXiv four times, OEIS, MathNet,
-ACL Anthology, eLife -- and on one item all three such pages carried the gold,
-which says the question was authored out of them; whether refusing those is a
-false stop or a leak caught is a judgement, not a measurement. The remaining two
-are the one clear false positive: a site-search URL echoing the query back,
-because the model had pasted the whole question into a search box.
+Those 18 stopped pages have to be read by kind, because the rate hides what the
+rule is doing and because the obvious shortcut is wrong. Five of them carried the
+gold, and that does NOT make them leaks: two are plain benchmark copies
+(``autobenchaudit.com/benchmark/humanitys_last_exam/task/<id>``, a
+``datasets-server.huggingface.co`` row), and the other three are OEIS, arXiv and
+MathNet on one item, which are its legitimate references. Carrying the answer is
+what a good source does; only reproducing the question makes a page a copy.
+
+By kind: roughly nine are dumps nobody had labelled (the two above plus a
+``harbor-datasets`` file on raw.githubusercontent, an ``hle_bio_chem_med`` wiki
+page and three eval sites), about seven are primary sources, and two are a
+site-search URL echoing the query because the model pasted the whole question
+into a search box.
+
+The primary-source stops are the failure mode worth watching, and the one this
+rule cannot reason its way out of. On ``hle-673364562c46590b377046dd`` the
+question is 101 characters and the run it shares with OEIS, arXiv and MathNet is
+"maximal number of prime implicants of a boolean function of n variables" -- a
+term of art, not a quotation. The shorter the question, the likelier its most
+distinctive 60 characters are simply the field's standard phrase. Raising the
+minimum question length to twice the run was measured as the remedy and rejected:
+it removes two of those stops and loses half the content rule's leak catches.
 
 The run length is 60 because the sweep flattens there: 50 prevents the same leaks
 and stops roughly twice as many clean items, and 80 prevents one fewer.
