@@ -261,7 +261,7 @@ SEARCH_PROVIDERS: dict[str, SearchProviderSpec] = {
         vendor="firecrawl",
         label="Firecrawl",
         env_var="FIRECRAWL_API_KEY",
-        # ``/v1/search`` documents no result-offset parameter.
+        # ``/v2/search`` documents no result-offset parameter.
         paginates=False,
     ),
     "serply": SearchProviderSpec(
