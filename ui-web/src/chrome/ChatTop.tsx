@@ -83,8 +83,8 @@ function Header(): JSX.Element {
       {/* One capsule for the header's right side: which view is up, the desk's
           chip -- which also says how the session's work stands -- and the
           conversation menu. The desk hangs from the capsule's right edge
-          (features/desk/geometry.ts), so the menu ends the row the panel lines
-          up with. The panel toggle stays for a page with no desk, and the
+          (features/desk/geometry.ts), so the menu ends the row the palette lines
+          up with. The panel toggle stays for a document with no desk, and the
           stylesheet takes it out of the row while a desk is up. */}
       <div className="chrome-capsule">
         <ViewSwitch />

@@ -6009,7 +6009,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    going on -- a pulse and how many tasks run, an amber dot and how many groups
    wait on the reader. It grows to its words and keeps its right edge, so the
    capsule widens to the left; with nothing to say it is a square icon button.
-   A page with no desk has no chip. */
+   A document with no desk has no chip. */
 :root:not(.desk-ready) .desk-follow-toggle { display: none; }
 .desk-follow-toggle { position: relative; display: inline-flex; align-items: center; justify-content: center;
   gap: 7px; width: auto; min-width: 28px; height: 28px; padding: 0 6.5px; border: 0; border-radius: 14px;

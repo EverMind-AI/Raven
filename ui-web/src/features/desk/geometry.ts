@@ -35,7 +35,7 @@ export const DESK_COMPOSER_GAP = 12
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
-/* The inset of what the panel hangs from -- the header's capsule, which holds
+/* The inset of what the palette hangs from -- the header's capsule, which holds
    the launcher -- from the chat's right edge, and the gap left between the
    panel and the text so the two do not touch. The first MUST agree with
    `--desk-launcher-edge` in the stylesheet, which is what actually places the
@@ -145,7 +145,7 @@ function launcher(): HTMLElement | null {
 }
 
 /* What the anchored desk hangs from: the header's capsule when the launcher
-   sits in one (chrome/ChatTop.tsx), so the panel lines up with the whole
+   sits in one (chrome/ChatTop.tsx), so the palette lines up with the whole
    group of controls rather than with the chip in its middle; the launcher
    itself anywhere else. */
 function anchor(): HTMLElement | null {
