@@ -164,6 +164,18 @@ describe('ordering', () => {
   })
 })
 
+describe('groups that need the reader', () => {
+  it('counts the groups of the board on screen that wait on the reader', () => {
+    expect(store.needingYou()).toBe(0)
+    store.onBoardUpdated({
+      session_key: 's1',
+      board: board([group('a', 1, 'needs_you'), group('b', 2, 'idle'), group('c', 3, 'needs_you'), group('d', 4, 'completed')]),
+      lineage: {},
+    })
+    expect(store.needingYou()).toBe(2)
+  })
+})
+
 describe('placement', () => {
   const placed = board([group('g_1', 1, 'idle', [{ kind: 'dag', id: 'RUN_A', summary: 'Review' }])])
 

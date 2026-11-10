@@ -20,6 +20,8 @@
  *     served with and this never changes it, so React never writes it again:
  *     it diffs against the props it rendered last rather than against the
  *     document.
+ *   - the desk's chip in the capsule: features/desk/DeskSurface.tsx renders it
+ *     whole, from the desk's own stores.
  *   - #wsBtn's aria-expanded, and #wsBdg's count and hidden (state/ws.ts's
  *     setOpen and bump). Its tooltip and label have two writers, which is the
  *     behaviour: state/ws.ts names them for the state the pane is in, and the
@@ -42,6 +44,7 @@ import { useEffect, useSyncExternalStore } from 'react'
 
 import { Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
+import { DeskFollowToggle } from '../features/desk/DeskSurface'
 import * as exportWizard from '../features/export/store'
 import { rename as renameSession } from '../features/rail/store'
 import * as trajectory from '../features/trajectory/store'
@@ -77,28 +80,36 @@ function Header(): JSX.Element {
           (src/chrome/WorkdirTag.tsx). */}
       <WorkdirTag />
       <span className="spacer" />
-      <TrajectoryToggle />
-      <button
-        className="ghost-ic wstog tipdn"
-        id="wsBtn"
-        aria-expanded="false"
-        data-tip={lang.attr('gui.expand_ws')}
-        aria-label={lang.attr('gui.expand_ws')}
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M14.5 4.5v15" />
-        </svg>
-        <span className="bdg" id="wsBdg" hidden>2</span>
-      </button>
-      <MoreButton />
+      {/* One capsule for the header's right side: which view is up, the desk's
+          chip -- which also says how the session's work stands -- and the
+          conversation menu. The desk hangs from the capsule's right edge
+          (features/desk/geometry.ts), so the menu ends the row the palette lines
+          up with. The panel toggle stays for a document with no desk, and the
+          stylesheet takes it out of the row while a desk is up. */}
+      <div className="chrome-capsule">
+        <ViewSwitch />
+        <DeskFollowToggle />
+        <button
+          className="ghost-ic wstog tipdn"
+          id="wsBtn"
+          aria-expanded="false"
+          data-tip={lang.attr('gui.expand_ws')}
+          aria-label={lang.attr('gui.expand_ws')}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M14.5 4.5v15" />
+          </svg>
+          <span className="bdg" id="wsBdg" hidden>2</span>
+        </button>
+        <MoreButton />
+      </div>
     </>
   )
 }
 
-/* The conversation's menu, in the corner slot: always rendered, so the slot
-   beside it -- the panel toggle's, where the desk launcher stands -- never
-   moves with the conversation, and disabled while there is nothing the menu
-   could act on. Whether there is reads the trajectory store, as the toggle
+/* The conversation's menu, at the capsule's end: always rendered, so the
+   chip beside it never moves with the conversation, and disabled while there
+   is nothing the menu could act on. Whether there is reads the trajectory store, as the toggle
    beside it does, through the export domain's own predicate. The rows are the
    shared context menu's, placed under the button: Export always, and Report a
    problem while the gateway announces a bug report receiver. */
@@ -131,42 +142,49 @@ function MoreButton(): JSX.Element {
   )
 }
 
-/* The switch between the conversation and its trajectory, left of the panel
-   toggle: the corner slot is the conversation menu's (`#moreBtn`), and the
-   desk launcher stands in the panel toggle's slot beside it (fixed one slot in
-   from the window's edge, `#wsBtn` hidden under `.desk-ready`), so anything
-   placed between the two is covered the moment a desk is up. Rendered only while the trajectory store says the view may be
-   offered -- the gateway serves it, it is on, a conversation with content is
-   open -- so the served header carries no trace of it, and the words come
-   through the catalogue because they change with the view. The store is read
-   through its own subscription rather than the region's language one: a flip
-   of the view is not a flip of the language. */
-function TrajectoryToggle(): JSX.Element | null {
+/* The two views of the column, as a two-way switch at the capsule's start:
+   each half names where it goes and is pressed while that view is up, so the
+   state reads off the control instead of off an icon that swaps. Rendered only
+   while the trajectory store says the view may be offered -- the gateway
+   serves it, it is on, a conversation with content is open -- so the served
+   header carries no trace of it. The store is read through its own
+   subscription rather than the region's language one: a flip of the view is
+   not a flip of the language. */
+function ViewSwitch(): JSX.Element | null {
   const state = useSyncExternalStore(trajectory.subscribe, trajectory.get)
   if (!trajectory.available(state)) return null
   const on = state.view === 'trajectory'
-  const label = t(on ? 'gui.trajectory.back' : 'gui.trajectory.show')
-  /* The icon names where the click goes: the trajectory's line while the
-     conversation is up, the conversation's bubble while the trajectory is. */
+  const chat = t('gui.trajectory.back')
+  const trace = t('gui.trajectory.show')
   return (
-    <button
-      className="ghost-ic tipdn chrome-traj"
-      id="trajBtn"
-      aria-pressed={on}
-      data-tip={label}
-      aria-label={label}
-      onClick={trajectory.toggleView}
-    >
-      {on ? (
+    <span className="chrome-viewsw">
+      <button
+        className="ghost-ic tipdn"
+        id="chatViewBtn"
+        aria-pressed={!on}
+        data-tip={chat}
+        aria-label={chat}
+        onClick={() => trajectory.setView('chat')}
+      >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
           <path d="M4.5 5.5h15v10.5h-9.5l-5.5 4v-4h0z" />
         </svg>
-      ) : (
+      </button>
+      {/* The trajectory's own picture: the waterfall its view draws, one bar
+          per call, each starting where the one before it began. */}
+      <button
+        className="ghost-ic tipdn"
+        id="trajBtn"
+        aria-pressed={on}
+        data-tip={trace}
+        aria-label={trace}
+        onClick={() => trajectory.setView('trajectory')}
+      >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-          <path d="M4 17.5h4l3-11 3 11h6" /><circle cx="18" cy="17.5" r="1.5" />
+          <path d="M4 6.5h7M7.5 12h9.5M11 17.5h9" />
         </svg>
-      )}
-    </button>
+      </button>
+    </span>
   )
 }
 

@@ -5145,6 +5145,10 @@
       "en": "{n} new",
       "zh": "{n} 项新的"
     },
+    "gui.ws.needs_you_n": {
+      "en": "Needs you · {n}",
+      "zh": "需要你回答 · {n}"
+    },
     "gui.ws.agents_working": {
       "en": "Subagents working",
       "zh": "子智能体处理中"
@@ -8046,10 +8050,6 @@
     "gui.tasks.board.answer_slot": {
       "en": "Answer: ",
       "zh": "答："
-    },
-    "gui.tasks.board.running": {
-      "en": "{n} subagents running",
-      "zh": "{n} 个子智能体在跑"
     },
     "gui.tasks.board.dag": {
       "en": "DAG {done}/{total}",

@@ -27,7 +27,7 @@ export const DESK_COMPOSER_GAP = 12
 /* The default is the smallest desk that shows a tab's contents, not the
    smallest one that renders -- it used to be 250x260 against a 250 minimum,
    which left a five-file shelf scrolling: 210px of body for 265px of rows.
-   Width stays the cautious axis: the desk hangs UNDER the launcher and keeps
+   Width stays the cautious axis: the desk hangs UNDER the capsule and keeps
    its right edge there, so widening it reaches further back across the centred
    transcript column, which is what put the default at the minimum in the first
    place. Anchored below rather than beside, it covers the top of that column
@@ -35,15 +35,14 @@ export const DESK_COMPOSER_GAP = 12
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
-/* The launcher's own inset from the chat's right edge, and the gap left between
-   the panel and the text so the two do not touch. The first MUST agree with
+/* The inset of what the palette hangs from -- the header's capsule, which holds
+   the launcher -- from the chat's right edge, and the gap left between the
+   panel and the text so the two do not touch. The first MUST agree with
    `--desk-launcher-edge` in the stylesheet, which is what actually places the
    panel -- the same pairing `anchoredGeometry` keeps with `[data-anchored]`.
-   50 is the old 12 plus one header slot (a 28px button and the header's 10px
-   gap): the corner slot is the conversation menu's (#moreBtn), and the
-   launcher stands over the panel toggle one slot in, with the panel hanging
-   under it. */
-export const DESK_LAUNCHER_EDGE = 50
+   16 is the header's own right padding: the capsule ends there, the
+   conversation menu at its end, and the panel's right edge lines up with it. */
+export const DESK_LAUNCHER_EDGE = 16
 export const DESK_TEXT_GAP = 12
 /* The narrowest transcript the reserve will leave behind. Below it the reserve
    is not taken at all -- see `deskReserve`, where measuring showed that taking
@@ -125,7 +124,7 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
   const w = Math.max(DESK_MIN_SIZE, Math.min(DESK_MAX_WIDTH, value.w, window.innerWidth - 16))
   const limit = deskBottomLimit()
   /* The height is the room between the top edge and the limit. Anchored, the
-     stylesheet holds that edge under the launcher. Detached, the edge is
+     stylesheet holds that edge under the capsule. Detached, the edge is
      wherever the palette was put, so the room is measured from the window's
      top instead: measured from the palette's own top, a downward move would
      shrink the palette rather than stop it. */
@@ -141,14 +140,38 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
 }
 
 function launcher(): HTMLElement | null {
-  return (document.querySelector('.desk-follow-toggle') as HTMLElement | null)
-    ?? document.getElementById('wsBtn')
+  /* The chip is rendered on every page and the stylesheet hides it -- with no
+     desk at all, and behind a fullscreen pane, where `#wsBtn` is the way to
+     the panel instead. So the first candidate is not always the one on
+     screen, and picking it anyway reads `display: none` as an all-zero box at
+     the window's top-left corner. A box with no extent is not drawn: let the
+     fallback have its turn, and when neither is drawn the answer is "no
+     anchor", which keeps the geometry the reader already has. */
+  const candidates = [
+    document.querySelector('.desk-follow-toggle'),
+    document.getElementById('wsBtn'),
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const rect = candidate.getBoundingClientRect()
+    if (rect.width > 0 || rect.height > 0) return candidate as HTMLElement
+  }
+  return null
 }
 
-/* Where the anchored desk sits: the gap below the launcher, right edge flush
+/* What the anchored desk hangs from: the header's capsule when the launcher
+   sits in one (chrome/ChatTop.tsx), so the palette lines up with the whole
+   group of controls rather than with the chip in its middle; the launcher
+   itself anywhere else. */
+function anchor(): HTMLElement | null {
+  const button = launcher()
+  return (button?.closest('.chrome-capsule') as HTMLElement | null) ?? button
+}
+
+/* Where the anchored desk sits: the gap below its anchor, right edge flush
    with it -- the placement `anchoredGeometry` describes. */
 function anchoredBox(w: number): { top: number; left: number; right: number } | null {
-  const rect = launcher()?.getBoundingClientRect()
+  const rect = anchor()?.getBoundingClientRect()
   return rect ? { top: rect.bottom + DESK_ANCHOR_GAP, left: rect.right - w, right: rect.right } : null
 }
 
@@ -171,7 +194,7 @@ export function defaultGeometry(): DeskGeometry {
 /* Where the anchored desk actually sits, for the magnet to snap back to. It
    MUST agree with .desk-palette[data-anchored="true"] in the stylesheet, which
    is what positions it while it is attached: right edge flush with the
-   launcher, hanging below it. Two expressions of one placement, so a change to
+   capsule the launcher sits in, hanging below it. Two expressions of one placement, so a change to
    either is a change to both. */
 export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
   const box = anchoredBox(value.w)

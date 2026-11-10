@@ -14,10 +14,10 @@ service, run `raven web --stop`.
 
 ## Trajectory view
 
-Once a conversation has content, a trajectory toggle appears in the chat
-header, to the left of the workspace panel button. The trajectory view draws
-every recorded step of that conversation (inputs, model calls, tool calls,
-replies) on one clock-time timeline. The header sums the session up -- its
+Once a conversation has content, a Conversation | Trajectory switch appears at
+the start of the chat header's capsule. The trajectory view draws every
+recorded step of that conversation (inputs, model calls, tool calls, replies)
+on one clock-time timeline. The header sums the session up -- its
 span, agents, turns, model and tool calls, and errors, with a link to the
 first error -- and an activity strip shows its calls across the whole
 session, with idle stretches folded. Below, each agent is one row: a capsule

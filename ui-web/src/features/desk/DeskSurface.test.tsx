@@ -717,6 +717,62 @@ describe('the collapsed launcher', () => {
     expect(count()).toBe('2')
   })
 
+  /* One number, one home: with another tab up the tasks tab's badge carries
+     the running count, so the chip must not repeat it an inch above. On the
+     tasks tab itself that badge goes quiet, which is what keeps the chip
+     saying it there. */
+  it('leaves the running count to the tasks tab\'s badge while another tab is up', async () => {
+    render(<DeskFollowToggle />)
+    taskRows = [taskRow('t1'), taskRow('t2')]
+    await act(async () => { await tasksStore.refresh() })
+    const live = (): string => btn().querySelector('.desk-live')?.textContent ?? ''
+
+    expect(live()).toBe('gui.ws.tasks_running_tab {"n":2}')
+
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    expect(live()).toBe('')
+    expect(btn().getAttribute('aria-label')).not.toContain('gui.ws.tasks_running_tab')
+
+    await act(async () => { desk.set({ tab: 'tasks' }) })
+    expect(live()).toBe('gui.ws.tasks_running_tab {"n":2}')
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.tasks_running_tab {"n":2}')
+  })
+
+  /* The chip says the session's state with the palette up or down: how many
+     tasks still run, in words, and how many groups wait on the reader. */
+  it('says how many tasks run, and drops the words when none do', async () => {
+    render(<DeskFollowToggle />)
+    taskRows = [taskRow('t1'), taskRow('t2')]
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(btn().querySelector('.desk-live')?.textContent).toBe('gui.ws.tasks_running_tab {"n":2}')
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.tasks_running_tab {"n":2}')
+
+    taskRows = [{ ...taskRow('t1'), status: 'completed' }, { ...taskRow('t2'), status: 'completed' }]
+    await act(async () => { await tasksStore.refresh() })
+
+    expect(btn().querySelector('.desk-live')).toBeNull()
+    expect(btn().getAttribute('aria-label')).not.toContain('gui.ws.tasks_running_tab')
+  })
+
+  it('counts the groups that wait on the reader, palette up or down', async () => {
+    const group = (id: string, status: 'needs_you' | 'idle') => ({
+      id, title: id, summary: '', status, created_at: 1, updated_at: 1, steps: [],
+    })
+    render(<DeskFollowToggle />)
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'tasks' }) })
+    await act(async () => {
+      tasksStore.onBoardUpdated({
+        session_key: 's1',
+        board: { version: 1, groups: [group('a', 'needs_you'), group('b', 'idle'), group('c', 'needs_you')], unassigned: [] },
+        lineage: {},
+      })
+    })
+
+    expect(btn().querySelector('.desk-ask')?.textContent).toBe('2')
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.needs_you_n {"n":2}')
+  })
+
   /* Nothing of the desk is over a fullscreen pane, so there is nothing there to
      badge either. */
   it('leaves with the rest of the desk when a pane goes fullscreen', async () => {

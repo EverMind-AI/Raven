@@ -241,6 +241,11 @@ export const openGroups = (board: TaskBoard): TaskGroup[] =>
 export const completedGroups = (board: TaskBoard): TaskGroup[] =>
   board.groups.filter((g) => g.status === 'completed').sort(newestFirst)
 
+/* How many groups of the board on screen wait on the reader: the desk's chip
+   says it in the header whether the palette is up or not. */
+export const needingYou = (board: TaskBoard | null = store.get().board): number =>
+  board ? board.groups.filter((g) => g.status === 'needs_you').length : 0
+
 export interface LinkedRow { link: TaskLinkRef; row: TaskRow | null }
 
 /* A step's Tasks, each followed by the runs that continued it. A link whose row

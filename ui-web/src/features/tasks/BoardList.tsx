@@ -39,16 +39,17 @@ function stepTime(iso: string, now: number): string {
   return d.toDateString() === new Date(now).toDateString() ? hm : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hm}`
 }
 
-/* What the row says at its right: a running graph's progress, or how many
-   subagents are running for the group, or else how long ago it last moved. */
-function metaOf(group: TaskGroup, rows: TaskRow[], lineage: Record<string, string>, now: number): string {
+/* What the foot says first: a running graph's progress, or how long ago the
+   group last moved -- and nothing while only subagents run, since the pill
+   already says the group runs and the foot counts them. */
+function metaOf(group: TaskGroup, rows: TaskRow[], lineage: Record<string, string>, now: number): string | null {
   const running = group.steps
     .flatMap((s) => store.linkedRows(s, rows, lineage))
     .map((l) => l.row)
     .filter((r): r is TaskRow => r !== null && r.status === 'running')
   const dag = running.find((r) => r.kind === 'dag')
   if (dag) return t('gui.tasks.board.dag', { done: dag.counts.completed, total: dag.counts.total })
-  if (running.length) return t('gui.tasks.board.running', { n: running.length })
+  if (running.length) return null
   return ago(group.updated_at, now)
 }
 
@@ -278,8 +279,17 @@ function GroupRows({ groups, rows, lineage, now, openIds, onToggle, done, openTa
         const open = openIds.has(group.id)
         const links = groupLinks(group, rows, lineage)
         const running = links.some((l) => l.row?.status === 'running')
+        const meta = metaOf(group, rows, lineage, now)
         return (
-          <div key={group.id} className="tkgcard" data-open={open || undefined} data-done={done || undefined}>
+          <div
+            key={group.id}
+            className="tkgcard"
+            data-cat={categoryOf(group.status, running)}
+            data-open={open || undefined}
+            data-done={done || undefined}
+          >
+            {/* The status leads the title's line: what a group needs from the
+                reader is the first thing on the card, and what it is comes next. */}
             <button
               type="button"
               className={'tkgroup' + (done ? ' tkdone' : '')}
@@ -289,23 +299,23 @@ function GroupRows({ groups, rows, lineage, now, openIds, onToggle, done, openTa
               aria-controls={`tkthread-${group.id}`}
               onClick={() => onToggle(group.id)}
             >
-              <span className="tkghead">
+              <span className="tkgtitle">
                 <Pill group={group} running={running} />
-                <span className="tkgmeta">{metaOf(group, rows, lineage, now)}</span>
+                <span className="nm">{group.title}</span>
               </span>
-              <span className="nm">{group.title}</span>
               {group.summary ? <span className="st">{group.summary}</span> : null}
             </button>
-            {/* Outside the head, so Move on is a button of its own rather
-                than a press that also folds the card. */}
-            {open ? null : (
-              <div className="tkgfoot">
-                <span>{t('gui.tasks.page.events', { n: group.steps.length })}</span>
-                <span className="tkgsep" aria-hidden="true" />
-                <span>{t('gui.tasks.page.sub_agents', { n: subAgentsOf(links) })}</span>
-                <MoveOnButton onClick={() => HERE.moveOn?.(group)} />
-              </div>
-            )}
+            {/* The card's foot, open or folded: the meta, the counts, and --
+                while folded -- Move on. Outside the head, so Move on is a button
+                of its own rather than a press that also folds the card; an open
+                card's thread carries its own. */}
+            <div className="tkgfoot">
+              {meta ? <span className="tkgmeta">{meta}</span> : null}
+              <span>{t('gui.tasks.page.events', { n: group.steps.length })}</span>
+              <span className="tkgsep" aria-hidden="true" />
+              <span>{t('gui.tasks.page.sub_agents', { n: subAgentsOf(links) })}</span>
+              {open ? null : <MoveOnButton onClick={() => HERE.moveOn?.(group)} />}
+            </div>
             {group.status === 'needs_you' && !open ? <Ask group={group} /> : null}
             {open ? (
               <Thread

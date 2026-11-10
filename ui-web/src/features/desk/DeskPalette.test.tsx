@@ -48,7 +48,7 @@ const task = (id: string): TaskRow => ({
 /* Which tab's bubble, by the tab's own label -- the strip is three buttons and
    an index would silently follow a reordering. */
 const tabButton = (tab: 'diff' | 'deliverables' | 'tasks'): HTMLElement | undefined => {
-  const label = tab === 'diff' ? 'diff' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
+  const label = tab === 'diff' ? 'gui.ws.changes' : tab === 'deliverables' ? 'gui.ws.deliverables' : 'gui.ws.tasks'
   return [...document.querySelectorAll<HTMLElement>('.desk-tabs button')]
     .find((b) => (b.querySelector('.lb')?.textContent || '') === label)
 }
@@ -552,7 +552,7 @@ describe('the desk shelf', () => {
        it by this class -- the bubble being a sibling is what broke the
        positional rule it used to use. */
     expect([...document.querySelectorAll('.desk-tabs button .lb')].map((n) => n.textContent))
-      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'diff'])
+      .toEqual(['gui.ws.deliverables', 'gui.ws.tasks', 'gui.ws.changes'])
 
     await act(async () => {
       desk.set({ tab: 'deliverables' })
@@ -1002,6 +1002,30 @@ describe('the size the desk comes up at', () => {
     expect(palette()?.style.width).toBe('420px')
     expect(palette()?.style.height).toBe('400px')
   })
+
+  /* A fullscreen pane leaves exactly this DOM: the chip is unmounted and
+     `#wsBtn` stays in the header with `display: none` (`.desk-ready #wsBtn`),
+     so the only anchor candidate measures as an all-zero box. Read as a real
+     one it is the window's top-left corner, and the clamp on mount -- and on
+     every resize, which is the only writer that runs while the desk is down --
+     stored that corner over the geometry the reader set. */
+  it('keeps the stored geometry while no anchor is drawn', async () => {
+    const hidden = document.createElement('button')
+    hidden.id = 'wsBtn'
+    document.body.appendChild(hidden)
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 700, y: 300, w: 300, h: 800, detached: false }),
+    )
+    const stored = (): { x: number; y: number } =>
+      JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) || '{}') as { x: number; y: number }
+
+    await shelf()
+    expect(stored()).toMatchObject({ x: 700, y: 300 })
+
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+    expect(stored()).toMatchObject({ x: 700, y: 300 })
+  })
 })
 
 /* That the reserve reaches the stylesheet at all.
@@ -1176,7 +1200,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true }) })
 
-    await press(tab('diff'), 500, 500)
+    await press(tab('gui.ws.changes'), 500, 500)
     await to(500 + DESK_DRAG_THRESHOLD + 20, 520)
     await release(520 + DESK_DRAG_THRESHOLD, 520)
 
@@ -1197,12 +1221,12 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('diff'), 500, 500)
+    await press(tab('gui.ws.changes'), 500, 500)
     await release(500, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('gui.ws.changes').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
   })
@@ -1214,13 +1238,13 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('diff'), 500, 500)
+    await press(tab('gui.ws.changes'), 500, 500)
     await to(501, 501)
     await release(501, 501)
 
     expect(captured).toBe(false)
     await act(async () => {
-      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('gui.ws.changes').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('diff')
     expect(panel().dataset.anchored).toBe('true')
@@ -1232,7 +1256,7 @@ describe('the panel drags by its handle', () => {
     render(<DeskPalette />)
     await act(async () => { desk.set({ paletteOpen: true, tab: 'deliverables' }) })
 
-    await press(tab('diff'), 500, 500)
+    await press(tab('gui.ws.changes'), 500, 500)
     /* A drag DOES capture, which is what keeps the pointer with the handle
        while the hand moves -- checked here, because the release gives it
        straight back. */
@@ -1242,7 +1266,7 @@ describe('the panel drags by its handle', () => {
     await release(600, 600)
 
     await act(async () => {
-      tab('diff').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      tab('gui.ws.changes').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     expect(desk.get().tab).toBe('deliverables')
   })

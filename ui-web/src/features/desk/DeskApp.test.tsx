@@ -14,6 +14,7 @@ import * as agents from '../subagents/store'
 import * as deliveries from '../workspace/deliveries'
 import * as workspace from '../workspace/store'
 import { DeskApp } from './DeskApp'
+import { DeskFollowToggle } from './DeskSurface'
 import * as desk from './store'
 
 import type { InstanceRow } from '../subagents/types'
@@ -143,7 +144,9 @@ describe('asking for the instance list', () => {
    * or sent the next message, which is to say: for exactly as long as they were
    * relying on the glyph instead of the palette. */
   it('keeps asking until the run it is showing has settled', async () => {
-    render(<DeskApp />)
+    /* The launcher lives in the chat header now; the desk's poll is still what
+       keeps its glyph current. */
+    render(<><DeskApp /><DeskFollowToggle /></>)
     await act(async () => { desk.set({ paletteOpen: false }) })
     await act(async () => { turn.dispatch({ type: 'send' }) })
     agentRows = [inst('h1', 'running')]
@@ -171,7 +174,7 @@ describe('asking for the instance list', () => {
      asked, so nothing was known, so nothing asked. The glyph the reader is
      relying on while the desk is down never came on at all. */
   it('lights the glyph for a run that outlives the turn that started it', async () => {
-    render(<DeskApp />)
+    render(<><DeskApp /><DeskFollowToggle /></>)
     await act(async () => { desk.set({ paletteOpen: false }) })
     /* No turn is ever dispatched: the launching one is already over. */
     expect(turn.busy()).toBe(false)

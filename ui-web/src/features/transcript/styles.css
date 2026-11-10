@@ -46,8 +46,10 @@
   flex: none; width: 22px; height: 10px; padding: 0; border: 0; background: none; cursor: pointer;
   display: flex; align-items: center; justify-content: flex-end;
 }
+/* A resting mark stays a whisper: a long conversation stacks fifty of them
+   beside the desk's palette, and only the turn on screen should read. */
 .transcript-navmark > i {
-  width: 10px; height: 2px; border-radius: 1px; background: var(--faint); opacity: .55;
+  width: 8px; height: 2px; border-radius: 1px; background: var(--faint); opacity: .4;
   transition: width .15s ease, opacity .15s ease, background-color .15s ease;
 }
 .transcript-navmark:hover > i, .transcript-navmark:focus-visible > i { width: 16px; opacity: 1; background: var(--muted); }

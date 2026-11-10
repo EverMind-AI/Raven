@@ -461,6 +461,10 @@ export function DeskSurface(): JSX.Element | null {
   )
 }
 
+/* The desk's chip, the middle control of the chat header's capsule
+   (chrome/ChatTop.tsx): it opens the palette, and it says the session's state
+   in the header whether the palette is up or not -- how many tasks still run,
+   in words, and how many groups wait on the reader. */
 export function DeskFollowToggle(): JSX.Element | null {
   const state = useSyncExternalStore(desk.subscribe, desk.get)
   /* The launcher speaks for all three tabs while they are down, so it reads
@@ -469,14 +473,18 @@ export function DeskFollowToggle(): JSX.Element | null {
      (The workspace's own changes arrive through `DeskApp`.) */
   useSyncExternalStore(deliveries.subscribe, deliveries.getVersion)
   useSyncExternalStore(agents.subscribe, agents.get)
+  useSyncExternalStore(desk.subscribeTasks, desk.tasksSnapshot)
   /* Only while the strip is down. With the palette up the three tabs each say
      their own number an inch below this, and a sum repeating them there is a
      second voice for one fact -- on the button whose job at that moment is to
-     put the desk away. The other signal has no such double: nothing in the
-     strip says a run is still going, so that one stands whether or not the
-     palette is up. */
+     put the desk away. The running count follows the same rule through the
+     tasks tab's own badge, which carries it while another tab is up; on the
+     tasks tab itself that badge is quiet, so this one still says it. The
+     waiting count has no badge in the strip, so it stands either way. */
   const fresh = desk.showing() ? 0 : desk.unseenAll()
   const busy = desk.working()
+  const running = desk.showing() && state.tab !== 'tasks' ? 0 : desk.runningTaskCount()
+  const asking = desk.askingTaskCount()
   /* The bubble pops on the way UP and only then. A number that drops is the
      reader having just read something -- announcing that with the same flourish
      as an arrival would be the page telling them news they made themselves.
@@ -491,13 +499,14 @@ export function DeskFollowToggle(): JSX.Element | null {
      both come back as they were when it does -- the flag and the geometry are
      untouched by this. */
   if (state.solo) return null
-  /* Both facts in words, in the button's own name. Neither channel is
-     announceable -- an animation is not, and the bubble is `<i>`, which maps to
-     a generic role where `aria-label` does not apply at all -- and an explicit
-     name on the button replaces the whole subtree, so this is the only place
-     they can be said. */
+  /* Every fact in words, in the button's own name. None of the marks is
+     announceable -- a pulse is not, and the counts are hidden from the
+     accessibility tree beside an explicit name, which replaces the whole
+     subtree -- so this is the only place they can be said. */
   const name = [
     t(state.paletteOpen ? 'gui.collapse_ws' : 'gui.workspace'),
+    ...(running ? [t('gui.ws.tasks_running_tab', { n: running })] : []),
+    ...(asking ? [t('gui.ws.needs_you_n', { n: asking })] : []),
     ...(fresh ? [t('gui.ws.unseen_tab', { n: String(fresh) })] : []),
     ...(busy ? [t('gui.ws.agents_working')] : []),
   ].join(', ')
@@ -506,19 +515,25 @@ export function DeskFollowToggle(): JSX.Element | null {
       className="ghost-ic desk-follow-toggle"
       aria-label={name}
       aria-expanded={state.paletteOpen}
-      /* The two signals are separate channels on purpose: the motion lives
-         inside the glyph and the bubble hangs off the corner, so a session that
-         is both working and holding news shows both without either moving the
-         other. Only one of them loops. */
+      /* Three channels that do not compete: the pulse says work is going and
+         is the only thing that moves, the words count the tasks and the
+         groups waiting, and the bubble on the corner counts what arrived
+         unread and pops once. */
       data-working={busy || undefined}
       onClick={desk.toggleDesk}
     >
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-        <path d="M4 7h4M12 7h8M4 12h9M17 12h3M4 17h2M10 17h10" />
-        <circle cx="10" cy="7" r="2" />
-        <circle cx="15" cy="12" r="2" />
-        <circle cx="8" cy="17" r="2" />
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" /><path d="M14.5 4.5v15" />
       </svg>
+      {busy || running ? (
+        <span className="desk-live" aria-hidden="true">
+          <i className="desk-pulse" />
+          {running ? t('gui.ws.tasks_running_tab', { n: running }) : null}
+        </span>
+      ) : null}
+      {asking ? (
+        <span className="desk-ask" aria-hidden="true"><i className="desk-askdot" />{asking}</span>
+      ) : null}
       {fresh ? (
         <i className="desk-count" key={grew ? fresh : 'held'} data-pop={grew || undefined} aria-hidden="true">
           {fresh}

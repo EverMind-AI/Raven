@@ -319,8 +319,6 @@ export function setView(view: View): void {
   patch({ view, listing: false, picked: view === 'trajectory' ? s.picked : null })
 }
 
-export const toggleView = (): void => { setView(store.get().view === 'trajectory' ? 'chat' : 'trajectory') }
-
 /* ── the selection ────────────────────────────────────────────────────── */
 
 /** The one way `selectedId` changes. `source` says which door it came through. */
