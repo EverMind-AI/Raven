@@ -593,10 +593,6 @@
       "en": "Task graph",
       "zh": "编排任务图"
     },
-    "gui.deleg.dag_meta": {
-      "en": "{n} nodes · {m} agents",
-      "zh": "{n} 个节点 · {m} 个 agent"
-    },
     "gui.deleg.dag_done": {
       "en": "{ok}/{n} done",
       "zh": "完成 {ok}/{n}"
@@ -8103,46 +8099,6 @@
       "en": "Graph",
       "zh": "图"
     },
-    "gui.tasks.rec_more": {
-      "en": "Show all",
-      "zh": "展开全文"
-    },
-    "gui.tasks.rec_less": {
-      "en": "Show less",
-      "zh": "收起"
-    },
-    "gui.tasks.rec_process": {
-      "en": "Process",
-      "zh": "过程"
-    },
-    "gui.tasks.rec_thought": {
-      "en": "Thought",
-      "zh": "已思考"
-    },
-    "gui.tasks.rec_thinking": {
-      "en": "Thinking",
-      "zh": "思考中"
-    },
-    "gui.tasks.call_failed_n": {
-      "en": "{n} failed",
-      "zh": "{n} 失败"
-    },
-    "gui.tasks.call_no_result": {
-      "en": "No result",
-      "zh": "未返回"
-    },
-    "gui.tasks.call_no_result_n": {
-      "en": "{n} with no result",
-      "zh": "{n} 未返回"
-    },
-    "gui.tasks.deleg_a_graph": {
-      "en": "a graph",
-      "zh": "一张图"
-    },
-    "gui.tasks.exit_code": {
-      "en": "Exit code {n}",
-      "zh": "退出码 {n}"
-    },
     "gui.tasks.canvas": {
       "en": "Graph - drag to pan, ctrl and scroll to zoom",
       "zh": "流程图 - 拖动平移，按住 ctrl 滚动缩放"
@@ -9694,18 +9650,6 @@
     "gui.tasks.ctx_load_failed": {
       "en": "Could not read this node's record.",
       "zh": "没能读到这个节点的记录。"
-    },
-    "gui.tasks.rec_process_aria": {
-      "en": "Show what happened before this answer",
-      "zh": "展开这次回答之前的过程"
-    },
-    "gui.tasks.copied_dispatch": {
-      "en": "Dispatch prompt copied",
-      "zh": "已复制派单提示词"
-    },
-    "gui.tasks.copied_answer": {
-      "en": "Answer copied",
-      "zh": "已复制这次的回答"
     },
     "gui.composer.ph_session": {
       "en": "Continue the conversation...",
