@@ -822,6 +822,28 @@ describe('the node panel', () => {
     expect(painted[painted.length - 1]?.ctx?.status).toBe('run')
   })
 
+  /* A cli-channel node writes no transcript while it runs: the server hands back
+     a console tail in its place, which the conversation's renderer has no row
+     for. Without the sentence the tab is a dispatch and a working glyph, which
+     reads as a node that has done nothing. */
+  it('says a node on the cli channel keeps no live transcript, and only while it does', async () => {
+    record = { dispatch: 'the rendered prompt', steps: [{ kind: 'console', text: 'cli output' }], answer: null, outputTruncated: false }
+    const running = task({
+      id: 'a', kind: 'dag', status: 'running',
+      nodes: [node({ node_id: 'n1', status: 'running', started_at: 1000 })],
+    })
+    pick(running)
+    await act(async () => {})
+    expect(document.querySelector('.tkctx .tkconsole')?.textContent).toBe('gui.tasks.ctx_console')
+    expect(painted[painted.length - 1]?.ctx?.messages?.map((m) => m.role)).toEqual(['user', 'console'])
+
+    cleanup()
+    record = { dispatch: 'the rendered prompt', steps: [], answer: 'the answer', outputTruncated: false }
+    pick(task({ id: 'a', kind: 'dag', status: 'completed', nodes: [node({ node_id: 'n1', status: 'completed' })] }))
+    await act(async () => {})
+    expect(document.querySelector('.tkconsole')).toBeNull()
+  })
+
   it('says a step has not started rather than drawing an empty context', () => {
     const pending = task({
       id: 'a', kind: 'dag', status: 'running', nodes: [node({ node_id: 'n1', status: 'pending' })],

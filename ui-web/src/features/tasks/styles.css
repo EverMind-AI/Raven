@@ -155,12 +155,17 @@
   padding: 0 6px;
 }
 
-/* The context tab: the node's record, then an ended-without-an-answer banner
-   and the output-truncated note under it. */
+/* The context tab: the node's record, then the cli channel's no-transcript
+   line, an ended-without-an-answer banner and the output-truncated note. */
 .tkctx {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+.tkconsole {
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--muted);
 }
 /* The record itself, painted by the transcript's renderer (TasksPage.tsx's
    RecordStage) and laid out the way the conversation lays out a turn: one

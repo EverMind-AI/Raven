@@ -528,6 +528,12 @@ function ContextTab({ row, node, rec }: {
   return (
     <div className="tkctx">
       <RecordStage record={record} status={node.status} nodeKey={nodeKey} />
+      {/* The console tail a cli-channel node is read through while it runs has
+         no row in the conversation's renderer, so the tab says why there is
+         nothing more to read yet. */}
+      {record.steps.some((s) => s.kind === 'console')
+        ? <div className="tkconsole">{t('gui.tasks.ctx_console')}</div>
+        : null}
       {!record.answer && node.status === 'failed'
         ? (
           <div className="tkerrb">
