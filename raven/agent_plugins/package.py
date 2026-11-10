@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import errno
 import hashlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -83,12 +82,6 @@ def is_contained(root: Path, candidate: Path) -> bool:
     # link is a containment failure, never a crash for the whole process.
     except (ValueError, OSError, RuntimeError):
         return False
-    # 3.13 returns the loop path instead of raising, and the relative-to check
-    # then passes; the strict realpath is the loop signal both versions share.
-    try:
-        os.path.realpath(candidate, strict=True)
-    except OSError as exc:
-        return not is_symlink_loop(exc)
     return True
 
 
