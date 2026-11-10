@@ -86,6 +86,24 @@ describe('skills page', () => {
     expect(calls).toEqual([['set', { key: 'skillForge.router.hub.enabled', value: false }]])
   })
 
+  it('the Skill Hub row says what it sends, and when the serving loop cannot search yet', async () => {
+    /* The switch reads on as soon as the endpoint is written, but a loop that
+       started without one holds no Hub client until a reload; a toast is gone
+       before the reader looks at the switch again. What the switch sends is
+       said either way, on or off: it is what the reader is deciding. */
+    install(snap({ skillHub: { on: true, awaitingReload: true } }))
+    await mount('skills')
+    expect(screen.getByText('gui.settings.skills.hub_sub_reload')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.skills.hub_sub')).toBeNull()
+    cleanup()
+    store._resetForTests()
+
+    install(snap({ skillHub: { on: false, awaitingReload: false } }))
+    await mount('skills')
+    expect(screen.getByText('gui.settings.skills.hub_sub')).toBeTruthy()
+    expect(screen.queryByText('gui.settings.skills.hub_sub_reload')).toBeNull()
+  })
+
   /* The knob slides rather than jumping. A write that remounts the page
      replaces the button, and the one that replaces it has the knob already at
      its new place -- so the knob's transition never got to run. A switch's

@@ -34,7 +34,7 @@
 .ob-langbtn { font: inherit; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; border: 0;
   border-radius: 7px; background: none; color: var(--text); padding: 5px 8px; cursor: pointer; }
 .ob-langbtn:hover, .ob-langbtn[aria-expanded="true"] { background: var(--raised); }
-.ob-langbtn:focus-visible { outline: 2px solid var(--warm); outline-offset: 1px; }
+.ob-langbtn:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .ob-langch { width: 10px; height: 10px; fill: none; stroke: var(--faint); stroke-width: 1.3; stroke-linecap: round;
   stroke-linejoin: round; transition: transform .15s; }
 .ob-langbtn[aria-expanded="true"] .ob-langch { transform: rotate(180deg); }
@@ -58,7 +58,7 @@
 .ob-err { color: var(--clay); font-size: 13px; }
 
 .ob-btn { font: inherit; font-size: 14px; padding: 8px 20px; border-radius: 8px; cursor: pointer; }
-.ob-btn:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
+.ob-btn:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .ob-btn:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 .ob-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-accent); font-weight: 600; }
 .ob-primary:hover { filter: brightness(1.05); }
