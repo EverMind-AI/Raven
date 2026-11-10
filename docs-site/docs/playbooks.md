@@ -253,6 +253,12 @@ the background. Missing ordinary parameters or required blanks prevent
 dispatch and return named gaps. A prompt-mode load returns guidance instead
 of dispatching by itself.
 
+Runs started through the page's `playbooks.run` RPC attribute model usage to
+the requested conversation, including any existing delegation owner. Resuming
+or extending a multi-round stint keeps the original conversation's attribution.
+This accounting lookup does not create a conversation: a key with no existing
+session is recorded without a delegation owner.
+
 `confirm` defaults to true on a Playbook and is passed to the graph when the
 executor dispatches it. **Without an ask channel, the current DAG implementation
 logs a notice and runs unconfirmed; the explicit CLI path does not wire one.**
