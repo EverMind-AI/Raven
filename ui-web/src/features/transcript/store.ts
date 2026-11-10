@@ -52,6 +52,17 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
    the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
+
+/* The fence lines a dispatch carries around an upstream node's output, set
+   apart so the reader sees where the injected text starts and stops. Only the
+   markers: the text between them stays ordinary prose. The search is over text
+   nobody here wrote, so a failed start stops at the next bracket rather than
+   running on to the end of the line, which is what keeps it linear; a marker
+   the runtime writes holds no bracket of its own. */
+const UNTRUSTED_MARK = /\[(?:BEGIN|END) UNTRUSTED[^[\]\n<]*\]/g
+export const markUntrusted = (html: string): string =>
+  html.replace(UNTRUSTED_MARK, (mark) => `<span class="transcript-untrusted">${mark}</span>`)
+
 export const durText = formatDuration
 
 const shortPath = (p: string): string => {

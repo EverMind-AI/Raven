@@ -2896,6 +2896,19 @@ describe("the turn's delivered files", () => {
      reader typed: it wears the runtime's bubble and says who sent it, and it is
      read as the markdown it was written in. A later message in the same record
      is the reader's own and keeps the reader's bubble. */
+  /* The text between the fences is an upstream node's output, so the marker
+     search runs over text nobody here wrote. A failed start must stop at the
+     next bracket: one that ran on to the end of the line made a long line of
+     unclosed markers quadratic (8000 of them took a second). */
+  it('finds the fence markers in time linear in a line of unclosed ones', () => {
+    const hostile = '[BEGIN UNTRUSTED '.repeat(20000)
+    const t0 = performance.now()
+    expect(store.markUntrusted(hostile)).toBe(hostile)
+    expect(performance.now() - t0).toBeLessThan(250)
+    expect(store.markUntrusted('a [END UNTRUSTED web #1] b')).toBe(
+      'a <span class="transcript-untrusted">[END UNTRUSTED web #1]</span> b')
+  })
+
   it('draws a record\'s dispatch as the bubble nobody typed', () => {
     const box = document.createElement('div')
     document.body.append(box)

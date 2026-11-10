@@ -1072,13 +1072,6 @@ function attMark(name: string): ReactElement {
   return <Icon icon={File01Icon} size={14} />
 }
 
-/* The fence lines a dispatch carries around an upstream node's output, set
-   apart so the reader sees where the injected text starts and stops. Only the
-   markers: the text between them stays ordinary prose. */
-const UNTRUSTED_MARK = /\[(?:BEGIN|END) UNTRUSTED[^\]\n<]*\]/g
-const markUntrusted = (html: string): string =>
-  html.replace(UNTRUSTED_MARK, (mark) => `<span class="transcript-untrusted">${mark}</span>`)
-
 const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData }): ReactElement {
   useSeg(lane, seg)
   const bRef = useRef<HTMLDivElement | null>(null)
@@ -1156,7 +1149,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
             </span>
           ) : null}
           {seg.md
-            ? <div className="prose" dangerouslySetInnerHTML={{ __html: markUntrusted(store.mdHtml(seg.body)) }} />
+            ? <div className="prose" dangerouslySetInnerHTML={{ __html: store.markUntrusted(store.mdHtml(seg.body)) }} />
             : seg.body}
         </div>
       ) : null}
