@@ -181,6 +181,37 @@
      surfaces meet, and a wide low-alpha falloff that fades into the page. */
   --seam:     -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
 
+  /* ---- the settings dialog: warm paper --------------------------------
+     The settings dialog is the one place a reader stops to think, so it is
+     the one place the page is allowed to feel like a room rather than a
+     console. These tokens are its own ground, its own ink and its own
+     accent; the page's neutrals stay cold so that arriving here reads as a
+     change of room.
+
+     The light set is parchment: a warm off-white sheet, a warmer rail beside
+     it, and a single gold accent that carries every "this is on" and "this
+     is the current one" in the dialog. Rules and separators are hairlines
+     over the sheet rather than boxes around it -- a line drawn on paper, not
+     a panel mounted on a page. */
+  --set-paper:    #fbf8f0;   /* the sheet the pages are written on */
+  --set-paper-2:  #fffdf8;   /* a raised card on that sheet */
+  --set-rail:     #f1ebdc;   /* the section rail beside it */
+  --set-rail-2:   #e9e2cf;   /* an icon tile in that rail */
+  --set-ink:      #241f17;   /* what the reader reads */
+  --set-ink-2:    #3b342a;
+  --set-muted:    #6e6558;
+  --set-faint:    #988e7c;
+  --set-rule:     rgba(60, 50, 30, .11);
+  --set-rule-soft:rgba(60, 50, 30, .06);
+  --set-accent:   #b5791c;   /* the gold: one accent, used sparingly */
+  --set-accent-2: #e0a63a;   /* the same gold, lighter -- a lit switch */
+  --set-accent-wash: rgba(181, 121, 28, .10);
+  --set-glow:     rgba(252, 191, 78, .58);
+  --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
+  /* The rail's own lamp: a warm wash in its top corner, so the eye lands on
+     the section list first. */
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
+
   /* Inset of the two panel toggles from their window edge. Both sides read it,
      so the buttons stay put when the panel they control opens or closes. */
   --edge: 10px;
@@ -308,6 +339,30 @@
     --text:     #e8e8e6;
     --muted:    #afafad;
     --faint:    #8a8a88;
+
+    /* The settings dialog under a lamp: the same warm room the light set is,
+       lit from one corner. The black is a warm near-black rather than the
+       page's, so the dialog is a different room and not a dimmer one, and the
+       accent is the lit amber -- the one thing in it that glows. */
+    --set-paper:    #141210;
+    --set-paper-2:  #1e1a16;
+    --set-rail:     #171410;
+    --set-rail-2:   #241f19;
+    --set-ink:      #f1e9da;
+    --set-ink-2:    #d8cdb8;
+    --set-muted:    #a2988a;
+    --set-faint:    #7c7367;
+    --set-rule:     rgba(255, 225, 180, .09);
+    --set-rule-soft:rgba(255, 225, 180, .05);
+    --set-accent:   #e9b44c;
+    --set-accent-2: #f5c46a;
+    --set-accent-wash: rgba(233, 180, 76, .11);
+    --set-glow:     rgba(233, 180, 76, .58);
+    --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
+                     0 0 90px -30px rgba(233, 180, 76, .18);
+    --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
+    --set-go:       var(--set-accent);
+    --set-go-ink:   #241b0c;
     --link:     #86abe4;
     --amber:    #e8cf49;
     --amber-dp: #6f6114;
@@ -358,6 +413,27 @@
     --snav-bg:        #262626;
     --settings-nav-on:  #333333;
     --settings-nav-ico: #999999;
+    /* The settings dialog, same as the media query's: an explicit dark theme
+       has to carry its own copy, because this block outranks that one. */
+    --set-paper:    #141210;
+    --set-paper-2:  #1e1a16;
+    --set-rail:     #171410;
+    --set-rail-2:   #241f19;
+    --set-ink:      #f1e9da;
+    --set-ink-2:    #d8cdb8;
+    --set-muted:    #a2988a;
+    --set-faint:    #7c7367;
+    --set-rule:     rgba(255, 225, 180, .09);
+    --set-rule-soft:rgba(255, 225, 180, .05);
+    --set-accent:   #e9b44c;
+    --set-accent-2: #f5c46a;
+    --set-accent-wash: rgba(233, 180, 76, .11);
+    --set-glow:     rgba(233, 180, 76, .58);
+    --set-shadow:   0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 0 1px rgba(255, 200, 130, .04),
+                     0 0 90px -30px rgba(233, 180, 76, .18);
+    --set-lamp:     radial-gradient(55% 42% at 88% -6%, rgba(233, 180, 76, .16), rgba(233, 180, 76, 0) 70%);
+    --set-go:       var(--set-accent);
+    --set-go-ink:   #241b0c;
     --composer-bg:    rgba(32, 32, 32, .85);
     --composer-line:  #333333;
     --composer-sh:    rgba(0, 0, 0, .45);
@@ -474,6 +550,31 @@
   --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
   --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
+  /* The settings dialog, same as the base block's: an explicit light theme
+     has to carry its own copy, because this block outranks that one. */
+  --set-paper:    #fbf8f0;
+  --set-paper-2:  #fffdf8;
+  --set-rail:     #f1ebdc;
+  --set-rail-2:   #e9e2cf;
+  --set-ink:      #241f17;
+  --set-ink-2:    #3b342a;
+  --set-muted:    #6e6558;
+  --set-faint:    #988e7c;
+  --set-rule:     rgba(60, 50, 30, .11);
+  --set-rule-soft:rgba(60, 50, 30, .06);
+  --set-accent:   #b5791c;
+  --set-accent-2: #e0a63a;
+  --set-accent-wash: rgba(181, 121, 28, .10);
+  --set-glow:     rgba(252, 191, 78, .58);
+  --set-shadow:   0 30px 70px -34px rgba(60, 45, 20, .55), 0 2px 6px rgba(60, 45, 20, .08);
+  --set-lamp:     radial-gradient(120% 45% at 0% 0%, rgba(224, 166, 58, .20), rgba(224, 166, 58, 0) 62%);
+  --set-go:       var(--set-ink);
+  --set-go-ink:   var(--set-paper);
+  /* The one filled button the dialog has. In the light theme it is ink on
+     paper, the way a printed form's submit is; in the dark one it is the lit
+     amber, because in a room lit by a lamp the accent is what draws the eye. */
+  --set-go:       var(--set-ink);
+  --set-go-ink:   var(--set-paper);
   --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
   --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
   --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
@@ -4488,7 +4589,13 @@ details[open] summary { margin-bottom: 8px; }
 }
 
 /* settings — a dialog with its own two panes: the nav and the panel scroll
-   independently, so a long panel never drags the section list off screen. */
+   independently, so a long panel never drags the section list off screen.
+
+   The dialog is the one warm room on the page. It runs on its own set of
+   tokens (--set-*), so the light theme is parchment and the dark theme is the
+   same room under a lamp: a warm near-black with an amber light in the top
+   corner. The page's own neutrals stay cold around it, so arriving here reads
+   as a change of room rather than as a dimmer console. */
 .setveil { background: var(--scrim-soft); backdrop-filter: blur(3px); }
 .smodal {
   /* The containing block for the add-model drawer, which is clipped by this
@@ -4496,15 +4603,46 @@ details[open] summary { margin-bottom: 8px; }
   position: relative;
   width: min(1000px, 94vw); height: min(680px, 88vh);
   display: grid; grid-template-columns: 208px 1fr;
-  background: var(--ink); border: 1px solid var(--line); border-radius: 16px;
-  box-shadow: 0 24px 64px -20px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.12);
+  background: var(--set-paper); border: 1px solid var(--set-rule); border-radius: 16px;
+  box-shadow: var(--set-shadow);
   overflow: hidden; animation: up .18s ease both;
+
+  /* The dialog's own neutrals, re-pointed at the warm set. Every rule inside
+     it that names a colour by role -- paper, line, text -- reads the warm one
+     now, so the room is warm without each rule knowing it. The two sections
+     another domain owns (schedules, memory) are rooted in boxes of their own
+     inside this dialog, so they inherit it too: one room, not three.
+
+     --ink is deliberately NOT re-pointed: it is the page's ground, and the
+     ground under a dialog is the scrim's, not the dialog's. */
+  --paper: var(--set-paper);
+  --raised: var(--set-paper-2);
+  --surface: var(--set-rail-2);
+  --line: var(--set-rule);
+  --line-soft: var(--set-rule-soft);
+  --text: var(--set-ink);
+  --muted: var(--set-muted);
+  --faint: var(--set-faint);
+  --amber: var(--set-accent);
+  --gold: var(--set-accent);
+  --warm: var(--set-accent-2);
+  --amber-dp: var(--set-accent-wash);
 }
-/* Same seam grammar as the app shell: the rail's grey against the body's
-   white is the boundary, no rule. */
+/* The lamp: in the dark theme a warm light falls into the dialog's top corner,
+   so the one thing in it that glows is the accent. It sits over the whole
+   dialog rather than over a panel, because it is the room's light and not
+   any one part's. */
+.smodal::before {
+  content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: var(--set-lamp);
+}
+/* Same seam grammar as the app shell: the rail's ground against the body's
+   white is the boundary, no rule. Here the rail is a shade warmer than the
+   sheet beside it, so the seam is a change of paper rather than a change of
+   grey. */
 .snav {
   display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
-  background: var(--snav-bg);
+  background: var(--set-rail);
 }
 /* Inside the settings dialog a small button is the control standard's size,
    the way the prototype's settings document sizes it -- 32 and 8, beside a
@@ -4522,46 +4660,53 @@ details[open] summary { margin-bottom: 8px; }
   font-size: 13px; padding: 0 13px;
 }
 :root[data-lang="en"] .smodal .mini { min-width: 88px; }
-.smodal .mini:hover:not(:disabled) { border-color: var(--amber); background: var(--paper); }
-.smodal .mini.ghost { background: none; color: var(--muted); }
+.smodal .mini:hover:not(:disabled) { border-color: var(--set-accent); background: var(--set-paper-2); }
+.smodal .mini.ghost { background: none; color: var(--set-muted); }
 .smodal .mini.danger { color: var(--clay); border-color: var(--clay); }
-/* The primary verb, filled: creating a schedule is the one the dialog has. */
+/* The primary verb, filled: creating a schedule is the one the dialog has.
+   Which fill it gets is the theme's to say, through --set-go: ink on paper in
+   the light theme, the lit amber in the dark one. */
 .smodal .mini.go {
-  background: var(--text); border-color: var(--text); color: var(--paper); font-weight: 500;
+  background: var(--set-go); border-color: var(--set-go); color: var(--set-go-ink); font-weight: 500;
 }
 .smodal .mini.go:hover:not(:disabled) {
-  filter: brightness(1.18); border-color: var(--text); background: var(--text);
+  filter: brightness(1.18); border-color: var(--set-go); background: var(--set-go);
 }
 .snav .brandrow { display: flex; align-items: center; height: 64px; padding: 0 24px; }
-.snav .wm { font-size: 16px; font-weight: 600; color: var(--composer-ink); }
+.snav .wm { font-size: 16px; font-weight: 600; color: var(--set-ink); }
 .snavlist { overflow-y: auto; min-height: 0; padding: 0 16px 16px; display: grid; gap: 2px; align-content: start; }
 /* Tight enough that all 14 sections fit without the rail scrolling: a section
    list you have to scroll to see hides half the settings. */
 .snav button.sitem {
-  text-align: left; padding: 5px 10px; border-radius: 7px; font-size: 12.5px; color: var(--muted);
+  text-align: left; padding: 5px 10px; border-radius: 7px; font-size: 12.5px; color: var(--set-muted);
   display: flex; align-items: center; gap: 9px; line-height: 1.55;
 }
-.snav button.sitem:hover { background: var(--raised); color: var(--text); }
-.snav button.sitem[aria-current="true"] { background: var(--ink); color: var(--text); font-weight: 600;
-  box-shadow: inset 0 0 0 1px var(--line-soft); }
+.snav button.sitem:hover { background: var(--set-paper-2); color: var(--set-ink); }
+/* The current section: a sheet of paper laid on the rail with a gold edge,
+   rather than an inverted block. In the dark theme the same shape is a warm
+   wash with the accent down its left side. */
+.snav button.sitem[aria-current="true"] {
+  background: var(--set-paper-2); color: var(--set-ink); font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--set-rule), inset 3px 0 0 var(--set-accent);
+}
 .snav button.sitem svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor;
-  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--faint); }
-.snav button.sitem[aria-current="true"] svg { color: var(--amber); }
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--set-faint); }
+.snav button.sitem[aria-current="true"] svg { color: var(--set-accent); }
 /* 14 sections stay findable only under group headings. */
 .snav .grp {
   font-family: var(--mono); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase;
-  color: var(--faint); padding: 11px 10px 4px;
+  color: var(--set-faint); padding: 11px 10px 4px;
 }
 .snav .grp:first-child { padding-top: 2px; }
 
 .sbody { display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0; }
 .shd {
   display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--set-rule-soft);
 }
 .shd .ttl { flex: 1; min-width: 0; }
-.shd h3 { font-size: 16.5px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
-.shd .sub { font-size: 12.5px; color: var(--muted); margin: 3px 0 0; line-height: 1.5; }
+.shd h3 { font-size: 16.5px; font-weight: 600; margin: 0; letter-spacing: -.01em; color: var(--set-ink); }
+.shd .sub { font-size: 12.5px; color: var(--set-muted); margin: 3px 0 0; line-height: 1.5; }
 .spanels { overflow-y: auto; min-height: 0; padding: 18px 20px 26px; }
 
 /* Two sections are another domain's island, rooted in a box of its own
