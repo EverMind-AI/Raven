@@ -171,7 +171,8 @@ details pane.
 Switching to it parks the scroller (`#scroll[data-parked]`: out of the flow,
 hidden, its size and scroll position kept) rather than unmounting it, so the
 transcript goes on streaming underneath and comes back exactly where it was.
-The header's toggle (`#trajBtn`) appears only when the gateway announced
+The header's view switch (`#chatViewBtn` and `#trajBtn`, the first control of its
+capsule) appears only when the gateway announced
 `trajectory-v1` (every gateway does while its trajectory policy is on, which is the default), `trajectory.state` says the view is on, a conversation is open
 and that conversation is not in its empty state (`state/session/conversation.ts`'s
 flag); the store's `available` is that one condition.
@@ -566,8 +567,8 @@ layer is open.
 **Export Wizard**:
 The dialog `#exportVeil` holds (`src/App.tsx` renders the veil, the box and the
 empty `#exportBody`), drawn by `features/export/` and opened from the header's
-conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the corner slot,
-with the desk launcher one slot in over `#wsBtn`). A flow is a sequence of
+conversation menu (`#moreBtn` in `src/chrome/ChatTop.tsx`, the last control of
+the header's capsule, after the desk's chip). A flow is a sequence of
 pages: the export is the turn picker, then the export page; the bug report
 (offered while the handshake carries `bugreport-v1`) is the picker, the
 problem, the decisions and the upload. The picker drops out when the
