@@ -36,7 +36,7 @@ function HubCard({ on, awaitingReload }: { on: boolean; awaitingReload: boolean 
   return (
     <Card title={t('gui.settings.skills.hub_card')}>
       <Row label={label} sub={t(awaitingReload ? 'gui.settings.skills.hub_sub_reload' : 'gui.settings.skills.hub_sub')}>
-        <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next)} />
+        <Switch on={on} label={label} onChange={(next) => void store.write(HUB_SWITCH, next, { remount: false })} />
       </Row>
     </Card>
   )
@@ -59,7 +59,7 @@ function SkillSwitch({ name, off }: { name: string; off: boolean }): JSX.Element
   const flip = (on: boolean): void => {
     const list = blocklist(store.get().snap.raw)
     const next = on ? list.filter((n) => n !== name) : [...list.filter((n) => n !== name), name]
-    void store.write('skillForge.blocklist', next)
+    void store.write('skillForge.blocklist', next, { remount: false })
   }
   return <Switch on={!off} label={name} onChange={flip} />
 }

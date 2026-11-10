@@ -47,6 +47,18 @@ describe('about page', () => {
     expect(copied.values).toEqual([])
   })
 
+  it('offers the repository on GitHub, in the row under the update one', async () => {
+    install()
+    await mount('about')
+    const link = screen.getByRole('link', { name: 'https://github.com/EverMind-AI/Raven' })
+    expect(link.getAttribute('href')).toBe('https://github.com/EverMind-AI/Raven')
+    expect(link.getAttribute('target')).toBe('_blank')
+    /* The row it sits in is the one below the update row, so the reader finds
+       the source where the version is. */
+    const update = screen.getByText('gui.settings.about.check').closest('.settings-row')
+    expect(update!.nextElementSibling).toBe(link.closest('.settings-row'))
+  })
+
   it('copies the path instead while the gateway is another machine', async () => {
     /* The file manager would open on the gateway's host, which is not the
        reader's screen when the page is served from elsewhere. */

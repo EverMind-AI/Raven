@@ -54,6 +54,9 @@ function place(): void {
      window's; the control says so with `data-tip-wrap`. Before the measure
      below, since wrapping is what decides the pill's height. */
   pill.dataset.wrap = hovered.hasAttribute('data-tip-wrap') ? 'true' : 'false'
+  /* A label that is a card rather than a pill: the cost chart's hover card,
+     which says so with `data-tip-card`. */
+  pill.dataset.card = hovered.hasAttribute('data-tip-card') ? 'true' : 'false'
   const vw = document.documentElement.clientWidth
   const vh = document.documentElement.clientHeight
   const r = hovered.getBoundingClientRect()

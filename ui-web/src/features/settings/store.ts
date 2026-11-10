@@ -58,7 +58,7 @@ export type ProvFilter = 'all' | 'on' | 'direct' | 'gateway' | 'oauth' | 'local'
 
 /* The vendor-list sheet under a provider's models card: what the vendor
    answered, what is ticked, and the typed filter. Kept here rather than in
-   the component because every write remounts the page. */
+   the component because a write can remount the page. */
 export interface Sheet {
   slug: string
   q: string
@@ -350,12 +350,17 @@ export function setTab(id: string): void {
 
 /* Every write the pages make: the row's key is busy while it runs, a fresh
    snapshot lands when it resolves, and a refusal the source already toasted
-   (its { handled } tag) only redraws. Resolves to whether it went through. */
-export async function run(key: string, work: () => Promise<SettingsSnapshot | void>): Promise<boolean> {
+   (its { handled } tag) only redraws. Resolves to whether it went through.
+
+   `remount: false` leaves the page standing. The epoch remounts it so the
+   fields re-seed from the fresh snapshot; a switch has no field, and the
+   remount replaces the button as well -- so the knob would appear at its new
+   place rather than slide there, and its transition never got to run. */
+export async function run(key: string, work: () => Promise<SettingsSnapshot | void>, opts?: { remount?: boolean }): Promise<boolean> {
   set({ busy: [...get().busy, key], err: '' })
   try {
     const snap = await work()
-    if (snap) set({ snap, epoch: get().epoch + 1 })
+    if (snap) set({ snap, epoch: opts?.remount === false ? get().epoch : get().epoch + 1 })
     return true
   } catch (e) {
     if (!(e as { handled?: boolean }).handled) {
@@ -367,8 +372,8 @@ export async function run(key: string, work: () => Promise<SettingsSnapshot | vo
   }
 }
 
-export const write = (key: string, value: unknown): Promise<boolean> =>
-  run(`set:${key}`, () => source().set(key, value))
+export const write = (key: string, value: unknown, opts?: { remount?: boolean }): Promise<boolean> =>
+  run(`set:${key}`, () => source().set(key, value), opts)
 
 export const isBusy = (key: string): boolean => get().busy.includes(key)
 

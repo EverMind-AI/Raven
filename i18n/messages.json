@@ -8275,6 +8275,10 @@
       "en": "Update",
       "zh": "更新"
     },
+    "gui.settings.about.github": {
+      "en": "GitHub",
+      "zh": "GitHub"
+    },
     "gui.settings.about.check": {
       "en": "Check for updates",
       "zh": "检查更新"

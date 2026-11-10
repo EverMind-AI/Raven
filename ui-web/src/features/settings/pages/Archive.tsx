@@ -37,7 +37,7 @@ export function Archive(): JSX.Element {
      pile of them disappear at once. Both reads below issue one, which is what
      performs the sweep and then shows what it did. */
   const toggleAuto = (on: boolean): void => {
-    void store.write('sessions.autoArchiveAfterDays', on ? AUTO_ARCHIVE_DAYS : null)
+    void store.write('sessions.autoArchiveAfterDays', on ? AUTO_ARCHIVE_DAYS : null, { remount: false })
       .then((applied) => { if (applied) return store.archivedLoad().then(() => refreshList()) })
   }
   const remove = (r: ArchivedSession): void => {

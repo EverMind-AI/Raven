@@ -104,6 +104,19 @@ describe('skills page', () => {
     expect(screen.queryByText('gui.settings.skills.hub_sub_reload')).toBeNull()
   })
 
+  /* The knob slides rather than jumping. A write that remounts the page
+     replaces the button, and the one that replaces it has the knob already at
+     its new place -- so the knob's transition never got to run. A switch's
+     write leaves the page standing. */
+  it('keeps the switch on the page across its write, so the knob can slide', async () => {
+    install(snap({ skillHub: { on: true, awaitingReload: false } }))
+    await mount('skills')
+    const hub = screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })
+    await act(async () => { fireEvent.click(hub) })
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('switch', { name: 'gui.settings.skills.hub_title' })).toBe(hub)
+  })
+
   it('reads the blocklist from a snake_case skill_forge block', async () => {
     /* A null camel block is dropped by the loader, so the snake one is what
        runs; the page has to read the first non-null spelling, not truthiness. */

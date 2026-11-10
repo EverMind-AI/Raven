@@ -174,7 +174,7 @@ export function Plugins(): JSX.Element {
     /* A server turned on that still needs its credential is written as
        enabled and opened, and nothing tries to connect until the key lands. */
     if (on && m.auth && m.auth !== 'none' && !m.credentialed) store.set({ plugOpen: m.name })
-    void store.run(busyKey(m.name), () => store.source().toggleServer(m.name, on))
+    void store.run(busyKey(m.name), () => store.source().toggleServer(m.name, on), { remount: false })
   }
   /* Connecting a server is not this page's either: the plugin tool finds it in
      the PlugHub catalogue and connects it in the chat, and the key or the
