@@ -650,6 +650,68 @@ async def test_a_forwarded_skill_read_reaches_the_skill_panel(tmp_path):
     assert reported[0]["kind"] == "read_skill"
 
 
+async def test_a_forwarded_skill_read_with_string_arguments_reaches_the_skill_panel(tmp_path):
+    """The tool accepts a JSON-string ``arguments``; the panel's read must too.
+
+    ``ToolCallController.call`` parses that spelling, so the read_skill body
+    really lands. A report path reading the raw envelope instead saw no
+    ``skill_id`` and dropped the report, leaving the panel empty for a call
+    that had run.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "s1",
+                                "function": {
+                                    "name": "tool_call",
+                                    "arguments": json.dumps(
+                                        {
+                                            "name": "read_skill",
+                                            "arguments": json.dumps({"skill_id": "local/deck-engine"}),
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert results and results[0][0] == "read_skill"
+    assert _ReadSkillTool.BODY in results[0][1]
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["kind"] == "read_skill"
+
+
 async def test_a_direct_skill_read_still_reaches_the_skill_panel(tmp_path):
     """The control for the forwarded case: a direct call reports unchanged."""
     provider = _FakeStreamToolProvider(
