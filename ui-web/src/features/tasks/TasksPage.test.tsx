@@ -46,7 +46,7 @@ function withMessages(r: RecordIn): NodeRecord {
 /* The transcript's painter, stood in for: the context tab hands it the record
    and says how to draw it, and that hand-over is this domain's half. What the
    record then looks like is the transcript's, and is tested there. */
-let painted: Array<{ ctx: { status?: string; messages?: Array<{ text?: string }> } | null; opts: StageOpts | null | undefined }> = []
+let painted: Array<{ ctx: { status?: string; messages?: Array<{ role?: string; text?: string }> } | null; opts: StageOpts | null | undefined }> = []
 const stagePaint: TranscriptSource['stagePaint'] = (box, ctx, opts) => {
   painted.push({ ctx, opts })
   box.textContent = (ctx?.messages ?? []).map((m) => m.text ?? '').filter(Boolean).join(' | ')
