@@ -23,12 +23,13 @@ interface Row { id: string; title?: string }
 
 async function harness({
   reject = null as { code?: number; message?: string } | null, draft = false, current = 's1',
-  create = false,
+  create = false, failSends = 0,
 } = {}) {
   const log: unknown[][] = []
   const notes: Array<Record<string, unknown> | undefined> = []
   const queue: QueuedMessage[] = []
   const asked: Array<[string, unknown]> = []
+  const delivered: string[] = []
   const rows: Row[] = [{ id: 's1' }]
   document.body.innerHTML = '<h1 id="title"></h1><div id="stage"></div><div id="flash"></div>'
   await loadPart(async () => {
@@ -104,9 +105,15 @@ async function harness({
   const runtime = (await import('./runtime')) as Runtime
   const registry = await import('./registry')
   const pipeline = await import('./pipeline')
+  let turnSends = 0
   await fakeGateway((method: string, params: unknown) => {
     asked.push([method, params])
-    if (method === 'turn.send' && reject) return Promise.reject(Object.assign(new Error(reject.message || 'no'), reject))
+    if (method === 'turn.send') {
+      turnSends += 1
+      const refusal = reject || (turnSends <= failSends ? { code: -32602, message: 'unknown field: busy' } : null)
+      if (refusal) return Promise.reject(Object.assign(new Error(refusal.message || 'no'), refusal))
+      delivered.push(String((params as Record<string, unknown>).content))
+    }
     /* The promotion hangs here, which is the window under test: the draft is
        becoming a conversation and there is no session key yet. A case that
        needs the promotion to finish asks for `create`. */
@@ -129,6 +136,7 @@ async function harness({
     asked,
     dispatch: pipeline.dispatch,
     sends: () => asked.filter(([m]) => m === 'turn.send').map(([, p]) => p as Record<string, unknown>),
+    delivered: () => [...delivered],
     did: (name: string) => log.filter((c) => c[0] === name),
     tick: () => new Promise((r) => setTimeout(r, 0)),
   }
@@ -184,7 +192,8 @@ describe('a message typed while the turn is running', () => {
 
   it('falls back to the queue when a gateway does not know the field', async () => {
     /* -32602: an older gateway. The message must not vanish, so it lands where
-       a mid-turn message has always landed, with the retry row beside it. */
+       a mid-turn message has always landed, with the note that says it waits
+       in the queue. */
     const h = await harness({ reject: { code: -32602, message: 'unknown field: busy' } })
     turn.dispatch({ type: 'stream', cancellable: true })
 
@@ -192,7 +201,7 @@ describe('a message typed while the turn is running', () => {
     await h.tick()
 
     expect(h.queue).toEqual([{ text: 'only the last quarter' }])
-    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'unknown field: busy', ['retry']]])
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'unknown field: busy', null]])
     expect(turn.phase()).toBe('streaming')
   })
 
@@ -218,7 +227,44 @@ describe('a message typed while the turn is running', () => {
     await h.tick()
 
     expect(h.queue).toEqual([{ text: 'only the last quarter' }])
-    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.send', 'gui.err.disconnected', ['retry']]])
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'gui.err.disconnected', null]])
+  })
+})
+
+/* The queue is the whole recovery for a message the running turn refused: it
+   goes out when the turn ends. A retry beside it sent the same text a second
+   time, on top of the copy already waiting -- the two paths did not know about
+   each other -- so the note now says where the message went and offers nothing
+   to press. */
+describe('a mid-turn send the gateway refused', () => {
+  it('leaves the text in the queue with no retry to send it again', async () => {
+    const h = await harness({ reject: { code: -32602, message: 'unknown field: busy' } })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    expect(h.queue).toEqual([{ text: 'only the last quarter' }])
+    expect(h.notes).toHaveLength(1)
+    expect(h.notes[0]?.retry).toBeUndefined()
+    expect(h.did('noteRow')).toEqual([['noteRow', 'gui.err.queued', 'unknown field: busy', null]])
+  })
+
+  it('delivers the text once when the turn ends', async () => {
+    const h = await harness({ failSends: 1 })
+    turn.dispatch({ type: 'stream', cancellable: true })
+
+    h.runtime.send('only the last quarter')
+    await h.tick()
+
+    /* The queue is the only copy: there is no second send to make. */
+    expect(h.notes[0]?.retry).toBeUndefined()
+
+    turn.dispatch({ type: 'idle' })
+    h.runtime.drain()
+    await h.tick()
+
+    expect(h.delivered()).toEqual(['only the last quarter'])
   })
 })
 

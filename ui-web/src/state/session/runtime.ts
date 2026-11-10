@@ -358,8 +358,9 @@ export function sendMidTurn(text: string): void {
     .catch((e: unknown) => {
       queuePush(text)
       const err = e as { message?: string }
-      noteRow(t('gui.err.send'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)),
-        { retry: () => send(text) })
+      /* The queue is the recovery: the message already waits there, and a retry
+         would send it a second time beside that copy. */
+      noteRow(t('gui.err.queued'), err.message === 'not connected' ? t('gui.err.disconnected') : (err.message || String(e)))
     })
 }
 
