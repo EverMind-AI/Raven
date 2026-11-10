@@ -52,6 +52,13 @@ def raven_home() -> Path:
     ``RAVEN_HOME`` decides where config.json, the cron store and every runtime
     subdirectory live, the same way it steers the installer, the node runtime
     lookup, the tracing directory and the serve state file.
+
+    How the value is read, so that every front end reads it the same way: an
+    unset or blank value names no home and falls back to ``~/.raven``; a
+    ``~`` or ``~/...`` expands to the user's home, as ``Path.expanduser()``
+    expands it; an absolute path is itself. A relative value stays relative
+    and is read against the working directory -- the TUI resolves it the same
+    way, so a TUI started as a child of the gateway names the same file.
     """
     home = os.environ.get(HOME_ENV_VAR, "").strip()
     return Path(home).expanduser() if home else Path.home() / DEFAULT_HOME_DIRNAME

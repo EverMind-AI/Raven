@@ -587,14 +587,13 @@ def test_break_stale_waits_when_unlink_fails() -> None:
 
 
 def test_parse_does_not_normalise_line_endings_but_read_entries_does(history_home: Path) -> None:
-    """Pin a real divergence from the TUI for externally converted files.
+    """``parse`` leaves ``\\r`` alone, as its docstring says; the readers do not.
 
-    ``parse`` leaves ``\\r`` alone, as its docstring says. But ``read_entries``
-    (and ``append``'s dedupe read) go through ``Path.read_text``, whose text
-    mode translates ``\\r\\n`` and lone ``\\r`` to ``\\n``; the TUI's
-    ``readFileSync`` does not translate. Both writers emit LF, so this only
-    shows for a history converted by something else or for content pasted
-    with CRLF. The entry text is otherwise identical.
+    ``read_entries`` (and ``append``'s dedupe read) go through
+    ``Path.read_text``, whose text mode translates ``\\r\\n`` and lone ``\\r``
+    to ``\\n``. The TUI's ``load()`` splits on the same endings, so the two
+    readers now agree on a file an external editor converted -- which is what
+    the entry text is compared on here. Both writers emit LF.
     """
     raw = "+line one\r\n+line two\r\n"
     assert parse(raw) == ["line one\r\nline two\r"]
@@ -701,6 +700,34 @@ def test_history_path_follows_raven_home(history_home: Path) -> None:
 
 
 def test_history_path_defaults_to_the_tui_location(monkeypatch: pytest.MonkeyPatch) -> None:
-    # history.ts: `process.env.RAVEN_HOME ?? join(homedir(), '.raven')`.
+    # history.ts: `ravenHome()` -- an unset value falls back to `~/.raven`.
     monkeypatch.delenv("RAVEN_HOME", raising=False)
     assert history_path() == Path.home() / ".raven" / ".raven_history"
+
+
+def test_history_path_reads_a_blank_value_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `RAVEN_HOME=` in a shell profile names no home. The TUI used to join the
+    # empty string and read the file from the working directory while this
+    # side fell back to `~/.raven`.
+    monkeypatch.setenv("RAVEN_HOME", "   ")
+    assert history_path() == Path.home() / ".raven" / ".raven_history"
+
+
+def test_history_path_expands_a_tilde(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `Path.expanduser()` expands `~` and `~/...`; the TUI's `ravenHome()`
+    # expands them the same way, so both name one file.
+    monkeypatch.setenv("RAVEN_HOME", "~/raven-two")
+    assert history_path() == Path.home() / "raven-two" / ".raven_history"
+
+
+def test_a_relative_home_is_read_against_the_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The value stays relative here, so it is read against the working
+    # directory -- which is the base the TUI resolves it against too, so a TUI
+    # started as a child of the gateway names the same file.
+    monkeypatch.setenv("RAVEN_HOME", "rel-home")
+    path = history_path()
+
+    assert path == Path("rel-home/.raven_history")
+    assert path.resolve() == (Path.cwd() / "rel-home" / ".raven_history").resolve()

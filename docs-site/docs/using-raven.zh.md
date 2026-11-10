@@ -36,6 +36,25 @@ Agent 创建独立 worktree，并汇报路径和分支。协调并发修改前�
 该流程见[与子 Agent 协作](agent-collaboration.md#models-modes-and-shared-files)；
 手动构建任务图时参阅[DAG 编排](orchestration.md)。
 
+## 让各个界面指向同一个 home { #point-every-surface-at-one-home }
+
+Raven 把配置、会话、日志、记忆和输入框历史都放在同一个 home 目录下，默认是
+`~/.raven`。`RAVEN_HOME` 可以把它换到别处，各界面读取这个值的方式一致：
+
+| `RAVEN_HOME` | 它指向的 home |
+| --- | --- |
+| 未设置或为空 | `~/.raven` |
+| `~/raven-two` | `~/raven-two`，其中 `~` 展开为用户 home 目录 |
+| `/srv/raven-home` | 该绝对路径 |
+| `rel-home` | 工作目录下的 `rel-home` |
+
+相对路径按各进程的工作目录解析。`raven tui` 启动的 TUI 继承网关的工作目录，
+因此两者共用同一个 home；连接到异地网关的 TUI 会读自己的那一份。两个进程不在同一
+目录时请使用绝对路径。
+
+输入框历史是这个 home 下的同一个文件，由 TUI 与 WebUI 共用。在任一界面发送的
+prompt，重新加载后可在另一界面调出。
+
 ## 继续对话 { #continue-a-conversation }
 
 每次单次 CLI 调用默认创建新会话。确实需要延续上下文时，选择 `--continue`、

@@ -58,12 +58,13 @@ _O_BINARY = getattr(os, "O_BINARY", 0)
 def history_path() -> Path:
     """The file both front ends share.
 
-    The two agree when ``RAVEN_HOME`` is unset or absolute. A ``~`` or a
-    relative value does not: ``raven_home()`` expands it here while the TUI
-    joins the literal string, so the two can name different files.
-    ``RAVEN_HOME=""`` is the extreme case: ``raven_home()`` strips it and
-    falls back to ``~/.raven``, while the TUI joins the empty string and reads
-    the file from the current directory.
+    The two name the same file: ``raven_home()`` expands the value and the
+    TUI's ``ravenHome()`` expands it the same way, so a ``~`` names one home
+    in both and a blank value is unset in both -- the TUI used to join the
+    empty string and read the file from the working directory while this side
+    fell back to ``~/.raven``. A relative value is read against the working
+    directory on each side, which is the same directory when the TUI is
+    started as a child of the gateway that reads the file.
     """
     return raven_home() / HISTORY_FILENAME
 
@@ -73,8 +74,9 @@ def parse(text: str) -> list[str]:
 
     A run of ``+`` lines is one entry. Any other line ends the run; trailing
     and leading separators do not create empty entries. Line endings are left
-    alone (a CRLF file yields ``\\r`` at the end of each line), matching the TUI
-    reader rather than inventing a cleaner one.
+    alone here, because the readers normalise before they parse: the Python
+    one through ``Path.read_text``, which applies universal-newline
+    translation, and the TUI one through its own split.
     """
     entries: list[str] = []
     current: list[str] = []
@@ -101,9 +103,9 @@ def read_entries(limit: int = MAX_ENTRIES) -> list[str]:
     so the cap belongs at this read boundary, before the answer reaches a page.
 
     ``Path.read_text`` applies universal-newline translation, so a CRLF file
-    converted by an external editor yields clean entries here while the TUI
-    reader keeps the trailing ``\\r``. A lone ``\\r`` is folded to ``\\n`` here
-    as well; the TUI's ``readFileSync`` keeps it. Both writers emit LF.
+    converted by an external editor yields clean entries here, and the TUI
+    reader splits on the same endings and yields the same entries. A lone
+    ``\\r`` is folded to ``\\n`` on both sides.
     """
     if limit <= 0:
         return []

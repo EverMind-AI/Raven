@@ -42,6 +42,28 @@ Check those reports before coordinating concurrent edits. See
 for this workflow and [DAG orchestration](orchestration.md) for manually
 constructed graphs.
 
+## Point every surface at one home
+
+Raven keeps configuration, sessions, logs, memory and the composer history
+under one home directory, `~/.raven` by default. `RAVEN_HOME` moves it, and
+every surface reads the value the same way:
+
+| `RAVEN_HOME` | The home it names |
+| --- | --- |
+| unset, or blank | `~/.raven` |
+| `~/raven-two` | `~/raven-two`, with `~` expanded to your home directory |
+| `/srv/raven-home` | that absolute path |
+| `rel-home` | `rel-home` under the working directory |
+
+A relative value is read against the working directory of each process. The
+TUI started by `raven tui` inherits the gateway's, so the two share the same
+home; a TUI attached to a gateway running somewhere else reads its own. Name
+an absolute path when the two are not in the same directory.
+
+The composer history is one file under this home, shared by the TUI and the
+WebUI. A prompt sent in either surface is recalled in the other after a
+reload.
+
 ## Continue a conversation
 
 Each one-shot CLI invocation starts a fresh session by default. Use one of
