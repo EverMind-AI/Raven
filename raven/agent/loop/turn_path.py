@@ -2088,7 +2088,8 @@ class TurnPathMixin:
                     producing = self.tools.get(tool_call.name)
                     owner = producing.metadata_owner(arguments) if producing is not None else None
                     result_name = owner.name if owner is not None else tool_call.name
-                    forwarded_args = producing.forwarded_params(arguments) if producing is not None else arguments
+                    forward = getattr(producing, "forwarded_params", None)
+                    forwarded_args = forward(arguments) if forward is not None else arguments
                     # A skill the model loaded itself never passes through
                     # SkillForge injection, so report it here or the skill panel
                     # misses the whole class (builtin guides in particular).

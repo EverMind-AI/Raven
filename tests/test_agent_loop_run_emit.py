@@ -121,6 +121,44 @@ class _SplitTool(Tool):
         return ToolResult(model_text=self.MODEL_TEXT, display_text=self.DISPLAY_TEXT)
 
 
+class _DuckTool:
+    """A registered tool that does not inherit ``Tool``, the way an MCP or
+    plugin tool is admitted on the authored members alone.
+
+    It carries the members the registry and the loop read today, but not
+    ``forwarded_params``: that hook has a default on ``Tool`` and a duck has no
+    base class to inherit it from, so the result path must treat it as absent
+    rather than require it.
+    """
+
+    name = "ducktool"
+    description = "duck-typed tool with no forwarded_params"
+    parameters = {"type": "object", "properties": {}, "required": []}
+    channels = None
+    timeout_seconds = None
+    blocking_interaction = False
+    truncation_hint = None
+    incomplete_hint = None
+
+    def cast_params(self, params):
+        return params
+
+    def validate_params(self, params):
+        return []
+
+    def metadata_owner(self, params):
+        return self
+
+    def take_metadata(self):
+        return None
+
+    def blocking_for(self, params) -> bool:
+        return self.blocking_interaction
+
+    async def execute(self, **kwargs) -> str:
+        return "duck-ran"
+
+
 class _ReadSkillTool(Tool):
     """Stands in for ``read_skill``: its result is the skill material the window
     splits out of the conversation."""
@@ -674,6 +712,42 @@ async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
     assert results and results[0][0] == "tool_call"
     assert results[0][1].startswith("Error: tool 'no_such_tool' is not available")
     assert sink.events == []
+
+
+async def test_a_tool_without_forwarded_params_still_completes_the_turn(tmp_path):
+    """A duck-typed tool has no base class to inherit ``forwarded_params`` from.
+
+    The result path reads that hook to report a forwarded skill; for a tool
+    that does not carry it the read must fall back to the arguments and the
+    turn must finish. Before the guard the AttributeError ended the turn
+    before any result was appended.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("d1", "ducktool", "direct")],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_DuckTool())
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    events = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), events, _drain)
+
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in events.events)
+    assert results == [("ducktool", "duck-ran")]
 
 
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
