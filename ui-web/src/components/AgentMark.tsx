@@ -70,15 +70,59 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
    Discovered agent under `agents/`. Each is a fact the server asserts about what
    the row runs, exactly as a preset is, so it picks a mark on the same terms --
    and a hand-written row that merely spells itself `Raven-Code` still gets
-   none, for the reason the table above is not keyed by name either.
+   none, because `own` is false for it and the flag is read before any name.
 
    raven.svg is this project's own mark rather than upstream's, so the `cmp`
    against @lobehub/icons-static-svg that settles provenance for the files above
    does not apply to it and LICENSES/README.md counts it separately. It answers
    the theme from a prefers-color-scheme rule inside the file, the way
    miromind.svg does; the tile pins that scheme light, so on its light plate the
-   raven is black under either theme, as the app icon draws it. */
+   raven is black under either theme, as the app icon draws it.
+
+   It stays the fallback for an own row `OWN_MARKS` does not name -- the
+   built-in `raven` row itself, an unfamiliar Discovered agent, and
+   `Raven-PPT`, which is hidden from the roster. */
 const OWN_MARK: { file: string } = { file: 'raven' }
+
+/* The four shipped Raven agents, each wearing the mark the official site draws
+   for it (raven.evermind.ai, the orchestration figure). The site has no
+   Research or Code chip: its `Raven Search` mark is the research one, and its
+   `Raven PPT` mark was given to `Raven-Code` by the owner, while Design and
+   Oncall wear their own. The files were taken from that figure at full
+   opacity -- the site dims its two unselected chips to 53%, which is a state
+   of the figure rather than the icon.
+
+   Keyed by display name, unlike `MARKS`: the manifest under `agents/` supplies
+   that name, and it is what the roster and the waterfall carry. `own` has
+   already established the row is one of raven's own, so this is a lookup inside
+   that set, not the name-only test `MARKS` refuses. */
+const OWN_MARKS: Record<string, { file: string }> = {
+  'Raven-Research': { file: 'raven-research' },
+  'Raven-Code': { file: 'raven-code' },
+  'Raven-Design': { file: 'raven-design' },
+  'Raven-Oncall': { file: 'raven-oncall' },
+}
+
+/* The name reaches here in two shapes: the roster's display name, and an
+   instance name a caller chose for the run -- a model or user may number two
+   runs of one agent (`Raven-Design-1`). Normalise case and separators, then
+   try the bare word and the word without that trailing number. The runtime's
+   own minted handles end in six hex characters (`raven-design-a1b2c3`), so
+   this does not shorten those; the waterfall prefers the record's `meta.agent`,
+   which is the canonical display name. `hasOwn` for the reason `markFor`
+   records below -- a bare index answers `constructor` from the prototype. */
+const OWN_BY_WORD: Record<string, { file: string }> = Object.fromEntries(
+  Object.entries(OWN_MARKS).map(([name, mark]) => [name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), mark]),
+)
+
+function ownMarkFor(agent?: string | null): { file: string } {
+  if (!agent) return OWN_MARK
+  const word = agent.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  for (const key of [word, word.replace(/-\d+$/, '')]) {
+    if (Object.hasOwn(OWN_BY_WORD, key)) return OWN_BY_WORD[key]!
+  }
+  return OWN_MARK
+}
 
 /* The group card's mark: one tile standing for the nine `mirasim_*` rows the
    reader has not picked an agent out of yet.
@@ -113,14 +157,16 @@ export const isOwnAgent = (row?: { builtin?: boolean; vendored?: boolean } | nul
    is a guard in another language with nothing tying it to this one, and this
    costs a call. `noUncheckedIndexedAccess` does not cover it -- it models the
    miss, not the inherited hit. */
-function markFor(preset?: string | null, own?: boolean): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
-  if (own) return OWN_MARK
+function markFor(
+  preset?: string | null, own?: boolean, agent?: string | null,
+): { file: string; tone?: 'mono' | 'hybrid' } | undefined {
+  if (own) return ownMarkFor(agent)
   if (preset === MIRASIM_GROUP) return GROUP_MARK
   return preset && Object.hasOwn(MARKS, preset) ? MARKS[preset] : undefined
 }
 
-export function agentMarkPath(preset?: string | null, own?: boolean): string | null {
-  const mark = markFor(preset, own)
+export function agentMarkPath(preset?: string | null, own?: boolean, agent?: string | null): string | null {
+  const mark = markFor(preset, own, agent)
   return mark ? `assets/agents/${mark.file}.svg` : null
 }
 
@@ -145,9 +191,9 @@ function BotIcon(): JSX.Element {
    the caller because the two flags live on the row and their spelling is the
    server's, not this module's. */
 export function AgentMark({
-  preset, own, badge,
-}: { preset?: string | null; own?: boolean; badge?: string | null }): JSX.Element {
-  const mark = markFor(preset, own)
+  preset, own, agent, badge,
+}: { preset?: string | null; own?: boolean; agent?: string | null; badge?: string | null }): JSX.Element {
+  const mark = markFor(preset, own, agent)
   /* The overlaid mark, for an agent that reaches the reader through another
      one: the plate keeps the route's mark and the badge names the agent. Both
      files are already in the table -- the route's and the agent's -- so this

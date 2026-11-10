@@ -21,9 +21,12 @@
  * default with one exemption) and are not read here.
  */
 
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 import { rules } from './css.mjs'
+
+const featureCss = readFileSync(new URL('../../src/features/extAgents/styles.css', import.meta.url), 'utf8')
 
 describe('the agent mark plate', () => {
   /* A filter reaching a mark is the mistake this file exists to catch, and it
@@ -110,6 +113,49 @@ describe('the agent mark plate', () => {
       expect(got.height, `${slot} declares a height`).toBeTruthy()
       expect(got.radius, `${slot} declares a radius`).toBeTruthy()
       expect(got.height, `${slot} is square`).toBe(got.width)
+    }
+  })
+
+  /* The own tile draws a larger box than the generic mark, and the card and
+     head slots override that box again. Each one has to be square: the four
+     agent marks are near-square while raven.svg is 34x43, so in a tall box the
+     raven fills by width and the four fill by height, and the four draw
+     shorter. In a square box every file fills by height and draws at one
+     height. Both stylesheets are read, not listed, for the reason above.
+
+     Every img/svg rule inside `.agent-mark` is read, not only the direct-child
+     ones: the tile-filling and badge rules reach the image as descendants, and
+     they are where a percentage size is written. */
+  const SIZED_MARK_IMAGES = [
+    ...rules(/\.agent-mark\b[^{]*\b(?:img|svg)\b/),
+    ...rules(/\.agent-mark\b[^{]*\b(?:img|svg)\b/, featureCss),
+  ]
+
+  it('draws every agent mark image in a square box', () => {
+    /* Presence, not a numeric match: a rule that writes only one side is the
+       silent half-size this test exists to catch, and filtering on both sides
+       present dropped it before it could be read. */
+    const declared = (body, property) =>
+      new RegExp(`(?:^|[;{\\s])${property}:\\s*([^;]+)`).exec(body)?.[1].trim().replace(/\s*!important$/i, '')
+    /* Number and unit together: `100%` and `100px` are different boxes, and
+       comparing the numbers alone would call them equal. */
+    const sizeOf = (value) => {
+      const match = /^([\d.]+)\s*([a-z%]*)$/i.exec(value ?? '')
+      return match ? `${Number(match[1])}${match[2].toLowerCase()}` : null
+    }
+    const boxes = SIZED_MARK_IMAGES
+      .map(([slot, body]) => [slot, declared(body, 'width'), declared(body, 'height')])
+      .filter(([, width, height]) => width !== undefined || height !== undefined)
+    /* Read, not assumed: a stylesheet that stopped sizing a mark image would
+       make the loop below pass over an empty set. */
+    expect(boxes.length, 'some img rule sizes a mark').toBeGreaterThan(0)
+    for (const [slot, width, height] of boxes) {
+      const got = sizeOf(height)
+      expect(
+        sizeOf(width) && got,
+        `${slot} declares both width and height (width: ${width ?? 'none'}, height: ${height ?? 'none'})`,
+      ).toBeTruthy()
+      expect(got, `${slot} is square (width: ${width}, height: ${height})`).toBe(sizeOf(width))
     }
   })
 })

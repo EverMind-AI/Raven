@@ -777,6 +777,16 @@ describe('a card', () => {
     expect(lineOf('moved')).toBe('gui.agent.kind_acp · gui.agent.tag_stale')
   })
 
+  /* The tile hands the row's name to AgentMark, and that name is what picks
+     one of the four own marks. A call site that drops it falls back to
+     raven.svg for every own row, which no other assertion on this page sees. */
+  it('draws an own agent s mark from the name its row carries', async () => {
+    install([row({ name: 'Raven-Code', preset: undefined, vendored: true, configured: false })])
+    await mount()
+    const mark = rowNamed('Raven-Code').querySelector('.extAgents-tile-own .agent-mark > img')!
+    expect(mark.getAttribute('src')).toBe('assets/agents/raven-code.svg')
+  })
+
   it('says which registered machine a card runs on, ahead of the line about it, and nothing on one that runs here', async () => {
     install([row({ name: 'claude_code' }), row({ name: 'claude_code@ravenx2', machine: 'ravenx2' })])
     await mount()

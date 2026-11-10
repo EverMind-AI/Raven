@@ -1,7 +1,8 @@
-"""Every third-party sub-agent preset has a brand mark, and every tone on it is true.
+"""Every third-party sub-agent preset and every shipped Raven agent has a brand mark.
 
-The roster draws a brand mark per agent, chosen by preset key. The preset list
-lives in Python and the mark table lives in
+The roster draws a brand mark per agent, chosen by preset key for a third-party
+agent and by the row's name for one of Raven's own. The preset list lives in
+Python, the Discovered agents under ``agents/``, and the mark table lives in
 ``ui-web/src/components/AgentMark.tsx``, so nothing in either language can notice
 when they disagree: adding a preset leaves its row wearing the generic glyph,
 and renaming a file leaves a row addressing a 404. Both are invisible in
@@ -26,6 +27,7 @@ one renders as a black mark on a black surface or as a recoloured brand:
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -34,11 +36,13 @@ from raven.agent.subagent.presets import THIRD_PARTY_SUBAGENT_PRESETS
 _ROOT = Path(__file__).resolve().parents[1]
 _TABLE = _ROOT / "ui-web" / "src" / "components" / "AgentMark.tsx"
 _ASSETS = _ROOT / "ui-web" / "src" / "assets" / "agents"
+_AGENTS = _ROOT / "agents"
 
 _ENTRY = re.compile(
     r"^\s{2}(\w+):\s*\{\s*file:\s*'([^']+)'(?:,\s*tone:\s*'(mono|hybrid)')?\s*\},?$",
     re.MULTILINE,
 )
+_OWN_ENTRY = re.compile(r"^\s{2}'([^']+)':\s*\{\s*file:\s*'([^']+)'\s*\},?$", re.MULTILINE)
 _OWN = re.compile(r"^const OWN_MARK: \{ file: string \} = \{ file: '([^']+)' \}$", re.MULTILINE)
 _GROUP = re.compile(r"^const GROUP_MARK: \{ file: string \} = \{ file: '([^']+)' \}$", re.MULTILINE)
 _SHAPE = re.compile(r"<(?:path|rect|circle|ellipse|polygon)\b[^>]*>")
@@ -69,6 +73,40 @@ def _own_mark() -> str:
     found = _OWN.findall(_TABLE.read_text(encoding="utf-8"))
     assert len(found) == 1, "raven's own mark did not parse -- has its shape changed?"
     return found[0]
+
+
+def _own_marks() -> dict[str, str]:
+    """The per-agent marks for Raven's own agents, keyed by display name.
+
+    ``OWN_MARKS`` cannot live in ``MARKS``: that table's contract is one entry
+    per third-party preset, and these rows carry no preset at all. It is parsed
+    from the source like the rest of the table, and the Discovered agents under
+    ``agents/`` are the other side of the same contract -- an agent added there
+    without an entry here is a row that silently wears the project mark.
+    """
+    body = _TABLE.read_text(encoding="utf-8")
+    start = body.index("const OWN_MARKS")
+    end = body.index("\n}", start)
+    found = dict(_OWN_ENTRY.findall(body[start:end]))
+    assert found, "the own mark table did not parse -- has its shape changed?"
+    return found
+
+
+def _discovered_names() -> set[str]:
+    """The display names of the Discovered agents that get a row of their own.
+
+    A hidden agent is reached only through another row's routing table and
+    never appears in the roster, so it has no row to wear a mark on.
+    """
+    names: set[str] = set()
+    for manifest in sorted(_AGENTS.glob("*/subagent.json")):
+        row = json.loads(manifest.read_text(encoding="utf-8"))
+        if row.get("hidden"):
+            continue
+        name = row.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
 
 
 def _group_mark() -> str:
@@ -111,13 +149,27 @@ def test_every_mark_names_a_file_that_ships() -> None:
     assert not missing
 
 
+def test_every_discovered_agent_has_its_own_mark() -> None:
+    assert set(_own_marks()) == _discovered_names()
+
+
+def test_every_own_mark_names_a_file_that_ships() -> None:
+    missing = {name: file for name, file in _own_marks().items() if not (_ASSETS / f"{file}.svg").is_file()}
+    assert not missing
+
+
 def test_no_asset_is_orphaned() -> None:
     """An unreferenced file is dead weight the wheel still carries.
 
     ``ui-web/build.py`` copies the whole assets tree into the bundle, so a mark
     left behind by a removed preset ships to every user forever.
     """
-    named = {f"{file}.svg" for file, _ in _marks().values()} | {f"{_own_mark()}.svg"} | {f"{_group_mark()}.svg"}
+    named = (
+        {f"{file}.svg" for file, _ in _marks().values()}
+        | {f"{file}.svg" for file in _own_marks().values()}
+        | {f"{_own_mark()}.svg"}
+        | {f"{_group_mark()}.svg"}
+    )
     assert {path.name for path in _ASSETS.glob("*.svg")} == named
 
 

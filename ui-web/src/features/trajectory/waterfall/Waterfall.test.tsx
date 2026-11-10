@@ -393,13 +393,16 @@ describe('the marks', () => {
     expect(document.querySelector('[data-row="agent"] .trajectory-wf-glyph')).not.toBeNull()
   })
 
-  it('wears Raven’s own mark on a Raven-* worker', async () => {
+  it('wears each Raven worker its own mark', async () => {
     await draw([
       E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'Raven-Research' } }),
       E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
     ])
     const marks = [...document.querySelectorAll('[data-row="agent"] img')].map((img) => img.getAttribute('src'))
-    expect(marks.filter((src) => src === 'assets/agents/raven.svg')).toHaveLength(2)
+    /* The turn's own row has no agent name and keeps the project mark; the
+       spawned worker is the Research one, so it wears the Research mark. */
+    expect(marks.filter((src) => src === 'assets/agents/raven.svg')).toHaveLength(1)
+    expect(marks.filter((src) => src === 'assets/agents/raven-research.svg')).toHaveLength(1)
   })
 
   it('keys each call by a square in its kind’s colour', async () => {

@@ -40,8 +40,8 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-const draw = (preset?: string, own?: boolean): void => {
-  act(() => { root.render(<AgentMark preset={preset} own={own} />) })
+const draw = (preset?: string, own?: boolean, agent?: string): void => {
+  act(() => { root.render(<AgentMark preset={preset} own={own} agent={agent} />) })
 }
 
 const img = (): HTMLImageElement | null => host.querySelector('img')
@@ -132,6 +132,49 @@ describe('an agent row s brand mark', () => {
       draw(undefined, false)
       expect(img()).toBe(null)
       expect(host.querySelector('svg')).toBeTruthy()
+    })
+
+    /* Each shipped Raven agent draws its own mark, looked up by the display
+       name its manifest declares. `Raven-PPT` is hidden from the roster, and
+       its mark was given to `Raven-Code`, so it falls back to the project mark
+       instead of keeping a file no row would draw. */
+    it('draws each shipped agent its own mark off the name', () => {
+      const marks: Array<[string, string]> = [
+        ['Raven-Research', 'raven-research'],
+        ['Raven-Code', 'raven-code'],
+        ['Raven-Design', 'raven-design'],
+        ['Raven-Oncall', 'raven-oncall'],
+      ]
+      for (const [agent, file] of marks) {
+        expect(agentMarkPath(undefined, true, agent)).toBe(`assets/agents/${file}.svg`)
+        draw(undefined, true, agent)
+        expect(img()?.getAttribute('src')).toBe(`assets/agents/${file}.svg`)
+      }
+    })
+
+    it('falls back to the project mark for an own agent the table does not name', () => {
+      /* The last two are inherited property names: the lookup is an object
+         literal, and a bare index would answer `constructor` with a function
+         that has no `file`. */
+      for (const agent of ['Raven-PPT', 'raven', 'Raven-Something', 'constructor', '__proto__']) {
+        expect(agentMarkPath(undefined, true, agent)).toBe('assets/agents/raven.svg')
+      }
+    })
+
+    /* A caller can name a run itself, and may number two runs of one agent:
+       `raven-design-1` is such an instance name. The runtime's own minted
+       handles end in six hex characters instead, so this pins the explicitly
+       named shape, not the minted one. */
+    it('reads an instance name down to its agent', () => {
+      expect(agentMarkPath(undefined, true, 'raven-design-1')).toBe('assets/agents/raven-design.svg')
+      expect(agentMarkPath(undefined, true, 'RAVEN-RESEARCH')).toBe('assets/agents/raven-research.svg')
+    })
+
+    /* The name selects among raven's own marks only. A third-party row that
+       happens to spell a Raven agent's name stays on its preset's mark. */
+    it('ignores the name on a row that is not one of raven s own', () => {
+      expect(agentMarkPath('claude_code', false, 'Raven-Code')).toBe('assets/agents/claudecode-color.svg')
+      expect(agentMarkPath('claude_code', true, 'Raven-Code')).toBe('assets/agents/raven-code.svg')
     })
 
     /* Both flags, spelled once here so four call sites cannot drift: a reading

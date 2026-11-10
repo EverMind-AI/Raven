@@ -54,7 +54,12 @@
    descendant selector here outranks the badge's rule and blows its image up to
    the slot's size, clipped at the plate's edge. */
 .extAgents-tile .agent-mark > img, .extAgents-tile .agent-mark > svg { width: 23px; height: 23px; }
-.extAgents-tile-own .agent-mark > img { width: 21px; height: 26px; }
+/* One square frame for the own tile at every size: raven.svg is 34x43 while
+   the four agent marks are near-square, so a square box gives every one of
+   them the same drawn height -- all five are contained by height and differ
+   only in width -- where the old 21x26 box made the four shorter than the
+   raven. The card and head slots use the same square at their own size. */
+.extAgents-tile-own .agent-mark > img { width: 26px; height: 26px; }
 
 .extAgents-who { flex: 1; min-width: 0; }
 .extAgents-nm { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -206,7 +211,7 @@
 .extAgents-ctop .extAgents-t { font-size: 14px; font-weight: 600; }
 .extAgents-card .extAgents-tile .agent-mark { width: 32px; height: 32px; border-radius: 9px; }
 .extAgents-card .extAgents-tile .agent-mark > img, .extAgents-card .extAgents-tile .agent-mark > svg { width: 20px; height: 20px; }
-.extAgents-card .extAgents-tile-own .agent-mark > img { width: 18px; height: 23px; }
+.extAgents-card .extAgents-tile-own .agent-mark > img { width: 23px; height: 23px; }
 .extAgents-card .extAgents-one {
   margin: 10px 0; line-height: 1.55; min-height: 3.1em; white-space: normal;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
@@ -246,7 +251,7 @@
 .extAgents-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 20px 48px 0 20px; }
 .extAgents-head .extAgents-tile .agent-mark { width: 46px; height: 46px; border-radius: 12px; }
 .extAgents-head .extAgents-tile .agent-mark > img, .extAgents-head .extAgents-tile .agent-mark > svg { width: 29px; height: 29px; }
-.extAgents-head .extAgents-tile-own .agent-mark > img { width: 26px; height: 33px; }
+.extAgents-head .extAgents-tile-own .agent-mark > img { width: 33px; height: 33px; }
 .extAgents-meta { flex: 1; min-width: 0; }
 .extAgents-meta h3 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; letter-spacing: -.02em; }
 .extAgents-by { font-size: 11.5px; color: var(--faint); margin-top: 1px; display: flex; align-items: center; gap: 6px; }
