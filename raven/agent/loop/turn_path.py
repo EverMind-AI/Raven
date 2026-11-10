@@ -3870,6 +3870,9 @@ class TurnPathMixin:
                     reasoning_effort=effort,
                 )
 
+        message_tool = self.tools.get("message")
+        answered = message_tool.answered_calls_in_turn if isinstance(message_tool, MessageTool) else frozenset()
+
         task = asyncio.create_task(
             run_post_turn(
                 board,
@@ -3881,9 +3884,11 @@ class TurnPathMixin:
                 turn_id=turn_id,
                 now_ms=board.now_ms,
                 generation=board.generation(key),
+                reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
                 mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                answered_message_calls=answered,
             )
         )
         self._consolidation_tasks.add(task)

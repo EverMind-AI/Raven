@@ -304,13 +304,14 @@ one instruction"). The instruction carries:
   matter no existing group covers, reopening a completed one instead of duplicating it; no
   step for a turn that advanced nothing; mark a group completed when it is done or the user
   dropped it; place every listed handle exactly once;
-- last, when the reply has any, its sentences that end in a question mark, quoted from it,
-  each once and at most the last eight, fenced code blocks and quoted lines left out, for
-  the model to sort: each that asks the user to answer, confirm or decide goes in the
-  `questions` of its matter's step, which makes that step `needs_you`; one not put to the
-  user, or that only repeats a question still open from an earlier turn, is skipped
-  (`task_board_asked.md`). Left to recall them from a long reply, the model most often
-  skipped the question of a turn that had also started work, and wrote the group `running`.
+- last, when the reply has any, its sentences that end in a question mark, quoted from it
+  without its list or emphasis markers, each once and at most the last eight, fenced code
+  blocks and quoted lines left out, for the model to sort: each that asks the user to
+  answer, confirm or decide goes in the `questions` of its matter's step, which makes that
+  step `needs_you`; one not put to the user, or that only repeats a question still open
+  from an earlier turn, is skipped (`task_board_asked.md`). Left to recall them from a
+  long reply, the model most often skipped the question of a turn that had also started
+  work, and wrote the group `running`.
 
 The three records sit between `[BEGIN ...]` / `[END ...]` markers, each under a sentence calling
 it data rather than instructions: the board and the dispatch list hold text earlier calls wrote,

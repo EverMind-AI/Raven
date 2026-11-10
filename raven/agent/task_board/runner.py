@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any, NamedTuple
 
 from loguru import logger
@@ -51,6 +51,7 @@ from raven.agent.task_board.board import (
     owning_groups,
     salvage,
 )
+from raven.agent.task_board.dispatches import call_target
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.tool import TOOL_NAME
 from raven.contracts.llm_provider import LLMResponse
@@ -123,6 +124,31 @@ _SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
+_QUESTION_RECORD_MARKER = re.compile(r"\[(?:BEGIN|END) QUESTION MARKS\]", re.IGNORECASE)
+
+
+def _paragraphs(reply: str) -> list[str]:
+    """The reply's prose, one entry per paragraph: soft-wrapped lines joined, and a blank
+    line, a list item or a quoted line starting a new one. Fenced blocks are left out."""
+    paragraphs: list[str] = []
+    current: list[str] = []
+
+    def flush() -> None:
+        if current:
+            paragraphs.append(" ".join(current))
+            current.clear()
+
+    for line in _FENCED.sub("", reply).splitlines():
+        text = line.strip()
+        if not text or line.lstrip().startswith(">"):
+            flush()
+        elif _LIST_MARK.match(text):
+            flush()
+            current.append(text)
+        else:
+            current.append(text)
+    flush()
+    return paragraphs
 
 
 def asked(reply: str) -> list[str]:
@@ -131,10 +157,8 @@ def asked(reply: str) -> list[str]:
     A fenced code block and a quoted line are left out: neither was put to the user.
     """
     found: list[str] = []
-    for line in _FENCED.sub("", reply).splitlines():
-        if line.lstrip().startswith(">"):
-            continue
-        for part in _SENTENCE_END.split(_EMPHASIS.sub("", line)):
+    for paragraph in _paragraphs(reply):
+        for part in _SENTENCE_END.split(_EMPHASIS.sub("", paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
             if sentence.endswith(_QUESTION_MARKS) and sentence.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)
@@ -149,44 +173,45 @@ def _text(content: Any) -> str:
     return ""
 
 
-def _message_tool_words(call: Any) -> str:
-    """What a ``message`` tool call sent, if that is the call: only this tool's argument is
-    words put to the user -- another tool's arguments hold code, URLs or paths."""
-    function = call.get("function") if isinstance(call, dict) else None
-    if not isinstance(function, dict) or function.get("name") != "message":
+def _message_tool_words(call: Any, answered: Collection[str]) -> str:
+    """What a message call that answered this conversation sent, if it is that call --
+    forwarded through ``tool_call`` or not. Only this tool's argument is words put to the
+    user; another tool's arguments hold code, URLs or paths."""
+    if not isinstance(call, Mapping) or str(call.get("id") or "") not in answered:
         return ""
-    arguments = function.get("arguments")
-    if not isinstance(arguments, str):
+    name, arguments = call_target(call)
+    if name != "message":
         return ""
-    try:
-        parsed = json.loads(arguments)
-    except (ValueError, RecursionError):
-        return ""
-    content = parsed.get("content") if isinstance(parsed, dict) else None
+    content = arguments.get("content")
     return content.strip() if isinstance(content, str) else ""
 
 
-def _reply(window: Sequence[dict]) -> str:
-    """The words of the turn's reply: every assistant message after the last message from the
-    user, in the order it wrote them, with what the message tool sent -- a reply before that
-    one answered an earlier turn."""
+def _reply(rows: Sequence[dict], answered: Collection[str]) -> str:
+    """The words of the turn's reply: every assistant message among ``rows``, in the order
+    it wrote them, with what a message call that answered this conversation sent. The rows
+    are the turn's own (``TurnLog.added``), so a user message among them was sent while the
+    turn ran and does not open a new one."""
     words: list[str] = []
-    for message in window:
-        if message.get("role") == "user":
-            words.clear()
-        elif message.get("role") == "assistant":
-            if text := _text(message.get("content")).strip():
-                words.append(text)
-            for call in message.get("tool_calls") or ():
-                if sent := _message_tool_words(call):
-                    words.append(sent)
+    for message in rows:
+        if message.get("role") != "assistant":
+            continue
+        if text := _text(message.get("content")).strip():
+            words.append(text)
+        for call in message.get("tool_calls") or ():
+            if sent := _message_tool_words(call, answered):
+                words.append(sent)
     return "\n".join(words)
 
 
 def _asked_block(questions: Sequence[str]) -> str:
-    if not questions:
+    listed: list[str] = []
+    for question in questions:
+        cleaned = " ".join(_QUESTION_RECORD_MARKER.sub("", question).split())
+        if cleaned.rstrip(_QUESTION_MARK_CHARS).strip():
+            listed.append(cleaned)
+    if not listed:
         return ""
-    return "\n\n" + prompt(ASKED_TEMPLATE).strip().format(questions="\n".join(f"- {q}" for q in questions))
+    return "\n\n" + prompt(ASKED_TEMPLATE).strip().format(questions="\n".join(f"- {q}" for q in listed))
 
 
 def build_instruction(
@@ -369,7 +394,9 @@ async def _ask(
     turn_id: str | None,
     now_ms: Callable[[], int],
     owners: list[str],
+    reply_rows: Sequence[dict],
     mid_turn: bool = False,
+    answered_message_calls: Collection[str] = (),
 ) -> tuple[dict[str, Any], bool, list[dict]] | None:
     """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, whether
     they are a salvage, whose text past a limit stands, and the exchange the asks left
@@ -383,7 +410,13 @@ async def _ask(
     placed and its steps written unless a fault lies there.
     """
     confined_to = () if mid_turn else owners
-    instruction = build_instruction(board, dispatches, owners, asked=asked(_reply(window)), mid_turn=mid_turn)
+    instruction = build_instruction(
+        board,
+        dispatches,
+        owners,
+        asked=asked(_reply(reply_rows, answered_message_calls)),
+        mid_turn=mid_turn,
+    )
     rows = list(window) + [{"role": "user", "content": instruction}]
     last: dict[str, Any] | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -543,9 +576,11 @@ async def run_post_turn(
     turn_id: str | None,
     now_ms: Callable[[], int],
     generation: int,
+    reply_rows: Sequence[dict],
     delegated: Sequence[str] = (),
     moved_on: Sequence[str] = (),
     mid_turn: bool = False,
+    answered_message_calls: Collection[str] = (),
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
@@ -587,7 +622,9 @@ async def run_post_turn(
                 turn_id=turn_id,
                 now_ms=now_ms,
                 owners=owning_groups(board, _as_placed(service, session_key, board, delegated), moved_on),
+                reply_rows=reply_rows,
                 mid_turn=mid_turn,
+                answered_message_calls=answered_message_calls,
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)
