@@ -22,8 +22,8 @@ whose query names the host at all. Three departures from it:
   ``huggingface.com`` -- and a wrongly blocked source is invisible to the model,
   indistinguishable from a page that does not exist.
 
-A host rule alone reaches 13 of those 21, and a smoke run showed exactly how the
-other 8 arrive. With the host rule on, the model's three answer-seeking queries
+A host rule alone reaches 14 of those 21, and a smoke run showed exactly how the
+rest arrive. With the host rule on, the model's three answer-seeking queries
 returned 21 organic rows of which 17 were Hugging Face copies; every one was
 dropped and none reached the model. It then scored anyway off
 ``openevalz.com/trace/<id>`` -- a judge-prompt dump carrying ``[correct_answer]``
@@ -34,28 +34,44 @@ A host list cannot be made long enough to fix that.
 So there is a second, host-independent rule: :func:`blocks_page` refuses a fetched
 page that reproduces the question it was asked. Quoting the prompt is what makes a
 published copy findable in the first place, so it is the one thing every copy has
-in common whatever host it sits on. Measured over the same 400-item evaluation, at
-a 60-character verbatim run:
+in common whatever host it sits on.
 
-* leaks prevented rise from 13/21 to 18/21 (the content rule alone reaches 15;
-  5 of those are ones the host rule misses, and 3 leaks escape both)
-* 24 of the 244 clean correct items lose at least one non-Hugging-Face page (51
-  pages). On 5 of those the lost page carried the gold, so they were unlabelled
-  leaks rather than false stops, leaving ~19 items exposed
+Measured over the same 400-item evaluation at a 60-character run, counting each
+rule only where it actually applies -- this one on ``web_fetch`` alone, so a gold
+that arrived in a search result is out of its reach:
+
+* leaks prevented rise from 14/21 to 17/21. The content rule alone reaches 12,
+  3 of them ones the host rule misses. Of the 4 that escape both, 3 took their
+  gold from a search result and 1 never had the gold in a tool result at all
+* 13 of the 243 clean correct items lose at least one fetched page (18 pages).
+  On 5 the lost page carried the gold, so they were unlabelled leaks rather than
+  false stops, leaving ~8 items exposed, about 3%
 * a question shorter than the run length puts the rule out of reach entirely --
   44 of the 400 questions here, which is the deliberate cost of not blocking
   pages on a short, unspecific string
 
-The run length is 60 because the sweep flattens there: 50 prevents the same 18
-leaks but costs 38 items instead of 24, and 80 prevents one fewer.
+Those 18 stopped pages are worth knowing by kind, because the rate alone hides
+what the rule is doing. Seven were themselves dumps nobody had labelled (a
+``harbor-datasets`` file on raw.githubusercontent, ``autobenchaudit.com`` twice,
+an ``hle_bio_chem_med`` wiki page, and three eval sites). Nine were primary
+sources the question was written from -- arXiv four times, OEIS, MathNet,
+ACL Anthology, eLife -- and on one item all three such pages carried the gold,
+which says the question was authored out of them; whether refusing those is a
+false stop or a leak caught is a judgement, not a measurement. The remaining two
+are the one clear false positive: a site-search URL echoing the query back,
+because the model had pasted the whole question into a search box.
+
+The run length is 60 because the sweep flattens there: 50 prevents the same leaks
+and stops roughly twice as many clean items, and 80 prevents one fewer.
 
 This rule has to run on the page as extracted and **before the digest**. The
 smoke's decisive page is why: its digest did not quote the question, its 112k
 characters of raw trace did, at every run length up to 120.
 
-What still escapes both rules: a gold answer paraphrased rather than quoted, or a
-page that carries the answer without the question -- 3 of the 21. A run under this
-is less contaminated, not clean, and the per-item leak review still applies.
+What still escapes both rules: a gold that arrives in a search result rather than
+a page, a gold paraphrased rather than quoted, and a page carrying the answer
+without the question. A run under this is less contaminated, not clean, and the
+per-item leak review still applies.
 
 Nothing here is a security control. Egress policy lives in ``raven.security``;
 this module only declines to read pages that would answer the question for the

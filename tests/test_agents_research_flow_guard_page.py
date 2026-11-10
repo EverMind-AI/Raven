@@ -7,9 +7,12 @@ by reading ``openevalz.com/trace/<id>``, a judge-prompt dump carrying the gold v
 and opened a second copy through ``cdn-avatars.qwak.ai/datasets/...`` -- a Hugging Face
 dataset page under a hostname no host list contains.
 
-Over the same 400-item evaluation, at a 60-character run: leaks prevented go from 13/21
-to 18/21, and 24 of the 244 clean correct items lose at least one page (on 5 of those the
-lost page carried the gold, so they were unlabelled leaks rather than false stops).
+Over the same 400-item evaluation at a 60-character run, counting each rule only where
+it applies -- this one on web_fetch alone -- leaks prevented go from 14/21 to 17/21, and
+13 of the 243 clean correct items lose at least one fetched page (18 pages; on 5 the lost
+page carried the gold, so those were unlabelled leaks rather than false stops). Of the 18,
+seven were unlabelled dumps, nine were primary sources the question was written from, and
+two were a site-search URL echoing the pasted question back -- the one clear false positive.
 """
 
 from __future__ import annotations

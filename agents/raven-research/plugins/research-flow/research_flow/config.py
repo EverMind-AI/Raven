@@ -89,9 +89,10 @@ class BenchmarkGuardConfig(_Base):
 
     enabled: bool = False
     block_queries: bool = True
-    # The host half reaches 13 of 21 measured leaks; refusing a page that reproduces
-    # the question reaches 18, and is the only half that sees a copy on a mirror host
-    # or inside a trajectory dump. ``support.benchmark_guard`` carries the sweep.
+    # The host half reaches 14 of 21 measured leaks; refusing a page that reproduces
+    # the question takes it to 17, and is the only half that sees a copy on a mirror
+    # host or inside a trajectory dump. ``support.benchmark_guard`` carries the sweep
+    # and what the ~3% of clean items it also stops turn out to be.
     block_question_pages: bool = True
     question_run_chars: int = QUESTION_RUN_CHARS
     # Dropping a result row leaves no trace in the transcript by construction, so

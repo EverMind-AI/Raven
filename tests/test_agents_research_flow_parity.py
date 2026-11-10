@@ -318,8 +318,8 @@ PRODUCT_ONLY_FIELDS: dict[str, str] = {
         "product profile: declining to read a dataset page is right for an evaluation and "
         "wrong for someone who asked about the dataset. The fork blocked nothing, which is "
         "why 21 of one 400-item run's 265 correct answers came from such a copy. Two halves: "
-        "a host rule aligned with BigBang-v1 (13 of those 21) and a host-independent one that "
-        "refuses a fetched page reproducing the question (18 of 21 together), because a copy "
+        "a host rule aligned with BigBang-v1 (14 of those 21) and a host-independent one that "
+        "refuses a fetched page reproducing the question (17 of 21 together), because a copy "
         "on a mirror host or inside a trajectory dump is invisible to any host list"
     ),
     "verify.evidence_items": (
