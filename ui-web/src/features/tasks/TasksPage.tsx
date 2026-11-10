@@ -753,9 +753,9 @@ const SETTLE_MS = 150
  * It starts not following, because a record opens at its beginning, and `key`
  * resets it -- another node, or the work order, is a different thing to read
  * rather than a continuation of this one. The pin runs off `record` rather
- * than off every render: this panel reads the task store, and every fold in
- * the record writes to it (`store.setFold`), so a pin on each render would
- * answer a reader opening a step above with a jump to the end. */
+ * than off every render: this panel reads the whole task store, which every
+ * live event on any run writes, so a pin on each render would answer a reader
+ * reading a step above with a jump to the end. */
 function useTailFollow(key: string, record: NodeRecord | null, live: boolean) {
   const box = useRef<HTMLDivElement>(null)
   const wantsTail = useRef(false)
