@@ -113,6 +113,46 @@ describe('desk placement', () => {
   })
 })
 
+/* The anchor is not always drawn. A fullscreen pane unmounts the chip and
+   leaves `#wsBtn` in the header with `display: none` (`.desk-ready #wsBtn`),
+   and a document with no desk hides the chip the same way. An element that is
+   not drawn measures as an all-zero rectangle, and read as a real one it is a
+   box at the window's top-left corner. */
+describe('an anchor that is not drawn', () => {
+  const hiddenButton = ({ className, id }: { className?: string; id?: string }): HTMLElement => {
+    const element = document.createElement('button')
+    if (className) element.className = className
+    if (id) element.id = id
+    document.body.appendChild(element)
+    return element
+  }
+
+  it('is no anchor: the default placement keeps its right-hand edge', () => {
+    hiddenButton({ id: 'wsBtn' })
+    const at = defaultGeometry()
+    expect(at.x).toBe(window.innerWidth - DESK_DEFAULT_WIDTH - DESK_VIEWPORT_GUTTER)
+    expect(at.y).toBe(DESK_VIEWPORT_GUTTER)
+  })
+
+  it('lets the panel toggle stand in while the chip is the hidden one', () => {
+    hiddenButton({ className: 'desk-follow-toggle' })
+    const toggle = hiddenButton({ id: 'wsBtn' })
+    toggle.getBoundingClientRect = () => ({
+      left: 900, right: 930, top: 10, bottom: 40,
+      width: 30, height: 30, x: 900, y: 10, toJSON: () => ({}),
+    }) as DOMRect
+    const at = defaultGeometry()
+    expect(at.x + at.w).toBe(930)
+    expect(at.y).toBe(40 + DESK_ANCHOR_GAP)
+  })
+
+  it('does not clamp an anchored desk to the top-left corner', () => {
+    hiddenButton({ id: 'wsBtn' })
+    const at = clampGeometry({ x: 700, y: 300, w: 300, h: 5000, detached: false })
+    expect(at.y).toBe(300)
+  })
+})
+
 /* How far down the desk reaches: to the composer card, not to a number. A
  * fixed height ends the palette wherever that number happens to land
  * -- in one reader's window, level with a message bubble and well short of

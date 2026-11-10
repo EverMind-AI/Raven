@@ -140,8 +140,23 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
 }
 
 function launcher(): HTMLElement | null {
-  return (document.querySelector('.desk-follow-toggle') as HTMLElement | null)
-    ?? document.getElementById('wsBtn')
+  /* The chip is rendered on every page and the stylesheet hides it -- with no
+     desk at all, and behind a fullscreen pane, where `#wsBtn` is the way to
+     the panel instead. So the first candidate is not always the one on
+     screen, and picking it anyway reads `display: none` as an all-zero box at
+     the window's top-left corner. A box with no extent is not drawn: let the
+     fallback have its turn, and when neither is drawn the answer is "no
+     anchor", which keeps the geometry the reader already has. */
+  const candidates = [
+    document.querySelector('.desk-follow-toggle'),
+    document.getElementById('wsBtn'),
+  ]
+  for (const candidate of candidates) {
+    if (!candidate) continue
+    const rect = candidate.getBoundingClientRect()
+    if (rect.width > 0 || rect.height > 0) return candidate as HTMLElement
+  }
+  return null
 }
 
 /* What the anchored desk hangs from: the header's capsule when the launcher

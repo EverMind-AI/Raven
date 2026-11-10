@@ -1002,6 +1002,30 @@ describe('the size the desk comes up at', () => {
     expect(palette()?.style.width).toBe('420px')
     expect(palette()?.style.height).toBe('400px')
   })
+
+  /* A fullscreen pane leaves exactly this DOM: the chip is unmounted and
+     `#wsBtn` stays in the header with `display: none` (`.desk-ready #wsBtn`),
+     so the only anchor candidate measures as an all-zero box. Read as a real
+     one it is the window's top-left corner, and the clamp on mount -- and on
+     every resize, which is the only writer that runs while the desk is down --
+     stored that corner over the geometry the reader set. */
+  it('keeps the stored geometry while no anchor is drawn', async () => {
+    const hidden = document.createElement('button')
+    hidden.id = 'wsBtn'
+    document.body.appendChild(hidden)
+    localStorage.setItem(
+      DESK_GEOMETRY_KEY,
+      JSON.stringify({ x: 700, y: 300, w: 300, h: 800, detached: false }),
+    )
+    const stored = (): { x: number; y: number } =>
+      JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) || '{}') as { x: number; y: number }
+
+    await shelf()
+    expect(stored()).toMatchObject({ x: 700, y: 300 })
+
+    await act(async () => { window.dispatchEvent(new Event('resize')) })
+    expect(stored()).toMatchObject({ x: 700, y: 300 })
+  })
 })
 
 /* That the reserve reaches the stylesheet at all.
