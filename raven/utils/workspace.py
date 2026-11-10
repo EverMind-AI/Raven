@@ -294,7 +294,9 @@ def sync_workspace_templates(
         except OSError:
             return
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(text, encoding="utf-8")
+        # Text-mode writing translates the \n inside a decoded \r\n again on
+        # Windows (CR CR LF); write the decoded bytes as they are.
+        dest.write_bytes(text.encode("utf-8"))
         added.append(f"{dest.relative_to(workspace)} (migrated from {src.relative_to(workspace)})")
 
     def _back_up(target: Path) -> Path:

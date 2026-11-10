@@ -340,6 +340,16 @@ def test_a_legacy_root_copy_is_migrated_and_refreshed_once(tmp_path: Path) -> No
     assert _soul(tmp_path).read_text(encoding="utf-8") == _template("SOUL.md")
 
 
+def test_a_crlf_legacy_copy_migrates_without_doubled_newlines(tmp_path: Path) -> None:
+    (tmp_path / "SOUL.md").write_bytes(b"# Soul\r\n\r\nMy own voice.\r\n")
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    raw = _soul(tmp_path).read_bytes()
+    assert b"\r\r\n" not in raw
+    assert raw.startswith(b"# Soul\r\n\r\nMy own voice.")
+
+
 def test_a_crlf_copy_is_recognised_as_the_previous_release(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)
