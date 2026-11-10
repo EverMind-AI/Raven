@@ -1,4 +1,4 @@
-/** The desk's root: the palette, the follow toggle and the pane surface. */
+/** The desk's root: the palette and the pane surface; its chip is the chat header's (chrome/ChatTop.tsx). */
 
 import { useEffect, useSyncExternalStore } from 'react'
 
@@ -6,7 +6,7 @@ import * as lang from '../../state/lang'
 import * as agents from '../subagents/store'
 import * as workspace from '../workspace/store'
 import { DeskPalette } from './DeskPalette'
-import { DeskFollowToggle, DeskSurface } from './DeskSurface'
+import { DeskSurface } from './DeskSurface'
 
 import type { JSX } from 'react'
 
@@ -71,5 +71,5 @@ export function DeskApp(): JSX.Element {
     const timer = setInterval(ask, AGENTS_POLL_MS)
     return () => clearInterval(timer)
   }, [])
-  return <><DeskPalette /><DeskFollowToggle /><DeskSurface /></>
+  return <><DeskPalette /><DeskSurface /></>
 }

@@ -146,7 +146,9 @@ describe('the task board', () => {
     const thread = document.getElementById(a.getAttribute('aria-controls')!)!
     expect([...thread.querySelectorAll('.tksteptext')].map((n) => n.textContent)).toEqual(['found it', 'fixed it'])
     expect(thread.textContent).not.toMatch(/\b1\.|\b2\./)
-    expect(a.nextElementSibling).toBe(thread)
+    /* In place: under the card's status line, inside the card. */
+    expect(a.nextElementSibling?.className).toBe('tkgfoot')
+    expect(a.nextElementSibling?.nextElementSibling).toBe(thread)
   })
 
   it('keeps several groups open at once', async () => {
@@ -172,7 +174,7 @@ describe('the task board', () => {
     expect(desk.get().panes.some((p) => p.id === 'task:dag:RUN_A')).toBe(true)
   })
 
-  it('shows a running badge from the group s running rows, else the age of its last step', async () => {
+  it('shows a running graph s progress, nothing beside the pill for running subagents, else the age of its last step', async () => {
     rows = [
       task({ id: 'RUN_A', kind: 'dag', status: 'running', counts: counts({ total: 4, completed: 2 }) }),
       task({ id: 'n1', kind: 'spawn', status: 'running' }),
@@ -184,11 +186,13 @@ describe('the task board', () => {
       group('c', NOW - 1e6, 'needs_you'),
     ]
     await draw()
-    const meta = (id: string): string => groupButtons().find((b) => b.dataset.group === id)!.querySelector('.tkgmeta')!.textContent || ''
+    const meta = (id: string): string | null =>
+      groupButtons().find((b) => b.dataset.group === id)!.closest('.tkgcard')!.querySelector('.tkgmeta')?.textContent ?? null
 
     expect(meta('a')).toBe('gui.tasks.board.dag {"done":2,"total":4}')
-    expect(meta('b')).toBe('gui.tasks.board.running {"n":2}')
-    expect(meta('c')).not.toBe('')
+    /* The pill already says it runs, and the foot counts its subagents. */
+    expect(meta('b')).toBeNull()
+    expect(meta('c')).toBeTruthy()
   })
 
   it('marks a group completed from its thread, and reopens a completed one', async () => {
@@ -535,7 +539,7 @@ describe('the group cards', () => {
   const pill = (id: string): HTMLElement =>
     groupButtons().find((b) => b.dataset.group === id)!.querySelector<HTMLElement>('.tkpill')!
 
-  it('draws each group as a card: its status as a pill, the meta, the title and the summary', async () => {
+  it('draws each group as a card: its status in front of the title, the summary, then the meta in the foot', async () => {
     board.groups = [group('a', NOW - 1e6, 'needs_you', [], ['asked'], 'two findings so far')]
     await draw()
 
@@ -545,7 +549,14 @@ describe('the group cards', () => {
     expect(groupButtons()[0]!.hasAttribute('title')).toBe(false)
     expect(head.querySelector('.nm')!.textContent).toBe('Matter a')
     expect(head.querySelector('.st')!.textContent).toBe('two findings so far')
-    expect(head.querySelector('.tkgmeta')!.textContent).not.toBe('')
+    /* The status leads the title's line, so the reader sees what a group needs
+       before reading what it is. */
+    const status = head.querySelector('.tkpill')!
+    expect(status.compareDocumentPosition(head.querySelector('.nm')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(status.parentElement).toBe(head.querySelector('.nm')!.parentElement)
+    expect(card.querySelector('.tkgfoot .tkpill')).toBeNull()
+    expect(card.querySelector('.tkgfoot .tkgmeta')!.textContent).not.toBe('')
+    expect(card.dataset.cat).toBe('needs_you')
   })
 
   it('a Task still running makes an open group running, and none makes it idle, whatever the model wrote', async () => {
@@ -579,7 +590,7 @@ describe('the group cards', () => {
     expect(statusCalls.at(-1)).toEqual(['s1', 'z', 'idle'])
   })
 
-  it('a folded card counts its events and subagents, and an open one shows its thread instead', async () => {
+  it('a card counts its events and subagents, and an open one hands Move on to its thread', async () => {
     rows = [
       task({ id: 'RUN_A', kind: 'dag', status: 'completed', counts: counts({ total: 2 }) }),
       task({ id: 'n1', kind: 'spawn', status: 'completed' }),
@@ -592,8 +603,9 @@ describe('the group cards', () => {
     expect(foot.textContent).toContain('gui.tasks.page.sub_agents {"n":4}')
 
     fireEvent.click(groupButtons()[0]!)
-    expect(document.querySelector('.tkgcard .tkgfoot')).toBeNull()
-    expect(document.querySelector('.tkgcard #tkthread-a')).not.toBeNull()
+    expect(document.querySelector('.tkgcard .tkgfoot')!.textContent).toContain('gui.tasks.page.events {"n":2}')
+    expect(document.querySelector('.tkgcard .tkgfoot .tkmove')).toBeNull()
+    expect(document.querySelector('.tkgcard #tkthread-a .tkmove')).not.toBeNull()
   })
 
   it('moves a group on from its folded foot and from its open thread, without folding or unfolding it', async () => {
@@ -625,7 +637,7 @@ describe('the group cards', () => {
     expect(document.querySelector('.tkgcard .tkgfoot')!.textContent).toContain('gui.tasks.page.sub_agents {"n":1}')
   })
 
-  it('keeps the thread and its action inside the card, the thread right after the head', async () => {
+  it('keeps the thread and its action inside the card, the thread right after the status line', async () => {
     board.groups = [group('a', NOW - 1e6, 'idle')]
     await draw()
     fireEvent.click(groupButtons()[0]!)
@@ -633,7 +645,9 @@ describe('the group cards', () => {
     const card = document.querySelector('.tkgcard')!
     const thread = document.getElementById('tkthread-a')!
     expect(card.contains(thread) && card.contains(thread.querySelector('.tkgroupact'))).toBe(true)
-    expect(groupButtons()[0]!.nextElementSibling).toBe(thread)
+    const foot = card.querySelector('.tkgfoot')!
+    expect(groupButtons()[0]!.nextElementSibling).toBe(foot)
+    expect(foot.nextElementSibling).toBe(thread)
   })
 
   it('names the Task kind apart in a chip and keeps the chip s words', async () => {

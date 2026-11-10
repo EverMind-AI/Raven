@@ -247,6 +247,15 @@ function taskFileEntries(): TaskFileEntry[] {
    what is new. */
 export const runningTaskCount = (): number => tasks.running(tasks.rows()).length
 
+/* The groups waiting on the reader, which the chip carries beside the running
+   count: an answer owed is the one thing on the desk that is the reader's move. */
+export const askingTaskCount = (): number => tasks.needingYou()
+
+/* The tasks store's subscription, for whatever draws the two counts above:
+   they are read through this module, so the change that moves them is too. */
+export const subscribeTasks = tasks.subscribe
+export const tasksSnapshot = tasks.get
+
 /* Whether the desk should be up for this conversation, when the reader has not
    said. The note in `palette.ts` states the rule and this is where it can be
    applied: a palette over nothing written, delivered or delegated is three empty

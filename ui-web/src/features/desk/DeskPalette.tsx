@@ -43,7 +43,7 @@ function DeskTabs({ value, onChange }: { value: DeskTab; onChange: (tab: DeskTab
   return (
     <div className="desk-tabs" role="tablist">
       {(['deliverables', 'tasks', 'diff'] as DeskTab[]).map((tab) => {
-        const label = tab === 'diff' ? 'diff'
+        const label = tab === 'diff' ? t('gui.ws.changes')
           : tab === 'deliverables' ? t('gui.ws.deliverables') : t('gui.ws.tasks')
         const fresh = tab === 'tasks' ? desk.runningTaskCount() : desk.unseen(tab)
         /* Shown only on a tab the reader is not already looking at, the way

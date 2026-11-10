@@ -3131,11 +3131,11 @@ textarea:focus, textarea:focus-visible,
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
 /* An imported conversation (state/session/conversation.ts's readOnly): nothing
    to type into, no folder it runs in, a name changed only on its rail row, and
-   no conversation menu -- the menu's slot kept, so the desk launcher and the
-   trajectory toggle beside it stay where they are. */
+   no conversation menu -- taken out of the capsule, which closes up around the
+   chip, and the palette's notch follows it (the desk section). */
 .chat[data-readonly] .dock { display: none; }
 .chat[data-readonly] #wdTag { display: none; }
-.chat[data-readonly] #moreBtn { visibility: hidden; }
+.chat[data-readonly] #moreBtn { display: none; }
 .chat[data-readonly] .top h1 { cursor: default; }
 .chat[data-readonly] .top h1:hover { background: none; }
 /* The trajectory view (features/trajectory/). The scroller is parked, not
@@ -3192,9 +3192,30 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 @supports not ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
   html[data-traj] #trajHost::before { background: var(--traj-solid) }
 }
-/* The header's view toggle is an icon like the panel toggle beside it; the
-   pressed state is the only thing it says in colour. */
-.chrome-traj[aria-pressed="true"] { color: var(--text); background: var(--selected, var(--hover)); }
+/* The header's right side as one capsule (chrome/ChatTop.tsx): the view
+   switch, the desk's chip and the conversation menu on one plate, so three
+   controls of three kinds read as one group instead of three loose tiles. The
+   plate is the header's own frosted one, and the controls inside drop theirs.
+   34px tall, which is what the desk's anchor reads (#deskHost's
+   --desk-launcher-size). */
+.chrome-capsule { flex: none; display: flex; align-items: center; height: 34px; padding: 3px;
+  border-radius: 17px; background: var(--topbar-plate);
+  box-shadow: 0 0 0 1px var(--ring-2), 0 2px 10px var(--ring); --ghost-bg: transparent; }
+.chrome-capsule .ghost-ic { border-radius: 14px; }
+/* A hairline between groups, drawn by the one that follows it: before the menu
+   always, and before the chip when the switch is there to precede it. The
+   9px each takes is what the notch's 40px counts (the menu's 28, its 9 and the
+   capsule's 3). */
+.chrome-capsule > #moreBtn, .chrome-viewsw + .desk-follow-toggle { position: relative; margin-left: 9px; }
+.chrome-capsule > #moreBtn::before, .chrome-viewsw + .desk-follow-toggle::before { content: ''; position: absolute;
+  left: -5px; top: 7px; bottom: 7px; width: 1px; background: var(--line); }
+/* The view switch: two halves on a recessed track, the one that is up raised
+   onto the paper. Each half names where it goes, so the state reads off which
+   one is raised rather than off an icon that swaps. */
+.chrome-viewsw { display: flex; gap: 2px; padding: 2px; border-radius: 14px; background: var(--hover); }
+.chrome-viewsw .ghost-ic { width: 28px; height: 24px; border-radius: 12px; }
+.chrome-viewsw .ghost-ic[aria-pressed="true"] { color: var(--text); background: var(--paper);
+  box-shadow: 0 1px 2px var(--ring-2), 0 0 0 .5px var(--ring-2); }
 /* The landing page does not move the composer. It used to float it up to the
    centre at 640px with a hero lockup over it and five characters perched on
    it; the composer then jumped down and widened the moment the first message
@@ -5876,8 +5897,8 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
 .desk-ready .split:has(.desk-grid[data-solo="true"]) #wsGrip { display: none; }
 .desk-ready .chat #wsGrip::after { display: none; }
 .desk-ready .chat #wsGrip { right: -3px; width: 6px; }
-.desk-ready #wsBtn { visibility: hidden; }
-.desk-ready .split[data-open="true"] #wsBtn { display: grid; }
+/* The capsule's chip is the desk's way in, so the panel toggle leaves the row. */
+.desk-ready #wsBtn { display: none; }
 
 /* The chat gives up its right edge while the desk is anchored over it, rather
    than being covered by it. `--desk-reserve` is published by DeskPalette (see
@@ -5958,8 +5979,13 @@ body:has(#onb:not([hidden])) .mpick { z-index: calc(var(--z-onboarding) + 1); }
   .backpill { transition: bottom .18s ease; }
 }
 
-#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 30px; --desk-launcher-edge: 50px;
-  --desk-palette-gap: 12px; --desk-launcher-center: 27px;
+/* What the anchored palette hangs from is the chat header's capsule
+   (chrome/ChatTop.tsx): 34px tall and centred in the 52px header, ending at
+   the header's 16px right padding. These four say where that is, for the
+   stylesheet; features/desk/geometry.ts measures the same capsule and the two
+   MUST agree. */
+#deskHost { --desk-anchor-width: 0px; --desk-launcher-size: 34px; --desk-launcher-edge: 16px;
+  --desk-palette-gap: 12px; --desk-launcher-center: 26px;
   position: fixed; inset: 0; z-index: var(--z-desk); pointer-events: none; }
 /* The desk hangs off the workspace's left edge while the workspace is a column
    beside the chat -- but a fullscreen pane IS the window, and then there is no
@@ -5979,34 +6005,41 @@ body:has(#split[data-open="true"]):not(:has(.desk-grid[data-solo="true"])) #desk
    Hidden rather than unmounted: the panes are still the session's, and coming
    back to the chat should find the desk as it was left. */
 body:has(.app[data-page="on"]) #deskHost { display: none; }
-.desk-follow-toggle { position: fixed; z-index: 1; top: var(--desk-launcher-center); width: var(--desk-launcher-size);
-  height: var(--desk-launcher-size); padding: 0;
-  right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge)); transform: translateY(-50%);
-  pointer-events: auto; border: 0; background: transparent; box-shadow: none; }
-.desk-follow-toggle { transition: background .16s ease, color .16s ease; }
+/* The desk's chip, in the header's capsule: the panel glyph, then what is
+   going on -- a pulse and how many tasks run, an amber dot and how many groups
+   wait on the reader. It grows to its words and keeps its right edge, so the
+   capsule widens to the left; with nothing to say it is a square icon button.
+   A page with no desk has no chip. */
+:root:not(.desk-ready) .desk-follow-toggle { display: none; }
+.desk-follow-toggle { position: relative; display: inline-flex; align-items: center; justify-content: center;
+  gap: 7px; width: auto; min-width: 28px; height: 28px; padding: 0 6.5px; border: 0; border-radius: 14px;
+  color: var(--muted); font: 600 11.5px/1 var(--sans); white-space: nowrap;
+  transition: background .16s ease, color .16s ease; }
+.desk-follow-toggle:has(.desk-live, .desk-ask) { padding-right: 10px; }
 .desk-follow-toggle[aria-expanded="true"] { color: var(--text); background: var(--raised); }
-.desk-follow-toggle:hover { background: var(--raised); }
+.desk-follow-toggle:hover { color: var(--text); background: var(--raised); }
 .desk-follow-toggle svg { stroke-linecap: round; stroke-linejoin: round; }
-/* What the launcher says while the desk is down, in two channels that do not
-   compete: delegated work still running, and things that arrived unread.
-
-   The first borrows the transcript's own work glyph rather than inventing a
-   second dialect for "still going" -- and it borrows it exactly, because this
-   icon already IS three dots on three lines. Same keyframes, same stagger, same
-   reduced-motion fallback as `.wkg`. Nothing travels: the button occupies the
-   same pixels for the whole cycle, which is what lets it sit in the corner of
-   the eye without reading as an alarm.
-
-   The second is the tab strip's own bubble, in the corner and out of the flow,
-   so a launcher with news is the same size as one without. It does not loop --
-   an arrival is an event, not a state -- and only pops on the way up. */
-.desk-follow-toggle[data-working] svg circle { transform-box: fill-box; transform-origin: center;
-  animation: work 1.4s cubic-bezier(.4, 0, .2, 1) infinite; }
-.desk-follow-toggle[data-working] svg circle:nth-of-type(2) { animation-delay: .18s; }
-.desk-follow-toggle[data-working] svg circle:nth-of-type(3) { animation-delay: .36s; }
+.desk-live { display: inline-flex; align-items: center; gap: 6px; color: var(--text); }
+.desk-pulse { position: relative; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--sky); }
+.desk-ask { display: inline-flex; align-items: center; gap: 4px; color: var(--amber); }
+.desk-askdot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.desk-live + .desk-ask { padding-left: 7px; border-left: 1px solid var(--line); }
+/* The unread count hangs off the chip's corner, out of the flow, so a chip
+   with news is the same width as one without. */
+.desk-follow-toggle .desk-count { top: -4px; right: -4px; }
+/* The two marks that move, and only these. Delegated work still running is a
+   ring breathing off the pulse dot -- nothing travels, the dot holds its place
+   for the whole cycle, which is what lets it sit in the corner of the eye
+   without reading as an alarm. Things that arrived unread are the tab strip's
+   own bubble on the corner; it does not loop -- an arrival is an event, not a
+   state -- and only pops on the way up. */
+.desk-follow-toggle[data-working] .desk-pulse::after { content: ''; position: absolute; inset: -4px;
+  border: 1.5px solid var(--sky); border-radius: 50%; opacity: 0;
+  animation: desk-pulse 1.8s cubic-bezier(.2, .6, .3, 1) infinite; }
+@keyframes desk-pulse { 0% { opacity: .55; transform: scale(.5); } 100% { opacity: 0; transform: scale(1.25); } }
 .desk-follow-toggle .desk-count[data-pop] { animation: sigin .18s cubic-bezier(.2, .9, .3, 1.3); }
 @media (prefers-reduced-motion: reduce) {
-  .desk-follow-toggle[data-working] svg circle { animation: none; opacity: .62; }
+  .desk-follow-toggle[data-working] .desk-pulse::after { animation: none; }
   .desk-follow-toggle .desk-count[data-pop] { animation: none; }
 }
 :root[data-shell="1"] #deskHost { --desk-launcher-center: calc(var(--tl-row, 38px) / 2); }
@@ -6016,19 +6049,33 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
      composer card (features/desk/geometry.ts), and a fixed one here would clip
      it short of what that allows. */
   max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
-  overflow: hidden; resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
-  border: 1px solid var(--line); border-radius: 10px;
+  resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
+  border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
   /* Its own handle sits off the top-right corner, so that corner is where the
      palette comes from and goes back to. */
   transform-origin: 100% 0; }
-/* Under the launcher and flush with it, not beside it: the transcript column is
-   centred, so a desk hung to the LEFT of the launcher reached back across what
-   the reader was reading. Kept in step with anchoredGeometry() in
-   deskGeometry.ts, which is where the magnet reads the same placement back. */
+/* Under the capsule and flush with its right edge, not beside it: the
+   transcript column is centred, so a desk hung to the LEFT of the launcher
+   reached back across what the reader was reading. Kept in step with
+   anchoredGeometry() in features/desk/geometry.ts, which is where the magnet
+   reads the same placement back. */
 .desk-palette[data-anchored="true"] { left: auto;
   right: calc(var(--desk-anchor-width) + var(--desk-launcher-edge));
   top: calc(var(--desk-launcher-center) + var(--desk-launcher-size) / 2 + var(--desk-palette-gap)); }
+/* The notch: the anchored palette points back at the chip that opened it. The
+   chip keeps its right edge however wide its words grow, and that edge is a
+   fixed 40px in from the capsule's -- the menu, its gap and the capsule's own
+   padding -- so the notch sits over the chip's last 14px, which is its glyph
+   when it has nothing to say. Drawn in the palette's own ground with the
+   frame's line on its two upper sides, over the frame's top border, so the two
+   read as one outline. An imported conversation has no menu, and its chip
+   ends at the capsule's padding. */
+.desk-palette[data-anchored="true"]::before { content: ''; position: absolute; top: -6px; right: 48.5px;
+  width: 11px; height: 11px; transform: rotate(45deg); background: inherit;
+  border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: 2px;
+  pointer-events: none; }
+body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { right: 11.5px; }
 /* Two curves rather than one duration in both directions: arriving is eased out
    over longer so the panel settles, leaving is eased in over less so it gets out
    of the reader's way. The exit length is also in DeskPalette.tsx, which is what
@@ -6049,35 +6096,44 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
   .desk-palette[data-phase="in"], .desk-palette[data-phase="out"],
   .desk-palette[data-phase="in"] .desk-body { animation: none; }
 }
-.desk-drag { height: 48px; flex: none; cursor: grab; padding: 7px 8px; border-bottom: 1px solid var(--line-soft);
-  user-select: none; touch-action: none; }
+.desk-drag { height: 48px; flex: none; cursor: grab; padding: 9px 9px; border-bottom: 1px solid var(--line-soft);
+  user-select: none; touch-action: none; container-type: inline-size; }
 .desk-drag[data-dragging="true"] { cursor: grabbing; }
 .desk-tabs { display: flex; align-items: center; gap: 4px; }
-/* `position: relative` for the bubble, which hangs off the corner rather than
-   sitting in the row: a collapsed tab is a 34px square and has no width to give
-   a number, and a bubble that took part in the layout is what pushed the icon
-   and the label out of one. */
-.desk-tabs button { position: relative; width: 34px; height: 34px; display: flex; align-items: center;
-  justify-content: center; gap: 7px; border: 0; border-radius: 8px; padding: 0; background: transparent;
-  color: var(--muted); font: 500 12px var(--sans); cursor: pointer; }
-.desk-tabs button[aria-selected="true"] { width: auto; padding: 0 9px; background: var(--surface); color: var(--text); }
-.desk-tabs button svg { width: 16px; height: 16px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
-/* By class, not by position: the bubble is a sibling of the label, and a
-   positional rule stopped matching the label the moment one existed. */
-.desk-tabs button .lb { display: none; font-weight: 600; }
-.desk-tabs button[aria-selected="true"] .lb { display: inline; }
-.desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; }
+/* Every tab says its name: an icon alone left two of the three to guesswork,
+   and the Diff tab's plus in a square read as "new". The selected one is the
+   strip's one dark pill -- the ink inverted, so it holds on either ground and
+   in either theme -- and a count sits in the row after its label, now that
+   every tab has the width to give it one. */
+.desk-tabs button { position: relative; height: 30px; display: flex; align-items: center;
+  justify-content: center; gap: 6px; border: 0; border-radius: 15px; padding: 0 10px 0 9px; background: transparent;
+  color: var(--muted); font: 500 12px var(--sans); white-space: nowrap; cursor: pointer;
+  transition: background .14s ease, color .14s ease; }
+.desk-tabs button:hover { color: var(--text); background: var(--hover); }
+.desk-tabs button[aria-selected="true"] { background: var(--text); color: var(--ink); }
+.desk-tabs button svg { width: 15px; height: 15px; flex: none; stroke-linecap: round; stroke-linejoin: round; }
+.desk-tabs button .lb { font-weight: 600; }
+.desk-tabs .desk-count { position: static; }
+/* A palette pulled narrow keeps the selected tab's word and hands the other
+   two back to their icons, so the strip never wraps. By class, not by
+   position: the count is a sibling of the label. */
+@container (max-width: 250px) {
+  .desk-tabs button:not([aria-selected="true"]) { width: 30px; padding: 0; }
+  .desk-tabs button:not([aria-selected="true"]) .lb,
+  .desk-tabs button:not([aria-selected="true"]) .desk-count { display: none; }
+}
+/* The palette no longer clips its children -- the notch stands above its top
+   edge -- so the scroll box rounds its own lower corners to the frame. */
+.desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; border-radius: 0 0 13px 13px; }
 /* The Tasks tab's board paints on --surface (features/tasks/styles.css's
    `.tkboard`). The palette's own ground is --ink, which showed through the
-   transparent drag strip and the body's 5px padding as a white band above and
-   below the board. The frame takes the ground the tab actually paints on; the
-   selected tab, the unread count and the flat list's hover move one step up
-   the same ramp so they stay distinct, and the header's rule takes the
-   stronger line the white ground used to supply. */
-.desk-palette[data-tab="tasks"] { background: var(--surface); }
+   body's 5px padding as a white band above and below the board. So the body
+   takes the board's ground, and only the body: the tab strip stays the
+   palette's white on every tab, and with it the notch, which inherits the
+   frame's ground. Where white meets the board the header's rule takes the
+   stronger line, and the flat list's hover moves one step up the ramp. */
+.desk-palette[data-tab="tasks"] .desk-body { background: var(--surface); }
 .desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
-.desk-palette[data-tab="tasks"] .desk-tabs button[aria-selected="true"] { background: var(--raised); }
-.desk-palette[data-tab="tasks"] .desk-count { border-color: var(--surface); }
 .desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
    one: the right edge is pinned under the launcher and hard against the
@@ -7523,3 +7579,5 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    view; nothing else reads it. */
 html[data-traj] .chat > .dock > :not(#sheetRack) { display: none }
 html[data-traj] #deskHost { display: none }
+/* Its chip goes with it, and the capsule closes up to the switch and the menu. */
+html[data-traj] .desk-follow-toggle { display: none }

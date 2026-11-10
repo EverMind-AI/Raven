@@ -82,6 +82,10 @@ describe('the chat column chrome', () => {
       'title',
       'wdTag',
       'spacer',
+      'chrome-capsule',
+    ])
+    expect(Array.from(top().querySelector('.chrome-capsule')!.children).map((child) => child.id || child.className)).toEqual([
+      'ghost-ic desk-follow-toggle',
       'wsBtn',
       'moreBtn',
     ])
@@ -275,13 +279,14 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(document.getElementById('trajBtn')).toBeNull()
   })
 
-  it('parks the scroller and shows the box on a click, and puts them back on the next', async () => {
+  it('parks the scroller and shows the box on a click, and puts them back from the other half', async () => {
     render()
     await offer()
     const btn = el('trajBtn')
     expect(btn.getAttribute('aria-pressed')).toBe('false')
+    expect(el('chatViewBtn').getAttribute('aria-pressed')).toBe('true')
     expect(Array.from(top().children).map((child) => child.id || child.className)).toEqual([
-      'title', 'wdTag', 'spacer', 'trajBtn', 'wsBtn', 'moreBtn',
+      'title', 'wdTag', 'spacer', 'chrome-capsule',
     ])
     const ta = document.getElementById('ta') as HTMLTextAreaElement
     ta.value = 'half a thought'
@@ -294,9 +299,13 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(el('trajHost').hidden).toBe(false)
     expect(document.getElementById('backpill')).not.toBeNull()
     expect(el('trajBtn').getAttribute('aria-pressed')).toBe('true')
+    expect(el('chatViewBtn').getAttribute('aria-pressed')).toBe('false')
     expect(ta.value).toBe('half a thought')
     expect(rack.firstElementChild).toBe(racked)
+    /* A segment says where it goes, so pressing the one already down stays. */
     act(() => { el('trajBtn').click() })
+    expect(trajectory.get().view).toBe('trajectory')
+    act(() => { el('chatViewBtn').click() })
     expect(trajectory.get().view).toBe('chat')
     expect(el('scroll').hasAttribute('data-parked')).toBe(false)
     expect(el('trajHost').hidden).toBe(true)
@@ -387,8 +396,23 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
     act(() => { el('trajBtn').click() })
     expect(document.documentElement.hasAttribute('data-traj')).toBe(true)
-    act(() => { el('trajBtn').click() })
+    act(() => { el('chatViewBtn').click() })
     expect(document.documentElement.hasAttribute('data-traj')).toBe(false)
+  })
+
+  /* The header's right side is one capsule: the view switch, the desk's chip
+     and the conversation menu, in that order, with the panel toggle kept for a
+     page without the desk. */
+  it('gathers the view switch, the desk chip and the menu in one capsule', async () => {
+    render()
+    await offer()
+    const capsule = document.querySelector('.chat > .top > .chrome-capsule') as HTMLElement
+    expect(Array.from(capsule.children).map((child) => child.id || child.className)).toEqual([
+      'chrome-viewsw', 'ghost-ic desk-follow-toggle', 'wsBtn', 'moreBtn',
+    ])
+    expect(Array.from(capsule.querySelectorAll('.chrome-viewsw > button')).map((b) => b.id)).toEqual([
+      'chatViewBtn', 'trajBtn',
+    ])
   })
 
 })

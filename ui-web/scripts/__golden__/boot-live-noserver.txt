@@ -93,14 +93,19 @@ div.app[data-rail=on]
               path
             span
           span.spacer
-          button#wsBtn.ghost-ic.wstog.tipdn
-            svg
-              rect
-              path
-            span#wsBdg.bdg
-          button#moreBtn.ghost-ic.tipdn
-            svg
-              path
+          div.chrome-capsule
+            button.ghost-ic.desk-follow-toggle
+              svg
+                rect
+                path
+            button#wsBtn.ghost-ic.wstog.tipdn
+              svg
+                rect
+                path
+              span#wsBdg.bdg
+            button#moreBtn.ghost-ic.tipdn
+              svg
+                path
         div#scroll.scroll
           div#bannerHost
           div#flash.flash

@@ -23,9 +23,9 @@ import {
   workspaceTransitionWidth,
 } from './geometry'
 
-/* The launcher, at the size and place the stylesheet gives it: a 30px button
-   centred on y=27, 50px in from the right edge: the 12px gutter plus the
-   header slot the conversation menu takes. */
+/* A launcher standing on its own, outside any capsule: a 30px button centred
+   on y=27, 50px in from the right edge. The desk hangs from the button itself
+   then; the capsule case is its own test below. */
 const EDGE = 50
 
 function launcher(): number {
@@ -68,6 +68,30 @@ describe('desk placement', () => {
     expect(at.x + at.w).toBe(right)
     expect(at.y).toBe(42 + DESK_ANCHOR_GAP)
     expect(at.detached).toBe(false)
+  })
+
+  /* In the header the launcher is one control of three in the capsule, and the
+     desk hangs from the capsule rather than from the chip: flush with its right
+     edge, the menu's included, and under its floor. */
+  it('hangs the desk from the capsule the launcher sits in', () => {
+    const capsule = document.createElement('div')
+    capsule.className = 'chrome-capsule'
+    document.body.appendChild(capsule)
+    const right = window.innerWidth - DESK_LAUNCHER_EDGE
+    capsule.getBoundingClientRect = () => ({
+      left: right - 160, right, top: 10, bottom: 44,
+      width: 160, height: 34, x: right - 160, y: 10, toJSON: () => ({}),
+    }) as DOMRect
+    const chip = document.createElement('button')
+    chip.className = 'desk-follow-toggle'
+    capsule.appendChild(chip)
+    chip.getBoundingClientRect = () => ({
+      left: right - 120, right: right - 36, top: 13, bottom: 41,
+      width: 84, height: 28, x: right - 120, y: 13, toJSON: () => ({}),
+    }) as DOMRect
+    const at = defaultGeometry()
+    expect(at.x + at.w).toBe(right)
+    expect(at.y).toBe(44 + DESK_ANCHOR_GAP)
   })
 
   /* Not the minimum. The desk opens at a size a reader can read a tab in, and
@@ -269,9 +293,9 @@ describe('the reserve the anchored desk asks the chat for', () => {
 
   it('gives a wider panel up sooner, because it is asking for more', () => {
     /* The panel is resizable, so the floor is a fact about the pair rather than
-       about one width: the same chat that can spare 362px cannot spare 542px. */
-    const chat = 362 + DESK_COLUMN_FLOOR
-    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(362)
+       about one width: the same chat that can spare 328px cannot spare 508px. */
+    const chat = 328 + DESK_COLUMN_FLOOR
+    expect(deskReserve({ shown: true, w: 300, chatWidth: chat })).toBe(328)
     expect(deskReserve({ shown: true, w: 480, chatWidth: chat })).toBe(0)
   })
 })

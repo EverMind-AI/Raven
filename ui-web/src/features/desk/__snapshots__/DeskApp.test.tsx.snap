@@ -26,11 +26,5 @@ exports[`asking for the instance list > keeps its rendered shape 1`] = `
         rect
         path
       b
-  div.desk-resize
-button.ghost-ic.desk-follow-toggle[data-working=true]
-  svg
-    path
-    circle
-    circle
-    circle"
+  div.desk-resize"
 `;

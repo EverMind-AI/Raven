@@ -35,15 +35,14 @@ export const DESK_COMPOSER_GAP = 12
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
-/* The launcher's own inset from the chat's right edge, and the gap left between
-   the panel and the text so the two do not touch. The first MUST agree with
+/* The inset of what the panel hangs from -- the header's capsule, which holds
+   the launcher -- from the chat's right edge, and the gap left between the
+   panel and the text so the two do not touch. The first MUST agree with
    `--desk-launcher-edge` in the stylesheet, which is what actually places the
    panel -- the same pairing `anchoredGeometry` keeps with `[data-anchored]`.
-   50 is the old 12 plus one header slot (a 28px button and the header's 10px
-   gap): the corner slot is the conversation menu's (#moreBtn), and the
-   launcher stands over the panel toggle one slot in, with the panel hanging
-   under it. */
-export const DESK_LAUNCHER_EDGE = 50
+   16 is the header's own right padding: the capsule ends there, the
+   conversation menu at its end, and the panel's right edge lines up with it. */
+export const DESK_LAUNCHER_EDGE = 16
 export const DESK_TEXT_GAP = 12
 /* The narrowest transcript the reserve will leave behind. Below it the reserve
    is not taken at all -- see `deskReserve`, where measuring showed that taking
@@ -145,10 +144,19 @@ function launcher(): HTMLElement | null {
     ?? document.getElementById('wsBtn')
 }
 
-/* Where the anchored desk sits: the gap below the launcher, right edge flush
+/* What the anchored desk hangs from: the header's capsule when the launcher
+   sits in one (chrome/ChatTop.tsx), so the panel lines up with the whole
+   group of controls rather than with the chip in its middle; the launcher
+   itself anywhere else. */
+function anchor(): HTMLElement | null {
+  const button = launcher()
+  return (button?.closest('.chrome-capsule') as HTMLElement | null) ?? button
+}
+
+/* Where the anchored desk sits: the gap below its anchor, right edge flush
    with it -- the placement `anchoredGeometry` describes. */
 function anchoredBox(w: number): { top: number; left: number; right: number } | null {
-  const rect = launcher()?.getBoundingClientRect()
+  const rect = anchor()?.getBoundingClientRect()
   return rect ? { top: rect.bottom + DESK_ANCHOR_GAP, left: rect.right - w, right: rect.right } : null
 }
 
@@ -171,7 +179,7 @@ export function defaultGeometry(): DeskGeometry {
 /* Where the anchored desk actually sits, for the magnet to snap back to. It
    MUST agree with .desk-palette[data-anchored="true"] in the stylesheet, which
    is what positions it while it is attached: right edge flush with the
-   launcher, hanging below it. Two expressions of one placement, so a change to
+   capsule the launcher sits in, hanging below it. Two expressions of one placement, so a change to
    either is a change to both. */
 export function anchoredGeometry(value: DeskGeometry): DeskGeometry {
   const box = anchoredBox(value.w)
