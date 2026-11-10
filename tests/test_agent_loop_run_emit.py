@@ -181,6 +181,29 @@ class _ReadSkillTool(Tool):
         return self.BODY
 
 
+class _FakeAskUserTool(Tool):
+    """Counts executions; the real ``ask_user`` would block on the broker."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    @property
+    def name(self) -> str:
+        return "ask_user"
+
+    @property
+    def description(self) -> str:
+        return "ask_user stand-in"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs) -> str:
+        self.calls.append(kwargs)
+        return "answered"
+
+
 class _FakeChatProvider:
     """Non-streaming path: ``chat_with_retry`` returns scripted LLMResponses."""
 
@@ -774,6 +797,75 @@ async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
     assert results and results[0][0] == "tool_call"
     assert results[0][1].startswith("Error: tool 'no_such_tool' is not available")
     assert sink.events == []
+
+
+@pytest.mark.parametrize("watched", [True, False], ids=["watched", "unwatched"])
+async def test_a_forwarded_ask_user_is_preempted_only_on_watched_work(tmp_path, monkeypatch, watched):
+    """Through ``tool_call`` the outer name is the forwarder.
+
+    A watched turn must not ask the owner, so the preempt gate has to read the
+    name the call produces rather than the outer one; the unwatched control
+    shows the same call still reaches the tool.
+    """
+    from raven.agent.subagent import watch_work
+
+    state = watch_work.TurnWatch()
+    if watched:
+        state.verdict = watch_work.Verdict(watched=True)
+        state.agent = "raven-oncall"
+    monkeypatch.setattr(watch_work, "TurnWatch", lambda: state)
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "a1",
+                                "function": {
+                                    "name": "tool_call",
+                                    "arguments": json.dumps(
+                                        {
+                                            "name": "ask_user",
+                                            "arguments": {"questions": [{"question": "Which base?"}]},
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    asked = _FakeAskUserTool()
+    loop.tools.register(asked)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert len(asked.calls) == (0 if watched else 1)
+    assert results and results[0][0] == "ask_user"
+    if watched:
+        assert results[0][1] == "This question was not sent to the owner."
+    else:
+        assert results[0][1] == "answered"
 
 
 async def test_a_tool_without_forwarded_params_still_completes_the_turn(tmp_path):

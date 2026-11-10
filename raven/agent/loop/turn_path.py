@@ -1933,10 +1933,17 @@ class TurnPathMixin:
                     if tracker is not None:
                         await tracker.record_tool_call(tool_call.name, tool_call.id)
                     preempted = ""
-                    if tool_call.name == "ask_user":
+                    call_args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
+                    producing_tool = self.tools.get(tool_call.name)
+                    owner_of = getattr(producing_tool, "metadata_owner", None)
+                    produced = owner_of(call_args) if owner_of is not None else None
+                    produced_name = produced.name if produced is not None else tool_call.name
+                    if produced_name == "ask_user":
                         from raven.agent.subagent import watch_work as _ww
 
-                        preempted = _ww.preempt_owner_ask(watch_state, tool_call.arguments)
+                        forward = getattr(producing_tool, "forwarded_params", None)
+                        params = forward(call_args) if forward is not None else call_args
+                        preempted = _ww.preempt_owner_ask(watch_state, params)
                     # Not asked of a preempted call: the branch below wins, so
                     # the refusal would be spent on something the model never sees.
                     stalled_verdict, stalled_answer = (
