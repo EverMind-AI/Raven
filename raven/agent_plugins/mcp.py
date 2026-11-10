@@ -404,7 +404,8 @@ def package_mcp_report(
             ),
         )
 
-    plugin_data = Path(plugin_data)
+    # Match the runtime: it expands PLUGIN_DATA from a resolved data root.
+    plugin_data = Path(plugin_data).resolve()
     taken = {str(name) for name in reserved_names}
     servers: dict[str, MCPServerConfig] = {}
     problems: list[McpServerProblem] = []

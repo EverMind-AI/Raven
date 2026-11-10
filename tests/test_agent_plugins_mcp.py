@@ -379,6 +379,24 @@ def test_a_dotdot_environment_value_does_not_take_other_entries_down(tmp_path: P
     assert list(report.servers) == [f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}good"]
 
 
+def test_a_dotdot_data_root_does_not_refuse_a_plugin_data_value(tmp_path: Path) -> None:
+    """RAVEN_HOME may spell the data root through '..'; the runtime resolves it first."""
+    root = _package(
+        tmp_path,
+        mcp=_mcp({"local": _stdio(env={"CONFIG": "${PLUGIN_DATA}/db.sqlite"})}),
+    )
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    plugin_data = tmp_path / "data" / ".." / "data" / PACKAGE_NAME
+
+    report = package_mcp_report(load_package(root), plugin_data=plugin_data)
+
+    assert report.problems == ()
+    server = report.servers[f"{PACKAGE_NAME}{PACKAGE_SERVER_SEPARATOR}local"]
+    assert server.env["PLUGIN_DATA"] == str(data_root / PACKAGE_NAME)
+    assert server.env["CONFIG"] == str(data_root / PACKAGE_NAME / "db.sqlite")
+
+
 def test_stdio_carries_the_two_reserved_variables(tmp_path: Path) -> None:
     root = _package(tmp_path, mcp=_mcp({"local": _stdio()}))
     data = tmp_path / "data"
