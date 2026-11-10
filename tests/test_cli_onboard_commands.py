@@ -3583,6 +3583,32 @@ def test_bootstrap_names_a_configured_endpoint_in_the_notice(
     assert "sends text from your conversation to https://hub.internal.test" in out
 
 
+def test_bootstrap_disclosure_uses_the_resolved_endpoint(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``RAVEN_SKILLHUB_URL`` moves where the loop sends the text, so the opt-in
+    disclosure has to name that address rather than the config's."""
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test")
+
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "sends text from your conversation to https://staging.hub.test" in out
+
+
+def test_bootstrap_disclosure_falls_back_on_an_invalid_override(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An override the client refuses is ignored there too, so the disclosure
+    names the URL the client actually falls back to."""
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://staging.hub.test")
+
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "sends text from your conversation to https://skillhub.evermind.ai" in out
+
+
 def _onboard_once() -> Any:
     return runner.invoke(
         app,

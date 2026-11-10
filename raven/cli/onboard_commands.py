@@ -346,6 +346,7 @@ def _bootstrap_empty_config() -> None:
     from raven.config.paths import get_workspace_path
     from raven.config.raven import load_raven_config
     from raven.config.update import enable_skill_hub_if_unset
+    from raven.skill_hub import resolve_hub_endpoint
     from raven.utils.workspace import sync_workspace_templates
 
     path = get_config_path()
@@ -355,7 +356,10 @@ def _bootstrap_empty_config() -> None:
         save_config(load_config())
     enable_skill_hub_if_unset(config_path=path)
     if skill_hub_on(read_raw_or_raise(path)):
-        endpoint = load_raven_config(path).skill_forge.router.hub.endpoint
+        # Through the client's own resolver: RAVEN_SKILLHUB_URL moves where the
+        # loop sends this text, and an override the client refuses falls back
+        # there too, so the disclosure has to name that address.
+        endpoint = resolve_hub_endpoint(load_raven_config(path).skill_forge.router.hub.endpoint)
         console.print(
             t(
                 "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
