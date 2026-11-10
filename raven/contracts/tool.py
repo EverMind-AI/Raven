@@ -339,6 +339,15 @@ class Tool(ABC):
         """
         return self
 
+    def forwarded_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """The params the tool that produced this call's result saw.
+
+        Defaults to ``params``. Overridden by a tool that forwards to another
+        tool (``tool_call``), where the target's own arguments are nested in
+        ``params`` and a reader of the target's fields would otherwise see none.
+        """
+        return params
+
     def take_metadata(self) -> dict[str, Any] | None:
         """Structured payload for this call's turn-stream event, consumed once.
 

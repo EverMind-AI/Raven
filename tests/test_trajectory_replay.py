@@ -847,9 +847,10 @@ class _MarkerTool:
     name = "marker"
     description = "leaves a marker file"
     parameters = {"type": "object", "properties": {"note": {"type": "string"}}, "required": ["note"]}
-    # Three members Tool carries in this tree and upstream's stub predates: the
-    # registry reads `channels` when it builds the array, and the loop asks every
-    # call for its metadata owner. Same defaults as the base class.
+    # Four members Tool carries in this tree and upstream's stub predates: the
+    # registry reads `channels` when it builds the array, the loop asks every
+    # call for its metadata owner, and the result path asks for the params the
+    # producing tool saw. Same defaults as the base class.
     channels = None
 
     def __init__(self, marker: Path):
@@ -874,6 +875,9 @@ class _MarkerTool:
 
     def metadata_owner(self, params):
         return self
+
+    def forwarded_params(self, params):
+        return params
 
     def take_metadata(self):
         return None

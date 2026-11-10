@@ -337,6 +337,46 @@ def test_pinned_scan_takes_the_whole_exchange_and_supersedes_earlier_fetches() -
     assert pinned == {5, 6}
 
 
+@pytest.mark.parametrize("tool_name", ["use_skill", "read_skill"])
+@pytest.mark.parametrize("inner_arguments", ["object", "string"])
+def test_pinned_scan_reads_a_skill_fetch_forwarded_through_tool_call(tool_name, inner_arguments) -> None:
+    """A fetch through ``tool_call`` is the fetch it forwards.
+
+    The outer name is the forwarder, so a scan that stopped there left the
+    body the model loaded through the fold unpinned and compaction could drop
+    it. The tool accepts the target's arguments as an object or as a JSON
+    string, so both spellings have to read as the same fetch.
+    """
+    from raven.context_engine.curator import pinned_message_ids
+
+    forwarded = {"skill_id": "local/guide"}
+    messages = [
+        {"role": "user", "content": "read the guide"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "c1",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_call",
+                        "arguments": json.dumps(
+                            {
+                                "name": tool_name,
+                                "arguments": forwarded if inner_arguments == "object" else json.dumps(forwarded),
+                            }
+                        ),
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "c1", "name": tool_name, "content": "body"},
+    ]
+
+    assert pinned_message_ids(messages, ["local/guide"]) == {1, 2}
+
+
 def test_pinned_scan_covers_sibling_results_of_the_pinned_turn(tmp_path: Path) -> None:
     from raven.context_engine.curator import CuratorArchiveStore, pinned_message_ids
 

@@ -317,6 +317,24 @@ async def test_tool_call_rejects_unparseable_arguments() -> None:
     assert "must be a JSON object" in await ctrl.call("anything", "not json {")
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({"skill_id": "local/guide"}, {"skill_id": "local/guide"}),
+        ('{"skill_id": "local/guide"}', {"skill_id": "local/guide"}),
+        ("not json {", {}),
+        ('["local/guide"]', {}),
+        (None, {}),
+    ],
+    ids=["object", "json-string", "invalid", "non-object", "absent"],
+)
+def test_forwarded_params_reads_the_arguments_the_call_accepts(arguments, expected) -> None:
+    """The hook promises what the target saw; ``call`` accepts a JSON string,
+    so a reader of the same envelope must return the same object."""
+    tool = ToolCallTool(_controller(ToolRegistry()))
+    assert tool.forwarded_params({"name": "read_skill", "arguments": arguments}) == expected
+
+
 # ---- ToolSearchStrategy ----
 
 

@@ -46,6 +46,11 @@ if TYPE_CHECKING:
 
 _SEG_SEP = "\n\n---\n\n"
 
+# The phase-A segments a reader of the window can tell apart even though they
+# are not turn-scoped: the always-on skill digest is stable and rides the
+# system prompt, and its bytes answer for the skills part, not the system's.
+_WINDOW_SEGMENTS = frozenset({"active_skills"})
+
 
 def _stable_prefix_chars(parts: list[tuple[int, str, bool]], *, tail_follows: bool = False) -> int:
     """Characters of the system prefix that read the same on the next turn.
@@ -176,7 +181,7 @@ class ContextAssembler(ContextEngine):
         meta: dict[str, Any] = {}
         prefix_parts: list[tuple[int, str, bool]] = []
         scratch_parts: list[tuple[int, str]] = []
-        turn_scoped_by_name: dict[str, str] = {}
+        window_parts: dict[str, str] = {}
         for builder, seg in zip(self._phase_a, a_segs):
             if seg is None or isinstance(seg, Exception):
                 continue
@@ -188,17 +193,10 @@ class ContextAssembler(ContextEngine):
                 scratch_parts.append((builder.order, seg.text))
             else:
                 prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
-            if turn_scoped:
-                turn_scoped_by_name[builder.name] = seg.text
+            if turn_scoped or builder.name in _WINDOW_SEGMENTS:
+                window_parts[builder.name] = seg.text
         prefix_parts.sort(key=lambda t: t[0])
         scratch_parts.sort(key=lambda t: t[0])
-        # The segments that are recomputed every turn, by name, so a reader can
-        # tell what they cost: the memory that was recalled and the skills that
-        # were routed, apart. They ride in the turn's scratch by default and in
-        # the system prompt when ``context.cache.turn_scratch`` is off, so they
-        # are recorded wherever they went.
-        if turn_scoped_by_name:
-            meta["turn_scoped_parts"] = turn_scoped_by_name
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
 
         if self._scent is not None:
@@ -209,6 +207,14 @@ class ContextAssembler(ContextEngine):
                 # only writer of this key: the after-turn backend feedback
                 # keeps receiving the skills the model was offered.
                 meta |= {"injected_skill_ids": list(scent.skill_ids)}
+                window_parts["scent"] = _scent_in_envelope(scent.text)
+        # What fills the window, by name, so a reader can tell the parts apart:
+        # the memory and the skills this turn added on top of the talk, the
+        # always-on skill digest that rides the system prompt, and the pull
+        # menu. Each is recorded wherever it rode, so the breakdown can cut it
+        # out of its default bucket.
+        if window_parts:
+            meta["window_parts"] = window_parts
         scratch = render_turn_scratch([text for _, text in scratch_parts])
         # Appended after the envelope is built, and recorded on it: what the
         # session write and every other reader strip is exactly this text.
@@ -376,8 +382,7 @@ class ContextAssembler(ContextEngine):
             session_notices=self._session_notices(ctx.session_key),
         )
         if ctx.scent_text:
-            scent = re.sub(r"\n{2,}", "\n", ctx.scent_text.strip())
-            runtime_ctx = f"{runtime_ctx}\n{scent}"
+            runtime_ctx = f"{runtime_ctx}\n{_scent_in_envelope(ctx.scent_text)}"
         user_content = render.build_user_content(
             ctx.current_message,
             ctx.media,
@@ -389,6 +394,18 @@ class ContextAssembler(ContextEngine):
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
         return {"role": "user", "content": merged}
+
+
+def _scent_in_envelope(text: str) -> str:
+    """The menu as the envelope carries it: one paragraph, no blank lines.
+
+    The session persist keeps only what follows the envelope's first blank
+    line, so the menu has to stay inside it -- stored as the user's own text it
+    would render as such on resume and feed the next turn's novelty window its
+    own output. One function for both the envelope and the recorded breakdown,
+    so a menu the reader measures is the text the model saw.
+    """
+    return re.sub(r"\n{2,}", "\n", text.strip())
 
 
 def _coalesce_assistant(history: list[dict[str, Any]]) -> list[dict[str, Any]]:

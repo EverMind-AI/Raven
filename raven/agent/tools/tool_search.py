@@ -88,6 +88,26 @@ TOOL_SEARCH_NAME: str = "tool_search"
 META_TOOL_NAMES: frozenset[str] = frozenset({TOOL_SEARCH_NAME, TOOL_CALL_NAME})
 
 
+def _forwarded_arguments(raw: Any) -> dict[str, Any] | None:
+    """The arguments a forwarded call's target receives, or ``None`` if unreadable.
+
+    Models sometimes emit the nested ``arguments`` as a JSON string rather than
+    an object. ``call`` has always accepted that spelling, so every reader of
+    the same envelope has to decode it the same way; one that only took a dict
+    saw no arguments at all. ``None`` (never an exception) lets a reader that
+    only reports treat an unreadable call as carrying none.
+    """
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 class _Target(NamedTuple):
     """What one ``tool_call`` name resolves to. Exactly one field is set."""
 
@@ -328,12 +348,7 @@ class ToolSearchController:
         """
         if not isinstance(name, str) or name in META_TOOL_NAMES:
             return False
-        if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
-                arguments = None
-        return self._registry.is_blocking(name, arguments if isinstance(arguments, dict) else {})
+        return self._registry.is_blocking(name, _forwarded_arguments(arguments) or {})
 
     async def call(self, name: str, arguments: dict[str, Any] | None) -> str:
         """Invoke a cataloged tool: forward to the registry (validates args).
@@ -342,10 +357,10 @@ class ToolSearchController:
         than an object; parse that case so the call still goes through.
         """
         if isinstance(arguments, str):
-            try:
-                arguments = json.loads(arguments)
-            except json.JSONDecodeError:
+            parsed = _forwarded_arguments(arguments)
+            if parsed is None:
                 return "Error: 'arguments' must be a JSON object."
+            arguments = parsed
         target = self.resolve_target(name)
         if target.refusal is not None:
             return target.refusal
@@ -442,6 +457,9 @@ class ToolCallTool(Tool):
 
     def metadata_owner(self, params: dict[str, Any]) -> Tool:
         return self._ctrl.resolve_target(params.get("name")).tool or self
+
+    def forwarded_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        return _forwarded_arguments(params.get("arguments")) or {}
 
     async def execute(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         return await self._ctrl.call(name, arguments)

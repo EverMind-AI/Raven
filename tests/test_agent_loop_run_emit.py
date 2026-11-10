@@ -21,6 +21,7 @@ from raven.agent.loop import AgentLoop
 from raven.agent.loop._shared import _MID_TURN_HEADER
 from raven.agent.loop.bundles import HostWiring
 from raven.agent.loop.recovery import NETWORK_CUT_CONTINUATION
+from raven.agent.window.parts import CONVERSATION, SKILLS, measure_parts
 from raven.contracts.llm_provider import ChatDelta, LLMResponse, ToolCallRequest
 from raven.contracts.loop_hooks import AgentHook, HookDecision
 from raven.contracts.tool import Tool, ToolResult
@@ -118,6 +119,89 @@ class _SplitTool(Tool):
 
     async def execute(self, **kwargs) -> ToolResult:
         return ToolResult(model_text=self.MODEL_TEXT, display_text=self.DISPLAY_TEXT)
+
+
+class _DuckTool:
+    """A registered tool that does not inherit ``Tool``, the way an MCP or
+    plugin tool is admitted on the authored members alone.
+
+    It carries the members the registry and the loop read today, but not
+    ``forwarded_params``: that hook has a default on ``Tool`` and a duck has no
+    base class to inherit it from, so the result path must treat it as absent
+    rather than require it.
+    """
+
+    name = "ducktool"
+    description = "duck-typed tool with no forwarded_params"
+    parameters = {"type": "object", "properties": {}, "required": []}
+    channels = None
+    timeout_seconds = None
+    blocking_interaction = False
+    truncation_hint = None
+    incomplete_hint = None
+
+    def cast_params(self, params):
+        return params
+
+    def validate_params(self, params):
+        return []
+
+    def metadata_owner(self, params):
+        return self
+
+    def take_metadata(self):
+        return None
+
+    def blocking_for(self, params) -> bool:
+        return self.blocking_interaction
+
+    async def execute(self, **kwargs) -> str:
+        return "duck-ran"
+
+
+class _ReadSkillTool(Tool):
+    """Stands in for ``read_skill``: its result is the skill material the window
+    splits out of the conversation."""
+
+    BODY = "### Skill: deck-engine\n\n" + "Build the deck from the outline. " * 40
+
+    @property
+    def name(self) -> str:
+        return "read_skill"
+
+    @property
+    def description(self) -> str:
+        return "skill body stand-in"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}, "required": []}
+
+    async def execute(self, **kwargs) -> str:
+        return self.BODY
+
+
+class _FakeAskUserTool(Tool):
+    """Counts executions; the real ``ask_user`` would block on the broker."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    @property
+    def name(self) -> str:
+        return "ask_user"
+
+    @property
+    def description(self) -> str:
+        return "ask_user stand-in"
+
+    @property
+    def parameters(self) -> dict:
+        return {"type": "object", "properties": {}}
+
+    async def execute(self, **kwargs) -> str:
+        self.calls.append(kwargs)
+        return "answered"
 
 
 class _FakeChatProvider:
@@ -481,12 +565,13 @@ async def test_tool_result_splits_model_text_from_display_preview(tmp_path):
     assert start.display == "Which base?"
 
 
-def _call_by_route(call_id: str, name: str, route: str) -> ChatDelta:
+def _call_by_route(call_id: str, name: str, route: str, arguments: dict | None = None) -> ChatDelta:
     """One model call to ``name``, made directly or forwarded through ``tool_call``."""
+    args = arguments or {}
     function = (
-        {"name": name, "arguments": "{}"}
+        {"name": name, "arguments": json.dumps(args)}
         if route == "direct"
-        else {"name": "tool_call", "arguments": json.dumps({"name": name, "arguments": {}})}
+        else {"name": "tool_call", "arguments": json.dumps({"name": name, "arguments": args})}
     )
     return ChatDelta(content=None, tool_call_delta={"tool_calls": [{"index": 0, "id": call_id, "function": function}]})
 
@@ -507,6 +592,316 @@ def _record_tool_results(loop: AgentLoop) -> tuple[dict[str, str], dict[str, str
 
     loop.context.add_tool_result = _record  # type: ignore[method-assign]
     return notes, contents
+
+
+async def test_a_forwarded_skill_read_is_named_for_the_tool_that_produced_it(tmp_path):
+    """Through ``tool_call`` the model names ``read_skill``; the result is the
+    skill's, so the window must see that name and count the body as skill
+    bytes rather than as the talk that read it."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "tool_call")],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+
+    recorded: list[tuple[str, str]] = []
+    written: list[dict] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, *, trusted_note=""):
+        recorded.append((tool_call_id, tool_name))
+        out = original_add(messages, tool_call_id, tool_name, result, trusted_note=trusted_note)
+        written[:] = [dict(m) for m in out]
+        return out
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert recorded == [("s1", "read_skill")]
+    prompt = [m for m in written if m.get("role") != "system"]
+    parts = measure_parts(prompt)
+    as_talk = measure_parts([{**m, "name": "tool_call"} if m.get("role") == "tool" else m for m in prompt])
+    assert parts[SKILLS] > 0
+    assert as_talk[SKILLS] == 0
+    assert parts[CONVERSATION] < as_talk[CONVERSATION]
+
+
+class _SkillSink:
+    """Records what ``set_skills_sink`` reports to the skill panel."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, dict]] = []
+
+    async def __call__(self, conversation: str, name: str, payload: dict) -> None:
+        self.events.append((conversation, name, payload))
+
+    def read_skills(self) -> list[dict]:
+        return [
+            skill
+            for _, name, payload in self.events
+            if name == "skills_injected"
+            for skill in payload["skills"]
+            if skill["kind"] in ("read_skill", "use_skill")
+        ]
+
+
+async def test_a_forwarded_skill_read_reaches_the_skill_panel(tmp_path):
+    """The outer call is ``tool_call``; the panel must still hear about the
+    skill the model loaded through it."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "tool_call", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["name"] == "deck-engine"
+    assert reported[0]["kind"] == "read_skill"
+
+
+async def test_a_forwarded_skill_read_with_string_arguments_reaches_the_skill_panel(tmp_path):
+    """The tool accepts a JSON-string ``arguments``; the panel's read must too.
+
+    ``ToolCallController.call`` parses that spelling, so the read_skill body
+    really lands. A report path reading the raw envelope instead saw no
+    ``skill_id`` and dropped the report, leaving the panel empty for a call
+    that had run.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "s1",
+                                "function": {
+                                    "name": "tool_call",
+                                    "arguments": json.dumps(
+                                        {
+                                            "name": "read_skill",
+                                            "arguments": json.dumps({"skill_id": "local/deck-engine"}),
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert results and results[0][0] == "read_skill"
+    assert _ReadSkillTool.BODY in results[0][1]
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["kind"] == "read_skill"
+
+
+async def test_a_direct_skill_read_still_reaches_the_skill_panel(tmp_path):
+    """The control for the forwarded case: a direct call reports unchanged."""
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "read_skill", "direct", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    reported = sink.read_skills()
+    assert len(reported) == 1
+    assert reported[0]["id"] == "local/deck-engine"
+    assert reported[0]["kind"] == "read_skill"
+
+
+async def test_a_refused_forward_reports_nothing_to_the_skill_panel(tmp_path):
+    """A ``tool_call`` whose target does not resolve reports no skill at all.
+
+    Both gates stay shut: ``metadata_owner`` falls back to the forwarder when
+    the target does not resolve, so the result is filed under ``tool_call``
+    rather than a skill tool, and the refusal text starts with ``Error``. The
+    forwarded arguments here carry a ``skill_id``, so a guard that keyed on the
+    arguments rather than the resolved target would report and turn this red.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("s1", "no_such_tool", "tool_call", arguments={"skill_id": "local/deck-engine"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_ReadSkillTool())
+    sink = _SkillSink()
+    loop.set_skills_sink(sink)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    events = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), events, _drain)
+
+    # The turn answered: a refusal is a tool result, never a raised exception.
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in events.events)
+    assert results and results[0][0] == "tool_call"
+    assert results[0][1].startswith("Error: tool 'no_such_tool' is not available")
+    assert sink.events == []
+
+
+@pytest.mark.parametrize("watched", [True, False], ids=["watched", "unwatched"])
+async def test_a_forwarded_ask_user_is_preempted_only_on_watched_work(tmp_path, monkeypatch, watched):
+    """Through ``tool_call`` the outer name is the forwarder.
+
+    A watched turn must not ask the owner, so the preempt gate has to read the
+    name the call produces rather than the outer one; the unwatched control
+    shows the same call still reaches the tool.
+    """
+    from raven.agent.subagent import watch_work
+
+    state = watch_work.TurnWatch()
+    if watched:
+        state.verdict = watch_work.Verdict(watched=True)
+        state.agent = "raven-oncall"
+    monkeypatch.setattr(watch_work, "TurnWatch", lambda: state)
+
+    provider = _FakeStreamToolProvider(
+        [
+            [
+                ChatDelta(
+                    content=None,
+                    tool_call_delta={
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "a1",
+                                "function": {
+                                    "name": "tool_call",
+                                    "arguments": json.dumps(
+                                        {
+                                            "name": "ask_user",
+                                            "arguments": {"questions": [{"question": "Which base?"}]},
+                                        }
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                )
+            ],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    asked = _FakeAskUserTool()
+    loop.tools.register(asked)
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert len(asked.calls) == (0 if watched else 1)
+    assert results and results[0][0] == "ask_user"
+    if watched:
+        assert results[0][1] == "This question was not sent to the owner."
+    else:
+        assert results[0][1] == "answered"
+
+
+async def test_a_tool_without_forwarded_params_still_completes_the_turn(tmp_path):
+    """A duck-typed tool has no base class to inherit ``forwarded_params`` from.
+
+    The result path reads that hook to report a forwarded skill; for a tool
+    that does not carry it the read must fall back to the arguments and the
+    turn must finish. Before the guard the AttributeError ended the turn
+    before any result was appended.
+    """
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("d1", "ducktool", "direct")],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_DuckTool())
+
+    results: list[tuple[str, str]] = []
+    original_add = loop.context.add_tool_result
+
+    def _record(messages, tool_call_id, tool_name, result, blocks=None, *, trusted_note="", agent_output=False):
+        results.append((tool_name, result))
+        return original_add(
+            messages, tool_call_id, tool_name, result, blocks, trusted_note=trusted_note, agent_output=agent_output
+        )
+
+    loop.context.add_tool_result = _record  # type: ignore[method-assign]
+    events = _EmitCollector()
+
+    await loop.run_turn(_req("hi"), events, _drain)
+
+    assert any(isinstance(e, EvStreamDelta) and e.delta == "done" for e in events.events)
+    assert results == [("ducktool", "duck-ran")]
 
 
 @pytest.mark.parametrize("route", ["direct", "tool_call"])
@@ -532,7 +927,9 @@ async def test_a_dispatch_receipt_carries_the_reply_rules_note_after_its_fence(t
 
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
-    fence_end = f"[END UNTRUSTED {dispatch if route == 'direct' else 'tool_call'}"
+    # The fence names the tool that produced the result, not the forwarder, on
+    # either route.
+    fence_end = f"[END UNTRUSTED {dispatch}"
     rule = "decisions you put to the user that are still open close this reply too"
     sections = "gives each task its own `### <task>` section"
     assert "started" in contents["s1"]

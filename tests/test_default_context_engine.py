@@ -312,6 +312,22 @@ class TestAssembledMetadata:
         ac = await eng.assemble("s", [], _budget(), turn=_turn())
         assert ac.metadata["engine"] == "context_assembler"
 
+    async def test_window_parts_record_the_always_on_skills(self, builder: ContextBuilder) -> None:
+        """The digest of the resident skills is stable and rides the system
+        prompt. It is recorded by name anyway -- otherwise a reader of the
+        window counts it as the system's own words and the skills row reads
+        zero, which is what pull discovery showed."""
+        from raven.agent.window.parts import SKILLS, measure_parts
+
+        eng = _engine(builder, router=SkillForgeRouter([]), backend=_StubBackend())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        recorded = ac.metadata["window_parts"]["active_skills"]
+
+        assert recorded.startswith("# Active Skills")
+        assert recorded in ac.messages[0]["content"]
+        parts = measure_parts(ac.messages, [], ac.metadata["window_parts"])
+        assert parts[SKILLS] > 0
+
 
 # ---------------------------------------------------------------------------
 # Block rendering — recall → # Memory, router → # Skills
