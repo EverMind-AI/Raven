@@ -4798,12 +4798,14 @@ def test_every_graph_example_in_the_skill_is_a_call_the_runtime_accepts() -> Non
     node list -- that the pre-dispatch checks accept. A node list without its
     `node_summary`s parses, and is then refused whole by those checks, which is what
     copying an example used to earn. The worked example's own test covers one graph;
-    this covers every one."""
+    this covers every one. A fence that writes a `prompt_template` shows a graph
+    whatever its language tag says, so every fence is read, not only the `json` ones."""
     graphs = []
-    for block in re.findall(r"```json\n(.*?)```", _repo_text(_SKILL), re.S):
-        value = json.loads(block)
-        if isinstance(value, list) or (isinstance(value, dict) and "nodes" in value):
-            graphs.append(value)
+    for language, block in re.findall(r"^```(\w*)\n(.*?)^```", _repo_text(_SKILL), re.S | re.M):
+        if "prompt_template" not in block:
+            continue
+        assert language == "json", f"a graph example sits in a {language or 'untagged'} fence; tag it json"
+        graphs.append(json.loads(block))
     assert len(graphs) >= 3, "the guide's graph examples are no longer found"
     for graph in graphs:
         assert isinstance(graph, dict), "a graph example is a whole call, task_summary included"
