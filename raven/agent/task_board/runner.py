@@ -1,20 +1,25 @@
 """The post-turn call: once a host turn has answered, its model keeps the Task Board.
 
 One extra call, after the reply has gone out: the turn's own window and tools
-array plus one instruction asking for a ``task_board`` call. Nothing forces the
-tool -- the choice stays the turn's own -- so an answer in text is asked again. The
-arguments are checked whole by :func:`apply_update`; a refusal goes back to the
-model with every fault it found, up to :data:`MAX_ATTEMPTS` times. When every
-attempt is refused, the last update the model sent is still written as far as
-the board can take it -- see :func:`salvage` -- and only a fault in a step or in
-where its work goes leaves no update to be had. Then the turn's dispatches are
-parked in ``unassigned`` and the next update has to place them first -- a
+array plus one instruction asking for a ``task_board`` call. The instruction ends
+with the sentences of the reply that end in a question mark (:func:`asked`), for
+the model to sort onto the steps of the matters they ask about: a reply that also
+started work too often went on the board as running, its question left off.
+Nothing forces the tool -- the choice stays the turn's own -- so an answer in text
+is asked again, unless its whole text is the call written out, which is read as
+the call. The arguments are checked whole by :func:`apply_update`; a refusal goes
+back to the model with every fault it found, up to :data:`MAX_ATTEMPTS` times.
+When every attempt is refused, the last update the model sent is still written as
+far as the board can take it -- see :func:`salvage` -- and only a fault in a step
+or in where its work goes leaves no update to be had. Then the turn's dispatches
+are parked in ``unassigned`` and the next update has to place them first -- a
 dispatch is never silently dropped. A turn that failed or was stopped makes no
 call, and what it dispatched is parked the same way, in its place in the update
 queue (:func:`park_dispatches`). A turn known to be about some groups -- a
-delegated result's, a Move on's -- has its update confined to them, and to
-wherever it places its dispatches, before it is checked. Each refusal is logged,
-and each update that never landed.
+delegated result's, a Move on's -- has its update confined to them, to wherever
+it places its dispatches and to each step that asks the user something, before it
+is checked; one that also took in a message the user sent while it ran is not
+confined. Each refusal is logged, and each update that never landed.
 
 When the update wrote a step over one whose questions the user never answered,
 one more call follows, continuing from the update's own exchange: it decides which
@@ -27,8 +32,9 @@ on this one's result. Nothing here touches the session's messages.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from loguru import logger
 
@@ -47,13 +53,16 @@ from raven.agent.task_board.board import (
 )
 from raven.agent.task_board.service import TaskBoardService
 from raven.agent.task_board.tool import TOOL_NAME
-from raven.contracts.llm_provider import LLMResponse, ToolCallRequest
+from raven.contracts.llm_provider import LLMResponse
 from raven.i18n import prompt
 
 MAX_ATTEMPTS = 3
 OPEN_STEPS_SHOWN = 2
+ASKED_SHOWN = 8
 TEMPLATE = "task_board_update"
 SCOPE_TEMPLATE = "task_board_scope"
+SCOPE_MID_TURN_TEMPLATE = "task_board_scope_mid_turn"
+ASKED_TEMPLATE = "task_board_asked"
 CARRY_TEMPLATE = "task_board_carry"
 
 _PROSE = "Answer with a task_board call (action=update), not with text."
@@ -100,13 +109,76 @@ def _handles(board: Board, dispatches: Sequence[Dispatch]) -> str:
     return "\n".join(lines) or "(none)"
 
 
-def _scope(owners: Sequence[str]) -> str:
+def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
     # Ids alone: a title is text an earlier call wrote, and only the record is fenced.
-    return f"\n{prompt(SCOPE_TEMPLATE).strip().format(groups=', '.join(owners))}\n" if owners else ""
+    if not owners:
+        return ""
+    template = SCOPE_MID_TURN_TEMPLATE if mid_turn else SCOPE_TEMPLATE
+    return f"\n{prompt(template).strip().format(groups=', '.join(owners))}\n"
 
 
-def build_instruction(board: Board, dispatches: Sequence[Dispatch], owners: Sequence[str] = ()) -> str:
-    return prompt(TEMPLATE).format(board=_snapshot(board), dispatches=_handles(board, dispatches), scope=_scope(owners))
+_FENCED = re.compile(r"```.*?```", re.S)
+_EMPHASIS = re.compile(r"\*\*|__")
+_SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
+_LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
+_QUESTION_MARKS = ("?", "\uff1f")
+
+
+def asked(reply: str) -> list[str]:
+    """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
+
+    A code block and a quoted line are left out: neither was put to the user.
+    """
+    found: list[str] = []
+    for line in _FENCED.sub("", reply).splitlines():
+        if line.lstrip().startswith(">"):
+            continue
+        for part in _SENTENCE_END.split(_EMPHASIS.sub("", line)):
+            sentence = _LIST_MARK.sub("", part.strip()).strip()
+            if sentence.endswith(_QUESTION_MARKS) and len(sentence) > 2:
+                found.append(sentence)
+    return list(dict.fromkeys(found))[-ASKED_SHOWN:]
+
+
+def _text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(p.get("text") or "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+
+def _reply(window: Sequence[dict]) -> str:
+    """The words of the turn's reply: its last assistant message that has any, looked for back
+    to the last message from the user -- a reply before that one answered an earlier turn."""
+    for message in reversed(window):
+        if message.get("role") == "user":
+            return ""
+        if message.get("role") == "assistant" and (text := _text(message.get("content"))).strip():
+            return text
+    return ""
+
+
+def _asked_block(questions: Sequence[str]) -> str:
+    if not questions:
+        return ""
+    return "\n\n" + prompt(ASKED_TEMPLATE).strip().format(questions="\n".join(f"- {q}" for q in questions))
+
+
+def build_instruction(
+    board: Board,
+    dispatches: Sequence[Dispatch],
+    owners: Sequence[str] = (),
+    *,
+    asked: Sequence[str] = (),
+    mid_turn: bool = False,
+) -> str:
+    return prompt(TEMPLATE).format(
+        board=_snapshot(board),
+        dispatches=_handles(board, dispatches),
+        scope=_scope(owners, mid_turn),
+        asked=_asked_block(asked),
+    )
 
 
 def carry_candidates(before: Board, after: Board, turn_at: str) -> list[tuple[TaskGroup, TaskGroup]]:
@@ -171,15 +243,42 @@ def _still_open(waiting: Sequence[tuple[TaskGroup, TaskGroup]], board: Board) ->
     return kept
 
 
-def _assistant_row(response: LLMResponse, call: ToolCallRequest) -> dict[str, Any]:
+class _Call(NamedTuple):
+    id: str
+    arguments: Any
+    written: bool
+
+
+def _the_call(response: LLMResponse, action: str, written_id: str) -> _Call | None:
+    """The ``task_board`` call a reply made, or the one it wrote out as its whole text instead
+    -- a JSON object naming ``action``, bare or in a fence -- filed under ``written_id``;
+    ``None`` for a reply that did neither."""
+    made = next((c for c in response.tool_calls if c.name == TOOL_NAME), None)
+    if made is not None:
+        return _Call(made.id, made.arguments, False)
+    text = (response.content or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = text[3:-3].removeprefix("json").strip()
+    try:
+        args = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(args, dict) or args.get("action") != action:
+        return None
+    return _Call(written_id, args, True)
+
+
+def _assistant_row(response: LLMResponse, call: _Call) -> dict[str, Any]:
+    # A call written out stands as the call alone: its text is the call, and an attempt
+    # shown its own text again tends to write it out again.
     row: dict[str, Any] = {
         "role": "assistant",
-        "content": response.content or "",
+        "content": "" if call.written else response.content or "",
         "tool_calls": [
             {
                 "id": call.id,
                 "type": "function",
-                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+                "function": {"name": TOOL_NAME, "arguments": json.dumps(call.arguments)},
             }
         ],
     }
@@ -204,6 +303,16 @@ def _faults(exc: UpdateRejectedError) -> str:
 
 def _refused(session_key: str, attempt: int, why: str, *, what: str = "update") -> None:
     logger.info("Task board {} for {}, attempt {} of {}, refused: {}", what, session_key, attempt, MAX_ATTEMPTS, why)
+
+
+def _read_as_call(session_key: str, attempt: int, *, what: str = "update") -> None:
+    logger.info(
+        "Task board {} for {}, attempt {} of {}, answered in text; read as its call",
+        what,
+        session_key,
+        attempt,
+        MAX_ATTEMPTS,
+    )
 
 
 def _as_placed(service: TaskBoardService, session_key: str, board: Board, handles: Sequence[str]) -> list[str]:
@@ -236,17 +345,22 @@ async def _ask(
     turn_id: str | None,
     now_ms: Callable[[], int],
     owners: list[str],
+    mid_turn: bool = False,
 ) -> tuple[dict[str, Any], bool, list[dict]] | None:
     """Up to MAX_ATTEMPTS asks; the arguments of an update the board accepted, whether
     they are a salvage, whose text past a limit stands, and the exchange the asks left
     -- the question pass continues from it. ``None`` when no update was had.
 
     A turn that belongs to ``owners`` has its update confined to them before it is
-    checked, so what would be dropped anyway never costs a refusal. When the last
-    attempt is refused too, the last update sent is salvaged: its work is placed and
-    its steps written unless a fault lies there.
+    checked, so what would be dropped anyway never costs a refusal -- unless it took in a
+    message the user sent while it ran (``mid_turn``): only the model can tell which
+    matter that message was about, so the instruction names it and nothing is dropped.
+    When the last attempt is refused too, the last update sent is salvaged: its work is
+    placed and its steps written unless a fault lies there.
     """
-    rows = list(window) + [{"role": "user", "content": build_instruction(board, dispatches, owners)}]
+    confined_to = () if mid_turn else owners
+    instruction = build_instruction(board, dispatches, owners, asked=asked(_reply(window)), mid_turn=mid_turn)
+    rows = list(window) + [{"role": "user", "content": instruction}]
     last: dict[str, Any] | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
@@ -257,17 +371,19 @@ async def _ask(
         if response.finish_reason == "error":
             logger.warning("Task board update for {} failed at the provider: {}", session_key, response.content)
             return None
-        tool_call = next((c for c in response.tool_calls if c.name == TOOL_NAME), None)
+        tool_call = _the_call(response, "update", f"written_update_{attempt}")
         if tool_call is None:
             _refused(session_key, attempt, "answered in text")
             rows += [{"role": "assistant", "content": response.content or ""}, {"role": "user", "content": _PROSE}]
             continue
+        if tool_call.written:
+            _read_as_call(session_key, attempt)
         args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
         if args.get("action") != "update":
             _refused(session_key, attempt, f"called action={args.get('action')}")
             result = _NOT_UPDATE
         else:
-            confined = confine_update(args, owners)
+            confined = confine_update(args, confined_to)
             try:
                 apply_update(board, confined, dispatches, turn_at=turn_at, turn_id=turn_id, now_ms=now_ms())
             except UpdateRejectedError as exc:
@@ -277,7 +393,9 @@ async def _ask(
             else:
                 if confined != args:
                     logger.info(
-                        "Task board update for {} kept to {}; the rest was about other matters", session_key, owners
+                        "Task board update for {} kept to {}; the rest was about other matters",
+                        session_key,
+                        confined_to,
                     )
                 rows += [
                     _assistant_row(response, tool_call),
@@ -325,7 +443,7 @@ async def _ask_carry(
         if response.finish_reason == "error":
             logger.warning("Task board questions for {} failed at the provider: {}", session_key, response.content)
             return None
-        tool_call = next((c for c in response.tool_calls if c.name == TOOL_NAME), None)
+        tool_call = _the_call(response, "carry", f"written_carry_{attempt}")
         if tool_call is None:
             _refused(session_key, attempt, "answered in text", what="questions")
             rows += [
@@ -333,6 +451,8 @@ async def _ask_carry(
                 {"role": "user", "content": _CARRY_PROSE},
             ]
             continue
+        if tool_call.written:
+            _read_as_call(session_key, attempt, what="questions")
         args = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
         if args.get("action") != "carry":
             _refused(session_key, attempt, f"called action={args.get('action')}", what="questions")
@@ -401,6 +521,7 @@ async def run_post_turn(
     generation: int,
     delegated: Sequence[str] = (),
     moved_on: Sequence[str] = (),
+    mid_turn: bool = False,
 ) -> Board | None:
     """Keep the board for the turn that just ended; the board written, or ``None`` when no update was had.
 
@@ -418,9 +539,12 @@ async def run_post_turn(
     ``delegated`` names the run whose result opened the turn -- read as the run the
     board placed when it descends from one -- and ``moved_on`` the groups the
     reader's Move on named: the groups they resolve to are the
-    ones the turn belongs to, and its update is confined to them and to wherever
-    it places the work it started. They are resolved on the board the queue
-    hands over, where the update before this one has placed its runs.
+    ones the turn belongs to, and its update is confined to them, to wherever
+    it places the work it started and to each step that asks the user something.
+    They are resolved on the board the queue hands over, where the update before
+    this one has placed its runs. ``mid_turn`` says the turn took in a message the
+    user sent while it ran: the instruction names that message's matter too, and
+    nothing is confined, since only the model can tell what the message was about.
 
     A step that wrote over one asking questions gets one more call, after the
     update and before the write: an answer that never comes leaves the update as
@@ -439,6 +563,7 @@ async def run_post_turn(
                 turn_id=turn_id,
                 now_ms=now_ms,
                 owners=owning_groups(board, _as_placed(service, session_key, board, delegated), moved_on),
+                mid_turn=mid_turn,
             )
         except Exception:
             logger.opt(exception=True).warning("Task board update for {} failed", session_key)

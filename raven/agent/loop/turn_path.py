@@ -3830,7 +3830,8 @@ class TurnPathMixin:
         come from what the turn added -- a spawn still in the history belongs to the
         turn that made it. ``delegated`` (the request's mark of the result that
         opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does.
+        say what the turn is about, when anything does; a message the user sent while
+        it ran, among what it added, says it is about more than they name.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3882,6 +3883,7 @@ class TurnPathMixin:
                 generation=board.generation(key),
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
+                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
             )
         )
         self._consolidation_tasks.add(task)

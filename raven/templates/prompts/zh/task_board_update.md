@@ -25,4 +25,4 @@
 - 再次出现的事情回到原来的任务，已完成的也一样；只有现有任务都不涵盖时才新建。
 - 用户提出的每个请求都是一件事，即使在这一轮里就办完了：也要记下，办完的标为 `completed`。只有闲聊和关于这段对话本身的提问不写事件：发送 `steps: []`，除非上面列出了句柄。
 
-示例：{{"action": "update", "steps": [{{"new_title": "修复登录后白屏", "new_summary": "已定位原因：恢复会话时 token 为空。等用户选修法。", "title": "定位原因，给出三种修法", "summary": "问用户用哪种修法：恢复时重新获取 token、等 token 到位再跳转，还是清掉过期会话。白屏来自恢复会话时 token 为空。", "status": "needs_you", "questions": ["用哪种修法：恢复时重新获取 token、等 token 到位再跳转，还是清掉过期会话？"], "tasks": ["spawn:locate_login_bug"]}}]}}
+示例：{{"action": "update", "steps": [{{"new_title": "修复登录后白屏", "new_summary": "已定位原因：恢复会话时 token 为空。等用户选修法。", "title": "定位原因，给出三种修法", "summary": "问用户用哪种修法：恢复时重新获取 token、等 token 到位再跳转，还是清掉过期会话。白屏来自恢复会话时 token 为空。", "status": "needs_you", "questions": ["用哪种修法：恢复时重新获取 token、等 token 到位再跳转，还是清掉过期会话？"], "tasks": ["spawn:locate_login_bug"]}}]}}{asked}

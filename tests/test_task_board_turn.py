@@ -456,6 +456,18 @@ async def test_a_silent_turn_makes_no_board_call(tmp_path):
     assert not (agent.sessions.session_dir(KEY) / BOARD_FILENAME).exists()
 
 
+async def test_the_board_call_is_shown_the_questions_the_reply_asked(tmp_path):
+    provider = Recording([LLMResponse(content=f"{ANSWER} Which fix should I apply?"), BOARD_REPLY])
+    agent = _agent(tmp_path, provider)
+
+    await agent._process_message(_turn(), session_key=KEY)
+    await _drain(agent)
+
+    instruction = _text(provider.requests[1]["messages"][-1])
+    listed = instruction[instruction.index("[BEGIN QUESTION MARKS]") : instruction.index("[END QUESTION MARKS]")]
+    assert listed.splitlines()[1:] == ["- Which fix should I apply?"]
+
+
 def _placed_and_another(agent: AgentLoop) -> None:
     """g_a placed the subagent run an earlier turn started; g_b is another matter."""
     run = TaskLink("spawn", "locate_bug", "Locate the bug")
@@ -507,6 +519,25 @@ async def test_a_move_on_keeps_its_turns_board_to_the_group_it_named(tmp_path):
 
     assert "g_b" in _scope(_text(provider.requests[1]["messages"][-1]))
     assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [1, 2]
+
+
+async def test_a_mid_turn_message_frees_a_move_ons_turn_to_write_what_it_moved(tmp_path):
+    """A message the user sent while the turn ran may be about any matter, and only the model
+    can tell which: the update is no longer kept to the group the Move on named."""
+    provider = Recording([LLMResponse(content=ANSWER), _both_moved()])
+    agent = _agent(tmp_path, provider)
+    _placed_and_another(agent)
+    await agent.task_board.move_on(KEY, "g_b")
+    waiting = [_turn("And where does the fix stand?")]
+
+    await agent._process_message(
+        _turn("Draft them for Friday."), session_key=KEY, drain=lambda: [waiting.pop()] if waiting else []
+    )
+    await _drain(agent)
+
+    scope = _scope(_text(provider.requests[1]["messages"][-1]))
+    assert "g_b -- and to the matter of each message the user sent while it was already running." in scope
+    assert [len(g.steps) for g in load_board(agent.sessions.session_dir(KEY)).groups] == [2, 2]
 
 
 async def test_a_turn_the_user_started_with_nothing_picked_keeps_every_group_it_moved(tmp_path):
