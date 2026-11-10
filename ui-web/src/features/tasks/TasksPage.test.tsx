@@ -26,7 +26,10 @@ let record: NodeRecord = { dispatch: null, steps: [], answer: null, outputTrunca
 let stopped: TaskRow[] = []
 
 const counts = (over: Partial<TaskRow['counts']> = {}) => (
-  { total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, ...over }
+  {
+    total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0, exception: 0,
+    not_executed: 0, carried: 0, ...over,
+  }
 )
 
 const node = (over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'status'>): TaskNode => ({
@@ -351,6 +354,13 @@ describe('a task pane', () => {
       expect(facts(row)).toEqual([
         'gui.tasks.st_completed', 'gui.tasks.step_done {"n":3}', 'gui.tasks.step_not_executed {"n":3}',
       ])
+    })
+
+    it('counts what a sealed run carried into its successor', () => {
+      const row = task({
+        id: 'a', kind: 'dag', status: 'cancelled', counts: counts({ total: 3, failed: 1, carried: 2 }),
+      })
+      expect(facts(row)).toEqual(['gui.tasks.st_cancelled', 'gui.tasks.step_failed {"n":1}', 'gui.tasks.step_carried {"n":2}'])
     })
 
     it('still says all done on a completed task nothing was left out of', () => {

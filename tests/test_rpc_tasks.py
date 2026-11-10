@@ -157,6 +157,7 @@ async def test_a_real_spawn_is_one_completed_task(workspace: Path) -> None:
         "interrupted": 0,
         "exception": 0,
         "not_executed": 0,
+        "carried": 0,
     }
     node = row["nodes"][0]
     assert node["agent"]
@@ -690,6 +691,7 @@ async def test_a_hard_stop_reads_cancelled_from_the_node_registry_not_all(worksp
         "interrupted": 0,
         "exception": 0,
         "not_executed": 0,
+        "carried": 0,
     }
 
 
@@ -1763,3 +1765,58 @@ async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_li
             0
         ]
         assert (a_after["tokens_in"], a_after["tokens_out"]) == (10, 1)
+
+
+_SEALED_ID = "20261108T000000Z-0000000a"
+_SUCCESSOR_ID = "20261108T000000Z-0000000b"
+_SEALED_GRAPH = {
+    "task_summary": "research",
+    "nodes": [
+        {"id": "r1", "subagent": "Raven", "node_summary": "first source", "depends_on": []},
+        {"id": "r2", "subagent": "Raven", "node_summary": "second source", "depends_on": []},
+        {"id": "r3", "subagent": "Raven", "node_summary": "third source", "depends_on": []},
+    ],
+}
+
+
+async def _seal_a_replanned_run(session_dir: Path) -> DagRunStore:
+    """Run A, sealed by a replan that carried `r1` and `r3` into run B and gave up `r2`."""
+    store = await _make_run(session_dir, _SEALED_ID, _SEALED_GRAPH, ["r1", "r2", "r3"])
+    carried = {"carried_into": _SUCCESSOR_ID, "ended_at": None}
+    await store.write_manifest(
+        {
+            "r1": _manifest_entry(status="carried", **carried),
+            "r2": _manifest_entry(status="failed", error=f"Superseded by replan into run {_SUCCESSOR_ID}: wrong"),
+            "r3": _manifest_entry(status="carried", **carried),
+        }
+    )
+    await store.record_replan(
+        {
+            "run_id": _SUCCESSOR_ID,
+            "from_node": "r2",
+            "reason": "wrong",
+            "decided_at": 1,
+            "started": True,
+            "carried": ["r1", "r3"],
+        }
+    )
+    return store
+
+
+async def test_a_sealed_runs_task_row_counts_carried_and_reads_as_a_hand_off(workspace: Path) -> None:
+    await _seal_a_replanned_run(_session_dir(workspace))
+
+    result = await tasks_list({"session_key": SESSION})
+    TasksListResult.model_validate(result)
+
+    row = result["tasks"][0]
+    assert row["status"] == "cancelled", "a sealed run reads as a hand-off, whatever its nodes read"
+    assert (row["counts"]["carried"], row["counts"]["failed"], row["counts"]["total"]) == (2, 1, 3)
+    assert row["replan"]["carried"] == ["r1", "r3"]
+    carried = {node["node_id"]: node.get("carried_into") for node in row["nodes"] if node["status"] == "carried"}
+    assert carried == {"r1": _SUCCESSOR_ID, "r3": _SUCCESSOR_ID}
+
+
+def test_a_carried_node_moves_no_rung_of_the_status_ladder() -> None:
+    assert task_rows._task_status(["completed", "carried"]) == "completed"
+    assert task_rows._task_status(["running", "carried"]) == "running"

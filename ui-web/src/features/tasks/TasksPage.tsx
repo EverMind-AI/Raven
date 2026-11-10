@@ -78,6 +78,7 @@ function nodeStatusWord(status: TaskNode['status']): string {
     case 'interrupted': return t('gui.tasks.node_st_interrupted')
     case 'exception': return t('gui.tasks.node_st_exception')
     case 'not_executed': return t('gui.tasks.node_st_not_executed')
+    case 'carried': return t('gui.tasks.node_st_carried')
   }
 }
 
@@ -113,6 +114,7 @@ function stepLine(row: TaskRow): string {
   if (c.failed) parts.push(t('gui.tasks.step_failed', { n: c.failed }))
   if (c.skipped) parts.push(t('gui.tasks.step_skipped', { n: c.skipped }))
   if (c.not_executed) parts.push(t('gui.tasks.step_not_executed', { n: c.not_executed }))
+  if (c.carried) parts.push(t('gui.tasks.step_carried', { n: c.carried }))
   return parts.join(' · ')
 }
 

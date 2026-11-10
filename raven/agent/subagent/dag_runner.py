@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import json
 import time
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -27,13 +27,15 @@ from raven.agent.subagent.backends.base import llm_error_reply, optional_keyword
 from raven.agent.subagent.dag_adjudication import (
     CONTINUE,
     REASSIGN,
-    REPLAN,
     REPORT_DELIVERY_ATTEMPTS,
     AdjudicationDesk,
     ReassignPlan,
+    ReplanOutcome,
+    ReplanProposal,
     deliver_report,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities
+from raven.agent.subagent.dag_carry import FINISHED_STATUSES, CarryPlan, classify_nodes, plan_carry
 from raven.agent.subagent.dag_graph import (
     DagNodeSpec,
     SubAgentDagSpec,
@@ -50,8 +52,10 @@ from raven.agent.subagent.dag_handover import (
 )
 from raven.agent.subagent.dag_render import render_prompt
 from raven.agent.subagent.dag_store import (
+    CARRIED,
     NOT_EXECUTED,
     DagRunStore,
+    SessionNodes,
     index_guard,
     make_run_id,
     node_live_key,
@@ -312,7 +316,6 @@ class DagRunResult:
     terminal_outputs: list[dict] = field(default_factory=list)
     files: list[dict] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
-    replanned_into: str | None = None
     # Internal only, never serialized here: the node each id would dispatch as,
     # and where each graph-named instance group ended up. A capture projects
     # them onto a saved graph; no reader of a run consumes them yet.
@@ -425,6 +428,23 @@ class ReassignmentState:
     deciding which nodes may move reads both.
     """
     submitted_auto: set[str] = field(default_factory=set)
+    queued: set[str] = field(default_factory=set)
+    """The nodes a dispatched task holds that have not begun an attempt.
+
+    Read-only by convention, like ``status``: the runner recomputes it whenever it
+    hands nodes to tasks or takes finished tasks back. Such a node reads
+    ``pending``, yet a task is about to dispatch it -- waiting at the concurrency
+    gate, or behind a sibling in its instance group -- so a caller deciding what a
+    replan may still change must not treat it as free.
+    """
+    replan_keep: frozenset[str] | None = None
+    """The nodes a replan in flight carries, once its successor is on disk.
+
+    Set by the commit the moment the successor is written and cleared at the
+    switch, so a task holding a node the plan dropped cannot begin a new attempt
+    between the stop and the tables changing: the node's outcome is already
+    sealed. Read-only by convention, like ``status``: the runner is its writer.
+    """
     dropped_moves: set[tuple[str, str]] = field(default_factory=set)
     """Keys of staged moves the run dropped without installing them.
 
@@ -550,6 +570,7 @@ async def run_dag(
     model: str | None = None,
     reassignment_state: ReassignmentState | None = None,
     build_reassigned: "Callable[[DagNodeSpec], Awaitable[tuple[DagNodeSpec, Any]]] | None" = None,
+    on_switch: "Callable[[str, str, ReplanProposal], None] | None" = None,
 ) -> DagRunResult:
     """Run a validated DAG, passing messages through files.
 
@@ -638,12 +659,6 @@ async def run_dag(
     node, so one answer that never arrives fails just that node instead of
     blocking the run forever.
 
-    A ``replan`` answer interrupts the round in flight rather than waiting for
-    it to drain: it gives every unfinished node a terminal status naming the
-    successor run and finalizes this one. The successor itself is submitted
-    by the caller, not here -- this run only reports its id back as
-    ``DagRunResult.replanned_into``.
-
     ``on_node_start``, when given, is called once per attempt as the node is
     marked running and before it is rendered -- for a caller that needs to know
     where things stood before this node touched them.
@@ -676,6 +691,15 @@ async def run_dag(
     unstarted backend. It is called only when a move installs, and for every
     node that actually moves; without it a node can only move to a target whose
     backend the plan itself supplied.
+
+    A replan proposal posted on ``desk`` is committed here, at the top of a
+    scheduling pass, and never half applied: the run is planned again as it
+    stands, the successor run is written, what the new plan drops stops, and this
+    same scheduler goes on as the successor -- its run id, its nodes, and the
+    attempts it carried, which keep running untouched. The old run is sealed
+    behind it. The returned result is the last run of the chain. ``on_switch``,
+    when given, is told the old and the new run id the moment the identity
+    switches, with the proposal that caused it.
     """
     if semaphore is None and max_concurrency < 1:
         raise DagValidationError("max_concurrency must be >= 1")
@@ -731,7 +755,9 @@ async def run_dag(
         await store.init(spec.model_dump_json(), [node.id for node in spec.nodes])
 
     published_terminal: set[str] = set()
-    replanned_into: str | None = None
+    # The run's own node ids, in order. A replan's switch replaces them in place
+    # with the successor's; the node table may then also hold finished context.
+    own: list[str] = [node.id for node in spec.nodes]
 
     # Built before the `try` below, not inside it: the cancellation handler reads
     # `status`, and a handler that covers the first await has to be able to.
@@ -797,7 +823,7 @@ async def run_dag(
         node_ended_at=node_ended_at,
         by_id=by_id,
         session_key=session_key,
-        run_id=store.run_id,
+        store=store,
         progress_publisher=progress_publisher,
         state=state,
     )
@@ -828,73 +854,18 @@ async def run_dag(
         await _emit(
             progress_publisher,
             "dag_run_started",
-            {
-                "run_id": store.run_id,
-                # The line the whole graph was dispatched with. Per-node
-                # summaries ride below; this one has no other way to reach a
-                # reader, and the sheet above the composer is titled by it.
-                "task_summary": spec.task_summary,
-                "nodes": [
-                    {
-                        "id": node.id,
-                        "subagent": node.subagent,
-                        "node_summary": node.node_summary,
-                        "depends_on": node.depends_on,
-                        "instance": node.instance,
-                        # Only on a node that branches: a graph without routes or
-                        # guards carries none of these keys.
-                        **({"routes": list(node.routes), "select": node.select or "one"} if node.routes else {}),
-                        **({"when": node.when} if node.id in branch.guards else {}),
-                    }
-                    for node in spec.nodes
-                ],
-            },
+            _run_started_payload(store.run_id, spec.task_summary, spec.nodes, branch),
         )
         while True:
             _cascade_failures(deps, status)
             if cancel is not None and cancel.is_set():
                 _mark_stopped(status)
-            if desk is not None and desk.replanned.is_set():
-                # A replan cancels in-flight work, and nodes an earlier `resume`
-                # handed on sit outside the round that would have done it -- this
-                # is the one loop exit that can be reached while any are running.
-                # Before `_apply_replan`, so the `cancelled` it records is true.
-                await _reap_carried(carried)
-                carried = set()
-                state.release_moves()
-                # The second settle pass announces what it decides before the
-                # ready set, so of `not_executed` this finds nothing; it stays
-                # as the backstop for an exit that skips the sweep below. What
-                # the widened states are for is this very pass's own: the
-                # cascade's skips and the stop's cancels, which the break would
-                # otherwise leave unannounced. NOT_EXECUTED itself only ever
-                # names a guarded node or a dependency of one, so a graph
-                # without routes or guards sees none of it.
-                await publish_terminal(("skipped", "cancelled", NOT_EXECUTED))
-                plan = desk.take_plan()
-                if plan is not None:
-                    await _apply_replan(
-                        plan,
-                        status=status,
-                        errors=errors,
-                        published_terminal=published_terminal,
-                        node_started_at=node_started_at,
-                        node_ended_at=node_ended_at,
-                        by_id=by_id,
-                        session_key=session_key,
-                        run_id=store.run_id,
-                        progress_publisher=progress_publisher,
-                        state=state,
-                    )
-                    replanned_into = plan.run_id
-                desk.replanned.clear()
-                break
-            # Below the stop and the replan, not beside the cascade: a decision node
-            # either one cut off mid-judgement reads `completed` with no route, and
-            # deciding its branches now would record a selection nobody made where the
-            # stop or the replan is why they never ran. Ahead of the sweep, so the
-            # sweep announces in this same pass what this pass decides -- the run's
-            # last decisions included, which no later pass would announce.
+            # Below the stop, not beside the cascade: a decision node the stop cut
+            # off mid-judgement reads `completed` with no route, and deciding its
+            # branches now would record a selection nobody made where the stop is
+            # why they never ran. Ahead of the sweep, so the sweep announces in this
+            # same pass what this pass decides -- the run's last decisions included,
+            # which no later pass would announce.
             settle_branches(deps, status, branch, unsettled)
             await publish_terminal(("skipped", "cancelled", NOT_EXECUTED))
             carried_ids = {nid for nids in owned.values() for nid in nids}
@@ -955,6 +926,51 @@ async def run_dag(
                     failed=failed_here,
                 )
             await announce_scheduler_failures(failed_here)
+            if desk is not None:
+                # Cleared before the take with nothing awaited between: a proposal
+                # posted after this point sets it again and wakes the next wait.
+                desk.proposed.clear()
+                taken = desk.take_proposal()
+                if taken is not None and await _answer_proposal(
+                    taken,
+                    ctx=_CommitContext(
+                        by_id=by_id,
+                        deps=deps,
+                        dependents=dependents,
+                        status=status,
+                        errors=errors,
+                        output_paths=output_paths,
+                        continuations=continuations,
+                        attempts=attempts,
+                        prompt_written=prompt_written,
+                        node_started_at=node_started_at,
+                        node_ended_at=node_ended_at,
+                        node_activity=node_activity,
+                        published_terminal=published_terminal,
+                        unsettled=unsettled,
+                        owned=owned,
+                        carried=carried,
+                        own=own,
+                        branch=branch,
+                        state=state,
+                        store=store,
+                        desk=desk,
+                        cancel=cancel,
+                        progress_publisher=progress_publisher,
+                        session_key=session_key,
+                        history_root=history_root,
+                        roots=roots,
+                        nodes_root=nodes_root,
+                        backend=backend,
+                        run_root=run_root,
+                        on_switch=on_switch,
+                    ),
+                ):
+                    # The next pass starts over as the successor, so the cascade,
+                    # branch settling and the ready set all read its graph. The ready
+                    # rule reads dependencies, not guards: a new guarded node has to
+                    # be settled before it could be taken.
+                    continue
             ready = [
                 nid
                 for nid, st in status.items()
@@ -991,12 +1007,12 @@ async def run_dag(
                     carried = await _run_ready_groups(
                         (),
                         cancel,
-                        interrupt=desk.replanned if desk is not None else None,
                         resume=desk.continued if desk is not None else None,
                         settled=settled,
                         carried=carried,
                     )
                     owned = {task: nids for task, nids in owned.items() if task in carried}
+                    state.queued = _queued(owned, status, state)
                     continue
                 state.release_moves()
                 break
@@ -1060,15 +1076,16 @@ async def run_dag(
                 )
                 dispatched[task] = tuple(group)
             owned.update(dispatched)
+            state.queued = _queued(owned, status, state)
             carried = await _run_ready_groups(
                 list(dispatched),
                 cancel,
-                interrupt=desk.replanned if desk is not None else None,
                 resume=desk.continued if desk is not None else None,
                 settled=settled,
                 carried=carried,
             )
             owned = {task: nids for task, nids in owned.items() if task in carried}
+            state.queued = _queued(owned, status, state)
 
         result = await _finalize(
             spec,
@@ -1086,8 +1103,8 @@ async def run_dag(
             auto_instances,
             branch=branch,
             state=state,
+            own=own,
         )
-        result.replanned_into = replanned_into
         result.execution_nodes = dict(state.effective_nodes)
         result.instance_assignments = _instance_assignments(state)
         return result
@@ -1106,10 +1123,13 @@ async def run_dag(
         await _reap_carried(carried)
         state.release_moves()
         _mark_stopped(status)
-        await _record_outcome(store, status, cancelled=True)
+        # The run's own nodes only: after a replan the tables also hold the
+        # finished nodes of the run before it, whose outcome that run recorded.
+        own_status = {nid: status[nid] for nid in own}
+        await _record_outcome(store, own_status, cancelled=True)
         # No manifest will carry them: a stopped run's set-aside accounts
         # would otherwise outlive it for the life of the process.
-        activity.forget_settled(node_live_key(store.run_id, nid) for nid in status)
+        activity.forget_settled(node_live_key(store.run_id, nid) for nid in own_status)
         # This run's own memory-record pollers, scheduled for nodes that had
         # already completed before this cancellation landed, would otherwise
         # keep polling with nothing left to reap them.
@@ -1119,6 +1139,11 @@ async def run_dag(
         if record_tasks:
             await asyncio.gather(*record_tasks, return_exceptions=True)
         raise
+    finally:
+        # Every way out answers a proposal still waiting to be committed, so the
+        # call waiting on it always returns.
+        if desk is not None:
+            desk.reject_pending(_RUN_ENDED, still_waiting=False)
 
 
 async def _reap_carried(carried: Iterable[asyncio.Future]) -> None:
@@ -1150,7 +1175,6 @@ async def _reap_carried(carried: Iterable[asyncio.Future]) -> None:
 async def _run_ready_groups(
     coros: Any,
     cancel: asyncio.Event | None,
-    interrupt: asyncio.Event | None = None,
     resume: asyncio.Event | None = None,
     settled: asyncio.Event | None = None,
     carried: Iterable[asyncio.Future] = (),
@@ -1159,10 +1183,9 @@ async def _run_ready_groups(
 
     With no signal to race, this is a plain ``asyncio.gather`` (if that
     gather is itself cancelled from outside, gather cancels every task it is
-    waiting on, same as before this function existed). With ``cancel``
-    and/or ``interrupt`` given, races the round's group tasks against
-    whichever signals are set, so an in-flight node is cancelled the instant
-    either one fires, releasing its semaphore slot immediately rather than
+    waiting on, same as before this function existed). With ``cancel`` given,
+    races the round's group tasks against it, so an in-flight node is cancelled
+    the instant it fires, releasing its semaphore slot immediately rather than
     waiting for it to finish on its own.
 
     ``resume`` is the one signal that does not end the graph's work. It says a
@@ -1170,9 +1193,9 @@ async def _run_ready_groups(
     round ends early and every node still running is *returned* rather than
     cancelled; the caller passes them straight back as ``carried``, which awaits
     them alongside the next round's own tasks. That is what keeps a re-dispatch
-    from waiting out an unrelated sibling, and it is why the two signals cannot
-    share a parameter: ``interrupt`` means stop these nodes, ``resume`` means
-    stop waiting for them.
+    from waiting out an unrelated sibling: ``cancel`` means stop these nodes,
+    ``resume`` means stop waiting for them. A posted replan proposal wakes a
+    round through ``resume`` too, so the work it carries keeps running.
 
     ``settled`` is the second soft signal and is handled exactly like ``resume``.
     It says a node reached its final status for this attempt, so the ready set is
@@ -1198,14 +1221,13 @@ async def _run_ready_groups(
     """
     tasks = [asyncio.ensure_future(c) for c in coros] + list(carried)
     cancel_sig = asyncio.ensure_future(cancel.wait()) if cancel is not None else None
-    interrupt_sig = asyncio.ensure_future(interrupt.wait()) if interrupt is not None else None
     resume_sig = asyncio.ensure_future(resume.wait()) if resume is not None else None
     settled_sig = asyncio.ensure_future(settled.wait()) if settled is not None else None
-    signals = [s for s in (cancel_sig, interrupt_sig, resume_sig, settled_sig) if s is not None]
+    signals = [s for s in (cancel_sig, resume_sig, settled_sig) if s is not None]
     if not signals:
         await asyncio.gather(*tasks)
         return set()
-    stopping = [s for s in (cancel_sig, interrupt_sig) if s is not None]
+    stopping = [s for s in (cancel_sig,) if s is not None]
     soft = [s for s in (resume_sig, settled_sig) if s is not None]
     handed_on: set[asyncio.Future] = set()
     try:
@@ -1232,6 +1254,45 @@ async def _run_ready_groups(
     return handed_on
 
 
+def _run_started_payload(
+    run_id: str, task_summary: str, nodes: Sequence[DagNodeSpec], branch: BranchState
+) -> dict[str, Any]:
+    """The ``dag_run_started`` frame for one run: the whole topology, before any node reports."""
+    return {
+        "run_id": run_id,
+        # The line the whole graph was dispatched with. Per-node summaries ride
+        # below; this one has no other way to reach a reader, and the sheet above
+        # the composer is titled by it.
+        "task_summary": task_summary,
+        "nodes": [
+            {
+                "id": node.id,
+                "subagent": node.subagent,
+                "node_summary": node.node_summary,
+                "depends_on": node.depends_on,
+                "instance": node.instance,
+                # Only on a node that branches: a graph without routes or guards
+                # carries none of these keys.
+                **({"routes": list(node.routes), "select": node.select or "one"} if node.routes else {}),
+                **({"when": node.when} if node.id in branch.guards else {}),
+            }
+            for node in nodes
+        ],
+    }
+
+
+def _queued(
+    owned: Mapping[asyncio.Future, tuple[str, ...]], status: Mapping[str, str], state: ReassignmentState
+) -> set[str]:
+    """The nodes a dispatched task holds that have not begun an attempt (``ReassignmentState.queued``)."""
+    return {
+        node_id
+        for node_ids in owned.values()
+        for node_id in node_ids
+        if status.get(node_id) == "pending" and not state.attempt_agents.get(node_id)
+    }
+
+
 async def _publish_terminal(
     states: tuple[str, ...],
     *,
@@ -1242,7 +1303,7 @@ async def _publish_terminal(
     node_ended_at: dict[str, int],
     by_id: dict[str, DagNodeSpec],
     session_key: str | None,
-    run_id: str,
+    store: DagRunStore,
     progress_publisher: ProgressPublisher | None,
     state: ReassignmentState | None = None,
     only: set[str] | None = None,
@@ -1250,11 +1311,9 @@ async def _publish_terminal(
     """Announce, once each, every node the scheduler itself put in one of ``states``.
 
     `_run_node` announces the nodes it ran; a node the scheduler skipped, cancelled
-    or left unexecuted is announced here or by `_apply_replan`, never by both,
-    including on the pass that meets a replan, whose exit publishes all three
-    before it breaks. Two cases are announced by neither: the nodes stopped by
-    cancelling the run's task, and a decision node completed but not yet
-    adjudicated when a replan cancels its group.
+    or left unexecuted is announced here. The nodes stopped by cancelling the run's
+    task are announced by neither, and so are the nodes a replan stops: their
+    statuses reach a reader in the replaced run's sealed record.
 
     ``only`` narrows the sweep to the nodes one caller failed itself. `_run_node`
     announces its own failures without recording them here, so a sweep of every
@@ -1279,11 +1338,11 @@ async def _publish_terminal(
         await _emit(
             progress_publisher,
             "dag_node_updated",
-            {"run_id": run_id, "node": nid, "status": st, **outcome, **assignment},
+            {"run_id": store.run_id, "node": nid, "status": st, **outcome, **assignment},
         )
         await _write_node_status(
             session_key,
-            run_id,
+            store.run_id,
             nid,
             _current_agent(nid, state, by_id[nid].subagent),
             st,
@@ -1292,63 +1351,587 @@ async def _publish_terminal(
         )
 
 
-async def _apply_replan(
-    plan: Any,
-    *,
-    status: dict[str, str],
-    errors: dict[str, str],
-    published_terminal: set[str],
-    node_started_at: dict[str, int],
-    node_ended_at: dict[str, int],
-    by_id: dict[str, DagNodeSpec],
-    session_key: str | None,
-    run_id: str,
-    progress_publisher: ProgressPublisher | None,
-    state: ReassignmentState | None = None,
-) -> None:
-    """Give this run's unfinished nodes their outcome, the replan being their cause.
+_RUN_ENDED = "the run ended before the replan was applied"
+"""Why a proposal still waiting to be committed is refused when its run ends."""
 
-    Publishes each transition here rather than leaving it to the loop's own sweep:
-    that sweep only announces `skipped`, `cancelled` and `not_executed`, and
-    widening it to `failed` would double-publish every node that failed on its own
-    merit -- `_run_node` already announces those and does not record them as
-    published.
 
-    A node already terminal on its own merit -- completed, failed, or skipped by
-    an unrelated cascade -- is untouched. A completed node's output is what the
-    new run references; a failed or skipped node's status and error are the real
-    reason it ended, and overwriting them with the replan's would erase that.
-    The pass's own skipped and cancelled are published by the replan exit
-    before this runs, through the same `_publish_terminal` the sweep uses.
+@dataclass
+class _CommitContext:
+    """The run's own tables, by reference, for the commit of one replan.
+
+    Built at the top of the pass that commits, so every field is the object
+    ``run_dag`` holds at that moment. The commit changes them in place: the group
+    tasks still running hold the same objects, and keep seeing them through the
+    switch. ``applied`` is set the moment the switch has happened, so a commit cut
+    short after it still answers with what it applied.
     """
-    reason = f"Superseded by replan into run {plan.run_id}: {plan.reason}"
+
+    by_id: dict[str, DagNodeSpec]
+    deps: dict[str, list[str]]
+    dependents: dict[str, list[str]]
+    status: dict[str, str]
+    errors: dict[str, str]
+    output_paths: dict[str, str]
+    continuations: dict[str, str]
+    attempts: dict[str, int]
+    prompt_written: set[str]
+    node_started_at: dict[str, int]
+    node_ended_at: dict[str, int]
+    node_activity: dict[str, dict]
+    published_terminal: set[str]
+    unsettled: set[str]
+    owned: dict[asyncio.Future, tuple[str, ...]]
+    carried: set[asyncio.Future]
+    own: list[str]
+    branch: BranchState
+    state: ReassignmentState
+    store: DagRunStore
+    desk: AdjudicationDesk
+    cancel: asyncio.Event | None
+    progress_publisher: ProgressPublisher | None
+    session_key: str | None
+    history_root: str
+    roots: tuple[str, ...]
+    nodes_root: str
+    backend: Any
+    run_root: str
+    on_switch: "Callable[[str, str, ReplanProposal], None] | None" = None
+    applied: ReplanOutcome | None = None
+
+
+@dataclass(frozen=True)
+class _Seal:
+    """A replanned run as it ended, captured at the switch.
+
+    ``status`` holds each of the run's own nodes as its sealed record reads it,
+    the carried ones as ``carried``; ``files`` and ``manifest`` are those records,
+    built at the same instant, so the sealed manifest and the completion frame
+    agree. ``stopped`` lists the nodes the replan stopped, in the run's order, and
+    ``stopped_suspended`` those of them that were waiting for an answer.
+    """
+
+    run_id: str
+    dir: str
+    nodes: tuple[DagNodeSpec, ...]
+    status: dict[str, str]
+    files: list[dict]
+    manifest: dict
+    outcomes: dict[str, dict[str, Any]]
+    stopped: tuple[str, ...]
+    stopped_suspended: tuple[str, ...]
+
+
+async def _answer_proposal(taken: tuple[ReplanProposal, asyncio.Future], *, ctx: _CommitContext) -> bool:
+    """Commit a taken proposal and resolve its future on every way out; True when applied.
+
+    A cancellation still answers the call waiting on the future: as a refusal
+    when it lands before the successor is on disk, and with what was applied
+    once it is, since the commit then finishes first.
+    """
+    proposal, future = taken
+    outcome = ReplanOutcome(applied=False, reason=_RUN_ENDED, still_waiting=False)
+    try:
+        outcome = await _commit_replan(proposal, ctx=ctx)
+    finally:
+        if ctx.applied is not None:
+            outcome = ctx.applied
+        if not future.done():
+            future.set_result(outcome)
+    return outcome.applied
+
+
+async def _commit_replan(proposal: ReplanProposal, *, ctx: _CommitContext) -> ReplanOutcome:
+    """Apply one replan whole, or refuse it whole; the runner is its only committer.
+
+    The steps run in a fixed order, each for the reason its own docstring gives:
+    plan it again, charge it, persist the successor, stop what it drops, switch,
+    seal the old run, publish. A refusal at any step before the stop changes
+    nothing; from the stop on, the replan stands.
+    """
+    plan = _fresh_plan(proposal, ctx=ctx)
+    if isinstance(plan, str):
+        return _refused(plan, proposal, ctx=ctx)
+    try:
+        refusal = proposal.charge()
+    except Exception as exc:  # noqa: BLE001 - a failed charge refuses the replan, it must not end the run
+        refusal = f"the replan could not be charged: {exc}"
+    if refusal is not None:
+        return _refused(refusal, proposal, ctx=ctx)
+    failure = await _persist_successor(proposal, plan=plan, ctx=ctx)
+    if failure is not None:
+        return _refused(failure, proposal, ctx=ctx)
+    # From here the replan stands. `/stop` and the shutdown sweep cancel the run's
+    # task, and one landing now waits for the rest of the commit: cut short, the
+    # successor's ids would stay claimed as running for good, under a run that
+    # never starts. The run then stops as the successor.
+    old_run = ctx.store.run_id
+    finishing = asyncio.ensure_future(_finish_commit(proposal, plan=plan, ctx=ctx))
+    try:
+        return await asyncio.shield(finishing)
+    except asyncio.CancelledError:
+        # Shielded again on every pass: a second cancel (a stop arriving twice, a
+        # timed-out wait cancelling on its way out) must not cancel the commit.
+        while not finishing.done():
+            try:
+                await asyncio.shield(finishing)
+            except asyncio.CancelledError:
+                continue
+        if finishing.exception() is not None:
+            logger.opt(exception=True).warning(
+                "DAG run {} could not finish its replan into {}", old_run, proposal.successor_run_id
+            )
+        raise
+
+
+async def _finish_commit(proposal: ReplanProposal, *, plan: CarryPlan, ctx: _CommitContext) -> ReplanOutcome:
+    """Stop what the plan drops, switch, seal the old run, move its records and publish the chain."""
+    cut = await _stop_dropped(plan, ctx=ctx)
+    seal = _switch_tables(proposal, plan=plan, cut=cut, ctx=ctx)
+    ctx.applied = ReplanOutcome(
+        applied=True,
+        successor_run_id=proposal.successor_run_id,
+        carried=plan.carried,
+        added=plan.new,
+        redefined=plan.redefined,
+        stopped=seal.stopped,
+        stopped_suspended=seal.stopped_suspended,
+    )
+    await _seal_predecessor(proposal, plan=plan, seal=seal, ctx=ctx)
+    await _move_run_records(proposal, plan=plan, seal=seal, ctx=ctx)
+    await _publish_chain(proposal, plan=plan, seal=seal, ctx=ctx)
+    return ctx.applied
+
+
+def _still_waiting(proposal: ReplanProposal, *, ctx: _CommitContext) -> bool:
+    """Whether the node a refused proposal answered can still be answered."""
+    node_id = proposal.from_node
+    if ctx.cancel is not None and ctx.cancel.is_set():
+        return False
+    desk = ctx.desk
+    return desk.is_open(node_id) and desk.waiter(node_id) is proposal.waiter and desk.peek(node_id) is None
+
+
+def _refused(reason: str, proposal: ReplanProposal, *, ctx: _CommitContext) -> ReplanOutcome:
+    return ReplanOutcome(applied=False, reason=reason, still_waiting=_still_waiting(proposal, ctx=ctx))
+
+
+def _fresh_plan(proposal: ReplanProposal, *, ctx: _CommitContext) -> CarryPlan | str:
+    """Plan the proposal again over the run as it stands, or say why it no longer applies.
+
+    First, because every later step acts on what this returns: a proposal the run
+    has overtaken -- its node answered or gone, the run stopped, a move or another
+    replan landed -- is refused before anything is spent. Planned again rather than
+    trusted, since this scheduler is the only writer of the status, attempt and
+    queued records the proposal was planned from. What the fresh plan carries,
+    drops and keeps as context may differ from the proposal's, which is how
+    progress in between is tolerated; what it adds and redefines may not. Its
+    carried set is fixed from here on: a carried node that finishes later finishes
+    as the successor's node.
+    """
+    desk, state = ctx.desk, ctx.state
+    node_id = proposal.from_node
+    if not desk.is_open(node_id) or desk.waiter(node_id) is not proposal.waiter or desk.peek(node_id) is not None:
+        return f"node '{node_id}' is no longer waiting for this answer"
+    if ctx.cancel is not None and ctx.cancel.is_set():
+        return "the run was stopped"
+    if state.revision != proposal.basis:
+        return "the run changed after this replan was prepared: a move or another replan landed first"
+    classes = classify_nodes(
+        ctx.status,
+        begun={nid for nid, agents in state.attempt_agents.items() if agents},
+        # The attempt record, not `unsettled`: a node waiting at the concurrency
+        # gate is already in `unsettled`, yet no attempt of it has begun -- it is
+        # queued. An attempt stays on the record until its verdict and report are done.
+        in_flight=set(state.active_attempts),
+        queued=state.queued,
+        answered=node_id,
+    )
+    plan = plan_carry(
+        proposal.entries,
+        authored=proposal.authored,
+        current=state.effective_nodes,
+        classes=classes,
+        status=ctx.status,
+        carried_before=set(proposal.plan.carried) - set(proposal.plan.redefined),
+    )
+    if isinstance(plan, list):
+        return "; ".join(plan)
+    if plan.new != proposal.plan.new or plan.redefined != proposal.plan.redefined:
+        return "the run changed after this replan was prepared: it would no longer add and redefine the same nodes"
+    return plan
+
+
+def _successor_nodes(proposal: ReplanProposal, plan: CarryPlan, state: ReassignmentState) -> list[DagNodeSpec]:
+    """The successor's own nodes as they dispatch: as built for a new or redefined one, as they run now otherwise."""
+    return [proposal.dispatch_nodes.get(node.id) or state.effective_nodes[node.id] for node in plan.nodes]
+
+
+def _successor_view(known: SessionNodes, exempt: Collection[str], ctx: _CommitContext) -> SessionNodes:
+    """The session's node index as the successor's graph is checked against it.
+
+    This run's live state is laid over the index, which reads its nodes as still
+    being written, so its finished nodes read as they ended. The claims left out
+    are the carried nodes' -- those pass to the successor -- and the finished
+    context's, which is read and not claimed. A node the plan adds is not exempt:
+    the conversation's ids are one namespace, so an id an older run claimed is
+    refused here as a plain submission refuses it, not written over by the
+    successor's claim.
+    """
+    state = dict(known.state)
+    has_output = dict(known.has_output)
+    for node_id, node_status in ctx.status.items():
+        state[node_id] = node_status
+        has_output[node_id] = bool(ctx.output_paths.get(node_id))
+    owner = {node_id: run for node_id, run in known.owner.items() if node_id not in exempt}
+    return SessionNodes(owner=owner, state=state, has_output=has_output)
+
+
+async def _persist_successor(proposal: ReplanProposal, *, plan: CarryPlan, ctx: _CommitContext) -> str | None:
+    """Write the successor run, or say why it could not be, leaving nothing behind.
+
+    Before anything is stopped: cancelling an attempt cannot be undone, so it
+    happens only once the successor that calls for it is on disk. Read, checked
+    and claimed under one guard, as a run's start is, so no other run can take an
+    id between the check and the claim. The check covers the successor's nodes
+    and the finished context they read, so a carried merge reading a node that was
+    not executed, or a guard naming a decision that already chose, checks as it
+    did in the plan it came from. A failed write releases every claim it made.
+    """
+    nodes = _successor_nodes(proposal, plan, ctx.state)
+    successor = DagRunStore(
+        ctx.backend,
+        ctx.run_root,
+        proposal.successor_run_id,
+        nodes_root=ctx.nodes_root,
+        registry_root=ctx.history_root,
+    )
+    async with index_guard(ctx.history_root):
+        try:
+            graph = SubAgentDagSpec(task_summary=proposal.task_summary, nodes=nodes, confirm=proposal.confirm)
+            checked = graph.model_copy(update={"nodes": [*nodes, *(ctx.by_id[nid] for nid in plan.context)]})
+            known = await read_session_nodes(ctx.backend, ctx.history_root)
+            view = _successor_view(known, (*plan.carried, *plan.context), ctx)
+            validate_and_order(checked, ctx.roots, view, nodes_root=ctx.nodes_root)
+        except Exception as exc:  # noqa: BLE001 - refused, never raised: nothing has been written yet
+            return str(exc)
+        try:
+            await successor.claim_successor(carried=plan.carried, new=plan.new)
+            await successor.write_text(ctx.backend.join_path(successor.run_dir, "graph.json"), graph.model_dump_json())
+        except BaseException as exc:
+            try:
+                await successor.release_successor(carried=plan.carried, new=plan.new, predecessor=ctx.store.run_id)
+            except Exception:  # noqa: BLE001 - the write's own failure is the one to report
+                logger.opt(exception=True).warning(
+                    "DAG run {} could not release the claims of its unwritten successor {}",
+                    ctx.store.run_id,
+                    proposal.successor_run_id,
+                )
+            if not isinstance(exc, Exception):
+                raise
+            return f"the successor run could not be written: {exc}"
+        # From here the successor stands. A node it does not carry is already
+        # sealed, so no task may begin an attempt on one while the stop and the
+        # switch are still to come.
+        ctx.state.replan_keep = frozenset(plan.carried)
+    return None
+
+
+async def _stop_dropped(plan: CarryPlan, *, ctx: _CommitContext) -> set[str]:
+    """Cancel every task running a node the successor does not take, and await it.
+
+    After the successor is on disk and before the switch, which then reads each
+    node as its task left it. A task is cut off when the node it is running now is
+    not carried: a node the plan drops, or the node this replan gives up, whose
+    task may still be finishing its report. A task running a carried node is never
+    touched; members it holds that the plan dropped are passed over at the gate.
+    The carried members a cut-off task had not reached go back to the scheduler,
+    which dispatches them again in groups of their own.
+
+    Returns the nodes whose attempts were cut off.
+    """
+    keep = set(plan.carried)
+    running = ctx.state.active_attempts
+    cut_tasks = [
+        task
+        for task in ctx.carried
+        if not task.done() and any(nid in running and nid not in keep for nid in ctx.owned.get(task, ()))
+    ]
+    cut = {nid for task in cut_tasks for nid in ctx.owned.get(task, ()) if nid in running}
+    await _reap_carried(cut_tasks)
+    for task in cut_tasks:
+        ctx.carried.discard(task)
+        ctx.owned.pop(task, None)
+    return cut
+
+
+def _stop_status(node_status: str, *, cut: bool) -> str | None:
+    """The status a node the plan drops stops with, or ``None`` when it already finished on its own."""
+    if cut:
+        return "failed" if node_status == "exception" else "cancelled"
+    if node_status in FINISHED_STATUSES:
+        return None
+    return {"exception": "failed", "pending": "skipped"}.get(node_status, "cancelled")
+
+
+def _switch_tables(proposal: ReplanProposal, *, plan: CarryPlan, cut: set[str], ctx: _CommitContext) -> _Seal:
+    """Make this scheduler the successor's, and capture the old run as it ended.
+
+    With no await anywhere in it, so every node is read at one instant: what
+    finished during the persist and the stop keeps the status it finished with,
+    and nothing lands between the snapshot and the switch. The tables change in
+    place, since the group tasks still running hold them by reference. They keep
+    the finished context the successor's nodes read -- marked as announced, so no
+    sweep republishes it under the successor -- and drop everything else of the
+    old run that did not carry over.
+    """
+    state, status = ctx.state, ctx.status
+    old_run = ctx.store.run_id
+    successor = proposal.successor_run_id
+    carried = set(plan.carried)
+    reason = f"Superseded by replan into run {successor}: {proposal.reason}"
     now = _now_ms()
-    for nid, st in status.items():
-        # Only the unfinished. A node already terminal on its own merit -- failed, or skipped
-        # by an unrelated cascade -- keeps its status and its reason: overwriting them with
-        # the replan's would erase why it actually ended, which is the one thing someone
-        # reading this run afterwards is looking for. `_mark_stopped` guards the same way.
-        if st not in ("running", "exception", "pending"):
+    old_nodes = tuple(ctx.by_id[nid] for nid in ctx.own)
+    stopped: list[str] = []
+    stopped_suspended: list[str] = []
+    for nid in (proposal.from_node, *plan.dropped):
+        stopping = "failed" if nid == proposal.from_node else _stop_status(status[nid], cut=nid in cut)
+        if stopping is None:
             continue
-        status[nid] = "skipped" if st == "pending" else ("cancelled" if st == "running" else "failed")
-        errors[nid] = reason
-        published_terminal.add(nid)
-        node_started_at.setdefault(nid, now)
-        node_ended_at[nid] = now
-        assignment = _assignment_fields(nid, state)
+        if nid != proposal.from_node:
+            stopped.append(nid)
+            if status[nid] == "exception":
+                stopped_suspended.append(nid)
+        status[nid] = stopping
+        ctx.errors[nid] = reason
+        ctx.node_started_at.setdefault(nid, now)
+        ctx.node_ended_at[nid] = now
+    ctx.desk.take(proposal.from_node)
+    for nid in stopped_suspended:
+        ctx.desk.close(nid)
+    sealed = {node.id: CARRIED if node.id in carried else status[node.id] for node in old_nodes}
+    files, manifest, outcomes = _node_records(
+        old_nodes,
+        status=sealed,
+        errors=ctx.errors,
+        output_paths=ctx.output_paths,
+        prompt_written=ctx.prompt_written,
+        node_started_at=ctx.node_started_at,
+        node_ended_at=ctx.node_ended_at,
+        node_activity=ctx.node_activity,
+        store=ctx.store,
+        branch=ctx.branch,
+        state=state,
+        minted=state.auto_instances,
+    )
+    # The node's end belongs to the run that holds it now; what stays here is
+    # where it went, and what it did before it went.
+    moved_on = {"carried_into": successor, "ended_at": None, "output_file": None, "error": None}
+    for entry in files:
+        if entry["node"] in carried:
+            entry.update(moved_on)
+    for nid in carried:
+        manifest[nid].update(moved_on)
+    seal = _Seal(
+        run_id=old_run,
+        dir=ctx.store.run_dir,
+        nodes=old_nodes,
+        status=sealed,
+        files=files,
+        manifest=manifest,
+        outcomes=outcomes,
+        stopped=tuple(nid for nid in plan.dropped if nid in stopped),
+        stopped_suspended=tuple(nid for nid in plan.dropped if nid in stopped_suspended),
+    )
+
+    built = proposal.dispatch_nodes
+    context = list(plan.context)
+    own = [node.id for node in plan.nodes]
+    table = {nid: ctx.by_id[nid] for nid in context} | {nid: built.get(nid) or ctx.by_id[nid] for nid in own}
+    statuses = {nid: status[nid] for nid in context} | {nid: "pending" if nid in built else status[nid] for nid in own}
+    effective = {nid: built.get(nid) or state.effective_nodes[nid] for nid in table}
+    backends = {nid: proposal.backends[nid] if nid in built else state.backends.get(nid) for nid in table}
+    ctx.by_id.clear()
+    ctx.by_id.update(table)
+    status.clear()
+    status.update(statuses)
+    state.effective_nodes.clear()
+    state.effective_nodes.update(effective)
+    state.backends.clear()
+    state.backends.update({nid: backend for nid, backend in backends.items() if backend is not None})
+    ctx.deps.clear()
+    ctx.deps.update({nid: graph_deps(node, table) for nid, node in table.items()})
+    ctx.dependents.clear()
+    ctx.dependents.update({nid: [] for nid in table})
+    for nid, in_graph in ctx.deps.items():
+        for dep in in_graph:
+            ctx.dependents[dep].append(nid)
+    ctx.branch.guards.clear()
+    ctx.branch.guards.update(guards_of(table.values()))
+    ctx.branch.skippable = may_not_execute(list(table.values()), table)
+    for node in built.values():
+        for key, members in list(state.original_groups.items()):
+            if node.id in members:
+                state.original_groups[key] = members - {node.id}
+        if node.instance is not None:
+            key = (node.subagent, node.instance)
+            state.original_groups[key] = state.original_groups.get(key, frozenset()) | {node.id}
+            if key not in state.group_current and node.id not in proposal.auto_instances:
+                state.group_current[key] = key
+    # A handle the plan minted counts as minted at submission, so no later move
+    # or capture ever reads it as one the graph chose.
+    state.submitted_auto.update(proposal.auto_instances)
+    state.auto_instances.update(proposal.auto_instances)
+    state.revision += 1
+    ctx.published_terminal.update(context)
+    ctx.own[:] = own
+    ctx.store.run_id = successor
+    # The successor's table now decides which nodes may run; the commit window
+    # this flag guarded is over.
+    state.replan_keep = None
+    state.queued = _queued(ctx.owned, status, state)
+    return seal
+
+
+async def _seal_predecessor(proposal: ReplanProposal, *, plan: CarryPlan, seal: _Seal, ctx: _CommitContext) -> None:
+    """Write the old run's record as it ended: its manifest, its outcome and its link.
+
+    After the switch, not before: the successor's records are the authoritative
+    ones by then, so a failed write here is logged and does not undo the replan.
+    The chain stays recoverable either way -- every carried node's claim already
+    names the successor, and so does its entry in the sealed manifest.
+    """
+    store = DagRunStore(
+        ctx.backend, ctx.run_root, seal.run_id, nodes_root=ctx.nodes_root, registry_root=ctx.history_root
+    )
+    stayed = {nid: node_status for nid, node_status in seal.status.items() if node_status != CARRIED}
+    link = {
+        "run_id": proposal.successor_run_id,
+        "from_node": proposal.from_node,
+        "reason": proposal.reason,
+        "decided_at": _now_ms(),
+        "started": True,
+        "carried": list(plan.carried),
+    }
+    writes: tuple[tuple[str, Callable[[], Awaitable[None]]], ...] = (
+        ("manifest", partial(store.write_manifest, seal.manifest)),
+        ("outcome", partial(_record_outcome, store, stayed)),
+        ("replan link", partial(store.record_replan, link)),
+    )
+    for what, write in writes:
+        try:
+            await write()
+        except Exception:  # noqa: BLE001 - see above
+            logger.opt(exception=True).warning("DAG run {} could not write its sealed {}", seal.run_id, what)
+    if ctx.session_key:
+        agents = {node.id: node.subagent for node in seal.nodes}
+        await asyncio.gather(
+            *(
+                _write_node_status(
+                    ctx.session_key,
+                    seal.run_id,
+                    nid,
+                    _current_agent(nid, ctx.state, agents[nid]),
+                    node_status,
+                    **seal.outcomes[nid],
+                    assignment=_assignment_fields(nid, ctx.state),
+                )
+                for nid, node_status in stayed.items()
+            )
+        )
+    activity.forget_settled(node_live_key(seal.run_id, nid) for nid in stayed)
+
+
+async def _move_run_records(proposal: ReplanProposal, *, plan: CarryPlan, seal: _Seal, ctx: _CommitContext) -> None:
+    """Move what is keyed by the old run id, for every carried node, to the successor.
+
+    After the seal, because the successor is the authoritative record by then: a
+    move that fails is logged and the replan stands. Each carried node's status
+    row moves from ``<old>/<node>`` to ``<new>/<node>``, a stateful node's instance
+    is linked to the successor, and an attempt in flight -- or the account of one
+    that settled -- is read under the successor's live key. The caller's own
+    per-run indices follow last, through ``on_switch``.
+    """
+    old, new = seal.run_id, proposal.successor_run_id
+    registry = get_registry()
+    for nid in plan.carried:
+        if ctx.session_key:
+            await _best_effort(
+                f"move the row of node {nid} to run {new}",
+                partial(
+                    registry.move_dag_node_run,
+                    ctx.session_key,
+                    agent=_current_agent(nid, ctx.state, ctx.by_id[nid].subagent),
+                    node_id=nid,
+                    old_run_id=old,
+                    new_run_id=new,
+                ),
+            )
+            attempt = ctx.state.last_attempt_nodes.get(nid)
+            if attempt is not None and attempt.instance is not None:
+                # Only a node that has dispatched holds a link: one that has not
+                # started links itself, under the successor, when it does.
+                await _link_node_instance(ctx.session_key, new, nid, attempt.subagent, attempt.instance)
+        activity.rekey_live(node_live_key(old, nid), node_live_key(new, nid))
+        activity.rekey_settled(node_live_key(old, nid), node_live_key(new, nid))
+    if ctx.on_switch is not None:
+        try:
+            ctx.on_switch(old, new, proposal)
+        except Exception:  # noqa: BLE001 - the switch has happened; a caller's bookkeeping must not undo it
+            logger.opt(exception=True).warning("DAG run {} switch callback failed for successor {}", old, new)
+
+
+async def _best_effort(what: str, write: Callable[[], Awaitable[None]]) -> None:
+    """One bounded registry write that is logged when it fails, never raised."""
+    try:
+        await asyncio.wait_for(write(), timeout=_REGISTRY_WRITE_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - a record move must never fail the run
+        logger.opt(exception=True).warning("DAG registry write failed: {}", what)
+
+
+async def _publish_chain(proposal: ReplanProposal, *, plan: CarryPlan, seal: _Seal, ctx: _CommitContext) -> None:
+    """Announce the replan in the order a reader needs to follow the chain.
+
+    The successor's start comes before the old run's completion, so a view that
+    closes a run's card on its completion has already bound the successor to it.
+    The carried nodes' frames come between, under the successor, so a client that
+    lays the successor out from its start frame shows them running at once.
+    """
+    successor = proposal.successor_run_id
+    publisher = ctx.progress_publisher
+    await _emit(
+        publisher,
+        "dag_run_replanned",
+        {
+            "run_id": seal.run_id,
+            "replan_run_id": successor,
+            "from_node": proposal.from_node,
+            "reason": proposal.reason,
+            "carried": list(plan.carried),
+        },
+    )
+    own = [ctx.state.effective(nid, ctx.by_id[nid]) for nid in ctx.own]
+    await _emit(publisher, "dag_run_started", _run_started_payload(successor, proposal.task_summary, own, ctx.branch))
+    for nid in plan.carried:
         await _emit(
-            progress_publisher,
+            publisher,
             "dag_node_updated",
-            {"run_id": run_id, "node": nid, "status": status[nid], **assignment},
+            {
+                "run_id": successor,
+                "node": nid,
+                "status": ctx.status[nid],
+                "started_at": ctx.node_started_at.get(nid),
+                **_selection_fields(nid, ctx.branch),
+                **_assignment_fields(nid, ctx.state),
+            },
         )
-        await _write_node_status(
-            session_key,
-            run_id,
-            nid,
-            _current_agent(nid, state, by_id[nid].subagent),
-            status[nid],
-            assignment=assignment,
-        )
+    await _emit(
+        publisher,
+        "dag_run_completed",
+        {
+            "run_id": seal.run_id,
+            "manifest": {"dir": seal.dir, "files": seal.files, "terminal_outputs": [], "summary": _tally(seal.status)},
+        },
+    )
 
 
 def _tally(status: dict[str, str]) -> dict:
@@ -1417,6 +2000,8 @@ def _exception_report(
     attempt_agents: Sequence[str] = (),
     attempt_reasons: Sequence[str] = (),
     instance_followers: Sequence[str] = (),
+    in_progress: Sequence[str] = (),
+    not_started: Sequence[str] = (),
 ) -> str:
     """The text the main agent is woken with. Everything it needs to decide, once.
 
@@ -1427,7 +2012,10 @@ def _exception_report(
     attempt that just ended; ``attempt_reasons`` is the same order without that
     one, whose reason is the report's own account of what is missing.
     ``instance_followers`` are the run's other unfinished nodes on the node's
-    instance handle.
+    instance handle. ``in_progress`` and ``not_started`` are the run's other
+    unfinished nodes as a replan would find them -- what it stops unless the plan
+    lists or depends on them. Advice, not a promise: a node may start or finish
+    before the answer arrives, and the commit is what checks.
     """
     dispatched_by = attempt_agents[-1] if attempt_agents else node.subagent
     lines = [f"DAG run {run_id}: node '{node.id}' ({dispatched_by}) did not accomplish its task."]
@@ -1514,12 +2102,24 @@ def _exception_report(
     lines.append(
         f'Or replan: tool_call with name "resolve_dag_node" and arguments '
         f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "replan", '
-        f'"message": "<why the plan is changing>", "nodes": [<the graph to run instead>]}}. '
-        "That stops this run and starts a new one from your nodes. Use replan when the plan "
-        "itself is wrong rather than this attempt: a step that cannot work as wired, or a step "
-        "nothing in the graph performs. Nodes this run completed are referenced, not re-declared "
-        "-- name one in depends_on and read it with {{ <id>.output }}; everything else needs a new id."
+        f'"message": "<why the plan is changing>", "nodes": [<the new run\'s plan>]}}. '
+        "A replan replaces the plan: a new run starts from the nodes you supply, and the work in "
+        "progress your plan lists or depends on is carried into it without stopping. Everything "
+        "else that has not finished stops with this run. A node of this run that has not started "
+        "is carried when you list it or depend on it -- list it with changes to redefine it; one in "
+        "progress is carried, still running, when you list it unchanged or depend on it. Never "
+        "list a finished node: depend on it and read it with {{ <id>.output }}. This node is given "
+        "up; redo its work under a new id. Use replan when the plan itself is wrong rather than "
+        "this attempt: a step that cannot work as wired, or a step nothing in the graph performs."
     )
+    if in_progress:
+        lines.append(
+            "in progress (a replan stops these unless your plan lists or depends on them): " + ", ".join(in_progress)
+        )
+    if not_started:
+        lines.append(
+            "not started (a replan stops these unless your plan lists or depends on them): " + ", ".join(not_started)
+        )
     # The invocations above carry this run's ids; this carries the field names,
     # and it is generated rather than written. A hand-written retelling is what
     # sent the model looking for a field called `action` (2026-09-03/04): the
@@ -1705,10 +2305,23 @@ async def _apply_verdict(
     attempt_agents: tuple[str, ...] = ()
     attempt_reasons: tuple[str, ...] = ()
     instance_followers: tuple[str, ...] = ()
+    in_progress: tuple[str, ...] = ()
+    not_started: tuple[str, ...] = ()
     if reassignment_state is not None:
         attempt_agents = tuple(reassignment_state.attempt_agents.get(node.id, ()))
         attempt_reasons = tuple(reassignment_state.attempt_reasons.get(node.id, ()))
         instance_followers = tuple(_instance_followers(node, reassignment_state, status))
+        classes = classify_nodes(
+            status,
+            begun={nid for nid, agents in reassignment_state.attempt_agents.items() if agents},
+            in_flight=set(reassignment_state.active_attempts),
+            queued=reassignment_state.queued,
+            answered=node.id,
+        )
+        # A queued node is listed as in progress: like one running, it can only be
+        # carried as it is.
+        in_progress = tuple(nid for nid, cls in classes.items() if cls in ("in_progress", "queued"))
+        not_started = tuple(nid for nid, cls in classes.items() if cls == "not_started")
     report = _exception_report(
         run_id=store.run_id,
         node=node,
@@ -1722,6 +2335,8 @@ async def _apply_verdict(
         attempt_agents=attempt_agents,
         attempt_reasons=attempt_reasons,
         instance_followers=instance_followers,
+        in_progress=in_progress,
+        not_started=not_started,
     )
     # `origin` is part of this predicate because whoever is going to be asked is
     # reached through it: a node suspended on a report that cannot be delivered
@@ -1915,8 +2530,8 @@ async def _await_adjudications(
     settled: asyncio.Event | None = None,
     failed: set[str] | None = None,
 ) -> None:
-    """Block until every suspended node has an answer, the wait runs out, or one
-    answer replans the graph.
+    """Block until every suspended node has an answer, the wait runs out, or the
+    scheduler has something else to act on.
 
     Reached only when nothing else can be dispatched: the report went to the
     main agent the moment the node was suspended, so this wait costs the graph
@@ -1948,10 +2563,6 @@ async def _await_adjudications(
     of the ready set picks it up like any other node. Abandoned and timed-out
     nodes take the ordinary failure path, which cascades to their dependents.
 
-    A replan ends the round for every node at once, answered or not, because the
-    graph they belong to is being replaced. They stay `exception` and
-    ``_apply_replan`` gives them their outcome on the next pass of the loop.
-
     A reassign is not a terminal answer: the node goes back to `pending` with
     its message parked in ``continuations`` and its prepared move parked in
     ``reassignments``, and the call returns without waiting for the round's
@@ -1971,7 +2582,10 @@ async def _await_adjudications(
     ``settled`` is raced alongside the waiters: a move staged on a running
     source attempt has to install as soon as that attempt lands, even when an
     unrelated node is still suspended. The call then returns without touching
-    the open waiters, exactly as the reassign arm does.
+    the open waiters, exactly as the reassign arm does. ``desk.proposed`` is
+    raced the same way and for the same reason: a posted replan proposal is
+    committed at the top of a scheduling pass, and the node it answers stays
+    open until that commit decides it.
 
     ``failed`` collects the nodes this call fails on the scheduler's behalf --
     the unopened-desk preamble, a reassign with no prepared move, a timeout --
@@ -1992,23 +2606,16 @@ async def _await_adjudications(
     node_tasks = {nid: asyncio.create_task(event.wait()) for nid, event in waiters.items()}
     stop = asyncio.create_task(cancel.wait()) if cancel is not None else None
     unbind = asyncio.create_task(released.wait()) if released is not None and not released.is_set() else None
-    # Raced alongside the per-node waiters, because one node's replan ends the
-    # whole round: the graph these nodes belong to is being replaced, so a
-    # sibling's answer can no longer change anything. Waiting for it is not
-    # merely wasted -- on a bound run there is no deadline, and the lane that
-    # would answer the sibling is the same one blocked in `resolve_dag_node`
-    # awaiting this run's task, so the two wait on each other forever.
-    replan = asyncio.create_task(desk.replanned.wait())
     # A move staged behind a running source attempt is parked here: the move
     # installs when that attempt settles, and without this the wait below would
     # hold it until an unrelated suspended node was answered or timed out. The
     # task is made even for an already-set event: that flag means the source
     # landed during this pass, and the wait must still hand control back.
     moved = asyncio.create_task(settled.wait()) if settled is not None else None
+    proposal = asyncio.create_task(desk.proposed.wait())
     loop = asyncio.get_running_loop()
     deadline: float | None = None if unbind is not None else loop.time() + timeout_s
     cancelled = False
-    replanned = False
     moved_on = False
     # Set when the call returns with work the scheduler must pick up: a move
     # parked above leaves sibling answers open by design, and a settled source
@@ -2019,7 +2626,7 @@ async def _await_adjudications(
         node_pending = set(node_tasks.values())
         while node_pending:
             budget = None if deadline is None else max(0.0, deadline - loop.time())
-            waiting_on: set[asyncio.Future] = {*node_pending, replan}
+            waiting_on: set[asyncio.Future] = {*node_pending, proposal}
             if moved is not None:
                 waiting_on.add(moved)
             if stop is not None:
@@ -2029,9 +2636,6 @@ async def _await_adjudications(
             done, _ = await asyncio.wait(waiting_on, timeout=budget, return_when=asyncio.FIRST_COMPLETED)
             if stop is not None and stop in done:
                 cancelled = True
-                break
-            if replan in done:
-                replanned = True
                 break
             if unbind is not None and unbind in done:
                 deadline = loop.time() + timeout_s
@@ -2064,10 +2668,11 @@ async def _await_adjudications(
                         continuations=continuations,
                     )
                     break
-            if moved is not None and moved in done:
-                # A staged move's source attempt landed. Hand control back so
-                # the scheduler can install it; every open waiter stays exactly
-                # as it is, so nothing is charged a timeout it did not have.
+            if (moved is not None and moved in done) or proposal in done:
+                # A staged move's source attempt landed, or a replan proposal was
+                # posted. Hand control back so the scheduler can install or commit
+                # it; every open waiter stays exactly as it is, so nothing is
+                # charged a timeout it did not have.
                 moved_on = True
                 break
             still_bound = unbind is not None and not unbind.done()
@@ -2102,7 +2707,6 @@ async def _await_adjudications(
             status,
             errors,
             continuations,
-            replanned=replanned,
             timeout_s=timeout_s,
             failed=failed,
         )
@@ -2111,10 +2715,10 @@ async def _await_adjudications(
             stop.cancel()
         if unbind is not None and not unbind.done():
             unbind.cancel()
-        if not replan.done():
-            replan.cancel()
         if moved is not None and not moved.done():
             moved.cancel()
+        if not proposal.done():
+            proposal.cancel()
         # Reached on every exit, including a hard Task.cancel() on the run
         # itself (as opposed to setting the soft `cancel` Event) raising
         # CancelledError right out of asyncio.wait above: that route skips
@@ -2130,7 +2734,7 @@ async def _await_adjudications(
             *([stop] if stop is not None else []),
             *([unbind] if unbind is not None else []),
             *([moved] if moved is not None else []),
-            replan,
+            proposal,
             return_exceptions=True,
         )
         # A reassign returns while siblings are still questions: their waiters
@@ -2152,9 +2756,10 @@ def _apply_answer(
 ) -> None:
     """Apply one node's decided answer to the scheduler's records.
 
-    ``REASSIGN`` and ``REPLAN`` are deliberately no-ops here: the move is parked
-    by the caller that owns it, and ``_apply_replan`` is a replanned node's single
-    terminal writer. Everything else is the ordinary continuation/failure path.
+    ``REASSIGN`` is deliberately a no-op here: the move is parked by the caller
+    that owns it. A replan never arrives as an answer -- the desk refuses one, and
+    the runner commits it as a proposal. Everything else is the ordinary
+    continuation/failure path.
     """
     if answer.decision == CONTINUE and answer.message:
         continuations[node_id] = answer.message
@@ -2164,7 +2769,7 @@ def _apply_answer(
         errors[node_id] = (
             "The main agent chose to continue but sent no message, so the node failed instead of resuming."
         )
-    elif answer.decision in (REPLAN, REASSIGN):
+    elif answer.decision == REASSIGN:
         return
     else:
         status[node_id] = "failed"
@@ -2204,7 +2809,6 @@ def _settle_open_waiters(
     errors: dict[str, str],
     continuations: dict[str, str],
     *,
-    replanned: bool,
     timeout_s: float,
     failed: set[str] | None,
 ) -> bool:
@@ -2218,30 +2822,20 @@ def _settle_open_waiters(
     for nid in open_nodes:
         event = waiters[nid]
         answer = desk.peek(nid) if event.is_set() else None
-        if answer is not None and answer.decision == REASSIGN and not replanned:
+        if answer is not None and answer.decision == REASSIGN:
             # An accepted move this call did not park (only one is parked, in
             # the early-return branch above). Leave the waiter and its answer
-            # for the scheduler's next pass. A replan is the exception: the
-            # graph is being replaced, so the move is moot and `_apply_replan`
-            # names the successor as the node's cause.
+            # for the scheduler's next pass.
             handing_back = True
             continue
         answer = desk.take(nid) if event.is_set() else None
         if answer is None:
             desk.close(nid)
-            if replanned:
-                # Never asked, rather than asked and ignored: left at
-                # "exception" for `_apply_replan` to name the successor as its
-                # cause, for the same reason a REPLAN answer is.
-                continue
             status[nid] = "failed"
             errors[nid] = f"Nothing was decided for {timeout_s:g}s, so the node timed out."
             if failed is not None:
                 failed.add(nid)
             continue
-        # A replan is left at "exception" for `_apply_replan`, at the top of the
-        # next loop pass, which is the single writer of a replanned node's
-        # terminal status and reason (naming the successor run).
         _apply_answer(nid, answer, status=status, errors=errors, continuations=continuations)
     return handing_back
 
@@ -3114,6 +3708,17 @@ async def _run_node(
     node while the run is in flight.
     """
     async with semaphore:
+        # A task holds its nodes from dispatch until their turn, and a replan may
+        # stop or carry off one it has not reached yet: such a node is no longer a
+        # pending node of the run this task now serves, and must not be dispatched.
+        if node_id not in by_id or status.get(node_id) != "pending":
+            return
+        # A replan's successor is on disk and has not taken this node: the stop
+        # that goes with the commit has already sealed its outcome, and the tables
+        # switch only after that stop returns. Starting here would run work the
+        # seal says the run stopped.
+        if state is not None and state.replan_keep is not None and node_id not in state.replan_keep:
+            return
         if state is not None:
             node = state.effective(node_id, by_id[node_id])
             agent_backend = state.backends.get(node_id, node_backends.get(node_id))
@@ -3132,6 +3737,7 @@ async def _run_node(
             replaced = state.last_attempt_nodes.get(node.id)
             state.last_attempt_nodes[node.id] = node
             state.attempt_agents.setdefault(node.id, []).append(node.subagent)
+            state.queued.discard(node.id)
             state.active_attempts[node.id] = _node_pair(node)
             started = await _start_attempt_row(
                 state,
@@ -3790,47 +4396,30 @@ async def _record_node_memory(
         logger.opt(exception=True).warning("Memory record for DAG node {} failed", node.id)
 
 
-async def _finalize(
-    spec: SubAgentDagSpec,
-    by_id: dict[str, DagNodeSpec],
-    status: dict[str, str],
-    errors: dict[str, str],
-    output_paths: dict[str, str],
-    prompt_written: set[str],
-    dependents: dict[str, list[str]],
-    node_started_at: dict[str, int],
-    node_ended_at: dict[str, int],
-    node_activity: dict[str, dict],
-    store: DagRunStore,
-    session_key: str | None = None,
-    auto_instances: frozenset[str] = frozenset(),
+def _node_records(
+    nodes: Sequence[DagNodeSpec],
     *,
+    status: Mapping[str, str],
+    errors: Mapping[str, str],
+    output_paths: Mapping[str, str],
+    prompt_written: Collection[str],
+    node_started_at: Mapping[str, int],
+    node_ended_at: Mapping[str, int],
+    node_activity: Mapping[str, dict],
+    store: DagRunStore,
     branch: BranchState,
-    state: ReassignmentState | None = None,
-) -> DagRunResult:
-    """Assemble the result, write the manifest, and update the registry.
+    state: ReassignmentState | None,
+    minted: Collection[str],
+) -> tuple[list[dict], dict, dict[str, dict[str, Any]]]:
+    """Each node's ``files`` entry and manifest entry, as a run reports them, and its branch outcome.
 
-    Also reconciles every node's registry row to its final status. This is
-    the only place that unconditionally re-asserts a status regardless of
-    what earlier writes landed, so it repairs the case where a node's own
-    terminal write raced a concurrent registry flush and lost, or where an
-    outer cancellation interrupted a write mid-flight -- either of which would
-    otherwise leave a row stuck at a stale, non-terminal status forever. The
-    write is idempotent, so re-asserting an already-correct row is a no-op.
-
-    A node that moved reports the agent, instance and history of its last
-    attempt, and its row is re-asserted under that agent: the reconciliation is
-    a write like any other, and a row under the submitted agent would leave the
-    moved one behind.
+    One builder for both records a run leaves: its own at ``_finalize``, and the
+    seal a replan writes for the run it replaced.
     """
     files: list[dict] = []
     manifest: dict = {}
     outcomes: dict[str, dict[str, Any]] = {}
-    # The assignment record owns the minted set once it exists: a handle minted by
-    # a move is as auto as one minted at submission, and the flag is about the
-    # handle this node ended on.
-    minted = state.auto_instances if state is not None else auto_instances
-    for node in spec.nodes:
+    for node in nodes:
         nid = node.id
         prompt_file = store.prompt_path(nid) if nid in prompt_written else None
         output_file = output_paths.get(nid)
@@ -3886,6 +4475,66 @@ async def _finalize(
             # records it: absent keys mean the transport could not say, not zero.
             **node_activity.get(nid, {}),
         }
+    return files, manifest, outcomes
+
+
+async def _finalize(
+    spec: SubAgentDagSpec,
+    by_id: dict[str, DagNodeSpec],
+    status: dict[str, str],
+    errors: dict[str, str],
+    output_paths: dict[str, str],
+    prompt_written: set[str],
+    dependents: dict[str, list[str]],
+    node_started_at: dict[str, int],
+    node_ended_at: dict[str, int],
+    node_activity: dict[str, dict],
+    store: DagRunStore,
+    session_key: str | None = None,
+    auto_instances: frozenset[str] = frozenset(),
+    *,
+    branch: BranchState,
+    state: ReassignmentState | None = None,
+    own: Sequence[str] | None = None,
+) -> DagRunResult:
+    """Assemble the result, write the manifest, and update the registry.
+
+    Also reconciles every node's registry row to its final status. This is
+    the only place that unconditionally re-asserts a status regardless of
+    what earlier writes landed, so it repairs the case where a node's own
+    terminal write raced a concurrent registry flush and lost, or where an
+    outer cancellation interrupted a write mid-flight -- either of which would
+    otherwise leave a row stuck at a stale, non-terminal status forever. The
+    write is idempotent, so re-asserting an already-correct row is a no-op.
+
+    A node that moved reports the agent, instance and history of its last
+    attempt, and its row is re-asserted under that agent: the reconciliation is
+    a write like any other, and a row under the submitted agent would leave the
+    moved one behind.
+    """
+    # The assignment record owns the minted set once it exists: a handle minted by
+    # a move is as auto as one minted at submission, and the flag is about the
+    # handle this node ended on.
+    minted = state.auto_instances if state is not None else auto_instances
+    # The run's own nodes. Without ``own`` that is the submitted graph; a run that
+    # took over a replanned plan also holds the finished nodes of the run before
+    # it, which it reads but does not report.
+    own_nodes = [by_id[nid] for nid in own] if own is not None else list(spec.nodes)
+    own_status = {node.id: status[node.id] for node in own_nodes}
+    files, manifest, outcomes = _node_records(
+        own_nodes,
+        status=own_status,
+        errors=errors,
+        output_paths=output_paths,
+        prompt_written=prompt_written,
+        node_started_at=node_started_at,
+        node_ended_at=node_ended_at,
+        node_activity=node_activity,
+        store=store,
+        branch=branch,
+        state=state,
+        minted=minted,
+    )
 
     if session_key:
         # Concurrent, not sequential: each call already has its own bounded
@@ -3905,12 +4554,12 @@ async def _finalize(
                     **outcomes[node.id],
                     assignment=_assignment_fields(node.id, state),
                 )
-                for node in spec.nodes
+                for node in own_nodes
             )
         )
 
     terminal_outputs: list[dict] = []
-    for nid in by_id:
+    for nid in own_status:
         # A completed node whose dependents all stayed unexecuted is the last word on its
         # path -- a `select: many` router that selected nothing is the case. Only an
         # unexecuted dependent ends the path there: one that failed, was skipped or was
@@ -3925,12 +4574,12 @@ async def _finalize(
             text = text[:_MAX_OUTPUT_CHARS] + "\n... (output truncated)"
         terminal_outputs.append({"node": nid, "text": text})
 
-    summary = _tally(status)
+    summary = _tally(own_status)
     await store.write_manifest(manifest)
     # The manifest now carries every node's account; the copies set aside for
     # the nodes that finished before it was written have done their job.
-    activity.forget_settled(node_live_key(store.run_id, nid) for nid in by_id)
-    await _record_outcome(store, status)
+    activity.forget_settled(node_live_key(store.run_id, nid) for nid in own_status)
+    await _record_outcome(store, own_status)
     return DagRunResult(
         run_id=store.run_id,
         dir=store.run_dir,

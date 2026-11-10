@@ -31,7 +31,14 @@ from raven.agent.subagent.dag_runner import (
     run_dag,
     settle_branches,
 )
-from raven.agent.subagent.dag_store import RUNNING, UNRECORDED, DagRunStore, read_registry, read_session_nodes
+from raven.agent.subagent.dag_store import (
+    RUNNING,
+    UNRECORDED,
+    DagRunStore,
+    node_live_key,
+    read_registry,
+    read_session_nodes,
+)
 from raven.agent.subagent.dag_tool import _NODE_SCHEMA, GUIDE_SKILL_ID, SubAgentDagTool
 from raven.agent.subagent.mcp_grant import McpGrant, MissingServer
 from raven.agent.subagent.prompt_backend import LocalFileBackend
@@ -5580,7 +5587,7 @@ def test_a_reassign_wakes_the_round_without_requesting_a_replan():
     event = desk.open("fix")
     assert desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
     assert desk.continued.is_set()
-    assert not desk.replanned.is_set()
+    assert not desk.proposed.is_set()
     answer = desk.take("fix")
     assert (answer.decision, answer.agent, answer.message) == (REASSIGN, "beta", "use the parser")
 
@@ -6014,7 +6021,6 @@ def test_a_reassign_answer_left_at_the_timeout_stays_on_the_desk():
         status,
         errors,
         continuations,
-        replanned=False,
         timeout_s=1,
         failed=None,
     )
@@ -6221,88 +6227,34 @@ async def test_await_adjudications_fails_a_reassign_without_a_prepared_move(prep
     assert desk.is_open("b")
 
 
-async def test_await_adjudications_still_ends_the_round_on_a_replan():
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk, ReplanPlan
+async def test_await_adjudications_hands_back_on_a_posted_proposal():
+    """A posted replan proposal is committed at the top of a pass, so the wait hands
+    control back at once and answers, closes and fails nothing: the node it answers
+    stays open until the commit decides it."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_runner import _await_adjudications
 
     desk = AdjudicationDesk()
     desk.open("a")
     desk.open("b")
-    plan = ReplanPlan(
-        run_id="run-new",
-        from_node="a",
-        reason="the plan was wrong",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
     status = {"a": "exception", "b": "exception"}
     errors: dict[str, str] = {}
 
-    async def _answer():
+    async def _post():
         await asyncio.sleep(0)
-        desk.resolve("a", REPLAN, "the plan was wrong", plan=plan)
+        desk.proposed.set()
 
     await asyncio.wait_for(
         asyncio.gather(
             _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None, reassignments={}),
-            _answer(),
+            _post(),
         ),
         timeout=5,
     )
 
     assert status == {"a": "exception", "b": "exception"}
     assert errors == {}
-    assert desk.open_nodes() == set(), "a replan still ends the round for every node"
-
-
-async def test_a_replan_in_the_same_batch_does_not_call_a_reassign_abandoned():
-    """A replan wins the round, but it is not an abandonment of a move beside it.
-
-    Both answers can land before the wait looks. The replan ends the round, and
-    the reassign's node is left for `_apply_replan` to name -- never charged to
-    the main agent as an abandonment it did not choose.
-    """
-    from raven.agent.subagent.dag_adjudication import REASSIGN, REPLAN, AdjudicationDesk, ReplanPlan
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    first = desk.open("a")
-    desk.open("b")
-    move = _reassign_plan(first)
-    plan = ReplanPlan(
-        run_id="run-new",
-        from_node="b",
-        reason="the plan was wrong",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
-    desk.resolve("a", REASSIGN, "use the parser", agent="beta", expected_waiter=first, reassignment=move)
-    desk.resolve("b", REPLAN, "the plan was wrong", plan=plan)
-    status = {"a": "exception", "b": "exception"}
-    errors: dict[str, str] = {}
-    continuations: dict[str, str] = {}
-
-    await asyncio.wait_for(
-        _await_adjudications(
-            desk,
-            status,
-            errors,
-            continuations,
-            timeout_s=5,
-            cancel=None,
-            reassignments={},
-        ),
-        timeout=5,
-    )
-
-    assert status == {"a": "exception", "b": "exception"}
-    assert errors == {}, f"neither answer is an abandonment, got {errors}"
-    assert continuations == {}
-    assert desk.open_nodes() == set()
+    assert desk.open_nodes() == {"a", "b"}, "a proposal hands back without closing any waiter"
 
 
 # --- node verdicts: judge the node, suspend it, report it, continue it ---
@@ -6842,26 +6794,6 @@ async def test_an_outer_cancellation_reaps_a_handed_on_task(tmp_path):
         with pytest.raises(asyncio.CancelledError):
             await run
         assert gate.cancelled == 1, "the handed-on task outlived the run that owned it"
-    finally:
-        gate.open.set()
-
-
-async def test_a_replan_reaps_a_handed_on_task_before_it_records_them_cancelled(tmp_path):
-    """`_apply_replan` writes `cancelled` for every running node; the reap is what makes
-    that true. A replan answered while the loop is parked reaches the replan exit with
-    the carried task held by `run_dag` alone, so nothing else can cancel it.
-    """
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-
-    desk = AdjudicationDesk()
-    gate = _AdmitThenPark()
-    announced = {n: asyncio.Event() for n in ("late", "a", "b")}
-    run = await _park_the_loop_with_a_carried_task(tmp_path, desk, gate, announced)
-    try:
-        desk.resolve("late", REPLAN, "regroup", plan=_replan_plan(from_node="late"))
-        result = await asyncio.wait_for(run, timeout=30)
-        assert gate.cancelled == 1, "the handed-on task survived the replan that superseded it"
-        assert result.replanned_into == "run-new"
     finally:
         gate.open.set()
 
@@ -9881,378 +9813,127 @@ async def test_release_turn_survives_a_raising_outbox_and_still_releases_the_res
         assert second_outbox.released.is_set(), "the second outbox still releases after the first one raises"
 
 
-def _replan_plan(run_id: str = "run-new", from_node: str = "a", reason: str = "the plan was wrong"):
-    from raven.agent.subagent.dag_adjudication import ReplanPlan
-
-    return ReplanPlan(
-        run_id=run_id,
-        from_node=from_node,
-        reason=reason,
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
-
-
-async def _run_replanned_dag(
-    tmp_path,
-    *,
-    extra_nodes: list[dict],
-    slow: set[str] = frozenset(),
-    crash: set[str] = frozenset(),
-    resolve_with=None,
-):
-    """`a` fails its verdict; `extra_nodes` run beside it, independent of `a`.
-
-    Independent on purpose: a node that depends on `a` is still `pending` when `a`
-    suspends, so a chain cannot express "in flight" at all.
-    """
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    desk = AdjudicationDesk()
-    started = asyncio.Event()
-    crashed_first = asyncio.Event()
-
-    class _Backend:
-        def __init__(self) -> None:
-            self.calls: list[str] = []
-
-        async def run(self, prompt: str, **_kw: Any) -> str:
-            self.calls.append(prompt)
-            if any(nid in prompt for nid in crash):
-                crashed_first.set()
-                raise RuntimeError("boom failed on its own merit")
-            if any(nid in prompt for nid in slow):
-                started.set()
-                await asyncio.sleep(30)
-            return "did it"
-
-    backend = _Backend()
-
-    async def _judge(*, node, store, output, error, crashed, **_):
-        return Verdict(accomplished=node.id != "a", what_is_missing="the wrong tool was used")
-
-    async def _announce(run_id, node_id, text, origin, *, awaiting_decision, output=None):
-        if slow:
-            await started.wait()
-        if crash:
-            # The crashing node's backend sets this and raises with no await in
-            # between, so `_run_node`'s except-handler has already recorded it as
-            # failed by the time this wait returns -- a real happens-before, the
-            # same way `started`/`slow` above pin the in-flight case, not
-            # scheduling-order luck.
-            await crashed_first.wait()
-        desk.resolve(node_id, REPLAN, "the plan was wrong", plan=resolve_with or _replan_plan(from_node=node_id))
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "replan me",
-            "nodes": [
-                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
-                *extra_nodes,
-            ],
-        }
-    )
-    return await run_dag(
-        spec,
-        resolve=lambda node: backend,
-        backend=LocalFileBackend(),
-        workdir=str(tmp_path),
-        run_root=str(tmp_path / "runs"),
-        nodes_root=str(tmp_path / "nodes"),
-        history_root=str(tmp_path),
-        desk=desk,
-        judge_node=_judge,
-        announce_exception=_announce,
-        origin=_TEST_ORIGIN,
-        adjudication_timeout_s=5,
-    )
-
-
 async def test_a_replan_cancels_a_node_in_flight_rather_than_draining_it(tmp_path) -> None:
-    """Cancel, not drain: chosen over waiting in the design. A slow node is cut off."""
-    result = await _run_replanned_dag(
-        tmp_path,
-        extra_nodes=[{"id": "slowpoke", "subagent": "x", "node_summary": "slow", "prompt_template": "do slowpoke"}],
-        slow={"slowpoke"},
+    """Cancel, not drain, for what the plan does not include: a running node it does
+    not carry is cut off, and the successor goes on without it."""
+    run = await _run_with_replan(
+        tmp_path, nodes=[_nd("r2"), _nd("slowpoke")], entries=[_nd("fresh")], hold=frozenset({"slowpoke"})
     )
 
-    statuses = {entry["node"]: entry["status"] for entry in result.files}
-    assert statuses["a"] == "failed", "the adjudicated node is given up on, not cancelled"
-    assert statuses["slowpoke"] == "cancelled", "the in-flight node was cut off, not drained"
-    assert result.replanned_into == "run-new"
+    sealed = _run_file(tmp_path, _RUN_A, "manifest.json")
+    assert sealed["r2"]["status"] == "failed", "the adjudicated node is given up on, not cancelled"
+    assert sealed["slowpoke"]["status"] == "cancelled", "the in-flight node was cut off, not drained"
+    assert run.result.run_id == _RUN_B
 
 
 async def test_the_wind_down_reason_names_the_new_run(tmp_path) -> None:
-    result = await _run_replanned_dag(tmp_path, extra_nodes=[])
+    await _run_with_replan(tmp_path, nodes=[_nd("r2")], entries=[_nd("fresh")])
 
-    error = next(e for e in result.files if e["node"] == "a")["error"] or ""
-    assert "run-new" in error
-    assert "the plan was wrong" in error
+    error = _run_file(tmp_path, _RUN_A, "manifest.json")["r2"]["error"] or ""
+    assert _RUN_B in error
+    assert _REPLAN_REASON in error
 
 
 async def test_a_pending_node_is_skipped_not_failed(tmp_path) -> None:
-    result = await _run_replanned_dag(
-        tmp_path,
-        extra_nodes=[
-            {
-                "id": "never_ran",
-                "subagent": "x",
-                "node_summary": "downstream",
-                "prompt_template": "do never_ran",
-                "depends_on": ["a"],
-            }
-        ],
-    )
+    await _run_with_replan(tmp_path, nodes=[_nd("r2"), _nd("never_ran", depends_on=["r2"])], entries=[_nd("fresh")])
 
-    statuses = {entry["node"]: entry["status"] for entry in result.files}
-    assert statuses["never_ran"] == "skipped"
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["never_ran"]["status"] == "skipped"
 
 
 async def test_a_completed_node_survives_a_replan_with_its_output(tmp_path) -> None:
-    result = await _run_replanned_dag(
+    await _run_with_replan(
         tmp_path,
-        extra_nodes=[{"id": "done", "subagent": "x", "node_summary": "fine", "prompt_template": "do done"}],
+        nodes=[_nd("r2"), _nd("done")],
+        entries=[_nd("fresh")],
+        wait_for=lambda state: state.status.get("done") == "completed" and "done" not in state.active_attempts,
     )
 
-    entry = next(e for e in result.files if e["node"] == "done")
-    assert entry["status"] == "completed"
-    assert entry["output_file"], "its output must stay referenceable by the new run"
-    assert not entry["error"], "a completed node is untouched by the wind-down"
+    done = _run_file(tmp_path, _RUN_A, "manifest.json")["done"]
+    assert done["status"] == "completed"
+    assert done["output_file"], "a finished node keeps the output it wrote"
 
 
 async def test_a_replan_does_not_overwrite_a_pre_existing_failure_or_its_cascade(tmp_path) -> None:
-    """`_apply_replan` must leave a node terminal on its own merit alone.
+    """A node already terminal on its own merit keeps its status and its reason.
 
-    `boom` crashes on its own and is judged accomplished regardless, so
-    `_apply_verdict` never touches its failure. `blocked` is cascaded to
-    `skipped` off `boom` at the top of the next loop iteration -- one round
-    before the replan is even discovered there, since `_cascade_failures` runs
-    first every iteration. `a` is the node that actually suspends and triggers
-    the replan. None of `boom` or `blocked`'s outcome is the replan's doing,
-    and overwriting either would erase the real reason it ended.
+    `boom` crashes on its own and is judged accomplished regardless, so its
+    failure stands; `blocked` is cascaded to `skipped` off it before the replan.
+    Neither outcome is the replan's doing, and overwriting either would erase the
+    real reason it ended.
     """
-    result = await _run_replanned_dag(
+    exec_ = _GatedExec()
+    exec_.fail_ids = {"boom"}
+    await _run_with_replan(
         tmp_path,
-        extra_nodes=[
-            {"id": "boom", "subagent": "x", "node_summary": "crashes", "prompt_template": "do boom"},
-            {
-                "id": "blocked",
-                "subagent": "x",
-                "node_summary": "cascaded off boom",
-                "prompt_template": "do blocked",
-                "depends_on": ["boom"],
-            },
-        ],
-        crash={"boom"},
+        nodes=[_nd("r2"), _nd("boom"), _nd("blocked", depends_on=["boom"])],
+        entries=[_nd("fresh")],
+        exec_=exec_,
+        wait_for=lambda state: state.status.get("blocked") == "skipped",
     )
 
-    files_by_node = {entry["node"]: entry for entry in result.files}
-    assert files_by_node["boom"]["status"] == "failed"
-    assert files_by_node["boom"]["error"] == "boom failed on its own merit"
-    assert files_by_node["blocked"]["status"] == "skipped"
-    assert not files_by_node["blocked"]["error"], "a cascaded skip has no reason of its own to overwrite"
-    assert files_by_node["a"]["status"] == "failed"
-    assert result.replanned_into == "run-new"
-
-
-async def test_a_node_skipped_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
-    """The replan exit's publish covers the cascade's own skips too.
-
-    The cascade marks `b` skipped off `a`'s failed verdict on the same pass
-    that discovers the replan the judge resolved for another ticket, and the
-    loop breaks at the replan before its sweep runs -- without this, `b` gets
-    no live frame and its registry row lands only when the run finalizes."""
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    desk = AdjudicationDesk()
-    frames: list[tuple[str, str]] = []
-
-    async def _capture(name: str, value: dict) -> None:
-        if name == "dag_node_updated":
-            frames.append((value["node"], value["status"]))
-
-    class _Backend:
-        async def run(self, prompt: str, **_kw: Any) -> str:
-            return "did it"
-
-    async def _judge(*, node, store, output, error, crashed, **_):
-        # A replan for a ticket of its own, resolved while `a`'s verdict is
-        # being decided, so the flag is discovered one pass after `a` has
-        # failed and the cascade has already skipped `b`.
-        desk.open("elsewhere")
-        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
-        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "replan me",
-            "nodes": [
-                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
-                {
-                    "id": "b",
-                    "subagent": "x",
-                    "node_summary": "downstream",
-                    "prompt_template": "do b",
-                    "depends_on": ["a"],
-                },
-            ],
-        }
-    )
-    result = await run_dag(
-        spec,
-        resolve=lambda node: _Backend(),
-        backend=LocalFileBackend(),
-        workdir=str(tmp_path),
-        run_root=str(tmp_path / "runs"),
-        nodes_root=str(tmp_path / "nodes"),
-        history_root=str(tmp_path),
-        desk=desk,
-        judge_node=_judge,
-        origin=_TEST_ORIGIN,
-        adjudication_timeout_s=5,
-        progress_publisher=_capture,
-    )
-
-    statuses = {entry["node"]: entry["status"] for entry in result.files}
-    assert statuses == {"a": "failed", "b": "skipped"}
-    assert ("b", "skipped") in frames, "the cascade's skip is announced on the pass that decides it"
-
-
-async def test_a_node_cancelled_on_the_replan_pass_is_announced_on_that_pass(tmp_path) -> None:
-    """The `cancelled` arm of the same publish: a stop and a replan landing on
-    one pass must not leave the stop's nodes unannounced either."""
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
-
-    desk = AdjudicationDesk()
-    cancel = asyncio.Event()
-    started = asyncio.Event()
-    frames: list[tuple[str, str]] = []
-
-    async def _capture(name: str, value: dict) -> None:
-        if name == "dag_node_updated":
-            frames.append((value["node"], value["status"]))
-
-    class _Backend:
-        async def run(self, prompt: str, **_kw: Any) -> str:
-            if "slowpoke" in prompt:
-                started.set()
-                await asyncio.sleep(30)
-            return "did it"
-
-    async def _judge(*, node, store, output, error, crashed, **_):
-        # Wait until the in-flight node is real, then land a stop and a replan
-        # on the same pass the runner will discover them.
-        await started.wait()
-        desk.open("elsewhere")
-        desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
-        cancel.set()
-        return Verdict(accomplished=node.id != "a", what_is_missing="nothing usable")
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "replan me",
-            "nodes": [
-                {"id": "a", "subagent": "x", "node_summary": "first", "prompt_template": "do a"},
-                {"id": "slowpoke", "subagent": "x", "node_summary": "slow", "prompt_template": "do slowpoke"},
-            ],
-        }
-    )
-    result = await run_dag(
-        spec,
-        resolve=lambda node: _Backend(),
-        backend=LocalFileBackend(),
-        workdir=str(tmp_path),
-        run_root=str(tmp_path / "runs"),
-        nodes_root=str(tmp_path / "nodes"),
-        history_root=str(tmp_path),
-        desk=desk,
-        judge_node=_judge,
-        origin=_TEST_ORIGIN,
-        adjudication_timeout_s=5,
-        cancel=cancel,
-        progress_publisher=_capture,
-    )
-
-    statuses = {entry["node"]: entry["status"] for entry in result.files}
-    assert statuses == {"a": "failed", "slowpoke": "cancelled"}
-    assert ("slowpoke", "cancelled") in frames, "the stop's cancel is announced on the pass that decides it"
+    sealed = _run_file(tmp_path, _RUN_A, "manifest.json")
+    assert (sealed["boom"]["status"], sealed["boom"]["error"]) == ("failed", "boom boom")
+    assert sealed["blocked"]["status"] == "skipped"
+    assert not sealed["blocked"]["error"], "a cascaded skip has no reason of its own to overwrite"
+    assert sealed["r2"]["status"] == "failed"
 
 
 async def test_a_node_cancelled_mid_retry_keeps_a_duration_of_its_own(tmp_path, monkeypatch) -> None:
-    """The replan-time publish and the loop's own sweep are one definition.
-
-    A node that ended an attempt, was adjudicated into a retry, and is then
-    stopped on the pass that meets a replan carries an earlier attempt's end
-    in its history. Publishing it with `setdefault` keeps that stamp and
-    writes a duration that runs backwards into the manifest, while the sweep
-    always re-stamps: one node history must not depend on whether a replan
-    landed on the same pass. The clock is a strict counter so every stamp is
-    orderable, not a race with the millisecond resolution of the real one.
-    """
+    """A node that ended an attempt, was continued into a retry, and is then cut off
+    by a replan carries an earlier attempt's end in its history. Its sealed record
+    is stamped at the stop, so the duration it records never runs backwards. The
+    clock is a strict counter so every stamp is orderable."""
     from raven.agent.subagent import dag_runner
-    from raven.agent.subagent.dag_adjudication import CONTINUE, REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_verdict import Verdict
+    from raven.agent.subagent.dag_adjudication import CONTINUE
 
     ticks = itertools.count(1000, 10)
     monkeypatch.setattr(dag_runner, "_now_ms", lambda: next(ticks))
+    retry_held = asyncio.Event()
 
-    desk = AdjudicationDesk()
-    cancel = asyncio.Event()
-    first_landed = asyncio.Event()
+    class _RetryHeld(_GatedExec):
+        async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+            if task_id == "n0" and any(call["task_id"] == "n0" for call in self.calls):
+                retry_held.set()
+                await asyncio.Event().wait()
+            if task_id == "r2":
+                # Suspends only once the retry is in flight: a wait for answers
+                # holds a continued node until every open question is decided.
+                await retry_held.wait()
+            return await super().run(task, task_id=task_id, **kwargs)
 
-    class _Backend:
-        async def run(self, prompt: str, **_kw: Any) -> str:
-            if not first_landed.is_set():
-                first_landed.set()
-                return "attempt one lands"
-            # The retry is in flight: land a replan and a stop on the one pass
-            # that will discover both.
-            desk.open("elsewhere")
-            desk.resolve("elsewhere", REPLAN, "the plan was wrong", plan=_replan_plan())
-            cancel.set()
-            await asyncio.sleep(30)
+    holder: dict[str, Any] = {}
 
-    async def _announce_exception(run_id, node_id, report, origin, **_):
-        desk.resolve(node_id, CONTINUE, "try it again")
+    async def _continue_n0(node_id: str) -> None:
+        if node_id == "n0":
+            holder["started"].desk.resolve("n0", CONTINUE, "try it again")
 
-    async def _judge(*, node, store, output, error, crashed, **_):
-        return Verdict(accomplished=False, what_is_missing="a token")
-
-    spec = parse_dag_spec(
-        {
-            "task_summary": "replan me",
-            "nodes": [{"id": "n0", "subagent": "x", "node_summary": "one", "prompt_template": "do it"}],
-        }
+    started = _start_carry_run(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("n0")],
+        judge=_carry_judge(suspend=("r2", "n0")),
+        exec_=_RetryHeld(),
+        announce=_continue_n0,
     )
-    result = await run_dag(
-        spec,
-        resolve=lambda node: _Backend(),
-        backend=LocalFileBackend(),
-        workdir=str(tmp_path),
-        run_root=str(tmp_path / "runs"),
-        nodes_root=str(tmp_path / "nodes"),
-        history_root=str(tmp_path),
-        desk=desk,
-        judge_node=_judge,
-        origin=_TEST_ORIGIN,
-        adjudication_timeout_s=5,
-        cancel=cancel,
-        announce_exception=_announce_exception,
-    )
+    holder["started"] = started
+    try:
+        await _until_asked(started, "r2")
+        await asyncio.wait_for(retry_held.wait(), timeout=10)
+        future = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh")]))
+        assert future is not None
+        assert (await asyncio.wait_for(future, 10)).applied
+        await asyncio.wait_for(started.run, 20)
+    finally:
+        await _drop(started)
 
-    rows = {entry["node"]: entry for entry in result.files}
-    assert rows["n0"]["status"] == "cancelled", rows
-    started, ended = rows["n0"]["started_at"], rows["n0"]["ended_at"]
-    assert started is not None and ended is not None
-    assert started <= ended, f"a cancelled retry must not end before it starts: {started} > {ended}"
+    n0 = _run_file(tmp_path, _RUN_A, "manifest.json")["n0"]
+    assert n0["status"] == "cancelled", n0
+    assert n0["started_at"] is not None and n0["ended_at"] is not None
+    assert n0["started_at"] <= n0["ended_at"], "a cancelled retry must not end before it starts"
 
 
-async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> None:
+async def test_a_run_that_was_not_replanned_carries_no_link(tmp_path) -> None:
+    """A run nobody replanned is recorded as it always was: under its own id, with
+    no `replan` link and no node read as carried."""
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
     from raven.agent.subagent.dag_verdict import Verdict
 
@@ -10266,103 +9947,10 @@ async def test_a_run_that_was_not_replanned_reports_no_successor(tmp_path) -> No
 
     result = await _run_two_node_dag(tmp_path, desk=desk, judge_node=_judge, announce_exception=_announce)
 
-    assert result.replanned_into is None
-
-
-async def test_a_replan_answer_that_lands_while_the_runner_is_parked_leaves_the_node_open() -> None:
-    """The REPLAN branch inside `_await_adjudications` itself, not the round-interrupt shortcut.
-
-    Every `_run_replanned_dag`-based test resolves the desk synchronously inside
-    `announce_exception`, which runs from within the same round that opened the
-    node -- so `desk.replanned` is already set by the time that round's loop next
-    checks it, and this function's own per-node REPLAN handling never runs at all.
-    A production resolve arrives from a separate turn's tool call, an arbitrary
-    wall-clock time later; a background task racing the wait is the only way to
-    reproduce that ordering rather than the shortcut.
-    """
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _apply_replan, _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    status = {"n0": "exception"}
-    errors: dict[str, str] = {}
-
-    async def _decide() -> None:
-        await asyncio.sleep(0.05)
-        desk.resolve("n0", REPLAN, "the plan was wrong", plan=_replan_plan(run_id="run-new", from_node="n0"))
-
-    driver = asyncio.create_task(_decide())
-    try:
-        await _await_adjudications(desk, status, errors, {}, timeout_s=5, cancel=None)
-    finally:
-        await driver
-
-    # Left at "exception", not "failed": `_apply_replan` is the run's single writer of
-    # a replanned node's terminal status and reason. Marking it "failed" here, with no
-    # mention of the successor, would also make `_apply_replan`'s own terminal-node
-    # guard skip this node on the next loop pass, since it only converts
-    # "running"/"exception"/"pending" and this node would already look resolved.
-    assert status["n0"] == "exception"
-    assert errors == {}
-
-    await _apply_replan(
-        _replan_plan(run_id="run-new", from_node="n0"),
-        status=status,
-        errors=errors,
-        published_terminal=set(),
-        node_started_at={},
-        node_ended_at={},
-        by_id={"n0": _node_spec("n0")},
-        session_key=None,
-        run_id="run-old",
-        progress_publisher=None,
-    )
-
-    assert status["n0"] == "failed"
-    assert "run-new" in errors["n0"]
-    assert "the plan was wrong" in errors["n0"]
-
-
-async def test_a_replan_ends_the_wait_for_the_siblings_it_never_answered() -> None:
-    """Two nodes suspend together; replanning one must not leave the round waiting
-    on the other.
-
-    The deadlock this guards is mutual and unbounded on a bound foreground run,
-    where `released` is unset and the wait therefore carries no deadline at all:
-    `resolve_dag_node` is itself parked in `await_finalized`, which waits on this
-    run's task with no timeout of its own, so the one lane that could answer `n1`
-    is the lane blocked on the run that is waiting for `n1`.
-
-    `asyncio.timeout` rather than a bare await, so a regression here fails as this
-    assertion instead of hanging the suite -- there is no deadline in the code
-    under test to end it.
-    """
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk
-    from raven.agent.subagent.dag_runner import _await_adjudications
-
-    desk = AdjudicationDesk()
-    desk.open("n0")
-    desk.open("n1")
-    status = {"n0": "exception", "n1": "exception"}
-    errors: dict[str, str] = {}
-    released = asyncio.Event()
-
-    async def _decide() -> None:
-        await asyncio.sleep(0.05)
-        desk.resolve("n0", REPLAN, "the plan was wrong", plan=_replan_plan(run_id="run-new", from_node="n0"))
-
-    driver = asyncio.create_task(_decide())
-    try:
-        async with asyncio.timeout(5):
-            await _await_adjudications(desk, status, errors, {}, timeout_s=600, cancel=None, released=released)
-    finally:
-        await driver
-
-    # Both left for `_apply_replan`: `n1` was never asked, so calling it a timeout
-    # would blame the agent for a silence its own replan is what ended.
-    assert status == {"n0": "exception", "n1": "exception"}
-    assert errors == {}
+    graph = json.loads((Path(result.dir) / "graph.json").read_text(encoding="utf-8"))
+    assert "replan" not in graph
+    assert "carried" not in result.summary
+    assert {entry["status"] for entry in result.files} == {"completed"}
 
 
 def _node_spec(node_id: str) -> DagNodeSpec:
@@ -11194,25 +10782,19 @@ def test_a_stop_leaves_a_not_executed_node_alone() -> None:
     assert status == {"a": "not_executed", "b": "cancelled", "c": "skipped", "d": "cancelled"}
 
 
-async def test_a_replan_leaves_a_not_executed_node_alone() -> None:
-    from raven.agent.subagent.dag_runner import _apply_replan
+def test_a_replan_leaves_a_not_executed_node_alone() -> None:
+    """A node that finished -- not executed included -- never stops with the old run:
+    only what had not finished takes a stop status, and one the stop cut off mid
+    attempt reads as the attempt it was in."""
+    from raven.agent.subagent.dag_runner import _stop_status
 
-    status = {"a": "not_executed", "b": "running", "c": "pending", "d": "exception"}
-    errors: dict[str, str] = {}
-    await _apply_replan(
-        SimpleNamespace(run_id="next", reason="the plan changed"),
-        status=status,
-        errors=errors,
-        published_terminal=set(),
-        node_started_at={},
-        node_ended_at={},
-        by_id={nid: SimpleNamespace(subagent="x") for nid in status},
-        session_key=None,
-        run_id="r1",
-        progress_publisher=None,
-    )
-    assert status == {"a": "not_executed", "b": "cancelled", "c": "skipped", "d": "failed"}
-    assert "a" not in errors
+    assert {st: _stop_status(st, cut=False) for st in ("not_executed", "running", "pending", "exception")} == {
+        "not_executed": None,
+        "running": "cancelled",
+        "pending": "skipped",
+        "exception": "failed",
+    }
+    assert (_stop_status("completed", cut=True), _stop_status("exception", cut=True)) == ("cancelled", "failed")
 
 
 async def test_the_events_carry_the_routes_the_selection_and_the_reason() -> None:
@@ -11636,58 +11218,6 @@ async def test_a_verdict_that_lands_while_the_second_pass_publishes_is_settled_b
     assert (g2["status"], g2["reason"]) == ("not_executed", "when_false")
 
 
-async def test_a_node_the_second_settle_pass_decides_is_announced_once_when_a_replan_ends_the_run() -> None:
-    """`g` is decided after the sweep, and a replan then ends the run before any later sweep:
-    its one frame comes from the pass that decided it."""
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
-
-    spec = _bgraph(
-        _bnode("x"),
-        _bnode("y", depends_on=["x"]),
-        _bnode("r", routes={"a": "a", "b": "b"}),
-        _bnode("g", depends_on=["r"], when="r.a"),
-    )
-    desk = AdjudicationDesk()
-    plan = ReplanPlan(
-        run_id="next",
-        from_node="elsewhere",
-        reason="the plan changed",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
-    release = asyncio.Event()
-    landed = asyncio.Event()
-    events: list[tuple[str, dict]] = []
-
-    async def pub(name, value):
-        events.append((name, value))
-        if name != "dag_node_updated":
-            return
-        if value["node"] == "r" and value.get("ended_at"):
-            landed.set()
-        if value["node"] == "y" and value["status"] == "skipped":
-            release.set()
-            await asyncio.wait_for(landed.wait(), 5)
-            desk.open("elsewhere")
-            desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
-
-    async def _judge(*, node, store, output, error, crashed, output_limited=False):
-        if node.routes:
-            await asyncio.wait_for(release.wait(), 5)
-            return Verdict(accomplished=True, routes=("b",))
-        return Verdict(accomplished=True)
-
-    result, _ = await _settle_run(spec, _judge, _FakeExec(fail_ids={"x"}), desk=desk, progress_publisher=pub)
-    assert result.replanned_into == "next"
-    g = {f["node"]: f for f in result.files}["g"]
-    assert (g["status"], g["reason"]) == ("not_executed", "when_false")
-    assert g["started_at"] is not None and g["ended_at"] is not None
-    g_frames = [v for n, v in events if n == "dag_node_updated" and v["node"] == "g"]
-    assert [(v["status"], v["reason"]) for v in g_frames] == [("not_executed", "when_false")]
-
-
 async def test_a_suspended_router_holds_its_branches_until_a_continue_judges_it_again() -> None:
     from raven.agent.subagent.dag_adjudication import AdjudicationDesk
 
@@ -11755,74 +11285,30 @@ async def test_a_stop_while_a_routers_judge_is_out_skips_its_branch() -> None:
     assert "not_executed" not in result.summary
 
 
-async def test_a_replan_while_a_routers_judge_is_out_skips_its_branch() -> None:
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
+async def test_a_replan_while_a_routers_judge_is_out_skips_its_branch(tmp_path) -> None:
+    """The replan is why `g` never ran: its router was cut off mid-judgement, so no
+    decision was made, and `g` stops with the old run as a node that never started."""
+    judging = asyncio.Event()
+    base = _carry_judge()
 
-    spec = _bgraph(_bnode("r", routes={"a": "a", "b": "b"}), _bnode("g", depends_on=["r"], when="r.a"))
-    desk = AdjudicationDesk()
-    plan = ReplanPlan(
-        run_id="next",
-        from_node="elsewhere",
-        reason="the plan changed",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
-
-    async def _judge(*, node, store, output, error, crashed, output_limited=False):
+    async def _judge(*, node: Any, **kwargs: Any) -> Any:
         if node.routes:
-            desk.open("elsewhere")
-            desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
+            judging.set()
             await asyncio.Event().wait()
-        return Verdict(accomplished=True)
+        return await base(node=node, **kwargs)
 
-    result, _ = await _settle_run(spec, _judge, desk=desk)
-    g = {f["node"]: f for f in result.files}["g"]
-    assert g["status"] == "skipped"
-    assert g["error"] == "Superseded by replan into run next: the plan changed"
-    assert result.replanned_into == "next"
-
-
-async def test_a_replan_exit_announces_the_cascade_skips_of_a_graph_without_branches() -> None:
-    """The replan exit publishes this pass's cascade skips too.
-
-    `b` is skipped by the cascade on the pass that meets the replan, and that pass
-    ends before its sweep: without the exit publishing it, a graph without routes
-    or guards got no event for it, and its row landed only when the run finalized.
-    """
-    from raven.agent.subagent.dag_adjudication import AdjudicationDesk, ReplanPlan
-
-    spec = _bgraph(_bnode("a"), _bnode("b", depends_on=["a"]))
-    desk = AdjudicationDesk()
-    plan = ReplanPlan(
-        run_id="next",
-        from_node="elsewhere",
-        reason="the plan changed",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
+    await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r", routes={"a": "a", "b": "b"}), _nd("g", depends_on=["r"], when="r.a"), _nd("r2")],
+        entries=[_nd("fresh")],
+        judge=_judge,
+        wait_for=lambda state: judging.is_set(),
     )
 
-    async def _judge(*, node, store, output, error, crashed, output_limited=False):
-        desk.open("elsewhere")
-        desk.resolve("elsewhere", "replan", "the plan changed", plan=plan)
-        return Verdict(accomplished=False, what_is_missing="nothing usable")
-
-    events: list[tuple[str, dict]] = []
-
-    async def pub(name, value):
-        events.append((name, value))
-
-    result, _ = await _settle_run(spec, _judge, desk=desk, progress_publisher=pub)
-    assert result.replanned_into == "next"
-    assert {f["node"]: f["status"] for f in result.files} == {"a": "failed", "b": "skipped"}
-    assert [(v["node"], v["status"]) for n, v in events if n == "dag_node_updated"] == [
-        ("a", "running"),
-        ("a", "failed"),
-        ("b", "skipped"),
-    ]
+    sealed = _run_file(tmp_path, _RUN_A, "manifest.json")
+    assert sealed["r"]["status"] == "cancelled"
+    assert sealed["g"]["status"] == "skipped"
+    assert sealed["g"]["error"] == f"Superseded by replan into run {_RUN_B}: {_REPLAN_REASON}"
 
 
 async def test_a_stateful_branch_entry_that_does_not_run_does_not_break_its_instance_order() -> None:
@@ -13989,7 +13475,6 @@ async def test_reassign_spends_the_existing_continuation_budget(tmp_path: Path) 
     assert desk.open_nodes() == set(), "a spent budget opens no fourth decision"
     assert result.summary == {"total": 1, "completed": 0, "failed": 1, "skipped": 0, "cancelled": 0}
     assert run_ids == {result.run_id}, "a reassign spends a continuation, not a dispatch"
-    assert result.replanned_into is None
     assert state.attempt_agents["fix"] == ["alpha", "beta", "gamma"]
     assert state.attempt_reasons["fix"] == ["a parser", "a parser", "a parser"]
 
@@ -14898,8 +14383,9 @@ async def test_a_running_sibling_that_suspends_joins_the_move(tmp_path: Path) ->
 
 @pytest.mark.parametrize("mode", ["cancel", "replan"])
 async def test_cancel_or_replan_releases_a_pending_transfer(tmp_path: Path, mode: str) -> None:
-    """A run that ends under a staged move leaves no claim and dispatches nothing on the target."""
-    from raven.agent.subagent.dag_adjudication import REASSIGN, REPLAN, AdjudicationDesk, ReplanPlan
+    """A run that stops, or replans away the nodes of a staged move, leaves no claim
+    and dispatches nothing on the target."""
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
     from raven.agent.subagent.dag_runner import ReassignmentState
     from raven.agent.subagent.dag_verdict import Verdict
 
@@ -14980,6 +14466,7 @@ async def test_cancel_or_replan_releases_a_pending_transfer(tmp_path: Path, mode
             origin=_TEST_ORIGIN,
             adjudication_timeout_s=5,
             cancel=cancel,
+            run_id=_RUN_A,
         )
     )
     try:
@@ -14988,20 +14475,13 @@ async def test_cancel_or_replan_releases_a_pending_transfer(tmp_path: Path, mode
         if mode == "cancel":
             cancel.set()
         else:
-            desk.resolve(
-                "q",
-                REPLAN,
-                "the plan is wrong",
-                plan=ReplanPlan(
-                    run_id="run-next",
-                    from_node="q",
-                    reason="the plan is wrong",
-                    nodes=(),
-                    backends={},
-                    auto_instances=frozenset(),
-                    notices=(),
-                ),
+            await _wait_until(lambda: desk.is_open("q") and "q" not in state.active_attempts, timeout=10)
+            scene = _StartedRun(run, desk, state, alpha, spec, [], set(), cancel, {})
+            future = desk.propose(
+                _carry_proposal(scene, entries=[_nd("fresh", subagent="alpha")], from_node="q", successor=_RUN_B)
             )
+            assert future is not None
+            assert (await asyncio.wait_for(future, 10)).applied
         result = await asyncio.wait_for(run, timeout=20)
     finally:
         cancel.set()
@@ -15010,16 +14490,17 @@ async def test_cancel_or_replan_releases_a_pending_transfer(tmp_path: Path, mode
     assert beta.calls == [], "no destination dispatch happens once the run is ending"
     assert state.pending_moves == {}
     assert state.pending_handovers == {}
-    files = {entry["node"]: entry for entry in result.files}
-    assert files["z"]["status"] == "skipped"
-    assert files["g"]["status"] == "completed"
-    assert files["a"]["status"] in {"completed", "cancelled"}, "the cut-off attempt is terminal, not stuck running"
     if mode == "cancel":
-        assert files["q"]["status"] == "cancelled"
-        assert result.replanned_into is None
+        files = {entry["node"]: entry["status"] for entry in result.files}
+        assert files["q"] == "cancelled"
     else:
-        assert files["q"]["status"] == "failed"
-        assert result.replanned_into == "run-next"
+        assert result.run_id == _RUN_B
+        assert {entry["node"]: entry["status"] for entry in result.files} == {"fresh": "completed"}
+        files = {nid: entry["status"] for nid, entry in _run_file(spec_root, _RUN_A, "manifest.json").items()}
+        assert files["q"] == "failed"
+    assert files["z"] == "skipped"
+    assert files["g"] == "completed"
+    assert files["a"] in {"completed", "cancelled"}, "the cut-off attempt is terminal, not stuck running"
 
 
 async def test_a_new_move_does_not_bypass_a_destination_collision(tmp_path: Path) -> None:
@@ -15257,7 +14738,7 @@ async def test_the_scheduler_publishes_only_the_failures_it_owns() -> None:
         node_ended_at={},
         by_id=by_id,
         session_key=None,
-        run_id="r",
+        store=SimpleNamespace(run_id="r"),
         progress_publisher=_capture,
         state=None,
         only={"scheduler"},
@@ -16436,9 +15917,9 @@ async def test_a_real_reassigned_run_reads_the_same_assignment_from_every_reader
 async def test_a_replan_writes_a_moved_nodes_terminal_row_under_the_agent_that_ran_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The replan's terminal write is one more write like any other: under the
+    """The seal's terminal write is one more write like any other: under the
     submitted agent it would leave the moved row behind, and the node listed twice."""
-    from raven.agent.subagent.dag_runner import _apply_replan
+    from raven.agent.subagent.dag_runner import _Seal, _seal_predecessor
 
     registry = instances_mod.InstanceRegistry(path=tmp_path / "inst.json")
     monkeypatch.setattr(instances_mod, "_registry", registry)
@@ -16446,19 +15927,31 @@ async def test_a_replan_writes_a_moved_nodes_terminal_row_under_the_agent_that_r
     state.reassigned.add("a")
     state.last_attempt_nodes["a"] = DagNodeSpec(id="a", subagent="beta", node_summary="s", prompt_template="t")
     state.attempt_agents["a"] = ["alpha", "beta"]
-
-    await _apply_replan(
-        SimpleNamespace(run_id="next", reason="the plan changed"),
-        status={"a": "running"},
-        errors={},
-        published_terminal=set(),
-        node_started_at={},
-        node_ended_at={},
-        by_id={"a": _node_spec("a")},
+    ctx = SimpleNamespace(
+        backend=LocalFileBackend(),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
         session_key="s1",
-        run_id="r1",
-        progress_publisher=None,
         state=state,
+    )
+    seal = _Seal(
+        run_id="r1",
+        dir=str(tmp_path / "runs" / "r1"),
+        nodes=(_node_spec("a"),),
+        status={"a": "cancelled"},
+        files=[],
+        manifest={},
+        outcomes={"a": {}},
+        stopped=("a",),
+        stopped_suspended=(),
+    )
+
+    await _seal_predecessor(
+        SimpleNamespace(successor_run_id="next", from_node="b", reason="the plan changed"),
+        plan=SimpleNamespace(carried=()),
+        seal=seal,
+        ctx=ctx,
     )
 
     rows = registry.list_instances("s1")
@@ -17447,100 +16940,6 @@ async def test_end_to_end_a_destination_that_becomes_occupied_fails_the_moved_no
     _valid_wire_frames(events)
 
 
-async def test_end_to_end_a_replan_wins_over_reassigning_another_node_in_the_same_batch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The interaction a model can actually produce: one graph, two open questions.
-
-    The replan is recorded first; the reassign that follows is refused at the
-    desk instead of being parked under a run that is already being replaced.
-    No target agent is called, the submitted graph is unchanged, and the run
-    names the successor it handed over to.
-    """
-    from raven.agent.subagent.dag_adjudication import REPLAN, AdjudicationDesk, ReplanPlan
-
-    alpha = _ScriptedExec("first try a", "first try b")
-    beta = _ScriptedExec()
-    desk = AdjudicationDesk()
-    state = ReassignmentState()
-    judge = _queued_judge(
-        {
-            "a": [_verdict(accomplished=False, missing="a parser")],
-            "b": [_verdict(accomplished=False, missing="a new plan")],
-        }
-    )
-    seen: list[str] = []
-
-    def _replan_plan() -> ReplanPlan:
-        return ReplanPlan(
-            run_id="successor-1",
-            from_node="b",
-            reason="the plan changed",
-            nodes=(
-                DagNodeSpec(id="b2", subagent="alpha", node_summary="run the new plan", prompt_template="new plan"),
-            ),
-            backends={},
-            auto_instances=frozenset(),
-            notices=(),
-            task_summary="one node",
-        )
-
-    async def announce(run_id, node_id, _report, _origin, *, awaiting_decision, **_kwargs: Any) -> None:
-        if not awaiting_decision:
-            return
-        if node_id == "b":
-            waiter = desk.waiter(node_id)
-            assert desk.resolve(node_id, REPLAN, "the plan changed", _replan_plan(), expected_waiter=waiter)
-            return
-        await asyncio.wait_for(desk.replanned.wait(), timeout=5)
-        waiter = desk.waiter(node_id)
-        refused = not desk.resolve(
-            node_id,
-            "reassign",
-            "use beta",
-            agent="beta",
-            expected_waiter=waiter,
-            reassignment=_move_plan(
-                node_id=node_id,
-                source_agent="alpha",
-                source_instance="s1",
-                target_agent="beta",
-                target_stateful=True,
-                target_instance="s1",
-                nodes=[DagNodeSpec(id="a", subagent="alpha", node_summary="a", prompt_template="a")],
-                backends={"a": beta},
-                waiter=waiter,
-            ),
-        )
-        seen.append("refused" if refused else "accepted")
-
-    nodes = [
-        {"id": "a", "subagent": "alpha", "node_summary": "node a", "prompt_template": "do a", "instance": "s1"},
-        {"id": "b", "subagent": "alpha", "node_summary": "node b", "prompt_template": "do b", "instance": "s2"},
-    ]
-    result = await _run_graph(
-        tmp_path,
-        nodes,
-        {"alpha": alpha, "beta": beta},
-        state=state,
-        desk=desk,
-        judge=judge,
-        announce=announce,
-        builder=_backend_builder({"alpha": alpha, "beta": beta}),
-    )
-
-    assert seen == ["refused"], "the reassign must be refused once the run is being replaced"
-    assert result.replanned_into == "successor-1"
-    assert beta.calls == [], "a run handed to a successor dispatches nothing on the target"
-    assert not any("attempt-2" in str(path) for path in Path(tmp_path / "nodes").glob("a.*"))
-    graph = json.loads((Path(tmp_path / "runs") / result.run_id / "graph.json").read_text(encoding="utf-8"))
-    assert [(node["id"], node["subagent"], node["instance"]) for node in graph["nodes"]] == [
-        ("a", "alpha", "s1"),
-        ("b", "alpha", "s2"),
-    ]
-    assert state.pending_moves == {} and state.reassigned == set()
-
-
 async def test_end_to_end_a_moved_worker_node_keeps_its_frozen_charter(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -17612,3 +17011,1361 @@ async def test_end_to_end_a_moved_worker_node_keeps_its_frozen_charter(
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["draft"]["subagent"] == "beta"
     assert manifest["draft"]["attempt_agents"] == ["alpha", "beta"]
+
+
+def _two_on_one_instance() -> Any:
+    return parse_dag_spec(
+        {
+            "task_summary": "t",
+            "nodes": [
+                {"id": "first", "subagent": "x", "node_summary": "one", "prompt_template": "do first", "instance": "h"},
+                {
+                    "id": "second",
+                    "subagent": "x",
+                    "node_summary": "two",
+                    "prompt_template": "do second",
+                    "instance": "h",
+                },
+            ],
+        }
+    )
+
+
+async def _run_held(tmp_path: Path, spec: Any, exec_: Any, state: ReassignmentState) -> Any:
+    return await run_dag(
+        spec,
+        resolve=lambda node: exec_,
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        reassignment_state=state,
+    )
+
+
+async def test_queued_lists_a_group_member_waiting_behind_its_sibling(tmp_path: Path) -> None:
+    exec_ = _GatedExec()
+    entered, release = exec_.gate("first")
+    state = ReassignmentState()
+    run = asyncio.ensure_future(_run_held(tmp_path, _two_on_one_instance(), exec_, state))
+    await asyncio.wait_for(entered.wait(), timeout=10)
+
+    assert state.queued == {"second"}, "a member waiting behind its sibling is held by a task, not free"
+
+    release.set()
+    await asyncio.wait_for(run, timeout=10)
+    assert state.queued == set()
+
+
+async def test_a_group_member_that_stopped_being_pending_is_not_dispatched(tmp_path: Path) -> None:
+    exec_ = _GatedExec()
+    entered, release = exec_.gate("first")
+    state = ReassignmentState()
+    run = asyncio.ensure_future(_run_held(tmp_path, _two_on_one_instance(), exec_, state))
+    await asyncio.wait_for(entered.wait(), timeout=10)
+
+    state.status["second"] = "skipped"
+    release.set()
+    await asyncio.wait_for(run, timeout=10)
+
+    assert [call["task_id"] for call in exec_.calls] == ["first"], "the gate passes over a member no longer pending"
+
+
+async def test_the_start_frame_is_built_by_the_shared_payload(tmp_path: Path) -> None:
+    from raven.agent.subagent.dag_runner import BranchState, _run_started_payload
+
+    spec = parse_dag_spec(
+        {
+            "task_summary": "t",
+            "nodes": [
+                {
+                    "id": "triage",
+                    "subagent": "x",
+                    "node_summary": "triage",
+                    "prompt_template": "triage it",
+                    "routes": {"bug": "a bug", "feature": "a feature"},
+                },
+                {
+                    "id": "fix",
+                    "subagent": "x",
+                    "node_summary": "fix",
+                    "prompt_template": "fix it",
+                    "depends_on": ["triage"],
+                    "when": "triage.bug",
+                },
+            ],
+        }
+    )
+    frames: list[dict] = []
+
+    async def _capture(name: str, value: dict) -> None:
+        if name == "dag_run_started":
+            frames.append(value)
+
+    await run_dag(
+        spec,
+        resolve=lambda node: _FakeExec(),
+        backend=LocalFileBackend(),
+        workdir=str(tmp_path),
+        run_root=str(tmp_path / "runs"),
+        nodes_root=str(tmp_path / "nodes"),
+        history_root=str(tmp_path),
+        progress_publisher=_capture,
+        run_id="20260101T000000Z-00000001",
+        judge_node=_queued_judge({}),
+    )
+    by_id = {node.id: node for node in spec.nodes}
+    branch = BranchState(guards=guards_of(spec.nodes), skippable=may_not_execute(spec.nodes, by_id))
+
+    assert frames == [_run_started_payload("20260101T000000Z-00000001", "t", spec.nodes, branch)]
+
+
+async def test_finalize_reports_only_the_runs_own_nodes(tmp_path: Path) -> None:
+    from raven.agent.subagent.dag_runner import BranchState, _finalize
+
+    spec = parse_dag_spec(
+        {"task_summary": "t", "nodes": [{"id": "a", "subagent": "x", "node_summary": "a", "prompt_template": "do a"}]}
+    )
+    ctx = DagNodeSpec(id="ctx", subagent="x", node_summary="context", prompt_template="done earlier")
+    by_id = {"a": spec.nodes[0], "ctx": ctx}
+    store = DagRunStore(
+        LocalFileBackend(), str(tmp_path / "runs"), "20260101T000000Z-00000002", str(tmp_path / "nodes"), str(tmp_path)
+    )
+    await store.write_text(store.output_path("a"), "A")
+    await store.write_text(store.output_path("ctx"), "CTX")
+    status = {"a": "completed", "ctx": "completed"}
+
+    result = await _finalize(
+        spec,
+        by_id,
+        status,
+        {},
+        {"a": store.output_path("a"), "ctx": store.output_path("ctx")},
+        set(),
+        {"a": [], "ctx": []},
+        {},
+        {},
+        {},
+        store,
+        branch=BranchState(guards={}, skippable=frozenset()),
+        own=["a"],
+    )
+
+    assert [entry["node"] for entry in result.files] == ["a"]
+    assert [term["node"] for term in result.terminal_outputs] == ["a"]
+    assert result.summary["total"] == 1
+    manifest = json.loads((tmp_path / "runs" / "20260101T000000Z-00000002" / "manifest.json").read_text())
+    assert set(manifest) == {"a"}
+
+
+# --- a replan carries the work its plan includes into a successor run ----------
+
+_RUN_A = "20261108T000000Z-0000000a"
+_RUN_B = "20261108T000000Z-0000000b"
+_RUN_C = "20261108T000000Z-0000000c"
+_REPLAN_REASON = "the plan was wrong"
+
+
+class _StartedRun(NamedTuple):
+    run: "asyncio.Future[DagRunResult]"
+    desk: Any
+    state: ReassignmentState
+    exec_: Any
+    spec: Any
+    frames: list[tuple[str, dict]]
+    asked: set[str]
+    cancel: asyncio.Event
+    gates: dict[str, tuple[asyncio.Event, asyncio.Event]]
+
+
+def _carry_judge(*, suspend: tuple[str, ...] = ("r2",), picks: dict[str, tuple[str, ...]] | None = None):
+    """Each node in ``suspend`` falls short once; a decision node takes its route from ``picks``."""
+    queues = {node_id: [_verdict(accomplished=False, missing="a source")] for node_id in suspend}
+
+    async def _judge(*, node: Any, **_kwargs: Any) -> Any:
+        queue = queues.get(node.id)
+        if queue:
+            return queue.pop(0)
+        if node.routes:
+            return Verdict(accomplished=True, routes=(picks or {})[node.id], route_evidence="because")
+        return Verdict(accomplished=True)
+
+    return _judge
+
+
+def _start_carry_run(
+    tmp_path: Path,
+    *,
+    nodes: list[dict],
+    hold: frozenset[str] = frozenset(),
+    judge: Any = None,
+    exec_: Any = None,
+    backend: Any = None,
+    announce: Any = None,
+    session_key: str | None = None,
+    on_switch: Any = None,
+) -> _StartedRun:
+    """Start run A with a desk, an assignment record and a frame recorder; hold the backends of ``hold``.
+
+    ``announce``, when given, is awaited with every report after it is recorded.
+    """
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    exec_ = exec_ if exec_ is not None else _GatedExec()
+    gates = {node_id: exec_.gate(node_id) for node_id in hold}
+    desk = AdjudicationDesk()
+    state = ReassignmentState()
+    cancel = asyncio.Event()
+    frames: list[tuple[str, dict]] = []
+    asked: set[str] = set()
+
+    async def _publish(name: str, value: dict) -> None:
+        frames.append((name, value))
+
+    async def _announce(run_id, node_id, text, origin, *, awaiting_decision, output=None, **_kwargs):
+        if awaiting_decision:
+            asked.add(node_id)
+        if announce is not None:
+            await announce(node_id)
+
+    spec = parse_dag_spec({"task_summary": "t", "nodes": nodes})
+    run = asyncio.ensure_future(
+        run_dag(
+            spec,
+            resolve=lambda node: exec_,
+            backend=backend if backend is not None else LocalFileBackend(),
+            workdir=str(tmp_path),
+            run_root=str(tmp_path / "runs"),
+            nodes_root=str(tmp_path / "nodes"),
+            history_root=str(tmp_path),
+            desk=desk,
+            judge_node=judge if judge is not None else _carry_judge(),
+            announce_exception=_announce,
+            origin=_TEST_ORIGIN,
+            reassignment_state=state,
+            run_id=_RUN_A,
+            cancel=cancel,
+            adjudication_timeout_s=30,
+            progress_publisher=_publish,
+            session_key=session_key,
+            on_switch=on_switch,
+        )
+    )
+    return _StartedRun(run, desk, state, exec_, spec, frames, asked, cancel, gates)
+
+
+async def _until_asked(started: _StartedRun, *node_ids: str) -> None:
+    """Wait until each node's report is out and its attempt has ended, suspended."""
+    await _wait_until(
+        lambda: all(nid in started.asked and nid not in started.state.active_attempts for nid in node_ids)
+    )
+
+
+def _carry_proposal(
+    started: _StartedRun,
+    *,
+    entries: list[dict],
+    authored: dict[str, DagNodeSpec] | None = None,
+    from_node: str = "r2",
+    successor: str = _RUN_B,
+    charge: Any = None,
+) -> Any:
+    """A proposal planned, as the graph tool plans one, over the run's state right now."""
+    from raven.agent.subagent.dag_adjudication import ReplanProposal
+    from raven.agent.subagent.dag_carry import CarryPlan, classify_nodes, plan_carry
+
+    state = started.state
+    listed = [DagNodeSpec(**entry) for entry in entries]
+    authored = authored if authored is not None else {node.id: node for node in started.spec.nodes}
+    classes = classify_nodes(
+        state.status,
+        begun={nid for nid, agents in state.attempt_agents.items() if agents},
+        in_flight=set(state.active_attempts),
+        queued=state.queued,
+        answered=from_node,
+    )
+    plan = plan_carry(listed, authored=authored, current=state.effective_nodes, classes=classes, status=state.status)
+    assert isinstance(plan, CarryPlan), plan
+    built = {node.id: node for node in listed if node.id in (*plan.new, *plan.redefined)}
+    return ReplanProposal(
+        successor_run_id=successor,
+        from_node=from_node,
+        reason=_REPLAN_REASON,
+        waiter=started.desk.waiter(from_node),
+        basis=state.revision,
+        entries=tuple(listed),
+        authored=dict(authored),
+        plan=plan,
+        dispatch_nodes=built,
+        backends={nid: started.exec_ for nid in built},
+        auto_instances=frozenset(),
+        notices=(),
+        task_summary="t",
+        confirm=False,
+        charge=charge if charge is not None else (lambda: None),
+    )
+
+
+class _ReplanRun(NamedTuple):
+    result: DagRunResult
+    frames: list[tuple[str, dict]]
+    calls: dict[str, int]
+    outcome: Any
+    open_after: set[str]
+    exec_: Any
+    charges: list[str]
+
+
+async def _run_with_replan(
+    tmp_path: Path,
+    *,
+    nodes: list[dict],
+    entries: list[dict],
+    hold: frozenset[str] = frozenset(),
+    judge: Any = None,
+    charge: Any = None,
+    exec_: Any = None,
+    backend: Any = None,
+    suspended: tuple[str, ...] = ("r2",),
+    wait_for: Any = None,
+    before_propose: Any = None,
+    after_propose: Any = None,
+    session_key: str | None = None,
+) -> _ReplanRun:
+    """Answer ``r2``'s report with a replan to ``entries``, and run to the end.
+
+    The backends of ``hold`` are held until the commit is observed. The proposal is
+    planned once every node in ``suspended`` is waiting, every held backend has
+    been entered and ``wait_for(state)`` holds. ``before_propose(state, exec_)``
+    runs between planning and posting -- the window in which the run may move on --
+    and ``after_propose(state)`` right after the desk accepts. A refused replan
+    stops the run, since the node it answered is still waiting.
+    """
+    started = _start_carry_run(
+        tmp_path, nodes=nodes, hold=hold, judge=judge, exec_=exec_, backend=backend, session_key=session_key
+    )
+    charges: list[str] = []
+
+    def _charge() -> str | None:
+        charges.append("charged")
+        return charge() if charge is not None else None
+
+    try:
+        await _until_asked(started, *suspended)
+        await _wait_until(lambda: all(entered.is_set() for entered, _ in started.gates.values()))
+        if wait_for is not None:
+            await _wait_until(lambda: wait_for(started.state))
+        proposal = _carry_proposal(started, entries=entries, charge=_charge)
+        if before_propose is not None:
+            await before_propose(started.state, started.exec_)
+        future = started.desk.propose(proposal)
+        assert future is not None, "the desk refused the proposal"
+        if after_propose is not None:
+            after_propose(started.state)
+        outcome = await asyncio.wait_for(future, 10)
+        open_after = set(started.desk.open_nodes())
+        for _entered, release in started.gates.values():
+            release.set()
+        if not outcome.applied:
+            started.cancel.set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+    calls: dict[str, int] = {}
+    for call in started.exec_.calls:
+        calls[call["task_id"]] = calls.get(call["task_id"], 0) + 1
+    return _ReplanRun(result, started.frames, calls, outcome, open_after, started.exec_, charges)
+
+
+def _research_nodes() -> list[dict]:
+    return [
+        _nd("r1"),
+        _nd("r2"),
+        _nd("r3"),
+        _nd("write", depends_on=["r1", "r2", "r3"], prompt_template="{{ r1.output }} {{ r2.output }} {{ r3.output }}"),
+    ]
+
+
+def _research_entries() -> list[dict]:
+    return [
+        _nd("r2a"),
+        _nd("r2b"),
+        _nd(
+            "write",
+            depends_on=["r1", "r2a", "r2b", "r3"],
+            prompt_template="{{ r1.output }} {{ r2a.output }} {{ r2b.output }} {{ r3.output }}",
+        ),
+    ]
+
+
+def _run_file(tmp_path: Path, run_id: str, name: str) -> dict:
+    return json.loads((tmp_path / "runs" / run_id / name).read_text(encoding="utf-8"))
+
+
+def _prompt_sent(exec_: Any, node_id: str) -> str:
+    return next(call["prompt"] for call in exec_.calls if call["task_id"] == node_id)
+
+
+async def test_a_replan_carries_running_nodes_without_a_second_attempt(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path, nodes=_research_nodes(), entries=_research_entries(), hold=frozenset({"r1", "r3"})
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert (run.calls["r1"], run.calls["r3"]) == (1, 1), "a carried node keeps the attempt it was running"
+    assert run.result.run_id == _RUN_B
+    assert {entry["node"]: entry["status"] for entry in run.result.files} == dict.fromkeys(
+        ("r1", "r3", "write", "r2a", "r2b"), "completed"
+    )
+    assert "OUT[r2a]" in _prompt_sent(run.exec_, "write"), "the redefined node reads the node that redoes the work"
+    assert (run.outcome.carried, run.outcome.added, run.outcome.redefined) == (
+        ("r1", "r3", "write"),
+        ("r2a", "r2b"),
+        ("write",),
+    )
+
+
+async def test_the_predecessor_is_sealed_with_carried_and_stopped_nodes(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path, nodes=_research_nodes(), entries=_research_entries(), hold=frozenset({"r1", "r3"})
+    )
+
+    assert run.outcome.applied, run.outcome
+    manifest = _run_file(tmp_path, _RUN_A, "manifest.json")
+    for node_id in ("r1", "r3", "write"):
+        assert (manifest[node_id]["status"], manifest[node_id]["carried_into"]) == ("carried", _RUN_B), node_id
+    assert manifest["r1"]["started_at"] is not None, "a carried node keeps when its work began"
+    assert manifest["r2"]["status"] == "failed"
+    assert manifest["r2"]["error"].startswith(f"Superseded by replan into run {_RUN_B}: ")
+    link = _run_file(tmp_path, _RUN_A, "graph.json")["replan"]
+    assert isinstance(link.pop("decided_at"), int)
+    assert link == {
+        "run_id": _RUN_B,
+        "from_node": "r2",
+        "reason": _REPLAN_REASON,
+        "started": True,
+        "carried": ["r1", "r3", "write"],
+    }
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert {nid: registry["nodes"][nid]["run_id"] for nid in ("r1", "r2", "r3", "write", "r2a")} == {
+        "r1": _RUN_B,
+        "r2": _RUN_A,
+        "r3": _RUN_B,
+        "write": _RUN_B,
+        "r2a": _RUN_B,
+    }
+
+
+async def test_what_the_plan_drops_stops_with_todays_statuses(tmp_path: Path) -> None:
+    judging = asyncio.Event()
+    never = asyncio.Event()
+    base = _carry_judge(suspend=("r2", "s"))
+
+    async def _judge(*, node: Any, **kwargs: Any) -> Any:
+        if node.id == "u":
+            judging.set()
+            await never.wait()
+        return await base(node=node, **kwargs)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("s"), _nd("h"), _nd("p", depends_on=["h"]), _nd("u")],
+        entries=[_nd("fresh")],
+        hold=frozenset({"h"}),
+        judge=_judge,
+        suspended=("r2", "s"),
+        wait_for=lambda state: judging.is_set(),
+    )
+
+    assert run.outcome.applied, run.outcome
+    sealed = _run_file(tmp_path, _RUN_A, "manifest.json")
+    assert {nid: sealed[nid]["status"] for nid in ("r2", "s", "h", "p", "u")} == {
+        "r2": "failed",
+        "s": "failed",
+        "h": "cancelled",
+        "p": "skipped",
+        "u": "cancelled",
+    }
+    for node_id in ("s", "h", "p", "u"):
+        assert sealed[node_id]["error"] == f"Superseded by replan into run {_RUN_B}: {_REPLAN_REASON}", node_id
+    assert (run.outcome.stopped, run.outcome.stopped_suspended) == (("s", "h", "p", "u"), ("s",))
+    assert run.open_after == set(), "the answered node and the suspended node that stopped wait no more"
+    assert set(_run_file(tmp_path, _RUN_B, "manifest.json")) == {"fresh"}
+    assert [entry["node"] for entry in run.result.files] == ["fresh"]
+
+
+async def test_a_replan_cannot_take_an_id_an_older_run_claimed(tmp_path: Path) -> None:
+    """A successor's new id is new to *this* run only. The conversation's ids are
+    one namespace, so an id an older run claimed is refused, as a plain submission
+    refuses it, instead of being written over by the successor's claim."""
+    from raven.agent.subagent.dag_store import read_registry, write_registry
+
+    async def _claim_by_another_run(state: ReassignmentState, exec_: Any) -> None:
+        registry = await read_registry(LocalFileBackend(), str(tmp_path))
+        registry["nodes"]["r2a"] = {"kind": "dag", "run_id": "20260101T000000Z-0000000f", "status": "completed"}
+        await write_registry(LocalFileBackend(), str(tmp_path), registry)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_research_nodes(),
+        entries=_research_entries(),
+        hold=frozenset({"r1", "r3"}),
+        before_propose=_claim_by_another_run,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "already used by run '20260101T000000Z-0000000f'" in run.outcome.reason, run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert registry["nodes"]["r2a"]["run_id"] == "20260101T000000Z-0000000f", "the older claim still stands"
+    assert "r1" not in registry["nodes"] or registry["nodes"]["r1"]["run_id"] == _RUN_A
+
+
+async def test_the_successor_is_on_disk_before_anything_is_stopped(tmp_path: Path) -> None:
+    successor_graph = tmp_path / "runs" / _RUN_B / "graph.json"
+    seen: list[bool] = []
+
+    class _Watching(_GatedExec):
+        async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+            try:
+                return await super().run(task, task_id=task_id, **kwargs)
+            except asyncio.CancelledError:
+                seen.append(successor_graph.exists())
+                raise
+
+    run = await _run_with_replan(
+        tmp_path, nodes=[_nd("r2"), _nd("h")], entries=[_nd("fresh")], hold=frozenset({"h"}), exec_=_Watching()
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert seen == [True], "an attempt is cancelled only once the successor that calls for it is on disk"
+
+
+async def test_a_stale_proposal_is_refused_and_the_node_still_waits(tmp_path: Path) -> None:
+    def _move_landed(state: ReassignmentState) -> None:
+        state.revision += 1
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_research_nodes(),
+        entries=_research_entries(),
+        hold=frozenset({"r1", "r3"}),
+        after_propose=_move_landed,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert run.charges == [], "a stale replan spends nothing"
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+    assert "r2" in run.open_after, "the node it answered is still a question"
+    assert run.result.run_id == _RUN_A
+
+
+async def test_a_redefined_node_that_started_meanwhile_refuses_the_whole_replan(tmp_path: Path) -> None:
+    exec_ = _GatedExec()
+    w_entered, _w_release = exec_.gate("w")
+
+    async def _start_w(state: ReassignmentState, exec_: Any) -> None:
+        exec_.releases["g"].set()
+        await asyncio.wait_for(w_entered.wait(), timeout=10)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("g"), _nd("w", depends_on=["g"])],
+        entries=[_nd("fresh"), _nd("w", depends_on=["g"], prompt_template="do w another way")],
+        hold=frozenset({"g"}),
+        exec_=exec_,
+        before_propose=_start_w,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "'w' is in progress" in run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+
+
+async def test_a_redefined_node_that_finished_meanwhile_is_refused_by_name(tmp_path: Path) -> None:
+    exec_ = _GatedExec()
+    w_entered, w_release = exec_.gate("w")
+
+    async def _run_w(state: ReassignmentState, exec_: Any) -> None:
+        exec_.releases["g"].set()
+        await asyncio.wait_for(w_entered.wait(), timeout=10)
+        w_release.set()
+        await _wait_until(lambda: state.status.get("w") == "completed" and "w" not in state.active_attempts)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("g"), _nd("w", depends_on=["g"])],
+        entries=[_nd("fresh"), _nd("w", depends_on=["g"], prompt_template="do w another way")],
+        hold=frozenset({"g"}),
+        exec_=exec_,
+        before_propose=_run_w,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "node 'w' has finished (completed)" in run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+
+
+@pytest.mark.parametrize("ended", ["failed", "skipped", "cancelled"])
+async def test_a_carried_node_that_died_meanwhile_refuses_the_replan(tmp_path: Path, ended: str) -> None:
+    async def _die(state: ReassignmentState, exec_: Any) -> None:
+        state.status["c"] = ended
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("g"), _nd("c", depends_on=["g"])],
+        entries=[_nd("fresh", depends_on=["c"])],
+        hold=frozenset({"g"}),
+        before_propose=_die,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "'fresh' depends on 'c'" in run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+
+
+async def test_a_spent_budget_refuses_the_replan_after_freshness(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_research_nodes(),
+        entries=_research_entries(),
+        hold=frozenset({"r1", "r3"}),
+        charge=lambda: "the hourly dispatch budget is spent",
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert run.outcome.reason == "the hourly dispatch budget is spent"
+    assert run.charges == ["charged"]
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert "r2a" not in registry["nodes"]
+    assert registry["nodes"]["r1"]["run_id"] == _RUN_A
+
+
+class _RefusingWrite(LocalFileBackend):
+    """A file backend that refuses one path."""
+
+    def __init__(self, refused: str) -> None:
+        self.refused = refused
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        if path == self.refused:
+            raise OSError("disk full")
+        await super().write_file(path, data)
+
+
+async def test_a_failed_persist_releases_every_claim(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_research_nodes(),
+        entries=_research_entries(),
+        hold=frozenset({"r1", "r3"}),
+        backend=_RefusingWrite(str(tmp_path / "runs" / _RUN_B / "graph.json")),
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert "disk full" in run.outcome.reason
+    assert "r2" in run.open_after
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert {nid: registry["nodes"][nid]["run_id"] for nid in ("r1", "r3", "write")} == dict.fromkeys(
+        ("r1", "r3", "write"), _RUN_A
+    )
+    assert not {"r2a", "r2b"} & set(registry["nodes"])
+    assert all(entry["run_id"] != _RUN_B for entry in registry["runs"])
+
+
+async def test_the_chain_events_arrive_in_order(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path, nodes=_research_nodes(), entries=_research_entries(), hold=frozenset({"r1", "r3"})
+    )
+
+    assert run.outcome.applied, run.outcome
+    keys = [(name, value.get("run_id"), value.get("node")) for name, value in run.frames]
+    start = keys.index(("dag_run_replanned", _RUN_A, None))
+    assert keys[start : start + 6] == [
+        ("dag_run_replanned", _RUN_A, None),
+        ("dag_run_started", _RUN_B, None),
+        ("dag_node_updated", _RUN_B, "r1"),
+        ("dag_node_updated", _RUN_B, "r3"),
+        ("dag_node_updated", _RUN_B, "write"),
+        ("dag_run_completed", _RUN_A, None),
+    ]
+    assert run.frames[start][1] == {
+        "run_id": _RUN_A,
+        "replan_run_id": _RUN_B,
+        "from_node": "r2",
+        "reason": _REPLAN_REASON,
+        "carried": ["r1", "r3", "write"],
+    }
+    assert [node["id"] for node in run.frames[start + 1][1]["nodes"]] == ["r1", "r3", "write", "r2a", "r2b"]
+    assert [run.frames[start + i][1]["status"] for i in (2, 3, 4)] == ["running", "running", "pending"]
+    sealed = {entry["node"]: entry["status"] for entry in run.frames[start + 5][1]["manifest"]["files"]}
+    assert sealed == {"r1": "carried", "r2": "failed", "r3": "carried", "write": "carried"}
+    assert not [value for name, value in run.frames if name == "dag_node_updated" and value["status"] == "carried"], (
+        "carried is a sealed record's status, never a live frame's"
+    )
+
+
+def _router_nodes(*extra: dict) -> list[dict]:
+    return [
+        _nd("rt", routes={"x": "the x way", "y": "the y way"}),
+        _nd("x", depends_on=["rt"], when="rt.x"),
+        _nd("y", depends_on=["rt"], when="rt.y"),
+        *extra,
+    ]
+
+
+async def test_a_carried_merge_reads_a_not_executed_predecessor_node_as_missing(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=_router_nodes(
+            _nd("m", depends_on=["x", "y"], prompt_template="{{ x.output }} {{ y.output }}"),
+            _nd("r2"),
+        ),
+        entries=[_nd("fresh", depends_on=["m"])],
+        hold=frozenset({"x"}),
+        judge=_carry_judge(picks={"rt": ("x",)}),
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert run.outcome.carried == ("x", "m")
+    assert MISSING_OUTPUT_TEXT in _prompt_sent(run.exec_, "m")
+    assert {entry["node"]: entry["status"] for entry in run.result.files} == dict.fromkeys(
+        ("x", "m", "fresh"), "completed"
+    )
+    assert not [
+        value
+        for name, value in run.frames
+        if name == "dag_node_updated" and value["run_id"] == _RUN_B and value["node"] in ("rt", "y")
+    ], "finished context is never republished under the successor"
+
+
+async def test_a_carried_guard_is_decided_by_a_predecessor_decision(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[
+            _nd("rt", routes={"x": "the x way", "y": "the y way"}),
+            _nd("slow"),
+            _nd("g2", depends_on=["rt", "slow"], when="rt.x"),
+            _nd("r2"),
+        ],
+        entries=[_nd("fresh", depends_on=["g2"])],
+        hold=frozenset({"slow"}),
+        judge=_carry_judge(picks={"rt": ("x",)}),
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert run.outcome.carried == ("slow", "g2")
+    assert {entry["node"]: entry["status"] for entry in run.result.files}["g2"] == "completed"
+    assert run.calls.get("g2") == 1
+
+
+async def test_a_committed_replan_settles_a_new_guarded_node_before_dispatch(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("rt", routes={"x": "the x way", "y": "the y way"}), _nd("r2")],
+        entries=[_nd("nx", depends_on=["rt"], when="rt.y")],
+        judge=_carry_judge(picks={"rt": ("x",)}),
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert "nx" not in run.calls, "a new guarded node is settled before the ready set can take it"
+    entry = next(entry for entry in run.result.files if entry["node"] == "nx")
+    assert (entry["status"], entry["reason"]) == ("not_executed", "when_false")
+
+
+async def test_every_exit_rejects_a_pending_proposal(tmp_path: Path) -> None:
+    started = _start_carry_run(tmp_path, nodes=[_nd("r2"), _nd("h")], hold=frozenset({"h"}))
+    try:
+        await _until_asked(started, "r2")
+        future = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh")]))
+        assert future is not None
+        started.run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await started.run
+        outcome = await asyncio.wait_for(future, 5)
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+
+    assert (outcome.applied, outcome.still_waiting) == (False, False), outcome
+    assert outcome.reason == "the run ended before the replan was applied"
+
+
+async def test_a_carried_node_landing_during_the_commit_is_recorded_under_the_successor(tmp_path: Path) -> None:
+    successor_graph = tmp_path / "runs" / _RUN_B / "graph.json"
+
+    class _LandsInsideTheCommit(_GatedExec):
+        async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+            if task_id == "c":
+                self.entered.setdefault(task_id, asyncio.Event()).set()
+                while not successor_graph.exists():
+                    await asyncio.sleep(0.001)
+            return await super().run(task, task_id=task_id, **kwargs)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("c")],
+        entries=[_nd("fresh", depends_on=["c"])],
+        exec_=_LandsInsideTheCommit(),
+        wait_for=lambda state: "c" in state.active_attempts,
+        session_key="t",
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert run.outcome.carried == ("c",)
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    assert (registry["nodes"]["c"]["run_id"], registry["nodes"]["c"]["status"]) == (_RUN_B, "completed")
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["c"]["status"] == "carried"
+    assert _run_file(tmp_path, _RUN_B, "manifest.json")["c"]["status"] == "completed"
+    under_successor = [
+        value
+        for name, value in run.frames
+        if name == "dag_node_updated" and value["node"] == "c" and value["run_id"] == _RUN_B
+    ]
+    assert under_successor[-1]["status"] == "completed"
+    assert [(row["runId"], row["status"]) for row in _dag_rows("t", "c")] == [(_RUN_B, "completed")]
+
+
+async def test_a_carried_node_that_completed_before_the_commit_becomes_context(tmp_path: Path) -> None:
+    async def _finish_c(state: ReassignmentState, exec_: Any) -> None:
+        exec_.releases["c"].set()
+        await _wait_until(lambda: state.status.get("c") == "completed" and "c" not in state.active_attempts)
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("c")],
+        entries=[_nd("fresh", depends_on=["c"], prompt_template="{{ c.output }}")],
+        hold=frozenset({"c"}),
+        before_propose=_finish_c,
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert run.outcome.carried == ()
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["c"]["status"] == "completed"
+    assert _run_file(tmp_path, _RUN_A, "graph.json")["replan"]["carried"] == []
+    assert [entry["node"] for entry in run.result.files] == ["fresh"]
+    assert "OUT[c]" in _prompt_sent(run.exec_, "fresh")
+
+
+@pytest.mark.parametrize("read", [False, True], ids=["unread", "read"])
+async def test_a_listed_node_that_completed_before_the_commit_is_tolerated(tmp_path: Path, read: bool) -> None:
+    async def _finish_leaf(state: ReassignmentState, exec_: Any) -> None:
+        exec_.releases["leaf"].set()
+        await _wait_until(lambda: state.status.get("leaf") == "completed" and "leaf" not in state.active_attempts)
+
+    fresh = _nd("fresh", depends_on=["leaf"], prompt_template="{{ leaf.output }}") if read else _nd("fresh")
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("leaf")],
+        entries=[_nd("leaf"), fresh],
+        hold=frozenset({"leaf"}),
+        before_propose=_finish_leaf,
+    )
+
+    assert run.outcome.applied, run.outcome
+    assert run.outcome.carried == ()
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["leaf"]["status"] == "completed"
+    assert [entry["node"] for entry in run.result.files] == ["fresh"]
+    assert ("OUT[leaf]" in _prompt_sent(run.exec_, "fresh")) is read
+
+
+@pytest.mark.parametrize("ended", ["failed", "cancelled"])
+async def test_a_listed_node_that_died_before_the_commit_refuses_the_replan(tmp_path: Path, ended: str) -> None:
+    async def _die(state: ReassignmentState, exec_: Any) -> None:
+        state.status["leaf"] = ended
+
+    run = await _run_with_replan(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("g"), _nd("leaf", depends_on=["g"])],
+        entries=[_nd("leaf", depends_on=["g"]), _nd("fresh")],
+        hold=frozenset({"g"}),
+        before_propose=_die,
+    )
+
+    assert (run.outcome.applied, run.outcome.still_waiting) == (False, True), run.outcome
+    assert f"node 'leaf' has finished ({ended})" in run.outcome.reason
+    assert not (tmp_path / "runs" / _RUN_B).exists()
+
+
+class _SlowToStop(_GatedExec):
+    """A gated backend whose cancelled attempt of one node takes until ``let_go`` to wind down."""
+
+    def __init__(self, slow: str) -> None:
+        super().__init__()
+        self.slow = slow
+        self.winding = asyncio.Event()
+        self.let_go = asyncio.Event()
+
+    async def run(self, task: str, *, task_id: str, **kwargs: Any) -> str:
+        try:
+            return await super().run(task, task_id=task_id, **kwargs)
+        except asyncio.CancelledError:
+            if task_id == self.slow:
+                self.winding.set()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self.let_go.wait()
+            raise
+
+
+@pytest.mark.parametrize("cancels", [1, 2], ids=["once", "twice"])
+async def test_a_stop_landing_in_the_commit_lets_it_finish_and_leaves_no_id_unrecorded(
+    tmp_path: Path, cancels: int
+) -> None:
+    """`/stop` cancels the run's task. Landing once the successor is on disk, it waits
+    for the switch and the seal, then stops the successor: cut short there, the
+    successor's ids would keep a claim with no status, which reads as running for
+    good. A second cancel must not cut the wait short either."""
+    from raven.agent.subagent.dag_store import UNRECORDED, read_session_nodes
+
+    exec_ = _SlowToStop("h")
+    started = _start_carry_run(
+        tmp_path, nodes=[*_research_nodes(), _nd("h")], hold=frozenset({"r1", "r3", "h"}), exec_=exec_
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: all(entered.is_set() for entered, _ in started.gates.values()))
+        future = started.desk.propose(_carry_proposal(started, entries=_research_entries()))
+        assert future is not None, "the desk refused the proposal"
+        await asyncio.wait_for(exec_.winding.wait(), 10)
+        assert (tmp_path / "runs" / _RUN_B / "graph.json").exists(), "the stop lands once the successor is on disk"
+        for _ in range(cancels):
+            started.run.cancel()
+            await asyncio.sleep(0)
+        exec_.let_go.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(started.run, 10)
+        outcome = await asyncio.wait_for(future, 10)
+    finally:
+        exec_.let_go.set()
+        for _entered, release in started.gates.values():
+            release.set()
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, outcome
+    assert _run_file(tmp_path, _RUN_A, "graph.json")["replan"]["run_id"] == _RUN_B, "the old run was sealed"
+    known = await read_session_nodes(LocalFileBackend(), str(tmp_path))
+    ids = ("r1", "r2", "r3", "write", "r2a", "r2b", "h")
+    ended = {"completed", "failed", "skipped", "cancelled"}
+    assert {nid: known.state.get(nid, UNRECORDED) for nid in ids if known.state.get(nid) not in ended} == {}
+    assert {nid: known.owner.get(nid) for nid in ("r1", "r2a", "r2", "h")} == {
+        "r1": _RUN_B,
+        "r2a": _RUN_B,
+        "r2": _RUN_A,
+        "h": _RUN_A,
+    }
+
+
+async def test_a_dropped_group_member_that_starts_during_the_stop_is_never_dispatched(
+    tmp_path: Path,
+) -> None:
+    """A replan's stop awaits the tasks it cancelled. A surviving group task whose
+    carried member finishes inside that window must not start the member the plan
+    dropped next: once the successor is on disk, only the nodes it carries may
+    still begin an attempt."""
+    exec_ = _SlowToStop("cut_run")
+
+    started = _start_carry_run(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("cut_run"), _nd("keep", instance="i"), _nd("later", instance="i")],
+        hold=frozenset({"cut_run", "keep", "later"}),
+        exec_=exec_,
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.gates["cut_run"][0].is_set() and started.gates["keep"][0].is_set())
+        future = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh"), _nd("keep", instance="i")]))
+        assert future is not None, "the desk refused the proposal"
+        await asyncio.wait_for(exec_.winding.wait(), 10)
+        # `keep` finishes inside the reap, so its group task moves on to `later`
+        # while the successor is already on disk and the tables have not switched.
+        started.gates["keep"][1].set()
+        await _wait_until(
+            lambda: started.state.status.get("keep") == "completed" and "keep" not in started.state.active_attempts
+        )
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(started.gates["later"][0].wait(), 1.0)
+        exec_.let_go.set()
+        outcome = await asyncio.wait_for(future, 10)
+        started.gates["later"][1].set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        exec_.let_go.set()
+        for _entered, release in started.gates.values():
+            release.set()
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, outcome
+    assert result.run_id == _RUN_B
+    assert "later" not in [call["task_id"] for call in started.exec_.calls], (
+        "a member the plan dropped is not dispatched once the successor is on disk"
+    )
+    assert not [
+        value
+        for name, value in started.frames
+        if name == "dag_node_updated" and value.get("run_id") == _RUN_B and value.get("node") == "later"
+    ], "an attempt the stop passed over says nothing under the successor"
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["later"]["status"] in ("cancelled", "skipped")
+
+
+async def test_a_carried_group_member_that_starts_during_the_stop_still_runs(tmp_path: Path) -> None:
+    """The same window, from the other side: a member the plan carries may begin its
+    attempt while the stop is winding down, and the successor finishes it."""
+    exec_ = _SlowToStop("cut_run")
+
+    started = _start_carry_run(
+        tmp_path,
+        nodes=[_nd("r2"), _nd("cut_run"), _nd("keep", instance="i"), _nd("later", instance="i")],
+        hold=frozenset({"cut_run", "keep", "later"}),
+        exec_=exec_,
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.gates["cut_run"][0].is_set() and started.gates["keep"][0].is_set())
+        future = started.desk.propose(
+            _carry_proposal(started, entries=[_nd("fresh"), _nd("keep", instance="i"), _nd("later", instance="i")])
+        )
+        assert future is not None, "the desk refused the proposal"
+        await asyncio.wait_for(exec_.winding.wait(), 10)
+        started.gates["keep"][1].set()
+        # The plan carries `later`, so the gate must let it start even though the
+        # successor is already on disk and the tables have not switched.
+        await _wait_until(lambda: started.gates["later"][0].is_set())
+        exec_.let_go.set()
+        outcome = await asyncio.wait_for(future, 10)
+        started.gates["later"][1].set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        exec_.let_go.set()
+        for _entered, release in started.gates.values():
+            release.set()
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, outcome
+    assert result.run_id == _RUN_B
+    assert "later" in [call["task_id"] for call in started.exec_.calls]
+    assert {entry["node"]: entry["status"] for entry in result.files}["later"] == "completed"
+
+
+async def test_a_carried_leaf_is_a_terminal_output_of_the_successor(tmp_path: Path) -> None:
+    run = await _run_with_replan(
+        tmp_path, nodes=[_nd("r2"), _nd("leaf")], entries=[_nd("leaf"), _nd("fresh")], hold=frozenset({"leaf"})
+    )
+
+    assert run.outcome.carried == ("leaf",)
+    assert {term["node"] for term in run.result.terminal_outputs} == {"leaf", "fresh"}
+
+
+async def test_a_replan_of_the_successor_starts_a_third_run(tmp_path: Path) -> None:
+    started = _start_carry_run(
+        tmp_path, nodes=[_nd("r2"), _nd("k")], hold=frozenset({"k"}), judge=_carry_judge(suspend=("r2", "n1"))
+    )
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.gates["k"][0].is_set())
+        first = started.desk.propose(_carry_proposal(started, entries=[_nd("n1"), _nd("k")]))
+        assert first is not None
+        assert (await asyncio.wait_for(first, 10)).applied
+        await _until_asked(started, "n1")
+        successor_graph = {node.id: node for node in (DagNodeSpec(**_nd("k")), DagNodeSpec(**_nd("n1")))}
+        second = started.desk.propose(
+            _carry_proposal(
+                started,
+                entries=[_nd("n2"), _nd("k")],
+                authored=successor_graph,
+                from_node="n1",
+                successor=_RUN_C,
+            )
+        )
+        assert second is not None
+        assert (await asyncio.wait_for(second, 10)).applied
+        started.gates["k"][1].set()
+        result = await asyncio.wait_for(started.run, 20)
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert result.run_id == _RUN_C
+    assert [entry["node"] for entry in result.files] == ["k", "n2"]
+    assert _run_file(tmp_path, _RUN_A, "graph.json")["replan"]["run_id"] == _RUN_B
+    assert _run_file(tmp_path, _RUN_B, "graph.json")["replan"]["run_id"] == _RUN_C
+    assert _run_file(tmp_path, _RUN_B, "graph.json")["replan"]["carried"] == ["k"]
+    assert _run_file(tmp_path, _RUN_B, "manifest.json")["n1"]["status"] == "failed"
+    assert [value["run_id"] for name, value in started.frames if name == "dag_run_started"] == [_RUN_A, _RUN_B, _RUN_C]
+    assert [call["task_id"] for call in started.exec_.calls].count("k") == 1
+
+
+async def test_a_stopped_successor_records_only_its_own_nodes(tmp_path: Path) -> None:
+    exec_ = _GatedExec()
+    fresh_entered, _fresh_release = exec_.gate("fresh")
+    started = _start_carry_run(tmp_path, nodes=[_nd("r2"), _nd("done_first")], exec_=exec_)
+    try:
+        await _until_asked(started, "r2")
+        await _wait_until(lambda: started.state.status.get("done_first") == "completed")
+        future = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh", depends_on=["done_first"])]))
+        assert future is not None
+        assert (await asyncio.wait_for(future, 10)).applied
+        await asyncio.wait_for(fresh_entered.wait(), timeout=10)
+        started.run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await started.run
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+
+    registry = await read_registry(LocalFileBackend(), str(tmp_path))
+    successor_runs = [entry for entry in registry["runs"] if entry["run_id"] == _RUN_B]
+    assert [entry["nodes"] for entry in successor_runs] == [["fresh"]], "finished context is not the successor's"
+    assert (registry["nodes"]["done_first"]["run_id"], registry["nodes"]["done_first"]["status"]) == (
+        _RUN_A,
+        "completed",
+    )
+
+
+async def test_a_replan_posted_while_the_given_up_node_still_reports_cuts_its_task(tmp_path: Path) -> None:
+    """The answered node's own task may still be delivering its report when the
+    replan lands. It is stopped with the old run: left running, it would go on to
+    write the node under the successor, which no longer holds it."""
+    holder: dict[str, Any] = {}
+    cut_off: list[bool] = []
+
+    async def _post_while_reporting(node_id: str) -> None:
+        if node_id != "r2":
+            return
+        started = holder["started"]
+        holder["future"] = started.desk.propose(_carry_proposal(started, entries=[_nd("fresh")]))
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cut_off.append(True)
+            raise
+
+    started = _start_carry_run(tmp_path, nodes=[_nd("r2")], announce=_post_while_reporting)
+    holder["started"] = started
+    try:
+        result = await asyncio.wait_for(started.run, 10)
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert holder["future"].result().applied
+    assert cut_off == [True]
+    assert result.run_id == _RUN_B
+    assert _run_file(tmp_path, _RUN_A, "manifest.json")["r2"]["status"] == "failed"
+    assert not [value for name, value in started.frames if value.get("run_id") == _RUN_B and value.get("node") == "r2"]
+
+
+async def test_a_posted_proposal_wakes_the_adjudication_wait(tmp_path: Path) -> None:
+    class _Watched(asyncio.Event):
+        def __init__(self) -> None:
+            super().__init__()
+            self.awaited = asyncio.Event()
+
+        async def wait(self) -> bool:
+            self.awaited.set()
+            return await super().wait()
+
+    started = _start_carry_run(tmp_path, nodes=_research_nodes(), hold=frozenset({"r1", "r3"}))
+    started.desk.proposed = _Watched()
+    try:
+        await _until_asked(started, "r2")
+        await asyncio.wait_for(started.desk.proposed.awaited.wait(), timeout=10)
+        future = started.desk.propose(_carry_proposal(started, entries=_research_entries()))
+        assert future is not None
+        outcome = await asyncio.wait_for(future, 5)
+        for _entered, release in started.gates.values():
+            release.set()
+        result = await asyncio.wait_for(started.run, 10)
+    finally:
+        if not started.run.done():
+            started.run.cancel()
+            with contextlib.suppress(BaseException):
+                await started.run
+
+    assert outcome.applied, "a proposal posted while the run waits for answers is committed without one"
+    assert result.run_id == _RUN_B
+
+
+class _RunReader:
+    """The two calls ``read_run_reconciled`` makes of the graph tool, over one test's run root."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self._tmp_path = tmp_path
+
+    async def read_run(self, run_id: str, session_key: str | None = None) -> dict:
+        from raven.agent.subagent.dag_reader import read_run
+
+        return await read_run(LocalFileBackend(), str(self._tmp_path / "runs"), run_id, str(self._tmp_path / "nodes"))
+
+    def active_run_ids(self) -> set[str]:
+        return set()
+
+
+async def _commit_research_replan(started: _StartedRun) -> None:
+    """Suspend ``r2`` and commit the research replan while ``r1`` and ``r3`` are still held."""
+    await _until_asked(started, "r2")
+    await _wait_until(lambda: all(entered.is_set() for entered, _ in started.gates.values()))
+    future = started.desk.propose(_carry_proposal(started, entries=_research_entries()))
+    assert future is not None
+    assert (await asyncio.wait_for(future, 10)).applied
+
+
+async def _finish(started: _StartedRun) -> DagRunResult:
+    for _entered, release in started.gates.values():
+        release.set()
+    return await asyncio.wait_for(started.run, 20)
+
+
+async def _drop(started: _StartedRun) -> None:
+    if not started.run.done():
+        started.run.cancel()
+        with contextlib.suppress(BaseException):
+            await started.run
+
+
+def _dag_rows(session_key: str, node_id: str) -> list[dict]:
+    return [
+        row
+        for row in instances_mod.get_registry().list_instances(session_key)
+        if row.get("kind") == "dag-node" and row.get("nodeId") == node_id
+    ]
+
+
+async def test_a_carried_running_node_reads_back_under_the_successor(tmp_path: Path) -> None:
+    from raven.agent.subagent.dag_resume import read_run_reconciled
+
+    started = _start_carry_run(tmp_path, nodes=_research_nodes(), hold=frozenset({"r1", "r3"}), session_key="t")
+    try:
+        await _commit_research_replan(started)
+        rows = _dag_rows("t", "r1")
+        reader = _RunReader(tmp_path)
+        successor = await read_run_reconciled(reader, _RUN_B, "t", live_runs=lambda: {_RUN_B})
+        predecessor = await read_run_reconciled(reader, _RUN_A, "t", live_runs=lambda: {_RUN_B})
+        await _finish(started)
+    finally:
+        await _drop(started)
+
+    assert [row["runId"] for row in rows] == [_RUN_B], "the carried node has one row, and it is the successor's"
+    assert {entry["node"]: entry["status"] for entry in successor["files"]}["r1"] == "running"
+    assert predecessor["finalized"] is True
+    assert {entry["node"]: entry["status"] for entry in predecessor["files"]}["r1"] == "carried"
+
+
+async def test_a_carried_attempt_reports_live_activity_under_the_successor(tmp_path: Path) -> None:
+    from raven.agent.subagent import activity
+
+    old_key, new_key = node_live_key(_RUN_A, "r1"), node_live_key(_RUN_B, "r1")
+    started = _start_carry_run(tmp_path, nodes=_research_nodes(), hold=frozenset({"r1", "r3"}), session_key="t")
+    try:
+        await _commit_research_replan(started)
+        during = (activity.live(new_key) is not None, activity.live(old_key) is not None)
+        await _finish(started)
+    finally:
+        await _drop(started)
+
+    assert during == (True, False), "the attempt in flight reports under the run that holds it now"
+    assert (activity.live(new_key), activity.live(old_key)) == (None, None)
+    assert (activity.settled(new_key), activity.settled(old_key)) == (None, None)
+
+
+async def test_a_stateful_carried_node_relinks_its_instance(tmp_path: Path) -> None:
+    nodes = [_nd("r1", instance="h1"), *_research_nodes()[1:]]
+    started = _start_carry_run(tmp_path, nodes=nodes, hold=frozenset({"r1", "r3"}), session_key="t")
+    try:
+        await _commit_research_replan(started)
+        linked = [row for row in instances_mod.get_registry().list_instances("t") if row.get("handle") == "h1"]
+        await _finish(started)
+    finally:
+        await _drop(started)
+
+    assert [(row["runId"], row["nodeId"]) for row in linked] == [(_RUN_B, "r1")]
+
+
+async def test_on_switch_is_called_once_with_both_ids(tmp_path: Path) -> None:
+    switches: list[tuple[str, str, str]] = []
+
+    def _on_switch(old: str, new: str, proposal: Any) -> None:
+        switches.append((old, new, proposal.successor_run_id))
+
+    started = _start_carry_run(tmp_path, nodes=_research_nodes(), hold=frozenset({"r1", "r3"}), on_switch=_on_switch)
+    try:
+        await _commit_research_replan(started)
+        await _finish(started)
+    finally:
+        await _drop(started)
+
+    assert switches == [(_RUN_A, _RUN_B, _RUN_B)]
+
+
+async def _report_of_r2(tmp_path: Path, nodes: list[dict], hold: frozenset[str]) -> str:
+    """The exception report `r2` is suspended with, while the backends of ``hold`` run."""
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    exec_ = _GatedExec(hold=set(hold))
+    reports: dict[str, str] = {}
+    cancel = asyncio.Event()
+
+    async def _announce(run_id, node_id, text, origin, *, awaiting_decision, output=None, **_kwargs):
+        if awaiting_decision:
+            reports[node_id] = text
+            cancel.set()
+
+    run = asyncio.ensure_future(
+        run_dag(
+            parse_dag_spec({"task_summary": "t", "nodes": nodes}),
+            resolve=lambda node: exec_,
+            backend=LocalFileBackend(),
+            workdir=str(tmp_path),
+            run_root=str(tmp_path / "runs"),
+            nodes_root=str(tmp_path / "nodes"),
+            history_root=str(tmp_path),
+            desk=AdjudicationDesk(),
+            judge_node=_carry_judge(),
+            announce_exception=_announce,
+            origin=_TEST_ORIGIN,
+            reassignment_state=ReassignmentState(),
+            cancel=cancel,
+            adjudication_timeout_s=30,
+        )
+    )
+    try:
+        await asyncio.wait_for(run, 20)
+    finally:
+        for release in exec_.releases.values():
+            release.set()
+        if not run.done():
+            run.cancel()
+    return reports["r2"]
+
+
+async def test_the_report_lists_in_progress_and_not_started_nodes(tmp_path: Path) -> None:
+    report = await _report_of_r2(tmp_path, _research_nodes(), frozenset({"r1", "r3"}))
+
+    lines = report.splitlines()
+    assert "in progress (a replan stops these unless your plan lists or depends on them): r1, r3" in lines
+    assert "not started (a replan stops these unless your plan lists or depends on them): write" in lines
+
+
+async def test_the_report_omits_an_empty_node_line(tmp_path: Path) -> None:
+    report = await _report_of_r2(tmp_path, [_nd("r2")], frozenset())
+
+    assert "in progress (a replan" not in report
+    assert "not started (a replan" not in report
+    assert "carried into it without stopping" in report, "the replan paragraph says what a replan does"

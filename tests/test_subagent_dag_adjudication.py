@@ -666,20 +666,7 @@ from raven.agent.subagent.dag_adjudication import (
     Adjudication,
     AdjudicationDesk,
     ReassignPlan,
-    ReplanPlan,
 )
-
-
-def _plan(run_id: str = "run-new", from_node: str = "a") -> ReplanPlan:
-    return ReplanPlan(
-        run_id=run_id,
-        from_node=from_node,
-        reason="the plan was wrong",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
-    )
 
 
 def _move(waiter: asyncio.Event, *, node_id: str = "fix") -> ReassignPlan:
@@ -713,7 +700,7 @@ def test_a_reassign_wakes_the_round_without_requesting_a_replan() -> None:
     event = desk.open("fix")
     assert desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
     assert desk.continued.is_set()
-    assert not desk.replanned.is_set()
+    assert not desk.proposed.is_set()
     answer = desk.take("fix")
     assert (answer.decision, answer.agent, answer.message) == (REASSIGN, "beta", "use the parser")
 
@@ -740,11 +727,10 @@ def test_an_unprotected_reassign_keeps_the_old_call_shape_working() -> None:
 
 
 def test_an_adjudication_keeps_its_existing_positional_fields() -> None:
-    answer = Adjudication(CONTINUE, "try again", None)
+    answer = Adjudication(CONTINUE, "try again")
 
     assert answer.decision == CONTINUE
     assert answer.message == "try again"
-    assert answer.plan is None
     assert answer.agent is None
     assert answer.reassignment is None
 
@@ -815,19 +801,6 @@ def test_a_reassign_without_a_message_is_refused(message: str | None) -> None:
     assert not desk.continued.is_set()
 
 
-def test_a_reassign_is_refused_when_a_replan_already_landed() -> None:
-    desk = AdjudicationDesk()
-    desk.open("plan")
-    desk.resolve("plan", REPLAN, "the plan was wrong", plan=_plan())
-    event = desk.open("fix")
-
-    assert not desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
-
-    assert not event.is_set()
-    assert desk.is_open("fix")
-    assert desk.take("fix") is None
-
-
 def test_a_prepared_move_for_another_waiter_is_refused() -> None:
     desk = AdjudicationDesk()
     event = desk.open("fix")
@@ -875,34 +848,17 @@ def test_a_prepared_move_for_another_node_is_refused() -> None:
     assert desk.take("fix") is None
 
 
-def test_resolving_a_replan_sets_the_replanned_event() -> None:
+def test_a_replan_is_never_answered_through_resolve() -> None:
+    """A replan is posted as a proposal and committed by the runner, so an answer
+    naming one records nothing, wakes nothing, and leaves the node waiting."""
     desk = AdjudicationDesk()
-    desk.open("a")
-    assert not desk.replanned.is_set()
+    event = desk.open("a")
 
-    assert desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan()) is True
+    assert desk.resolve("a", REPLAN, "the plan was wrong") is False
 
-    assert desk.replanned.is_set()
-    assert desk.take_plan() == _plan()
-
-
-def test_resolving_a_continue_leaves_the_replanned_event_alone() -> None:
-    desk = AdjudicationDesk()
-    desk.open("a")
-
-    assert desk.resolve("a", CONTINUE, "try again") is True
-
-    assert not desk.replanned.is_set()
-    assert desk.take_plan() is None
-
-
-def test_a_replan_nobody_waits_for_sets_nothing() -> None:
-    desk = AdjudicationDesk()
-
-    assert desk.resolve("gone", REPLAN, "too late", plan=_plan()) is False
-
-    assert not desk.replanned.is_set(), "an unrecorded answer must not interrupt the run"
-    assert desk.take_plan() is None
+    assert desk.is_open("a") and not event.is_set()
+    assert desk.peek("a") is None
+    assert not desk.continued.is_set() and not desk.proposed.is_set()
 
 
 def test_resolving_a_continue_sets_the_continued_event() -> None:
@@ -913,15 +869,6 @@ def test_resolving_a_continue_sets_the_continued_event() -> None:
     assert desk.resolve("a", CONTINUE, "try again") is True
 
     assert desk.continued.is_set()
-
-
-def test_resolving_a_replan_leaves_the_continued_event_alone() -> None:
-    desk = AdjudicationDesk()
-    desk.open("a")
-
-    assert desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan()) is True
-
-    assert not desk.continued.is_set(), "a replan stops the round's nodes rather than handing them on"
 
 
 def test_a_continue_nobody_waits_for_sets_nothing() -> None:
@@ -945,27 +892,7 @@ def test_resolving_an_abandon_sets_neither_event() -> None:
     assert desk.resolve("a", ABANDON, None) is True
 
     assert not desk.continued.is_set()
-    assert not desk.replanned.is_set()
-
-
-def test_take_plan_consumes() -> None:
-    desk = AdjudicationDesk()
-    desk.open("a")
-    desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan())
-
-    assert desk.take_plan() is not None
-    assert desk.take_plan() is None
-
-
-def test_the_replanned_answer_is_still_taken_per_node() -> None:
-    desk = AdjudicationDesk()
-    desk.open("a")
-    desk.resolve("a", REPLAN, "the plan was wrong", plan=_plan())
-
-    answer = desk.take("a")
-    assert answer is not None
-    assert answer.decision == REPLAN
-    assert answer.plan is not None
+    assert not desk.proposed.is_set()
 
 
 async def test_a_released_outbox_carries_the_informational_state_to_the_announcer() -> None:
@@ -1009,3 +936,140 @@ async def test_a_bound_outbox_drops_a_stall_notice_like_any_notification() -> No
     assert announced.reports == []
     await box.release(flush=True)
     assert announced.reports == [], "a dropped notice is not owed after release either"
+
+
+def _empty_carry_plan():
+    from raven.agent.subagent.dag_carry import CarryPlan
+
+    return CarryPlan(new=(), redefined=(), carried=(), dropped=(), context=(), nodes=())
+
+
+def _proposal(desk, node: str = "a", **overrides):
+    from raven.agent.subagent.dag_adjudication import ReplanProposal
+
+    fields = {
+        "successor_run_id": "run-next",
+        "from_node": node,
+        "reason": "the plan was wrong",
+        "waiter": desk.waiter(node),
+        "basis": 0,
+        "entries": (),
+        "authored": {},
+        "plan": _empty_carry_plan(),
+        "dispatch_nodes": {},
+        "backends": {},
+        "auto_instances": frozenset(),
+        "notices": (),
+        "task_summary": "graph under test",
+        "confirm": False,
+        "charge": lambda: None,
+    }
+    fields.update(overrides)
+    return ReplanProposal(**fields)
+
+
+async def test_a_proposal_lands_only_on_the_open_unanswered_waiter_it_was_prepared_against() -> None:
+    from raven.agent.subagent.dag_adjudication import CONTINUE, AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    stale = _proposal(desk, waiter=asyncio.Event())
+    assert desk.propose(stale) is None, "a proposal prepared against another waiter must not land"
+
+    desk.open("b")
+    desk.resolve("b", CONTINUE, "go on")
+    assert desk.propose(_proposal(desk, "b")) is None, "an answered node takes no proposal"
+
+    closed = _proposal(desk, "c")
+    desk.close("c")
+    assert desk.propose(closed) is None, "a closed node takes no proposal"
+
+    assert desk.pending_proposal is None
+    assert not desk.proposed.is_set()
+
+
+async def test_one_replan_proposal_per_run_at_a_time() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    desk.open("b")
+    first = _proposal(desk, "a")
+    assert desk.propose(first) is not None
+    assert desk.propose(_proposal(desk, "b")) is None
+    assert desk.pending_proposal is first
+
+
+async def test_proposing_wakes_the_scheduler_without_answering_anything() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    assert desk.propose(_proposal(desk)) is not None
+
+    assert desk.continued.is_set(), "a round in flight must end early and hand its running nodes on"
+    assert desk.proposed.is_set(), "the adjudication wait must return"
+    assert desk.peek("a") is None, "posting a proposal answers nothing"
+    assert desk.is_open("a")
+
+
+async def test_take_proposal_hands_the_runner_the_proposal_and_its_future() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    proposal = _proposal(desk)
+    future = desk.propose(proposal)
+
+    taken = desk.take_proposal()
+    assert taken is not None
+    assert taken[0] is proposal
+    assert taken[1] is future
+    assert desk.pending_proposal is None
+    assert desk.take_proposal() is None
+
+
+async def test_a_withdrawn_proposal_resolves_its_future_as_rejected() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    proposal = _proposal(desk)
+    future = desk.propose(proposal)
+
+    assert desk.withdraw(proposal) is True
+    outcome = future.result()
+    assert outcome.applied is False
+    assert outcome.still_waiting is True
+    assert desk.pending_proposal is None
+    assert desk.withdraw(proposal) is False
+
+
+async def test_reject_pending_resolves_the_future_once() -> None:
+    from raven.agent.subagent.dag_adjudication import AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("a")
+    future = desk.propose(_proposal(desk))
+
+    desk.reject_pending("the run ended before the replan was applied", still_waiting=False)
+    desk.reject_pending("again", still_waiting=False)
+
+    outcome = future.result()
+    assert outcome.applied is False
+    assert outcome.reason == "the run ended before the replan was applied"
+    assert outcome.still_waiting is False
+    assert desk.pending_proposal is None
+
+
+async def test_a_reassign_is_refused_while_a_replan_proposal_is_pending() -> None:
+    from raven.agent.subagent.dag_adjudication import REASSIGN, AdjudicationDesk
+
+    desk = AdjudicationDesk()
+    desk.open("plan")
+    event = desk.open("fix")
+    assert desk.propose(_proposal(desk, "plan")) is not None
+
+    assert not desk.resolve("fix", REASSIGN, "use the parser", agent="beta", expected_waiter=event)
+    assert desk.is_open("fix")
+    assert desk.peek("fix") is None

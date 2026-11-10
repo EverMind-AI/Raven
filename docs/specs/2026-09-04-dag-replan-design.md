@@ -1,6 +1,8 @@
 # DAG node adjudication: a third decision, `replan`
 
-Status: design, approved 2026-09-04.
+Status: design, approved 2026-09-04. Winding down, the ordering rule, the foreground
+transfer and losing the race on ids were since replaced: a replan now carries the
+unfinished nodes its new plan includes into the successor run, which starts at once.
 
 ## The gap
 

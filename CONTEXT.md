@@ -3951,7 +3951,9 @@ An id is claimed at dispatch and kept whatever the outcome, but referencing it n
 `completed` status and an output file actually written — a task can finish having written
 nothing, which the status alone does not say. A failed, skipped, cancelled, not-executed or
 still-running one — or, as a replan validating its replacement sees it, one still pending
-or awaiting a decision — keeps its id and is refused with which of those it is. A run stopped
+or awaiting a decision — keeps its id and is refused with which of those it is. A claim
+belongs to one run at a time: when a replan carries a node into its successor, the claim
+passes to the successor with it, so the id still names one task. A run stopped
 by `/stop` or a shutdown records its still-running nodes as `cancelled` and its pending
 ones as `skipped` on the way out, so "still-running" means what it says rather than
 outliving the run that claimed it. Distinct from an
@@ -3985,7 +3987,9 @@ follow-ups.
 waiting for the main agent to decide whether to continue, abandon, reassign or replan it.
 Reached by two routes: the backend raised, or the backend returned and the
 verdict said the task was not accomplished. Non-terminal: its dependents stay
-`pending` rather than cascading to `skipped`.
+`pending` rather than cascading to `skipped`. A replan answering it gives it up, `failed`;
+another node suspended this way is carried into the successor, still waiting, when the new
+plan lists or depends on it, and stops `failed` otherwise.
 _Avoid_: it is not a synonym for a Python exception. A raised exception is only one
 of the two routes into this status, and `status[node.id] = "exception"` sits next to
 `except Exception as exc` in `_run_node` for that reason.
@@ -4066,14 +4070,30 @@ something went wrong before it (a dependency failed, was abandoned or was itself
 the run was stopped), and it skips that node's dependents in turn. A node a branch left out
 is not executed, and nothing went wrong.
 
-**replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`) -- the answer
-to an exception report that replaces the plan instead of the node: the agent hands
-`resolve_dag_node` a new node list, the answered run stops where it is and finalizes, and a
-new run starts from that list. Chained rather than spliced -- the successor is a separate
+**Carried** (`carried`, `raven/agent/subagent/dag_carry.py`, `dag_runner.py`):
+The status a node reads in the sealed record of a run a replan replaced, when the replan
+carried it into the successor run: it was unfinished, and the new plan listed it or depended
+on it. Its entry names that run in `carried_into`, and the node goes on there untouched -- a
+running attempt keeps running, a suspended one keeps waiting -- under the same id, whose claim
+passed to the successor with it. Only a sealed record has one: no live run holds a carried
+node, and no `dag.node_updated` frame says it. Terminal in that record, never rewritten to
+`interrupted`; the run that holds the node now has its outcome. The tally counts it only when
+there is one, as `not_executed` is counted.
+_Avoid_: "moved" -- a reassign moves a node between agents, inside one run; and "migrated".
+
+**replan** (adjudication decision; `raven/agent/subagent/dag_adjudication.py`,
+`dag_carry.py`) -- the answer to an exception report that replaces the plan instead of the
+node: the agent hands `resolve_dag_node` a new node list, and a successor run starts from it
+at once, inside the same scheduler. The new plan includes every node it lists and every
+unfinished node of the old run an included node depends on; those are **carried** into the
+successor -- a running one keeps running -- and every other unfinished node stops with the old
+run, whose record is then sealed. Chained rather than spliced -- the successor is a separate
 run with its own id and dir, and the old run's `graph.json` carries a reserved `replan` key
-naming it. A completed node of the old run is reused by reference (`depends_on` plus
-`{{ <id>.output }}`); no id it claimed can be re-declared, so a replan gives up on the
-adjudicated node and no attempt budget crosses the boundary.
+naming it and what it carried. A finished node of the old run is read by reference
+(`depends_on` plus `{{ <id>.output }}`), never listed. The answered node is given up, and its
+work is redone under a new id; a node not yet started may be redefined by listing it with
+changes. The runner commits a replan whole or refuses it whole, at the top of a scheduling
+pass, and charges it there.
 _Avoid_: "reorchestrate" -- orchestration is what the main agent does with graphs generally;
 this names one decision about one graph.
 

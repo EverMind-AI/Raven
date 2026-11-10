@@ -169,6 +169,9 @@ const STAGE: Record<string, number> = {
   not_executed: 3,
   cancelled: 3,
   interrupted: 3,
+  /* Only a sealed run's record says it, and it is that run's last word on the
+     node: the work went on in the successor. */
+  carried: 4,
 }
 
 const stage = (status: string): number => STAGE[status] ?? 0

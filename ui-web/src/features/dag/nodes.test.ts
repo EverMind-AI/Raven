@@ -368,3 +368,17 @@ describe('a reassigned node', () => {
     })
   })
 })
+
+describe('a carried node', () => {
+  it('carried sorts after the terminal states', () => {
+    /* Only a sealed run's record says it, and it is the last word on the node in
+       that run: a read that saw the node finish before the seal must not pull it
+       back from carried, and carried is never walked back to a terminal state. */
+    const finished = merge([], fromSnapshot([{ node: 'a', status: 'completed', started_at: 5, ended_at: 9 }]))
+    const sealed = merge(finished, fromSnapshot([{ node: 'a', status: 'carried' }]))
+    const stale = merge(sealed, fromSnapshot([{ node: 'a', status: 'completed', started_at: 5, ended_at: 9 }]))
+
+    expect(sealed[0]?.status).toBe('carried')
+    expect(stale[0]?.status).toBe('carried')
+  })
+})

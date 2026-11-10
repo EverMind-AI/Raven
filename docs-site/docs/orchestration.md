@@ -267,6 +267,7 @@ running a graph with external effects.
 | `not_executed` | A branch left the node out: its guard was false or unknown, or none of its dependencies in the graph was executed. Never dispatched, no output |
 | `cancelled` | The active node was canceled |
 | `interrupted` | A history reader found unfinished recorded work without a live run |
+| `carried` | Only in the sealed record of a run a replan replaced: the node went on in the successor run that `carried_into` names |
 
 A model-based **verdict** checks whether the returned output actually
 accomplished the node's prompt, using output, transcript tail, and available
@@ -286,16 +287,65 @@ agent opens on the visible conversation so far as plain text, without the earlie
 agent's tool calls or tool output, so the message has to say what went wrong. It
 spends one continuation like a continue, and a node on an `instance` takes the
 run's other unfinished nodes on that instance with it, which needs a `[stateful]`
-target when the instance was shared. Replanning finalizes the old run and starts a
-new one; reuse completed outputs by reference and assign fresh ids to replacement
-nodes. Failed prerequisites eventually skip their dependents; nodes that do not
-depend on them need not be discarded.
+target when the instance was shared. A replan starts a successor run from a new
+plan at once and carries the work still wanted into it, as described below. Failed
+prerequisites eventually skip their dependents; nodes that do not depend on them
+need not be discarded.
 
 The `subagentDag` settings default to a 180-second judge timeout, a 600-second
 background adjudication window, and two continuations per node. These bound
 additional model calls and waiting; they do not prove an external action is safe
 to retry. Check for already-created files, messages, or remote jobs before
 continuing a node with side effects.
+
+### What a replan carries
+
+A replan's `nodes` are the successor run's plan. The plan includes every node it
+lists and, through `depends_on`, every unfinished node of the old run that an
+included node depends on. At commit, each node of the old run is in one class, and
+the replan treats it accordingly:
+
+| Class | What it is | Included | Not included |
+| --- | --- | --- | --- |
+| finished | `completed`, `failed`, `skipped`, `cancelled`, `not_executed` | Read through `depends_on`, never listed; a `failed`, `skipped` or `cancelled` one may not be depended on | Stays in the old run |
+| in progress | Running, suspended on a report, waiting to run again, or between an attempt and its verdict | Carried, untouched | Stops: a running attempt is `cancelled`, a suspended node `failed`, a waiting one `skipped` |
+| queued | Handed to a task that has not started it | Carried as it is | `skipped` |
+| not started | Waiting for its dependencies | Carried; listed with changes, redefined | `skipped` |
+| answered | The node whose report the replan answers | Refused | `failed` |
+
+An in-progress or queued node may be listed only unchanged; to change its work, add
+a node under a new id. A replan has to add or redefine at least one node -- to give
+up on the node alone, `abandon` it. The old run's record is then sealed, with each
+carried node reading `carried` and naming the successor, so the chain reads the same
+from either end.
+
+**Keep what should go on.** Anything unfinished that the plan neither lists nor
+depends on stops with the old run -- typically the leaf of a branch the replan is not
+about. The exception report lists the run's in-progress and not-started nodes for
+exactly this.
+
+A worked example. A run has three research nodes `r1`, `r2` and `r3`, and a `write`
+node that depends on all three. `r1` and `r3` are still running when `r2` reports
+that its source does not exist. The replan answers `r2`:
+
+```json
+{"decision": "replan", "message": "the second source does not exist; split it in two",
+ "nodes": [
+   {"id": "r2a", "...": "..."},
+   {"id": "r2b", "...": "..."},
+   {"id": "write", "depends_on": ["r1", "r2a", "r2b", "r3"], "...": "..."}
+ ]}
+```
+
+`r2a` and `r2b` are new. `write` has not started, so listing it with new dependencies
+redefines it. `r1` and `r3` are carried because `write` depends on them: they keep
+running and never start again. `r2` is given up, `failed`. The successor runs `r2a`
+and `r2b` at once, and `write` once all four have landed.
+
+The runner commits a replan at the top of its next scheduling pass, and refuses it
+whole when the run moved on in a way the plan did not expect: a node it redefines has
+started, a node it carries has died, or another replan or a reassign landed first.
+The hourly dispatch budget is charged once, at commit.
 
 ## Inspect and recover
 

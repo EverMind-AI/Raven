@@ -13,6 +13,7 @@ them out of every discovery path except those texts.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import tempfile
@@ -25,12 +26,11 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.loop.bundles import ToolWiring, TurnPolicy
-from raven.agent.loop.wiring import WiringMixin
 from raven.agent.subagent import dag_tool as raven_agent_subagent
-from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, REASSIGN, REPLAN, ReassignPlan, ReplanPlan
+from raven.agent.subagent.dag_adjudication import ABANDON, CONTINUE, REASSIGN, ReassignPlan, ReplanOutcome
 from raven.agent.subagent.dag_control_tools import CancelDagTool, DagStatusTool, ResolveDagNodeTool
 from raven.agent.subagent.dag_graph import parse_dag_spec
-from raven.agent.subagent.dag_live import awaiting_decision, resolve_node
+from raven.agent.subagent.dag_live import awaiting_decision
 from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_runner import _exception_report
 from raven.agent.subagent.dag_tool import SubAgentDagTool
@@ -499,8 +499,7 @@ async def test_dag_status_reports_an_unknown_run() -> None:
 class _ResolvableDagTool(_DagTool):
     """A run_subagent_dag double: read_run succeeds, resolve_node is recorded, and a
     foreground run hands scripted events to await_run. `calls` records the replan
-    hops in the order they ran, for tests that check emit_replanned lands between
-    resolve_node and await_finalized rather than just checking each one happened."""
+    hops in the order they ran: prepare, propose, and what a bound call does after."""
 
     def __init__(
         self,
@@ -509,8 +508,7 @@ class _ResolvableDagTool(_DagTool):
         foreground: bool = False,
         events: list[Any] | None = None,
         plan: Any = None,
-        raise_on_emit: BaseException | None = None,
-        raise_on_finalize: BaseException | None = None,
+        outcome: Any = None,
         awaiting: bool = True,
     ) -> None:
         super().__init__(_finished_run())
@@ -522,13 +520,13 @@ class _ResolvableDagTool(_DagTool):
         self.aborted: list[str] = []
         self.release_taker = asyncio.Event()
         self._plan = plan
-        self._raise_on_emit = raise_on_emit
-        self._raise_on_finalize = raise_on_finalize
+        self._outcome = outcome if outcome is not None else _applied_outcome()
+        self.proposed: asyncio.Future | None = None
+        self.retired: tuple[str, tuple[str, ...]] | None = None
         self.calls: list[str] = []
         self.is_foreground_calls: list[str] = []
         self.awaiting_calls: list[tuple[str, str]] = []
         self._awaiting = awaiting
-        self.interrupted: tuple[str, Any, str] | None = None
         self.reassign_plan: Any = None
         self.reassign_refusal: str | None = None
         self.commit_ok: bool = True
@@ -539,10 +537,7 @@ class _ResolvableDagTool(_DagTool):
         self.awaiting_calls.append((run_id, node_id))
         return self._awaiting
 
-    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None, plan: Any = None) -> bool:
-        # A replan's plan is not folded into `resolved`: every existing caller that
-        # drives continue/abandon through this double asserts the 4-tuple exactly,
-        # and none of them cares that the parameter now exists.
+    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
         self.calls.append("resolve_node")
         self.resolved = (run_id, node_id, decision, message)
         return self._resolves
@@ -575,23 +570,25 @@ class _ResolvableDagTool(_DagTool):
         self.calls.append("prepare_replan")
         return self._plan
 
-    async def emit_replanned(self, run_id: str, plan: Any) -> None:
-        self.calls.append("emit_replanned")
-        if self._raise_on_emit is not None:
-            raise self._raise_on_emit
+    def propose_replan(self, run_id: str, proposal: Any) -> "asyncio.Future | None":
+        self.calls.append("propose_replan")
+        if not self._resolves:
+            return None
+        self.proposed = asyncio.get_running_loop().create_future()
+        if self._outcome is not False:
+            self.proposed.set_result(self._outcome)
+        return self.proposed
 
-    async def await_finalized(self, run_id: str) -> None:
-        self.calls.append("await_finalized")
-        if self._raise_on_finalize is not None:
-            raise self._raise_on_finalize
+    def withdraw_replan(self, proposal: Any) -> bool:
+        self.calls.append("withdraw_replan")
+        return True
 
-    async def record_interrupted_replan(self, run_id: str, plan: Any, reason: str) -> None:
-        self.calls.append("record_interrupted_replan")
-        self.interrupted = (run_id, plan, reason)
+    def retire_reports(self, run_id: str, node_ids: Any) -> None:
+        self.calls.append("retire_reports")
+        self.retired = (run_id, tuple(node_ids))
 
-    async def start_replan(self, run_id: str, plan: Any, *, bound: bool = False) -> Any:
-        self.calls.append("start_replan")
-        return f"replan started as {plan.run_id}"
+    def running_nodes(self, run_id: str, node_ids: Any) -> list[str]:
+        return []
 
     async def prepare_reassign(
         self, run_id: str, node_id: str, agent: str, message: str, session_key: str | None
@@ -643,8 +640,8 @@ class _LoopWithSecondOwner(_Loop):
     private instance, in reality). Both read r1's history the same way, but only
     the private instance's active_run_ids admits owning it, so owning_tool's
     fan-out -- not the registered-tool shortcut every _LoopWithRun test above
-    takes -- is what every prepare_replan / is_foreground / emit_replanned /
-    await_finalized / start_replan call below has to go through.
+    takes -- is what every prepare_replan / is_foreground / propose_replan /
+    retire_reports / await_run call below has to go through.
     """
 
     def __init__(self, resolves: bool = True, plan: Any = None) -> None:
@@ -1271,114 +1268,63 @@ def test_the_nodes_parameter_reuses_the_graph_tools_node_schema() -> None:
     )
 
 
-def _replan_plan() -> ReplanPlan:
-    """A minimal, equality-stable plan: these tests check pass-through, not content."""
-    return ReplanPlan(
-        run_id="r2",
-        from_node="a",
-        reason="the plan was wrong",
-        nodes=(),
-        backends={},
-        auto_instances=frozenset(),
-        notices=(),
+def _replan_proposal() -> Any:
+    """A stand-in proposal: these tests check the hops, not what the proposal holds."""
+    return SimpleNamespace(notices=())
+
+
+def _applied_outcome() -> ReplanOutcome:
+    return ReplanOutcome(applied=True, successor_run_id="r2", added=("fresh",))
+
+
+async def test_a_replan_is_prepared_then_proposed_and_says_what_it_did() -> None:
+    loop = _LoopWithRun(plan=_replan_proposal())
+
+    out = await _resolve_tool(loop).execute(
+        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
 
-
-async def test_the_plan_survives_both_hops_to_the_tool() -> None:
-    seen: list[Any] = []
-
-    class _Owner:
-        def resolve_node(self, run_id, node_id, decision, message, plan=None):
-            seen.append(plan)
-            return True
-
-    class _LoopWithMethod(_Loop):
-        def resolve_dag_node(self, run_id, node_id, decision, message, plan=None):
-            return any(t.resolve_node(run_id, node_id, decision, message, plan) for t in [_Owner()])
-
-    assert resolve_node(_LoopWithMethod(), "r1", "a", REPLAN, "wrong", _replan_plan()) is True
-    assert seen == [_replan_plan()], "the loop hop must not swallow the plan"
+    assert loop._dag_tool.calls == ["prepare_replan", "propose_replan"]
+    assert out == "Run r1 was replanned into run r2: added fresh; node a failed, superseded by the replan."
+    assert loop.resolved is None, "a replan is posted, never answered through resolve_node"
 
 
-async def test_the_real_loop_hop_forwards_the_plan_too() -> None:
-    """`_LoopWithMethod` above proves dag_live.resolve_node finds and calls a loop's
-    resolve_dag_node when one exists; it never runs the real method's body, because
-    that class hand-rolls its own copy rather than inheriting one. This subclasses
-    the real `WiringMixin` and stubs only `dag_tools()` -- the one collaborator its
-    actual resolve_dag_node touches -- so the forwarding call in that method's own
-    body is what executes. Dropping `plan` from that call turns this test red; the
-    other test would not notice.
-    """
-    seen: list[Any] = []
+async def test_a_replan_the_desk_refuses_says_the_node_is_not_waiting() -> None:
+    """The desk refuses a proposal whose node stopped waiting *while* the replacement
+    graph was being prepared; nothing was recorded, and the reply says so."""
+    loop = _LoopWithRun(resolves=False, plan=_replan_proposal())
 
-    class _Owner:
-        def resolve_node(self, run_id, node_id, decision, message, plan=None):
-            seen.append(plan)
-            return True
+    out = await _resolve_tool(loop).execute(
+        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
+    )
 
-    class _RealMixinHost(WiringMixin):
-        def __init__(self, tool: Any) -> None:
-            self._tool = tool
-
-        def dag_tools(self):
-            return [self._tool]
-
-    assert resolve_node(_RealMixinHost(_Owner()), "r1", "a", REPLAN, "wrong", _replan_plan()) is True
-    assert seen == [_replan_plan()], "the real resolve_dag_node must not swallow the plan"
-
-
-async def test_a_successful_replan_emits_between_resolve_and_await_finalized() -> None:
-    """The wire event fires once resolve_node succeeds, before await_finalized --
-    the old run has not wound down yet at that point, which is what the web UI's
-    live tracking (keyed by run_id, dropped on that run's own completion) needs."""
-    plan = _replan_plan()
-    loop = _LoopWithRun(plan=plan)
-    tool = _resolve_tool(loop)
-
-    out = await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
-
-    assert loop._dag_tool.calls == [
-        "prepare_replan",
-        "resolve_node",
-        "emit_replanned",
-        "await_finalized",
-        "start_replan",
-    ]
-    assert "replan started" in out
-
-
-async def test_a_replan_nobody_waits_for_never_emits() -> None:
-    """resolve_node returning False is a real, tested outcome elsewhere (an answer
-    for a node that already got one) -- emitting for it would announce a replan
-    that never happened, and nothing durable corrects that claim on this path."""
-    plan = _replan_plan()
-    loop = _LoopWithRun(resolves=False, plan=plan)
-    tool = _resolve_tool(loop)
-
-    out = await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
-
-    assert loop._dag_tool.calls == ["prepare_replan", "resolve_node"]
+    assert loop._dag_tool.calls == ["prepare_replan", "propose_replan"]
     assert "no longer waiting for a decision" in out
 
 
-async def test_a_replan_for_a_node_nobody_awaits_is_refused_before_it_costs_anything() -> None:
-    """The cost of a replan is paid inside `prepare_replan` -- the confirm question,
-    the dispatch quota, the minted instances -- and `resolve_node` is only reached
-    afterwards. So a node that is plainly not suspended has to be turned away
-    before that call, or a replan aimed at the wrong id spends a dispatch from the
-    session's hourly budget and dispatches nothing: enough of those and a
-    legitimate replan is refused for a budget the model never got to use.
+async def test_a_replan_the_runner_refuses_records_no_decision() -> None:
+    refused = ReplanOutcome(applied=False, reason="the hourly dispatch budget is spent", still_waiting=True)
+    loop = _LoopWithRun(plan=_replan_proposal(), outcome=refused)
 
-    Distinct from `test_a_replan_nobody_waits_for_never_emits` above, which is the
-    race -- the node stopped waiting *while* the replacement graph was being
-    validated. That one still has to pay, and still has to refuse.
-    """
-    loop = _LoopWithRun(awaiting=False, plan=_replan_plan())
+    out = await _resolve_tool(loop).execute(
+        run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
+    )
+
+    assert "the hourly dispatch budget is spent" in out
+    assert "No decision was recorded" in out and "is still waiting" in out
+
+
+async def test_a_replan_for_a_node_nobody_awaits_is_refused_before_it_costs_anything() -> None:
+    """Preparing a replan asks the user and builds backends, so a node that is
+    plainly not suspended is turned away before that call. Distinct from the desk
+    refusing a proposal: that is the race, the node stopping *while* the plan was
+    prepared."""
+    loop = _LoopWithRun(awaiting=False, plan=_replan_proposal())
     tool = _resolve_tool(loop)
 
     out = await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
 
-    assert loop._dag_tool.calls == [], "nothing that costs budget may run for a node nobody is waiting on"
+    assert loop._dag_tool.calls == [], "nothing may be prepared for a node nobody is waiting on"
     assert loop.resolved is None
     assert "no longer waiting for a decision" in out
     assert "still running as submitted" in out
@@ -1386,12 +1332,12 @@ async def test_a_replan_for_a_node_nobody_awaits_is_refused_before_it_costs_anyt
 
 async def test_the_two_not_waiting_refusals_read_identically() -> None:
     """One situation, one sentence: the model cannot act differently on "refused
-    before validation" than on "refused after it", and a second wording would only
-    invite it to try to."""
-    early = await _resolve_tool(_LoopWithRun(awaiting=False, plan=_replan_plan())).execute(
+    before preparing" than on "refused by the desk after it", and a second wording
+    would only invite it to try to."""
+    early = await _resolve_tool(_LoopWithRun(awaiting=False, plan=_replan_proposal())).execute(
         run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
-    raced = await _resolve_tool(_LoopWithRun(resolves=False, plan=_replan_plan())).execute(
+    raced = await _resolve_tool(_LoopWithRun(resolves=False, plan=_replan_proposal())).execute(
         run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
 
@@ -1407,29 +1353,28 @@ async def test_a_graph_tool_that_cannot_say_whether_a_node_waits_still_replans()
     class _NoPredicate(_ResolvableDagTool):
         is_awaiting_decision = None
 
-    loop = _Loop(tool=_NoPredicate(plan=_replan_plan()))
+    loop = _Loop(tool=_NoPredicate(plan=_replan_proposal()))
     assert awaiting_decision(loop, "r1", "a") is None
 
     out = await _resolve_tool(loop).execute(
         run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
 
-    assert "replan started" in out
+    assert "replanned into run r2" in out
 
 
 async def test_the_pre_check_asks_every_instance_the_hand_off_would() -> None:
     """The shape dag_live's module docstring describes: the run is held by the
-    playbook engine's private instance, not by the one on the model's table.
-    `WiringMixin.resolve_dag_node` answers from whichever instance holds it, so a
+    playbook engine's private instance, not by the one on the model's table. A
     pre-check that asked only the registered tool -- or only `owning_tool`, which
     falls back to it when no instance claims the run -- would refuse a replan the
-    hand-off was going to accept.
+    owner was going to accept.
     """
 
     class _Loop2(_Loop):
         def __init__(self) -> None:
-            self._registered = _NonOwningDagTool(awaiting=False, plan=_replan_plan())
-            self._owner = _ResolvableDagTool(awaiting=True, plan=_replan_plan())
+            self._registered = _NonOwningDagTool(awaiting=False, plan=_replan_proposal())
+            self._owner = _ResolvableDagTool(awaiting=True, plan=_replan_proposal())
             super().__init__(tool=self._registered)
 
         def dag_tools(self) -> list[Any]:
@@ -1442,7 +1387,7 @@ async def test_the_pre_check_asks_every_instance_the_hand_off_would() -> None:
         run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
 
-    assert "replan started" in out
+    assert "replanned into run r2" in out
 
 
 async def test_an_instance_that_raises_does_not_refuse_the_replan() -> None:
@@ -1454,18 +1399,18 @@ async def test_an_instance_that_raises_does_not_refuse_the_replan() -> None:
         def is_awaiting_decision(self, run_id: str, node_id: str) -> bool:
             raise RuntimeError("boom")
 
-    loop = _Loop(tool=_Raises(plan=_replan_plan()))
+    loop = _Loop(tool=_Raises(plan=_replan_proposal()))
     assert awaiting_decision(loop, "r1", "a") is None, "an instance that cannot answer has not answered no"
 
     out = await _resolve_tool(loop).execute(
         run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")]
     )
 
-    assert "replan started" in out
+    assert "replanned into run r2" in out
 
 
 async def test_continue_and_abandon_do_not_consult_the_predicate() -> None:
-    """Neither charges anything, so neither needs the pre-check -- and adding one
+    """Neither prepares anything, so neither needs the pre-check -- and adding one
     would turn `resolve_node`'s own False into a second, earlier refusal for a
     decision that was always free to attempt."""
     for decision, kwargs in (("continue", {"message": "try again"}), ("abandon", {})):
@@ -1479,79 +1424,40 @@ async def test_continue_and_abandon_do_not_consult_the_predicate() -> None:
 async def test_a_replan_resolves_through_the_owning_tool_not_just_the_registered_one() -> None:
     """dag_live's module docstring: two tool instances can be dispatching runs at
     once, and the registered one only shares the on-disk session index with the
-    other -- its in-memory bookkeeping (_outboxes, _runs, _cancels) knows nothing
-    about a run the other instance actually dispatched. Routing prepare_replan,
-    is_foreground, emit_replanned, await_finalized and start_replan through the
-    merely-registered instance instead of owning_tool's fan-out would silently
-    read that instance's own empty bookkeeping (is_foreground always False,
-    await_finalized returning at once with nothing to wait for) rather than
-    raising, so this pins *which object* receives each call, not just that the
-    calls happened -- the registered-tool shortcut every _LoopWithRun test above
-    takes would pass this assertion trivially, since there the two are the same
-    object.
+    other -- its in-memory bookkeeping (_desks, _outboxes, _runs) knows nothing
+    about a run the other instance dispatched. Routing prepare_replan,
+    is_foreground, propose_replan, retire_reports and await_run through the
+    merely-registered instance would read that instance's empty bookkeeping rather
+    than raise, so this pins *which object* receives each call.
     """
-    plan = _replan_plan()
-    loop = _LoopWithSecondOwner(plan=plan)
+    loop = _LoopWithSecondOwner(plan=_replan_proposal())
     tool = _resolve_tool(loop)
 
     out = await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
 
-    assert loop._owner.calls == ["prepare_replan", "emit_replanned", "await_finalized", "start_replan"]
-    assert loop._owner.is_foreground_calls == ["r1"]
-    assert loop._registered.calls == ["resolve_node"]
-    assert loop._registered.is_foreground_calls == []
-    assert "replan started" in out
+    assert loop._owner.calls == ["prepare_replan", "propose_replan", "retire_reports"]
+    assert loop._owner.retired == ("r2", ("a",)), "the bound call settles the report the replan answered"
+    assert loop._owner.is_foreground_calls[0] == "r1"
+    assert loop._owner.awaited == ["r2"], "a bound call waits on the successor's next event"
+    assert loop._registered.calls == []
+    assert "replanned into run r2" in out
 
 
-async def test_an_interrupted_emit_still_records_the_link_before_reraising() -> None:
-    """The stretch between resolve_node succeeding and start_replan itself is not
-    covered by start_replan's own _record_link -- emit_replanned and
-    await_finalized run before it, and an interruption there (a /stop cancelling
-    this call is realistic) must not leave the old run's graph.json silent about
-    a replan the desk already answered. record_interrupted_replan has to fire
-    with the exact reason, and the exception still has to propagate rather than
-    being swallowed by that bookkeeping.
-    """
-    plan = _replan_plan()
-    loop = _LoopWithRun(plan=plan, raise_on_emit=RuntimeError("boom"))
-    tool = _resolve_tool(loop)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
-
-    assert loop._dag_tool.calls == ["prepare_replan", "resolve_node", "emit_replanned", "record_interrupted_replan"]
-    assert loop._dag_tool.interrupted == (
-        "r1",
-        plan,
-        "Interrupted between the node hand-off and starting the replan.",
+async def test_a_cancelled_replan_wait_withdraws_through_the_owner() -> None:
+    """A /stop while the call waits for the runner takes the proposal back, and the
+    cancellation still propagates: the caller waiting on this call must learn the
+    turn was cancelled."""
+    loop = _LoopWithRun(plan=_replan_proposal(), outcome=False)
+    call = asyncio.ensure_future(
+        _resolve_tool(loop).execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("x")])
     )
-
-
-async def test_a_cancelled_await_finalized_still_records_the_link_and_reraises() -> None:
-    """CancelledError is the realistic shape of the interruption record_interrupted_replan
-    exists for (a /stop mid-wait): it still has to propagate, not be swallowed by
-    the wind-down bookkeeping, or the caller waiting on this call would never
-    learn the turn was cancelled.
-    """
-    plan = _replan_plan()
-    loop = _LoopWithRun(plan=plan, raise_on_finalize=asyncio.CancelledError())
-    tool = _resolve_tool(loop)
+    while loop._dag_tool.proposed is None:
+        await asyncio.sleep(0)
+    call.cancel()
 
     with pytest.raises(asyncio.CancelledError):
-        await tool.execute(run_id="r1", node_id="a", decision="replan", message="wrong", nodes=[_node("fresh")])
-
-    assert loop._dag_tool.calls == [
-        "prepare_replan",
-        "resolve_node",
-        "emit_replanned",
-        "await_finalized",
-        "record_interrupted_replan",
-    ]
-    assert loop._dag_tool.interrupted == (
-        "r1",
-        plan,
-        "Interrupted between the node hand-off and starting the replan.",
-    )
+        await call
+    assert loop._dag_tool.calls == ["prepare_replan", "propose_replan", "withdraw_replan"]
 
 
 async def test_resolve_accepts_action_as_the_name_the_model_reaches_for():
@@ -3179,7 +3085,7 @@ async def test_a_cancelled_run_is_refused_before_the_user_is_asked(
         tool.request_cancel(run_id)
 
 
-async def test_a_replanned_run_is_refused_before_the_user_is_asked(
+async def test_a_reassign_is_refused_before_the_user_is_asked_while_a_replan_is_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from tests.test_subagent_dag_runner import draining_dag_runs
@@ -3187,7 +3093,9 @@ async def test_a_replanned_run_is_refused_before_the_user_is_asked(
     async with draining_dag_runs():
         tool, _fakes, ask, _charge = _real_tool(tmp_path, monkeypatch)
         run_id = await _suspended(tool)
-        tool._desks[run_id].replanned.set()
+        # A replan prepared first and not yet committed: posted without the wake,
+        # so the runner leaves it pending for as long as this test looks.
+        tool._desks[run_id]._proposal = (SimpleNamespace(from_node="a"), asyncio.get_running_loop().create_future())
         asked = len(ask.calls)
 
         out = await tool.prepare_reassign(run_id, "a", "beta", "use the parser", _REASSIGN_SESSION)
@@ -3195,7 +3103,7 @@ async def test_a_replanned_run_is_refused_before_the_user_is_asked(
         assert isinstance(out, str), out
         assert "replan" in out.lower()
         assert "no decision was recorded" in out.lower()
-        assert len(ask.calls) == asked, "a graph being replaced must not reach the user"
+        assert len(ask.calls) == asked, "a move racing a replan must not reach the user"
         tool.request_cancel(run_id)
 
 
@@ -3496,3 +3404,630 @@ async def test_the_confirmation_does_not_list_a_terminal_member(
         assert "- a:" not in question, "a terminal member must not be named as a possible mover"
         assert "may move" in question or "Reassign 1 node(s)" in question
         tool.request_cancel(run_id)
+
+
+# --- a replan carries what its plan includes into a successor run --------------
+
+
+class _ToolLoop(_Loop):
+    """A host whose liveness, stops and answers are the real graph tool's own."""
+
+    def __init__(self, tool: SubAgentDagTool) -> None:
+        super().__init__(tool=tool)
+        self._graph = tool
+
+    def active_dag_run_ids(self) -> set[str]:
+        return set(self._graph.active_run_ids())
+
+    def cancel_dag_run(self, run_id: str) -> bool:
+        return self._graph.request_cancel(run_id)
+
+
+def _bound_to(tool: SubAgentDagTool, control: Any) -> Any:
+    control.set_context("web", "default", _REASSIGN_SESSION)
+    return control
+
+
+def _resolver(tool: SubAgentDagTool) -> ResolveDagNodeTool:
+    return _bound_to(tool, ResolveDagNodeTool(_ToolLoop(tool)))
+
+
+def _held(fakes: dict[str, _FakeAgent], agent: str, *node_ids: str) -> asyncio.Event:
+    release = asyncio.Event()
+    fakes[agent].hold = release
+    fakes[agent].hold_ids = set(node_ids)
+    return release
+
+
+def _calls_for(fake: _FakeAgent, node_id: str) -> int:
+    return sum(1 for call in fake.calls if call["kwargs"].get("task_id") == node_id)
+
+
+def _text(out: Any) -> str:
+    return out if isinstance(out, str) else out.model_text
+
+
+async def _wind_down(tool: SubAgentDagTool, *releases: asyncio.Event) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    for release in releases:
+        release.set()
+    for run_id in list(tool.active_run_ids()):
+        tool.request_cancel(run_id)
+    await _wait_until(lambda: not tool.active_run_ids())
+    for task in list(tool._runs.values()):
+        with contextlib.suppress(BaseException):
+            await task
+
+
+class _ScriptedAsk(_Ask):
+    """An ask channel that gives its answers in order, then says yes."""
+
+    def __init__(self, *answers: bool) -> None:
+        super().__init__()
+        self.answers = list(answers)
+
+    async def __call__(self, conversation: str, question: str) -> bool:
+        self.calls.append((conversation, question))
+        return self.answers.pop(0) if self.answers else True
+
+
+async def test_a_replan_carries_a_running_node_and_says_what_it_did(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=True)
+    try:
+        await _wait_until(lambda: _calls_for(fakes["alpha"], "r1") == 1)
+        desk = tool._desks[run_id]
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+        [successor] = tool.active_run_ids()
+        assert successor != run_id
+        assert tool._desks[successor] is desk, "the run keeps its desk across the switch"
+        release.set()
+        await _wait_until(lambda: not tool.active_run_ids())
+    finally:
+        await _wind_down(tool, release)
+
+    text = _text(out)
+    assert f"replanned into run {successor}" in text and "carried r1" in text, text
+    assert _calls_for(fakes["alpha"], "r1") == 1, "a carried node keeps the attempt it was running"
+    assert _calls_for(fakes["alpha"], "fresh") == 1
+
+
+async def test_a_bound_replan_stays_bound_and_returns_the_next_event(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=False)
+    call = asyncio.ensure_future(
+        _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+    )
+    try:
+        await _wait_until(lambda: any(rid != run_id for rid in tool.active_run_ids()))
+        release.set()
+        await _wait_until(call.done, timeout=10)
+        out = call.result()
+    finally:
+        if not call.done():
+            call.cancel()
+        await _wind_down(tool, release)
+
+    text = _text(out)
+    assert "replanned into run" in text and "finished" in text, "the bound call returns the successor's result"
+
+
+async def test_a_cancelled_replan_call_withdraws_its_proposal(tmp_path: Path, monkeypatch) -> None:
+    tool, fakes, _ask, charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=True)
+    holder: dict[str, Any] = {}
+    original = tool.propose_replan
+
+    def _propose_then_stop(rid: str, proposal: Any) -> Any:
+        future = original(rid, proposal)
+        holder["call"].cancel()
+        return future
+
+    monkeypatch.setattr(tool, "propose_replan", _propose_then_stop)
+    try:
+        call = asyncio.ensure_future(
+            _resolver(tool).execute(
+                run_id=run_id, node_id="a", decision="replan", message="wrong", nodes=[_node_spec("fresh")]
+            )
+        )
+        holder["call"] = call
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        for _ in range(50):
+            await asyncio.sleep(0)
+        desk = tool._desks[run_id]
+        assert desk.pending_proposal is None, "the cancelled call took its proposal back"
+        assert desk.is_open("a"), "nothing was applied: the node is still waiting"
+        assert tool.active_run_ids() == [run_id]
+    finally:
+        await _wind_down(tool, release)
+
+    assert len(charge.calls) == 1, "only the submission was charged; a withdrawn replan spends nothing"
+
+
+async def test_an_answer_naming_the_old_run_reaches_the_carried_node(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"a", "s"}))
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("s")], confirm=False, background=True)
+    try:
+        await _wait_until(lambda: tool._desks[run_id].is_open("s"))
+        resolver = _resolver(tool)
+        await resolver.execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh"), _node_spec("s")],
+        )
+        answer = await resolver.execute(run_id=run_id, node_id="s", decision="continue", message="use the parser")
+        await _wait_until(lambda: _calls_for(fakes["alpha"], "s") == 2)
+        await _wait_until(lambda: not tool.active_run_ids())
+    finally:
+        await _wind_down(tool)
+
+    assert "will run again" in _text(answer)
+
+
+async def test_an_answer_for_a_stopped_node_says_it_is_no_longer_waiting(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"a", "s"}))
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("s")], confirm=False, background=True)
+    try:
+        await _wait_until(lambda: tool._desks[run_id].is_open("s"))
+        resolver = _resolver(tool)
+        await resolver.execute(
+            run_id=run_id, node_id="a", decision="replan", message="the plan was wrong", nodes=[_node_spec("fresh")]
+        )
+        answer = await resolver.execute(run_id=run_id, node_id="s", decision="continue", message="use the parser")
+    finally:
+        await _wind_down(tool)
+
+    assert "no longer waiting" in _text(answer)
+    assert _calls_for(fakes["alpha"], "s") == 1
+
+
+async def test_a_replan_cannot_take_an_id_an_older_run_claimed(tmp_path: Path, monkeypatch) -> None:
+    """The conversation's node ids are one namespace. A successor's `new` id is new
+    to the run being replanned, not to the conversation: an id an older run claimed
+    is refused here, with the same sentence a plain submission gets, rather than
+    being written over when the successor claims it."""
+    from raven.agent.subagent.dag_store import read_registry, write_registry
+    from raven.agent.subagent.prompt_backend import LocalFileBackend
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=True)
+    try:
+        root = tool._history_root(_REASSIGN_SESSION)
+        registry = await read_registry(LocalFileBackend(), str(root))
+        registry["nodes"]["fresh"] = {"kind": "dag", "run_id": "20260101T000000Z-0000000f", "status": "completed"}
+        await write_registry(LocalFileBackend(), str(root), registry)
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+        runs = list(tool.active_run_ids())
+    finally:
+        await _wind_down(tool, release)
+
+    text = _text(out)
+    assert "already used by run '20260101T000000Z-0000000f'" in text, text
+    # Refused while it was being prepared, not at commit: this test is about the
+    # tool's own check, and the runner's would answer with its own wording.
+    assert text.startswith("Error: ") and "No decision was recorded, so the node is still waiting." in text, text
+    assert runs == [run_id], "no successor was started"
+    registry = await read_registry(LocalFileBackend(), str(root))
+    assert registry["nodes"]["fresh"]["run_id"] == "20260101T000000Z-0000000f", "the older claim still stands"
+
+
+async def test_a_second_replan_prepared_before_the_first_committed_is_stale(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"a", "s"}))
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("s")], confirm=False, background=True)
+    try:
+        await _wait_until(lambda: tool._desks[run_id].is_open("s"))
+        live = await _resolver(tool)._read_live(run_id)
+        first = await tool.prepare_replan(
+            run_id, "a", [_node_spec("fresh1"), _node_spec("s")], "first", _REASSIGN_SESSION, live
+        )
+        second = await tool.prepare_replan(run_id, "s", [_node_spec("fresh2")], "second", _REASSIGN_SESSION, live)
+        applied = await asyncio.wait_for(tool.propose_replan(run_id, first), 10)
+        [successor] = tool.active_run_ids()
+        late = await asyncio.wait_for(tool.propose_replan(successor, second), 10)
+    finally:
+        await _wind_down(tool)
+
+    assert applied.applied
+    assert (late.applied, late.still_waiting) == (False, True), late
+    assert "changed after this replan was prepared" in late.reason
+    assert len(charge.calls) == 2, "the submission and the first replan; the stale one spends nothing"
+
+
+async def test_a_rejected_replan_records_no_decision_and_spends_nothing(tmp_path: Path, monkeypatch) -> None:
+    tool, fakes, ask, charge = _real_tool(tmp_path, monkeypatch, ask=_ScriptedAsk(True, False))
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=True, background=True)
+    try:
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+        still_open = tool._desks[run_id].is_open("a")
+    finally:
+        await _wind_down(tool, release)
+
+    text = _text(out)
+    assert "did not approve" in text and "no decision was recorded" in text.lower(), text
+    assert still_open
+    assert len(charge.calls) == 1, "only the submission was charged"
+    question = ask.calls[-1][1]
+    assert "carried: r1" in question and "new: fresh" in question and "given up: a" in question, question
+
+
+async def test_dag_status_on_a_sealed_run_names_its_successor(tmp_path: Path, monkeypatch) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch)
+    release = _held(fakes, "alpha", "r1")
+    run_id = await _suspended(tool, nodes=[_node_spec("a"), _node_spec("r1")], confirm=False, background=True)
+    try:
+        await _wait_until(lambda: _calls_for(fakes["alpha"], "r1") == 1)
+        await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("fresh", depends_on=["r1"])],
+        )
+        [successor] = tool.active_run_ids()
+        status = await _bound_to(tool, DagStatusTool(_ToolLoop(tool))).execute(run_id=run_id)
+        stopped = await _bound_to(tool, CancelDagTool(_ToolLoop(tool))).execute(run_id=run_id)
+        still_live = tool.active_run_ids()
+    finally:
+        await _wind_down(tool, release)
+
+    line = f"run {run_id} was replanned into run {successor}; {successor} holds what is still going"
+    assert line in status, status
+    assert line in stopped, stopped
+    assert still_live == [successor], "a cancel naming the sealed run stops nothing in its successor"
+
+
+@pytest.mark.parametrize("side", ["alpha", "beta"])
+async def test_a_replan_may_not_add_a_node_to_a_moved_group(tmp_path: Path, monkeypatch, side: str) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    remaining = {"a": 2}
+
+    async def _short_twice(*, node: Any, **_kwargs: Any) -> Verdict:
+        if remaining.get(node.id, 0) > 0:
+            remaining[node.id] -= 1
+            return Verdict(accomplished=False, category="tool_failure", what_is_missing="a parser")
+        return Verdict(accomplished=True)
+
+    tool, fakes, _ask, _charge = _real_tool(
+        tmp_path,
+        monkeypatch,
+        agents=[_local("alpha", stateful=True), _local("beta", stateful=True)],
+        judge=_short_twice,
+    )
+    run_id = await _suspended(tool, nodes=[_node_spec("a", instance="s1")], confirm=False, background=True)
+    state = tool._run_contexts[run_id].state
+    desk = tool._desks[run_id]
+    try:
+        assert isinstance(await _prepare_then_commit(tool, run_id, "beta", "use the parser"), ReassignPlan)
+        await _wait_until(lambda: len(state.attempt_agents.get("a", [])) == 2)
+        await _wait_until(lambda: desk.is_open("a"))
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="the plan was wrong",
+            nodes=[_node_spec("n", subagent=side, instance="s1")],
+        )
+    finally:
+        await _wind_down(tool)
+
+    text = _text(out)
+    assert "'s1'" in text and "no decision was recorded" in text.lower(), text
+
+
+def test_dag_status_renders_a_carried_node() -> None:
+    from raven.agent.subagent.dag_control_tools import _render_run
+
+    run = {
+        "run_id": "a",
+        "dir": "/w/a",
+        "nodes_root": "/w/nodes",
+        "summary": {"total": 2, "carried": 1, "failed": 1},
+        "files": [
+            {"node": "r1", "status": "carried", "carried_into": "b"},
+            {"node": "r2", "status": "failed", "error": "superseded"},
+        ],
+    }
+
+    out = _render_run(run)
+
+    assert "- r1 [carried into run b]" in out
+    assert "- r2 [failed]" in out
+
+
+def test_the_replan_field_text_says_what_carries_and_what_stops() -> None:
+    params = _resolve_tool().parameters["properties"]
+
+    assert "carried into it without stopping" in params["decision"]["description"]
+    assert "Everything else that has not finished stops with this run" in params["decision"]["description"]
+    assert "Never list a finished node" in params["nodes"]["description"]
+    assert "redo its work under a new id" in params["nodes"]["description"]
+
+
+# --- end to end: a replan through resolve_dag_node, in both lanes --------------
+
+_LANES = pytest.mark.parametrize("background", [True, False], ids=["background", "bound"])
+
+
+def _research_graph() -> list[dict[str, Any]]:
+    return [
+        _node_spec("r1"),
+        _node_spec("r2"),
+        _node_spec("r3"),
+        _node_spec(
+            "write", depends_on=["r1", "r2", "r3"], prompt_template="{{ r1.output }} {{ r2.output }} {{ r3.output }}"
+        ),
+    ]
+
+
+def _research_replan() -> list[dict[str, Any]]:
+    return [
+        _node_spec("r2a"),
+        _node_spec("r2b"),
+        _node_spec(
+            "write",
+            depends_on=["r1", "r2a", "r2b", "r3"],
+            prompt_template="{{ r1.output }} {{ r2a.output }} {{ r2b.output }} {{ r3.output }}",
+        ),
+    ]
+
+
+def _run_record(tool: SubAgentDagTool, run_id: str, name: str) -> dict[str, Any]:
+    return json.loads((Path(tool._run_root(_REASSIGN_SESSION)) / run_id / name).read_text(encoding="utf-8"))
+
+
+class _Announced:
+    """The detached lane's result route: every final result it was handed."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def __call__(self, run_id: str, text: str, _origin: dict) -> None:
+        self.calls.append((run_id, text))
+
+
+def _replan_call(tool: SubAgentDagTool, run_id: str, node_id: str, message: str, nodes: list[dict[str, Any]]) -> Any:
+    """The resolve call answering ``node_id`` with a replan, as a task: a bound lane keeps it waiting."""
+    return asyncio.ensure_future(
+        _resolver(tool).execute(run_id=run_id, node_id=node_id, decision="replan", message=message, nodes=nodes)
+    )
+
+
+async def _settle(tool: SubAgentDagTool, call: Any, *releases: asyncio.Event) -> None:
+    await _wind_down(tool, *releases)
+    if call is not None and not call.done():
+        call.cancel()
+    if call is not None:
+        with contextlib.suppress(BaseException):
+            await call
+
+
+@_LANES
+async def test_the_research_example_end_to_end(tmp_path: Path, monkeypatch, background: bool) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    announced = _Announced()
+    tool, fakes, _ask, charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"r2"}), announce=announced)
+    alpha = fakes["alpha"]
+    release = _held(fakes, "alpha", "r1", "r3")
+    run_id = await _suspended(tool, nodes=_research_graph(), confirm=False, background=background, node_id="r2")
+    call = None
+    try:
+        await _wait_until(lambda: _calls_for(alpha, "r1") == 1 and _calls_for(alpha, "r3") == 1)
+        call = _replan_call(tool, run_id, "r2", "the second source does not exist; split it in two", _research_replan())
+        await _wait_until(lambda: any(rid != run_id for rid in tool.active_run_ids()))
+        [successor] = tool.active_run_ids()
+        release.set()
+        await _wait_until(lambda: call.done() and not tool.active_run_ids(), timeout=10)
+        text = _text(call.result())
+    finally:
+        await _settle(tool, call, release)
+
+    attempts = {nid: _calls_for(alpha, nid) for nid in ("r1", "r2", "r3", "r2a", "r2b", "write")}
+    assert attempts == dict.fromkeys(attempts, 1), "every node ran once: the carried ones were never started again"
+    sealed = _run_record(tool, run_id, "manifest.json")
+    assert {nid: (entry["status"], entry.get("carried_into")) for nid, entry in sealed.items()} == {
+        "r1": ("carried", successor),
+        "r2": ("failed", None),
+        "r3": ("carried", successor),
+        "write": ("carried", successor),
+    }
+    finished = _run_record(tool, successor, "manifest.json")
+    assert {nid: entry["status"] for nid, entry in finished.items()} == dict.fromkeys(
+        ("r1", "r3", "write", "r2a", "r2b"), "completed"
+    )
+    assert f"replanned into run {successor}" in text, text
+    if background:
+        assert [rid for rid, _ in announced.calls] == [successor], "the chain is announced once, as the successor"
+    else:
+        assert announced.calls == [], "the bound call is handed the result, so nothing else announces it"
+        assert "finished" in text, text
+    assert len(charge.calls) == 2, "the submission and the replan, once each"
+
+
+@_LANES
+async def test_a_plan_that_reads_nothing_in_progress_stops_it_as_today(
+    tmp_path: Path, monkeypatch, background: bool
+) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"a"}))
+    alpha = fakes["alpha"]
+    release = _held(fakes, "alpha", "r1")
+    nodes = [_node_spec("a"), _node_spec("r1"), _node_spec("p", depends_on=["r1"])]
+    run_id = await _suspended(tool, nodes=nodes, confirm=False, background=background)
+    call = None
+    try:
+        await _wait_until(lambda: _calls_for(alpha, "r1") == 1)
+        call = _replan_call(tool, run_id, "a", "start over from a fresh step", [_node_spec("fresh")])
+        await _wait_until(lambda: call.done() and not tool.active_run_ids(), timeout=10)
+        text = _text(call.result())
+    finally:
+        await _settle(tool, call, release)
+
+    successor = _run_record(tool, run_id, "graph.json")["replan"]["run_id"]
+    sealed = _run_record(tool, run_id, "manifest.json")
+    assert {nid: entry["status"] for nid, entry in sealed.items()} == {"a": "failed", "r1": "cancelled", "p": "skipped"}
+    assert {nid: entry["status"] for nid, entry in _run_record(tool, successor, "manifest.json").items()} == {
+        "fresh": "completed"
+    }
+    assert {nid: _calls_for(alpha, nid) for nid in ("r1", "p", "fresh")} == {"r1": 1, "p": 0, "fresh": 1}
+    assert "stopped r1, p" in text and "carried" not in text, text
+
+
+@_LANES
+async def test_a_redefinition_raced_by_its_start_is_refused_whole(
+    tmp_path: Path, monkeypatch, background: bool
+) -> None:
+    from tests.test_subagent_dag_runner import _wait_until
+
+    tool, fakes, _ask, charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"a"}))
+    release_g = _held(fakes, "alpha", "g")
+    release_w = _held(fakes, "beta", "w")
+    nodes = [_node_spec("a"), _node_spec("g"), _node_spec("w", subagent="beta", depends_on=["g"])]
+    run_id = await _suspended(tool, nodes=nodes, confirm=False, background=background)
+    prepare = tool.prepare_replan
+
+    async def _prepared_then_w_starts(*args: Any, **kwargs: Any) -> Any:
+        proposal = await prepare(*args, **kwargs)
+        release_g.set()
+        await _wait_until(lambda: _calls_for(fakes["beta"], "w") == 1)
+        return proposal
+
+    monkeypatch.setattr(tool, "prepare_replan", _prepared_then_w_starts)
+    try:
+        await _wait_until(lambda: _calls_for(fakes["alpha"], "g") == 1)
+        out = await _resolver(tool).execute(
+            run_id=run_id,
+            node_id="a",
+            decision="replan",
+            message="w should work another way",
+            nodes=[
+                _node_spec("fresh"),
+                _node_spec("w", subagent="beta", depends_on=["g"], prompt_template="do w another way"),
+            ],
+        )
+        still_waiting = tool._desks[run_id].is_open("a")
+        runs = list(tool.active_run_ids())
+    finally:
+        await _wind_down(tool, release_g, release_w)
+
+    text = _text(out)
+    assert "was not applied" in text and "'w' is in progress" in text and "is still waiting" in text, text
+    assert still_waiting, "the node the replan answered still waits"
+    assert runs == [run_id], "no successor was started"
+    assert _calls_for(fakes["alpha"], "fresh") == 0
+    assert len(charge.calls) == 1, "only the submission was charged; the refused replan spent nothing"
+    assert "replan" not in _run_record(tool, run_id, "graph.json")
+
+
+@_LANES
+async def test_a_reload_mid_chain_reads_each_run_once_and_to_the_contract(
+    tmp_path: Path, monkeypatch, background: bool
+) -> None:
+    import jsonschema
+
+    from raven.agent.subagent import instances as instances_mod
+    from raven.rpc.methods.dag import dag_get
+    from raven.rpc.methods.tasks import tasks_list
+    from raven.rpc.models import METHOD_MODELS
+    from raven.session.manager import SessionManager
+    from tests.test_subagent_dag_runner import _wait_until
+
+    monkeypatch.setattr(instances_mod, "_registry", instances_mod.InstanceRegistry(path=tmp_path / "inst.json"))
+    tool, fakes, _ask, _charge = _real_tool(tmp_path, monkeypatch, judge=_short_once({"r2"}))
+    alpha = fakes["alpha"]
+    release = _held(fakes, "alpha", "r1", "r3", "r2a", "r2b")
+    run_id = await _suspended(tool, nodes=_research_graph(), confirm=False, background=background, node_id="r2")
+    loop = SimpleNamespace(
+        tools=SimpleNamespace(get=lambda name: tool if name == "run_subagent_dag" else None),
+        sessions=SessionManager(tmp_path),
+        active_dag_run_ids=lambda: set(tool.active_run_ids()),
+    )
+    asked = {"session_key": _REASSIGN_SESSION}
+    call = None
+    try:
+        await _wait_until(lambda: _calls_for(alpha, "r1") == 1 and _calls_for(alpha, "r3") == 1)
+        call = _replan_call(tool, run_id, "r2", "the second source does not exist; split it in two", _research_replan())
+        await _wait_until(lambda: _calls_for(alpha, "r2a") == 1 and _calls_for(alpha, "r2b") == 1)
+        [successor] = tool.active_run_ids()
+        sealed = await dag_get({"run_id": run_id, **asked}, agent_loop_factory=lambda: loop)
+        live = await dag_get({"run_id": successor, **asked}, agent_loop_factory=lambda: loop)
+        listed = await tasks_list(asked, agent_loop_factory=lambda: loop)
+    finally:
+        await _settle(tool, call, release)
+
+    contract = json.loads((Path(__file__).resolve().parents[1] / "rpc-schema" / "openrpc.json").read_text("utf-8"))
+    for method, answer in (("dag.get", sealed), ("dag.get", live), ("tasks.list", listed)):
+        [entry] = [m for m in contract["methods"] if m["name"] == method]
+        dumped = METHOD_MODELS[method][1].model_validate(answer).model_dump(exclude_none=True)
+        jsonschema.validate(dumped, {**entry["result"]["schema"], "components": contract["components"]})
+
+    old = {f["node"]: f for f in sealed["run"]["files"]}
+    assert sealed["run"]["finalized"] is True
+    assert {nid: (f["status"], f.get("carried_into")) for nid, f in old.items()} == {
+        "r1": ("carried", successor),
+        "r2": ("failed", None),
+        "r3": ("carried", successor),
+        "write": ("carried", successor),
+    }
+    new = [f["node"] for f in live["run"]["files"]]
+    assert sorted(new) == ["r1", "r2a", "r2b", "r3", "write"], "each node once, under the run that holds it"
+    assert live["run"]["finalized"] is False
+    assert {f["node"]: f["status"] for f in live["run"]["files"]} == {
+        "r1": "running",
+        "r3": "running",
+        "r2a": "running",
+        "r2b": "running",
+        "write": "pending",
+    }
+    rows = {row["id"]: row for row in listed["tasks"] if row["kind"] == "dag"}
+    assert set(rows) == {run_id, successor}
+    running = [(row_id, n["node_id"]) for row_id, row in rows.items() for n in row["nodes"] if n["status"] == "running"]
+    assert sorted(running) == sorted((successor, nid) for nid in ("r1", "r2a", "r2b", "r3")), running
+    assert rows[run_id]["counts"]["carried"] == 3 and rows[run_id]["replan"]["carried"] == ["r1", "r3", "write"]

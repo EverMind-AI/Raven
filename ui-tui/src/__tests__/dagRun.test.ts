@@ -1069,3 +1069,47 @@ describe('attemptOrder', () => {
     expect(attemptOrder(['alpha'], ['alpha'])).toBe('same')
   })
 })
+
+describe('a replan that carries work into a successor run', () => {
+  it('a sealed run shows its carried nodes as carried into the successor', () => {
+    const completed: DagRunCompletedEvent = {
+      type: 'dag.run_completed',
+      payload: {
+        run_id: 'dag-1',
+        dir: '/w/mas_dag/dag-1',
+        summary: { total: 2, failed: 1, carried: 1 },
+        files: [
+          { node: 'a', status: 'carried', carried_into: 'dag-2' },
+          { node: 'b', status: 'failed', error: 'Superseded by replan into run dag-2: wrong' }
+        ]
+      }
+    }
+    const run = foldDagEvent(foldDagEvent(null, started(CHAIN)), completed)
+
+    expect(run?.done).toBe(true)
+    expect(run?.nodes.find(n => n.id === 'a')).toMatchObject({ carriedInto: 'dag-2', status: 'carried' })
+    expect(run?.nodes.find(n => n.id === 'b')?.carriedInto).toBeUndefined()
+  })
+
+  it('the successor shows a carried node running from its first frame', () => {
+    const begun: DagNodeUpdatedEvent = {
+      type: 'dag.node_updated',
+      payload: { node: 'a', run_id: 'dag-2', started_at: 5, status: 'running' }
+    }
+    const run = foldDagEvent(foldDagEvent(null, started(CHAIN, 'dag-2')), begun)
+
+    expect(run?.nodes.find(n => n.id === 'a')).toMatchObject({ startedAt: 5, status: 'running' })
+  })
+
+  it('a sealed run read back keeps where each carried node went', () => {
+    const run = foldDagSnapshot(null, {
+      dir: '/w/mas_dag/dag-1',
+      files: [{ carried_into: 'dag-2', node: 'a', status: 'carried' }],
+      finalized: true,
+      run_id: 'dag-1',
+      summary: { carried: 1, total: 1 }
+    })
+
+    expect(run.nodes[0]).toMatchObject({ carriedInto: 'dag-2', status: 'carried' })
+  })
+})

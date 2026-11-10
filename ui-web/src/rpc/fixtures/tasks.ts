@@ -31,7 +31,7 @@ function node(over: Partial<TaskNode> & Pick<TaskNode, 'node_id' | 'agent' | 'st
 function counts(nodes: readonly TaskNode[]): TaskCounts {
   const c: TaskCounts = {
     total: nodes.length, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0,
-    cancelled: 0, interrupted: 0, exception: 0, not_executed: 0,
+    cancelled: 0, interrupted: 0, exception: 0, not_executed: 0, carried: 0,
   }
   nodes.forEach((n) => {
     switch (n.status) {
@@ -44,6 +44,7 @@ function counts(nodes: readonly TaskNode[]): TaskCounts {
       case 'interrupted': c.interrupted += 1; break
       case 'exception': c.exception += 1; break
       case 'not_executed': c.not_executed += 1; break
+      case 'carried': c.carried += 1; break
     }
   })
   return c

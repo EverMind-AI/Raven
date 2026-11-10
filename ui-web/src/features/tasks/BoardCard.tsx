@@ -23,6 +23,7 @@ const RT_WORD_KEY: Record<string, string> = {
   cancelled: 'gui.tasks.node_st_cancelled',
   interrupted: 'gui.tasks.node_st_interrupted',
   exception: 'gui.tasks.node_st_exception',
+  carried: 'gui.tasks.node_st_carried',
 }
 
 /* `ICONS.check` / `ICONS.spin`, drawn the way `ico()` draws them: one or more

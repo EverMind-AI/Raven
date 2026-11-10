@@ -7,6 +7,7 @@ live agent loop degrades to empty rather than raising at the client.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -2808,3 +2809,41 @@ def test_the_published_clear_contract_does_not_promise_the_agent_default() -> No
     assert "back to the agent's own default" not in doc
     assert "no tier to inherit" in doc
     assert inspect.iscoroutinefunction(instances_set_mode)
+
+
+async def test_a_dag_node_row_moves_to_the_successor_run(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_dag_node("s1", "run-A", "r1", "alpha", "running")
+    before = next(r for r in _isolated_registry.list_instances("s1") if r.get("nodeId") == "r1")
+
+    await _isolated_registry.move_dag_node_run(
+        "s1", agent="alpha", node_id="r1", old_run_id="run-A", new_run_id="run-B"
+    )
+
+    rows = [r for r in _isolated_registry.list_instances("s1") if r.get("nodeId") == "r1"]
+    assert len(rows) == 1, rows
+    assert rows[0]["handle"] == "run-B/r1"
+    assert rows[0]["runId"] == "run-B"
+    assert rows[0]["status"] == before["status"]
+    assert rows[0]["createdAtMs"] == before["createdAtMs"]
+
+
+async def test_moving_a_missing_dag_node_row_writes_nothing(_isolated_registry: Any) -> None:
+    await _isolated_registry.move_dag_node_run(
+        "s1", agent="alpha", node_id="ghost", old_run_id="run-A", new_run_id="run-B"
+    )
+    assert [r for r in _isolated_registry.list_instances("s1") if r.get("nodeId") == "ghost"] == []
+
+
+async def test_a_move_never_overwrites_a_newer_row_under_the_successor(_isolated_registry: Any) -> None:
+    await _isolated_registry.upsert_dag_node("s1", "run-A", "r1", "alpha", "running")
+    await asyncio.sleep(0.01)
+    await _isolated_registry.upsert_dag_node("s1", "run-B", "r1", "alpha", "completed")
+
+    await _isolated_registry.move_dag_node_run(
+        "s1", agent="alpha", node_id="r1", old_run_id="run-A", new_run_id="run-B"
+    )
+
+    rows = [r for r in _isolated_registry.list_instances("s1") if r.get("nodeId") == "r1"]
+    assert len(rows) == 1, rows
+    assert rows[0]["handle"] == "run-B/r1"
+    assert rows[0]["status"] == "completed", "the newer outcome under the successor survives the move"

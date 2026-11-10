@@ -33,8 +33,8 @@ import { clipToWidth } from '../lib/text.js'
 // drift out of sync with a status the type gains.
 const ALL_STATUSES = Object.keys(DAG_STATUS_GLYPH) as DagRunNodeStatus[]
 
-// What a node could be before branches existed: every status but the one they added.
-const OLD_STATUSES = ALL_STATUSES.filter(status => status !== 'not_executed')
+// What a node could be before branches and replans existed: every status but the ones they added.
+const OLD_STATUSES = ALL_STATUSES.filter(status => status !== 'not_executed' && status !== 'carried')
 
 const run = (over: Partial<DagRunState> = {}): DagRunState => ({
   runId: 'dag-1',
@@ -78,6 +78,17 @@ describe('DAG_STATUS_GLYPH', () => {
 
   it('styles every status the wire can send, included a node a branch left out', () => {
     expect(DAG_STATUS_GLYPH.not_executed).toEqual({ color: expect.any(Function), glyph: '◌' })
+  })
+
+  it('carried has its own glyph', () => {
+    // A carried node did not fail and was not left out: its work goes on in the
+    // run that holds it now. Muted, as a record of where it went.
+    const theme = { color: { error: 'error', muted: 'muted', warn: 'warn' } } as Theme
+
+    expect(DAG_STATUS_GLYPH.carried.color(theme)).toBe('muted')
+    expect(DAG_STATUS_GLYPH.carried.glyph).not.toBe(DAG_STATUS_GLYPH.failed.glyph)
+    expect(DAG_STATUS_GLYPH.carried.glyph).not.toBe(DAG_STATUS_GLYPH.not_executed.glyph)
+    expect(stringWidth(DAG_STATUS_GLYPH.carried.glyph)).toBe(1)
   })
 
   it('draws a node a branch left out muted, and apart from a skipped one', () => {
@@ -1039,5 +1050,31 @@ describe('formatDagNodeDetail for a reassigned node', () => {
     const pageText = formatDagNodeDetail(detail(), { attemptAgents: [long, 'beta'], status: 'completed' })
 
     expect(pageText).toContain(`attempts: ${long} -> beta`)
+  })
+})
+
+describe('a carried node', () => {
+  it('names the run that holds it now', () => {
+    expect(dagNodeOutcome({ carriedInto: 'dag-2', status: 'carried' })).toBe('carried into run dag-2')
+    expect(dagNodeOutcome({ status: 'carried' })).toBe('carried')
+  })
+})
+
+describe('a sealed run with carried nodes', () => {
+  it('counts what it carried in its tally', () => {
+    const sealed = run({
+      done: true,
+      nodes: [{ ...node('a', 'carried'), carriedInto: 'dag-2' }, node('b', 'failed')],
+      summary: { carried: 1, failed: 1, total: 2 }
+    })
+
+    expect(dagRunTally(sealed)).toEqual([
+      { count: 1, status: 'failed' },
+      { count: 1, status: 'carried' }
+    ])
+  })
+
+  it('shows no clock on a carried node: its time is kept by the run that holds it', () => {
+    expect(dagNodeElapsed({ startedAt: 1_000, status: 'carried' }, 9_000)).toBe('')
   })
 })

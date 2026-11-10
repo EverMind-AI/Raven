@@ -55,7 +55,7 @@ export function startOfRunId(id: string): number | null {
 const blankCounts = (): TaskCounts => (
   {
     total: 0, pending: 0, running: 0, completed: 0, failed: 0, skipped: 0, cancelled: 0, interrupted: 0,
-    exception: 0, not_executed: 0,
+    exception: 0, not_executed: 0, carried: 0,
   }
 )
 
@@ -73,6 +73,7 @@ export function countsOf(nodes: readonly TaskNode[]): TaskCounts {
       case 'interrupted': c.interrupted += 1; break
       case 'exception': c.exception += 1; break
       case 'not_executed': c.not_executed += 1; break
+      case 'carried': c.carried += 1; break
     }
   })
   return c
@@ -259,7 +260,10 @@ export function applyRunReplanned(rows: readonly TaskRow[], p: RunReplannedPaylo
   if (at < 0) return { rows: [...rows] }
   const next: TaskRow = {
     ...rows[at]!, status: 'cancelled',
-    replan: { run_id: p.replan_run_id, from_node: p.from_node, reason: p.reason, started: true },
+    replan: {
+      run_id: p.replan_run_id, from_node: p.from_node, reason: p.reason, started: true,
+      ...(p.carried ? { carried: [...p.carried] } : {}),
+    },
   }
   return { rows: rows.map((r, i) => (i === at ? next : r)), refetch: { kind: 'dag', id: p.run_id } }
 }

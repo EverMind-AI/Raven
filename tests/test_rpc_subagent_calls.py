@@ -1014,3 +1014,30 @@ async def test_two_conversations_that_named_a_spawn_alike_each_read_their_own_li
 
     hold.release[SESSION].set()
     await asyncio.gather(*mgr._running_tasks.values(), return_exceptions=True)
+
+
+async def test_a_carried_entry_is_not_listed_twice(workspace: Path, tmp_path: Path, monkeypatch) -> None:
+    """A node a replan carried has one row: the successor's. The sealed run's
+    `carried` entry is the hand-off record, and listing it too would show the node
+    twice."""
+    from raven.agent.subagent import instances as instances_mod
+    from tests.test_rpc_tasks import _SEALED_ID, _SUCCESSOR_ID, _make_run, _seal_a_replanned_run, _session_dir
+
+    monkeypatch.setattr(instances_mod, "_registry", instances_mod.InstanceRegistry(path=tmp_path / "inst.json"))
+    session_dir = _session_dir(workspace)
+    await _seal_a_replanned_run(session_dir)
+    successor_graph = {
+        "task_summary": "research",
+        "nodes": [
+            {"id": "r1", "subagent": "Raven", "node_summary": "first source", "depends_on": []},
+            {"id": "r3", "subagent": "Raven", "node_summary": "third source", "depends_on": []},
+            {"id": "fresh", "subagent": "Raven", "node_summary": "redo the second", "depends_on": []},
+        ],
+    }
+    await _make_run(session_dir, _SUCCESSOR_ID, successor_graph, ["r1", "r3", "fresh"])
+
+    rows = (await subagent_list({"session_id": SESSION}))["items"]
+
+    listed = [(row["run_id"], row["node"]) for row in rows if row.get("kind") == "dag"]
+    assert [run for run, node in listed if node == "r1"] == [_SUCCESSOR_ID]
+    assert (_SEALED_ID, "r2") in listed, "the node the replan gave up stays in the sealed run's list"

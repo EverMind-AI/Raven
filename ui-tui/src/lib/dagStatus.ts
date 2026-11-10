@@ -32,6 +32,9 @@ export const DAG_STATUS_GLYPH: Record<DagRunNodeStatus, { color: (t: Theme) => s
   failed: { color: t => t.color.error, glyph: '✗' },
   skipped: { color: t => t.color.muted, glyph: '⊘' },
   not_executed: { color: t => t.color.muted, glyph: '◌' },
+  // A replan carried the node into its successor run: the sealed run's record
+  // of where it went, muted, and apart from every way a node can end.
+  carried: { color: t => t.color.muted, glyph: '↪' },
   cancelled: { color: t => t.color.error, glyph: '⊗' },
   interrupted: { color: t => t.color.warn, glyph: '■' },
   exception: { color: t => t.color.warn, glyph: '⚠' }
@@ -65,9 +68,15 @@ const routesText = (routes: readonly string[]): string => (routes.length > 0 ? r
  * guess at. `selectedRoutes` is read by presence: `[]` is a decision that chose
  * nothing, `undefined` one not made.
  */
-export const dagNodeOutcome = (node: Pick<DagRunNode, 'reason' | 'selectedRoutes' | 'status'>): string => {
+export const dagNodeOutcome = (
+  node: Pick<DagRunNode, 'carriedInto' | 'reason' | 'selectedRoutes' | 'status'>
+): string => {
   if (node.status === 'not_executed') {
     return reasonWords(node.reason) || 'not executed'
+  }
+
+  if (node.status === 'carried') {
+    return node.carriedInto ? `carried into run ${node.carriedInto}` : 'carried'
   }
 
   if (node.selectedRoutes === undefined) {
@@ -206,6 +215,7 @@ export const dagRunTally = (run: DagRunState): { count: number; status: DagRunNo
     ['skipped', fromManifest('skipped', run.summary?.skipped)],
     ['not_executed', fromManifest('not_executed', run.summary?.not_executed)],
     ['cancelled', fromManifest('cancelled', run.summary?.cancelled)],
+    ['carried', fromManifest('carried', run.summary?.carried)],
     ['interrupted', counted('interrupted')]
   ]
 
@@ -229,7 +239,8 @@ export const dagNodeElapsed = (node: Pick<DagRunNode, 'endedAt' | 'startedAt' | 
     return 'queued'
   }
 
-  if (node.status === 'not_executed' || node.status === 'skipped') {
+  // A carried node's clock is the successor's to keep: its work goes on there.
+  if (node.status === 'not_executed' || node.status === 'skipped' || node.status === 'carried') {
     return ''
   }
 
@@ -325,6 +336,7 @@ export const hasDagRowDetail = (detail: DagRowDetail): boolean => Object.values(
 export const dagRowDetail = (
   node: Pick<
     DagRunNode,
+    | 'carriedInto'
     | 'dependsOn'
     | 'error'
     | 'id'

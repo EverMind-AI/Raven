@@ -38,8 +38,7 @@ import asyncio
 import contextlib
 import inspect
 import json
-import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -57,15 +56,16 @@ from raven.agent.subagent.dag_adjudication import (
     Final,
     Outbox,
     ReassignPlan,
-    ReplanPlan,
+    ReplanProposal,
     Report,
     Stopped,
 )
 from raven.agent.subagent.dag_capabilities import AgentCapabilities, validate_capabilities
+from raven.agent.subagent.dag_carry import CarryPlan, classify_nodes, plan_carry
 from raven.agent.subagent.dag_graph import DagNodeSpec, SubAgentDagSpec, parse_dag_spec, validate_and_order
 from raven.agent.subagent.dag_handover import HandoverError, load_handover_turns, render_handover
 from raven.agent.subagent.dag_mcp_scope import run_mcp_scope
-from raven.agent.subagent.dag_reader import DagReadError, run_dir_of
+from raven.agent.subagent.dag_reader import DagReadError
 from raven.agent.subagent.dag_reader import read_node as _read_node
 from raven.agent.subagent.dag_reader import read_run as _read_run
 from raven.agent.subagent.dag_runner import (
@@ -441,6 +441,25 @@ class RunSubmission:
     named_instance_groups: "Mapping[str, tuple[str, str]]"
 
 
+@dataclass
+class _RunIdentity:
+    """Which run a dispatched task is executing now, and which it was submitted as.
+
+    A replan carries a run's live work into a successor run that the same task goes
+    on executing, so the id the task was started with stops naming it. Everything
+    that names the run later -- the announcers, the retire callback, the capture
+    check -- reads ``run_id`` from here, never a value captured at dispatch.
+    """
+
+    run_id: str
+    submitted: str
+
+
+_SUCCESSOR_HOPS = 64
+"""How many replan links ``successor_holding`` follows before it stops: a damaged
+chain must not hold the caller, and no real chain comes near it."""
+
+
 @dataclass(frozen=True)
 class _Reservation:
     """One accepted move's claim on its source group, kept until the move installs."""
@@ -810,13 +829,12 @@ class SubAgentDagTool(Tool):
         # submitted, the frozen roles, the live assignment record and its builder.
         # Removed on every run exit beside the desk and the cancel event.
         self._run_contexts: dict[str, _RunAdmission] = {}
-        # A replanned successor's admission data, keyed by the id its plan names,
-        # between `prepare_replan` and the submission that consumes it.
-        self._pending_submissions: dict[str, tuple[RunSubmission, dict[str, AgentCapabilities]]] = {}
         # Strong references to in-flight background runs. Without them the event
         # loop only weakly references a bare create_task, and a run can be
         # garbage-collected mid-graph.
         self._runs: dict[str, asyncio.Task] = {}
+        # Each dispatched run's identity, by the id it runs under now.
+        self._identities: dict[str, _RunIdentity] = {}
         # The one agent table, normally the sub-agent manager's. This tool used to
         # build a second one from the same config, which meant a hot-apply refreshed
         # two maps through two setters that each skipped a bad entry independently:
@@ -966,12 +984,14 @@ class SubAgentDagTool(Tool):
             admission.reservations.clear()
         return True
 
-    def resolve_node(
-        self, run_id: str, node_id: str, decision: str, message: str | None, plan: "ReplanPlan | None" = None
-    ) -> bool:
-        """Answer one suspended node. False when nothing was waiting on it."""
+    def resolve_node(self, run_id: str, node_id: str, decision: str, message: str | None) -> bool:
+        """Answer one suspended node. False when nothing was waiting on it.
+
+        A replan is not answered here: it is prepared, posted with
+        :meth:`propose_replan`, and committed by the runner.
+        """
         desk = self._desks.get(run_id)
-        if desk is None or not desk.resolve(node_id, decision, message, plan):
+        if desk is None or not desk.resolve(node_id, decision, message):
             return False
         # The outbox owes a re-send for every report it handed over and nobody
         # decided; this is the decision, so that debt is settled.
@@ -987,10 +1007,11 @@ class SubAgentDagTool(Tool):
         ``is_open`` answers False -- so asking first refuses nothing the hand-off
         would have accepted.
 
-        It is asked first because a replan's costs are paid before that hand-off,
-        inside ``prepare_replan``: the confirm question, the dispatch quota and
-        the minted instances, none of which is refunded when the hand-off then
-        finds nobody waiting. See the call site in
+        It is asked first because some of a replan's costs are paid before that
+        hand-off, inside ``prepare_replan``: the confirm question and the minted
+        instances, neither of which is refunded when the hand-off then finds
+        nobody waiting. The dispatch quota is charged only at commit, so a
+        proposal nobody takes spends none of it. See the call site in
         :mod:`raven.agent.subagent.dag_control_tools`.
         """
         desk = self._desks.get(run_id)
@@ -1081,7 +1102,7 @@ class SubAgentDagTool(Tool):
                 rendered.append(f"{name}: {text}")
         return ("\n\n" + "\n".join(rendered)) if rendered else ""
 
-    def _report_announcer(self, run_id: str, origin: _DagOrigin):
+    def _report_announcer(self, identity: _RunIdentity, origin: _DagOrigin):
         async def _announce(
             node_id: str,
             text: str,
@@ -1092,11 +1113,13 @@ class SubAgentDagTool(Tool):
             dispatch_link: tuple[str, str] | None = None,
         ) -> None:
             if self._announce_exception is None:
-                logger.info("DAG run {} node {} reported after release with no announcer wired", run_id, node_id)
+                logger.info(
+                    "DAG run {} node {} reported after release with no announcer wired", identity.run_id, node_id
+                )
                 return
             address = origin if dispatch_link is None else replace(origin, dispatch_link=dispatch_link)
             await self._announce_exception(
-                run_id,
+                identity.run_id,
                 node_id,
                 text,
                 address.as_dict(),
@@ -1159,12 +1182,12 @@ class SubAgentDagTool(Tool):
 
         return _announce
 
-    def _final_announcer(self, run_id: str, origin: _DagOrigin):
+    def _final_announcer(self, identity: _RunIdentity, origin: _DagOrigin):
         async def _announce(result: Any) -> None:
             if self._announce is None:
-                logger.info("DAG run {} finished after release with no announcer wired", run_id)
+                logger.info("DAG run {} finished after release with no announcer wired", identity.run_id)
                 return
-            await self._announce(run_id, str(getattr(result, "model_text", result)), origin.as_dict())
+            await self._announce(identity.run_id, str(getattr(result, "model_text", result)), origin.as_dict())
 
         return _announce
 
@@ -1232,6 +1255,70 @@ class SubAgentDagTool(Tool):
         turn is running when round twelve is compiled, which is nobody.
         """
         return (self._origin.get() or self._default_origin).as_dict()
+
+    def _rekey_run(self, old: str, new: str) -> None:
+        """File one live run's records under its successor's id, as the same objects.
+
+        Synchronous and never raising: it runs inside the runner's identity
+        switch, where nothing may await and nothing may fail the commit. A run
+        this tool does not hold changes nothing, and an entry already filed under
+        ``new`` is never displaced.
+        """
+        for index in (
+            self._runs,
+            self._cancels,
+            self._desks,
+            self._outboxes,
+            self._run_contexts,
+            self._identities,
+            self._stints,
+        ):
+            if old in index and new not in index:
+                index[new] = index.pop(old)
+        if (identity := self._identities.get(new)) is not None:
+            identity.run_id = new
+        if (admission := self._run_contexts.get(new)) is not None:
+            admission.run_id = new
+
+    def _switch_run(self, old: str, new: str, proposal: ReplanProposal) -> None:
+        """Follow a run into the successor a replan carried it into.
+
+        The run's indices move to the successor's id, and its admission takes the
+        successor's submitted graph, so a later reassign of a node the replan
+        added builds it exactly as it builds a submitted one.
+        """
+        self._rekey_run(old, new)
+        if proposal.submission is not None and (admission := self._run_contexts.get(new)) is not None:
+            admission.submission = proposal.submission
+
+    async def successor_holding(self, run_id: str, node_id: str, session_key: str | None) -> str:
+        """The run that holds ``node_id`` now, following the replan links that carried it.
+
+        A report names the run it was sent from, and a replan may since have
+        carried its node on, once or several times. Each hop follows the
+        ``replan`` link of the run reached so far while that link carries the
+        node. A missing link, an unreadable file or a node the link did not carry
+        ends the walk at the run it reached, and so does the hop limit, so a
+        damaged chain cannot hold the caller.
+        """
+        current = run_id
+        for _ in range(_SUCCESSOR_HOPS):
+            link = await self.replan_link(current, session_key)
+            if link is None or node_id not in (link.get("carried") or ()):
+                return current
+            current = link["run_id"]
+        return current
+
+    async def replan_link(self, run_id: str, session_key: str | None) -> dict[str, Any] | None:
+        """The ``replan`` link a run's ``graph.json`` carries, or ``None`` when it has none or cannot be read."""
+        try:
+            path = self._backend.join_path(self._run_root(session_key), run_id, "graph.json")
+            link = json.loads(await self._backend.read_file(path)).get("replan")
+        except Exception:  # noqa: BLE001 - an unreadable record has no link to follow
+            return None
+        if not isinstance(link, dict) or not isinstance(link.get("run_id"), str):
+            return None
+        return link
 
     def active_run_ids(self) -> list[str]:
         """Ids of runs currently accepting a cancel request."""
@@ -1947,11 +2034,10 @@ class SubAgentDagTool(Tool):
     ) -> str | ToolResult:
         """Start a validated, minted spec running and return its first result.
 
-        The shared tail of `_execute` and `_submit_replan`: both have already
+        The tail of `_execute` and of a stint round: both have already
         validated, preflighted, and minted instances by the time they call this,
-        and what is left -- creating the cancel event, the outbox, the task, and
-        either parking on the first event or building the background message --
-        is identical between a fresh submission and an applied replan.
+        and what is left is creating the cancel event, the outbox and the task,
+        and either parking on the first event or building the background message.
         """
         # Taken once, here: every report of this run starts from this origin, and
         # several are sent where the dispatching span is no longer current -- a
@@ -1959,13 +2045,15 @@ class SubAgentDagTool(Tool):
         origin = replace(origin, dispatch_link=trace.dispatch_link())
         cancel = asyncio.Event()
         self._cancels[run_id] = cancel
+        identity = _RunIdentity(run_id=run_id, submitted=run_id)
+        self._identities[run_id] = identity
 
         outbox: Outbox | None = None
         if not background:
             outbox = Outbox(
                 conversation=origin.conversation,
-                announce_report=self._report_announcer(run_id, origin),
-                announce_final=self._final_announcer(run_id, origin),
+                announce_report=self._report_announcer(identity, origin),
+                announce_final=self._final_announcer(identity, origin),
             )
             self._outboxes[run_id] = outbox
 
@@ -2000,6 +2088,7 @@ class SubAgentDagTool(Tool):
                 capture,
                 stint,
                 admission,
+                identity=identity,
             )
         )
         self._runs[run_id] = task
@@ -2011,10 +2100,11 @@ class SubAgentDagTool(Tool):
             # a same-tick /stop or the shutdown sweep cancels it un-started.
             # Left behind, active_run_ids() lists the dead run forever and its
             # node rows stay pinned running. The pops are idempotent with the
-            # finally's own.
-            self._runs.pop(run_id, None)
-            self._cancels.pop(run_id, None)
-            self._desks.pop(run_id, None)
+            # finally's own. Under the id the run holds now: a replan switches it.
+            current = identity.run_id
+            self._runs.pop(current, None)
+            self._cancels.pop(current, None)
+            self._desks.pop(current, None)
             # Dropping the outbox here is what makes `resolve_dag_node`'s shape
             # load-bearing rather than stylistic: `release_turn` reaches a run
             # through this index, so a run that finishes before a taker exists has
@@ -2024,9 +2114,10 @@ class SubAgentDagTool(Tool):
             # that shape out of the source: a behavioural test only catches a yield
             # once it lasts long enough to lose the race, and the claim here is
             # about any yield at all.
-            self._outboxes.pop(run_id, None)
-            self._stints.pop(run_id, None)
-            self._run_contexts.pop(run_id, None)
+            self._outboxes.pop(current, None)
+            self._stints.pop(current, None)
+            self._run_contexts.pop(current, None)
+            self._identities.pop(current, None)
 
         task.add_done_callback(_retire)
         if self._adopt is not None and (refusal := self._adopt(run_id, task, origin.conversation)) is not None:
@@ -2093,137 +2184,259 @@ class SubAgentDagTool(Tool):
             display_text=f"DAG {run_id}: {len(spec.nodes)} nodes started",
         )
 
-    async def _submit_replan(self, plan: "ReplanPlan", *, bound: bool) -> "str | ToolResult":
-        """`_execute`'s post-validation half, replayed for an already-validated plan.
-
-        A second, cheap check regardless: the old run's id and its nodes' ids only
-        became free again once `await_finalized` returned, and a fresh submission
-        could have raced into one of them during that wait. Session nodes are read
-        plain here, with no overlay -- the old run has finalized by now, so its own
-        index entry already carries real statuses. Raises `DagValidationError`
-        rather than returning a refusal string, so `start_replan` can tell "the
-        link never started" apart from every other refusal shape and record it
-        that way.
-        """
-        spec = parse_dag_spec({"task_summary": plan.task_summary, "nodes": list(plan.nodes), "confirm": plan.confirm})
-        # Popped ahead of the revalidation: a plan that is refused here is dead,
-        # and its admission data must not outlive the decision it was prepared for.
-        pending = self._pending_submissions.pop(plan.run_id, None)
-        validate_and_order(
-            spec, self._reference_roots(), await self._session_nodes(), nodes_root=self._reference_nodes_root()
-        )
-        origin = self._origin.get() or self._default_origin
-        session_dir = self._session_dir_for(self._turn_conversation())
-        dirs = _RunDirs(
-            workdir=str(workdir.current() or self._workspace),
-            run_root=str(dag_root(session_dir)),
-            nodes_root=str(nodes_root(session_dir)),
-            subagents_root=str(session_history_root(session_dir)),
-        )
-        call_id = self._tool_call_id.get()
-        # The successor's own admission data, when this instance prepared it. The
-        # fallback covers a plan handed in from elsewhere: it can only describe
-        # the graph as already folded, which is still better than no role data.
-        if pending is not None:
-            submission, capabilities = pending
-        else:
-            submission = RunSubmission(
-                submitted=spec,
-                harness=None,
-                workers={},
-                named_instance_groups={
-                    node.id: (node.subagent, node.instance) for node in spec.nodes if node.instance is not None
-                },
-            )
-            capabilities = self._capability_map()
-        return await self._dispatch(
-            spec,
-            plan.run_id,
-            dirs,
-            plan.backends,
-            plan.auto_instances,
-            origin,
-            call_id,
-            background=not bound,
-            submission=submission,
-            capabilities=capabilities,
-        )
-
     async def prepare_replan(
         self, run_id: str, from_node: str, nodes: list[dict], reason: str, session_key: str | None, live: dict
-    ) -> "ReplanPlan | str":
-        """Validate a replacement graph and charge for it. The plan, or a refusal.
+    ) -> "ReplanProposal | str":
+        """Check a replan against the live run and build what it adds; the proposal, or a refusal.
 
-        Runs the same phases a submitted graph runs, in the same order and for the
-        same reasons (see ``_execute``): a refused graph must cost zero dispatches
-        and be refused in the caller's own turn.
-
-        The successor's run id is minted here, before the decision is handed over,
-        because the wind-down names it in every node reason it writes.
+        Everything that may await or ask happens here, against a snapshot of the
+        run, and nothing is spent or written: the runner commits the proposal at
+        the top of its next pass, plans it again over the run as it stands then,
+        and charges it there, so a replan the run overtook in the meantime costs
+        nothing. The refusals come in the order a decision's checks run: the run
+        and the node, the plan itself, the successor's graph, the groups a
+        reassign is moving, and last the user.
 
         ``live`` is passed in rather than read here: reconciling a run needs
-        loop-wide liveness (``dag_live.live_run_ids``) and this tool holds no
-        reference to the agent loop -- the control tool does, and its own
-        ``_read_live`` already asks exactly that question with the right source.
+        loop-wide liveness (``dag_live.live_run_ids``), which only the control
+        tool holds. It is laid over the session's index, so a node of this run
+        that completed reads as completed before the run is sealed.
         """
         if (member := self._stints.get(run_id)) is not None:
-            # A replanned run finishes as "replanned into", which is the one
-            # finish that announces nothing and hands nothing on -- so a round
-            # replanned this way would leave its stint waiting for a hand-over
-            # that is never coming, and the stint would stop without ever saying
-            # it had. Refused rather than made to work: a round is a compiled
-            # view of the role table, so the thing to change is the table.
+            # A round is a compiled view of the role table: the table is what has
+            # to change, and the stint would wait forever on a round that became
+            # another run.
             return (
                 f"Error: run {run_id} is round {member.round_index} of stint {member.stint_id}, "
                 "and a round cannot be replanned. Stop the stint, or let it reach the round "
-                "that acts on what you learned."
+                "that acts on what you learned. No decision was recorded."
             )
         if self._is_paused is not None and self._is_paused():
             return (
-                "Error: delegation is paused. The user paused sub-agent spawning; "
-                "do the work in this turn instead, or ask them to resume."
+                "Error: delegation is paused. The user paused sub-agent spawning; do the work in this "
+                "turn instead, or ask them to resume. No decision was recorded, so the node is still waiting."
             )
-        try:
-            raw_graph = json.loads(await self._read_graph_json(run_id, session_key))
-            raw_graph.pop("replan", None)
-            old = parse_dag_spec(raw_graph)
-            spec = parse_dag_spec({"task_summary": old.task_summary, "nodes": nodes, "confirm": old.confirm})
-            validate_and_order(
-                spec,
-                self._reference_roots(),
-                await self._session_nodes_for_replan(run_id, live),
-                nodes_root=self._reference_nodes_root(),
-            )
-            pre = await self._preflight(spec)
-        except DagValidationError as exc:
-            return self._validation_error(exc)
-        origin = self._origin.get() or self._default_origin
-        if pre.spec.confirm and not await self._confirmed(pre.spec, origin):
+        desk = self._desks.get(run_id)
+        admission = self._run_contexts.get(run_id)
+        if desk is None or admission is None or not desk.is_open(from_node) or desk.peek(from_node) is not None:
             return (
-                "The user did not approve this replan, so nothing was run and the old run is "
-                "still running as submitted. Ask them what to change before replanning again."
+                f"Node '{from_node}' of run {run_id} is no longer waiting for a decision, so the replan "
+                'was not applied and no decision was recorded. tool_call name "dag_status" shows where '
+                "every node stands."
             )
-        if self._charge is not None and (refusal := self._charge(origin.conversation)) is not None:
-            return refusal
-        submission = self._run_submission(spec, pre)
+        state = admission.state
+        # Read before anything awaits: the runner compares both again when it
+        # commits, so a replan the run has since overtaken is refused, not landed.
+        waiter = desk.waiter(from_node)
+        basis = state.revision
+        submitted = admission.submission.submitted
+        authored = admission.authored()
+        try:
+            listed = parse_dag_spec(
+                {"task_summary": submitted.task_summary, "nodes": nodes, "confirm": submitted.confirm}
+            ).nodes
+        except DagValidationError as exc:
+            return self._replan_refusal(str(exc))
+        classes = classify_nodes(
+            state.status,
+            begun={nid for nid, agents in state.attempt_agents.items() if agents},
+            in_flight=set(state.active_attempts),
+            queued=state.queued,
+            answered=from_node,
+        )
+        plan = plan_carry(
+            listed, authored=authored, current=state.effective_nodes, classes=classes, status=state.status
+        )
+        if isinstance(plan, list):
+            return self._replan_refusal("the replan cannot be applied: " + "; ".join(plan))
+        built_ids = {*plan.new, *plan.redefined}
+        entries = [node for node in listed if node.id in built_ids]
+        # The successor's graph as it is checked: each carried node with its
+        # authored definition and the agent and handle it dispatches under now, so
+        # a moved node is checked where it runs and no check reads a folded prompt.
+        carried_nodes = [
+            node
+            if node.id in built_ids
+            else node.model_copy(
+                update={
+                    "subagent": state.effective(node.id, node).subagent,
+                    "instance": state.effective(node.id, node).instance,
+                }
+            )
+            for node in plan.nodes
+            if node.id not in plan.new
+        ]
+        context = [authored.get(nid) or state.effective_nodes[nid] for nid in plan.context]
+        checked = SubAgentDagSpec(
+            task_summary=submitted.task_summary,
+            nodes=[*carried_nodes, *(node for node in plan.nodes if node.id in plan.new), *context],
+            confirm=submitted.confirm,
+        )
+        try:
+            known = await self._session_nodes_for_replan(run_id, live)
+            # Only what passes to the successor keeps its claim out of the check:
+            # the carried nodes (a redefined one is carried too) and the finished
+            # context, which is read rather than claimed. An id the plan adds is
+            # still checked against every run this conversation has made, as a
+            # plain submission checks it.
+            exempt = {*plan.carried, *plan.context}
+            view = SessionNodes(
+                owner={nid: owner for nid, owner in known.owner.items() if nid not in exempt},
+                state=known.state,
+                has_output=known.has_output,
+            )
+            validate_and_order(checked, self._reference_roots(), view, nodes_root=self._reference_nodes_root())
+            if refusal := self._moving_group_refusal(admission, entries, plan):
+                return refusal
+            with admission.mcp():
+                pre = await self._preflight(
+                    SubAgentDagSpec(task_summary=submitted.task_summary, nodes=entries, confirm=submitted.confirm)
+                )
+            notices = list(pre.notices)
+            notices.extend(
+                validate_capabilities(
+                    checked.model_copy(update={"nodes": [*carried_nodes, *pre.spec.nodes]}), pre.capabilities
+                )
+            )
+        except DagValidationError as exc:
+            return self._replan_refusal(str(exc))
         spec, _handed = self._with_skills(pre.spec, pre.capabilities, str(workdir.current() or self._workspace))
         spec, auto = self._mint_missing_instances(spec, pre.capabilities)
-        plan = ReplanPlan(
-            run_id=make_run_id(),
+        origin = self._origin.get() or self._default_origin
+        successor_run_id = make_run_id()
+        if submitted.confirm and not await self._confirmed(
+            spec, origin, question=self._replan_question(run_id, plan, reason, from_node)
+        ):
+            return (
+                f"The user did not approve this replan, so no decision was recorded and node '{from_node}' "
+                f"is still waiting; run {run_id} goes on as it is. Ask them what to change before "
+                "replanning again."
+            )
+        charge = self._charge
+        return ReplanProposal(
+            successor_run_id=successor_run_id,
             from_node=from_node,
             reason=reason,
-            nodes=tuple(spec.nodes),
-            backends=pre.backends,
+            waiter=waiter,
+            basis=basis,
+            entries=tuple(listed),
+            authored=authored,
+            plan=plan,
+            dispatch_nodes={node.id: node for node in spec.nodes},
+            backends={nid: backend for nid, backend in pre.backends.items() if nid in built_ids},
             auto_instances=auto,
-            notices=tuple(pre.notices),
-            task_summary=spec.task_summary,
-            confirm=spec.confirm,
+            notices=tuple(notices),
+            task_summary=submitted.task_summary,
+            confirm=submitted.confirm,
+            charge=(lambda: charge(admission.conversation)) if charge is not None else (lambda: None),
+            submission=self._successor_submission(admission.submission, plan, pre),
         )
-        # The admission record the successor will need if its own nodes are later
-        # reassigned. Keyed by the id its plan already names, consumed by the
-        # submission; the authored graph is the parsed one, not the folded copy.
-        self._pending_submissions[plan.run_id] = (submission, dict(pre.capabilities))
-        return plan
+
+    @staticmethod
+    def _replan_refusal(detail: str) -> str:
+        """A replan the checks refused, said the way every replan refusal ends."""
+        detail = detail.rstrip()
+        if detail and detail[-1] not in ".!?":
+            detail += "."
+        return f"Error: {detail} No decision was recorded, so the node is still waiting."
+
+    @staticmethod
+    def _moving_group_refusal(admission: "_RunAdmission", entries: list[DagNodeSpec], plan: CarryPlan) -> str | None:
+        """Refuse a replan that would disagree with a reassign about where a node runs.
+
+        A new or redefined node may not name an instance pair a reassign has moved,
+        or is moving, in this run -- on either side of the move -- and the plan may
+        not redefine a node a reassign moved or is moving.
+        """
+        state = admission.state
+        moved: set[tuple[str, str | None]] = set()
+        for source, target in state.group_current.items():
+            if target != source:
+                moved.update((source, target))
+        moving: set[str] = set()
+        for move in state.pending_moves.values():
+            moved.update(((move.source_agent, move.source_instance), (move.target_agent, move.target_instance)))
+            moving.update(move.members)
+        for reservation in admission.reservations.values():
+            moving.add(reservation.node_id)
+            moved.add((reservation.target_agent, reservation.target_instance))
+            source = state.effective_nodes.get(reservation.node_id)
+            if source is not None:
+                moved.add((source.subagent, source.instance))
+        for node in entries:
+            if node.instance is not None and (node.subagent, node.instance) in moved:
+                return SubAgentDagTool._replan_refusal(
+                    f"node '{node.id}' names instance '{node.instance}' on '{node.subagent}', which a reassign "
+                    "has moved or is moving in this run; give the node another instance"
+                )
+        for nid in plan.redefined:
+            if nid in state.reassigned or nid in moving:
+                return SubAgentDagTool._replan_refusal(
+                    f"node '{nid}' was moved by a reassign in this run, so the replan cannot redefine it; add a "
+                    "node under a new id instead"
+                )
+        return None
+
+    @staticmethod
+    def _replan_question(run_id: str, plan: CarryPlan, reason: str, answered: str) -> "Callable[[], str]":
+        """The confirm question for one replan: what it gives up, carries, adds, redefines and stops."""
+
+        def _question() -> str:
+            lines = [f"Replan DAG run {run_id}? Reason: {reason}", f"- given up: {answered}"]
+            for label, ids in (
+                ("carried", plan.carried),
+                ("new", plan.new),
+                ("redefined", plan.redefined),
+                ("stopped", plan.dropped),
+            ):
+                if ids:
+                    lines.append(f"- {label}: {', '.join(ids)}")
+            return "\n".join(lines)
+
+        return _question
+
+    @staticmethod
+    def _successor_submission(old: RunSubmission, plan: CarryPlan, pre: Preflight) -> RunSubmission:
+        """The successor's admission data: the old run's for what it carries unchanged, the preflight's for the rest."""
+        built = {*plan.new, *plan.redefined}
+        kept = {nid for nid in plan.carried if nid not in built}
+        resolved = {node.id: node.subagent for node in pre.spec.nodes}
+        named = {nid: pair for nid, pair in old.named_instance_groups.items() if nid in kept}
+        named.update(
+            {
+                node.id: (resolved[node.id], node.instance)
+                for node in plan.nodes
+                if node.id in built and node.instance is not None and node.id in resolved
+            }
+        )
+        return RunSubmission(
+            submitted=old.submitted.model_copy(update={"nodes": list(plan.nodes)}),
+            harness=old.harness,
+            workers={**{nid: w for nid, w in old.workers.items() if nid in kept}, **pre.workers},
+            named_instance_groups=named,
+        )
+
+    def propose_replan(self, run_id: str, proposal: ReplanProposal) -> "asyncio.Future | None":
+        """Post a prepared replan to its run. The future the runner resolves, or ``None`` when the desk refused it."""
+        desk = self._desks.get(run_id)
+        return desk.propose(proposal) if desk is not None else None
+
+    def withdraw_replan(self, proposal: ReplanProposal) -> bool:
+        """Take back a posted replan the runner has not taken yet. False when it has."""
+        return any(desk.withdraw(proposal) for desk in list(self._desks.values()))
+
+    def running_nodes(self, run_id: str, node_ids: "Iterable[str]") -> list[str]:
+        """Which of ``node_ids`` have an attempt in flight in ``run_id`` right now."""
+        admission = self._run_contexts.get(run_id)
+        if admission is None:
+            return []
+        return [nid for nid in node_ids if nid in admission.state.active_attempts]
+
+    def retire_reports(self, run_id: str, node_ids: "Iterable[str]") -> None:
+        """Settle the outbox's debt for reports a decision has answered, or a replan stopped."""
+        if (outbox := self._outboxes.get(run_id)) is not None:
+            for node_id in node_ids:
+                outbox.answered(node_id)
 
     def _run_submission(self, submitted: SubAgentDagSpec, pre: Preflight) -> RunSubmission:
         """The run's admission data, frozen before any runtime rewriting.
@@ -2619,10 +2832,10 @@ class SubAgentDagTool(Tool):
                 f"Error: DAG run {run_id} was cancelled, so the reassign was not applied. No decision "
                 f"was recorded, so node '{node_id}' is no longer waiting."
             )
-        if desk.replanned.is_set():
+        if desk.pending_proposal is not None:
             return (
-                f"Error: DAG run {run_id} is being replaced by a replan, so the reassign was not applied. "
-                "No decision was recorded."
+                f"Error: a replan of DAG run {run_id} is waiting to be applied, so the reassign was not "
+                "accepted. No decision was recorded."
             )
         if admission.submission.submitted.confirm:
             if self._ask is None:
@@ -2751,7 +2964,7 @@ class SubAgentDagTool(Tool):
             return False
         if desk.waiter(prepared.node_id) is not prepared.waiter:
             return False
-        if desk.replanned.is_set():
+        if desk.pending_proposal is not None:
             return False
         cancel = self._cancels.get(run_id)
         if cancel is not None and cancel.is_set():
@@ -2784,12 +2997,6 @@ class SubAgentDagTool(Tool):
             outbox.answered(prepared.node_id)
         return True
 
-    async def _read_graph_json(self, run_id: str, session_key: str | None) -> str:
-        """One run's submitted graph, as text."""
-        root = self._run_root(session_key)
-        path = self._backend.join_path(run_dir_of(self._backend, root, run_id), "graph.json")
-        return (await self._backend.read_file(path)).decode("utf-8", errors="replace")
-
     async def _session_nodes_for_replan(self, run_id: str, live: dict) -> SessionNodes:
         """This session's node index, with the replanned run's live state laid over it.
 
@@ -2811,112 +3018,6 @@ class SubAgentDagTool(Tool):
             # -- the very refusal the overlay exists to prevent.
             has_output[entry["node"]] = bool(entry.get("output_file") or entry.get("output"))
         return SessionNodes(owner=dict(known.owner), state=state, has_output=has_output)
-
-    async def await_finalized(self, run_id: str) -> None:
-        """Wait for one run's task to end, so its per-node outcomes are on disk.
-
-        The successor's validation reads them, and a run whose index entry has no
-        statuses reads back as still running. Returns at once for a run id not in
-        this instance's own ``_runs`` -- true both when it already ended and when
-        it never started here, because a second graph tool instance is running it
-        (see ``dag_live``'s module docstring). Callers must resolve the owning
-        instance first, with ``dag_live.owning_tool``, or this returns instantly
-        without having waited for anything.
-        """
-        task = self._runs.get(run_id)
-        if task is not None and not task.done():
-            await asyncio.wait([task])
-
-    async def _record_link(self, run_id: str, entry: dict[str, Any]) -> None:
-        """Note the replan link on `run_id`'s own graph.json."""
-        session_key = self._turn_conversation()
-        store = DagRunStore(
-            self._backend,
-            self._run_root(session_key),
-            run_id,
-            nodes_root=self._nodes_root(session_key),
-            registry_root=self._history_root(session_key) or self._run_root(session_key),
-        )
-        await store.record_replan(entry)
-
-    @staticmethod
-    def _link_entry(plan: "ReplanPlan", *, started: bool, error: str | None = None) -> dict[str, Any]:
-        """The replan link's shape, in the one place that decides it.
-
-        Both writers -- the ordinary hand-off and the interrupted one -- record
-        the same four facts about the decision and differ only in whether the
-        successor started and why not. Written out twice, a field added for one
-        reader silently reaches only half the records that reader will meet.
-        """
-        entry: dict[str, Any] = {
-            "run_id": plan.run_id,
-            "from_node": plan.from_node,
-            "reason": plan.reason,
-            "decided_at": int(time.time() * 1000),
-            "started": started,
-        }
-        if error is not None:
-            entry["error"] = error
-        return entry
-
-    async def start_replan(self, run_id: str, plan: "ReplanPlan", *, bound: bool = False) -> "str | ToolResult":
-        """Start the successor run and note the link on the run it replaces."""
-        # Built before the submission, so `decided_at` stamps when the decision
-        # was taken rather than when its dispatch happened to return.
-        entry = self._link_entry(plan, started=True)
-        try:
-            result = await self._submit_replan(plan, bound=bound)
-        except DagValidationError as exc:
-            entry["started"] = False
-            entry["error"] = str(exc)
-            result = self._validation_error(exc)
-        await self._record_link(run_id, entry)
-        return result
-
-    async def record_interrupted_replan(self, run_id: str, plan: "ReplanPlan", reason: str) -> None:
-        """Note an aborted hand-off on ``run_id``'s own graph.json.
-
-        For the stretch between a successful ``resolve_node`` and ``start_replan``:
-        ``emit_replanned`` and ``await_finalized`` run in it, and an interruption
-        there (a ``/stop`` cancelling this call is realistic) would otherwise
-        leave the link unrecorded -- even though the desk already answered and
-        every node's wind-down reason already names ``plan.run_id`` as the
-        successor. Without this, a reader of ``run_id``'s graph.json sees nodes
-        pointing at a run this file never admits was even attempted.
-
-        This narrows that window rather than closing it. ``start_replan`` records
-        the link once ``_submit_replan`` has returned or raised
-        ``DagValidationError``, so a cancellation from inside the submission --
-        a bound dispatch parks on the successor's first event, the longest await
-        in the hand-off -- escapes both guards and still leaves the link
-        unwritten.
-        """
-        await self._record_link(run_id, self._link_entry(plan, started=False, error=reason))
-        self._pending_submissions.pop(plan.run_id, None)
-
-    async def _emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
-        origin = self._origin.get() or self._default_origin
-        emit = self._emitter(origin.conversation, self._tool_call_id.get())
-        await emit(
-            "dag_run_replanned",
-            {
-                "run_id": run_id,
-                "replan_run_id": plan.run_id,
-                "from_node": plan.from_node,
-                "reason": plan.reason,
-            },
-        )
-
-    async def emit_replanned(self, run_id: str, plan: "ReplanPlan") -> None:
-        """Tell the wire a replan is under way, before the old run winds down.
-
-        Called by the control tool right after the node hand-off succeeds, and
-        before it waits out the old run's finish -- the web UI's live tracking
-        for a run is keyed by ``run_id`` and is dropped the moment that run's own
-        ``dag_run_completed`` arrives, so this has to land before that happens,
-        not after ``start_replan`` returns.
-        """
-        await self._emit_replanned(run_id, plan)
 
     async def _node_backend(self, node: DagNodeSpec) -> tuple[Any, list[str]]:
         """One node's dispatch backend, and the downgrade notices it earned.
@@ -3092,6 +3193,7 @@ class SubAgentDagTool(Tool):
         capture: tuple[Any, SubAgentDagSpec] | None = None,
         stint: StintRef | None = None,
         admission: _RunAdmission | None = None,
+        identity: _RunIdentity | None = None,
     ) -> None:
         """Run a graph as its own task, then hand the result on.
 
@@ -3104,7 +3206,12 @@ class SubAgentDagTool(Tool):
         is one round of a multi-round stint either hands over to the next round
         and says nothing, or is the last round and carries the whole stint's
         result out through the ordinary announce.
+
+        ``identity`` is the run's identity as the dispatch filed it. A replan
+        switches it to the successor, whose result is the one handed on, under the
+        successor's id; without one the run keeps the id it was started with.
         """
+        identity = identity if identity is not None else _RunIdentity(run_id=run_id, submitted=run_id)
         try:
             result = await self._run(
                 spec,
@@ -3119,6 +3226,7 @@ class SubAgentDagTool(Tool):
                 capture=capture,
                 stint=stint,
                 admission=admission,
+                identity=identity,
             )
         except asyncio.CancelledError:
             if outbox is not None:
@@ -3129,19 +3237,8 @@ class SubAgentDagTool(Tool):
             # `_run` itself used to propagate to the inline caller. Detached, it would
             # die with the task and leave the outbox's taker waiting forever, so it
             # takes the same shape and travels the same route.
-            logger.opt(exception=True).error("DAG run {} raised outside run_dag: {}", run_id, exc)
-            result = f"Error running DAG {run_id}: {exc}"
-        if getattr(result, "replanned_into", None):
-            # Checked before the outbox: a released outbox stays in `_outboxes`
-            # exactly like a bound one, so `put_final` would reach it here too
-            # and announce the raw `DagRunResult` this branch exists to suppress
-            # (`_run` skips rendering one when replanned -- see its docstring).
-            # The resolve call already returned both halves of the decision to
-            # the agent; announcing "3 completed, 1 failed, 2 skipped" here
-            # would narrate what it just decided -- the same reason a cancelled
-            # run stays silent one branch below.
-            logger.info("DAG run {} was replanned into {}; not announcing a result", run_id, result.replanned_into)
-            return
+            logger.opt(exception=True).error("DAG run {} raised outside run_dag: {}", identity.run_id, exc)
+            result = f"Error running DAG {identity.run_id}: {exc}"
         if outbox is not None:
             await outbox.put_final(result, stopped=cancel.is_set())
             return
@@ -3176,19 +3273,19 @@ class SubAgentDagTool(Tool):
             # skipped, but announcing that would spend a turn narrating what
             # they just cancelled -- which is why a cancelled spawn stays
             # silent too.
-            logger.info("DAG run {} was stopped; not announcing a result", run_id)
+            logger.info("DAG run {} was stopped; not announcing a result", identity.run_id)
             return
         if self._announce is None:
-            logger.info("DAG run {} finished with no announcer wired; result reaches no one", run_id)
+            logger.info("DAG run {} finished with no announcer wired; result reaches no one", identity.run_id)
             return
         try:
             await self._announce(
-                run_id,
+                identity.run_id,
                 str(getattr(result, "model_text", result)),
                 origin.as_dict(),
             )
         except Exception as exc:  # noqa: BLE001 - a failed announce must not also lose the log line
-            logger.error("DAG run {} finished but its result could not be announced: {}", run_id, exc)
+            logger.error("DAG run {} finished but its result could not be announced: {}", identity.run_id, exc)
 
     @staticmethod
     async def _close_graph(emit: ProgressPublisher, run_id: str, node_count: int, detail: dict) -> None:
@@ -3323,13 +3420,15 @@ class SubAgentDagTool(Tool):
         capture: tuple[Any, SubAgentDagSpec] | None = None,
         stint: StintRef | None = None,
         admission: _RunAdmission | None = None,
+        identity: _RunIdentity | None = None,
     ) -> str | ToolResult | DagRunResult:
         """Execute one validated graph and render its outcome.
 
-        Returns the raw ``DagRunResult`` rather than rendering it when the run
-        was replanned -- there is no outcome of its own left to narrate, and
-        ``_run_detached`` needs ``replanned_into`` on the object it gets back.
+        A replan the runner commits switches ``identity`` to the successor through
+        ``_switch_run``, and the outcome rendered is the last run of the chain;
+        every exit below reads the id from the identity.
         """
+        identity = identity if identity is not None else _RunIdentity(run_id=run_id, submitted=run_id)
         emit = self._emitter(origin.conversation, call_id, stint)
         desk = AdjudicationDesk()
         self._desks[run_id] = desk
@@ -3411,6 +3510,7 @@ class SubAgentDagTool(Tool):
                 model=model,
                 reassignment_state=admission.state if admission is not None else None,
                 build_reassigned=admission.build if admission is not None else None,
+                on_switch=self._switch_run,
             )
         except DagValidationError as exc:
             return self._validation_error(exc)
@@ -3420,8 +3520,8 @@ class SubAgentDagTool(Tool):
             # own, so a bare error is one it cannot attribute to any of the
             # graphs it has in flight. The summary carries that itself rather
             # than the announce framing it -- see ``announce_dag_result``.
-            await self._close_graph(emit, run_id, len(spec.nodes), {"error": str(exc)})
-            return f"Error running DAG {run_id}: {exc}"
+            await self._close_graph(emit, identity.run_id, len(spec.nodes), {"error": str(exc)})
+            return f"Error running DAG {identity.run_id}: {exc}"
         except asyncio.CancelledError:
             # The other way a run is stopped. The model's ``cancel_dag`` tool
             # (via ``cancel_dag_run``) sets the event and
@@ -3435,15 +3535,21 @@ class SubAgentDagTool(Tool):
             # fragile, which is what the bound in ``_close_graph`` is for. A
             # close that loses the race changes nothing -- the task ends
             # cancelled either way.
-            await self._close_graph(emit, run_id, len(spec.nodes), {"stopped": True})
+            await self._close_graph(emit, identity.run_id, len(spec.nodes), {"stopped": True})
             raise
         finally:
-            self._cancels.pop(run_id, None)
-            self._desks.pop(run_id, None)
-            self._run_contexts.pop(run_id, None)
+            self._cancels.pop(identity.run_id, None)
+            self._desks.pop(identity.run_id, None)
+            self._run_contexts.pop(identity.run_id, None)
 
         # A terminal event carrying the authoritative manifest, so the web UI can
-        if capture is not None and _successful_final(Final(result, stopped=cancel.is_set())):
+        # A replanned chain is never captured: the graph it finished is not the one
+        # submitted, and its successor's id is what it finished under.
+        if (
+            capture is not None
+            and result.run_id == identity.submitted
+            and _successful_final(Final(result, stopped=cancel.is_set()))
+        ):
             from raven.playbook.run_record import record_completed_dag, rewrite_completed_dag
 
             recorded, recorded_harness, attempt_agents = capture[1], None, None
@@ -3480,13 +3586,6 @@ class SubAgentDagTool(Tool):
                 },
             },
         )
-
-        if result.replanned_into:
-            # Narrating "N completed, M failed" here would be for a run the agent
-            # itself just decided to end; _run_detached reads this attribute to
-            # skip announcing it, and the resolve call already returned both
-            # halves of the decision to the agent.
-            return result
 
         lines: list[str] = [
             f"DAG run {result.run_id} finished: {format_tally(result.summary)}.",

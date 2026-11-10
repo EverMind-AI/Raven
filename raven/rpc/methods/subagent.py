@@ -272,8 +272,10 @@ def _dag_rows(root: Path, session_id: str, live_runs: set[str]) -> list[dict[str
             # not-executed node is the same: a branch that was not taken never
             # called a sub-agent, and the stamps it carries only date the
             # moment that was decided. A cancelled node is the opposite case:
-            # it ran, so its row opens onto a real transcript and stays.
-            if status in ("skipped", "not_executed"):
+            # it ran, so its row opens onto a real transcript and stays. A carried
+            # node is listed once, under the run that holds it now: its entry in
+            # the sealed run is the hand-off record, not a second row.
+            if status in ("skipped", "not_executed", "carried"):
                 continue
             tools = entry.get("tool_calls")
             # One resolver for every reader: the registry row records who is

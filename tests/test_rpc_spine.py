@@ -2364,3 +2364,27 @@ async def test_a_turns_end_lets_go_of_what_it_measured(end):
     await sink(event)
 
     assert live == {}
+
+
+def test_the_replanned_frame_carries_the_carried_list() -> None:
+    from raven.rpc.spine import _dag_payload
+
+    replanned = _dag_payload(
+        "dag_run_replanned",
+        {"run_id": "a", "replan_run_id": "b", "from_node": "r2", "reason": "wrong", "carried": ["r1", "r3"]},
+    )
+    completed = _dag_payload(
+        "dag_run_completed",
+        {
+            "run_id": "a",
+            "manifest": {
+                "dir": "/w/a",
+                "summary": {"total": 2, "carried": 1, "failed": 1},
+                "files": [{"node": "r1", "status": "carried", "carried_into": "b"}, {"node": "r2", "status": "failed"}],
+            },
+        },
+    )
+
+    assert replanned["carried"] == ["r1", "r3"]
+    assert completed["files"][0]["carried_into"] == "b"
+    assert "carried_into" not in completed["files"][1], "only a carried node names where it went"

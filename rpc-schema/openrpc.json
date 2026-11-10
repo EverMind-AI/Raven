@@ -16396,7 +16396,7 @@
         }
       },
       "DagNodeStatus": {
-        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
+        "description": "Per-node status reported by the DAG runner. 'interrupted' never comes off the wire -- it is what a client infers for a node still called running when the run stopped reporting. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal. 'carried' is a node a replan carried into a successor run: it appears only in the sealed record of the run it left, names that run in carried_into, and is terminal there -- no live run has one.",
         "type": "string",
         "enum": [
           "pending",
@@ -16406,11 +16406,12 @@
           "skipped",
           "cancelled",
           "exception",
-          "not_executed"
+          "not_executed",
+          "carried"
         ]
       },
       "DagSnapshotNodeStatus": {
-        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal.",
+        "description": "Per-node status in a run read back off disk. Unlike the event vocabulary this includes 'interrupted', which the server infers for a node the registry still calls running on a run nothing is executing. 'exception' is a node that finished without accomplishing its task and is waiting on a decision; it is not terminal. 'not_executed' is a node a branch left out -- its guard was false or unknown, or every dependency of it was not executed. It never ran, and it is terminal. 'carried' is a node a replan carried into a successor run: it appears only in the sealed record of the run it left, names that run in carried_into, and is terminal there -- no live run has one.",
         "type": "string",
         "enum": [
           "pending",
@@ -16421,7 +16422,8 @@
           "cancelled",
           "interrupted",
           "exception",
-          "not_executed"
+          "not_executed",
+          "carried"
         ]
       },
       "DagNotExecutedReason": {
@@ -16536,6 +16538,10 @@
           "when": {
             "description": "The guard: this node runs only if the expression holds once its dependencies settle. Absent on a node with no guard.",
             "type": "string"
+          },
+          "carried_into": {
+            "type": "string",
+            "description": "The run that holds this node now. Present only on a carried node, in the sealed record of the run it left."
           }
         }
       },
@@ -16610,6 +16616,10 @@
               },
               "not_executed": {
                 "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
+                "type": "integer"
+              },
+              "carried": {
+                "description": "Nodes a replan carried into its successor. Present only when there is at least one, which only a sealed run has.",
                 "type": "integer"
               }
             }
@@ -16862,7 +16872,7 @@
         }
       },
       "DagRunReplannedEvent": {
-        "description": "A replan decision started a successor run for a node that could not proceed; replan_run_id names the new run.",
+        "description": "A replan decision sealed this run and started a successor for a node that could not proceed; replan_run_id names the new run, and carried lists the work it took over, still running or waiting.",
         "type": "object",
         "additionalProperties": false,
         "required": [
@@ -16898,6 +16908,13 @@
               },
               "reason": {
                 "type": "string"
+              },
+              "carried": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The unfinished nodes the replan carried into the successor run, which go on there as they were."
               }
             }
           }
@@ -17007,6 +17024,10 @@
                   "not_executed": {
                     "description": "Nodes a branch left out. Present only when there is at least one, so a run that never branches carries the five counts it always did.",
                     "type": "integer"
+                  },
+                  "carried": {
+                    "description": "Nodes a replan carried into its successor. Present only when there is at least one, which only a sealed run has.",
+                    "type": "integer"
                   }
                 }
               },
@@ -17068,6 +17089,10 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "carried_into": {
+                      "type": "string",
+                      "description": "The run that holds this node now. Present only on a carried node, in the sealed record of the run it left."
                     }
                   }
                 }
@@ -18099,7 +18124,8 @@
           "cancelled",
           "interrupted",
           "exception",
-          "not_executed"
+          "not_executed",
+          "carried"
         ],
         "properties": {
           "total": {
@@ -18133,6 +18159,10 @@
           "not_executed": {
             "type": "integer",
             "description": "Nodes a branch left out. They never ran, and an unselected branch does not move the task's status: a run of completed and not_executed nodes is completed."
+          },
+          "carried": {
+            "type": "integer",
+            "description": "Nodes a replan carried into the successor run. Only a sealed run has them, and they move no rung of the task's status: the run reads as the hand-off its replan link says it was."
           }
         }
       },
@@ -18169,6 +18199,16 @@
               "string",
               "null"
             ]
+          },
+          "carried": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The unfinished nodes the replan carried into the successor run, which go on there as they were."
           }
         }
       },
@@ -18380,6 +18420,13 @@
             "items": {
               "$ref": "#/components/schemas/TaskFile"
             }
+          },
+          "carried_into": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run that holds this node now. Present only on a carried node, in the sealed record of the run it left."
           }
         }
       },

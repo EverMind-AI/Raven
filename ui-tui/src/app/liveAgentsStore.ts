@@ -26,6 +26,7 @@ import type { SubagentProgress } from '../types.js'
 
 export type LiveAgentStatus =
   | 'cancelled'
+  | 'carried'
   | 'completed'
   | 'exception'
   | 'failed'
@@ -56,7 +57,14 @@ export interface LiveAgentRow {
   status: LiveAgentStatus
 }
 
-const TERMINAL: ReadonlySet<LiveAgentStatus> = new Set(['cancelled', 'completed', 'failed', 'not_executed', 'skipped'])
+const TERMINAL: ReadonlySet<LiveAgentStatus> = new Set([
+  'cancelled',
+  'carried',
+  'completed',
+  'failed',
+  'not_executed',
+  'skipped'
+])
 
 export const isTerminal = (status: LiveAgentStatus): boolean => TERMINAL.has(status)
 
@@ -240,6 +248,10 @@ type DagEvent = DagNodeUpdatedEvent | DagRunCompletedEvent | DagRunStartedEvent
 
 const DAG_TO_LIVE: Record<string, LiveAgentStatus> = {
   cancelled: 'cancelled',
+  // Only a sealed run's record says this, and only of a node a replan handed to
+  // the successor: the run it left is over, and the row the strip keeps for the
+  // node under the successor is the live one.
+  carried: 'carried',
   completed: 'completed',
   exception: 'exception',
   failed: 'failed',
@@ -668,6 +680,9 @@ export const agentRows = (rows: readonly LiveAgentRow[]): LiveAgentRow[] =>
 
 const LIVE_TO_PROGRESS: Record<LiveAgentStatus, SubagentProgress['status']> = {
   cancelled: 'interrupted',
+  // The successor's row is the one with work left on it; this run's reads as
+  // settled and untroubled rather than as a failure or an open line.
+  carried: 'completed',
   completed: 'completed',
   exception: 'interrupted',
   failed: 'failed',

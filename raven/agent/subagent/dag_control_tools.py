@@ -30,6 +30,82 @@ from raven.contracts.tool import Tool, ToolResult
 _PROMPT_LINE_LIMIT = 10
 
 
+async def _holding(tool: Any, run_id: str, node_id: str, session_key: str | None) -> str:
+    """The run that holds ``node_id`` now: ``run_id``, or a successor a replan carried the node into.
+
+    A report names the run it was sent from, and a replan may since have carried
+    its node on. The link is read under this conversation's own run history, so
+    following it never leaves the conversation.
+    """
+    follow = getattr(tool, "successor_holding", None)
+    if follow is None:
+        return run_id
+    try:
+        return str(await follow(run_id, node_id, session_key))
+    except Exception:  # noqa: BLE001 - an unreadable chain answers for the run the caller named
+        return run_id
+
+
+def _replan_applied(run_id: str, node_id: str, outcome: Any, running: list[str]) -> str:
+    """What a committed replan did, in the order the model acts on it."""
+    parts: list[str] = []
+    if outcome.carried:
+        carried = "carried " + ", ".join(outcome.carried)
+        if running:
+            carried += f" (still running: {', '.join(running)})"
+        parts.append(carried)
+    if outcome.added:
+        parts.append("added " + ", ".join(outcome.added))
+    if outcome.redefined:
+        parts.append("redefined " + ", ".join(outcome.redefined))
+    if outcome.stopped:
+        parts.append("stopped " + ", ".join(outcome.stopped))
+    parts.append(f"node {node_id} failed, superseded by the replan")
+    return f"Run {run_id} was replanned into run {outcome.successor_run_id}: " + "; ".join(parts) + "."
+
+
+def _replan_refused(run_id: str, node_id: str, outcome: Any) -> str:
+    """A replan the runner refused at commit: why, that nothing was recorded, and what to do."""
+    reason = (outcome.reason or "the run could not apply it").rstrip(". ")
+    if outcome.still_waiting:
+        return (
+            f"The replan of run {run_id} was not applied: {reason}. No decision was recorded, and node "
+            f"'{node_id}' is still waiting -- prepare the replan again against the run as it is now, or "
+            "decide otherwise."
+        )
+    return (
+        f"The replan of run {run_id} was not applied: {reason}. No decision was recorded, and node "
+        f"'{node_id}' is no longer waiting. "
+        'tool_call name "dag_status" shows where every node stands.'
+    )
+
+
+def _prefixed(head: str, result: "str | ToolResult") -> "str | ToolResult":
+    """``head``, then the event a bound call goes on to return."""
+    if isinstance(result, ToolResult):
+        return ToolResult(
+            model_text=f"{head}\n\n{result.model_text}",
+            display_text=result.display_text,
+            agent_output=result.agent_output,
+        )
+    return f"{head}\n\n{result}"
+
+
+async def _sealed_line(tool: Any, run_id: str, session_key: str | None) -> str | None:
+    """The line a run a replan sealed gets: which run holds what is still going."""
+    read = getattr(tool, "replan_link", None)
+    if read is None:
+        return None
+    try:
+        link = await read(run_id, session_key)
+    except Exception:  # noqa: BLE001 - a run whose link cannot be read is reported as it reads
+        return None
+    if link is None or not link.get("started", True):
+        return None
+    successor = link["run_id"]
+    return f"run {run_id} was replanned into run {successor}; {successor} holds what is still going"
+
+
 def _not_waiting(run_id: str, node_id: str) -> str:
     """The refusal for a replan whose node is not suspended.
 
@@ -154,6 +230,10 @@ class CancelDagTool(_ControlTool):
                 'this conversation\'s run history to be cancelled. tool_call name "dag_status" '
                 "with no run_id lists the runs this conversation has in flight."
             )
+        if (sealed := await _sealed_line(tool, run_id, self._session.get())) is not None:
+            # A sealed run has nothing left to stop, and its successor is a run
+            # of its own: stopping that is a decision about that run, by its id.
+            return sealed + ". Nothing was stopped; cancel the successor by its own run id to stop it."
         if not cancel_run(self._loop, run_id):
             return (
                 f"No in-flight DAG run {run_id} to cancel: it is not running, or the id is wrong. "
@@ -184,8 +264,9 @@ class ResolveDagNodeTool(_ControlTool):
         return (
             "Decide what happens to a DAG node that reported it could not accomplish its "
             "task: continue it with a message, abandon it and skip its dependents, reassign "
-            "it to another sub-agent on the roster, or replan -- hand over a new node list, "
-            "which stops this run and starts a new one from that list. On a run started with "
+            "it to another sub-agent on the roster, or replan -- hand over a new plan: a new run "
+            "starts from it, and the work in progress it lists or depends on is carried into it. "
+            "On a run started with "
             "background=false this call also waits, and returns the next report or the run's "
             "final result."
         )
@@ -219,9 +300,10 @@ class ResolveDagNodeTool(_ControlTool):
                         "'abandon' fails the node and skips its dependents; the rest of the "
                         "graph carries on. 'reassign' hands the node to another sub-agent on "
                         "the roster, named by `agent`, and keeps its task and place in the "
-                        "graph. 'replan' replaces what is left of the graph with the `nodes` "
-                        "you supply: this run stops, and a new run starts from your list. To "
-                        'stop everything instead, use tool_call name "cancel_dag".'
+                        "graph. 'replan' replaces the plan: a new run starts from the `nodes` "
+                        "you supply, and the work in progress your plan lists or depends on is "
+                        "carried into it without stopping. Everything else that has not finished "
+                        'stops with this run. To stop everything instead, use tool_call name "cancel_dag".'
                     ),
                 },
                 "agent": agent,
@@ -237,9 +319,13 @@ class ResolveDagNodeTool(_ControlTool):
                     "type": "array",
                     "items": schema,
                     "description": (
-                        "The replacement graph, required when replanning. Nodes this run "
-                        "already completed are NOT re-declared -- name one in depends_on and "
-                        "read it with {{ <id>.output }}. Every other node needs a new id."
+                        "Required when replanning: the new run's plan. A new id adds a node. A "
+                        "node of this run that has not started is carried when you list it or "
+                        "depend on it -- list it with changes to redefine it -- and stops "
+                        "otherwise. A node of this run in progress is carried, still running, "
+                        "when you list it unchanged or depend on it, and stops otherwise. Never "
+                        "list a finished node: depend on it to read it. The node you are "
+                        "answering is given up; redo its work under a new id."
                     ),
                 },
             },
@@ -263,11 +349,11 @@ class ResolveDagNodeTool(_ControlTool):
         The registry consults this to decide whether to put a ceiling on the
         call, and the turn stream reports it as the call's blocking flag; both
         must say "may go silent" for exactly the calls that will wait on the
-        graph and for no others. A background replan also waits for the answered
-        run's wind-down, but that wait is bounded and short by construction: the
-        replan event cancels the round in flight, and only status marking and a
-        manifest write remain. If a background replan is ever observed to hang,
-        this predicate is the first thing to revisit.
+        graph and for no others. A background replan also waits, for the runner
+        to commit it, but that wait is short by construction: posting the
+        proposal wakes the runner, which commits it at the top of its next pass.
+        If a background replan is ever observed to hang, this predicate is the
+        first thing to revisit.
         """
         tool = _registered_tool(self._loop)
         is_foreground = getattr(tool, "is_foreground", None)
@@ -316,6 +402,9 @@ class ResolveDagNodeTool(_ControlTool):
                 f"Cannot resolve node '{node_id}' of DAG run {run_id}: run ownership cannot be "
                 "resolved here (no run_subagent_dag tool is registered), so nothing was signalled."
             )
+        # A report names the run it was sent from; a replan may since have carried
+        # the node into a successor, which is the run that can answer it now.
+        run_id = await _holding(tool, run_id, node_id, self._session.get())
         if decision == REASSIGN:
             # Its own admission, not the resolver helpers': those take a replan's
             # plan and would smuggle this decision through a shape it was not
@@ -386,12 +475,13 @@ class ResolveDagNodeTool(_ControlTool):
         if decision == REPLAN:
             # Ahead of every step below, because each of them costs something a
             # refused replan must not spend: the reconciled read, then -- inside
-            # prepare_replan -- the confirm question, the dispatch quota and the
-            # minted instances, none of which is refunded when the hand-off later
-            # finds nobody waiting. An answer for an unwaited node is ordinary
-            # (a decision past the adjudication deadline, a stopped run, a
-            # mistyped id), so without this a handful of them exhausts the
-            # session's hourly budget having dispatched nothing.
+            # prepare_replan -- the confirm question and the minted instances,
+            # neither of which is refunded when the hand-off later finds nobody
+            # waiting. (The dispatch quota is charged at commit, so a proposal
+            # nobody takes spends none of it.) An answer for an unwaited node is
+            # ordinary (a decision past the adjudication deadline, a stopped run,
+            # a mistyped id), so without this a handful of them would walk the
+            # user through a confirmation and mint handles for nothing.
             #
             # Only when the answer is a definite no: `None` means no instance
             # here implements the question, and the hand-off below stays the
@@ -415,36 +505,41 @@ class ResolveDagNodeTool(_ControlTool):
             # replan-specific call below needs whichever instance actually holds
             # this run's task, desk and outbox.
             owner = owning_tool(self._loop, run_id)
-            plan = await owner.prepare_replan(
+            proposal = await owner.prepare_replan(
                 run_id, node_id, nodes or [], (message or "").strip(), self._session.get(), live
             )
-            if isinstance(plan, str):
-                return plan
-            # Read before the hand-off: `_retire` drops the old run's outbox as
-            # soon as its task ends, so by `start_replan` the lane it was asked
-            # for is no longer discoverable.
+            if isinstance(proposal, str):
+                return proposal
             was_bound = bool(getattr(owner, "is_foreground", lambda _r: False)(run_id))
-            if not resolve_node(self._loop, run_id, node_id, decision, message, plan):
+            future = owner.propose_replan(run_id, proposal)
+            if future is None:
                 return _not_waiting(run_id, node_id)
-            # Emitted here, not in start_replan: resolve_node returning False above
-            # (an answer for a node nothing is waiting on any more) must announce
-            # nothing, and start_replan only runs after await_finalized, by which
-            # point the old run may already be gone from the web UI's live tracking.
-            # start_replan records the link for anything it returns from or
-            # refuses as invalid, which leaves this stretch uncovered -- the desk
-            # already answered, so an interruption here (a `/stop` cancelling this
-            # call is realistic) must not leave the link missing.
-            # CancelledError still has to propagate, so this records and re-raises
-            # rather than swallowing it.
+            # The wait is short by construction: the post woke the runner, which
+            # commits at the top of its next pass. A cancelled call takes back a
+            # proposal the runner has not taken yet; a committed replan stands.
             try:
-                await owner.emit_replanned(run_id, plan)
-                await owner.await_finalized(run_id)
-            except BaseException:
-                await owner.record_interrupted_replan(
-                    run_id, plan, "Interrupted between the node hand-off and starting the replan."
-                )
+                outcome = await future
+            except asyncio.CancelledError:
+                owner.withdraw_replan(proposal)
                 raise
-            return _with_notices(await owner.start_replan(run_id, plan, bound=was_bound), list(plan.notices))
+            if not outcome.applied:
+                return _replan_refused(run_id, node_id, outcome)
+            successor = outcome.successor_run_id
+            running = list(getattr(owner, "running_nodes", lambda _r, _ids: [])(successor, outcome.carried))
+            text = _replan_applied(run_id, node_id, outcome, running)
+            if was_bound:
+                # The run's outbox is the same object, now filed under the
+                # successor: the reports this replan answered or stopped are
+                # settled, and the call waits for what the successor says next.
+                owner.retire_reports(successor, (node_id, *outcome.stopped_suspended))
+                try:
+                    event = await owner.await_run(successor)
+                except asyncio.CancelledError:
+                    owner.abort_run(successor)
+                    raise
+                if event is not None:
+                    return _with_notices(_prefixed(text, owner.render_event(successor, event)), list(proposal.notices))
+            return _with_notices(text, list(proposal.notices))
         if not resolve_node(self._loop, run_id, node_id, decision, message):
             return (
                 f"Node '{node_id}' of run {run_id} is no longer waiting for a decision: it timed "
@@ -521,7 +616,8 @@ class DagStatusTool(_ControlTool):
                 f'No DAG run {run_id} found: {exc}. tool_call name "dag_status" with no run_id '
                 "lists the runs currently in flight."
             )
-        return _render_run(run)
+        sealed = await _sealed_line(_registered_tool(self._loop), run_id, self._session.get())
+        return _render_run(run) if sealed is None else sealed + "\n\n" + _render_run(run)
 
 
 def _field(label: str, value: str) -> list[str]:
@@ -558,6 +654,11 @@ def _render_run(run: dict[str, Any]) -> str:
         f"task_summary: {run.get('task_summary') or '(none)'}",
     ]
     for entry in run.get("files", []):
+        if entry.get("status") == "carried" and entry.get("carried_into"):
+            # A replan carried it on: the run that holds it now has everything
+            # else about it, so the sealed run names where to look.
+            lines.append(f"- {entry['node']} [carried into run {entry['carried_into']}]")
+            continue
         lines.append(f"- {entry['node']} [{entry.get('status')}]")
         lines += _field("node_summary", entry.get("node_summary") or "(none)")
         lines += _field("subagent", entry.get("subagent") or "(none)")
