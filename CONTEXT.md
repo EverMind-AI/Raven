@@ -1660,10 +1660,17 @@ The window divided: one request's prompt by part — the system prompt, the tool
 schemas, the conversation, the memory and the skills
 (`raven/agent/window/parts.py`). An estimate of the request the loop sent, not
 a provider's count: the provider reports a prompt as one number and does not
-split it. The memory and the skills are the two segments the turn's scratch
-carried, which the assembler hands over by name so they can be measured apart.
-Carried on the wire as `context_parts` on a turn's usage, and absent until a
-turn has measured one.
+split it. The memory is the recalled segment, wherever it rides: the turn's
+scratch, or the system prompt when `context.cache.turn_scratch` is off. The
+skills are every byte the skill subsystem put in the prompt: the always-on
+digest in the system prompt, the routed segment beside the memory, the
+pull-mode scent menu in the user envelope, and the results of the skill tools
+(`find_skill`, `read_skill`, `use_skill`) — including one the model reached by
+forwarding through `tool_call`, whose message is named for the tool that
+produced it. A `SKILL.md` read through `read_file` or `exec` is not counted:
+the split follows what the skill subsystem wrote, not what a general-purpose
+tool happened to read. Carried on the wire as `context_parts` on a turn's
+usage, and absent until a turn has measured one.
 _Avoid_: "segments" for these — a Segment is a piece the context engine assembles
 the prompt from, not a share of the window.
 
