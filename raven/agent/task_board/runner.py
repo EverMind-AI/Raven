@@ -118,7 +118,9 @@ def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
     return f"\n{prompt(template).strip().format(groups=', '.join(owners))}\n"
 
 
-_FENCE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+# A backtick fence's info string holds no backtick (CommonMark), so a line that opens
+# with a triple-backtick code span is prose rather than a fence.
+_FENCE = re.compile(r"^(`{3,}(?=[^`]*$)|~{3,})(.*)$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
 _SENTENCE_END = re.compile(r"(?<=[\u3002\uff01\uff1f])|(?<=[.!?])\s+")
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")

@@ -583,6 +583,13 @@ def test_asked_reads_nothing_from_a_reply_that_is_one_fence():
     assert asked("~~~\nIs this code right?\n~~~") == []
 
 
+def test_asked_reads_past_a_line_that_opens_with_inline_code():
+    """A backtick fence's info string holds no backtick, so a line that opens with a
+    triple-backtick code span is prose: neither it nor what follows is code."""
+    assert asked("```npm test``` fails on CI.\n\nShould I fix it?") == ["Should I fix it?"]
+    assert asked("```make lint``` first, or skip it?") == ["```make lint``` first, or skip it?"]
+
+
 def test_asked_reads_a_long_reply_in_one_pass():
     """The reply is read on the event loop the whole gateway shares."""
     reply = " ".join(f"Question {n}?" for n in range(40_000))
