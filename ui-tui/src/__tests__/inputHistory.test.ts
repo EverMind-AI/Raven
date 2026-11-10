@@ -105,4 +105,28 @@ describe('input history store (backs cycleHistory)', () => {
       vi.stubEnv('RAVEN_HOME', suiteHome)
     }
   })
+
+  it('loads a file of lone CRs with the same entries an LF one yields', async () => {
+    // `Path.read_text` applies universal-newline translation, so the host
+    // reads a CR-only file the way it reads an LF one. The TUI has to fold
+    // the same endings, or the two front ends disagree about the file they
+    // share.
+    const crDir = mkdtempSync(join(tmpdir(), 'raven-hist-cr-'))
+    const suiteHome = process.env.RAVEN_HOME
+
+    vi.stubEnv('RAVEN_HOME', crDir)
+    try {
+      writeFileSync(
+        join(crDir, '.raven_history'),
+        '# 2026-11-09 00:00:00\r+first command\r# 2026-11-09 00:00:01\r+second command\r'
+      )
+
+      vi.resetModules()
+      const reloaded: HistoryModule = await import('../lib/history.js')
+
+      expect(reloaded.load()).toEqual(['first command', 'second command'])
+    } finally {
+      vi.stubEnv('RAVEN_HOME', suiteHome)
+    }
+  })
 })
