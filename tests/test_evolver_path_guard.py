@@ -29,6 +29,8 @@ from evolver.applier.path_guard import (
         "CON",
         "COM1",
         "LPT9.log",
+        "CONIN$",
+        "CONOUT$",
     ],
 )
 def test_unsafe_paths_are_rejected(path: str):
