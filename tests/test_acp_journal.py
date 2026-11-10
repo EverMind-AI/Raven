@@ -67,8 +67,10 @@ def test_the_file_is_unreadable_to_anyone_else(tmp_path: Path) -> None:
     assert stat.S_IMODE(journal.path.stat().st_mode) == 0o600
 
 
-@pytest.mark.parametrize("method", ["session/new", "session/load"])
+@pytest.mark.parametrize("method", ["session/new", "session/load", "session/resume"])
 def test_mcp_secrets_are_redacted_without_mutating_the_wire_frame(method) -> None:
+    """Every frame that hands an agent MCP servers carries their secrets, and
+    the reopen raven sends a resume-only agent is one of them."""
     frame = {
         "method": method,
         "params": {

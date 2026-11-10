@@ -46,7 +46,7 @@ from loguru import logger
 
 from raven.acp_client import npx_fetch, protocol
 from raven.acp_client.ask_user import notification_dispatcher
-from raven.acp_client.capabilities import handshake_of
+from raven.acp_client.capabilities import handshake_of, reopens_sessions
 from raven.acp_client.client import AcpClient, end_drain
 from raven.acp_client.journal import open_journal
 from raven.acp_client.permissions import request_dispatcher
@@ -268,8 +268,8 @@ class _SessionRouter:
     def reserve(self, session_id: str) -> None:
         """Reserve a session before its turn sink is attached.
 
-        ACP agents may emit an update immediately after ``session/new`` or
-        ``session/load`` returns. Keeping that short handoff window explicit
+        ACP agents may emit an update immediately after ``session/new``,
+        ``session/load`` or ``session/resume`` returns. Keeping that short handoff window explicit
         prevents the first progress frame from being dropped as unrouted.
         """
         self._reserved.add(session_id)
@@ -964,15 +964,16 @@ class AcpConnectionPool:
 
         Nothing in flight either way, quiet for the whole budget, and an agent
         that can reopen what it held: a session this connection served is
-        resumed in the next process with ``session/load``, so only an agent
-        that advertises it, or one that never opened a session, is closed.
+        reopened in the next process with ``session/load`` or ``session/resume``,
+        so only an agent that advertises one of them, or one that never opened a
+        session, is closed.
         """
         client = connection.client
         if not connection.alive or getattr(client, "busy", True):
             return False
         if connection.idle_for(now) < budget:
             return False
-        return handshake_of(connection.initialize).can_load or not connection.router.seen
+        return reopens_sessions(handshake_of(connection.initialize)) or not connection.router.seen
 
     @staticmethod
     async def _holds_resident_work(connection: _Connection) -> bool:

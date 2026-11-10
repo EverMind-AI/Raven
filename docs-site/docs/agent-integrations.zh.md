@@ -70,7 +70,7 @@ launcher。readiness probe 成功或收到委派回执，都不代表任务已�
 
 | 键 | 默认值 | 作用 |
 | --- | --- | --- |
-| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。仍持有已设定的提醒或正在运行的插件服务的 Agent 会被保留。只关闭能重新加载会话的 Agent，因此下一轮会在新进程中续上原对话。`0` 或 `null` 表示一直保留到宿主退出。 |
+| `idleCloseS` | `600` | Agent 空闲达到该秒数（双方都没有在途请求，也没有任何消息）后关闭其进程。仍持有已设定的提醒或正在运行的插件服务的 Agent 会被保留。只关闭能重新打开会话的 Agent（声明了 `loadSession` 或 `sessionCapabilities.resume`），因此下一轮会在新进程中续上原对话。`0` 或 `null` 表示一直保留到宿主退出。 |
 | `llmRelay` | `true` | 由宿主代为发出原生 Agent 的 LiteLLM 调用，Agent 自身不再加载 LiteLLM。请求组装、重试和用量记录仍由 Agent 自己完成。若 Agent 自己的 `env` 设置了 LLM 端点、云凭据、代理或 CA 证书，它会自己发起调用。 |
 | `forkTemplate` | `true` | 在 Linux 上，原生 Agent 从一个已加载 Raven 的进程 fork 出来，共享这些内存页，而不是各自加载一份。其他系统仍按原方式启动。 |
 
@@ -174,6 +174,7 @@ Raven-Code 的 `code-flow` 提供的不只是身份 prompt。每个任务都应�
 | `hermes` | `hermes acp --accept-hooks` | 原生认证；该标志接受之前未见的 Shell hook |
 | `openclaw` | `openclaw acp` | 自身网关、认证；启动使用较长握手等待 |
 | `minimax_code` | `mcode acp` | 原生 ACP server；需要 Node.js 22.19-22.x 或 24-26.x。用 `npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3` 安装 CLI（npm 12 不批准安装脚本时会装出不完整的包；npm 11 及更早的版本照常执行安装脚本，其中不认识这个参数的版本会打印一条警告，但安装照样完成），再用 `mcode login` 登录——账号不在 cn 区（CLI 默认的账号站）时，加上 `--region global`（或 `--region cn`）。如果桌面端已经登录，把 `MINIMAX_DATA_DIR` 指向它数据目录的绝对路径（即 `~/.minimax` 展开后的目录，例如 `/Users/<you>/.minimax` 或 `C:\Users\<you>\.minimax`），可以写在这个 agent 在 `~/.raven/config.json` 里的 `env`，也可以写进 Raven 启动 agent 时读的环境变量（POSIX 上按“重新检测”会重新读一遍登录 shell 的环境；Windows 上子进程继承的是 Raven 自己的环境，需要重启 Raven）。 |
+| `dsh` | `dsh --profile acp` | 已安装 DSH（`npm install -g @deepseek-ai/dsh`，需 Node.js 24.9 及以上）并完成登录；它声明 `session/resume`、不声明 `loadSession`，Raven 用 `session/resume` 续接它的会话 |
 | `mirothinker` | OpenAI-compatible HTTP | 端点、模型、key；预设关闭有状态重放 |
 | `mirasim_<agent>` | Raven 自带的 ACP 适配器，经 Mirasim host 的协议调用 | 本机装了 Mirasim 且正在运行，该 Agent 已在 Mirasim 中安装。Raven 找到 Mirasim 就会列出这些行：有能连上的 host（Mirasim host 写出了令牌的端口，例如桌面应用或 `mirasim serve` 的端口，或 Mirasim 经 ssh 在本机跑的服务器的套接字，二者都要真的应答），否则看 Mirasim 写在自己目录下的启动器（`~/.mirasim/bin/mirasim`，它不会把这个目录放进 PATH）、登录 shell PATH 上的 `mirasim`，或某个 Mirasim 经 ssh 装到本机的服务器（`~/.mirasim-remote`）；装了但没在运行时，这一行会提示打开 Mirasim 应用或启动 `mirasim serve`，或让另一台电脑上的 Mirasim 应用重新连到本机。以 `sessionMcp: false` 阻止每会话 MCP 下发 |
 

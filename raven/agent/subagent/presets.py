@@ -40,6 +40,12 @@ each transport below:
   directory, the handshake was ready.
 - ``MiroThinker`` - not a local agent at all: MiroMind deep-research over an
   OpenAI-compatible endpoint (set ``apiKey``).
+- ``DSH`` (DeepSeek Harness) - ACP, native (``dsh --profile acp``, the profile
+  its own install ships), measured 2026-11-09 on 0.2.2-rc.1. resume + list +
+  close and **no load**: it continues a session through ``session/resume``,
+  which raven reopens with for exactly that reason -- a word planted in a
+  session came back from a second process that resumed it. It reads the
+  credentials DSH already holds and advertises no auth method of its own.
 
 What a row is allowed to fetch depends on what the package is. An **ACP shim** --
 a dedicated adapter whose product lives elsewhere, as ``Claude Code`` and
@@ -292,6 +298,13 @@ THIRD_PARTY_SUBAGENT_PRESETS: dict[str, dict[str, Any]] = {
         # less room on a colder machine than the other local executables need.
         "readyTimeoutMs": 60000,
     },
+    "dsh": {
+        "name": "DSH",
+        "preset": "dsh",
+        "kind": "acp",
+        "description": "DeepSeek Harness, a coding agent on DeepSeek models.",
+        "command": "dsh --profile acp",
+    },
     "mirothinker": {
         "name": "MiroThinker",
         "preset": "mirothinker",
@@ -390,6 +403,9 @@ INSTALL_HINTS: dict[str, str] = {
     # scripts by default, and without it `better-sqlite3`'s native binding is
     # never built, so the install reports success and `mcode` dies at startup.
     "minimax_code": "npm install -g @minimax-ai/code --allow-scripts=@minimax-ai/code,better-sqlite3",
+    # Published on npm; the row names the `dsh` it puts on PATH, whose bundled
+    # `acp` profile the row launches.
+    "dsh": "npm install -g @deepseek-ai/dsh",
 }
 """How to install the agent a core preset defers to, by preset key.
 
@@ -798,6 +814,11 @@ NODE_RUNTIME_PRESETS: frozenset[str] = frozenset(
         # reads the lower bound of that range, so a Node 23 the package does
         # not list passes the check.
         "minimax_code",
+        # `#!/usr/bin/env node` (lib/bin.js) and `>=24.9.0` declared by the
+        # package itself, which the check finds one level above the script.
+        # Not measured on an old Node either (26.6 is what this machine has); a
+        # `node` answering v22.11.0 ahead on PATH is reported as too old for it.
+        "dsh",
     }
 )
 """Presets whose agent is a Node.js script, so a launch that quits may be the

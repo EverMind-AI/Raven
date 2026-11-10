@@ -214,7 +214,8 @@ const AGENT_ALIASES: Record<string, string> = {
   kimi: 'kimi_code', kimi_code: 'kimi_code', grok: 'grok', copilot: 'github_copilot',
   github_copilot: 'github_copilot', qoder: 'qoder', codebuddy: 'codebuddy',
   minimax: 'minimax_code', minimax_code: 'minimax_code',
-  antigravity: 'mirasim_antigravity', dsh: 'mirasim_dsh', zcode: 'mirasim_zcode',
+  antigravity: 'mirasim_antigravity', zcode: 'mirasim_zcode',
+  dsh: 'dsh', deepseek_harness: 'dsh', deepseek_harness_acp: 'dsh',
   mirothinker: 'mirothinker',
 }
 

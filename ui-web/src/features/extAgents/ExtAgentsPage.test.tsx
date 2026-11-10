@@ -955,11 +955,11 @@ describe('connecting', () => {
       },
     })
     await mount()
-    /* Twenty and not the agent catalogue's twenty-eight: the nine Mirasim presets
+    /* Twenty-one and not the agent catalogue's twenty-nine: the nine Mirasim presets
        are one card while none of them has been opened out, so the skeleton has
        to draw one cell for them or the grid jumps by eight when the roster
        lands -- which is the whole reason this count is pinned. */
-    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(20)
+    expect(document.querySelectorAll('.extAgents-wcard').length).toBe(21)
     expect(document.querySelector('.extAgents-grid')!.getAttribute('aria-busy')).toBe('true')
     expect(document.querySelector('.extAgents-empty')).toBeNull()
     /* Every tab waits with the roster: the machines are a module of their own now, not a tab. */

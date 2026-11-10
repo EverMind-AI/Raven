@@ -12,8 +12,9 @@ import type { JSX } from 'react'
    @lobehub/icons-static-svg settles provenance for every file here on the
    terms LICENSES/README.md already records for the provider marks. The
    exceptions are miromind.svg, which that package does not carry and which is
-   MiroMind's own favicon, also verbatim, and minimax-code.svg, the product
-   icon's app artwork, resampled inside an SVG wrapper.
+   MiroMind's own favicon, also verbatim; dsh.svg, the favicon DSH's own web
+   app ships, verbatim too; and minimax-code.svg, the product icon's app
+   artwork, resampled inside an SVG wrapper.
 
    `tone` says what the file is made of, which is a fact about the file rather
    than a preference -- tests/test_ui_agent_marks.py derives each one from the
@@ -34,12 +35,14 @@ import type { JSX } from 'react'
 
    A `mirasim_` row is the agent of the same name run through Mirasim, so it
    wears that agent's mark; the row's name already says the route. DSH (the
-   DeepSeek Harness) publishes no mark of its own and wears DeepSeek's, whose
-   models it is built around. */
+   DeepSeek Harness) wears its own mark, the one-ink whale its web app serves
+   as its favicon, rather than DeepSeek's colour one: the harness is a product
+   of its own, and that is the mark it gives itself. */
 const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   claude_code: { file: 'claudecode-color' },
   codebuddy: { file: 'codebuddy-color' },
   codex: { file: 'codex-color' },
+  dsh: { file: 'dsh' },
   github_copilot: { file: 'copilot-color' },
   grok: { file: 'grok', tone: 'mono' },
   hermes: { file: 'hermesagent', tone: 'mono' },
@@ -48,7 +51,7 @@ const MARKS: Record<string, { file: string; tone?: 'mono' | 'hybrid' }> = {
   mirasim_antigravity: { file: 'antigravity-color' },
   mirasim_claude: { file: 'claudecode-color' },
   mirasim_codex: { file: 'codex-color' },
-  mirasim_dsh: { file: 'deepseek-color' },
+  mirasim_dsh: { file: 'dsh' },
   mirasim_grok: { file: 'grok', tone: 'mono' },
   mirasim_kimi: { file: 'kimi', tone: 'mono' },
   mirasim_pi: { file: 'pi', tone: 'mono' },

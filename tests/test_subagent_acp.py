@@ -48,7 +48,7 @@ from raven.acp_client.capabilities import (
     snapshot_fingerprint,
     verify_agent,
 )
-from raven.acp_client.pool import close_pool, get_pool
+from raven.acp_client.pool import _SessionRouter, close_pool, get_pool
 from raven.acp_client.protocol import AcpError, AcpRemoteError
 from raven.agent.subagent.backends import (
     acp_snapshot_for,
@@ -2985,9 +2985,10 @@ def _snapshot(
 ) -> CapabilitySnapshot:
     """One handshake's capabilities.
 
-    ``can_load`` is what makes the snapshot resumable, not ``can_resume``:
-    resuming calls ``session/load``, so its capability is the one the roster and
-    the backend read. A fixture meaning "a resumable agent" has to set it.
+    Either ``can_load`` or ``can_resume`` makes the snapshot resumable: raven
+    reopens a session with ``session/load`` where the agent declares it and with
+    ``session/resume`` where it declares only that. A fixture meaning "a
+    stateless agent" has to leave both off.
     """
     return CapabilitySnapshot(
         agent=agent,
@@ -3015,25 +3016,25 @@ def test_acp_statefulness_comes_from_the_snapshot_not_a_config_field() -> None:
     assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False, can_load=False)).stateful is False
 
 
-def test_statefulness_follows_load_session_because_that_is_what_resuming_calls() -> None:
-    """``loadSession``, not ``sessionCapabilities.resume``, decides.
+def test_statefulness_follows_whichever_reopening_call_the_agent_answers() -> None:
+    """``loadSession`` or ``sessionCapabilities.resume``: either is a call raven makes.
 
-    Resuming an acp instance is the agent's own ``session/load``, so the
-    capability for *that* method is the one that says whether a handle continues
-    a session. Read from ``resume`` instead, an agent advertising ``loadSession``
-    alone was marked stateless and never even reached the load call -- measured
+    Read from ``resume`` alone, an agent advertising ``loadSession`` alone was
+    marked stateless and never even reached the load call -- measured
     2026-09-07, github-copilot 1.0.83, codebuddy 2.146.0 and pi-acp 0.0.33 all
     report ``resume: false`` with ``loadSession: true``, and all three resume
-    correctly when it is called: the transcript replays and a token planted
-    before the reconnect comes back.
+    correctly when ``session/load`` is called.
 
-    The reverse pairing is what the old gate got wrong in the other direction:
-    ``resume`` without ``loadSession`` promised a resumability raven has no call
-    to deliver, since the load itself is guarded on ``can_load`` regardless.
+    The reverse pairing reopens with ``session/resume``. Measured 2026-11-09 on
+    DeepSeek Harness 0.2.2-rc.1 (``dsh --profile acp``), which declares
+    ``resume`` and no ``loadSession``: a word planted in a session came back
+    from a second process that resumed it. Read from ``loadSession`` alone, that
+    agent was stateless, and every turn on one of its handles started over.
     """
     cfg = stub_config("a")
     assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False, can_load=True)).stateful is True
-    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=True, can_load=False)).stateful is False
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=True, can_load=False)).stateful is True
+    assert third_party_agent_meta(cfg, snapshot=_snapshot("a", cfg, can_resume=False, can_load=False)).stateful is False
 
 
 def test_acp_meta_reads_the_stored_snapshot_when_none_is_passed(tmp_path: Path, monkeypatch) -> None:
@@ -3082,6 +3083,16 @@ def test_acp_backend_statefulness_follows_the_snapshot() -> None:
         name="a", command=cfg.command, snapshot=_snapshot("a", cfg, can_resume=True, can_load=True), registry=None
     )
     assert backend.is_stateful is True
+
+
+def test_the_backend_and_the_roster_agree_a_resume_only_agent_is_stateful() -> None:
+    """Two readers of one fact. If the roster offered ``instance`` for an agent
+    the backend then treated as stateless, a reused handle would be accepted by
+    the spawn schema and silently start a fresh session on every turn."""
+    cfg = stub_config("a")
+    snapshot = _snapshot("a", cfg, can_resume=True, can_load=False)
+    backend = AcpAgentBackend(name="a", command=cfg.command, snapshot=snapshot, registry=None)
+    assert (backend.is_stateful, third_party_agent_meta(cfg, snapshot=snapshot).stateful) == (True, True)
 
 
 # ---- test-verdict fingerprinting -------------------------------------------
@@ -4330,6 +4341,106 @@ async def test_any_other_refusal_of_a_load_still_starts_a_fresh_session(
     assert opened == ("fresh-session", False)
     assert methods == ["session/load", "session/new"]
     assert bound is None
+
+
+async def _open_resume_only(
+    tmp_path: Path,
+    *,
+    refusal: AcpRemoteError | None = None,
+    served_here: bool = False,
+    mcp_servers: list[dict[str, Any]] | None = None,
+) -> tuple[tuple[str, bool], list[tuple[str, dict[str, Any]]], str | None]:
+    """Open a bound instance of an agent that declares ``resume`` and no ``loadSession``.
+
+    ``served_here`` is a connection that already routed the session -- the
+    second turn on one pooled process -- and ``refusal`` what the agent answers
+    ``session/resume`` with, if it refuses.
+    """
+    cfg = stub_config("a")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    await registry.commit("s", "a", "work", "held-session", kind="acp")
+    backend = AcpAgentBackend(
+        name="a",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("a", cfg, can_resume=True, can_load=False),
+        registry=registry,
+    )
+    router = _SessionRouter("a")
+    if served_here:
+        router.reserve("held-session")
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _Client:
+        async def request(self, method: str, params: dict[str, Any], *, timeout: float):
+            calls.append((method, params))
+            if method == "session/resume" and refusal is not None:
+                raise refusal
+            return {"sessionId": "fresh-session"} if method == "session/new" else {}
+
+    opened = await backend._open_session(
+        _Client(), cwd=str(tmp_path), skey="s", handle="work", budget=5, mcp_servers=mcp_servers or [], router=router
+    )
+    return opened, calls, await registry.lookup("s", "a", "work", kind="acp")
+
+
+async def test_a_resume_only_agent_reopens_a_bound_session_with_session_resume(tmp_path: Path) -> None:
+    """The call the agent declared, with the fields the schema requires on it.
+
+    DeepSeek Harness 0.2.2-rc.1 declares ``resume`` and answers ``session/load``
+    with method-not-found, so the load the other agents get would fail every
+    reopen and start every turn over. ``mcpServers`` rides along as on
+    ``session/load``: the resumed session is promptable, and a grant left off
+    the reopen is a turn run without its servers."""
+    servers = [{"name": "docs", "type": "http", "url": "https://mcp.example.test", "headers": []}]
+
+    opened, calls, bound = await _open_resume_only(tmp_path, mcp_servers=servers)
+
+    assert opened == ("held-session", True)
+    assert calls == [("session/resume", {"sessionId": "held-session", "cwd": str(tmp_path), "mcpServers": servers})]
+    assert bound == "held-session"
+
+
+async def test_a_session_this_connection_already_serves_is_not_resumed_again(tmp_path: Path) -> None:
+    """Resume reopens a session in a process that does not hold it; the one
+    that does refuses it. DeepSeek Harness answers ``-32602 session is already
+    active``, and read as a pruned id that refusal dropped the binding and began
+    the instance's second turn on one connection with no memory of its first."""
+    opened, calls, bound = await _open_resume_only(tmp_path, served_here=True)
+
+    assert opened == ("held-session", True)
+    assert calls == []
+    assert bound == "held-session"
+
+
+async def test_a_refused_resume_starts_a_fresh_session_like_a_refused_load(tmp_path: Path) -> None:
+    """An id the agent no longer has is the same stale binding a pruned load is,
+    and gets the same recovery: a fresh session now, the binding dropped."""
+    refusal = AcpRemoteError("session/resume", -32602, "Invalid params: session is not resumable: held-session")
+
+    opened, calls, bound = await _open_resume_only(tmp_path, refusal=refusal)
+
+    assert opened == ("fresh-session", False)
+    assert [method for method, _params in calls] == ["session/resume", "session/new"]
+    assert bound is None
+
+
+async def test_a_session_the_process_holds_but_this_connection_did_not_open_is_kept(tmp_path: Path) -> None:
+    """An adopted connection fronts a process the previous host started.
+
+    The pick-up seeds the router with the session of the run it adopts and no
+    other, so another instance handle's bound session is live in that process
+    while this connection never watched it open. DeepSeek Harness refuses to
+    resume a session its process holds, and reading that refusal as a pruned id
+    dropped a conversation a fresh process resumes without complaint.
+    """
+    held = AcpRemoteError("session/resume", -32602, "Invalid params: session is already active: held-session")
+
+    opened, calls, bound = await _open_resume_only(tmp_path, refusal=held)
+
+    assert opened == ("held-session", True)
+    assert [method for method, _params in calls] == ["session/resume"]
+    assert bound == "held-session"
 
 
 async def test_a_pruned_session_keeps_the_instance_on_the_strip(tmp_path: Path) -> None:
@@ -8825,6 +8936,42 @@ async def test_a_cleared_pin_is_sent_back_after_the_pool_closes_the_idle_agent(
     )
     frames = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "set_config_option" in ln]
     assert frames and frames[-1].endswith(restore), f"the restore on the new process, got {frames!r}"
+
+
+async def test_a_resume_only_instance_keeps_its_session_on_one_process_and_across_two(tmp_path: Path) -> None:
+    """One handle, three turns, the session it opened on the first carried by all three.
+
+    The second turn runs on the process that opened the session, which refuses
+    to resume what it already holds; the third runs on a fresh process after the
+    pool closed the idle one, which resumes it. Any turn that opened a session of
+    its own instead -- a refused resume read as a pruned id, an idle agent the
+    pool would not close, a stateless reading of the snapshot -- moves the
+    handle's binding off the first session."""
+    cfg = stub_config("resumer", mode="resume_only")
+    registry = InstanceRegistry(path=tmp_path / "instances.json")
+    backend = AcpAgentBackend(
+        name="resumer",
+        command=cfg.command,
+        env=dict(cfg.env),
+        snapshot=_snapshot("resumer", cfg, can_resume=True),
+        registry=registry,
+    )
+
+    async def turn(task_id: str) -> str | None:
+        await backend.run("ping", task_id=task_id, workspace=tmp_path, executor=None, session_key="s", instance="h1")
+        return await registry.lookup("s", "resumer", "h1", kind="acp")
+
+    first = await turn("t1")
+    assert first is not None
+    assert await turn("t2") == first, "the same process kept the session it holds"
+    assert await get_pool().close_idle(0.0) == ["resumer"]
+    assert await turn("t3") == first, "a fresh process resumed it"
+
+    connection = await get_pool().acquire(
+        name="resumer", command=cfg.command, cwd=str(tmp_path), env=dict(cfg.env), ready_timeout_s=15.0
+    )
+    resumed = [ln for ln in connection.client.stderr_tail(4000).splitlines() if "session/resume" in ln]
+    assert resumed == [f"stub: session/resume {first}"]
 
 
 async def test_an_adopted_connections_session_record_outlives_the_idle_close(tmp_path: Path) -> None:

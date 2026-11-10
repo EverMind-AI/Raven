@@ -17,9 +17,10 @@ Two consequences worth stating, because they are what the transport buys:
   answered, raven's outbound frames, notifications no session was listening for,
   stderr -- is written by :mod:`raven.acp_client.journal` for the life of the
   connection, and each call records the byte range it occupied there.
-- Resuming is the agent's own ``session/load``, not a second command template, so
-  whether an agent *can* resume is read from its handshake instead of inferred
-  from a config field a human filled in.
+- Resuming is the agent's own ``session/load``, or ``session/resume`` where that is
+  the one it declares, not a second command template, so whether an agent *can*
+  resume is read from its handshake instead of inferred from a config field a
+  human filled in.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from raven.acp_client.capabilities import (
     read_session_current_model,
     read_session_effort,
     relearn_session_menus,
+    reopens_sessions,
     steer_offered,
 )
 from raven.acp_client.elicitor import Elicitor
@@ -272,14 +274,20 @@ def _turn_cost(reported: Any, spent_before: float | None) -> tuple[float | None,
 
 
 def _holds_session(exc: AcpRemoteError) -> bool:
-    """Whether the agent refused ``session/load`` because this process already holds the session.
+    """Whether the agent refused a reopening call because this process already holds the session.
 
-    Measured on GitHub Copilot CLI 1.0.88: the refusal is ``-32602`` ``Session <id>
-    is already loaded``, it comes only from the process that holds the session (a
-    second process loads it without complaint), and the session keeps its context.
-    That is a live session, not a pruned one, and there is no replay to read.
+    Both reopening calls refuse the process that holds the session, and neither
+    refusal means the id was pruned: ``session/load`` answers ``-32602`` ``Session
+    <id> is already loaded`` (measured on GitHub Copilot CLI 1.0.88), and
+    ``session/resume`` answers ``-32602`` ``session is already active`` (measured
+    on DeepSeek Harness 0.2.2-rc.1). A second process reopens either one without
+    complaint, and the session keeps its context -- so this is a live session,
+    not a pruned one, and there is no replay to read.
     """
-    return exc.code == -32602 and "already loaded" in exc.message.lower()
+    if exc.code != -32602:
+        return False
+    message = exc.message.lower()
+    return "already loaded" in message or "already active" in message
 
 
 @asynccontextmanager
@@ -1702,17 +1710,17 @@ class AcpAgentBackend:
 
         Read from the handshake snapshot, never declared: a cli entry derives this
         from ``resume_command`` because that is the mechanism that would have to
-        deliver it, and for acp the equivalent mechanism is the agent's own
-        ``session/load`` -- so the capability read here is ``loadSession``, the one
-        that method is gated on, and not ``sessionCapabilities.resume``.
+        deliver it, and for acp the equivalent mechanism is whichever reopening
+        call the agent declared -- ``session/load`` or ``session/resume``, see
+        :func:`~raven.acp_client.capabilities.reopens_sessions`.
 
         Measured 2026-09-07: github-copilot, codebuddy and pi-acp all report
         ``resume: false`` alongside ``loadSession: true`` and all three resume
-        correctly when ``session/load`` is called. Read from ``resume``, they were
-        stateless -- which never reached the load call, and cost them their strip
-        row and their place among the spawn schema's ``instance`` targets.
+        correctly when ``session/load`` is called. Read from ``resume`` alone, they
+        were stateless -- which never reached the load call, and cost them their
+        strip row and their place among the spawn schema's ``instance`` targets.
         """
-        return bool(self._snapshot and self._snapshot.can_load)
+        return self._snapshot is not None and reopens_sessions(self._snapshot)
 
     async def run(
         self,
@@ -2456,33 +2464,53 @@ class AcpAgentBackend:
         lost: str | None = None
         if self.is_stateful:
             known = await self._registry.lookup(skey, self.name, handle, kind="acp")
-            if known is not None and (self._snapshot and self._snapshot.can_load):
+            if known is not None:
+                reopen = {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers}
                 try:
-                    # `session/load` is not a getter: the agent answers it by
-                    # replaying the whole transcript as `session/update` frames
-                    # (see the fork's `raven/acp/replay.py`). No run is attached
-                    # to this session yet, so those frames would fall through to
-                    # the connection's resident sink -- the unprompted recorder --
-                    # and every resumed turn would log its own history as work
-                    # the agent did on its own account, and stream it to the pane
-                    # a second time. A sink that drops them holds the session for
-                    # the length of the call; the turn's collector takes it over
-                    # immediately after.
-                    try:
-                        async with _replay_dropped(router, known):
-                            loaded = await request_or_busy(
-                                "session/load",
-                                {"sessionId": known, "cwd": cwd, "mcpServers": mcp_servers},
-                            )
-                    except AcpRemoteError as exc:
-                        if not _holds_session(exc):
-                            raise
-                        loaded = None
-                    if loaded is not None:
-                        self._relearn_menus(loaded)
-                        self._note_session_model(client, known, loaded)
-                        self._note_session_effort(client, known, loaded)
-                        self._note_session_mode(client, known, loaded)
+                    if self._snapshot is not None and self._snapshot.can_load:
+                        # `session/load` is not a getter: the agent answers it by
+                        # replaying the whole transcript as `session/update` frames
+                        # (see the fork's `raven/acp/replay.py`). No run is attached
+                        # to this session yet, so those frames would fall through to
+                        # the connection's resident sink -- the unprompted recorder --
+                        # and every resumed turn would log its own history as work
+                        # the agent did on its own account, and stream it to the pane
+                        # a second time. A sink that drops them holds the session for
+                        # the length of the call; the turn's collector takes it over
+                        # immediately after.
+                        try:
+                            async with _replay_dropped(router, known):
+                                reopened = await request_or_busy("session/load", reopen)
+                        except AcpRemoteError as exc:
+                            if not _holds_session(exc):
+                                raise
+                            reopened = None
+                    elif router is not None and known in router.seen:
+                        # `session/resume` reopens a session in a process that
+                        # does not hold it, and the one that does refuses it
+                        # (DeepSeek Harness: `-32602 session is already active`).
+                        # This connection served it, so it is live here as it
+                        # is. The refusal below covers an adopted connection,
+                        # whose process holds sessions this router never saw
+                        # opened.
+                        reopened = None
+                    else:
+                        try:
+                            reopened = await request_or_busy("session/resume", reopen)
+                        except AcpRemoteError as exc:
+                            if not _holds_session(exc):
+                                raise
+                            # Live in a process this connection is not the
+                            # record of -- an adopted one, whose router holds
+                            # only the session the pick-up seeded. Reading the
+                            # refusal as a pruned id dropped a conversation
+                            # that was still there.
+                            reopened = None
+                    if reopened is not None:
+                        self._relearn_menus(reopened)
+                        self._note_session_model(client, known, reopened)
+                        self._note_session_effort(client, known, reopened)
+                        self._note_session_mode(client, known, reopened)
                     await self._settle_session(
                         client,
                         known,
@@ -2493,11 +2521,11 @@ class AcpAgentBackend:
                     )
                     return known, True
                 except AcpRemoteError as exc:
-                    # The agent's own store may have pruned this id, and the
-                    # `session/load` param shape is not measured against a live
-                    # server. Either way a fresh session is a working outcome, so
-                    # drop the stale binding rather than fail the task -- the
-                    # instance itself stays on the strip, see `unbind`.
+                    # The agent's own store may have pruned this id, or refused
+                    # the reopen for a reason of its own. Either way a fresh
+                    # session is a working outcome, so drop the stale binding
+                    # rather than fail the task -- the instance itself stays on
+                    # the strip, see `unbind`.
                     logger.warning(
                         "acp agent {!r}: resuming {}/{!r} failed ({}); starting a fresh session",
                         self.name,

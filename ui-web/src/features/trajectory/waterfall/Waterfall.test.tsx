@@ -376,6 +376,15 @@ describe('the marks', () => {
     expect(marks).toContain('assets/agents/minimax-code.svg')
   })
 
+  it('wears DSH’s own mark for its ACP server name', async () => {
+    await draw([
+      E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'deepseek-harness-acp' } }),
+      E('s1', 1, { subagent_scope: 't:sub', turn_span_id: 'S1' }),
+    ])
+    const marks = [...document.querySelectorAll('[data-row="agent"] img')].map((img) => img.getAttribute('src'))
+    expect(marks).toContain('assets/agents/dsh.svg')
+  })
+
   it('falls back to its own glyph for a worker the page ships no mark for', async () => {
     await draw([
       E('door', 0, { kind: 'tool.output', opens_subagent_scope: 't:sub', meta: { agent: 'a hand-written agent' } }),

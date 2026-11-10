@@ -40,8 +40,7 @@ const OWN_BY = 'gui.agent.by_raven'
 
 /* A Mirasim row is the agent of the same name run through Mirasim: its maker is
    that agent's, and what an absent one lacks is Mirasim itself, which installs
-   from Mirasim's own site rather than by one command. DSH names no maker it can
-   be held to, so it gets none. */
+   from Mirasim's own site rather than by one command. */
 const MIRASIM_SHORT = 'gui.agent.short_mirasim'
 const MIRASIM_SITE = 'mirasim.ai/download'
 
@@ -135,13 +134,19 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
     signInNote: 'gui.agent.minimax_sign_in_note',
   },
   pi: { short: 'gui.agent.short_pi', brand: 'Pi', site: 'pi.dev', cmd: 'npm install -g @earendil-works/pi-coding-agent' },
+  dsh: {
+    short: 'gui.agent.short_dsh',
+    brand: 'DeepSeek',
+    site: 'github.com/deepseek-ai/deepseek-harness',
+    cmd: 'npm install -g @deepseek-ai/dsh',
+  },
   mirasim_claude: { short: MIRASIM_SHORT, brand: 'Anthropic', site: MIRASIM_SITE },
   mirasim_codex: { short: MIRASIM_SHORT, brand: 'OpenAI', site: MIRASIM_SITE },
   mirasim_kimi: { short: MIRASIM_SHORT, by: 'gui.agent.by_kimi_code', site: MIRASIM_SITE },
   mirasim_antigravity: { short: MIRASIM_SHORT, brand: 'Google', site: MIRASIM_SITE },
   mirasim_qwen: { short: MIRASIM_SHORT, by: 'gui.agent.by_qwen_code', site: MIRASIM_SITE },
   mirasim_grok: { short: MIRASIM_SHORT, brand: 'xAI', site: MIRASIM_SITE },
-  mirasim_dsh: { short: MIRASIM_SHORT, site: MIRASIM_SITE },
+  mirasim_dsh: { short: MIRASIM_SHORT, brand: 'DeepSeek', site: MIRASIM_SITE },
   mirasim_pi: { short: MIRASIM_SHORT, brand: 'Pi', site: MIRASIM_SITE },
   mirasim_zcode: { short: MIRASIM_SHORT, brand: 'Z.ai', site: MIRASIM_SITE },
 }

@@ -276,7 +276,7 @@ class McpGrant:
         )
 
     def for_acp(self, bridge_argv: Sequence[str]) -> list[dict[str, Any]]:
-        """ACP SDK wire objects for ``session/new`` and ``session/load``.
+        """ACP SDK wire objects for ``session/new``, ``session/load`` and ``session/resume``.
 
         Every server projects to the same shape whatever its upstream transport
         is: one stdio stanza pointing at a host endpoint. ``env`` is empty by

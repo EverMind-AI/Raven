@@ -68,6 +68,7 @@ THIRD_PARTY_PRESET_NAMES: frozenset[str] = frozenset(
         "claude_code",
         "codebuddy",
         "codex",
+        "dsh",
         "github_copilot",
         "grok",
         "hermes",

@@ -413,6 +413,20 @@ class CapabilitySnapshot:
         )
 
 
+def reopens_sessions(caps: Any) -> bool:
+    """Whether raven can reopen a session this agent served, by a call the agent declared.
+
+    ``session/load`` where it declares ``loadSession``, ``session/resume`` where
+    it declares ``sessionCapabilities.resume`` alone. Either one makes a reused
+    instance handle continue its session, so the roster, the backend and the
+    pool's idle close all read this one answer: a split reading lets the spawn
+    schema offer a handle the backend then opens fresh every turn.
+
+    Takes a stored :class:`CapabilitySnapshot` or a live handshake alike.
+    """
+    return bool(getattr(caps, "can_load", False) or getattr(caps, "can_resume", False))
+
+
 def _executable_identity(cfg: Any) -> list[Any] | None:
     """The launcher file an in-place upgrade replaces, when the command names one.
 
@@ -690,8 +704,8 @@ class SnapshotStore:
         chip and the ``instance`` parameter in the spawn schema, silently, until
         someone happened to press Test. Trusting the old capabilities is the
         weaker claim and it self-heals: if the edit really did swap in an agent
-        that cannot resume, the next ``session/load`` fails and the backend drops
-        the binding and starts fresh.
+        that cannot resume, the next reopen (``session/load`` or ``session/resume``)
+        fails and the backend drops the binding and starts fresh.
         """
         rows = {row.get("agent"): row for row in self._read()}
         found: dict[str, CapabilitySnapshot] = {}
