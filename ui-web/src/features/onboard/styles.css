@@ -83,6 +83,7 @@
   border: 1px solid var(--line); background: var(--raised); cursor: pointer; }
 .ob-switch::after { content: ""; position: absolute; top: .5px; left: .5px; width: 17px; height: 17px; border-radius: 99px;
   background: var(--paper); box-shadow: var(--elev); transition: transform .22s cubic-bezier(.25, .8, .25, 1); }
+@media (prefers-reduced-motion: reduce) { .ob-switch::after {transition:none} }
 .ob-switch[aria-checked="true"] { background: var(--amber); border-color: var(--amber); }
 .ob-switch[aria-checked="true"]::after { transform: translateX(16px); box-shadow: none; }
 .ob-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 99px;
