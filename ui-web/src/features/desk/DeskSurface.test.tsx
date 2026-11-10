@@ -717,6 +717,27 @@ describe('the collapsed launcher', () => {
     expect(count()).toBe('2')
   })
 
+  /* One number, one home: with another tab up the tasks tab's badge carries
+     the running count, so the chip must not repeat it an inch above. On the
+     tasks tab itself that badge goes quiet, which is what keeps the chip
+     saying it there. */
+  it('leaves the running count to the tasks tab\'s badge while another tab is up', async () => {
+    render(<DeskFollowToggle />)
+    taskRows = [taskRow('t1'), taskRow('t2')]
+    await act(async () => { await tasksStore.refresh() })
+    const live = (): string => btn().querySelector('.desk-live')?.textContent ?? ''
+
+    expect(live()).toBe('gui.ws.tasks_running_tab {"n":2}')
+
+    await act(async () => { desk.set({ paletteOpen: true, tab: 'diff' }) })
+    expect(live()).toBe('')
+    expect(btn().getAttribute('aria-label')).not.toContain('gui.ws.tasks_running_tab')
+
+    await act(async () => { desk.set({ tab: 'tasks' }) })
+    expect(live()).toBe('gui.ws.tasks_running_tab {"n":2}')
+    expect(btn().getAttribute('aria-label')).toContain('gui.ws.tasks_running_tab {"n":2}')
+  })
+
   /* The chip says the session's state with the palette up or down: how many
      tasks still run, in words, and how many groups wait on the reader. */
   it('says how many tasks run, and drops the words when none do', async () => {

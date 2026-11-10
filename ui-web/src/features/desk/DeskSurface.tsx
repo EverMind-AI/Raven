@@ -477,12 +477,13 @@ export function DeskFollowToggle(): JSX.Element | null {
   /* Only while the strip is down. With the palette up the three tabs each say
      their own number an inch below this, and a sum repeating them there is a
      second voice for one fact -- on the button whose job at that moment is to
-     put the desk away. The running and waiting counts have no such double:
-     nothing in the strip says them while another tab is up, so they stand
-     whether or not the palette is. */
+     put the desk away. The running count follows the same rule through the
+     tasks tab's own badge, which carries it while another tab is up; on the
+     tasks tab itself that badge is quiet, so this one still says it. The
+     waiting count has no badge in the strip, so it stands either way. */
   const fresh = desk.showing() ? 0 : desk.unseenAll()
   const busy = desk.working()
-  const running = desk.runningTaskCount()
+  const running = desk.showing() && state.tab !== 'tasks' ? 0 : desk.runningTaskCount()
   const asking = desk.askingTaskCount()
   /* The bubble pops on the way UP and only then. A number that drops is the
      reader having just read something -- announcing that with the same flourish
