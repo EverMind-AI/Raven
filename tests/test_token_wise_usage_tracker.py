@@ -536,6 +536,18 @@ class _PositionalStreamProvider(_DirectProvider):
             yield delta
 
 
+class _PositionalProvider(_DirectProvider):
+    """Forwards to its parent by position, as ``MiniMaxOAuthProvider`` did."""
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        return await super().chat(messages, tools, model, **kwargs)
+
+    def get_default_model(self) -> str:
+        # Deliberately not the model under test: a lookup that misses the call's
+        # own third argument falls back to this name, and the row shows it.
+        return "direct/default"
+
+
 def _listening() -> UsageTracker:
     """A tracker the seam reports to for the length of one block."""
     return UsageTracker(persist=False)
@@ -651,6 +663,27 @@ async def test_a_stream_forwarded_positionally_without_a_model_is_billed_under_t
         ]
 
     assert deltas
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/model"]
+
+
+async def test_a_non_stream_call_forwarded_positionally_is_billed_under_its_model(tmp_path: Path):
+    """The ``chat`` entry point reads the same (messages, tools, model) shape the
+    stream wrapper does. A subclass forwarding to its parent by position, as the
+    MiniMax OAuth provider did, is recorded by its own outer wrapper; that
+    wrapper must take the call's third argument for the model, not the tools list.
+    The double's default name is different on purpose: a lookup that lands on the
+    tools list falls back to it, and the row would show that instead.
+    """
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat([{"role": "user", "content": "hi"}], tools, "direct/model")
+
     rows = [
         json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
     ]
