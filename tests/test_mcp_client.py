@@ -230,6 +230,7 @@ async def test_the_registry_probe_takes_a_host_servers_cwd_but_not_a_packages(mo
 
     async def _fake_launch(argv, env, cwd=None, **kwargs):
         seen["cwd"] = cwd
+        seen["project"] = kwargs.get("project", True)
         return list(argv)
 
     @asynccontextmanager
@@ -246,6 +247,7 @@ async def test_the_registry_probe_takes_a_host_servers_cwd_but_not_a_packages(mo
 
     assert seen["cwd"] == "/proj"
     assert seen["params_cwd"] == "/proj"
+    assert seen["project"] is True, "the host's own directory is the host's own content"
 
     package = MCPServerConfig(type="stdio", command="npx", args=["server"], cwd="/pkg", source="package")
     seen.clear()
@@ -254,6 +256,7 @@ async def test_the_registry_probe_takes_a_host_servers_cwd_but_not_a_packages(mo
 
     assert seen["cwd"] is None
     assert seen["params_cwd"] == "/pkg"
+    assert seen["project"] is False, "a package root is third-party content: no project file is read"
 
 
 def test_a_config_without_the_marker_is_the_hosts_own() -> None:

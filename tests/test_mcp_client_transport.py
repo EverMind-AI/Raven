@@ -136,7 +136,7 @@ async def test_a_stdio_server_starts_the_way_the_mirror_fallback_says(tmp_path, 
     observed = tmp_path / "observed.json"
     asked: list[tuple[list[str], dict[str, str], bool]] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append((list(argv), dict(env), local))
         return [*argv, "--as-the-answer-says"]
 
@@ -178,7 +178,7 @@ async def test_a_sandboxed_stdio_server_starts_the_same_way(monkeypatch):
 
     asked: list[bool] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append(local)
         return [argv[0], "--default-index", mirrors.PYPI_INDEX, *argv[1:]]
 
@@ -205,7 +205,7 @@ async def test_a_packages_working_directory_does_not_choose_the_registry(monkeyp
 
     asked: list[str | None] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append(cwd)
         return list(argv)
 
@@ -236,7 +236,7 @@ async def test_a_host_servers_working_directory_chooses_the_registry(monkeypatch
 
     asked: list[str | None] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append(cwd)
         return list(argv)
 
@@ -253,6 +253,48 @@ async def test_a_host_servers_working_directory_chooses_the_registry(monkeypatch
 
     assert asked == [host_cwd]
     assert executor.started == [("uvx", ["mcp-server-fetch"], None, host_cwd)]
+
+
+@pytest.mark.asyncio
+async def test_the_probe_of_a_server_that_is_not_the_hosts_own_reads_no_project_file(monkeypatch):
+    """A host server's probe reads the project file of the operator's own
+    directory. Another one's reads none at all: with no directory of its own
+    to read, the question would be asked about wherever this process runs,
+    and the registry would then depend on where Raven was started.
+    """
+    from raven.utils import mirrors
+
+    asked: list[tuple[str | None, bool]] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
+        asked.append((cwd, project))
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    executor = _SpawningExecutor()
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd="/srv/host-project"),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd="/srv/packages/demo", source="package"),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd="/srv/handed-over", source="playbook"),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    assert asked == [("/srv/host-project", True), (None, False), (None, False)]
 
 
 @pytest.mark.asyncio

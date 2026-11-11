@@ -149,6 +149,7 @@ async def test_an_acp_child_starts_the_way_the_mirror_fallback_says(
         local: bool = True,
         deadline: float | None = None,
         cache_root: Path | None = None,
+        project: bool = True,
     ) -> list[str]:
         asked.append((list(argv), dict(env), cwd))
         return [*argv, "--as-the-answer-says"]
@@ -197,6 +198,7 @@ async def test_an_acp_launch_asks_the_mirror_before_it_fetches_the_package(tmp_p
         local: bool = True,
         deadline: float | None = None,
         cache_root: Path | None = None,
+        project: bool = True,
     ) -> list[str]:
         asked.append(list(argv))
         return [*started, "--as-the-answer-says"]

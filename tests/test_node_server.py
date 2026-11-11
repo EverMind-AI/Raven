@@ -652,7 +652,7 @@ async def test_an_agent_starts_the_way_this_machine_s_mirror_fallback_says(tmp_p
     monkeypatch.setattr(server, "capture_login_env", lambda: {**os.environ, "FROM_LOGIN": "yes"})
     asked: list[tuple[list[str], object, object, object]] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append((list(argv), env.get("FROM_LOGIN"), env.get("FROM_ENTRY"), cwd, deadline, cache_root))
         return [*argv, "--as-the-answer-says"]
 
@@ -687,7 +687,7 @@ async def test_launches_that_outnumber_the_workers_are_answered_within_the_budge
     monkeypatch.setattr(protocol, "AGENT_LAUNCH_PREPARE_S", 1.0)
     release = threading.Event()
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         release.wait(10)
         return list(argv)
 
@@ -728,7 +728,7 @@ async def test_the_hosts_own_opt_out_turns_the_fallback_off_on_the_machine(tmp_p
     asked: list[dict[str, str]] = []
     real = mirrors.package_launch
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append(dict(env))
         return real(argv, env, cwd, local=local, deadline=deadline, cache_root=cache_root)
 
@@ -753,7 +753,7 @@ async def test_a_launch_whose_own_environment_says_so_is_left_alone(tmp_path, ag
     monkeypatch.delenv("RAVEN_NO_MIRROR", raising=False)
     asked: list[dict[str, str]] = []
 
-    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
         asked.append(dict(env))
         return list(argv)
 

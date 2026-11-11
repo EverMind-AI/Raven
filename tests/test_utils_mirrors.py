@@ -236,15 +236,54 @@ class _Npm:
         self.registry: str | None = mirrors.NPM_DEFAULT_REGISTRY
         self.prefix = global_prefix
         self.asked_in: list[str | None] = []
+        self.asked_project: list[bool] = []
 
     def config_in(
-        self, _env: object, cwd: str | None, names: tuple[str, ...], deadline: float | None = None
+        self,
+        _env: object,
+        cwd: str | None,
+        names: tuple[str, ...],
+        deadline: float | None = None,
+        *,
+        project: bool = True,
     ) -> dict[str, str] | None:
         self.asked_in.append(cwd)
+        self.asked_project.append(project)
         if self.registry is None:
             return None
         holds = {"registry": self.registry, "prefix": self.prefix}
         return {name: holds[name] for name in names}
+
+
+def test_npm_is_asked_without_the_project_file_when_the_launch_has_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """npm's own words for it: the global and the user configuration alone.
+
+    The user configuration is read whatever this says, so the operator's own
+    registry still decides; the project file that sits in the directory does
+    not, and the question is asked of npm in that shape.
+    """
+    asked: list[list[str]] = []
+
+    class _Done:
+        returncode = 0
+        stdout = b"registry=https://registry.npmjs.org/\n"
+
+    def _run(command, **_kwargs):
+        asked.append(list(command))
+        return _Done()
+
+    monkeypatch.setattr(mirrors.shutil, "which", lambda *_args, **_kwargs: "/usr/bin/npm")
+    monkeypatch.setattr(mirrors.subprocess, "run", _run)
+
+    mirrors._npm_config({}, str(tmp_path), ("registry",), project=False)
+    mirrors._npm_config({}, str(tmp_path), ("registry",), project=True)
+
+    assert asked == [
+        ["/usr/bin/npm", "config", "get", "registry", "--location=global"],
+        ["/usr/bin/npm", "config", "get", "registry"],
+    ]
 
 
 class TestPackageRunners:
@@ -954,6 +993,43 @@ class TestNpxLaunches:
 
         assert npm.asked_in == [str(project)]
 
+    def test_a_launch_with_no_project_of_its_own_asks_npm_alone(
+        self, network, npm, installs, project, tmp_path
+    ) -> None:
+        """A launch that must see no project file asks npm for the global and
+        the user configuration alone: the operator's own registry still
+        decides, and no directory's .npmrc does."""
+        (project / ".npmrc").write_text("registry=https://registry.example.internal/\n", encoding="utf-8")
+        argv = ["npx", "-y", "@acme/agent"]
+
+        assert mirrors.package_launch(argv, self._env(tmp_path), str(project), project=False) != argv
+        assert npm.asked_project == [False]
+
+    def test_a_projects_npmrc_does_not_keep_a_launch_that_has_no_project(
+        self, network, installs, project, tmp_path
+    ) -> None:
+        """The .npmrc of a directory that is no project's is passed over: it
+        would name a registry for a launch that must read no project file."""
+        (project / ".npmrc").write_text("registry=https://registry.example.internal/\n", encoding="utf-8")
+        argv = ["npx", "-y", "@acme/agent"]
+
+        assert mirrors.package_launch(argv, self._env(tmp_path), str(project), project=False) != argv
+        assert [verb for _prefix, verb in installs.runs] == ["install"]
+
+    def test_what_a_directory_holds_does_not_keep_a_launch_that_has_no_project(
+        self, network, installs, project, tmp_path
+    ) -> None:
+        """A local install is the project's own, so a launch that reads no
+        project file starts from the registry and not from what the directory
+        happens to hold."""
+        package = project / "node_modules" / "@acme" / "agent"
+        package.mkdir(parents=True)
+        (package / "package.json").write_text("{}", encoding="utf-8")
+        argv = ["npx", "-y", "@acme/agent"]
+
+        assert mirrors.package_launch(argv, self._env(tmp_path), str(project), project=False) != argv
+        assert [verb for _prefix, verb in installs.runs] == ["install"]
+
     def test_a_launch_that_runs_in_a_sandbox_is_left_alone(self, network, installs, project, tmp_path) -> None:
         """The install would be made on this machine, and the sandbox starts
         what it has in there."""
@@ -1484,7 +1560,7 @@ class TestThePreparationBudget:
         prepared: list[str] = []
         release = threading.Event()
 
-        def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
             prepared.append(argv[0])
             release.wait(10)
             return list(argv)
@@ -1512,7 +1588,7 @@ class TestThePreparationBudget:
 
         prepared: list[float | None] = []
 
-        def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None, project=True):
             prepared.append(deadline)
             time.sleep(0.3)
             return list(argv)
