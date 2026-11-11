@@ -58,6 +58,12 @@ function composer(bottom: number, { height = 132, left = 36, right = 600 } = {})
 afterEach(() => { document.body.innerHTML = '' })
 
 describe('desk placement', () => {
+  it('asks to reach the bottom until the reader sets a height, and the clamp keeps the ask', () => {
+    launcher()
+    expect(defaultGeometry().fill).toBe(true)
+    expect(clampGeometry(defaultGeometry()).fill).toBe(true)
+  })
+
   it('hangs the desk under the launcher, flush with it, clear of the chat column', () => {
     const right = launcher()
     const at = defaultGeometry()

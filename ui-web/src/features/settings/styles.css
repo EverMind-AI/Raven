@@ -54,12 +54,18 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-rail {background:var(--surface); border-right:1px solid var(--line); padding:20px 12px 24px; overflow-y:auto}
 .settings-rail h4 {font-size:16px; font-weight:600; padding:0 10px 14px}
 .settings-rail .settings-grp {font-family:var(--disp); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:14px 10px 6px}
+/* The section list in the rail. The current one is a sheet of paper laid on
+   the rail with a gold edge down its left, rather than an inverted block --
+   on a warm ground an inversion reads as a hole, and a sheet reads as the
+   page you are looking at. */
 .settings-nitem {display:flex; align-items:center; gap:8px; width:100%; height:32px; text-align:left; font:inherit; font-size:14px;
-  background:none; border:0; color:var(--rail-ink); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
-.settings-nitem:hover {background:var(--settings-nav-on); color:var(--rail-ink-on)}
-.settings-nitem[aria-current="true"] {background:var(--settings-nav-on); color:var(--rail-ink-on); font-weight:500}
-.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; color:var(--settings-nav-ico)}
-.settings-nitem[aria-current="true"] svg, .settings-nitem:hover svg {color:currentColor}
+  background:none; border:0; color:var(--set-muted); padding:0 8px; border-radius:8px; cursor:pointer; position:relative}
+.settings-nitem:hover {background:var(--set-paper-2); color:var(--set-ink)}
+.settings-nitem[aria-current="true"] {background:var(--set-paper-2); color:var(--set-ink); font-weight:500;
+  box-shadow:inset 0 0 0 1px var(--set-rule), inset 3px 0 0 var(--set-accent)}
+.settings-nitem svg {width:16px; height:16px; flex:0 0 16px; color:var(--set-faint)}
+.settings-nitem[aria-current="true"] svg {color:var(--set-accent)}
+.settings-nitem:hover svg {color:var(--set-muted)}
 .settings-nitem.settings-soon {opacity:.55; cursor:default}
 .settings-nitem.settings-soon:hover {background:none; color:var(--muted)}
 .settings-nitem .settings-p2 {margin-left:auto; font-size:11px; font-family:var(--disp); font-weight:600; letter-spacing:.06em;
@@ -68,8 +74,11 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-bhead {display:flex; align-items:baseline; gap:10px; padding-bottom:16px; border-bottom:1px solid var(--line-soft); margin-bottom:20px}
 .settings-bhead h3 {font-size:21px; font-weight:600}
 .settings-bhead .settings-sub {color:var(--faint); font-size:13px}
-.settings-card {border:1px solid var(--line); border-radius:10px; background:var(--paper); margin-bottom:16px; overflow:hidden}
-.settings-card > .settings-ch {padding:12px 15px 10px; border-bottom:1px solid var(--line-soft)}
+/* A card is a card of paper: one hairline around it, and the rows inside it
+   separated by a lighter one. The border is the paper's edge, not a frame
+   around a widget, so it is drawn in the warm rule rather than the cold one. */
+.settings-card {border:1px solid var(--set-rule); border-radius:10px; background:var(--set-paper-2); margin-bottom:16px; overflow:hidden}
+.settings-card > .settings-ch {padding:12px 15px 10px; border-bottom:1px solid var(--set-rule-soft)}
 .settings-card > .settings-ch .settings-t {font-family:var(--disp); font-size:14px; font-weight:600}
 .settings-card > .settings-ch .settings-d {color:var(--faint); font-size:13px; margin-top:2px}
 .settings-rows {display:flex; flex-direction:column}
@@ -80,10 +89,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-row.settings-stack {grid-template-columns:1fr}
 .settings-row.settings-stack .settings-ctl {margin-top:8px}
 .settings-row .settings-kk {font-family:var(--mono); font-size:11px; color:var(--faint)}
+/* A switch that is on is lit, not filled: the accent under a white knob, and
+   a soft glow around it in the dark theme where the room has a lamp in it. */
 .settings-swi {width:36px; height:20px; border-radius:99px; border:1px solid var(--line); background:var(--raised); position:relative; cursor:pointer; padding:0; flex:0 0 auto}
 .settings-swi::after {content:""; position:absolute; top:.5px; left:.5px; width:17px; height:17px; border-radius:99px; background:var(--paper); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .22s cubic-bezier(.25,.8,.25,1)}
 @media (prefers-reduced-motion: reduce) { .settings-swi::after {transition:none} }
-.settings-swi[aria-checked="true"] {background:var(--amber); border-color:var(--amber)}
+.settings-swi[aria-checked="true"] {background:var(--set-accent-2); border-color:var(--set-accent-2)}
 .settings-swi[aria-checked="true"]::after {transform:translateX(16px); box-shadow:none}
 .settings-swi:focus-visible {outline:2px solid var(--warm); outline-offset:2px}
 /* Built in: the row is here so the tool is not invisible, and there is
@@ -92,10 +103,12 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
    control that ignores clicks. */
 .settings-swi-fixed {opacity:.45; cursor:default; box-shadow:none}
 .settings-swi-fixed[aria-checked="true"] {background:var(--line); border-color:var(--line)}
-.settings-seg {display:inline-flex; border:1px solid var(--line); border-radius:var(--ctl-r); overflow:hidden; background:var(--surface); height: var(--ctl-h); box-sizing: border-box; padding: 2px; gap: 2px}
-.settings-seg button {font:inherit; font-size:14px; border:0; background:none; color:var(--muted); padding:0 12px; cursor:pointer; border-right:1px solid var(--line); border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap}
+/* A segment's chosen half is a sheet of paper lifted off the ground it sits
+   on, so the pick reads without a colour of its own. */
+.settings-seg {display:inline-flex; border:1px solid var(--set-rule); border-radius:var(--ctl-r); overflow:hidden; background:var(--set-rail-2); height: var(--ctl-h); box-sizing: border-box; padding: 2px; gap: 2px}
+.settings-seg button {font:inherit; font-size:14px; border:0; background:none; color:var(--set-muted); padding:0 12px; cursor:pointer; border-right:1px solid var(--set-rule); border-radius: calc(var(--ctl-r) - 3px); white-space: nowrap}
 .settings-seg button:last-child {border-right:0}
-.settings-seg button[aria-pressed="true"] {background:var(--paper); color:var(--text); font-weight:500; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)}
+.settings-seg button[aria-pressed="true"] {background:var(--set-paper-2); color:var(--set-ink); font-weight:500; box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 0 0 1px rgba(0,0,0,.03)}
 .settings-stepper {display:inline-flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden}
 .settings-stepper button {font:inherit; border:0; background:var(--raised); color:var(--muted); width:26px; height:28px; cursor:pointer}
 .settings-stepper button:hover {color:var(--text)}
@@ -731,7 +744,7 @@ button.settings-xname {cursor:pointer}
 .settings-apall:hover {color:var(--text)}
 .settings-apall:hover .settings-aptick {border-color:var(--muted)}
 .settings-apall[aria-checked="true"] .settings-aptick,
-.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-amber)}
 .settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:14px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
 .settings-apm:hover {background:var(--surface)}
 /* A tick box: the list is a selection, and the footer commits it. The glyph
@@ -744,7 +757,7 @@ button.settings-xname {cursor:pointer}
 .settings-apm:hover .settings-aptick,.settings-mgroup:hover .settings-aptick {border-color:var(--muted)}
 .settings-apm[aria-checked="true"] .settings-aptick,
 .settings-mgroup[aria-checked="true"] .settings-aptick,
-.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-amber)}
 .settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:13px}
 .settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
 .settings-apadd {color:var(--gold)}
@@ -830,3 +843,40 @@ button.settings-xname {cursor:pointer}
 /* System: the dark window over the right-hand part of the light one. */
 .settings-shot-half {position:absolute; inset:0; clip-path:inset(0 0 0 62%)}
 @media (max-width: 640px) { .settings-themes {grid-template-columns:1fr} }
+
+/* ---- the warm room ----------------------------------------------------
+   The dialog runs on the page's warm set (--set-*, defined in
+   styles/page.css and re-pointed at the dialog's own scope). What is left
+   here is what that set cannot say by itself: the two places where the
+   accent is lit rather than merely painted.
+
+   A switch that is on glows in the dark theme, because a room lit by a lamp
+   has one bright thing in it and the switch is that thing. In the light
+   theme the same switch is the accent under a white knob and nothing more --
+   a printed form's tick is not a lamp. */
+.settings-swi[aria-checked="true"] {box-shadow:0 0 0 0 var(--set-glow)}
+:root[data-theme="dark"] .settings-swi[aria-checked="true"] {box-shadow:0 0 14px var(--set-glow)}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .settings-swi[aria-checked="true"] {box-shadow:0 0 14px var(--set-glow)}
+}
+/* A card in the dark theme is a surface the lamp reaches, so it carries a
+   hairline of warm light along its edge rather than a shadow. */
+:root[data-theme="dark"] .settings-card {border-color:var(--set-rule); background:var(--set-paper-2)}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .settings-card {border-color:var(--set-rule); background:var(--set-paper-2)}
+}
+/* The metric tiles are divided by hairlines rather than boxed: a table of
+   numbers on paper wants rules between the columns, not frames around them.
+   The one that is worth noticing -- the cache hit -- carries the accent. */
+.settings-tiles4 {background:var(--set-rule)}
+.settings-tl {background:var(--set-paper-2)}
+.settings-tl .settings-l {color:var(--set-faint)}
+.settings-tl.settings-good .settings-n {color:var(--set-accent)}
+/* The daily bars are the accent at full strength, so a month of spending
+   reads as one warm shape against the sheet. */
+.settings-bars .settings-bb {background:var(--set-accent)}
+.settings-bars .settings-bcol:hover {background:var(--set-accent-wash)}
+/* The per-model table: a header in the warm faint, and rows divided by the
+   same hairline the rest of the dialog uses. */
+.settings-utab th {color:var(--set-faint); border-bottom:1px solid var(--set-rule)}
+.settings-utab td {border-bottom:1px solid var(--set-rule-soft)}
