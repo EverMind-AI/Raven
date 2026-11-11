@@ -154,13 +154,13 @@ class TestGitTimeouts:
     def test_run_capture_does_not_wait_for_a_grandchild(self, tmp_path):
         code = (
             "import subprocess, sys, time; "
-            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)']); "
-            "print('parent', flush=True); time.sleep(3)"
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
+            "print('parent', flush=True); time.sleep(5)"
         )
         started = time.monotonic()
         with pytest.raises(subprocess.TimeoutExpired) as exc:
             git_ops.run_capture([sys.executable, "-c", code], cwd=tmp_path, timeout=0.3)
-        assert time.monotonic() - started < 2.0
+        assert time.monotonic() - started < 3.0
         assert b"parent" in (exc.value.output or b"")
 
     def test_run_wraps_timeout_with_partial_stderr(self, tmp_path, monkeypatch):
