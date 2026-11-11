@@ -4197,14 +4197,20 @@ Which default a `WorkdirResolver` falls back to when a session has no explicit o
 The bundled markdown seed files copied into Agent home by `sync_workspace_templates()`
 (idempotent — fills only missing files, so user edits win), with one exception: `SOUL.md`
 is the host's voice as well as a template. The sync keeps the product text it last wrote in
-`.soul.md.template` and applies a line-level three-way merge: a product change that conflicts
-with an operator edit keeps that section as the operator has it and is named in the notice,
-every other change follows the new release. A copy that no
-shipped template or base record attributes to the product is left alone and named. The
-historical texts under `templates/legacy/` give the first merge a base, so a release that
-changes `SOUL.md` copies the outgoing text there. The operator's own lines may also live in
-`soul.local.md` beside it; the sync records the block it appended and withdraws that block on the
-next sync, so editing or deleting `soul.local.md` takes effect. The set is `SOUL.md` (agent persona), `AGENTS.md`
+`.soul.md.template` and applies a line-level three-way merge: a conflict with an operator edit
+leaves every section the product hunk touches as the operator has it, including a heading
+rename, and names them in the notice; a product hunk that spans several sections is left whole,
+so those sections stay as the operator has them too. Product hunks no conflict touches follow
+the new release. A copy is attributed to the product by the base record, an exact shipped text,
+a `.soul.md.generated.sha256` receipt naming it, a shipped text it starts with, or a
+`SequenceMatcher` ratio of at least 0.6 against one. A copy none of those attribute is left
+alone and named; a generated product prompt whose receipt names a text no shipped template
+carries is another product's and is left alone silently. The historical texts under
+`templates/legacy/` give the first merge a base, so a release that changes `SOUL.md` copies the
+outgoing text there; `scripts/check_soul_legacy.py` fails a change that does not. The
+operator's own lines may also live in `soul.local.md` beside it; the sync records the block it
+appended and withdraws that block on the next sync while the block is still at the end of the
+file, so editing or deleting `soul.local.md` takes effect. The set is `SOUL.md` (agent persona), `AGENTS.md`
 (agent operating instructions), `USER.md` (user profile), `HEARTBEAT.md` (periodic-task
 list read by the heartbeat Scheduler), `TOOLS.md` (tool-usage notes), `memory/MEMORY.md`
 (legacy memory seed). On the L4 layout these map under `agent_memory/profile/` (soul.md,

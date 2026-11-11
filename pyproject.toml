@@ -538,6 +538,7 @@ max-complexity = 40
 "scripts/check_commit_file.py" = ["S607"]
 "scripts/check_commit_messages.py" = ["S607"]
 "scripts/check_large_files.py" = ["S607"]
+"scripts/check_soul_legacy.py" = ["S607"]
 "scripts/check_source_language.py" = ["S607"]
 "scripts/skill_hub_e2e.py" = ["S101"]
 
