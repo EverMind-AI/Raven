@@ -28,7 +28,7 @@ import { PermGlyph } from './PermGlyph'
 
 import type { JSX } from 'react'
 
-/** The shield page.html serves, which is also every tier's outline. */
+/** The shield page.html serves before the store has drawn a tier. */
 const SERVED = '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
 
 export function PermChip(): JSX.Element {

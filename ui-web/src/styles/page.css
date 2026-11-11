@@ -1549,8 +1549,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--warm); }
 /* The permission list. A row is a glyph, the tier's name over its sentence,
    and the tick; the chosen row gets a warm band and a hairline of the same
-   colour rather than the bare tick the other menus use. The band stays
-   translucent, so it reads as the panel lit from within, not a second
+   colour rather than the bare tick the other menus use. The band is a wash
+   over the paper, so it reads as the row tinted in place rather than a second
    material. */
 #permPop .hd { padding: 4px 10px 5px; }
 #permPop .hd .lab { color: var(--muted); }
