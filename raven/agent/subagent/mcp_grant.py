@@ -129,10 +129,12 @@ class LiveMcpSource:
         cannot be borrowed for it.
 
         Equality is the one case where they can: a run that re-declares a server
-        the host already has, field for field, has named the same service, so
-        there is no provenance to confuse. That is what keeps a portable playbook
-        -- one that ships a definition so it runs anywhere -- from costing an
-        in-process node the wrappers it would have had on a host that also has it.
+        the host already has, field for field, has named the same service. The
+        provenance marker is not part of that comparison -- it says who
+        configured the server, not which service it is. That is what keeps a
+        portable playbook -- one that ships a definition so it runs anywhere --
+        from costing an in-process node the wrappers it would have had on a host
+        that also has it.
 
         Except for an OAuth server under a run credential scope: its credential
         lives outside the definition, in the token file under the playbook's
