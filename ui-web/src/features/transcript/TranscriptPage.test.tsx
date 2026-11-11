@@ -3166,10 +3166,10 @@ describe("the turn's delivered files", () => {
     }
   })
 
-  /* The lane's running state is the lane's, not a fold's. A direct-chat history
-     paints every earlier turn through the same lane, so a later live turn must
-     not relabel them Running or start their clocks. */
-  it('keeps earlier turns settled while a later one runs', () => {
+  /* A direct-chat record carries no record clock -- only per-row times. The
+     live fold still counts from its own turn's opening; the settled final turn
+     has no span, because the wire records no end for an instance turn. */
+  it('counts a live turn from its own row when the record has no clock', () => {
     vi.useFakeTimers()
     try {
       const box = document.createElement('div')
@@ -3177,24 +3177,87 @@ describe("the turn's delivered files", () => {
       act(() => {
         mount.agentStage(box, {
           status: 'run',
-          started_at: new Date(Date.now() - 5_000).toISOString(),
           messages: [
-            { role: 'user', text: 'first' },
-            { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
-            { role: 'tool', tool_call_id: 'c1', text: 'ok' },
-            { role: 'assistant', text: 'first answer' },
-            { role: 'user', text: 'second' },
-            { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }] },
-            { role: 'tool', tool_call_id: 'c2', text: 'ok' },
+            { role: 'user' as const, text: 'first', timestamp: new Date(Date.now() - 60_000).toISOString() },
+            { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+            { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+            { role: 'assistant' as const, text: 'first answer' },
+            { role: 'user' as const, text: 'second', timestamp: new Date(Date.now() - 5_000).toISOString() },
+            { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }] },
+            { role: 'tool' as const, tool_call_id: 'c2', text: 'ok' },
           ],
-        }, { key: 'turns-1', reset: true, dispatch: true })
+        }, { key: 'no-record-clock', reset: true, dispatch: true })
       })
+      const folds = [...box.querySelectorAll('.tfh')]
+      expect(folds[1]?.querySelector('.tm')?.textContent).toBe('5s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* A record can end on a message the runtime merged into the turn under way.
+     That is not a second turn: the one fold still carries the record's span,
+     the boundary `collapse` draws too. */
+  it('clocks a record whose last word is a mid-turn message', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        started_at: '2026-11-11T03:00:00.000Z',
+        ended_at: '2026-11-11T03:00:30.000Z',
+        messages: [
+          { role: 'user', text: 'job', timestamp: '2026-11-11T03:00:00.000Z' },
+          { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+          { role: 'user', text: 'one more thing', mid_turn: true, timestamp: '2026-11-11T03:00:10.000Z' },
+        ],
+      }, { key: 'mid-turn-1', reset: true, dispatch: true, shut: true })
+    })
+    expect(box.querySelector('.tfh .tm')?.textContent).toBe(store.durText(30_000))
+  })
+
+  /* The lane's running state is the lane's, not a fold's. A direct-chat history
+     paints every earlier turn through the same lane, so a later live turn must
+     not relabel them Running or start their clocks. The record's own span is
+     likewise the record's: on a longer history it belongs to no one turn, so
+     the last fold does not claim it. */
+  it('keeps earlier turns settled while a later one runs', () => {
+    vi.useFakeTimers()
+    try {
+      const box = document.createElement('div')
+      document.body.append(box)
+      const started = new Date(Date.now() - 60_000).toISOString()
+      const running = {
+        status: 'run',
+        started_at: started,
+        messages: [
+          { role: 'user' as const, text: 'first', timestamp: started },
+          { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+          { role: 'assistant' as const, text: 'first answer' },
+          { role: 'user' as const, text: 'second', timestamp: new Date(Date.now() - 5_000).toISOString() },
+          { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool' as const, tool_call_id: 'c2', text: 'ok' },
+        ],
+      }
+      act(() => { mount.agentStage(box, running, { key: 'turns-1', reset: true, dispatch: true }) })
       const folds = [...box.querySelectorAll('.tfh')]
       expect(folds).toHaveLength(2)
       expect(folds[0]?.querySelector('.lb')?.textContent).toBe('en:gui.fold.steps')
       expect(folds[0]?.querySelector('.tm')?.textContent).toBe('')
       expect(folds[1]?.querySelector('.lb')?.textContent).toBe('en:gui.deleg.st_run')
+      /* The live turn's own opening, not the record's start a minute ago. */
       expect(folds[1]?.querySelector('.tm')?.textContent).toBe('5s')
+
+      act(() => {
+        mount.agentStage(box, { ...running, status: 'completed', ended_at: new Date(Date.now()).toISOString() }, { key: 'turns-1', dispatch: true })
+      })
+      const settled = [...box.querySelectorAll('.tfh')]
+      expect(settled[0]?.querySelector('.lb')?.textContent).toBe('en:gui.fold.steps')
+      expect(settled[1]?.querySelector('.lb')?.textContent).toBe('en:gui.fold.steps')
+      /* No record span on a multi-turn last fold. */
+      expect(settled[1]?.querySelector('.tm')?.textContent).toBe('')
     } finally {
       vi.useRealTimers()
     }

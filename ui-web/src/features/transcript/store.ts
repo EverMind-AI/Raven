@@ -2045,23 +2045,46 @@ function agentDidStep(lane: Lane, calls: unknown[]): void {
 
 /* The last fold of the turn the lane ends on, found the way `collapse` finds
    it: scanning stops at the turn's opening, so a final turn that produced no
-   work answers null rather than the turn above it. */
+   work answers null rather than the turn above it. A mid-turn question is the
+   boundary only when work sits above it, which is `collapse`'s own rule. */
 function lastTurnFold(lane: Lane): FoldData | null {
+  let above = 0
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
     if (s.kind === 'fold') return s
+    if (s.kind === 'step') { above += 1; continue }
+    if (s.kind === 'ask' && s.midTurn) { if (above) return null; continue }
     if (s.kind === 'ask' || s.kind === 'sdlv') return null
   }
   return null
 }
 
+/* How many turns the lane holds. A typed question or a delegated result opens
+   one; a mid-turn injection joins the turn under way, which is the boundary
+   `collapse` draws too. */
+function turnCount(lane: Lane): number {
+  return lane.segs.filter((s) => s.kind === 'sdlv' || (s.kind === 'ask' && !s.midTurn)).length
+}
+
+/* When the lane's last turn opened, from its own opening row's stamp. */
+function lastTurnOpening(lane: Lane): number {
+  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
+    const s = lane.segs[i] as Seg
+    if (s.kind === 'sdlv') return s.at || 0
+    if (s.kind === 'ask' && !s.midTurn) return s.at || 0
+  }
+  return 0
+}
+
 /* The fold the history read just closed carries no clock; the record's own
-   start and end are the truer span for a delegated run anyway. Only that turn's
-   fold takes it -- a lane paints a whole multi-turn history, and an earlier
-   turn's span is its own. */
+   start and end are the truer span for a delegated run anyway. The ctx clock is
+   the RECORD's, though, so only a one-turn record takes it: a longer history's
+   earlier folds keep their own spans and the last one would otherwise claim the
+   record's whole life for a single turn. */
 function agentFoldTime(lane: Lane, ctx: { started_at?: string | number; ended_at?: string | number }): void {
   const fold = lastTurnFold(lane)
   if (!fold) return
+  if (turnCount(lane) > 1) return
   const from = msOfTime(ctx && ctx.started_at)
   const to = msOfTime(ctx && ctx.ended_at)
   if (!from || !to || to <= from) return
@@ -2243,7 +2266,6 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
   const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
-  lane.agentStart = msOfTime(r && r.started_at)
   /* The pane asks for a settled record's work to fold shut. While the run is
      still going its work is what the reader is watching, so the ask binds only
      once the record has settled. */
@@ -2352,6 +2374,12 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
      A direct-chat history spans many turns, and only the one still going wears
      the state word and the clock. */
   lane.liveFold = running ? (lastTurnFold(lane)?.id ?? 0) : 0
+  /* The live clock's anchor. On a one-turn record it is the record's own start,
+     the same span the settled fold shows; on a longer history it is the live
+     turn's opening, because the record's start belongs to an earlier turn. */
+  const recordStart = msOfTime(r && r.started_at)
+  const openedAt = lastTurnOpening(lane)
+  lane.agentStart = turnCount(lane) > 1 ? (openedAt || recordStart) : (recordStart || openedAt)
   /* A fold born open because the run was going shuts when it settles, the same
      rule a record born settled gets. `shutAutoFolds` leaves a fold the reader
      touched and one carrying a delegation or a long message. A record ending on
