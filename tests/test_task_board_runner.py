@@ -625,6 +625,17 @@ def test_asked_splits_after_an_ascii_statement_mark_a_closing_mark_follows():
     assert asked("Tests pass (see log.) Should I ship?") == ["Should I ship?"]
 
 
+def test_asked_reads_a_question_that_an_exclamation_mark_follows():
+    assert asked("Is it done?!") == ["Is it done?"]
+    assert asked("Done!?") == ["Done!?"]
+
+
+def test_asked_leaves_out_an_exclamation_that_is_not_a_question():
+    assert asked("That is great!") == []
+    assert asked("?!") == []
+    assert asked("!?") == []
+
+
 def test_asked_reads_a_long_reply_in_one_pass():
     """The reply is read on the event loop the whole gateway shares."""
     reply = " ".join(f"Question {n}?" for n in range(40_000))

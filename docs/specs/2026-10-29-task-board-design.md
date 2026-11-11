@@ -305,9 +305,10 @@ one instruction"). The instruction carries:
   step for a turn that advanced nothing; mark a group completed when it is done or the user
   dropped it; place every listed handle exactly once;
 - last, when the reply has any, its sentences that end in a question mark -- closing
-  emphasis, a bracket or a quote after the mark allowed -- quoted from it without its list
-  markers or strong emphasis (single emphasis stays as written), each once and at most the
-  last eight, read one message at a time the way the reader was shown them (a cut answer
+  emphasis, a bracket or a quote after the mark allowed (a half-width `>` included), and an
+  exclamation mark after the question mark allowed and dropped -- quoted from it without its
+  list markers or strong emphasis (single emphasis stays as written), each once and at most
+  the last eight, read one message at a time the way the reader was shown them (a cut answer
   together with its continuation), fenced code blocks and quoted lines left out, for the
   model to sort: each that asks the user to
   answer, confirm or decide goes in the `questions` of its matter's step, which makes that

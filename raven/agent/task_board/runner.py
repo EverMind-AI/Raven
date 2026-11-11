@@ -130,6 +130,7 @@ _CLOSER_CACHE: dict[str, bool] = {}
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
+_EXCLAMATION_MARKS = "!\uff01"
 _QUESTION_RECORD_MARKER = re.compile(r"\[(?:BEGIN|END) QUESTION MARKS\]", re.IGNORECASE)
 _RECOVERY_MARK = "_recovery_synthetic"
 
@@ -239,6 +240,29 @@ def _rstrip_closers(text: str) -> str:
     return text[:end]
 
 
+def _rstrip_exclamations(text: str) -> str:
+    end = len(text)
+    while end and text[end - 1] in _EXCLAMATION_MARKS:
+        end -= 1
+    return text[:end]
+
+
+def _without_exclamation_after_question(sentence: str) -> str:
+    """The sentence without the exclamation marks that follow its final question mark,
+    closing marks after them kept: a full-width pair keeps its question mark only."""
+    if max(sentence.rfind(mark) for mark in _EXCLAMATION_MARKS) < max(sentence.rfind(mark) for mark in _QUESTION_MARKS):
+        return sentence
+    end = len(sentence)
+    while end and _is_closer(sentence[end - 1]):
+        end -= 1
+    start = end
+    while start and sentence[start - 1] in _EXCLAMATION_MARKS:
+        start -= 1
+    if start == end or start == 0 or sentence[start - 1] not in _QUESTION_MARKS:
+        return sentence
+    return sentence[:start] + sentence[end:]
+
+
 def _sentences(paragraph: str) -> list[str]:
     """The paragraph's sentences: a full-width mark ends one after any closing marks, and an
     ASCII mark ends one only when whitespace follows, the closing marks included."""
@@ -271,19 +295,20 @@ def _questions(message: str) -> list[str]:
     for paragraph in _paragraphs(message):
         for part in _sentences(_without_emphasis(paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
-            closed = _rstrip_closers(sentence)
-            if closed.endswith(_QUESTION_MARKS) and closed.rstrip(_QUESTION_MARK_CHARS).strip():
-                found.append(sentence)
+            closed = _rstrip_exclamations(_rstrip_closers(sentence))
+            if closed.endswith(_QUESTION_MARKS) and closed.rstrip(_QUESTION_MARK_CHARS + _EXCLAMATION_MARKS).strip():
+                found.append(_without_exclamation_after_question(sentence))
     return found
 
 
 def asked(reply: str | Sequence[str]) -> list[str]:
     """The sentences of a reply that end in a question mark, each once, the last ``ASKED_SHOWN`` of them.
 
-    A question mark still ends one when closing emphasis, a bracket or a quote follows it. A
-    reply given as its messages is read one message at a time, the way the reader was shown
-    it: a line with no closing mark, or a fence left open, ends with its message. A fenced
-    code block and a quoted line are left out: neither was put to the user.
+    A question mark still ends one when closing emphasis, a bracket or a quote follows it, and
+    an exclamation mark after it still leaves a question, dropped the way a full-width pair
+    drops it. A reply given as its messages is read one message at a time, the way the reader
+    was shown it: a line with no closing mark, or a fence left open, ends with its message. A
+    fenced code block and a quoted line are left out: neither was put to the user.
     """
     messages = [reply] if isinstance(reply, str) else reply
     return list(dict.fromkeys(q for message in messages for q in _questions(message)))[-ASKED_SHOWN:]
@@ -311,7 +336,8 @@ def _message_tool_words(call: Any, answered: Collection[str]) -> str:
 
 
 # The loop writes this assistant text only to keep a tool result from being followed by a
-# user message (a 400 on most providers); nobody read it as the reply.
+# user message (a 400 on most providers); nobody read it as the reply. `turn_path.py` writes
+# it for the post-tool nudge and for a reply cut at the output ceiling with nothing in it.
 _EMPTY_PLACEHOLDER = "(empty)"
 
 

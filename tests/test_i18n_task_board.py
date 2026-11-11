@@ -115,6 +115,11 @@ def test_asked_keeps_three_closing_marks_after_a_full_width_question():
     assert asked("「*可以继续吗？*」」后面。") == ["「*可以继续吗？*」」"]
 
 
+def test_asked_reads_a_question_that_an_exclamation_mark_follows():
+    assert asked("真的吗?！") == ["真的吗?"]
+    assert asked("真的吗？！") == ["真的吗？"]
+
+
 def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     board = Board([_group("g_1", "修复登录白屏", "定位到 bug")], [])
 
