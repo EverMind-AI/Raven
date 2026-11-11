@@ -55,6 +55,7 @@ describe('a usage report on the context ring', () => {
         conversation: 108_600,
         memory: 2_100,
         skills: 3_300,
+        files: 1_500,
       },
     })
     expect(get().parts).toEqual({
@@ -63,6 +64,7 @@ describe('a usage report on the context ring', () => {
       conversation: 108_600,
       memory: 2_100,
       skills: 3_300,
+      files: 1_500,
     })
   })
 })

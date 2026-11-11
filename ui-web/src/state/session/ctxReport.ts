@@ -19,6 +19,7 @@ export interface UsageReport {
     conversation?: number
     memory?: number
     skills?: number
+    files?: number
   } | null
 }
 

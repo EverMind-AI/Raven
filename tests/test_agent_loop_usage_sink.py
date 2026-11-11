@@ -174,7 +174,7 @@ async def test_usage_sink_carries_the_window_divided(workspace):
     )
 
     parts = sink["context_parts"]
-    assert set(parts) == {"system", "tools", "conversation", "memory", "skills"}
+    assert set(parts) == {"system", "tools", "conversation", "memory", "skills", "files"}
     assert parts["system"] > 0
     assert parts["conversation"] > 0
     assert parts["memory"] > 0

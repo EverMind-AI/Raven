@@ -818,6 +818,7 @@ def build_user_content(
     *,
     can_see_images: bool = True,
     describe_tool: str | None = None,
+    notes_out: list[str] | None = None,
 ) -> str | list[dict[str, Any]]:
     """User message content with attachments.
 
@@ -854,6 +855,10 @@ def build_user_content(
     ceiling -- becomes a note as well. This runs deep inside turn assembly, where
     a raised ``OSError`` surfaces as a failed turn rather than as a sentence about
     one attachment.
+
+    ``notes_out``, when given, receives the joined note text: exactly what was
+    appended to the message body, so the window measurement can record it as
+    the "attachments" part and cut it out of the conversation count.
     """
     if not media:
         return text
@@ -921,6 +926,8 @@ def build_user_content(
     body = text
     if notes:
         body = (f"{text}\n\n" if text else "") + "\n".join(notes)
+        if notes_out is not None:
+            notes_out.append("\n".join(notes))
     if not images:
         return body
     return images + [{"type": "text", "text": body}]

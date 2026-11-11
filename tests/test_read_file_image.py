@@ -1579,7 +1579,7 @@ def test_the_assembler_forwards_the_verdict_to_the_renderer(monkeypatch) -> None
 
     seen = {}
 
-    def _spy(text, media, *, can_see_images=True, describe_tool=None):
+    def _spy(text, media, *, can_see_images=True, describe_tool=None, notes_out=None):
         seen.update(can_see_images=can_see_images, describe_tool=describe_tool)
         return text
 
@@ -1656,6 +1656,21 @@ def test_an_attachment_that_cannot_be_prepared_is_named_not_dropped(tmp_path: Pa
     assert isinstance(out, str)
     assert "broken.png" in out
     assert "could not be prepared" in out
+
+
+def test_the_attachment_notes_are_recorded_for_the_window_breakdown(tmp_path: Path) -> None:
+    """``notes_out`` receives exactly what was appended to the message body, so
+    the window measurement can cut it out of the conversation count."""
+    from raven.context_engine.segments import render
+
+    pdf = tmp_path / "report.pdf"
+    pdf.write_bytes(b"%PDF-1.4 fake")
+    notes_out: list[str] = []
+    out = render.build_user_content("read the report", [str(pdf)], notes_out=notes_out)
+
+    assert isinstance(out, str)
+    assert notes_out == ["[Attachment: report.pdf (path: " + str(pdf) + ")]"]
+    assert notes_out[0] in out
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 000 does not block root")

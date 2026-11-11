@@ -213,12 +213,18 @@ class ContextAssembler(ContextEngine):
         # always-on skill digest that rides the system prompt, and the pull
         # menu. Each is recorded wherever it rode, so the breakdown can cut it
         # out of its default bucket.
-        if window_parts:
-            meta["window_parts"] = window_parts
         scratch = render_turn_scratch([text for _, text in scratch_parts])
         # Appended after the envelope is built, and recorded on it: what the
         # session write and every other reader strip is exactly this text.
-        user_msg = mark_turn_scratch(self._build_user(ctx), scratch)
+        notes_out: list[str] = []
+        user_msg = mark_turn_scratch(self._build_user(ctx, notes_out=notes_out), scratch)
+        # The attachment notes the user message carries are file material, not
+        # the user's own words: recorded under the same envelope key so the
+        # breakdown can cut them out of the conversation count.
+        if notes_out:
+            window_parts["attachments"] = notes_out[0]
+        if window_parts:
+            meta["window_parts"] = window_parts
 
         # ── Phase B — prefix-dependent builders (Curator), serial ───
         ctx_b = replace(
@@ -357,7 +363,7 @@ class ContextAssembler(ContextEngine):
             logger.opt(exception=True).error("Notices for {} failed; assembling without them", session_key)
             return None
 
-    def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
+    def _build_user(self, ctx: AssemblyContext, *, notes_out: list[str] | None = None) -> dict[str, Any]:
         """The single structural user message: runtime context + content.
 
         The scent menu (pull-mode skill discovery) rides the same envelope
@@ -388,6 +394,7 @@ class ContextAssembler(ContextEngine):
             ctx.media,
             can_see_images=ctx.can_see_images,
             describe_tool=ctx.describe_tool,
+            notes_out=notes_out,
         )
         if isinstance(user_content, str):
             merged: Any = f"{runtime_ctx}\n\n{user_content}"

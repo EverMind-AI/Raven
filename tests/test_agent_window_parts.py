@@ -11,10 +11,13 @@ is.
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from raven.agent.window.parts import (
     CONVERSATION,
+    FILES,
     MEMORY,
     SKILLS,
     SYSTEM,
@@ -160,7 +163,7 @@ def test_the_parts_add_up_to_the_prompt() -> None:
 
 
 def test_an_empty_prompt_has_no_parts() -> None:
-    assert measure_parts([]) == {SYSTEM: 0, TOOLS: 0, CONVERSATION: 0, MEMORY: 0, SKILLS: 0}
+    assert measure_parts([]) == {SYSTEM: 0, TOOLS: 0, CONVERSATION: 0, MEMORY: 0, SKILLS: 0, FILES: 0}
 
 
 # The always-on digest a pull-mode turn carries in its system prompt, and the
@@ -232,6 +235,62 @@ def test_a_tool_message_whose_name_cannot_be_read_is_not_skill_bytes(name) -> No
     parts = measure_parts([{"role": "tool", "tool_call_id": "c1", "name": name, "content": "x"}])
 
     assert parts[SKILLS] == 0
+
+
+# The attachment note the assembler appends to the user message, recorded under
+# the "attachments" key exactly as it was appended.
+ATTACHMENT_TEXT = "[Attachment: report.pdf (path: /srv/report.pdf) — use the read_file tool to read its contents]"
+
+
+def test_the_attachment_notes_are_file_bytes_not_conversation() -> None:
+    messages = [
+        {"role": "user", "content": f"read the report\n\n{ATTACHMENT_TEXT}"},
+    ]
+    without = measure_parts(messages)
+    parts = measure_parts(messages, None, {"attachments": ATTACHMENT_TEXT})
+
+    assert without[FILES] == 0
+    assert parts[FILES] > 0
+    assert parts[CONVERSATION] < without[CONVERSATION]
+
+
+def test_an_inline_picture_is_file_bytes_not_conversation() -> None:
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")},
+    }
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "what is in this picture?"}, image]},
+    ]
+    parts = measure_parts(messages)
+
+    assert parts[FILES] > 0
+    assert parts[CONVERSATION] == estimate_prompt_tokens(
+        [{"role": "user", "content": [{"type": "text", "text": "what is in this picture?"}]}]
+    )
+
+
+def test_a_picture_and_a_pdf_share_the_files_part() -> None:
+    """Issue #1204's acceptance: both ride one row, and the conversation drops
+    by what they took."""
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode("ascii")},
+    }
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": f"read the report\n\n{ATTACHMENT_TEXT}"}, image]},
+    ]
+    without = measure_parts(messages)
+    parts = measure_parts(messages, None, {"attachments": ATTACHMENT_TEXT})
+
+    assert parts[FILES] > without[FILES]
+    assert parts[CONVERSATION] < without[CONVERSATION]
 
 
 # A recorded segment only answers for a part when the prompt really carried it:

@@ -86,6 +86,7 @@ describe('the context panel', () => {
         conversation: 108_600,
         memory: 2_100,
         skills: 3_300,
+        files: 1_500,
       })
     })
     const rows = Array.from(panel().querySelectorAll('.chrome-ctx-row'))
@@ -95,6 +96,7 @@ describe('the context panel', () => {
       'Conversation',
       'Memory',
       'Skills',
+      'Files',
     ])
     expect(rows.map((r) => r.querySelector('.chrome-ctx-num')?.textContent)).toEqual([
       '4.2K',
@@ -102,6 +104,7 @@ describe('the context panel', () => {
       '108.6K',
       '2.1K',
       '3.3K',
+      '1.5K',
     ])
     /* The rows are the loop's local estimate, not the headline's provider
        count: the card has to say so where the rows are. */

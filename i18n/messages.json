@@ -1917,6 +1917,10 @@
       "en": "Conversation",
       "zh": "对话"
     },
+    "gui.ctx.part.files": {
+      "en": "Files",
+      "zh": "文件"
+    },
     "gui.ctx.part.memory": {
       "en": "Memory",
       "zh": "记忆"

@@ -44,6 +44,7 @@ const LABEL: Record<CtxPart, string> = {
   conversation: 'gui.ctx.part.conversation',
   memory: 'gui.ctx.part.memory',
   skills: 'gui.ctx.part.skills',
+  files: 'gui.ctx.part.files',
 }
 
 export function CtxPopover(): JSX.Element {

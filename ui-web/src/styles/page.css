@@ -44,6 +44,7 @@
   --ctx-skills: #e8c870;
   --ctx-conversation: #8fa9ab;
   --ctx-memory: #9c7a38;
+  --ctx-files: #7d86b8;
   /* The popover's one warm accent, in the palette's ink gold: the percentage
      badge and the room left. Its secondary text and model chip lean to the
      same slate as the parts rather than to the page's plain grey. */
@@ -325,6 +326,7 @@
     --ctx-skills: #9c7a38;
     --ctx-conversation: #5e7678;
     --ctx-memory: #e8c870;
+    --ctx-files: #a7b0e0;
     --ctx-ink: #e8c870;
     --ctx-ink-bg: #4a4538;
     --ctx-muted: #cdd6dc;
@@ -1318,6 +1320,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-cell[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-cell[data-part="conversation"] { background: var(--ctx-conversation); }
 .chrome-ctx-cell[data-part="memory"] { background: var(--ctx-memory); }
+.chrome-ctx-cell[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-rows { list-style: none; margin: 0; padding: 0; }
 .chrome-ctx-row { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13px; }
 .chrome-ctx-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; background: var(--line); }
@@ -1326,6 +1329,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-dot[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-dot[data-part="conversation"] { background: var(--ctx-conversation); }
 .chrome-ctx-dot[data-part="memory"] { background: var(--ctx-memory); }
+.chrome-ctx-dot[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chrome-ctx-num { font-family: var(--mono); font-size: 11.5px; color: var(--ctx-muted); font-variant-numeric: tabular-nums; }
 /* The rows are the loop's own estimate, not the provider's count the headline

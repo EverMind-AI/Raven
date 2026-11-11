@@ -151,6 +151,7 @@ export function set(
       conversation: nextParts.conversation ?? 0,
       memory: nextParts.memory ?? 0,
       skills: nextParts.skills ?? 0,
+      files: nextParts.files ?? 0,
     }
   }
   draw()

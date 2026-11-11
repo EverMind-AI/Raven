@@ -11,7 +11,7 @@
  * of window".
  */
 
-export type CtxPart = 'system' | 'tools' | 'conversation' | 'memory' | 'skills'
+export type CtxPart = 'system' | 'tools' | 'conversation' | 'memory' | 'skills' | 'files'
 
 export interface CtxParts {
   readonly system: number
@@ -19,6 +19,7 @@ export interface CtxParts {
   readonly conversation: number
   readonly memory: number
   readonly skills: number
+  readonly files: number
 }
 
 export interface CtxCell {
@@ -28,7 +29,7 @@ export interface CtxCell {
 
 /** The parts, in the order they fill the window: what is fixed first, then the
     conversation, and last what this turn recalled on top of it. */
-export const PARTS: readonly CtxPart[] = ['system', 'tools', 'conversation', 'memory', 'skills']
+export const PARTS: readonly CtxPart[] = ['system', 'tools', 'conversation', 'memory', 'skills', 'files']
 
 /** The cells a full window is drawn with: a hundred and twelve, twenty-eight
     across. The stylesheet's grid has those twenty-eight columns, and the two

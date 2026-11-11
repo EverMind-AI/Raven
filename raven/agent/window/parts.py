@@ -2,9 +2,10 @@
 
 A window is one number -- how full it is -- and a reader who asks what is
 filling it needs the parts: the system prompt, the tool schemas, the
-conversation, and the skill material the prompt carries. This measures the
-parts apart on the request that was sent, so a page can say which of them
-grew.
+conversation, the skill material the prompt carries, and the files the turn
+attached (the notes a non-inline attachment rides as, and the pictures that
+ride as their own image blocks). This measures the parts apart on the request
+that was sent, so a page can say which of them grew.
 
 Each part is measured on its own content and never as "what is left of the
 whole": the estimator caches a prompt it has already counted and counts a
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from raven.utils.images import estimate_content_part_tokens
 from raven.utils.tokens import estimate_prompt_tokens
 
 SYSTEM = "system"
@@ -23,10 +25,12 @@ TOOLS = "tools"
 CONVERSATION = "conversation"
 MEMORY = "memory"
 SKILLS = "skills"
+FILES = "files"
 
 # The parts, in the order a window fills: what is fixed first, then the
-# conversation, and last the memory and the skill material it carries.
-PARTS = (SYSTEM, TOOLS, CONVERSATION, MEMORY, SKILLS)
+# conversation, and last the memory, the skill material and the file material
+# it carries.
+PARTS = (SYSTEM, TOOLS, CONVERSATION, MEMORY, SKILLS, FILES)
 
 # The segment names the assembler records, by the part they answer for. A
 # skill is skill bytes wherever it rides: the always-on digest sits in the
@@ -35,6 +39,7 @@ PARTS = (SYSTEM, TOOLS, CONVERSATION, MEMORY, SKILLS)
 SEGMENTS = {
     MEMORY: ("memory",),
     SKILLS: ("active_skills", "scent", "skills"),
+    FILES: ("attachments",),
 }
 
 # Tool results made of skill material, by the name of the tool that produced
@@ -57,9 +62,10 @@ def measure_parts(
 
     The system prompt is the request's system message; the tools are the
     schemas sent beside the messages; the memory and the skills are the
-    segments ``window_parts`` names, each measured on its own text; and the
-    conversation is what the rest of the prompt is. Skill material arrives by
-    two routes: those named segments, and the results of the skill tools.
+    segments ``window_parts`` names, each measured on its own text; the files
+    are the attachment notes and the inline pictures; and the conversation is
+    what the rest of the prompt is. Skill material arrives by two routes: those
+    named segments, and the results of the skill tools.
 
     ``window_parts`` carries the text of every segment that answers for a part
     of its own, keyed by segment name (see :data:`SEGMENTS`). The text is taken
@@ -74,8 +80,10 @@ def measure_parts(
     scoped = window_parts or {}
     memory_texts = _texts(scoped, MEMORY)
     skill_texts = _texts(scoped, SKILLS)
-    cut = (*memory_texts, *skill_texts)
+    files_texts = _texts(scoped, FILES)
+    cut = (*memory_texts, *skill_texts, *files_texts)
     kept = [_cut(m, cut) for m in messages]
+    kept, image_tokens = _strip_images(kept)
     system_messages = [m for m in kept if m.get("role") == "system"]
     rest = [m for m in kept if m.get("role") != "system"]
     skill_results = [m for m in rest if _is_skill_result(m)]
@@ -86,7 +94,32 @@ def measure_parts(
         CONVERSATION: estimate_prompt_tokens(conversation) if conversation else 0,
         MEMORY: _texts_tokens(memory_texts),
         SKILLS: _texts_tokens(skill_texts) + (estimate_prompt_tokens(skill_results) if skill_results else 0),
+        FILES: _texts_tokens(files_texts) + image_tokens,
     }
+
+
+def _strip_images(messages: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """The messages without their inline image blocks, and those blocks' tokens.
+
+    A picture that rides as its own ``image_url`` block is file material, not
+    conversation: it is pulled out of the message and counted as the FILES
+    part, the way the attachment notes are cut out of the text.
+    """
+    image_tokens = 0
+    stripped: list[dict[str, Any]] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            stripped.append(message)
+            continue
+        blocks: list[Any] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "image_url":
+                image_tokens += estimate_content_part_tokens(block) or 0
+            else:
+                blocks.append(block)
+        stripped.append({**message, "content": blocks})
+    return stripped, image_tokens
 
 
 def _texts(scoped: dict[str, str], part: str) -> tuple[str, ...]:
