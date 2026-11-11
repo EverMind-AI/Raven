@@ -30,12 +30,9 @@ requirement.
 from __future__ import annotations
 
 import hashlib
-import itertools
 import json
 import os
 import re
-import stat
-import time
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -43,6 +40,7 @@ from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BAC
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
 from raven.home import raven_home
 from raven.utils.atomic_io import atomic_replace, write_transaction
+from raven.utils.atomic_io import back_up_file as _back_up
 from raven.utils.paths import safe_path_segment
 from raven.utils.pid import pid_alive
 
@@ -673,53 +671,6 @@ def _read_receipt(receipt: Path) -> dict[str, set[str]]:
 
 def _receipt_text(owner: str, digests: Iterable[str]) -> str:
     return "".join(f"{owner} {digest}\n" for digest in sorted(digests))
-
-
-# A new Windows file takes its folder's inherited ACL whatever mode os.open is
-# given, so a copy of a prompt kept private in a shared folder would be open
-# to every account the folder lets in.
-_BACK_UP_BY_LINK = os.name == "nt"
-
-
-def _back_up(target: Path, raw: bytes) -> Path:
-    """Keep ``target``'s bytes beside it under a name no earlier backup holds.
-
-    Never readable by more accounts than ``target``, since it holds the
-    operator's private text. On POSIX, a copy of ``raw`` created owner-only
-    and never wider than ``target``. On Windows, a hard link to ``target``
-    itself, so the backup is the same file with the same ACL and no bytes are
-    written; a volume that cannot link refuses the backup instead of copying.
-    """
-    stem = f"{target.name}.bak-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-    names = (target.with_name(f"{stem}-{attempt}" if attempt else stem) for attempt in itertools.count())
-    if _BACK_UP_BY_LINK:
-        for backup in names:
-            try:
-                os.link(target, backup)
-            except FileExistsError:
-                continue
-            except OSError as exc:
-                raise OSError(
-                    f"cannot back it up: on Windows only a hard link keeps the file's access rights, "
-                    f"and this volume refused one ({exc})"
-                ) from exc
-            return backup
-    try:
-        mode = stat.S_IMODE(target.stat().st_mode) & 0o600
-    except OSError:
-        mode = 0o600
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
-    for backup in names:
-        try:
-            fd = os.open(backup, flags, mode)
-        except FileExistsError:
-            continue
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        return backup
-    raise AssertionError("unreachable: itertools.count does not end")
 
 
 def write_generated(

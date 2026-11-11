@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from raven.config import product_render as render
+from raven.utils import atomic_io
 
 
 def test_env_wins_over_the_env_file(tmp_path, monkeypatch):
@@ -867,7 +868,7 @@ def test_a_windows_backup_is_the_edited_file_itself_so_its_acl_comes_with_it(tmp
     """Windows gives a new file its folder's inherited ACL whatever mode it is
     opened with, so a copy of a privately permissioned prompt was readable by
     accounts the prompt was not."""
-    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", True)
+    monkeypatch.setattr(atomic_io, "_BACK_UP_BY_LINK", True)
     target = tmp_path / "agent.md"
     _write(target, "v1")
     target.write_text("private tuning")
@@ -879,7 +880,7 @@ def test_a_windows_backup_is_the_edited_file_itself_so_its_acl_comes_with_it(tmp
 
 
 def test_a_windows_backup_the_volume_cannot_link_is_refused_not_copied(tmp_path, monkeypatch):
-    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", True)
+    monkeypatch.setattr(atomic_io, "_BACK_UP_BY_LINK", True)
     target = tmp_path / "agent.md"
     _write(target, "v1")
     receipt = _receipt(target).read_text()
@@ -888,7 +889,7 @@ def test_a_windows_backup_the_volume_cannot_link_is_refused_not_copied(tmp_path,
     def unsupported(_src, _dst):
         raise OSError(1, "Incorrect function")
 
-    monkeypatch.setattr(render.os, "link", unsupported)
+    monkeypatch.setattr(atomic_io.os, "link", unsupported)
     with pytest.raises(OSError, match="only a hard link keeps the file's access rights"):
         _write(target, "v2")
     assert target.read_text() == "private tuning" and _backups(target) == []
@@ -953,8 +954,8 @@ def test_a_private_windows_prompt_keeps_its_own_dacl_when_regenerated_and_backed
 
 @pytest.mark.parametrize("by_link", [False, True], ids=["copy", "link"])
 def test_backups_taken_in_the_same_second_do_not_collide(tmp_path, monkeypatch, by_link):
-    monkeypatch.setattr(render, "_BACK_UP_BY_LINK", by_link)
-    monkeypatch.setattr(render.time, "strftime", lambda _fmt: "20261016-120000")
+    monkeypatch.setattr(atomic_io, "_BACK_UP_BY_LINK", by_link)
+    monkeypatch.setattr(atomic_io.time, "strftime", lambda _fmt: "20261016-120000")
     target = tmp_path / "agent.md"
     for edit, release in (("first edit", "v1"), ("second edit", "v2")):
         target.write_text(edit)
