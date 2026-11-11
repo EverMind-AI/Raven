@@ -38,9 +38,10 @@ def test_max_chars_one_is_accepted():
     assert spec.max_chars == 1
 
 
-def test_empty_trajectory_regex_is_rejected():
-    with pytest.raises(ValueError, match="non-empty"):
-        ActivationSpec.from_dict({"kind": "trajectory_regex", "pattern": "  "})
+@pytest.mark.parametrize("pattern", ["  ", None, 3])
+def test_empty_or_non_string_trajectory_regex_is_rejected(pattern):
+    with pytest.raises(ValueError, match="non-empty string"):
+        ActivationSpec.from_dict({"kind": "trajectory_regex", "pattern": pattern})
 
 
 @pytest.mark.parametrize("value", [True, 1.9, float("inf")])

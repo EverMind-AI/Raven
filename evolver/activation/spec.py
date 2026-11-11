@@ -132,10 +132,11 @@ class ActivationSpec:
         if kind == "trajectory_regex" and "pattern" not in d:
             raise ValueError("trajectory_regex requires 'pattern'")
         if kind == "trajectory_regex":
-            if not str(d["pattern"]).strip():
-                raise ValueError("trajectory_regex pattern must be non-empty")
+            pattern = d["pattern"]
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ValueError("trajectory_regex pattern must be a non-empty string")
             try:
-                re.compile(d["pattern"])
+                re.compile(pattern)
             except re.error as exc:
                 raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
         if kind in _THRESHOLD_KINDS:
@@ -180,8 +181,10 @@ def evaluate_spec(spec: ActivationSpec, corpus: list[list[dict]]) -> int:
         _require_positive_int(spec.raw, "threshold", spec.kind)
     if spec.kind == "short_content_run" and "max_chars" in spec.raw:
         _require_positive_int(spec.raw, "max_chars", spec.kind, minimum=1)
-    if spec.kind == "trajectory_regex" and not str(spec.raw.get("pattern", "")).strip():
-        raise ValueError("trajectory_regex pattern must be non-empty")
+    if spec.kind == "trajectory_regex":
+        pattern = spec.raw.get("pattern")
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise ValueError("trajectory_regex pattern must be a non-empty string")
     scope = spec.raw.get("scope", "assistant")
     hits = 0
     if spec.kind == "trajectory_regex":
