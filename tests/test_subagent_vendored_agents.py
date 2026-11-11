@@ -1831,3 +1831,26 @@ class TestAQuotedSpacedRootStaysFailClosed:
         assert va._launcher_is_gone(row) is not launcher
         if not launcher:
             assert va._launcher_missing({"command": row.command}) == f"{folder}/run.py"
+
+
+class TestAcpRedeclarationOfABuiltInAgent:
+    """An acp row of a seed's name is left for ``_acp_host_override`` to complete."""
+
+    def test_a_row_without_a_command_is_not_disabled_before_the_override(self) -> None:
+        from raven.config.agent_names import GENERIC_AGENT
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        row = ThirdPartyAcpSubagentConfig(name=GENERIC_AGENT, enabled=True, command="")
+
+        (merged,) = va.merge_product_seeds([row], [])
+
+        assert merged.enabled is True
+
+    def test_a_row_naming_no_builtin_agent_keeps_the_disabled_rule(self) -> None:
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        row = ThirdPartyAcpSubagentConfig(name="not-a-seed", enabled=True, command="")
+
+        (merged,) = va.merge_product_seeds([row], [])
+
+        assert merged.enabled is False

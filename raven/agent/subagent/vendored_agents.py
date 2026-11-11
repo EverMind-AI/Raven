@@ -766,6 +766,17 @@ def merge_product_seeds(configs: list[Any] | None, discovered: list[Any] | None)
         # anything to do with. The marker still stands alone, because only this
         # switch writes it.
         if no_launcher and found is None and not marked:
+            # An `acp` redeclaration of a built-in agent is the one row in this branch
+            # that can still start: `_acp_host_override` fills its empty `command`
+            # with this install's own `raven acp` -- but it runs after this function,
+            # so disabling the row here made that documented default unreachable,
+            # since nothing cleared the flag again. Leave the row as written and let
+            # the override decide; it warns when the host command cannot be resolved.
+            if getattr(cfg, "kind", None) == "acp" and _names_a_builtin_agent(name):
+                if name not in by_name:
+                    order.append(name)
+                by_name[name] = cfg
+                continue
             # A row that names no launcher and no folder. It cannot start
             # anything, whoever wrote it and whatever its flag says, so it is
             # carried through disabled rather than dropped: deleting a row nobody
@@ -858,6 +869,16 @@ def _same_but_enabled(cfg: Any, discovered: Any) -> bool:
         return False
     drop = {"enabled", "switch_only"}
     return {k: v for k, v in dump().items() if k not in drop} == {k: v for k, v in other().items() if k not in drop}
+
+
+def _names_a_builtin_agent(name: str) -> bool:
+    """Whether ``name`` is a package seed's name, under any spelling it has had.
+
+    Imported where it is used: ``builtin_agents`` imports this module.
+    """
+    from raven.config.agent_names import is_builtin_agent_name
+
+    return is_builtin_agent_name(name)
 
 
 def _with_enabled(row: Any, enabled: bool) -> Any:
