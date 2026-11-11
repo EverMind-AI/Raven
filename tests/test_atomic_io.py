@@ -423,6 +423,27 @@ class TestReplaceRetry:
         assert path.read_text(encoding="utf-8") == "old"
         assert not (tmp_path / "state.json.tmp").exists()
 
+    def test_retries_a_held_temp_file(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_create = atomic_io._create_like
+        attempts = {"n": 0}
+
+        def flaky_create(tmp_path_arg, path_arg, preserve):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise FileExistsError(80, "held temp file")
+            return real_create(tmp_path_arg, path_arg, preserve)
+
+        monkeypatch.setattr(atomic_io, "_create_like", flaky_create)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert attempts["n"] == 2
+        assert path.read_text(encoding="utf-8") == "new"
+
     def test_does_not_retry_a_missing_source(self, tmp_path: Path, monkeypatch):
         import raven.utils.atomic_io as atomic_io
 

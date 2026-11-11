@@ -25,7 +25,9 @@ _held = threading.local()
 
 #: A reader on Windows holds the target open without delete sharing, so the
 #: temp-file open or ``os.replace`` fails with a sharing violation
-#: (WinError 32/5). The hold is normally brief; retry the whole replacement
+#: (WinError 32/5). A scanner can also hold the new ``.tmp`` itself, which
+#: makes the retry's ``O_EXCL`` create fail with ``FileExistsError`` until the
+#: handle is released. The hold is normally brief; retry the whole replacement
 #: instead of losing the write. The bound is deliberately small; callers that
 #: must not block an event loop should reach the helper through a thread.
 _REPLACE_ATTEMPTS = 5
@@ -47,7 +49,7 @@ def _replace_with_retry(
             else:
                 _replace_unlocked(path, data, create_mode=create_mode, newline=newline)
             return
-        except PermissionError:
+        except (PermissionError, FileExistsError):
             if attempt + 1 == _REPLACE_ATTEMPTS:
                 raise
             time.sleep(delay)
