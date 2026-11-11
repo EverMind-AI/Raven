@@ -4200,11 +4200,11 @@ is the host's voice as well as a template. The sync keeps the product text it la
 `.soul.md.template` and applies a line-level three-way merge: a conflict with an operator edit
 leaves every section the product hunk touches as the operator has it, including a heading
 rename, and names them in the notice; a product hunk that spans several sections is left whole,
-so those sections stay as the operator has them too. Product hunks no conflict touches follow
-the new release. A copy is attributed to the product by the base record, an exact shipped text,
+so those sections stay as the operator has them too. Product hunks that no conflict touches
+follow the new release. A copy is attributed to the product by the base record, an exact shipped text,
 a `.soul.md.generated.sha256` receipt naming it, a shipped text it starts with, or a
-`SequenceMatcher` ratio of at least 0.6 against one. A copy none of those attribute is left
-alone and named; a generated product prompt whose receipt names a text no shipped template
+`SequenceMatcher` ratio of at least 0.6 against one. A copy that none of those attributes is
+left alone and named; a generated product prompt whose receipt names a text no shipped template
 carries is another product's and is left alone silently. The historical texts under
 `templates/legacy/` give the first merge a base, so a release that changes `SOUL.md` copies the
 outgoing text there; `scripts/check_soul_legacy.py` fails a change that does not. The
