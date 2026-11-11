@@ -476,6 +476,17 @@ carried venv and credential readiness; "third-party agent" — these are raven's
 agents, and nobody registered them; "builtin" — that is the in-process row, which has
 no subprocess and no launcher.
 
+**Acceptance suite** (`evolver/validator/suite.py`):
+The held-out cases `python -m evolver validate` judges an agent folder on: a directory
+holding `suite.json` (`name`, `version`, an optional `target` agent name, a default
+`timeout_s` of 900) and `cases/<id>.json`, each a task, its input files (text, or
+`{"base64": ...}`), criteria with ids, optional reference notes and an optional timeout.
+It lives outside the folder it judges, so a folder cannot grade itself. A `target` naming
+another agent, a file path that is absolute or climbs with `..`, and a duplicate case or
+criterion id are input errors. Each case runs in its own workspace through the host's
+ACP backend, and a judge model decides each criterion from the final reply and the files
+the agent created or changed.
+
 **Machine** (`raven/ops/connections.py`):
 A compute host the owner registered — with `raven ops connection add`, or,
 since 2026-09-23, with the `ops_connection_add` tool an agent drives from the

@@ -4,6 +4,7 @@ run      cold start -> rounds -> unseal, resumable at any interruption
 check    validate config / models / bench setup without running anything
 status   inspect progress (never reveals sealed test numbers)
 finalize end the run now and unseal (one-way)
+validate check an agent folder against the agent scope and an acceptance suite
 """
 
 from __future__ import annotations
@@ -37,11 +38,28 @@ def build_parser() -> argparse.ArgumentParser:
     common(fin)
     fin.add_argument("--yes", action="store_true", help="confirm ending the run")
 
+    val = sub.add_parser("validate", help="check an agent folder against the agent scope and an acceptance suite")
+    val.add_argument("folder", help="the agent folder to check")
+    val.add_argument("--suite", help="acceptance suite directory (required unless --static-only)")
+    val.add_argument("--engine", help="engine project directory for a wheel-shaped agent")
+    val.add_argument("--host-config", help="config whose providers the run borrows (default: the active one)")
+    val.add_argument("--model", default="deepseek/deepseek-flash", help="model the agent runs on")
+    val.add_argument("--judge-model", default="deepseek/deepseek-flash", help="model that judges the results")
+    val.add_argument("--judge-repeats", type=int, default=1, help="judge calls per case; majority per criterion")
+    val.add_argument("--min-pass-rate", type=float, default=1.0, help="fraction of cases that must pass")
+    val.add_argument("--report", help="JSON report path (default: report.json in the run directory)")
+    val.add_argument("--keep", action="store_true", help="keep the isolated home for inspection")
+    val.add_argument("--static-only", action="store_true", help="run layers F, D, C and A only; never PASS")
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "validate":
+        from evolver.validator.runner import cli_main
+
+        return cli_main(args)
     from evolver.launch import runner
 
     if args.command == "run":

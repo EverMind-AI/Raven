@@ -1,4 +1,4 @@
-# Agent package validator: product-scope rules and a judged end-to-end run
+# Agent package validator: agent-scope rules and a judged end-to-end run
 
 Status: design, 2026-11-11. Scope ruled by the owner on 2026-11-11: build the check only; no repair
 step and no generator in this change. Location ruled the same day: `evolver/validator/`.
@@ -12,9 +12,9 @@ a `config.json` diff, optional `soul.md` / `skills/` / `modes/`, and plugin cont
 
 Harness development is going to be automated. Whatever produces an agent folder -- a person, a
 future generator, a retargeted Evolver or Curator -- needs one command that decides whether the
-folder is a product Raven can ship:
+folder can ship with Raven:
 
-1. it stays inside the scope Raven grants a product (the **product scope**, section 4), and
+1. it stays inside the scope Raven grants an agent (the **agent scope**, section 4), and
 2. it runs end to end through the host's own dispatch path and returns results that a judge model
    accepts on an acceptance suite the folder did not write.
 
@@ -25,7 +25,7 @@ The check gives a verdict and evidence. It never edits the folder.
 - **Discovered agent** -- as defined in `CONTEXT.md`: a folder under an `agents/` tree holding a
   launcher (`run.py`) and a `subagent.json` manifest. In this document "agent folder" means the
   folder being checked.
-- **Product scope** -- the set of places a product may change, defined in section 4 by what the
+- **Agent scope** -- the set of places an agent folder may change, defined in section 4 by what the
   five shipped agents use.
 - **Acceptance suite** (new term; define it in `CONTEXT.md` in the same change) -- a directory of
   cases kept outside the agent folder. Each case is a task, its input files, and the criteria a
@@ -66,21 +66,21 @@ Anti-goals -- outcomes that count as failure even if the command works:
   with its reason (except `--static-only`, which can never report PASS).
 - Touching the operator's real `RAVEN_HOME`, config file, roster or memory store.
 - Spending a model call before layers F, D, C and A have passed.
-- Printing or persisting a credential anywhere except the isolated home's config file (mode 600),
-  which is deleted at the end of the run.
+- Printing or persisting a credential anywhere except the isolated home (files mode 600), which is
+  deleted at the end of the run together with the package snapshot.
 
-## 4. Product scope (normative)
+## 4. Agent scope (normative)
 
 The rules in section 6 enforce this table. It is read from the shipped agents on main `2eb428ac8`
 and from `agents/BUILDING.md`.
 
-| Place | What a product may set | Evidence |
+| Place | What an agent may set | Evidence |
 | --- | --- | --- |
 | `subagent.json` | `name`, `description`, `owns`, launcher `command` with `{PYTHON}` / `{SUBAGENT_DIR}`, `everos` identity, optional `engine` | all five |
 | `config.json` | any block of the host schema: model, provider, effort, limits, `tools` (incl. `disabledTools`, `sandbox`, `restrictToWorkspace`, `exec`, `mcpServers`), `context`, `compaction`, memory identity (`memory.userId` / `agentId`, `memoryTopK`), `plugins.config["<id>"]`, `language` | all five |
 | identity and prompts | `soul.md`, other top-level `*.md` read by the launcher, plugin `prompts/` | code, research, design |
 | `modes/*.json` | ACP mode profiles (e.g. effort per mode) | all five |
-| `skills/` | product skills | design |
+| `skills/` | the agent's own skills | design |
 | plugin contributions | `tools`, `hooks`, `memory_backends`, `services`, `tool_gates`, `session_observers`, `onboard` (`raven/plugins/manifest.py:Contributes`) | code, research, oncall, design and ppt engines |
 | hook phases | `before_user_inbound`, `before_iteration`, `before_execute_tools`, `after_iteration`, `terminal_answerless`, `after_send` | all five |
 | participant verbs | `intake`, `select_tools`, `advise`, `system_addendum`, `review`, `salvage`, `judge`, `outbound`, `archive` (`raven/contracts/participant.py`) | all five |
@@ -94,7 +94,7 @@ Outside the scope:
   `raven/agent/loop/main.py:500`);
 - choosing the long-term memory store or its address, and `plugins.dirs`: the launcher renders these
   from the host (`raven/config/product_render.py:inherit_memory_backend`, the launcher's
-  `plugins["dirs"]`). The host also supplies, at render time, the LLM block when the product holds
+  `plugins["dirs"]`). The host also supplies, at render time, the LLM block when the agent holds
   no key (`inherit_llm`), the host's deny rules (`inherit_host_denials`), plugin opt-outs
   (`inherit_plugin_opt_outs`) and the image section (`inherit_media_image`).
 
@@ -109,7 +109,7 @@ python -m evolver validate <folder>
     --suite <dir>              acceptance suite (required unless --static-only)
     [--engine <dir>]           engine project for a wheel-shaped agent
     [--host-config <path>]     where provider credentials are read from (default: the active
-                               RAVEN_HOME's config.json); only `providers` is copied
+                               RAVEN_HOME's config.json); `providers`, `tools.web` and `tools.media` are copied
     [--model <name>]           model the agent runs on (default deepseek/deepseek-flash)
     [--judge-model <name>]     default deepseek/deepseek-flash
     [--judge-repeats <n>]      judge calls per case, default 1; majority per criterion
@@ -119,8 +119,8 @@ python -m evolver validate <folder>
     [--static-only]            run layers F, D, C and A (no model call); prints STATIC-OK, never PASS
 ```
 
-The agent runs on `--model` because a product without its own key inherits the host's LLM block,
-and the isolated host config sets `agents.defaults.model` to `--model`. The report records the model
+The agent runs on `--model` because an agent without its own key inherits the host's LLM block,
+and the isolated host config sets `agents.defaults.model` to `--model` and names its provider. The report records the model
 the turn actually used where the ACP record exposes it, and the configured one otherwise.
 
 Exit codes: `0` pass (or static-ok with `--static-only`); `1` the folder failed a rule or a case;
@@ -163,7 +163,8 @@ build output is never part of a package, and a working checkout of the shipped a
 - F1 required files: `subagent.json`, `run.py`, `config.json`.
 - F2 allowed top-level entries: `subagent.json`, `run.py`, `config.json`, `install.py`,
   `.env.example`, `README.md`, `soul.md`, other `*.md`, `modes/`, `skills/`, `plugins/`.
-- F3 no `.env`, no file whose name or content matches a credential pattern (key-like values).
+- F3 no `.env`; no non-empty value under a credential-named key (`*_API_KEY=...`, `"apiKey": ...`);
+  no live-looking vendor key shape (`sk-...`, `AKIA...`, `ghp_...`, `xox?-...`) in any text file.
 - F4 no symlink resolving outside the folder; no file over 1 MiB (AGENTS.md section 7 parity).
 - F5 *advisory*: build output (`__pycache__`, `*.pyc`) present in the source folder; it is left out
   of the copy.
@@ -194,17 +195,28 @@ build output is never part of a package, and a working checkout of the shipped a
 
 ### Isolated home (set up after layer C, before layer A)
 
-- Build an isolated home in the run directory: `config.json` with `agents.defaults.model = --model`,
-  the `providers` block copied from `--host-config` (file mode 600), `memory.backend: null` (the host's
-  off switch travels to the product at render time, so the product writes to no long-term store), the
-  permission settings the dispatch needs to run unattended, and `agents/<name>/` = the folder copy.
-  The product state root and ACP home both derive from `RAVEN_HOME` (`product_state_root`,
+- Build an isolated home in the run directory: `config.json` (file mode 600) with
+  `agents.defaults.model = --model` and `agents.defaults.provider` named for it (the host's provider
+  when the host's default model is `--model`, else the provider whose `models` list it, else the model
+  id's provider prefix); the `providers`, `tools.web` and `tools.media` blocks copied from
+  `--host-config`, which are what a launcher inherits at render time; and `memory.backend: null` (the
+  host's off switch travels to the agent at render time, so the run writes to no long-term store).
+  Nothing else of the host config is copied. An agent's own provider survives the render whenever the
+  host config names none, so the provider is always named.
+- `agents/<name>/` holds the folder copy, beside the shipped agents its `routes[].to` names (copied from
+  the repository's `agents/`): discovery disables a routing folder whose target is absent.
+- No permission settings are needed for an unattended dispatch: the host answers an agent's
+  `session/request_permission` itself and approves unless a deny rule matches
+  (`raven/acp_client/permissions.py`).
+- The agent state root and ACP home both derive from `RAVEN_HOME` (`product_state_root`,
   `product_acp_home`), so they land inside the isolated home.
 - Every child process (launcher, activation probe) starts with `RAVEN_HOME` pointing at the isolated
   home and with the operator's other `RAVEN_*` variables and every variable carrying the agent's env
-  prefix (for example `CODE_API_KEY`, the state-root and ACP-home overrides) removed. A product key in
-  the environment would switch the product to own-key mode and bypass `--model`.
-- At the end, close every connection pool and child process; delete the isolated home unless `--keep`.
+  prefix (for example `CODE_API_KEY`, the state-root and ACP-home overrides) removed. An agent key in
+  the environment would switch the agent to own-key mode and bypass `--model`.
+- At the end, close every connection pool and child process; delete the isolated home and the package
+  snapshot unless `--keep`. The snapshot is a copy of the folder as handed in, credentials included
+  when the folder carries any.
 
 ### Layer A -- activation
 
@@ -212,46 +224,57 @@ build output is never part of a package, and a working checkout of the shipped a
   enabled; otherwise fail with the row's disabled reason (for an engine agent this is where a missing
   wheel shows).
 - A2 the ACP `initialize` handshake succeeds through that row's command.
-  Starting the launcher this way also makes it write its rendered config under the product state root
-  inside the isolated home; A3 to A5 read that file.
-- A3 the rendered config's model is `--model` and its memory backend is off; the report records both.
+  Starting the launcher this way also makes it write its rendered config under the agent state root
+  inside the isolated home; A3 to A5 read that file. A launcher that exits before answering with
+  `_API_KEY is not set` or `no provider key to inherit from` on stderr is an environment failure
+  (exit 3), the heuristic `raven agents new` applies to its own smoke check.
+- A3 the rendered config's model is `--model`, its provider is the one the isolated home named, and
+  its memory backend is off; the report records all three.
 - A4 in a child process loading the rendered config, every declared contribution is either
   registered or declined by its factory (returns `None`); no activation failure, no name conflict
   with another plugin active in the same environment.
-- A5 with the plugin's `plugins.config["<id>"]` slice removed from a copy of the rendered config, no
-  tool or hook from the package registers (the product gate in `agents/BUILDING.md` section 7).
+- A5 for an engine-wheel plugin: with its `plugins.config["<id>"]` slice removed from a copy of the
+  rendered config, no contribution registers (the gate in `agents/BUILDING.md` section 7). An engine
+  loads into every raven process through its entry point; a directory plugin loads only through its
+  own launcher's `plugins.dirs`, so A5 does not apply to it.
+- A rule that needs an earlier one is not reported when that one fails: A2 to A5 need the discovered
+  row, and A3 to A5 need the running launcher.
 
 ### Layer E -- end to end
 
 - For each case: create a fresh workspace, write the case files, construct `AcpAgentBackend` from the
   discovered row with its own connection pool, and `await backend.run(task, task_id=...,
   workspace=..., executor=None, session_key=...)` under the case timeout. Cases run one at a time.
-- Record the closing text (`closing_text`), the full streamed text, and every file created or changed
-  in the workspace (text up to a size cap; binaries by name, size and hash).
+- Record the reply `run()` returns (the last message, which is what the host sees), the full streamed
+  text, and every file created or changed in the workspace (text up to a size cap; binaries by name,
+  size and hash). Raven's own `.raven/` checkpoint tree at the workspace root is bookkeeping, not
+  output, and is left out.
 - E1 the turn completes without transport error, timeout or empty turn (`AcpEmptyTurnError`); a case
-  that fails E1 goes to the report as a runtime failure and is not judged.
+  that fails E1 goes to the report as a runtime failure, is not judged, and counts as a failed case in
+  J1's pass rate. E1 failures end the run only when no case completed.
 
 ### Layer J -- judge
 
 - The judge sees: task text, the list of input files (contents for small text files), criteria,
-  reference, the closing text, and the delivered files (truncated with an explicit marker). It does
-  not see the agent's internal transcript.
+  reference, the final reply, and the delivered files (truncated with an explicit marker). It does
+  not see the agent's streamed transcript.
 - It returns JSON: `{"criteria": [{"id", "verdict": "pass" | "fail" | "not_applicable", "reason"}]}`
   covering every criterion id exactly once. Malformed output gets one retry; still malformed makes
   the case a judge error, which fails the case.
 - Temperature 0. With `--judge-repeats n`, the per-criterion verdict is the majority; a tie fails.
-- J1 a case passes when every applicable criterion passes. The run passes J when the passing fraction
-  is at least `--min-pass-rate`.
+- J1 a case passes when no criterion fails and at least one passes (all `not_applicable` fails). The
+  run passes J when the passing fraction of all suite cases is at least `--min-pass-rate`.
 - The judge call goes through Raven's provider stack (`raven.providers.factory`) with the isolated
   home's config, so credentials and routing match the agent's.
 - The prompt is an English template file next to the code.
 
 ### Verdict and report
 
-Overall PASS requires F, D, C, A, E and J to pass. The JSON report holds: folder and suite digests,
-Raven version and commit, configured agent model and judge model, per-layer rule results with
-evidence, and per case: task id, timings, closing text, delivered files, every raw judge output, the
-parsed verdicts. Stdout prints one line per layer and one per case.
+Overall PASS requires F, D, C and A to pass and J1 to pass. The JSON report holds: folder and suite
+digests, Raven version and commit, configured agent model and judge model, the rendered model,
+provider and memory backend, per-layer rule results with evidence, and per case: task id, timings,
+final reply, delivered files, every raw judge output, the parsed verdicts, plus an `error` when an
+environment failure or an exception ended the run. Stdout prints one line per layer and one per case.
 
 ## 7. Constraints
 
@@ -312,8 +335,6 @@ parsed verdicts. Stdout prints one line per layer and one per case.
 - How layer A observes registration (registry APIs in a child process; see
   `tests/test_plugin_registry.py` and `raven plugins` for existing seams).
 - Default timeouts, text size caps, and how the run directory is named.
-- The exact permission settings the isolated host needs for an unattended ACP dispatch; take them
-  from how existing ACP integration tests run products, and record them in the report.
 
 ## 10. Later
 

@@ -251,6 +251,11 @@ one-liner) and restart the gateway.
 wherever it sits now. If the row was pinned, re-run `install.py` from the new
 location: that re-resolution is the whole migration story.
 
+**Validate** -- before shipping a folder, run
+`uv run python -m evolver validate <folder> --suite <suite>` from a source
+checkout: it checks the folder against the agent scope and runs it end to end on
+held-out cases (`evolver/README.md`).
+
 **Troubleshoot**:
 
 | Symptom | Meaning | Fix |

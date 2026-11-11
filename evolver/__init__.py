@@ -21,6 +21,8 @@ Package layout:
 - ``scheduler``    — task/anchor selection and bandit utilities
 - ``analysis``     — trial-ledger readers and stability bucketing
 - ``compressor``   — trajectory compression for diagnosis prompts
+- ``validator``    — agent package validator: agent-scope rules, an isolated
+                     end-to-end run and a judge (``python -m evolver validate``)
 
 Provenance notes for readers of module docstrings: citations of the form
 ``spec §NN`` refer to the upstream project's internal design document (not

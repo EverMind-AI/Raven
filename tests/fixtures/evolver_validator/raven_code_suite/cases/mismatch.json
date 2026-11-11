@@ -1,0 +1,8 @@
+{
+  "id": "mismatch",
+  "task": "Create a file named hello.txt in the current working directory. Its entire content must be the two words: hello validator",
+  "criteria": [
+    {"id": "goodbye", "statement": "The delivered file hello.txt contains the word goodbye."}
+  ],
+  "reference": "This case is designed to fail: the task never asks for the word goodbye."
+}

@@ -217,6 +217,37 @@ Evolver 晋升不等于合并或发布。
 | 运行已 unseal | 阅读最终工件；不要绕过保护用 test 结果调参 |
 | 没有 retention 报告 | 检查是否配置 test split，以及最终收尾是否成功 |
 
+## 校验智能体包 { #validate-an-agent-package }
+
+`python -m evolver validate` 判断一个智能体目录（形状同 `agents/raven-code/`）能否随
+Raven 发布。它不使用演化循环。
+
+```bash
+uv run python -m evolver validate agents/my-agent --suite path/to/suite
+uv run python -m evolver validate agents/raven-design --engine plugins-dist/design-engine --static-only
+```
+
+校验按顺序跑六层，遇到第一层失败就停下：
+
+| 层 | 检查内容 |
+| --- | --- |
+| F 目录 | 必需文件齐全、只含允许的条目、没有凭据、没有指向目录外的符号链接、没有超过 1 MiB 的文件 |
+| D 声明 | roster schema、写好的 `description` 和 `owns`、使用 `{PYTHON}` / `{SUBAGENT_DIR}` 的启动命令、插件 manifest，以及不含凭据、`plugins.dirs` 和宿主管理的记忆地址的 `config.json` |
+| C 代码 | 全部能编译、import 不越出智能体范围、工厂模块导入时不改动目录 |
+| A 激活 | 在隔离 home 里：能被发现、ACP `initialize` 握手成功、渲染出的模型正确且长期记忆已关、每个插件贡献要么构建成功要么主动拒绝 |
+| E 端到端 | 验收集里的每个用例都经宿主的 ACP 后端派发 |
+| J 判分 | 评审模型根据最终回复和交付的文件逐条判定 |
+
+验收集放在智能体目录之外，目录没法给自己出题。它包含 `suite.json` 和每个用例一个
+`cases/<id>.json`：任务原文、输入文件、带编号的验收标准、可选的参考说明和可选的超时。
+每条标准都要能只凭任务和交付结果判定。
+
+隔离 home 带上被测模型（`--model`，默认 `deepseek/deepseek-flash`）及其 provider、你的
+`providers`、`tools.web` 和 `tools.media`，以及 `memory.backend: null`。它和目录副本在结束后
+都会删除，除非传了 `--keep`。报告写成 `report.json`。智能体按
+它自己配置里的权限运行，所以请在开发机或容器里跑校验。退出码：`0` 通过，`1` 目录未通过，
+`2` 输入有误，`3` 环境问题。
+
 ## 扩展基准与查看内部实现 { #extend-a-benchmark-or-inspect-internals }
 
 新的 launcher 目标实现 `build(ctx) -> BenchBundle`，并注册到

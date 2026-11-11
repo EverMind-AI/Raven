@@ -247,6 +247,41 @@ scores. Trajectories may contain private data and are sent to configured models.
 | Run is already unsealed | Read the final artifacts; do not bypass the guard to tune on test results |
 | No retention report | Check whether a test split was configured and finalization succeeded |
 
+## Validate an agent package
+
+`python -m evolver validate` decides whether an agent folder, shaped like
+`agents/raven-code/`, can ship with Raven. It does not use the evolution loop.
+
+```bash
+uv run python -m evolver validate agents/my-agent --suite path/to/suite
+uv run python -m evolver validate agents/raven-design --engine plugins-dist/design-engine --static-only
+```
+
+The check runs six layers in order and stops at the first one that fails:
+
+| Layer | What it checks |
+| --- | --- |
+| F folder | required files, allowed entries, no credentials, no symlink out of the folder, no file over 1 MiB |
+| D declarations | roster schema, a written `description` and `owns`, a `{PYTHON}` / `{SUBAGENT_DIR}` launcher, plugin manifests, and a `config.json` without credentials, `plugins.dirs` or a host-owned memory address |
+| C code | everything compiles, imports stay inside the agent scope, and factory modules import without touching the folder |
+| A activation | in an isolated home: discovery, the ACP `initialize` handshake, the rendered model with long-term memory off, and every plugin contribution building or declining |
+| E end to end | every case of the acceptance suite, dispatched through the host's ACP backend |
+| J judge | a judge model decides each criterion from the final reply and the delivered files |
+
+The acceptance suite lives outside the agent folder, so a folder cannot grade
+itself. It holds `suite.json` and one `cases/<id>.json` per case: the task, its
+input files, criteria with ids, optional reference notes and an optional
+timeout. Write every criterion so it can be decided from the task and the
+delivered result alone.
+
+The isolated home carries the model under test (`--model`, default
+`deepseek/deepseek-flash`) with its provider, your `providers`, `tools.web` and
+`tools.media` blocks, and `memory.backend: null`. It and the copy of the folder
+are removed afterwards unless you pass `--keep`. The report is written as
+`report.json`. The agent runs with the permissions its own config grants, so
+run the check on a development machine or in a container. Exit codes: `0`
+pass, `1` the folder failed, `2` input error, `3` environment failure.
+
 ## Extend a benchmark or inspect internals
 
 A new launcher target implements `build(ctx) -> BenchBundle` and registers in

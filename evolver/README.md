@@ -161,6 +161,55 @@ renderer, splits, editable-path whitelist) is documented in
 `docs/specs/evolve-bench-contract.md`. `benchmarks/appworld/evolve/entry.py`
 is the reference implementation.
 
+## Validating an agent package
+
+`python -m evolver validate` decides whether an agent folder -- the shape of
+`agents/raven-code/` -- can ship with Raven. It is separate from the evolution
+loop and imports none of it.
+
+```bash
+uv run python -m evolver validate agents/my-agent --suite path/to/suite
+uv run python -m evolver validate agents/raven-design --engine plugins-dist/design-engine --static-only
+```
+
+Layers run in order, and the first failing layer ends the run:
+
+| Layer | Checks |
+|---|---|
+| F folder | required files; allowed top-level entries; no credentials; no symlink leaving the folder; no file over 1 MiB |
+| D declarations | `subagent.json` passes the roster schema, has a written `description` and `owns`, and launches through `{PYTHON}` / `{SUBAGENT_DIR}`; plugin manifests parse; `config.json` loads and holds no credential, no `plugins.dirs` and no host-owned memory address |
+| C code | every `.py` compiles; no import of `evolver`, `experimental`, `benchmarks`, `tests` or another agent's plugin package; factory modules import without touching the folder |
+| A activation | in an isolated `RAVEN_HOME`: discovery lists the folder enabled; its launcher answers ACP `initialize`; the rendered config uses `--model` with long-term memory off; every plugin contribution builds or declines; an engine plugin registers nothing without its config slice |
+| E end to end | each suite case is dispatched through the host's ACP backend, in its own workspace |
+| J judge | a judge model decides each criterion from the final reply and the delivered files |
+
+The rules encode what the shipped agents use: all five pass layers F, D and C.
+Advisory notes (build output in the folder, tool names not derived from the
+agent name, a memory identity shared with another agent) never fail a run.
+
+The acceptance suite lives outside the folder it judges, so a folder cannot
+grade itself:
+
+```
+<suite>/suite.json        {"name", "version", "target": <agent name> | null, "timeout_s": 900}
+<suite>/cases/<id>.json   {"id", "task", "files": {"<path>": "<text>" | {"base64": "..."}},
+                           "criteria": [{"id", "statement"}], "reference", "timeout_s"}
+```
+
+The isolated home carries `--model` with its provider named, the operator's
+`providers`, `tools.web` and `tools.media` blocks (what a launcher inherits at
+render time), `memory.backend: null`, and any shipped agent the folder routes
+to; child processes run without the operator's `RAVEN_*` variables and without
+the agent's own env-prefixed settings. The home and the package snapshot are
+removed at the end unless `--keep`; `report.json` stays in the run directory. The agent runs with the permissions
+its own config grants, so run the check on a development machine or container.
+
+Defaults: `--model` and `--judge-model` are `deepseek/deepseek-flash`,
+`--judge-repeats 1`, `--min-pass-rate 1.0`. A case that fails to run is not
+judged and counts as failed. Exit codes: `0` PASS (or STATIC-OK with
+`--static-only`), `1` the folder failed, `2` input error, `3` environment
+failure.
+
 ## Documentation map
 
 | Document | What it is |
@@ -170,6 +219,7 @@ is the reference implementation.
 | `docs/specs/self-evolution-loop-raven-mapping.md` | SOP clause -> Raven code, deviations, unwired parts |
 | `docs/specs/evolve-bench-contract.md` | what a new benchmark implements |
 | `orchestrator/DESIGN.md` | design notes: inversion of control, SOP<->module table, cross-module conventions |
+| `docs/specs/2026-11-11-agent-package-validator-design.md` | the agent package validator: agent scope, layers, acceptance suite |
 
 ## Status and known limitations (2026-07)
 
