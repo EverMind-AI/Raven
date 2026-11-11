@@ -1733,6 +1733,10 @@ const ArtsView = memo(function ArtsView({ lane, seg }: { lane: Lane; seg: ArtsDa
 
 const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldData }): ReactElement {
   useSeg(lane, seg)
+  /* A delegated record's fold while its run is still going says so: "Done" over
+     work the reader can watch arriving would contradict the pane header, which
+     names the node's state. Only a stage lane ever sets `running`. */
+  const running = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.running)
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleFold(lane, seg))
   return (
@@ -1744,7 +1748,7 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
             closing line. It is the TURN that is done -- a backgrounded graph
             dispatched from it may still be running below, and its own status
             lives on the task rows, not here. */}
-        <span className="lb">{t('gui.fold.steps')}</span>
+        <span className="lb">{t(running ? 'gui.deleg.st_run' : 'gui.fold.steps')}</span>
         <span className="tm">{seg.time || ''}</span>
         <Chev />
       </button>

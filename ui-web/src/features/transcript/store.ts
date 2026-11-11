@@ -2185,11 +2185,15 @@ function adoptCallIdentity(prev: StepData, next: StepData): void {
    written back by position: the redraw walks the same messages, so an existing
    row keeps its place and new rows only follow. Only the reader's own choices
    travel -- a thought's live open/close is the step's, and is left to it. */
-interface FoldToggles { open: boolean; steps: Array<{ think: boolean | null; work: boolean | null; calls: boolean[] }> }
+interface FoldToggles { open: boolean; auto: boolean; steps: Array<{ think: boolean | null; work: boolean | null; calls: boolean[] }> }
 
 function readToggles(lane: Lane): FoldToggles[] {
   return lane.segs.flatMap((s) => (s.kind !== 'fold' ? [] : [{
     open: s.open,
+    /* Carried so a fold the reader took over stays over when the provisional
+       tail is redrawn as a new object: the runtime shuts the folds nobody
+       touched, and `auto` is how it knows. */
+    auto: s.auto,
     steps: s.steps.map((st) => ({
       think: st.thinkPinned ? st.thinkOpen : null,
       work: st.wkPinned ? st.wkOpen : null,
@@ -2204,6 +2208,7 @@ function writeToggles(lane: Lane, saved: FoldToggles[]): void {
     const f = folds[i]
     if (!f) return
     f.open = t.open
+    f.auto = t.auto
     t.steps.forEach((ts, j) => {
       const st = f.steps[j]
       if (!st) return
@@ -2220,9 +2225,14 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
   const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
-  lane.agentShut = !!(opts && opts.shut)
+  /* The pane asks for a settled record's work to fold shut. While the run is
+     still going its work is what the reader is watching, so the ask binds only
+     once the record has settled. */
+  lane.agentShut = !!(opts && opts.shut) && !running
   if (opts && opts.reset) lane.agentKey = null
   const fresh = lane.agentKey !== key
+  /* A lane the next node takes over says nothing about this one's run. */
+  const wasRunning = !fresh && lane.running
   if (fresh) {
     lane.segs = []
     lane.agentKey = key
@@ -2315,6 +2325,12 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
   }
   if (toggles) writeToggles(lane, toggles)
   lane.running = running
+  /* A fold born open because the run was going shuts when it settles, the same
+     rule a record born settled gets. `shutAutoFolds` leaves a fold the reader
+     touched and one carrying a delegation or a long message. A record ending on
+     an unstaged tool result has no provisional tail for the next paint to
+     redraw, so this is what shuts the fold it kept. */
+  if (opts && opts.shut && wasRunning && !running) shutAutoFolds(lane, null)
   lane.empty = (opts && opts.empty) || t('gui.ws.agents_none')
   bumpList(lane)
 }

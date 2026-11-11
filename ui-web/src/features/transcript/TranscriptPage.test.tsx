@@ -2959,6 +2959,106 @@ describe("the turn's delivered files", () => {
     expect(shut.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('false')
   })
 
+  /* A record whose node is still going shows its work: the pane header beside
+     it says the node is running, so the fold under it must not say the turn is
+     over. The word is the one the delegation cards use for the same state. */
+  it('keeps a running record unfolded, headed by the state word', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'run',
+        messages: [
+          { role: 'user', text: 'job' },
+          { role: 'assistant', reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+        ],
+      }, { key: 'running-1', reset: true, dispatch: true, shut: true })
+    })
+    const head = box.querySelector('.tfh')
+    expect(head?.getAttribute('aria-expanded')).toBe('true')
+    expect(head?.querySelector('.lb')?.textContent).toBe('en:gui.deleg.st_run')
+    expect(box.querySelectorAll('.wrow').length).toBeGreaterThan(0)
+  })
+
+  /* And the moment it settles the work folds away, which is the rule a record
+     born settled gets. The reader never touched this fold, so it is still the
+     runtime's to shut. */
+  it('folds the same record once the run settles', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    const running = {
+      status: 'run',
+      messages: [
+        { role: 'user' as const, text: 'job' },
+        { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+      ],
+    }
+    act(() => { mount.agentStage(box, running, { key: 'ledger-1', reset: true, dispatch: true, shut: true }) })
+    expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('true')
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [...running.messages, { role: 'assistant', text: 'all done' }],
+      }, { key: 'ledger-1', dispatch: true, shut: true })
+    })
+    const head = box.querySelector('.tfh')
+    expect(head?.getAttribute('aria-expanded')).toBe('false')
+    expect(head?.querySelector('.lb')?.textContent).toBe('en:gui.fold.steps')
+    expect(box.querySelector('.answer')?.textContent).toContain('all done')
+  })
+
+  /* Closing and re-opening the fold is the reader taking it over. The
+     provisional tail redraws the fold as a new object, so the takeover has to
+     travel with the toggles or settling would shut it under them. */
+  it('leaves a fold the reader re-opened alone when the run settles', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    const running = {
+      status: 'run',
+      messages: [
+        { role: 'user' as const, text: 'job' },
+        { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+      ],
+    }
+    act(() => { mount.agentStage(box, running, { key: 'touched-1', reset: true, dispatch: true, shut: true }) })
+    const head = box.querySelector('.tfh') as HTMLElement
+    act(() => { head.click() })
+    act(() => { head.click() })
+    expect(head.getAttribute('aria-expanded')).toBe('true')
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [...running.messages, { role: 'assistant', text: 'all done' }],
+      }, { key: 'touched-1', dispatch: true, shut: true })
+    })
+    expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  /* A record that ends on a tool result (nothing said after it) has no
+     provisional tail to redraw, so its fold is the same object the running
+     paint made. Settling has to shut that one too. */
+  it('folds a running record that ends on a tool result', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    const running = {
+      status: 'run',
+      messages: [
+        { role: 'user' as const, text: 'job' },
+        { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+      ],
+    }
+    act(() => { mount.agentStage(box, running, { key: 'tool-tail-1', reset: true, dispatch: true, shut: true }) })
+    expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('true')
+    act(() => {
+      mount.agentStage(box, { ...running, status: 'completed' }, { key: 'tool-tail-1', dispatch: true, shut: true })
+    })
+    expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('shows a file the agent explicitly delivered', async () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: true }))
     const box = document.createElement('div')
