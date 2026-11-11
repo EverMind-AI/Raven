@@ -139,7 +139,8 @@ class SpawnTool(Tool):
             # path it does not know the use of.
             base += (
                 " The result names a `Record:` path, this task's output file: a follow-up task "
-                "reads it as `{{ <node_id>.output }}` instead of you restating the result. Beside "
+                "reads it as `{{ <node_id>.output }}` instead of you restating the result; for a "
+                "large one use `{{ <node_id>.output_path }}`, which hands over the path. Beside "
                 "it, `<node_id>.memory.json` holds what the subagent concluded for itself; it is "
                 "written after the call, so it may be absent."
             )

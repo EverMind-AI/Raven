@@ -21,14 +21,15 @@ All notable changes to Raven are documented here.
 ### Changed
 
 - The `spawn` and `run_subagent_dag` definitions a model reads on every call
-  are about 225 tokens shorter. Each tool describes its placeholder forms once,
-  and the node schema points to the orchestration guide's Conditional branches
-  for which guard a branch node needs and how a node that may not run is read,
-  instead of restating them. `spawn` opens with what it does rather than "for
-  complex or time-consuming tasks", the DAG description says a graph runs in
-  the background by default, a node's `instance` is described as a handle that
-  never replaces its `subagent`, and both tools, their error messages and the
-  Raven-General roster row spell "subagent".
+  are about 175 tokens shorter. Each tool describes its placeholder forms once,
+  and the node schema states the branch-route guard rule while pointing to the
+  orchestration guide's Conditional branches for the rest of the guard and
+  stand-in rules, instead of restating them. `spawn` opens with what it does
+  rather than "for complex or time-consuming tasks", its `Record:` sentence
+  points a large output at the `.output_path` form, the DAG description says a
+  graph runs in the background by default, a node's `instance` is described as
+  a handle that never replaces its `subagent`, and both tools, their error
+  messages and the Raven-General roster row spell "subagent".
 
 - LiteLLM moves to 1.108.0 and the MCP client to 2.3.0; `TIKTOKEN_CACHE_DIR`
   now defaults to the tokenizer files bundled in the LiteLLM wheel, so a cold
