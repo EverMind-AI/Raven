@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,7 @@ from raven.contracts.token_strategy import UsageSnapshot
 from raven.providers import usage_record
 from raven.providers.base import LLMProvider, LLMResponse
 from raven.providers.lazy import LazyProvider
-from raven.token_wise import usage_context
+from raven.token_wise import usage_context, usage_tracker
 from raven.token_wise.registry import StrategyRegistry
 from raven.token_wise.usage_tracker import UsageTracker, read_usage_rows
 
@@ -528,6 +529,59 @@ class _SplitStreamProvider(_DirectProvider):
         yield ChatDelta(content=None, finish_reason="stop")
 
 
+class _StreamingParent(_DirectProvider):
+    """A provider that streams in its own right, as ``LiteLLMProvider`` does.
+
+    The parent defines ``chat_stream`` itself, so the wrapper that records the
+    call sits on the parent -- the place it sits in the real chain, where
+    ``MiniMaxOAuthProvider`` forwards to ``LiteLLMProvider.chat_stream`` and
+    that parent wrapper is the one that records.
+
+    Fidelity is not what makes these tests able to fail, though. A double whose
+    parent was only the base fallback catches the same mutation: with
+    ``_wrap_stream`` reading the position one slot off, both shapes record the
+    provider's default. What made the original double unable to fail was its
+    default, which named the model under test -- so the fallback reproduced the
+    very string the assertion expected. The stream double here keeps a default
+    that differs, and a test pins that.
+    """
+
+    def __init__(self, reply: LLMResponse | None = None):
+        super().__init__(reply)
+        self.stream_calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    async def chat_stream(self, *args, **kwargs):
+        # The wrapper hands its arguments through untouched, so this is the
+        # shape the recording wrapper on this class read the model from.
+        self.stream_calls.append((args, kwargs))
+        yield ChatDelta(content="ok", finish_reason="stop", usage=dict(_REPORTED))
+
+
+class _PositionalStreamProvider(_StreamingParent):
+    """Forwards to its parent by position, as ``MiniMaxOAuthProvider`` did."""
+
+    async def chat_stream(self, messages, tools=None, model=None, **_kwargs):
+        async for delta in super().chat_stream(messages, tools, model):
+            yield delta
+
+    def get_default_model(self) -> str:
+        # Deliberately not the model under test: a lookup that misses the call's
+        # own third argument falls back to this name, and the row shows it.
+        return "direct/default"
+
+
+class _PositionalProvider(_DirectProvider):
+    """Forwards to its parent by position, as ``MiniMaxOAuthProvider`` did."""
+
+    async def chat(self, messages, tools=None, model=None, **kwargs):
+        return await super().chat(messages, tools, model, **kwargs)
+
+    def get_default_model(self) -> str:
+        # Deliberately not the model under test: a lookup that misses the call's
+        # own third argument falls back to this name, and the row shows it.
+        return "direct/default"
+
+
 def _listening() -> UsageTracker:
     """A tracker the seam reports to for the length of one block."""
     return UsageTracker(persist=False)
@@ -604,6 +658,373 @@ async def test_a_stream_whose_usage_and_finish_arrive_apart_is_one_row():
     assert text == "hello"
     assert tracker.total.calls == 1
     assert (tracker.total.input_tokens, tracker.total.output_tokens) == (120, 30)
+
+
+async def test_a_stream_forwarded_positionally_is_billed_under_its_model(tmp_path: Path):
+    """A subclass that forwards messages/tools/model positionally, as the MiniMax
+    OAuth provider does, is recorded by the parent's stream wrapper. That wrapper
+    must read the model from the third argument, not mistake the tools list for it.
+    """
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalStreamProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                messages=[{"role": "user", "content": "hi"}], tools=tools, model="direct/model"
+            )
+        ]
+
+    assert deltas
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/model"]
+
+
+async def test_a_positional_stream_double_does_not_hide_the_lookup_behind_its_default():
+    """The double stands in for a provider that forwards by position, so its own
+    default must name something other than the model under test. A default that
+    repeated the expected value would make a lookup that missed the call's third
+    argument fall back to the very name the row is supposed to carry, and the
+    test would pass on a seam that had the bug back.
+    """
+    assert _PositionalStreamProvider().get_default_model() != "direct/model"
+    assert _PositionalProvider().get_default_model() != "direct/model"
+
+
+async def test_the_positional_stream_double_reaches_its_parent_by_position():
+    """The parent is where the recording wrapper sits in the real chain, so the
+    double has to reach it the way that chain does: by position, with
+    ``(messages, tools, model)`` in the parent's own arguments.
+    """
+    provider = _PositionalStreamProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    async for _ in provider.chat_stream(
+        messages=[{"role": "user", "content": "hi"}], tools=tools, model="direct/model"
+    ):
+        pass
+
+    assert len(provider.stream_calls) == 1, "the parent was never reached"
+    args, kwargs = provider.stream_calls[0]
+    assert len(args) == 3 and args[1] is tools and args[2] == "direct/model"
+    assert "tools" not in kwargs and "model" not in kwargs
+
+
+async def test_a_stream_forwarded_positionally_without_a_model_is_billed_under_the_default(tmp_path: Path):
+    """With no model in the call, the positional slot is None and the provider's
+    default names the row. The tools list is not a name."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalStreamProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [
+            delta async for delta in provider.chat_stream(messages=[{"role": "user", "content": "hi"}], tools=tools)
+        ]
+
+    assert deltas
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/default"]
+
+
+async def test_a_non_stream_call_forwarded_positionally_is_billed_under_its_model(tmp_path: Path):
+    """The ``chat`` entry point reads the same (messages, tools, model) shape the
+    stream wrapper does. A subclass forwarding to its parent by position, as the
+    MiniMax OAuth provider did, is recorded by its own outer wrapper; that
+    wrapper must take the call's third argument for the model, not the tools list.
+    The double's default name is different on purpose: a lookup that lands on the
+    tools list falls back to it, and the row would show that instead.
+    """
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat([{"role": "user", "content": "hi"}], tools, "direct/model")
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/model"]
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["", "line\nbreak", "x" * 5000, [{"type": "function", "function": {"name": "read_file"}}]],
+    ids=["empty", "multiline", "oversized", "not-a-string"],
+)
+async def test_a_usage_row_normalizes_an_implausible_model_name(tmp_path: Path, model):
+    """The file is the one account every consumer reads; a value that cannot be a
+    model name is written as the unknown marker, never stringified into the row."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    await tracker.after_llm_call({}, UsageSnapshot(model=model, session_key="sess1"))
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["?"]
+
+
+@pytest.fixture
+def model_warnings():
+    """The warnings the model-name reports emit, captured through loguru.
+
+    The reports go through loguru, not the stdlib logging the ``caplog`` fixture
+    reads, so the sink is loguru's own -- the way ``test_token_wise_pricing``
+    reads the pricing warning.
+    """
+    import loguru
+
+    seen: list[str] = []
+    handler_id = loguru.logger.add(lambda m: seen.append(m.record["message"]), level="WARNING")
+    try:
+        yield seen
+    finally:
+        loguru.logger.remove(handler_id)
+
+
+async def test_a_missing_model_name_is_reported_and_the_row_carries_the_marker(tmp_path: Path, model_warnings):
+    """A call that named no model is a shape the row cannot show and the log must.
+
+    The missing name and the refused one both land on the unknown marker, so a
+    reader of the file cannot tell them apart. The log is where they are told
+    apart, and a missing name is the one that used to pass unnoticed.
+    """
+    usage_tracker.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+
+    await tracker.after_llm_call({}, UsageSnapshot(model=None, session_key="sess1"))
+    await tracker.after_llm_call({}, UsageSnapshot(model="", session_key="sess1"))
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["?", "?"]
+    assert any("no model on this call" in r for r in model_warnings), (
+        f"the missing name was not reported: {model_warnings}"
+    )
+
+
+async def test_a_missing_model_name_is_reported_once(tmp_path: Path, model_warnings):
+    """A deployment whose calls never name a model would otherwise report it on
+    every single call, which is what turns a warning into noise."""
+    usage_tracker.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+
+    for i in range(5):
+        await tracker.after_llm_call({}, UsageSnapshot(model=None, session_key=f"sess{i}"))
+
+    assert len([r for r in model_warnings if "no model on this call" in r]) == 1, (
+        f"reported more than once: {model_warnings}"
+    )
+
+
+async def test_a_refused_model_name_is_reported_every_time(tmp_path: Path, model_warnings):
+    """A value that cannot be a name is one call's own defect, so it is not a
+    condition of the deployment and is not deduplicated."""
+    usage_tracker.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+
+    for i in range(3):
+        await tracker.after_llm_call({}, UsageSnapshot(model="x" * 5000, session_key=f"sess{i}"))
+
+    assert len([r for r in model_warnings if "implausible model name" in r]) == 3, (
+        f"not reported per call: {model_warnings}"
+    )
+
+
+async def test_a_legal_model_name_is_not_reported(tmp_path: Path, model_warnings):
+    """The normal path stays quiet: a warning on every call would be noise."""
+    usage_tracker.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+
+    for i in range(3):
+        await tracker.after_llm_call({}, UsageSnapshot(model="direct/model", session_key=f"sess{i}"))
+
+    assert not [r for r in model_warnings if "usage:" in r], f"the normal path was reported: {model_warnings}"
+
+
+async def test_the_seam_does_not_report_a_call_that_leaves_the_model_to_the_provider(tmp_path: Path, model_warnings):
+    """A call with no model is served by the provider's default (the title
+    generator passes ``model=None`` by design), so the row's name is the true
+    one and a warning would be a false alarm."""
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat([{"role": "user", "content": "hi"}], tools=[{"type": "function"}], model=None)
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/default"]
+    assert not [r for r in model_warnings if "usage:" in r], (
+        f"the provider's own default was reported: {model_warnings}"
+    )
+
+
+async def test_the_seam_reports_a_model_that_is_not_a_name(tmp_path: Path, model_warnings):
+    """A value that is not a name falls back to the provider's default, which
+    reads like a real model in the row. The warning names the refused value --
+    here the tools list that once reached this field -- so it says which value
+    it was rather than only that there was one."""
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat(
+            [{"role": "user", "content": "hi"}],
+            [{"type": "function", "function": {"name": "read_file"}}],
+            [{"type": "function", "function": {"name": "read_file"}}],
+        )
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/default"]
+    reports = [r for r in model_warnings if "implausible model" in r]
+    assert reports, f"the refused value was not reported: {model_warnings}"
+    assert "read_file" in reports[0], f"the report does not name the value: {reports}"
+    assert "the provider's default" in reports[0], f"the report does not say where the row went: {reports}"
+
+
+async def test_the_seam_reports_a_value_that_cannot_even_be_stringified(tmp_path: Path, model_warnings):
+    """Accounting must never fail the call it accounts.
+
+    The report names the refused value by rendering it, and a value whose
+    ``__str__`` raises would otherwise turn the report into the one exception
+    this module exists not to raise. The description falls back to the type, and
+    the call still produces its row.
+    """
+
+    class _Unstringable:
+        def __str__(self) -> str:
+            raise RuntimeError("cannot stringify this model slot value")
+
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat([{"role": "user", "content": "hi"}], None, _Unstringable())
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/default"]
+    reports = [r for r in model_warnings if "implausible model" in r]
+    assert reports, f"the unrenderable value was not reported: {model_warnings}"
+    assert "_Unstringable" in reports[0], f"the report does not name the type: {reports}"
+
+
+async def test_the_seam_reports_an_unrenderable_value_more_than_once(tmp_path: Path, model_warnings):
+    """A report that raised is not a report that was made.
+
+    The dedup key was taken before the value was rendered, so a first call that
+    raised left the key behind and every later one of the same shape passed
+    silently -- the worst pairing of the two.
+    """
+
+    class _Unstringable:
+        def __str__(self) -> str:
+            raise RuntimeError("cannot stringify this model slot value")
+
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        for _ in range(3):
+            await provider.chat([{"role": "user", "content": "hi"}], None, _Unstringable())
+
+    assert len([r for r in model_warnings if "implausible model" in r]) == 1, (
+        f"the dedup did not keep one report per condition: {model_warnings}"
+    )
+
+
+async def test_the_seam_reports_a_call_with_no_model_and_no_default(tmp_path: Path, model_warnings):
+    """With no model on the call and none on the provider, the row carries no
+    name at all. Both layers say so: the seam names the provider, the tracker
+    says the row got the unknown marker."""
+
+    class _NoDefault(_PositionalProvider):
+        def get_default_model(self) -> str:
+            return ""
+
+    usage_record.reset_model_warnings()
+    usage_tracker.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await _NoDefault().chat([{"role": "user", "content": "hi"}], None, None)
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["?"]
+    assert any("no default either" in r and "_NoDefault" in r for r in model_warnings), (
+        f"the seam did not report the missing name: {model_warnings}"
+    )
+    assert any("no model on this call" in r for r in model_warnings), (
+        f"the tracker did not report the missing name: {model_warnings}"
+    )
+
+
+async def test_the_seam_reports_its_fallback_once_per_provider(tmp_path: Path, model_warnings):
+    """A provider that forwards the same wrong value on every call would
+    otherwise report it on every call."""
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        for _ in range(4):
+            await provider.chat([{"role": "user", "content": "hi"}], tools, tools)
+
+    assert len([r for r in model_warnings if "the provider's default" in r]) == 1, (
+        f"reported more than once: {model_warnings}"
+    )
+
+
+async def test_the_seam_does_not_report_a_call_that_named_its_model(tmp_path: Path, model_warnings):
+    """The normal path stays quiet: a warning on every call would be noise."""
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        for _ in range(3):
+            await provider.chat([{"role": "user", "content": "hi"}], None, "direct/model")
+
+    assert not [r for r in model_warnings if "usage:" in r], f"the normal path was reported: {model_warnings}"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("m" * 200, "m" * 200), ("m" * 201, "?")],
+    ids=["at-the-cap", "over-the-cap"],
+)
+async def test_a_usage_row_accepts_a_model_name_up_to_the_two_hundred_character_cap(
+    tmp_path: Path, model: str, expected: str
+):
+    """The cap is a contract, not a suggestion: a name of exactly the cap is a
+    name, and one character more is the unknown marker."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    await tracker.after_llm_call({}, UsageSnapshot(model=model, session_key="sess1"))
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == [expected]
 
 
 async def test_an_error_that_reached_no_model_is_not_a_row():

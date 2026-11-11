@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import time
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
 
+from raven.contracts.llm_provider import ChatDelta
+from raven.providers import usage_record
 from raven.providers.minimax_oauth import (
     CLIENT_ID,
     DEVICE_GRANT_TYPE,
@@ -21,6 +26,8 @@ from raven.providers.minimax_oauth import (
     save_token,
 )
 from raven.providers.minimax_oauth_provider import MiniMaxOAuthProvider
+from raven.token_wise.registry import StrategyRegistry
+from raven.token_wise.usage_tracker import UsageTracker
 
 
 @pytest.fixture
@@ -255,4 +262,202 @@ async def test_provider_refreshes_and_injects_headers(monkeypatch: pytest.Monkey
     assert seen["extra_headers"] == {
         "x-api-key": "access",
         "Authorization": "Bearer access",
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_stream_forwards_every_argument_to_the_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The usage seam reads the parent's keyword ``model``; a positional forward
+    leaves it reading the tools list instead. Every argument keeps its name."""
+    token = MiniMaxOAuthToken(
+        "access",
+        "refresh",
+        int(time.time() * 1000) + 3_600_000,
+        "https://api.minimax.io/anthropic/v1",
+    )
+    monkeypatch.setattr("raven.providers.minimax_oauth_provider.get_token", lambda _: token)
+    seen: dict[str, object] = {}
+
+    async def fake_parent_stream(self, *args, **kwargs):
+        seen.update(args=args, **kwargs)
+        yield ChatDelta(content="ok", finish_reason="stop")
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider.chat_stream", fake_parent_stream)
+    provider = MiniMaxOAuthProvider("global", "minimax-global/MiniMax-M3")
+    messages = [{"role": "user", "content": "hello"}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    deltas = [
+        delta
+        async for delta in provider.chat_stream(
+            messages=messages,
+            tools=tools,
+            model="minimax-global/MiniMax-M3",
+            max_tokens=123,
+            temperature=0.2,
+            reasoning_effort="high",
+            tool_choice="auto",
+        )
+    ]
+
+    assert [delta.content for delta in deltas] == ["ok"]
+    assert seen == {
+        "args": (),
+        "messages": messages,
+        "tools": tools,
+        "model": "minimax-global/MiniMax-M3",
+        "max_tokens": 123,
+        "temperature": 0.2,
+        "reasoning_effort": "high",
+        "tool_choice": "auto",
+    }
+
+
+class _StreamDelta:
+    def __init__(self, content: str | None = None, tool_calls: Any = None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class _StreamChoice:
+    def __init__(self, delta: _StreamDelta, finish_reason: str | None = None):
+        self.delta = delta
+        self.finish_reason = finish_reason
+
+
+class _StreamChunk:
+    def __init__(self, choices: list[_StreamChoice], usage: dict[str, int] | None = None):
+        self.choices = choices
+        self.usage = usage
+
+
+class _FakeWireStream:
+    """What ``acompletion`` returns on this route: the chunks, nothing else."""
+
+    def __init__(self, chunks: list[_StreamChunk]):
+        self._chunks = iter(chunks)
+
+    def __aiter__(self) -> "_FakeWireStream":
+        return self
+
+    async def __anext__(self) -> _StreamChunk:
+        try:
+            return next(self._chunks)
+        except StopIteration:
+            raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_call_through_the_real_parent_wrapper_is_billed_under_its_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The whole chain, not a stand-in for either half of it.
+
+    ``MiniMaxOAuthProvider`` forwards to the real ``LiteLLMProvider.chat_stream``,
+    and that parent's instrumented wrapper is the one that records. Only the wire
+    is faked -- ``acompletion``, the call that would go out on the network -- so
+    the recording happens in the code that records in production.
+
+    The provider's own default names a different model than the one requested:
+    a lookup that lands on the wrong argument would fall back to it, and the row
+    would say so. That is what makes a mis-read distinguishable here rather than
+    hidden by a default that happens to repeat the expected name.
+    """
+    import raven.providers.litellm_provider as litellm_provider
+
+    token = MiniMaxOAuthToken(
+        "access",
+        "refresh",
+        int(time.time() * 1000) + 3_600_000,
+        "https://api.minimax.io/anthropic/v1",
+    )
+    monkeypatch.setattr("raven.providers.minimax_oauth_provider.get_token", lambda _: token)
+
+    async def fake_acompletion(**_kwargs: Any) -> _FakeWireStream:
+        return _FakeWireStream(
+            [
+                _StreamChunk([_StreamChoice(_StreamDelta(content="ok"))]),
+                _StreamChunk(
+                    [_StreamChoice(_StreamDelta(), finish_reason="stop")],
+                    usage={"prompt_tokens": 120, "completion_tokens": 30},
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(litellm_provider, "acompletion", fake_acompletion)
+
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = MiniMaxOAuthProvider("global", "minimax-global/FALLBACK-DEFAULT")
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        deltas = [
+            delta
+            async for delta in provider.chat_stream(
+                messages=[{"role": "user", "content": "hello"}],
+                tools=tools,
+                model="minimax-global/MiniMax-M3",
+            )
+        ]
+
+    assert [delta.content for delta in deltas] == ["ok", None]
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["minimax-global/MiniMax-M3"]
+    assert (rows[0]["input_tokens"], rows[0]["output_tokens"]) == (120, 30)
+
+
+@pytest.mark.asyncio
+async def test_provider_chat_forwards_every_argument_to_the_parent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``chat`` keeps every argument's name, as ``chat_stream`` does.
+
+    ``chat`` and the parent's ``chat`` take the same parameters in the same
+    order, so forwarding by position delivers the right values and reads the
+    same. The seam that records a call reads the name, though, and a conversion
+    back to positional form is how that read went one slot off before.
+    """
+    from raven.contracts.llm_provider import LLMResponse
+
+    token = MiniMaxOAuthToken(
+        "access",
+        "refresh",
+        int(time.time() * 1000) + 3_600_000,
+        "https://api.minimax.io/anthropic/v1",
+    )
+    monkeypatch.setattr("raven.providers.minimax_oauth_provider.get_token", lambda _: token)
+    seen: dict[str, object] = {}
+
+    async def fake_parent_chat(self, *args, **kwargs):
+        seen.update(args=args, **kwargs)
+        return LLMResponse(content="ok", usage={"prompt_tokens": 1, "completion_tokens": 1})
+
+    monkeypatch.setattr("raven.providers.litellm_provider.LiteLLMProvider.chat", fake_parent_chat)
+    provider = MiniMaxOAuthProvider("global", "minimax-global/MiniMax-M3")
+    messages = [{"role": "user", "content": "hello"}]
+    tools = [{"type": "function", "function": {"name": "read_file"}}]
+
+    response = await provider.chat(
+        messages=messages,
+        tools=tools,
+        model="minimax-global/MiniMax-M3",
+        max_tokens=123,
+        temperature=0.2,
+        reasoning_effort="high",
+        tool_choice="auto",
+    )
+
+    assert response.content == "ok"
+    assert seen == {
+        "args": (),
+        "messages": messages,
+        "tools": tools,
+        "model": "minimax-global/MiniMax-M3",
+        "max_tokens": 123,
+        "temperature": 0.2,
+        "reasoning_effort": "high",
+        "tool_choice": "auto",
     }
