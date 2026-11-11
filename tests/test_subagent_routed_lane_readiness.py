@@ -175,6 +175,56 @@ def test_a_lane_that_searches_through_its_own_plugin_is_read_on_that_plugins_ven
     assert with_serper._routed_target_ready(LANE, ("image_search",)) is True
 
 
+def _follows_the_host(folder: Path) -> None:
+    """Declare the product's own picture tool as riding the host's selection."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_host_following_lane_reads_the_hosts_selected_vendor(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="serpapi",
+        web_provider_keys={"serpapi": "serp-key"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_host_following_lane_falls_back_to_serper(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        search_api_key="sk-host-serper",
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_host_following_lane_closes_with_neither_vendor(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+
 def test_a_serper_key_the_host_did_not_select_is_still_the_lanes_to_spend(lane) -> None:
     """The other half of reading the vendor rather than the selection: a host
     running Tavily without Tavily's key may still hold a Serper key, and Serper is

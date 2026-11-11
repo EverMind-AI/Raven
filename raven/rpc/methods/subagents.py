@@ -163,6 +163,43 @@ def _clean_name(raw: str | None, *, field: str) -> str | None:
     return trimmed
 
 
+def _routes_payload(cfg: Any, config: Any) -> list[dict]:
+    """Each route on the row with the picture-search readiness the router applies.
+
+    Only ``image_search`` is measured here: it is the one requirement a card can
+    explain from the search-vendor picker. ``None`` means the route does not
+    declare it.
+    """
+    import os
+
+    from raven.agent.subagent.vendored_agents import picture_search_ready, product_secret
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+
+    selected = "" if config is None else config.tools.web.search.provider
+
+    def key_for(target: str):
+        def key(name: str) -> str:
+            return (
+                product_secret(target, f"{name.upper()}_API_KEY")
+                or (config.effective_web_vendor_key(name) if config is not None else "")
+                or os.environ.get(SEARCH_PROVIDERS[name].env_var, "")
+            )
+
+        return key
+
+    out: list[dict] = []
+    for route in getattr(cfg, "routes", None) or ():
+        if isinstance(route, dict):
+            to = str(route.get("to") or "")
+            needs = tuple(route.get("needs") or ())
+        else:
+            to = str(getattr(route, "to", "") or "")
+            needs = tuple(getattr(route, "needs", None) or ())
+        ready = picture_search_ready(to, selected, key_for(to)) if "image_search" in needs and config else None
+        out.append({"to": to, "image_search_ready": ready})
+    return out
+
+
 async def _rows(*, probe: bool = True) -> list[dict]:
     """Every row the overlay shows: configured entries first, then presets that
     have no configured entry of their own.
@@ -177,6 +214,12 @@ async def _rows(*, probe: bool = True) -> list[dict]:
         configured_raw = get_agents(config_path=get_config_path())
     except ValidationError as exc:
         _raise_config_error(exc)
+    from raven.config.loader import load_config
+
+    try:
+        host = load_config(get_config_path())
+    except Exception:  # noqa: BLE001 - the roster still renders with an unreadable host config
+        host = None
     configured = _as_configs(configured_raw)
     claimed = {getattr(c, "preset", None) for c in configured}
     # A preset is also withheld when a configured row already occupies the name it
@@ -390,6 +433,7 @@ async def _rows(*, probe: bool = True) -> list[dict]:
                 # accepts for `model` on this row. `own` is the ownership mark.
                 "model_source": _model_rule(cfg, snapshot, meta),
                 "machine": (getattr(cfg, "machine", None) or "").strip() or None,
+                "routes": _routes_payload(cfg, host),
             }
         )
     return rows

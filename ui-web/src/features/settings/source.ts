@@ -453,6 +453,22 @@ export const keySet = (tool: string, vendor: string, raw: Record<string, unknown
   return !!str(raw, vendorKey(vendor)) || (!!legacy && !!str(raw, legacy))
 }
 
+/* Vendors whose image results can fill a slide: the host image set minus
+   Tavily, whose hits carry no dimensions and no source page. Mirrors
+   PPT_IMAGE_SEARCH_VENDORS in raven/agent/tools/web.py; the web-tool tests
+   hold the two lists equal. */
+export const PPT_IMAGE_VENDORS = new Set(['serper', 'serpapi', 'brave', 'firecrawl', 'serply'])
+
+/* The vendor the deck engine's picture search will speak, from the selected
+   search vendor and the keys on file: the selected one where it is a PPT
+   vendor and keyed, else Serper. Empty when neither resolves. Mirrors
+   ppt_image_vendor() in raven/agent/tools/web.py. */
+export const pptImageVendor = (raw: Record<string, unknown>): string => {
+  const selected = webVendor('web_search', raw)
+  if (PPT_IMAGE_VENDORS.has(selected) && keySet('web_search', selected, raw)) return selected
+  return keySet('web_search', 'serper', raw) ? 'serper' : ''
+}
+
 /* Web vendors whose API runs on the same account as an LLM provider: an empty
    vendor slot borrows providers.<vendor>.apiKey. Mirrors
    WEB_VENDOR_BORROWED_KEYS in raven/config/schema.py; the vendor tests hold

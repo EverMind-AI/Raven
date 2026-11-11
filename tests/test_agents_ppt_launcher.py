@@ -237,7 +237,11 @@ TRUNK_OVERRIDDEN_DEFAULTS = {
 # reasoning effort: the fork read every page at the author's setting, which litellm
 # dropped for this model anyway, so a GLM thought at its default for 100 to 350 seconds
 # a page; the gateway's own low effort reads one in 13 to 29.
-TRUNK_ONLY_SLICE = {"readerEffort": "low"}
+TRUNK_ONLY_SLICE = {
+    "readerEffort": "low",
+    # The deck engine's picture search rides the host's selected search vendor.
+    "imageSearch": {"provider": "host"},
+}
 
 # Fork slice keys the product deliberately stops spelling. renderConcurrency: the
 # fork's fixed 2 is now the engine's floor rather than its answer -- the number of
@@ -1636,6 +1640,18 @@ def test_a_host_on_the_vendor_table_hands_its_web_keys_down(grounded, tmp_path, 
     assert data["tools"]["web"]["search"]["maxResults"] == 10, "the product's own search knobs stay"
 
 
+def test_the_shipped_slice_lets_the_engine_follow_the_hosts_vendor(grounded, tmp_path, monkeypatch):
+    """``provider: host`` is the deck engine's declaration that its pictures ride
+    the deployment's selected search vendor; the Serper key stays as the old
+    override path."""
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    _host(tmp_path, {"providers": {"serper": {"apiKey": "host-serper"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+    slice_ = data["plugins"]["config"]["ppt-engine"]["imageSearch"]
+    assert slice_["provider"] == "host"
+    assert slice_["apiKey"] == "host-serper"
+
+
 def test_an_own_web_key_outranks_the_hosts_vendor_slot(grounded, tmp_path, monkeypatch):
     """PPT_SERPER_API_KEY lands in the pre-vendor leaf, which trunk reads only
     after an empty vendor slot; inheriting the host's slot beside it would have
@@ -1664,7 +1680,9 @@ def test_the_hosts_vendor_choice_travels_with_its_key(grounded, tmp_path, monkey
     web = data["tools"]["web"]
     assert web["providers"]["tavily"]["apiKey"] == "host-tavily"
     assert web["search"]["provider"] == "tavily" and web["fetch"]["provider"] == "tavily"
-    assert "imageSearch" not in data["plugins"]["config"]["ppt-engine"], "the picture search is Serper's alone"
+    assert data["plugins"]["config"]["ppt-engine"]["imageSearch"] == {"provider": "host"}, (
+        "no Serper key, so no override is bridged; the provider declaration stays"
+    )
 
 
 def test_the_render_loads_through_trunks_own_loader(grounded):

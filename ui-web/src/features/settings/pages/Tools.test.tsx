@@ -191,6 +191,27 @@ describe('tools page', () => {
     expect(calls).toEqual([['set', { key: 'tools.web.search.apiKey', value: '' }]])
   })
 
+  it('the search panel says deck generation has no picture tool without one', async () => {
+    const data = snap()
+    ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'tavily' }, providers: { tavily: { apiKey: 'tv' } } }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_missing')).toBeTruthy()
+  })
+
+  it('the search panel says when deck generation will fall back to Serper', async () => {
+    const data = snap()
+    ;(data.raw.tools as Record<string, unknown>).web = {
+      search: { provider: 'tavily' },
+      providers: { tavily: { apiKey: 'tv' }, serper: { apiKey: 'sp' } },
+    }
+    install(data)
+    await mount('tools')
+    await act(async () => { fireEvent.click(screen.getByText('web_search')) })
+    expect(screen.getByText('gui.settings.tools.ppt_image_fallback {"name":"Serper"}')).toBeTruthy()
+  })
+
   it('a vendor that needs no key blocks neither web tool, and its panel still takes an optional key', async () => {
     const data = snap()
     ;(data.raw.tools as Record<string, unknown>).web = { search: { provider: 'keenable' }, fetch: { provider: 'keenable' } }

@@ -21,7 +21,13 @@ import pytest
 from raven.agent.loop import AgentLoop
 from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
 from raven.agent.tools.registry import ToolRegistry
-from raven.agent.tools.web import ImageSearchTool, WebSearchTool
+from raven.agent.tools.web import (
+    IMAGE_SEARCH_VENDORS,
+    PPT_IMAGE_SEARCH_VENDORS,
+    ImageSearchTool,
+    WebSearchTool,
+    ppt_image_vendor,
+)
 from raven.contracts.tool import Tool
 from raven.providers.base import LLMProvider, LLMResponse
 from tests._wiring import wire
@@ -661,6 +667,42 @@ async def test_image_search_returns_url_size_and_source_and_drops_what_a_screen_
     assert "API key not configured" in await ImageSearchTool(api_key=None).execute(query="x")
 
 
+@pytest.mark.asyncio
+async def test_require_dimensions_drops_a_hit_whose_size_the_vendor_did_not_report(monkeypatch) -> None:
+    class _NoSize:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> None:
+            return None
+
+        async def post(self, url, json=None, headers=None, timeout=None):
+            return _ImageResponse(
+                [
+                    {
+                        "title": "no size",
+                        "imageUrl": "https://pics.example/x.png",
+                        "domain": "example.com",
+                        "link": "https://example.com/x",
+                    }
+                ]
+            )
+
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _NoSize)
+    permissive = ImageSearchTool(api_key="k", provider="serper")
+    strict = ImageSearchTool(api_key="k", provider="serper", require_dimensions=True)
+
+    loose = await permissive.execute(query="x")
+    tight = await strict.execute(query="x")
+
+    assert "https://pics.example/x.png" in loose and "size unknown" in loose
+    assert "No images at least 640px wide for: x" in tight
+    assert "size unknown" not in tight
+
+
 @pytest.mark.parametrize(
     ("vendor", "payload"),
     [
@@ -731,6 +773,49 @@ def test_tavily_hits_come_without_a_size_and_are_offered_as_such() -> None:
     assert hits[0].title == "the gate at dusk" and hits[0].width is None and hits[0].source == "cdn.example"
 
 
+def test_serply_image_results_are_read_from_the_original_image() -> None:
+    """Serply reports the Google-cached thumbnail as ``image.src`` and the picture
+    itself as ``original_image.src``; only the latter is a usable result."""
+    hit = ImageSearchTool(api_key="k", provider="serply").normalise_hits(
+        {
+            "image_results": [
+                {
+                    "image": {"src": "https://encrypted-tbn0.gstatic.com/thumb.jpg", "alt": "bike"},
+                    "link": {
+                        "href": "https://shop.example/bike",
+                        "title": "Vintage Bicycle",
+                        "domain": "shop.example",
+                    },
+                    "original_image": {"src": "https://shop.example/bike.png", "width": "1170", "height": "764"},
+                }
+            ]
+        }
+    )[0]
+
+    assert (hit.title, hit.image_url, hit.width, hit.height) == (
+        "Vintage Bicycle",
+        "https://shop.example/bike.png",
+        1170,
+        764,
+    )
+    assert hit.source == "shop.example" and hit.page == "https://shop.example/bike"
+
+
 def test_a_vendor_without_an_image_surface_is_refused_at_construction() -> None:
     with pytest.raises(ValueError):
         ImageSearchTool(api_key="k", provider="exa")
+
+
+def test_the_ppt_set_is_the_host_set_without_tavily() -> None:
+    assert "tavily" in IMAGE_SEARCH_VENDORS
+    assert set(PPT_IMAGE_SEARCH_VENDORS) == set(IMAGE_SEARCH_VENDORS) - {"tavily"}
+
+
+def test_ppt_image_vendor_takes_a_keyed_ppt_vendor() -> None:
+    assert ppt_image_vendor("serpapi", {"serpapi": "k"}.get) == "serpapi"
+
+
+def test_ppt_image_vendor_falls_back_to_serper() -> None:
+    assert ppt_image_vendor("tavily", {"tavily": "tv", "serper": "sp"}.get) == "serper"
+    assert ppt_image_vendor("serpapi", {"serper": "sp"}.get) == "serper"
+    assert ppt_image_vendor("exa", {}.get) == "serper", "the caller checks the key"

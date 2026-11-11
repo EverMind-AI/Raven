@@ -44,6 +44,14 @@ export interface ExtAgentMenuRefresh {
    openai or cli row with no menu at all. */
 export type ExtAgentModelSource = 'raven' | 'agent' | 'fixed'
 
+/* One route a row offers to another agent, with the readiness the server's
+   router applies. `image_search_ready` is null on a route that does not
+   declare picture search. */
+export interface ExtAgentRoute {
+  to: string
+  image_search_ready: boolean | null
+}
+
 export interface ExtAgentRow {
   name: string
   preset?: string
@@ -53,6 +61,9 @@ export interface ExtAgentRow {
      runs here, and absent from a server that predates it. Shown as a chip
      after the name: the name is the user's and need not say. */
   machine?: string | null
+  /* The routes this row offers to other agents. Empty on a row that offers
+     none, and from a server that predates the field. */
+  routes?: ExtAgentRoute[]
   configured: boolean
   /* A built-in agent is this process. It has no row to write, which is why
      `configured` is false on one and why the connect paths below leave it out:
