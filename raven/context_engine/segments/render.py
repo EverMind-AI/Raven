@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import platform
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -548,12 +549,14 @@ def is_work_call(name: str, arguments: dict | None) -> bool:
     A skill can be read by its file as well as through ``read_skill`` -- the active
     skills digest points at a workspace skill's ``SKILL.md`` directly -- so a file read
     under a ``skills`` directory is the host reading how to run the work, not doing it.
+    The directory is matched in any case and across either separator: on Windows
+    ``Skills`` names the same directory as ``skills``.
     """
     if name not in WORK_TOOLS and not name.startswith("browser_"):
         return False
     if name in ("read_file", "list_dir"):
         path = str((arguments or {}).get("path") or "")
-        return "skills" not in Path(path).parts
+        return "skills" not in {part.casefold() for part in re.split(r"[\\/]+", path)}
     return True
 
 

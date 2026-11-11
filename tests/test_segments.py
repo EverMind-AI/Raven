@@ -1098,6 +1098,8 @@ class TestWorkToolNote:
             ("read_skill", {"skill_id": "local/x"}),
             ("read_file", {"path": "/home/u/.raven/workspace/skills/conventions/SKILL.md"}),
             ("list_dir", {"path": "/home/u/.raven/workspace/skills/conventions/references"}),
+            ("read_file", {"path": "C:\\Users\\u\\.raven\\workspace\\Skills\\conventions\\SKILL.md"}),
+            ("read_file", {"path": "/home/u/.raven/workspace/SKILLS/conventions/SKILL.md"}),
             ("task_board", {"action": "update"}),
             ("ask_user", {"question": "q"}),
             ("spawn", {"subagent": "Raven-General"}),
