@@ -89,12 +89,16 @@ describe('the permission chip', () => {
     expect(perm.current()).toBe('ask')
   })
 
-  it('puts the tier icon in the chip slot', async () => {
+  it('puts the tier icon in the chip slot, the same glyph the row draws', async () => {
     const perm = await load('ask')
     perm.draw()
     const pic = chip().querySelector('.pico')!
-    expect(pic.innerHTML).toContain('M9.6 10.2')
-    expect(pic.querySelectorAll('path').length).toBe(3)
+    expect(pic.tagName.toLowerCase()).toBe('svg')
+    perm.open()
+    const row = rows().find((r) => r.querySelector('.nm')!.textContent === 'gui.perm.ask')!
+    const shape = (el: Element): (string | null)[] =>
+      [...el.querySelectorAll('path')].map((p) => p.getAttribute('d'))
+    expect(shape(pic)).toEqual(shape(row.querySelector('.pico')!))
   })
 })
 
@@ -114,10 +118,18 @@ describe('the permission popover', () => {
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
-    /* Names only: the sentence behind each is a hover away, and there is no
-       heading and no note -- the chip already says what is being chosen. */
-    expect(rows().map((r) => r.title)).toEqual(['gui.perm.ask_h', 'gui.perm.smart_h', 'gui.perm.full_h'])
-    expect(pop().querySelector('.hd, .note, .sub')).toBeNull()
+    /* Each row carries the sentence the tooltip used to hold, under the name,
+       and a glyph of its own; the list is named once above them. */
+    expect(rows().map((r) => r.querySelector('.sub')!.textContent)).toEqual([
+      'gui.perm.ask_h',
+      'gui.perm.smart_h',
+      'gui.perm.full_h',
+    ])
+    expect(rows().map((r) => r.getAttribute('title'))).toEqual([null, null, null])
+    const glyphs = rows().map((r) => r.querySelector('svg.pico')!.outerHTML)
+    expect(new Set(glyphs).size).toBe(3)
+    expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
+    expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
   })
 
   it('hangs off the chip inside the card, and measures nothing', async () => {

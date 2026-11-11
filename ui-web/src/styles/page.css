@@ -1116,7 +1116,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    inset ridge catches light along the top edge, and the three stacked
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
-   below keep geometry only, never their own background. */
+   below keep geometry only, never their own background. The two cards that
+   are read rather than glanced at are the exception: the context table and
+   the permission list mount solid paper of their own (#ctxPop, #permPop). */
 .menu, .pop, .mpick, .csheet, .chrome-navfly {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
@@ -1454,9 +1456,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    cell belongs to.
 
    Solid, where the other popovers are translucent: this one is a table of
-   numbers to be read, and a table read over a blurred conversation is a table
-   nobody can read. The blur goes with it -- there is nothing left to blur
-   behind a card that is not there. */
+   numbers to be read, and the permission list below joins it for the same
+   reason. A table read over a blurred conversation is a table nobody can
+   read. The blur goes with it -- there is nothing left to blur behind a card
+   that is not there. */
 #ctxPop {
   right: 0; left: auto; width: 288px; padding: 14px 16px 12px; border-radius: 14px;
   background: var(--paper);
@@ -1516,25 +1519,79 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
    off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
-   above the chip's top edge, left edges lined up. Names only, no heading: the
-   chip already says what is being chosen, and the sentence behind a name is on
-   the row's title. The tick is the whole of the "this is the one" signal -- no
-   filled band behind the row, which on a translucent panel reads as a second
-   material. */
+   above the chip's top edge, left edges lined up.
+
+   The three menus stay names-only: the chip already says what is being chosen,
+   and the sentence behind a name is on the row's title. The permission list is
+   the exception -- choosing what the agent may do without asking earns a
+   heading, a sentence per row and a filled band behind the chosen one, so the
+   three modes can be compared without hovering any of them. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
 #plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
 #atPop { width: 240px; }
 #wdPop { width: 200px; }
 #wdPop[data-view="browse"], #wdPop[data-view="drives"] { width: 300px; }
-#permPop { width: 200px; }
+/* Solid paper, the way the context card is: this list is read sentence by
+   sentence, and its warm band should not take its colour from whatever the
+   conversation happens to be showing behind it. */
+#permPop {
+  width: 268px; border-radius: 14px;
+  background: var(--paper);
+  border-color: var(--line);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
 #plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
 #plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--warm); }
+/* The permission list. A row is a glyph, the tier's name over its sentence,
+   and the tick; the chosen row gets a warm band and a hairline of the same
+   colour rather than the bare tick the other menus use. The band stays
+   translucent, so it reads as the panel lit from within, not a second
+   material. */
+#permPop .hd { padding: 4px 10px 5px; }
+#permPop .hd .lab { color: var(--muted); }
+#permPop .prow { align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: 9px; }
+#permPop .prow + .prow { margin-top: 2px; }
+#permPop .prow .pico { flex: none; width: 18px; height: 18px; margin-top: 1px; color: var(--muted); }
+#permPop .prow .chrome-perm-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+#permPop .prow .nm {
+  flex: none; overflow: visible; white-space: normal; text-overflow: clip;
+  line-height: 1.35; color: var(--text);
+}
+#permPop .prow .sub { font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+#permPop .prow:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+#permPop .prow[aria-checked="true"] {
+  background: color-mix(in oklab, var(--warm) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warm) 30%, transparent);
+}
+#permPop .prow[aria-checked="true"]:hover { background: color-mix(in oklab, var(--warm) 18%, transparent); }
+#permPop .prow[aria-checked="true"] .pico { color: var(--gold); }
+#permPop .prow .tick { margin-top: 2px; color: var(--gold); }
+#permPop .prow .chrome-tick-slot { flex: none; width: 14px; }
 /* The tier with no brakes says so in its row too, in the chip's colour. */
 #permPop .prow.risk .nm { color: var(--clay); }
+#permPop .prow.risk .pico { color: var(--clay); }
+#permPop .prow.risk[aria-checked="true"] {
+  background: color-mix(in oklab, var(--clay) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 26%, transparent);
+}
+#permPop .prow.risk[aria-checked="true"]:hover { background: color-mix(in oklab, var(--clay) 14%, transparent); }
+#permPop .prow.risk .tick { color: var(--clay); }
+#permPop .chrome-perm-note {
+  margin: 5px 3px 0; padding: 7px 7px 3px; border-top: 1px solid var(--line-soft);
+  font-size: 11px; line-height: 1.4; color: var(--muted);
+}
+/* On a phone the chip sits too far right to hang the list off its left edge.
+   Taking the anchor out of the positioned chain hangs the list off the
+   composer card instead, whose width it can share. */
+@media (max-width: 480px) {
+  .chrome-anch:has(> #permPop) { position: static; }
+  #permPop { width: min(268px, calc(100vw - 72px)); }
+}
 #plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
    button carries the count, because the scope of a question is worth seeing
@@ -3150,6 +3207,9 @@ textarea:focus, textarea:focus-visible,
 .under .chip:hover, .under .chip[aria-expanded="true"] {
   color: var(--rail-ink); background: var(--composer-hover); border-radius: 100px;
 }
+/* The one chip with a warning to carry keeps its colour through the resting and
+   hover inks above: the shape alone does not say "no brakes". */
+.under .chip.risk, .under .chip.risk:hover, .under .chip.risk[aria-expanded="true"] { color: var(--clay); }
 .under .chip .pico { width: 12px; height: 12px; }
 .under .chip.model { color: var(--composer-ink); font-weight: 400; }
 .under .chip.model:hover, .under .chip.model[aria-expanded="true"] { color: var(--composer-ink); }

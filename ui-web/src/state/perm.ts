@@ -46,29 +46,17 @@ const KEY = 'raven.perm'
    under the reader. */
 const DEFAULT_TIER = 'smart'
 
-/* Shields, one per tier, differing only in what is inside them: a question, a
-   check, an exclamation. Same outline so the three read as one control's three
-   states rather than three unrelated icons.
-
-   The chip wears one of these; the popover's rows do not. The visual reference
-   draws the tier list as name-and-sentence alone, and a shield repeated down a
-   list of three says nothing the words beside it do not. */
-const ICO: Record<string, string> = {
-  ask:
-    '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
-    + '<path d="M9.6 10.2a2.4 2.4 0 1 1 3.3 2.2v1.1"/><path d="M12 16h.01"/>',
-  smart:
-    '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
-    + '<path d="M9 12.2l2 2 4-4.4"/>',
-  full:
-    '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
-    + '<path d="M12 8.6v3.6M12 15.2h.01"/>',
-}
+/* The tier glyphs live in src/chrome/PermGlyph.tsx, where the chip and the
+   popover's rows both draw them: one shape per tier, so the chip names the mode
+   with the shape the list shows. The store carries the tier's id, not the
+   drawing. */
 
 /** The tick, which wears its stroke on the element rather than on the sheet. */
 export const CHECK = 'M5 12.5l4.5 4.5L19 7'
 
-/** One row of the popover, as the open that built it read the catalogue. */
+/** One row of the popover, as the open that built it read the catalogue: the
+ * tier's name, the sentence under it, and whether it is the risky or the
+ * chosen tier. */
 export interface PermRow {
   readonly id: string
   readonly name: string
@@ -78,14 +66,14 @@ export interface PermRow {
 }
 
 /* The chip's own four values, as the last draw read the catalogue: the tier's
-   name, whether it is the one in the warning colour, its shield and the
-   accessible name. Null until the first draw, and then <PermChip/> shows the
-   word the page was served with. */
+   name, whether it is the one in the warning colour, which tier it is (for the
+   glyph) and the accessible name. Null until the first draw, and then
+   <PermChip/> shows the word the page was served with. */
 export interface PermPaint {
   readonly label: string
   readonly risk: boolean
-  /** The shield's paths, as markup, because that is how ICO spells them. */
-  readonly ico: string
+  /** The tier's id, which selects the glyph both surfaces draw. */
+  readonly id: string
   readonly aria: string
 }
 
@@ -117,7 +105,7 @@ export const { get, subscribe } = store
 const samePaint = (a: PermPaint | null, b: PermPaint | null): boolean => {
   if (a === b) return true
   if (!a || !b) return false
-  return a.label === b.label && a.risk === b.risk && a.ico === b.ico && a.aria === b.aria
+  return a.label === b.label && a.risk === b.risk && a.id === b.id && a.aria === b.aria
 }
 
 /* Committed synchronously, the way the writes by id were: a caller that opens
@@ -195,7 +183,7 @@ export function draw(): void {
     paint: {
       label: t(cur.label),
       risk: !!cur.risk,
-      ico: ICO[cur.id] || ICO.full!,
+      id: cur.id,
       aria: `${t('gui.perm.title')}: ${t(cur.label)}`,
     },
   })
