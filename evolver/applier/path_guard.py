@@ -195,7 +195,10 @@ def assert_safe_relative_paths(target_files: list[str]) -> None:
     worktree join (`worktree / rel`) and write outside the subject tree. The
     check is deliberately conservative: it rejects every ``..`` component and
     every Windows device/reserved base name even on POSIX, where some of those
-    are legal file names.
+    are legal file names. Colons are rejected throughout: a leading ``a:`` is
+    parsed as a Windows drive (hence the "absolute or drive-qualified" reason),
+    and a colon in any later component is an NTFS alternate-data-stream or
+    drive form.
     """
     bad = [(path, _unsafe_reason(path)) for path in target_files]
     bad = [(path, why) for path, why in bad if why is not None]

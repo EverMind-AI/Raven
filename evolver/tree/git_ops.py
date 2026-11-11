@@ -329,14 +329,20 @@ def commit_files_as_child(
                 parent = link.parent.resolve()
                 if not parent.is_relative_to(wt_resolved):
                     raise ValueError(f"refusing to delete outside the worktree: {rel!r}")
-                if link.is_symlink():
-                    try:
-                        target = link.resolve()
-                    except RuntimeError as exc:
-                        raise ValueError(f"symlink loop in {rel!r}") from exc
-                    if target.is_relative_to(wt_resolved):
-                        resolved_rel = target.relative_to(wt_resolved).as_posix()
-                        assert_patch_allowed([resolved_rel])
+                # Resolve unconditionally: a symlinked parent directory can
+                # carry the delete into an immutable file even when the last
+                # component is not itself a link.
+                try:
+                    target = link.resolve()
+                except RuntimeError as exc:
+                    # Only Python 3.12's Path.resolve() raises RuntimeError for
+                    # a loop; 3.13 returns the loop path silently, so the write
+                    # path fails later with OSError(ELOOP) and this delete
+                    # would proceed.
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
+                if target.is_relative_to(wt_resolved):
+                    resolved_rel = target.relative_to(wt_resolved).as_posix()
+                    assert_patch_allowed([resolved_rel])
                 # Unlink the authored path, not its resolved target: deleting a
                 # link is safe even when it points outside the worktree.
                 if link.is_symlink() or link.exists():
