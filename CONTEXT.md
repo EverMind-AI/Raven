@@ -733,9 +733,13 @@ a request into tasks and dispatches each, keeps every task until the user accept
 sends each later message about a task's work -- a question included -- to that task's
 instance, and gathers the reports into one answer. A decision it put to the user stays open
 until they make it, drop it or defer it, and each reply until then ends by asking about it
-again; an offer the user passes over is declined. Producing anything goes to the agent whose
-ownership or description fits it, to `Raven-General` only when none does; the host answers
-itself only what needs no tools and belongs to no task. On a turn that dispatches through a
+again; an offer the user passes over is declined. Any work that needs a tool -- a lookup, a
+check or a cleanup as much as anything produced -- goes to the agent whose ownership or
+description fits it, to `Raven-General` only when none does; a brief names where things are
+rather than carrying facts looked up for it, and a report to check goes back out. The host
+answers itself only what needs none of its other tools and belongs to no task, and the first
+task-work result of its own in a turn carries a note to hand the rest over
+(`work_tool_note`). On a turn that dispatches through a
 **Worker Table** the same rule names the table's workers instead: the worker whose brief
 covers the work, by its label. Work no worker covers is put to the user -- a worker added for
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,

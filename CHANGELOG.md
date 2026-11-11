@@ -20,6 +20,17 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Raven hands a task's work to an agent even when it is small: looking
+  something up, checking a result, a cleanup or a one-line edit now go to the
+  agent that fits, and to `Raven-General` when none does, instead of being done
+  with Raven's own tools while the conversation waits. A brief names where
+  things are rather than carrying facts Raven looked up first, a report that
+  needs checking goes back out, and the Delegation list ends with what
+  `Raven-General` owns. The first time in a turn Raven does task work with its
+  own tool anyway, that result carries a note to hand the rest over. The soul
+  template no longer calls Raven a personal assistant that reads and searches
+  for itself.
+
 - The `spawn` and `run_subagent_dag` definitions a model reads on every call
   are about 175 tokens shorter. Each tool describes its placeholder forms once,
   and the node schema states the branch-route guard rule while pointing to the

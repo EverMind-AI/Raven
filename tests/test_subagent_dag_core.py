@@ -2336,8 +2336,10 @@ def test_the_guide_and_the_refusal_agree_about_a_replans_unfinished_nodes() -> N
 
 def test_the_skill_states_how_to_keep_what_should_go_on() -> None:
     """The replan guidance lives in the body. The frontmatter -- whose `description`
-    is in every system prompt -- keeps the exact bytes it had, which is what keeps the
-    per-turn cost of this guidance at nothing; the digest is of those bytes."""
+    is in every system prompt -- is pinned by its digest, which is what kept the
+    per-turn cost of this guidance at nothing; a change to the resident text is a
+    deliberate one that moves the digest with it (the host-coordination sentence
+    now names only a run's status, not reading a brief)."""
     import hashlib
 
     import raven.memory_engine
@@ -2349,7 +2351,7 @@ def test_the_skill_states_how_to_keep_what_should_go_on() -> None:
     assert "Keep what should go on" in body
     assert "carried into it without stopping" in body
     frontmatter = text.split("---", 2)[1].encode("utf-8")
-    assert hashlib.sha256(frontmatter).hexdigest() == "fee4f41e9323067fa3dc5745cf4e7e0c1c5cd5bafaa8441827faad19cc698adc"
+    assert hashlib.sha256(frontmatter).hexdigest() == "3d1b1f60d4e86301771b0d8c51ae6e022de28c58486c5249a89b96bb0131daba"
 
 
 async def test_a_run_is_listed_from_init_not_from_its_finalize() -> None:

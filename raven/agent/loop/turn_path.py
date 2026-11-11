@@ -1215,6 +1215,9 @@ class TurnPathMixin:
 
         watch_state = _watch_work.TurnWatch()
         watch_request = _watch_work.asked_for(initial_messages, origin=origin)
+        # Turn-local for the same reason: the host's first task-work result of this
+        # turn earns the hand-it-over note (render.work_tool_note), and only the first.
+        work_note_due = True
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
@@ -2015,6 +2018,14 @@ class TurnPathMixin:
                             watch_note += render.reply_rules_note(
                                 board_shown=render.board_on_page(self._task_board_config.enabled, channel, surface)
                             )
+                        if work_note_due and reached is not None:
+                            forward_to = getattr(called, "forwarded_params", None)
+                            reached_args = forward_to(call_args) if forward_to is not None else call_args
+                            if work_note := render.work_tool_note(
+                                reached.name, reached_args, render.live_dispatch_tools(self.tools.get_definitions)
+                            ):
+                                watch_note += work_note
+                                work_note_due = False
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
