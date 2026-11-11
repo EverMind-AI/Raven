@@ -350,6 +350,13 @@ export interface Lane {
   /* Whether a delegated record's settled work folds shut. The direct chat keeps
      its steps open; the task pane asks for the conversation's own default. */
   agentShut: boolean
+  /* When this lane's run started, in epoch ms (0 when unknown). The fold's live
+     clock counts from it while the run is going. */
+  agentStart: number
+  /* The id of the fold the lane's last turn closed while that turn is still
+     running, or 0. A lane holds a multi-turn history, so the lane-wide `running`
+     says nothing about a fold belonging to an earlier turn. */
+  liveFold: number
   running: boolean
   empty: string
 }

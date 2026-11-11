@@ -3093,6 +3093,113 @@ describe("the turn's delivered files", () => {
     expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('false')
   })
 
+  /* The record's own clock, on the fold a settled run closes: the node's start
+     and end are the span the old record renderer showed, and the turn's own
+     question-to-answer gap is the conversation's rule, not this one. */
+  it('clocks a settled record from its own start and end', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        started_at: '2026-11-11T03:00:00.000Z',
+        ended_at: '2026-11-11T03:01:12.000Z',
+        messages: [
+          { role: 'user', text: 'job' },
+          { role: 'assistant', reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+          { role: 'assistant', text: 'all done' },
+        ],
+      }, { key: 'clock-1', reset: true, dispatch: true, shut: true })
+    })
+    expect(box.querySelector('.tfh .tm')?.textContent).toBe(store.durText(72_000))
+  })
+
+  /* A run still going counts up from its own start, the way the task row does;
+     the ellipsis is the same one a call under a second shows. */
+  it('counts a running record up from its own start', () => {
+    vi.useFakeTimers()
+    try {
+      const box = document.createElement('div')
+      document.body.append(box)
+      const running = {
+        status: 'run',
+        started_at: new Date(Date.now() - 5_000).toISOString(),
+        messages: [
+          { role: 'user' as const, text: 'job' },
+          { role: 'assistant' as const, reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+        ],
+      }
+      act(() => { mount.agentStage(box, running, { key: 'live-clock', reset: true, dispatch: true, shut: true }) })
+      expect(box.querySelector('.tfh .tm')?.textContent).toBe('5s')
+      act(() => { vi.advanceTimersByTime(2_000) })
+      expect(box.querySelector('.tfh .tm')?.textContent).toBe('7s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* No times to read: a live record still says it is alive, and a settled one
+     leaves the cell empty rather than inventing a zero. */
+  it('leaves the clock unstated when the record has no times', () => {
+    vi.useFakeTimers()
+    try {
+      const box = document.createElement('div')
+      document.body.append(box)
+      const running = {
+        status: 'run',
+        messages: [
+          { role: 'user' as const, text: 'job' },
+          { role: 'assistant' as const, reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool' as const, tool_call_id: 'c1', text: 'ok' },
+        ],
+      }
+      act(() => { mount.agentStage(box, running, { key: 'no-clock', reset: true, dispatch: true, shut: true }) })
+      expect(box.querySelector('.tfh .tm')?.textContent).toBe('…')
+      act(() => {
+        mount.agentStage(box, { ...running, status: 'completed' }, { key: 'no-clock', dispatch: true, shut: true })
+      })
+      expect(box.querySelector('.tfh .tm')?.textContent).toBe('')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  /* The lane's running state is the lane's, not a fold's. A direct-chat history
+     paints every earlier turn through the same lane, so a later live turn must
+     not relabel them Running or start their clocks. */
+  it('keeps earlier turns settled while a later one runs', () => {
+    vi.useFakeTimers()
+    try {
+      const box = document.createElement('div')
+      document.body.append(box)
+      act(() => {
+        mount.agentStage(box, {
+          status: 'run',
+          started_at: new Date(Date.now() - 5_000).toISOString(),
+          messages: [
+            { role: 'user', text: 'first' },
+            { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+            { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+            { role: 'assistant', text: 'first answer' },
+            { role: 'user', text: 'second' },
+            { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c2', name: 'read_file', arguments: '{}' }] },
+            { role: 'tool', tool_call_id: 'c2', text: 'ok' },
+          ],
+        }, { key: 'turns-1', reset: true, dispatch: true })
+      })
+      const folds = [...box.querySelectorAll('.tfh')]
+      expect(folds).toHaveLength(2)
+      expect(folds[0]?.querySelector('.lb')?.textContent).toBe('en:gui.fold.steps')
+      expect(folds[0]?.querySelector('.tm')?.textContent).toBe('')
+      expect(folds[1]?.querySelector('.lb')?.textContent).toBe('en:gui.deleg.st_run')
+      expect(folds[1]?.querySelector('.tm')?.textContent).toBe('5s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   /* The dispatch is read once per version of its body. The reader sits in a
      quadratic markdown pass otherwise -- 1.3 s on 136 KB of fence markers an
      upstream node can write -- and every repaint paid it again. */

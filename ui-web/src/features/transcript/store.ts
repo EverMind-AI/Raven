@@ -267,7 +267,7 @@ export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
     key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
     pend: '', pendStep: null, flush: null,
-    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, agentShut: false, running: false, empty: '',
+    agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, agentShut: false, agentStart: 0, liveFold: 0, running: false, empty: '',
   }
   lanes.add(lane)
   return lane
@@ -2037,18 +2037,32 @@ function agentDidStep(lane: Lane, calls: unknown[]): void {
   st.seal()
 }
 
-/* The fold the history read just closed carries no clock; the record's own
-   start and end are the truer span for a delegated run anyway. */
-function agentFoldTime(lane: Lane, ctx: { started_at?: string; ended_at?: string }): void {
-  let fold: FoldData | null = null
-  lane.segs.forEach((s) => { if (s.kind === 'fold') fold = s })
-  if (!fold) return
-  const from = Date.parse((ctx && ctx.started_at) || '')
-  const to = Date.parse((ctx && ctx.ended_at) || '')
-  if (from && to && to > from) {
-    ;(fold as FoldData).time = durText(to - from)
-    bump(lane, fold)
+/* The last fold of the turn the lane ends on, found the way `collapse` finds
+   it: scanning stops at the turn's opening, so a final turn that produced no
+   work answers null rather than the turn above it. */
+function lastTurnFold(lane: Lane): FoldData | null {
+  for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
+    const s = lane.segs[i] as Seg
+    if (s.kind === 'fold') return s
+    if (s.kind === 'ask' || s.kind === 'sdlv') return null
   }
+  return null
+}
+
+/* The fold the history read just closed carries no clock; the record's own
+   start and end are the truer span for a delegated run anyway. Only that turn's
+   fold takes it -- a lane paints a whole multi-turn history, and an earlier
+   turn's span is its own. */
+function agentFoldTime(lane: Lane, ctx: { started_at?: string; ended_at?: string }): void {
+  const fold = lastTurnFold(lane)
+  if (!fold) return
+  const from = msOfIso(ctx && ctx.started_at)
+  const to = msOfIso(ctx && ctx.ended_at)
+  if (!from || !to || to <= from) return
+  const time = durText(to - from)
+  if (fold.time === time) return
+  fold.time = time
+  bump(lane, fold)
 }
 
 /* The origin a delegated record's first message is drawn under, when the pane
@@ -2227,6 +2241,7 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
   const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
+  lane.agentStart = msOfIso(r && r.started_at)
   /* The pane asks for a settled record's work to fold shut. While the run is
      still going its work is what the reader is watching, so the ask binds only
      once the record has settled. */
@@ -2308,7 +2323,6 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
       history(lane, tail.filter((m) => m && m.role === 'user'), after)
       agentDidStep(lane, did)
       history(lane, tail.filter((m) => !(m && m.role === 'user')), after)
-      if (r) agentFoldTime(lane, r)
     } else {
       history(lane, tail, after)
     }
@@ -2326,7 +2340,16 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
     hold.folds.forEach(({ fold }, i) => adoptStepIdentity(appended[i] || [], fold.steps.slice(heldSteps[i])))
   }
   if (toggles) writeToggles(lane, toggles)
+  /* The record's own clock, for the fold this paint closed or extended. Set on
+     every paint so a record whose last paint brought nothing new (a run ending
+     on a tool result) still gets its settled span; the helper returns without a
+     bump when the value has not moved, so a poll does not redraw the fold. */
+  if (r) agentFoldTime(lane, r)
   lane.running = running
+  /* Which fold is the live one: the lane's last turn, not every turn it holds.
+     A direct-chat history spans many turns, and only the one still going wears
+     the state word and the clock. */
+  lane.liveFold = running ? (lastTurnFold(lane)?.id ?? 0) : 0
   /* A fold born open because the run was going shuts when it settles, the same
      rule a record born settled gets. `shutAutoFolds` leaves a fold the reader
      touched and one carrying a delegation or a long message. A record ending on

@@ -1762,8 +1762,16 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
   useSeg(lane, seg)
   /* A delegated record's fold while its run is still going says so: "Done" over
      work the reader can watch arriving would contradict the pane header, which
-     names the node's state. Only a stage lane ever sets `running`. */
-  const running = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.running)
+     names the node's state. The lane's last turn is the live one; every earlier
+     turn it paints is settled history and keeps its own clock. */
+  const running = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.liveFold === seg.id)
+  /* A run still going counts up from its own start, the way its task row does.
+     The ellipsis covers the first second and a start the pane never had: the
+     fold is visibly live, the number is not invented. */
+  const elapsed = useTick(running, lane.agentStart)
+  const runTime = running
+    ? (lane.agentStart > 0 && elapsed >= 1000 ? store.durText(elapsed) : '\u2026')
+    : seg.time || ''
   const headRef = useRef<HTMLButtonElement | null>(null)
   const flip = (): void => pinRow(headRef.current, () => store.toggleFold(lane, seg))
   return (
@@ -1776,7 +1784,7 @@ const FoldView = memo(function FoldView({ lane, seg }: { lane: Lane; seg: FoldDa
             dispatched from it may still be running below, and its own status
             lives on the task rows, not here. */}
         <span className="lb">{t(running ? 'gui.deleg.st_run' : 'gui.fold.steps')}</span>
-        <span className="tm">{seg.time || ''}</span>
+        <span className="tm">{runTime}</span>
         <Chev />
       </button>
       {/* A shut body is not built, which is where the weight was: a forty-turn
