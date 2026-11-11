@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -18,6 +19,7 @@ import pytest
 
 from raven.agent.subagent.mcp_grant import acp_target, raven_cli_target, resolve_grant
 from raven.config.schema import MCPServerConfig
+from raven.mcp.client import open_mcp_transport
 from raven.playbook.mcp import (
     declared_mcp_names,
     playbook_mcp_servers,
@@ -415,3 +417,45 @@ def test_a_server_is_named_when_its_credential_reference_did_not_resolve():
     )
     assert servers_missing_a_credential(plain, {"REGION": ""}) == frozenset()
     assert playbook_mcp_servers(plain, {"REGION": ""})["wiki"].env == {}
+
+
+def test_a_carried_definition_is_marked_as_the_playbooks_own():
+    """A definition that travels with the file is not the host's own server."""
+    spec = _spec(mcp_servers={"local-pg": MCPServerConfig(command="npx", args=["server"], cwd="/srv/playbook")})
+
+    carried = playbook_mcp_servers(spec, {})["local-pg"]
+
+    assert carried.source == "playbook"
+    assert carried.cwd == "/srv/playbook"
+    # The file keeps what it says; only the copy handed to the run is marked.
+    assert spec.mcp_servers["local-pg"].source == "host"
+
+
+@pytest.mark.asyncio
+async def test_a_carried_definition_probes_outside_its_declared_cwd(monkeypatch):
+    """The probe stays out of a playbook's cwd; the launch still starts there.
+
+    This is the pre-PR probe behaviour for carried servers: their cwd reached
+    the launch but never the mirror decision.
+    """
+    spec = _spec(mcp_servers={"local-pg": MCPServerConfig(command="npx", args=["server"], cwd="/srv/playbook")})
+    carried = playbook_mcp_servers(spec, {})["local-pg"]
+    seen: dict = {}
+
+    async def _fake_launch(argv, env, cwd=None, **kwargs):
+        seen["probe_cwd"] = cwd
+        return list(argv)
+
+    @asynccontextmanager
+    async def _fake_stdio(params, errlog=None):
+        seen["launch_cwd"] = params.cwd
+        yield ("read", "write")
+
+    monkeypatch.setattr("raven.utils.mirrors.package_launch_async", _fake_launch)
+    monkeypatch.setattr("mcp.client.stdio.stdio_client", _fake_stdio)
+
+    async with open_mcp_transport(carried, "stdio"):
+        pass
+
+    assert seen["probe_cwd"] is None
+    assert seen["launch_cwd"] == "/srv/playbook"

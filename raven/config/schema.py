@@ -1432,6 +1432,14 @@ class MCPServerConfig(Base):
     # that fails may just be waiting for a human.
     auth: Literal["none", "apikey", "oauth"] = "none"
     oauth: MCPOAuthConfig = Field(default_factory=MCPOAuthConfig)
+    # Who configured the server: the host's own configuration, a portable
+    # Agent Plugins package, or a definition a playbook carries with it. The
+    # registry probe reads a host server's project .npmrc (it runs in the
+    # server's cwd) but stays out of a package root and out of a directory a
+    # playbook definition names. Raven composes this marker; it is not a
+    # user-facing knob, and hand-writing a non-host value only turns the
+    # probe-cwd behaviour off for that server.
+    source: Literal["host", "package", "playbook"] = "host"
 
 
 class ToolSearchConfig(Base):

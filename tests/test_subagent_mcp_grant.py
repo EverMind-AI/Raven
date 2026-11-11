@@ -597,3 +597,31 @@ def test_an_equal_carried_oauth_definition_keeps_its_playbook_scope() -> None:
         folded = source.server("pg")
         assert folded.scope is None
         assert folded.state == "connected"
+
+
+def test_cli_projection_carries_the_servers_provenance_marker() -> None:
+    """The marker survives the child hand-off because the dump does not exclude it."""
+    config = MCPServerConfig(command="mcp-files", cwd="/srv/package", source="package")
+    source = _Source({"files": _view("files", config)})
+
+    grant = resolve_grant(["files"], source, raven_cli_target(allow_secrets=True))
+
+    assert grant.for_child_config()["mcpServers"]["files"]["source"] == "package"
+
+
+def test_a_marked_playbook_definition_still_folds_onto_an_equal_host_server() -> None:
+    """Provenance is not part of which service a definition names."""
+    from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
+
+    manager = SimpleNamespace(status=lambda: [{"name": "pg", "state": "connected"}])
+    host_cfg = MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "same"})
+    carried = host_cfg.model_copy(update={"source": "playbook"})
+    source = LiveMcpSource(
+        lambda: {"pg": host_cfg}, lambda: manager, ToolRegistry(), frozenset, run_servers=run_mcp_servers
+    )
+
+    with run_mcp_scope({"pg": carried}, scope="playbooks/portable"):
+        view = source.server("pg")
+
+    assert view.state == "connected"
+    assert view.scope is None

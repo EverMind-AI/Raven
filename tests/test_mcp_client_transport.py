@@ -214,7 +214,7 @@ async def test_a_packages_working_directory_does_not_choose_the_registry(monkeyp
     package_root = "/srv/packages/demo"
 
     async with open_mcp_transport(
-        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd=package_root),
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd=package_root, source="package"),
         "stdio",
         executor=executor,
     ):
@@ -222,6 +222,37 @@ async def test_a_packages_working_directory_does_not_choose_the_registry(monkeyp
 
     assert asked == [None]
     assert executor.started == [("uvx", ["mcp-server-fetch"], None, package_root)]
+
+
+@pytest.mark.asyncio
+async def test_a_host_servers_working_directory_chooses_the_registry(monkeypatch):
+    """The mirror decision reads a host server's own project ``.npmrc``.
+
+    The host configured the server, so its cwd is the operator's content, not
+    third-party content: the probe runs there and sees the registry the
+    server's own launch would read.
+    """
+    from raven.utils import mirrors
+
+    asked: list[str | None] = []
+
+    def package_launch(argv, env, cwd=None, *, local=True, deadline=None, cache_root=None):
+        asked.append(cwd)
+        return list(argv)
+
+    monkeypatch.setattr(mirrors, "package_launch", package_launch)
+    executor = _SpawningExecutor()
+    host_cwd = "/srv/host-project"
+
+    async with open_mcp_transport(
+        MCPServerConfig(command="uvx", args=["mcp-server-fetch"], cwd=host_cwd),
+        "stdio",
+        executor=executor,
+    ):
+        pass
+
+    assert asked == [host_cwd]
+    assert executor.started == [("uvx", ["mcp-server-fetch"], None, host_cwd)]
 
 
 @pytest.mark.asyncio
