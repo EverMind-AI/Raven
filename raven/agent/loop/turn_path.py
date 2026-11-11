@@ -2021,8 +2021,12 @@ class TurnPathMixin:
                         if work_note_due and reached is not None:
                             forward_to = getattr(called, "forwarded_params", None)
                             reached_args = forward_to(call_args) if forward_to is not None else call_args
-                            if work_note := render.work_tool_note(
-                                reached.name, reached_args, render.live_dispatch_tools(self.tools.get_definitions)
+                            # Named first: the dispatch paths are read off the whole tool
+                            # list, too much to rebuild for every call that does no work.
+                            if render.is_work_call(reached.name, reached_args) and (
+                                work_note := render.work_tool_note(
+                                    reached.name, reached_args, render.live_dispatch_tools(self.tools.get_definitions)
+                                )
                             ):
                                 watch_note += work_note
                                 work_note_due = False

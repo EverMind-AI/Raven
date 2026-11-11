@@ -1035,6 +1035,40 @@ async def test_the_first_task_work_result_of_a_turn_carries_the_hand_off_note(tm
     assert notes["e2"] == ""
 
 
+async def test_only_a_task_work_call_reads_the_dispatch_paths_for_the_note(tmp_path, monkeypatch):
+    # The dispatch paths come off the whole tool list; a call that does no work must
+    # not rebuild it on the way to finding out that no note is due.
+    from raven.context_engine.segments import render
+
+    asked: list[str] = []
+    real = render.work_tool_note
+
+    def _spy(name, arguments, dispatch):
+        asked.append(name)
+        return real(name, arguments, dispatch)
+
+    monkeypatch.setattr(render, "work_tool_note", _spy)
+    provider = _FakeStreamToolProvider(
+        [
+            [_call_by_route("f1", "faketool", "direct")],
+            [_call_by_route("f2", "faketool", "direct")],
+            [_call_by_route("e1", "exec", "direct", {"command": "ls"})],
+            [_call_by_route("e2", "exec", "direct", {"command": "ls"})],
+            [ChatDelta(content="done")],
+        ]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    loop.tools.register(_SpawnReceiptTool())
+    loop.tools.register(_FakeTool())
+    loop.tools.register(_WorkFake("exec"))
+    _record_tool_results(loop)
+
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+
+    assert asked == ["exec"]
+
+
 async def test_task_work_without_a_dispatch_path_earns_no_hand_off_note(tmp_path):
     # Nowhere to hand the work over: the note would order what the turn cannot do.
     provider = _FakeStreamToolProvider(

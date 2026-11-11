@@ -538,7 +538,7 @@ WORK_TOOLS = frozenset(
 )
 
 
-def _is_work_call(name: str, arguments: dict | None) -> bool:
+def is_work_call(name: str, arguments: dict | None) -> bool:
     """Whether a host call did task work: a work tool, short of reading a skill.
 
     A skill can be read by its file as well as through ``read_skill`` -- the active
@@ -580,7 +580,7 @@ def work_tool_note(name: str, arguments: dict | None, dispatch: Sequence[str]) -
     """
     from raven.agent.subagent.role import is_subagent_process
 
-    if not dispatch or is_subagent_process() or not _is_work_call(name, arguments):
+    if not dispatch or is_subagent_process() or not is_work_call(name, arguments):
         return ""
     route = " or ".join(f"`{tool}`" for tool in DISPATCH_TOOLS if tool in dispatch)
     return (
