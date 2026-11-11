@@ -2783,6 +2783,41 @@ def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
         time.sleep(0.02)
 
 
+def _wait_for_json(path: Path, timeout_s: float = 20.0) -> dict:
+    """The parsed content of a state file, once it holds a whole document.
+
+    The fakes above write these files with `open(..., "w")`, which creates and
+    truncates the file before the first byte lands, so `path.exists()` goes true
+    while the file is still empty. A wait built on existence returned that empty
+    file and the read that followed raised `JSONDecodeError`; the same shape on
+    the pid file raised `ValueError: invalid literal for int() with base 10: ''`
+    on a loaded CI runner. Waiting for the payload rather than for the path is
+    the honest wait, and it hands back what the caller was about to parse.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            assert time.monotonic() < deadline, f"{path.name} never held a json document"
+        time.sleep(0.02)
+
+
+def _wait_for_pid(path: Path, timeout_s: float = 20.0) -> int:
+    """The pid a child wrote, once it wrote a whole one. See `_wait_for_json`."""
+    import time
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            return int(path.read_text())
+        except (OSError, ValueError):
+            assert time.monotonic() < deadline, f"{path.name} never held a pid"
+        time.sleep(0.02)
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
 class TestStoppingARealTree:
     """The fakes above say what is signalled; these say it actually ends.
@@ -2831,10 +2866,8 @@ class TestStoppingARealTree:
             f"subprocess.Popen([sys.executable, '-c', {supervisor!r}, sys.argv[1]], start_new_session=True)\n"
         )
         subprocess.run([sys.executable, "-c", launcher, str(home)], check=True, timeout=30)
-        _wait_for(home / "web.json")
-        _wait_for(home / "serve.json")
-        sup = json.loads((home / "web.json").read_text())["pid"]
-        gw = json.loads((home / "serve.json").read_text())["pid"]
+        sup = _wait_for_json(home / "web.json")["pid"]
+        gw = _wait_for_json(home / "serve.json")["pid"]
         monkeypatch.setattr(serve_commands, "_STOP_WAIT_S", 0.5)
         try:
             assert serve_commands._stop_resident() is True
@@ -2867,8 +2900,7 @@ class TestStoppingARealTree:
         )
         proc = subprocess.Popen([sys.executable, "-c", script], env={**os.environ, "RAVEN_HOME": str(home)})
         try:
-            _wait_for(home / "serve.json")
-            gw = json.loads((home / "serve.json").read_text())["pid"]
+            gw = _wait_for_json(home / "serve.json")["pid"]
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             _wait_for(home / "gw-sigterm")  # the supervisor is now inside its cleanup
@@ -2902,8 +2934,7 @@ class TestStoppingARealTree:
             # Signalled as soon as the gateway is up, so usually while the
             # supervisor still polls serve.json for the port it bound; the unit
             # test above pins that window, this one that the tree really ends.
-            _wait_for(home / "serve.json")
-            gw = json.loads((home / "serve.json").read_text())["pid"]
+            gw = _wait_for_json(home / "serve.json")["pid"]
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             assert proc.wait(timeout=20) == 0
@@ -2939,8 +2970,7 @@ class TestStoppingARealTree:
         env = {**os.environ, "RAVEN_HOME": str(home)}
         proc = subprocess.Popen([sys.executable, "-c", script], env=env)
         try:
-            _wait_for(home / "gc-pid")
-            gc = int((home / "gc-pid").read_text())
+            gc = _wait_for_pid(home / "gc-pid")
             _wait_for(home / "web.json")
             proc.send_signal(signal.SIGTERM)
             assert proc.wait(timeout=20) == 0
@@ -2996,6 +3026,66 @@ def _settled(proc) -> None:
         proc.kill()
     with suppress(Exception):
         proc.wait(timeout=5)
+
+
+class TestWaitingForAStateFile:
+    """The wait the real-process tests above lean on: it stops at the payload,
+    not at the path.
+
+    A child opens these files with `open(..., "w")`, which creates and truncates
+    them before the first byte lands, so the path exists while the file is still
+    empty. A wait built on existence handed that empty file back, and the read
+    that followed it raised `ValueError: invalid literal for int() with base 10:
+    ''` on a loaded CI runner, in `test_the_gateways_own_children_are_killed_
+    before_web_json_goes` -- a flake in the test rather than in the code under
+    it. Both helpers are pinned here so the race cannot come back through a wait
+    nobody wrote down."""
+
+    def test_an_empty_pid_file_is_not_an_answer(self, tmp_path: Path) -> None:
+        """The pid file exists from the moment it is created, so existence cannot
+        be what the wait is for."""
+        import subprocess
+
+        path = tmp_path / "gc-pid"
+        writer = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"import time, pathlib; p = pathlib.Path({str(path)!r})\n"
+                "p.write_text('')\n"
+                "time.sleep(0.2)\n"
+                "p.write_text('4242')\n",
+            ]
+        )
+        try:
+            assert _wait_for_pid(path) == 4242
+            assert writer.wait(timeout=20) == 0
+        finally:
+            with suppress(OSError):
+                writer.kill()
+
+    def test_a_half_written_json_file_is_not_an_answer(self, tmp_path: Path) -> None:
+        """The same for the state jsons: a document cut in the middle parses as
+        neither a dict nor a failure worth reporting."""
+        import subprocess
+
+        path = tmp_path / "serve.json"
+        writer = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                f"import time, pathlib; p = pathlib.Path({str(path)!r})\n"
+                "p.write_text('{\"port\": 18')\n"
+                "time.sleep(0.2)\n"
+                "p.write_text('{\"pid\": 4242}')\n",
+            ]
+        )
+        try:
+            assert _wait_for_json(path) == {"pid": 4242}
+            assert writer.wait(timeout=20) == 0
+        finally:
+            with suppress(OSError):
+                writer.kill()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups and SIGKILL are POSIX")
