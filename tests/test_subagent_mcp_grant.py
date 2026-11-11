@@ -607,3 +607,21 @@ def test_cli_projection_carries_the_servers_provenance_marker() -> None:
     grant = resolve_grant(["files"], source, raven_cli_target(allow_secrets=True))
 
     assert grant.for_child_config()["mcpServers"]["files"]["source"] == "package"
+
+
+def test_a_marked_playbook_definition_still_folds_onto_an_equal_host_server() -> None:
+    """Provenance is not part of which service a definition names."""
+    from raven.agent.subagent.dag_mcp_scope import run_mcp_scope, run_mcp_servers
+
+    manager = SimpleNamespace(status=lambda: [{"name": "pg", "state": "connected"}])
+    host_cfg = MCPServerConfig(command="pg-mcp", env={"PGPASSWORD": "same"})
+    carried = host_cfg.model_copy(update={"source": "playbook"})
+    source = LiveMcpSource(
+        lambda: {"pg": host_cfg}, lambda: manager, ToolRegistry(), frozenset, run_servers=run_mcp_servers
+    )
+
+    with run_mcp_scope({"pg": carried}, scope="playbooks/portable"):
+        view = source.server("pg")
+
+    assert view.state == "connected"
+    assert view.scope is None

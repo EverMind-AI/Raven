@@ -67,6 +67,20 @@ class McpSource(Protocol):
         return None
 
 
+def _names_the_same_service(a: MCPServerConfig, b: MCPServerConfig) -> bool:
+    """Whether two definitions name the same service, whatever their provenance.
+
+    ``source`` says who configured a server, not which service it is: a portable
+    playbook that re-declares the host's own definition still names the same
+    service, so its in-process nodes keep the host's wrappers. A package server
+    stays out of that fold -- its content travels with the package, so equality
+    of the remaining fields is not evidence of the same service.
+    """
+    if {getattr(a, "source", "host"), getattr(b, "source", "host")} == {"host", "playbook"}:
+        return a.model_dump(exclude={"source"}) == b.model_dump(exclude={"source"})
+    return a == b
+
+
 class LiveMcpSource:
     """Combine public manager and registry seams into a live MCP source.
 
@@ -129,7 +143,7 @@ class LiveMcpSource:
         run = self._run_servers().get(name) if self._run_servers is not None else None
         if run is None:
             return host, True
-        if run != host:
+        if host is None or not _names_the_same_service(run, host):
             return run, False
         from raven.agent.subagent.dag_mcp_scope import run_mcp_credential_scope
 
