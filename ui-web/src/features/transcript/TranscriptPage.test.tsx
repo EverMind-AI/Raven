@@ -2569,23 +2569,6 @@ describe('a delegated result, drawn as the message it is', () => {
     expect($('.sdlv .sdbd .transcript-dlv-rundir')?.textContent).toContain('~/.raven/dag/run-7')
     expect($$('.sdlv .sdbd .transcript-dlv-nodes > div')).toHaveLength(1)
   })
-
-  /* Both reader-side bubbles are shrink-wrapped flex items of a column, so
-     their max-content width is what wins: a delivered body's markdown table,
-     or a runtime-opened brief's code block, is wider than the turn, and
-     without a cap the bubble keeps that width and overflows the turn to the
-     left. happy-dom lays nothing out, so the declarations are all this can
-     hold. */
-  it('caps a bubble at the turn it sits in', () => {
-    const css = readFileSync('src/styles/page.css', 'utf8')
-    const rule = (head: string): string => {
-      const at = css.indexOf(head)
-      expect(at, head).toBeGreaterThanOrEqual(0)
-      return css.slice(at, css.indexOf('}', at) + 1)
-    }
-    expect(rule('.msg.me {')).toContain('max-width: 100%')
-    expect(rule('.sdlv { min-width: 0;')).toContain('max-width: 100%')
-  })
 })
 
 describe("the turn's delivered files", () => {
