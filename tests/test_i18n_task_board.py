@@ -106,6 +106,15 @@ def test_asked_keeps_the_closing_mark_after_a_full_width_sentence_mark(reply, qu
     assert asked(reply) == [question]
 
 
+@pytest.mark.parametrize("closer", ["》", "〉", "］", "｝", "〕"])
+def test_asked_keeps_a_closing_mark_outside_the_old_list(closer):
+    assert asked(f"（可以继续吗？{closer}后面。") == [f"（可以继续吗？{closer}"]
+
+
+def test_asked_keeps_three_closing_marks_after_a_full_width_question():
+    assert asked("「*可以继续吗？*」」后面。") == ["「*可以继续吗？*」」"]
+
+
 def test_the_zh_update_instruction_renders_the_board_and_handles(zh):
     board = Board([_group("g_1", "修复登录白屏", "定位到 bug")], [])
 

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any, NamedTuple
 
@@ -122,16 +123,10 @@ def _scope(owners: Sequence[str], mid_turn: bool = False) -> str:
 # with a triple-backtick code span is prose rather than a fence.
 _FENCE = re.compile(r"^(`{3,}(?=[^`]*$)|~{3,})(.*)$")
 _INLINE_CODE = re.compile(r"`[^`\n]+`")
-_CLOSERS = "*_)]\"'\u201d\u2019\u300d\u300f\u3011\uff09"
-_CLOSER = f"[{re.escape(_CLOSERS)}]"
-# Closing emphasis, a bracket or a quote right after a full-width sentence mark, or after an
-# ASCII question mark, stays with that sentence, two of them at most.
-_SENTENCE_END = re.compile(
-    rf"(?<=[\u3002\uff01\uff1f])(?!{_CLOSER})"
-    rf"|(?<=[\u3002\uff01\uff1f]{_CLOSER})(?!{_CLOSER})"
-    rf"|(?<=[\u3002\uff01\uff1f]{_CLOSER}{_CLOSER})"
-    rf"|(?<=[.!?])\s+|(?<=\?{_CLOSER})\s+|(?<=\?{_CLOSER}{_CLOSER})\s+"
-)
+_FULL_MARKS = "\u3002\uff01\uff1f"
+_SENTENCE_MARK = re.compile(r"[\u3002\uff01\uff1f.!?]")
+_ASCII_CLOSERS = frozenset("\"')]}>*_")
+_CLOSER_CACHE: dict[str, bool] = {}
 _LIST_MARK = re.compile(r"^(?:[-*+\u2022]\s+|\d+[.)]\s+|\d+\u3001\s*)")
 _QUESTION_MARKS = ("?", "\uff1f")
 _QUESTION_MARK_CHARS = "".join(_QUESTION_MARKS)
@@ -222,12 +217,61 @@ def _paragraphs(reply: str) -> list[str]:
     return paragraphs
 
 
+def _is_closer(char: str) -> bool:
+    """A mark that closes the sentence before it: a closing bracket or final quote in Unicode
+    (``Pe`` / ``Pf``), the strong markers, the ASCII quotes, or a half-width ``>``."""
+    cached = _CLOSER_CACHE.get(char)
+    if cached is None:
+        if char in _ASCII_CLOSERS:
+            cached = True
+        elif char < "\x80":
+            cached = False
+        else:
+            cached = unicodedata.category(char) in {"Pe", "Pf"}
+        _CLOSER_CACHE[char] = cached
+    return cached
+
+
+def _rstrip_closers(text: str) -> str:
+    end = len(text)
+    while end and _is_closer(text[end - 1]):
+        end -= 1
+    return text[:end]
+
+
+def _sentences(paragraph: str) -> list[str]:
+    """The paragraph's sentences: a full-width mark ends one after any closing marks, and an
+    ASCII mark ends one only when whitespace follows, the closing marks included."""
+    out: list[str] = []
+    start = cursor = 0
+    end_of_text = len(paragraph)
+    while (match := _SENTENCE_MARK.search(paragraph, cursor)) is not None:
+        index = match.start()
+        end = index + 1
+        while end < end_of_text and _is_closer(paragraph[end]):
+            end += 1
+        if paragraph[index] in _FULL_MARKS:
+            out.append(paragraph[start:end])
+            start = cursor = end
+            continue
+        if end < end_of_text and paragraph[end].isspace():
+            out.append(paragraph[start:end])
+            while end < end_of_text and paragraph[end].isspace():
+                end += 1
+            start = cursor = end
+            continue
+        cursor = end
+    if start < end_of_text:
+        out.append(paragraph[start:])
+    return out
+
+
 def _questions(message: str) -> list[str]:
     found: list[str] = []
     for paragraph in _paragraphs(message):
-        for part in _SENTENCE_END.split(_without_emphasis(paragraph)):
+        for part in _sentences(_without_emphasis(paragraph)):
             sentence = _LIST_MARK.sub("", part.strip()).strip()
-            closed = sentence.rstrip(_CLOSERS)
+            closed = _rstrip_closers(sentence)
             if closed.endswith(_QUESTION_MARKS) and closed.rstrip(_QUESTION_MARK_CHARS).strip():
                 found.append(sentence)
     return found

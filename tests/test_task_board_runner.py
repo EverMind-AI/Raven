@@ -610,6 +610,21 @@ def test_asked_leaves_out_a_closing_mark_after_a_statement():
     assert asked("*Done.* (See the log.) The suite passed!") == []
 
 
+@pytest.mark.parametrize("closer", ["}", ">"])
+def test_asked_keeps_an_ascii_closing_mark_after_a_question(closer):
+    assert asked(f"Why?{closer} Next.") == [f"Why?{closer}"]
+
+
+def test_asked_keeps_any_number_of_closing_marks_after_a_question():
+    assert asked('("Is this right?")) Then go.') == ['("Is this right?"))']
+    assert asked('("Is this right?")))) Then go.') == ['("Is this right?"))))']
+
+
+def test_asked_splits_after_an_ascii_statement_mark_a_closing_mark_follows():
+    assert asked("(Done.) Should I ship?") == ["Should I ship?"]
+    assert asked("Tests pass (see log.) Should I ship?") == ["Should I ship?"]
+
+
 def test_asked_reads_a_long_reply_in_one_pass():
     """The reply is read on the event loop the whole gateway shares."""
     reply = " ".join(f"Question {n}?" for n in range(40_000))
