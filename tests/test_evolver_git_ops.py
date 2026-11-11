@@ -112,6 +112,27 @@ class TestWorktreeAt:
             assert not str(wt).startswith(str(root))
 
 
+class TestCaptureFiles:
+    def test_temp_files_follow_the_ephemeral_root(self, tmp_path, monkeypatch):
+        root = tmp_path / "run_tmp"
+        git_ops.set_ephemeral_root(root)
+        seen: list = []
+        real_temporary_file = git_ops.tempfile.TemporaryFile
+
+        def recording_temporary_file(*args, **kwargs):
+            seen.append(kwargs.get("dir"))
+            return real_temporary_file(*args, **kwargs)
+
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(git_ops.tempfile, "TemporaryFile", recording_temporary_file)
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        git_ops.run_capture(["git"], cwd=tmp_path)
+
+        assert seen == [str(root), str(root)]
+
+
 class TestGitTimeouts:
     def test_run_wraps_a_timeout_as_git_op_error(self, tmp_path, monkeypatch):
         def boom(*args, **kwargs):
@@ -152,6 +173,9 @@ class TestGitTimeouts:
         assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
     def test_run_capture_does_not_wait_for_a_grandchild(self, tmp_path):
+        # Only Windows can fail this: subprocess.run waits for the grandchild's
+        # pipe handles there, while POSIX waits for the direct child alone, so
+        # both the pipe and the file shape return at the timeout.
         code = (
             "import subprocess, sys, time; "
             "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)']); "
@@ -182,6 +206,28 @@ class TestGitTimeouts:
         monkeypatch.setattr(git_ops.subprocess, "run", boom)
         with pytest.raises(git_ops.GitOpError, match="timed out"):
             git_ops.commit_exists(repo_dir, "deadbeef")
+
+
+class TestRecombineTimeout:
+    def test_timeout_is_re_raised_but_other_git_errors_return_none(self, tmp_path, monkeypatch):
+        from evolver.orchestrator.production import make_git_recombine_fn
+
+        recombine = make_git_recombine_fn(tmp_path)
+        parent = SimpleNamespace(node_id="n0")
+        elite = SimpleNamespace(files=("src/x.py",), git_commit_sha="deadbeef")
+
+        def timed_out(*args, **kwargs):
+            raise git_ops.GitOpError(cmd=["git"], returncode=-1, stderr="timed out after 60.0s")
+
+        monkeypatch.setattr(git_ops, "read_file_at", timed_out)
+        with pytest.raises(git_ops.GitOpError):
+            recombine(parent, elite)
+
+        def missing_path(*args, **kwargs):
+            raise git_ops.GitOpError(cmd=["git"], returncode=128, stderr="path not found")
+
+        monkeypatch.setattr(git_ops, "read_file_at", missing_path)
+        assert recombine(parent, elite) is None
 
 
 class TestRefs:

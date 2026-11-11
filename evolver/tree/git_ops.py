@@ -109,13 +109,15 @@ def _run_capture_files(
 ) -> tuple[int, bytes, bytes]:
     """Run ``cmd`` with a hard timeout, returning raw ``(code, stdout, stderr)``.
 
-    Output goes to temporary files rather than pipes. With ``capture_output`` a
-    git hook or credential helper (a grandchild) inherits the pipe handles, and
+    Output goes to temporary files rather than pipes. On Windows, a git hook
+    or credential helper (a grandchild) inherits the pipe handles, and
     ``communicate`` waits for those handles to close even after the timeout has
-    killed the direct child. Regular files have no such EOF wait, so the bound
-    holds even when a hook outlives git. Stdin is ``DEVNULL`` unless a caller
-    supplies input, and terminal credential prompts are disabled; a helper that
-    still runs is bounded by the timeout.
+    killed the direct child, so pipe capture can outlive the bound. POSIX waits
+    only for the direct child in that path, so the pipe shape returned at the
+    timeout there too; regular files remove the Windows-only wait on both
+    platforms. Stdin is ``DEVNULL`` unless a caller supplies input, and terminal
+    credential prompts are disabled; a helper that still runs is bounded by the
+    timeout.
     """
     merged_env = {**os.environ, **(env or {}), "GIT_TERMINAL_PROMPT": "0"}
     with (
@@ -164,10 +166,15 @@ def run_capture(
     return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
 
-def timeout_detail(exc: subprocess.TimeoutExpired, timeout: float) -> str:
-    """A one-line timeout plus whatever the command managed to write."""
+def timeout_detail(exc: subprocess.TimeoutExpired, timeout: float, *, include_stdout: bool = True) -> str:
+    """A one-line timeout plus whatever the command managed to write.
+
+    ``include_stdout=False`` leaves the stdout stream out, for callers that
+    report it in a dedicated field instead of folding it into stderr.
+    """
     parts = [f"timed out after {timeout}s"]
-    for field in ("stderr", "output"):
+    fields = ("stderr", "output") if include_stdout else ("stderr",)
+    for field in fields:
         value = getattr(exc, field, None)
         text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value or "")
         if text.strip():
@@ -185,7 +192,8 @@ def _run(
 ) -> str:
     """Run ``git <args>`` in ``repo_root`` and return stdout.
 
-    :param env: extra env vars merged on top of os.environ
+    :param env: extra env vars merged on top of os.environ; ``GIT_TERMINAL_PROMPT``
+        is forced to ``"0"`` after that merge, so a value passed here is overridden
     :param input_text: passed to stdin (used by ``git apply``)
     :param check: raise :class:`GitOpError` on non-zero exit
     :param timeout: seconds before the command is killed
@@ -207,7 +215,7 @@ def _run(
         raise GitOpError(
             cmd=cmd,
             returncode=-1,
-            stderr=timeout_detail(exc, timeout),
+            stderr=timeout_detail(exc, timeout, include_stdout=False),
             stdout=partial,
         ) from exc
     if check and returncode != 0:
