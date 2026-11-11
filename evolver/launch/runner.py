@@ -77,8 +77,8 @@ def _note_defaulted_base(spec: RunSpec) -> None:
             cwd=spec.repo_root,
             timeout=git_ops.GIT_TIMEOUT,
         )
-    except subprocess.TimeoutExpired:
-        _say("warning: git status timed out; skipping the uncommitted-changes probe")
+    except subprocess.TimeoutExpired as exc:
+        _say(f"warning: {git_ops.timeout_detail(exc, git_ops.GIT_TIMEOUT)}; skipping the uncommitted-changes probe")
         return
     if code == 0 and stdout.strip():
         _say(
@@ -105,8 +105,8 @@ def _claim_ephemeral_root(spec: RunSpec) -> None:
                 cwd=spec.repo_root,
                 timeout=git_ops.GIT_TIMEOUT,
             )
-        except subprocess.TimeoutExpired:
-            _say("warning: git worktree prune timed out; stale worktrees may remain")
+        except subprocess.TimeoutExpired as exc:
+            _say(f"warning: {git_ops.timeout_detail(exc, git_ops.GIT_TIMEOUT)}; stale worktrees may remain")
     git_ops.set_ephemeral_root(tmp_root)
 
 

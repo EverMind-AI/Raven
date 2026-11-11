@@ -130,6 +130,38 @@ class TestGitTimeouts:
             )
         assert time.monotonic() - started < 2.0
 
+    def test_run_capture_does_not_wait_for_a_grandchild(self, tmp_path):
+        code = (
+            "import subprocess, sys, time; "
+            "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)']); "
+            "print('parent', flush=True); time.sleep(3)"
+        )
+        started = time.monotonic()
+        with pytest.raises(subprocess.TimeoutExpired) as exc:
+            git_ops.run_capture([sys.executable, "-c", code], cwd=tmp_path, timeout=0.3)
+        assert time.monotonic() - started < 2.0
+        assert b"parent" in (exc.value.output or b"")
+
+    def test_run_wraps_timeout_with_partial_stderr(self, tmp_path, monkeypatch):
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1, output=b"stdout-part", stderr=b"stderr-part")
+
+        monkeypatch.setattr(git_ops.subprocess, "run", boom)
+        with pytest.raises(git_ops.GitOpError) as exc:
+            git_ops._run(tmp_path, "status")
+        assert "stderr-part" in str(exc.value)
+        assert "stdout-part" in str(exc.value)
+
+    def test_commit_exists_propagates_a_timeout(self, repo, monkeypatch):
+        repo_dir, _sha = repo
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", boom)
+        with pytest.raises(git_ops.GitOpError, match="timed out"):
+            git_ops.commit_exists(repo_dir, "deadbeef")
+
 
 class TestRefs:
     def test_ref_anchors_evolver_commit_against_gc(self, repo):

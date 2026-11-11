@@ -93,8 +93,56 @@ class GitOpError(RuntimeError):
 
 
 #: Bound every git call: a credential prompt, index lock or hung hook must not
-#: freeze an unattended evolution run.
+#: freeze an unattended evolution run. 60 s is about 26x the measured 2.3 s
+#: `git worktree add` over 4,885 files on a local SSD; a network filesystem may
+#: need this raised.
 GIT_TIMEOUT = 60.0
+
+
+def _run_capture_files(
+    cmd: list[str],
+    *,
+    cwd: Path | str,
+    env: Optional[dict[str, str]] = None,
+    input_bytes: Optional[bytes] = None,
+    timeout: float = GIT_TIMEOUT,
+) -> tuple[int, bytes, bytes]:
+    """Run ``cmd`` with a hard timeout, returning raw ``(code, stdout, stderr)``.
+
+    Output goes to temporary files rather than pipes. With ``capture_output`` a
+    git hook or credential helper (a grandchild) inherits the pipe handles, and
+    ``communicate`` waits for those handles to close even after the timeout has
+    killed the direct child. Regular files have no such EOF wait, so the bound
+    holds even when a hook outlives git. Stdin is ``DEVNULL`` unless a caller
+    supplies input, and terminal credential prompts are disabled; a helper that
+    still runs is bounded by the timeout.
+    """
+    merged_env = {**os.environ, **(env or {}), "GIT_TERMINAL_PROMPT": "0"}
+    with (
+        tempfile.TemporaryFile(dir=_ephemeral_dir()) as out,
+        tempfile.TemporaryFile(dir=_ephemeral_dir()) as err,
+    ):
+        kwargs: dict = {"stdout": out, "stderr": err}
+        if input_bytes is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        else:
+            kwargs["input"] = input_bytes
+        try:
+            proc = subprocess.run(cmd, cwd=str(cwd), env=merged_env, timeout=timeout, **kwargs)
+        except subprocess.TimeoutExpired as exc:
+            out.seek(0)
+            err.seek(0)
+            partial_out = out.read()
+            partial_err = err.read()
+            # A test double may raise TimeoutExpired directly (no temp files).
+            if not partial_out and isinstance(exc.output, bytes):
+                partial_out = exc.output
+            if not partial_err and isinstance(exc.stderr, bytes):
+                partial_err = exc.stderr
+            raise subprocess.TimeoutExpired(cmd, timeout, output=partial_out, stderr=partial_err) from exc
+        out.seek(0)
+        err.seek(0)
+        return proc.returncode, out.read(), err.read()
 
 
 def run_capture(
@@ -105,35 +153,26 @@ def run_capture(
     input_text: Optional[str] = None,
     timeout: float = GIT_TIMEOUT,
 ) -> tuple[int, str, str]:
-    """Run ``cmd`` with a hard timeout, returning ``(returncode, stdout, stderr)``.
+    """Text wrapper around :func:`_run_capture_files`."""
+    code, out, err = _run_capture_files(
+        cmd,
+        cwd=cwd,
+        env=env,
+        input_bytes=input_text.encode("utf-8") if input_text is not None else None,
+        timeout=timeout,
+    )
+    return code, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
 
-    Output goes to temporary files rather than pipes. With ``capture_output`` a
-    git hook or credential helper (a grandchild) inherits the pipe handles, and
-    ``communicate`` waits for those handles to close even after the timeout has
-    killed the direct child. Regular files have no such EOF wait, so the bound
-    holds even when a hook outlives git. Stdin is ``DEVNULL`` unless a caller
-    supplies ``input_text`` (which becomes a pipe): an unattended run must not
-    wait on a credential prompt.
-    """
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        kwargs: dict = {"stdout": out, "stderr": err}
-        if input_text is None:
-            kwargs["stdin"] = subprocess.DEVNULL
-        else:
-            kwargs["input"] = input_text.encode("utf-8")
-        try:
-            proc = subprocess.run(cmd, cwd=str(cwd), env=env, timeout=timeout, **kwargs)
-        except subprocess.TimeoutExpired as exc:
-            out.seek(0)
-            err.seek(0)
-            raise subprocess.TimeoutExpired(cmd, timeout, output=out.read(), stderr=err.read()) from exc
-        out.seek(0)
-        err.seek(0)
-        return (
-            proc.returncode,
-            out.read().decode("utf-8", "replace"),
-            err.read().decode("utf-8", "replace"),
-        )
+
+def timeout_detail(exc: subprocess.TimeoutExpired, timeout: float) -> str:
+    """A one-line timeout plus whatever the command managed to write."""
+    parts = [f"timed out after {timeout}s"]
+    for field in ("stderr", "output"):
+        value = getattr(exc, field, None)
+        text = value.decode("utf-8", "replace") if isinstance(value, bytes) else str(value or "")
+        if text.strip():
+            parts.append(text.strip())
+    return "\n".join(parts)
 
 
 def _run(
@@ -168,7 +207,7 @@ def _run(
         raise GitOpError(
             cmd=cmd,
             returncode=-1,
-            stderr=f"timed out after {timeout}s",
+            stderr=timeout_detail(exc, timeout),
             stdout=partial,
         ) from exc
     if check and returncode != 0:
@@ -197,10 +236,16 @@ def get_tree_sha(repo_root: Path, commit_sha: str) -> str:
 
 
 def commit_exists(repo_root: Path, sha: str) -> bool:
-    """Return True iff ``sha`` is a known commit object in this repo."""
+    """Return True iff ``sha`` is a known commit object in this repo.
+
+    A timeout is not evidence that the object is missing, so it propagates
+    instead of being reported as ``False``.
+    """
     try:
         out = _run(repo_root, "cat-file", "-t", sha).strip()
-    except GitOpError:
+    except GitOpError as exc:
+        if exc.returncode == -1:
+            raise
         return False
     return out == "commit"
 
@@ -218,16 +263,16 @@ def read_file_at(repo_root: Path, sha: str, rel_path: str) -> bytes:
     """
     cmd = ["git", "cat-file", "blob", f"{sha}:{rel_path}"]
     try:
-        proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, timeout=GIT_TIMEOUT)
+        returncode, stdout, stderr = _run_capture_files(cmd, cwd=repo_root)
     except subprocess.TimeoutExpired as exc:
-        raise GitOpError(cmd=cmd, returncode=-1, stderr=f"timed out after {GIT_TIMEOUT}s") from exc
-    if proc.returncode != 0:
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=timeout_detail(exc, GIT_TIMEOUT)) from exc
+    if returncode != 0:
         raise GitOpError(
             cmd=cmd,
-            returncode=proc.returncode,
-            stderr=proc.stderr.decode("utf-8", errors="replace"),
+            returncode=returncode,
+            stderr=stderr.decode("utf-8", errors="replace"),
         )
-    return proc.stdout
+    return stdout
 
 
 # ---------------------------------------------------------------------------
@@ -452,16 +497,10 @@ def branch_exists(repo_root: Path, branch_name: str) -> bool:
     """True iff a local branch with this name exists."""
     cmd = ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"]
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=GIT_TIMEOUT,
-        )
+        returncode, _stdout, _stderr = run_capture(cmd, cwd=repo_root)
     except subprocess.TimeoutExpired as exc:
-        raise GitOpError(cmd=cmd, returncode=-1, stderr=f"timed out after {GIT_TIMEOUT}s") from exc
-    return proc.returncode == 0
+        raise GitOpError(cmd=cmd, returncode=-1, stderr=timeout_detail(exc, GIT_TIMEOUT)) from exc
+    return returncode == 0
 
 
 def delete_branch(repo_root: Path, branch_name: str, *, force: bool = True) -> None:

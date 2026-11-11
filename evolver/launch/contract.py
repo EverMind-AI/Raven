@@ -20,7 +20,7 @@ from typing import Any, Callable, Optional
 
 from evolver.launch.config import RunSpec
 from evolver.launch.models import CallFn
-from evolver.tree.git_ops import GIT_TIMEOUT, run_capture
+from evolver.tree.git_ops import GIT_TIMEOUT, run_capture, timeout_detail
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def validate_whitelist(repo_root: Path, base_sha: str, prefixes: tuple[str, ...]
             timeout=GIT_TIMEOUT,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ValueError(f"git ls-tree timed out after {GIT_TIMEOUT}s for {repo_root}") from exc
+        raise ValueError(f"git ls-tree failed for {repo_root}: {timeout_detail(exc, GIT_TIMEOUT)}") from exc
     if returncode != 0:
         raise ValueError(f"cannot list {base_sha} in {repo_root}: {stderr.strip()}")
     paths = stdout.splitlines()
