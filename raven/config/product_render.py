@@ -124,6 +124,47 @@ def apply_secret_slots(
             put(config, path, value)
 
 
+def inherit_web_vendors(
+    config: dict,
+    host: dict,
+    *,
+    own_keys: dict[str, str] | None = None,
+    lookup: Callable[[str], str | None],
+) -> list[str]:
+    """Carry the host's vendor-table web keys and vendor selection into ``config``.
+
+    A host set up on a current raven keeps each vendor's credential under
+    ``tools.web.providers``, which the pre-vendor secret slots do not read: a
+    product rendered from those leaves alone launched keyless on such a host,
+    ``web_search`` withheld while the host's own tools searched fine. A key
+    this product holds of its own wins -- in the vendor slot, or in the
+    pre-vendor leaf ``own_keys`` names, which trunk reads only after an empty
+    slot, so inheriting the host's slot beside it would have the host's key
+    silently answer for the product's own. A vendor with no slot of its own on
+    the host borrows the LLM provider key it shares an account with. The
+    search and fetch vendor choices follow the host where the product names
+    none, so a host that searches through another vendor hands down the key
+    and the choice together.
+    """
+    from raven.config.schema import WEB_VENDOR_ENV_VARS, borrowed_web_key
+
+    own_keys = own_keys or {}
+    carried: list[str] = []
+    for vendor in WEB_VENDOR_ENV_VARS:
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        own = own_keys.get(vendor)
+        if dig(config, slot) or (own and lookup(own)):
+            continue
+        candidate = dig(host, slot) or borrowed_web_key(vendor, host.get("providers") or {})
+        if candidate:
+            put(config, slot, candidate)
+            carried.append(vendor)
+    for slot in (("tools", "web", "search", "provider"), ("tools", "web", "fetch", "provider")):
+        if not dig(config, slot) and (chosen := dig(host, slot)):
+            put(config, slot, chosen)
+    return carried
+
+
 def _inherited_defaults(config: dict, host: dict) -> dict:
     """The ``agents.defaults`` an agent would run on after taking the host's LLM.
 

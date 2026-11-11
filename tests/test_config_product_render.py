@@ -63,6 +63,43 @@ def test_secret_slots_fall_back_to_the_host_except_required():
     assert render.dig(config, ("tools", "extra")) == "mine", "an own value beats the host fallback"
 
 
+def test_inherit_web_vendors_carries_the_hosts_slots_and_choice():
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"serper": {"apiKey": "host-serper"}, "tavily": {"apiKey": "host-tavily"}},
+                "search": {"provider": "tavily"},
+                "fetch": {"provider": "tavily"},
+            }
+        }
+    }
+    config = {"tools": {"web": {"search": {"maxResults": 10}}}}
+
+    carried = render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert carried == ["serper", "tavily"]
+    assert config["tools"]["web"]["providers"]["serper"]["apiKey"] == "host-serper"
+    assert config["tools"]["web"]["providers"]["tavily"]["apiKey"] == "host-tavily"
+    assert config["tools"]["web"]["search"]["provider"] == "tavily"
+    assert config["tools"]["web"]["fetch"]["provider"] == "tavily"
+    assert config["tools"]["web"]["search"]["maxResults"] == 10, "the product's own knobs stay"
+
+
+def test_inherit_web_vendors_leaves_an_own_key_alone_and_borrows_the_llm_slot():
+    host = {
+        "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+        "tools": {"web": {"providers": {"serper": {"apiKey": "host-serper"}}}},
+    }
+    config: dict = {}
+    own = {"serper": "P_SERPER_API_KEY"}
+
+    carried = render.inherit_web_vendors(config, host, own_keys=own, lookup={"P_SERPER_API_KEY": "sk-own-serper"}.get)
+
+    assert "serper" not in config["tools"]["web"].get("providers", {}), "the own leaf key must stay the one read"
+    assert carried == ["deepseek"]
+    assert config["tools"]["web"]["providers"]["deepseek"]["apiKey"] == "sk-deepseek"
+
+
 def test_inherit_llm_takes_the_hosts_brains_not_its_limits():
     host = {
         "providers": {"open": {"apiKey": "k"}},
