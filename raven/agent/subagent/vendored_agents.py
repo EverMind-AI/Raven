@@ -46,7 +46,7 @@ import importlib.util
 import json
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -349,14 +349,15 @@ def product_image_pin(row_name: str, root: Path | None = None) -> tuple[str, str
 
 
 def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
-    """The web vendor a product's own picture search speaks, or ``""`` for the host's.
+    """The web vendor a product's own picture search speaks, or the host's rule.
 
-    A product that holds the host ``image_search`` out of its tool set searches
-    pictures through its own plugin, and that plugin spends the key of the
-    folder's own search vendor: ``tools.web.search.provider`` in the folder's
-    ``config.json``, Serper when it names none, which is what the shipped deck
-    engine speaks. A product that keeps the host tool follows the host's vendor
-    rule instead, and ``""`` is that answer.
+    Three answers. ``""``: the product keeps the host ``image_search`` tool, so it
+    follows the host's vendor rule. ``"host"``: the product has its own picture
+    tool, and that tool rides the host's selected vendor -- the deck engine's
+    declaration, read from ``plugins.config`` -- which also narrows it to the
+    vendors whose hits carry dimensions and a source page. A vendor name: the
+    product's own plugin is pinned to that vendor (``tools.web.search.provider``
+    in the folder's ``config.json``, Serper when it names none).
 
     Here beside :func:`product_secret` for the same reason: a route asking
     whether a lane can search pictures has to read the lane's contract, not the
@@ -370,11 +371,32 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
         declared = json.loads((folder / "config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ""
+    slices = (declared.get("plugins") or {}).get("config") or {}
+    for section in slices.values() if isinstance(slices, dict) else ():
+        if not isinstance(section, dict):
+            continue
+        image_search = section.get("imageSearch")
+        if isinstance(image_search, dict) and image_search.get("provider") == "host":
+            return "host"
     tools = declared.get("tools") or {}
     if "image_search" not in (tools.get("disabledTools") or []):
         return ""
     search = (tools.get("web") or {}).get("search") or {}
     return str(search.get("provider") or "serper")
+
+
+def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str], str]) -> bool:
+    """Whether a routed lane can search pictures under the rule its own tool speaks."""
+    from raven.agent.tools.web import image_search_vendor, ppt_image_vendor
+
+    declared = product_picture_vendor(target)
+    if declared == "host":
+        vendor = ppt_image_vendor(host_vendor, key_for)
+    elif declared:
+        vendor = declared
+    else:
+        vendor = image_search_vendor(host_vendor, key_for)
+    return bool(vendor and key_for(vendor))
 
 
 def _folder_addresses_openrouter(folder: Path) -> bool:

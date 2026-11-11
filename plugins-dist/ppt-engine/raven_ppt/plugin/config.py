@@ -35,6 +35,9 @@ proxy) through the same grant and is withheld where the host configured none.
                       Serper key (tools.web.providers.serper.apiKey, or the
                       legacy tools.web.search.apiKey); falls back to
                       $SERPER_API_KEY (the research-flow spelling)
+  imageSearch.provider  "host" (the shipped value) follows the deployment's
+                      selected search vendor, with Serper as the fallback; a
+                      vendor name pins the deck's pictures to that vendor
   image               an override of the host's tools.media.image for
                       ppt_generate_image (apiKey/apiBase/model/quality, as
                       tools.media.image spells them); absent, the generator
@@ -99,6 +102,7 @@ class EngineConfig:
     # engine per session; here the hook repoints the turn's working directory instead.
     deck_per_session: bool = True
     image_search_api_key: str | None = None
+    image_search_provider: str = "host"
     # An override of the host's tools.media.image for ppt_generate_image; the
     # grant on the locator is what serves it otherwise.
     image: Any | None = None
@@ -117,6 +121,16 @@ class EngineConfig:
         key = image_search.get("apiKey", "")
         if not isinstance(key, str):
             raise ValueError(f"imageSearch.apiKey must be a string, got {key!r}")
+        provider = image_search.get("provider", "host")
+        if not isinstance(provider, str):
+            raise ValueError(f"imageSearch.provider must be a string, got {provider!r}")
+        from raven.agent.tools.web import PPT_IMAGE_SEARCH_VENDORS
+
+        if provider != "host" and provider not in PPT_IMAGE_SEARCH_VENDORS:
+            raise ValueError(
+                f"unknown ppt image search provider {provider!r}; "
+                f"known routes are 'host' and {', '.join(PPT_IMAGE_SEARCH_VENDORS)}"
+            )
         image_raw = raw.get("image")
         if image_raw is not None and not isinstance(image_raw, dict):
             raise ValueError(f"image must be an object, got {image_raw!r}")
@@ -151,6 +165,7 @@ class EngineConfig:
             web_proxy=_text(raw, "webProxy", "") or None,
             deck_per_session=_flag(raw, "deckPerSession", True),
             image_search_api_key=key or None,
+            image_search_provider=provider,
             image=image,
             reader_effort=_text(raw, "readerEffort", ""),
         )

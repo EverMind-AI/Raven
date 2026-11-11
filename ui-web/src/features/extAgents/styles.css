@@ -351,6 +351,9 @@
 .extAgents-site svg { width: 12px; height: 12px; }
 .extAgents-probe { margin-top: 14px; font-size: 12px; color: var(--faint); display: flex; align-items: center; gap: 7px; }
 .extAgents-probe-bad { color: var(--clay); }
+/* A warning at the top of the body is followed by the first field; without the
+   gap the label sits against the sentence's last line. */
+.extAgents-body > .extAgents-probe { margin-bottom: 14px; }
 
 /* The action bar: right-aligned, primary rightmost, the destructive one left of it. */
 /* `flex-wrap`: the bar holds up to four presses, and under the fold the sheet

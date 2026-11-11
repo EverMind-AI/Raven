@@ -130,18 +130,47 @@ class _Shared:
             return self.cfg.web_proxy
         return getattr(self.web(), "proxy", None) or None
 
-    def image_search_key(self) -> str | None:
-        """The slice's Serper key when it names one, else the host's: the vendor slot
-        ``tools.web.providers.serper.apiKey`` first, the legacy ``tools.web.search.apiKey``
-        after it, the order the host's own ``web_search`` reads them in."""
-        if self.cfg.image_search_api_key:
+    def image_search_vendor(self) -> str:
+        """The picture vendor this deck speaks: the pinned one, else the host's.
+
+        ``imageSearch.provider`` is ``"host"`` in the shipped slice. An explicit
+        vendor is honoured while a key for it resolves; without one the host rule
+        answers instead, so a pin cannot leave the deck with a tool whose every
+        call fails. :func:`ppt_image_vendor` supplies the fallback to Serper.
+        """
+        from raven.agent.tools.web import PPT_IMAGE_SEARCH_VENDORS, ppt_image_vendor
+
+        web = self.web()
+        selected = str(getattr(getattr(web, "search", None), "provider", "") or "serper")
+        pinned = self.cfg.image_search_provider
+        if pinned != "host" and pinned in PPT_IMAGE_SEARCH_VENDORS and self.image_search_key(pinned):
+            return pinned
+        return ppt_image_vendor(selected, self.image_search_key)
+
+    def image_search_key(self, vendor: str) -> str | None:
+        """One vendor's key: the slice override only for Serper, else the host's.
+
+        The bare environment variable is the last source, the order the host tool
+        reads: a launched product inherits it, and a deployment that exports the
+        vendor's key configures the deck's pictures without a config edit.
+        """
+        if vendor == "serper" and self.cfg.image_search_api_key:
             return self.cfg.image_search_api_key
         web = self.web()
         vendor_key = getattr(web, "vendor_key", None)
         if callable(vendor_key):
-            return vendor_key("serper") or None
-        search = getattr(web, "search", None)
-        return getattr(search, "api_key", None) or None
+            key = vendor_key(vendor)
+        elif vendor == "serper":
+            key = getattr(getattr(web, "search", None), "api_key", None)
+        else:
+            key = None
+        if key:
+            return key
+        import os
+
+        from raven.config.schema import WEB_VENDOR_ENV_VARS
+
+        return os.environ.get(WEB_VENDOR_ENV_VARS.get(vendor, ""), "") or None
 
     def prototypes(self) -> dict[str, Tool]:
         if self._prototypes is None:
@@ -170,17 +199,17 @@ class _Shared:
         return SessionTool(prototype, self.engine_for, on_bind=self.bind)
 
     def image_search(self) -> PptImageSearchTool | None:
-        """The D2 tool, or ``None`` without a key to search with.
+        """The D2 tool, or ``None`` without a vendor that has a key.
 
         The fork's loop registered no keyless web_search rather than advertise
         a tool whose every call is an error string; the same refusal, said as a
-        factory decline. Asked of the built tool rather than the slice because
-        the key resolves from either the slice or ``SERPER_API_KEY``.
+        factory decline.
         """
         if self._image_search is None:
-            tool = PptImageSearchTool(api_key=self.image_search_key(), proxy=self.web_proxy())
-            if tool.api_key:
-                self._image_search = tool
+            vendor = self.image_search_vendor()
+            key = self.image_search_key(vendor)
+            if key:
+                self._image_search = PptImageSearchTool(api_key=key, proxy=self.web_proxy(), provider=vendor)
         return self._image_search
 
     def hook(self) -> ParticipantHook:

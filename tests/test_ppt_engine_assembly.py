@@ -256,6 +256,18 @@ def test_a_view_budget_outside_the_range_is_refused_not_silently_clamped() -> No
             EngineConfig.from_slice({"viewsPerCall": bad})
 
 
+def test_the_engine_image_search_provider_defaults_to_the_host_and_refuses_an_unknown() -> None:
+    """The shipped slice says ``host``: the deck's pictures follow whichever search
+    vendor the deployment selected. An explicit vendor is allowed, a typo is not."""
+    from raven_ppt.plugin.config import EngineConfig
+
+    assert EngineConfig().image_search_provider == "host"
+    assert EngineConfig.from_slice({}).image_search_provider == "host"
+    assert EngineConfig.from_slice({"imageSearch": {"provider": "serpapi"}}).image_search_provider == "serpapi"
+    with pytest.raises(ValueError, match="unknown ppt image search provider"):
+        EngineConfig.from_slice({"imageSearch": {"provider": "tavily"}})
+
+
 def test_the_image_generator_answers_configured_from_the_live_host_section(tmp_path: Path, monkeypatch) -> None:
     """Same terms as the host's image_generate, asked live rather than at assembly:
     the tool is always built, and `configured()` follows the section the reader

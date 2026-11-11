@@ -1025,6 +1025,13 @@ export interface SubagentRow {
      */
     name?: string;
   }[];
+  /**
+   * The routes this row offers to other agents, with the picture-search readiness the router applies. image_search_ready is null on a route that does not declare image_search.
+   */
+  routes?: {
+    to: string;
+    image_search_ready?: boolean | null;
+  }[];
 }
 export interface ModelOptionProvider {
   slug: string;

@@ -95,6 +95,19 @@ class SkillInfo(_Strict):
     tags: list[str]
 
 
+class SubagentRoutePayload(_Strict):
+    """One route a row offers to another agent, and whether it can open now."""
+
+    to: str
+    image_search_ready: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the route's target can search pictures right now. Null on a route that does not "
+            "declare image_search."
+        ),
+    )
+
+
 class SubagentRow(_Strict):
     """One row of the /subagents overlay.
 
@@ -242,6 +255,13 @@ class SubagentRow(_Strict):
             "The reasoning efforts this row's agent offers on the row's own model: its thought_level option, "
             "or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that "
             "packs effort into model ids instead has no such menu."
+        ),
+    )
+    routes: list[SubagentRoutePayload] = Field(
+        default_factory=list,
+        description=(
+            "The routes this row offers to other agents, with the picture-search readiness the router "
+            "applies. Empty on a row that offers none."
         ),
     )
 

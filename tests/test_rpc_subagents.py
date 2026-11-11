@@ -255,6 +255,58 @@ async def test_list_leaves_out_a_hidden_row(tmp_path: Path, monkeypatch) -> None
     assert "Deck" not in names
 
 
+async def test_a_route_reports_whether_the_picture_search_it_needs_is_ready(tmp_path: Path, monkeypatch) -> None:
+    """The Design card reads this. A route declaring ``image_search`` is closed
+    while the deck lane has no picture vendor, and open once the host's Serper
+    key answers the fallback."""
+    root = tmp_path / "agents"
+    folder = root / "raven-deck"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Deck", "kind": "acp", "description": "builds decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}}}),
+        encoding="utf-8",
+    )
+    path = tmp_path / "config.json"
+
+    def write_host(providers: dict) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "subagents": {
+                        "agents": [
+                            {
+                                "name": "Raven-Design",
+                                "kind": "acp",
+                                "command": "x",
+                                "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                            }
+                        ]
+                    },
+                    "tools": {"web": {"search": {"provider": "tavily"}, "providers": providers}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: root)
+    for name in ("SERPER_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    write_host({"tavily": {"apiKey": "tv"}})
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": False}]
+
+    write_host({"tavily": {"apiKey": "tv"}, "serper": {"apiKey": "sp"}})
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": True}]
+
+
 async def test_list_never_returns_an_api_key(config_path: Path) -> None:
     result = await subagents_list({})
     blob = json.dumps(result)

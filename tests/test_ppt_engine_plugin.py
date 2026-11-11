@@ -157,6 +157,13 @@ def test_the_usage_recorder_bound_at_runtime_reaches_the_image_generator(tmp_pat
     assert generator.media._usage_recorder is recorder
 
 
+def _web_ctx(slice_: dict, workspace: Path, web) -> PluginContext:
+    return PluginContext(
+        config=slice_,
+        services=ServiceLocator(workspace=workspace, user_id="u", agent_id="a", web_config=lambda: web),
+    )
+
+
 def test_image_search_reads_the_hosts_serper_key_through_the_web_grant(tmp_path: Path, monkeypatch) -> None:
     """A deployment that configured web_search once has configured the deck's image
     search too: the host's tools.web reaches the plugin through the locator, vendor
@@ -165,31 +172,79 @@ def test_image_search_reads_the_hosts_serper_key_through_the_web_grant(tmp_path:
 
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
     web = WebToolsConfig.model_validate({"providers": {"serper": {"apiKey": "vendor-key"}}, "proxy": "http://p:1"})
-    ctx = PluginContext(
-        config=dict(ENABLED),
-        services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
-    )
-    shared = plugin_module._Shared(ctx)
-    assert shared.image_search_key() == "vendor-key"
+    shared = plugin_module._Shared(_web_ctx(dict(ENABLED), tmp_path, web))
+    assert shared.image_search_vendor() == "serper"
+    assert shared.image_search_key("serper") == "vendor-key"
     assert shared.web_proxy() == "http://p:1"
-    assert plugin_module.make_ppt_image_search(ctx) is not None
+    assert plugin_module.make_ppt_image_search(shared._ctx) is not None
 
     legacy = WebToolsConfig.model_validate({"search": {"apiKey": "legacy-key"}})
-    shared = plugin_module._Shared(
-        PluginContext(
-            config=dict(ENABLED),
-            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: legacy),
-        )
-    )
-    assert shared.image_search_key() == "legacy-key"
+    shared = plugin_module._Shared(_web_ctx(dict(ENABLED), tmp_path, legacy))
+    assert shared.image_search_key("serper") == "legacy-key"
 
     shared = plugin_module._Shared(
-        PluginContext(
-            config={**ENABLED, "imageSearch": {"apiKey": "slice-key"}, "webProxy": "http://own:2"},
-            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
-        )
+        _web_ctx({**ENABLED, "imageSearch": {"apiKey": "slice-key"}, "webProxy": "http://own:2"}, tmp_path, web)
     )
-    assert shared.image_search_key() == "slice-key" and shared.web_proxy() == "http://own:2"
+    assert shared.image_search_key("serper") == "slice-key" and shared.web_proxy() == "http://own:2"
+
+
+def test_the_deck_picture_vendor_follows_the_hosts_selection(tmp_path: Path, monkeypatch) -> None:
+    from raven.config.schema import WebToolsConfig
+
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    web = WebToolsConfig.model_validate(
+        {"search": {"provider": "serpapi"}, "providers": {"serpapi": {"apiKey": "serp-key"}}}
+    )
+    shared = plugin_module._Shared(_web_ctx(dict(ENABLED), tmp_path, web))
+
+    assert shared.image_search_vendor() == "serpapi"
+    tool = plugin_module.make_ppt_image_search(shared._ctx)
+    assert tool is not None and tool.provider == "serpapi"
+
+
+def test_the_deck_picture_vendor_falls_back_to_serper(tmp_path: Path, monkeypatch) -> None:
+    from raven.config.schema import WebToolsConfig
+
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    web = WebToolsConfig.model_validate(
+        {
+            "search": {"provider": "tavily"},
+            "providers": {"tavily": {"apiKey": "tv-key"}, "serper": {"apiKey": "serper-key"}},
+        }
+    )
+    shared = plugin_module._Shared(_web_ctx(dict(ENABLED), tmp_path, web))
+
+    assert shared.image_search_vendor() == "serper"
+    tool = plugin_module.make_ppt_image_search(shared._ctx)
+    assert tool is not None and tool.provider == "serper"
+
+
+def test_no_picture_key_anywhere_withholds_the_tool(tmp_path: Path, monkeypatch) -> None:
+    from raven.config.schema import WebToolsConfig
+
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    web = WebToolsConfig.model_validate(
+        {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv-key"}}}
+    )
+    shared = plugin_module._Shared(_web_ctx(dict(ENABLED), tmp_path, web))
+
+    assert plugin_module.make_ppt_image_search(shared._ctx) is None
+
+
+def test_the_slice_key_is_spent_on_serper_only(tmp_path: Path, monkeypatch) -> None:
+    from raven.config.schema import WebToolsConfig
+
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    web = WebToolsConfig.model_validate(
+        {"search": {"provider": "serpapi"}, "providers": {"serpapi": {"apiKey": "serp-key"}}}
+    )
+    shared = plugin_module._Shared(
+        _web_ctx({**ENABLED, "imageSearch": {"apiKey": "slice-serper"}}, tmp_path, web)
+    )
+
+    assert shared.image_search_vendor() == "serpapi"
+    assert shared.image_search_key("serpapi") == "serp-key"
+    assert shared.image_search_key("serper") == "slice-serper"
 
 
 def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> None:
