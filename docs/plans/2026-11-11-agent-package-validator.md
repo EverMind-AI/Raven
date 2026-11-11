@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `uv run python -m evolver validate <folder> --suite <dir>` decides whether an agent folder stays inside the product scope, runs end to end through the host's ACP dispatch path, and returns results a judge model accepts.
+**Goal:** `uv run python -m evolver validate <folder> --suite <dir>` decides whether an agent folder stays inside the agent scope, runs end to end through the host's ACP dispatch path, and returns results a judge model accepts.
 
 **Architecture:** A self-contained package `evolver/validator/` runs six layers in order (F folder, D declarations, C code, A activation, E end to end, J judge) and stops after the first failing layer. All agent-folder code runs in child processes started with `sys.executable`, under an isolated `RAVEN_HOME` and a scrubbed environment; the parent only reads files, starts children, and calls the judge model through Raven's provider stack.
 
@@ -18,7 +18,7 @@
 - Defaults: `--model deepseek/deepseek-flash`, `--judge-model deepseek/deepseek-flash`, `--judge-repeats 1`, `--min-pass-rate 1.0`, suite `timeout_s` 900. Real-model tests use `deepseek/deepseek-flash` only.
 - Rule ids exactly: `F1`-`F5`, `D1`-`D7`, `C1`-`C3`, `A1`-`A5`, `E1`, `J1`. `F5` and `D7` are advisory and never fail.
 - Exit codes: `0` PASS or STATIC-OK; `1` the folder failed a rule or a case (including a non-importable engine wheel); `2` usage or input error; `3` environment failure (provider unreachable, missing credentials).
-- Credentials exist only under `<run_dir>/home/` (files mode 600), including any copy of a rendered product config; `home/` is removed in a `finally` unless `--keep`. `report.json` and the package snapshot stay.
+- Credentials exist only under `<run_dir>/home/` (files mode 600), including any copy of a rendered agent config; `home/` is removed in a `finally` unless `--keep`. `report.json` and the package snapshot stay.
 - Unattended dispatch needs no extra permission settings: the host side approves `session/request_permission` except on deny rules (`raven/acp_client/permissions.py`). The isolated config sets none.
 - Tests: `uv run --frozen --all-extras pytest <files> -q`, never `-n 8`. Unit files `tests/test_evolver_validator_<aspect>.py`; integration files `tests/integration/test_evolver_validator_<kind>.py`.
 - Commits happen only on the owner's explicit word (AGENTS.md 3.4). Each task ends by stopping and reporting; when told to commit: header `<type>(evolver): <subject>`, ASCII, no trailer.
@@ -240,7 +240,7 @@ def test_shipped_agent_passes_static_layers(name, engine, tmp_path):
         assert layer.passed, [r for r in layer.results if r.status == "fail"]
 ```
 
-- [ ] **Step 2: Run it.** `uv run --frozen --all-extras pytest tests/test_evolver_validator_rules.py -q -k shipped`. Any failure is analysed: a rule the shipped agents break is wrong for the product scope; change it (or make it advisory) and re-run the whole rules file, mutants included.
+- [ ] **Step 2: Run it.** `uv run --frozen --all-extras pytest tests/test_evolver_validator_rules.py -q -k shipped`. Any failure is analysed: a rule the shipped agents break is wrong for the agent scope; change it (or make it advisory) and re-run the whole rules file, mutants included.
 - [ ] **Step 3: Stop and report** the calibration result rule by rule; commit on the owner's word.
 
 ---

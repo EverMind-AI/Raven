@@ -98,7 +98,7 @@ def test_timeout_fails_e1_and_leaves_no_process(tmp_path):
     assert not _stub_pids(home.path)
 
 
-def test_cases_run_in_order_each_in_its_own_workspace(tmp_path):
+def test_cases_run_in_order_each_in_its_own_working_directory(tmp_path):
     home = _home(tmp_path, mode="ok", reply="pong")
     runs = run_cases(
         home, agent_name="Stub-Agent", suite=_suite(_case("a"), _case("b")), run_dir=tmp_path / "run", run_id="r1"

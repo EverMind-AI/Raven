@@ -180,7 +180,7 @@ Layers run in order, and the first failing layer ends the run:
 | D declarations | `subagent.json` passes the roster schema, has a written `description` and `owns`, and launches through `{PYTHON}` / `{SUBAGENT_DIR}`; plugin manifests parse; `config.json` loads and holds no credential, no `plugins.dirs` and no host-owned memory address |
 | C code | every `.py` compiles; no import of `evolver`, `experimental`, `benchmarks`, `tests` or another agent's plugin package; factory modules import without touching the folder |
 | A activation | in an isolated `RAVEN_HOME`: discovery lists the folder enabled; its launcher answers ACP `initialize`; the rendered config uses `--model` with long-term memory off; every plugin contribution builds or declines; an engine plugin registers nothing without its config slice |
-| E end to end | each suite case is dispatched through the host's ACP backend, in its own workspace |
+| E end to end | each suite case is dispatched through the host's ACP backend, in its own working directory |
 | J judge | a judge model decides each criterion from the final reply and the delivered files |
 
 The rules encode what the shipped agents use: all five pass layers F, D and C.

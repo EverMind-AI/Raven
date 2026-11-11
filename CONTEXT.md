@@ -483,7 +483,7 @@ holding `suite.json` (`name`, `version`, an optional `target` agent name, a defa
 `{"base64": ...}`), criteria with ids, optional reference notes and an optional timeout.
 It lives outside the folder it judges, so a folder cannot grade itself. A `target` naming
 another agent, a file path that is absolute or climbs with `..`, and a duplicate case or
-criterion id are input errors. Each case runs in its own workspace through the host's
+criterion id are input errors. Each case runs in its own working directory through the host's
 ACP backend, and a judge model decides each criterion from the final reply and the files
 the agent created or changed.
 

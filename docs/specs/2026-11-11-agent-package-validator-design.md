@@ -115,7 +115,7 @@ python -m evolver validate <folder>
     [--judge-repeats <n>]      judge calls per case, default 1; majority per criterion
     [--min-pass-rate <x>]      fraction of cases that must pass, default 1.0
     [--report <path>]          JSON report path (default: printed location under the run dir)
-    [--keep]                   keep the isolated home and workspaces for inspection
+    [--keep]                   keep the isolated home and the package snapshot
     [--static-only]            run layers F, D, C and A (no model call); prints STATIC-OK, never PASS
 ```
 
@@ -242,12 +242,12 @@ build output is never part of a package, and a working checkout of the shipped a
 
 ### Layer E -- end to end
 
-- For each case: create a fresh workspace, write the case files, construct `AcpAgentBackend` from the
+- For each case: create a fresh working directory, write the case files, construct `AcpAgentBackend` from the
   discovered row with its own connection pool, and `await backend.run(task, task_id=...,
   workspace=..., executor=None, session_key=...)` under the case timeout. Cases run one at a time.
 - Record the reply `run()` returns (the last message, which is what the host sees), the full streamed
-  text, and every file created or changed in the workspace (text up to a size cap; binaries by name,
-  size and hash). Raven's own `.raven/` checkpoint tree at the workspace root is bookkeeping, not
+  text, and every file created or changed in the case's working directory (text up to a size cap;
+  binaries by name, size and hash). Raven's own `.raven/` Checkpoint repository at its root is bookkeeping, not
   output, and is left out.
 - E1 the turn completes without transport error, timeout or empty turn (`AcpEmptyTurnError`); a case
   that fails E1 goes to the report as a runtime failure, is not judged, and counts as a failed case in
@@ -272,7 +272,7 @@ build output is never part of a package, and a working checkout of the shipped a
 
 Overall PASS requires F, D, C and A to pass and J1 to pass. The JSON report holds: folder and suite
 digests, Raven version and commit, configured agent model and judge model, the rendered model,
-provider and memory backend, per-layer rule results with evidence, and per case: task id, timings,
+provider and memory backend, per-layer rule results with evidence, and per case: case id, timings,
 final reply, delivered files, every raw judge output, the parsed verdicts, plus an `error` when an
 environment failure or an exception ended the run. Stdout prints one line per layer and one per case.
 

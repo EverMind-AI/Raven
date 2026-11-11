@@ -2,7 +2,7 @@
 
 The parent never talks ACP itself; ``_dispatch`` does, in a child started with the
 isolated home's environment. Files the agent creates or changes in a case's
-workspace are recorded with their size and hash, and with their text when it is
+working directory are recorded with their size and hash, and with their text when it is
 UTF-8 (capped at :data:`TEXT_CAP` characters).
 """
 
@@ -29,7 +29,7 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-# Raven's own per-workspace checkpoint tree (a shadow git and its notice), not output.
+# Raven's own Checkpoint repository and its notice at a working directory's root, not output.
 BOOKKEEPING_DIR = ".raven"
 
 
