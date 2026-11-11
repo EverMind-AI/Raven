@@ -53,7 +53,9 @@ export function okOf(name: string, preview: string): boolean {
 
 /* One delegated run's record, painted by this island's renderer into a box a
    sibling owns (features/tasks' context tab) -- reached through the seam, so
-   the sibling neither imports this island nor keeps a renderer of its own. */
+   the sibling neither imports this island nor keeps a renderer of its own.
+   The subagents domain exposes its own `stagePaint` for the instance pane;
+   this one is the task pane's and carries the extra options a record needs. */
 export const stagePaint = (box: HTMLElement, ctx: { status?: string; messages?: HistoryMessage[] } | null,
   opts?: StageOpts | null): void => agentStage(box, ctx, opts)
 
