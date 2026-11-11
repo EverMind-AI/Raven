@@ -1127,7 +1127,13 @@ class TestResultReportRule:
         rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
         assert "has not seen your tool results, an agent's report or your reasoning" in rules
         assert "An agent's report reaches you, not the user." in rules
-        assert "not by its label alone" in rules
+
+    def test_both_homes_retell_findings_in_the_same_words(self, tmp_path: Path) -> None:
+        """The announce's rule and the reply rules state one rule; worded apart, they
+        drifted once already (one kept the labels-alone wording the other dropped)."""
+        rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
+        assert render.REPORT_FINDINGS_RULE in rules
+        assert render.REPORT_FINDINGS_RULE in render.RESULT_REPORT_RULE
 
     def test_the_note_is_the_rule_after_a_fence(self) -> None:
         note = render.result_report_note()
