@@ -1824,6 +1824,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.why_api_key': 'API key rejected',
     'gui.agent.why_download': 'Download failed',
     'gui.agent.why_model': 'Model unavailable',
+    'gui.agent.route_no_picture':
+      'Deck generation is unavailable: no image search tool is configured. Set a search API with image search, or a Serper key.',
     'gui.agent.why_billing': 'Out of credit',
     'gui.agent.why_quota': 'Rate-limited',
     'gui.agent.why_network': "Can't reach its provider",
@@ -2703,6 +2705,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.tools.model': 'Model',
     'gui.settings.tools.vendor': 'Vendor',
     'gui.settings.tools.search_vendor': 'Search service',
+    'gui.settings.tools.ppt_image_missing':
+      'This search API has no image search and no Serper key is configured. Deck generation cannot run.',
+    'gui.settings.tools.ppt_image_fallback': 'This search API has no image search. Deck generation will use {name}.',
     'gui.settings.tools.fetch_vendor': 'Fetch service',
     'gui.settings.tools.vendor_key': '{name} API key',
     'gui.settings.tools.key_first': 'Enter the key first',
@@ -5399,6 +5404,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.agent.why_api_key': 'API key 不可用',
     'gui.agent.why_download': '没能下载',
     'gui.agent.why_model': '模型不可用',
+    'gui.agent.route_no_picture':
+      '当前无搜图工具，无法启用 PPT 制作引擎。请配置支持搜图的搜索 API，或设置 Serper key。',
     'gui.agent.why_billing': '余额不足',
     'gui.agent.why_quota': '被限流或额度不足',
     'gui.agent.why_network': '连不上服务商',
@@ -6205,6 +6212,8 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.tools.model': '模型',
     'gui.settings.tools.vendor': '服务',
     'gui.settings.tools.search_vendor': '搜索服务',
+    'gui.settings.tools.ppt_image_missing': '当前搜索 API 无搜图工具，无法启用 PPT 制作引擎。',
+    'gui.settings.tools.ppt_image_fallback': '当前搜索 API 无搜图工具，PPT 制作将回退使用 {name}。',
     'gui.settings.tools.fetch_vendor': '抓取服务',
     'gui.settings.tools.vendor_key': '{name} API key',
     'gui.settings.tools.key_first': '先填入 Key',
