@@ -27,8 +27,8 @@ goes to the agent that fits it, and to the built-in `Raven-General` agent only
 when none does: looking something up, checking a result and a cleanup as much as
 a script or a document. Raven's own turn holds the conversation while it works,
 so handing the work over keeps it free for your next message. An agent's report
-reaches Raven, not you, so when one comes back Raven tells you in its own words
-what was done and what came of it: each finding by what it is rather than by the
+comes to Raven, and the page shows it folded (the terminal as one line), so when
+one comes back Raven tells you in its own words what was done and what came of it: each finding by what it is rather than by the
 report's label, and the grounds the report gives for a verdict. In a
 conversation running on a Harness with workers, such as a Persona, Raven hands work
 only to those workers; work none of them covers, it tells you about and asks how to

@@ -308,16 +308,17 @@ REPORT_FINDINGS_RULE = (
 """How an agent's findings are retold, shared by the announce's rule and the reply rules so the two cannot drift."""
 
 RESULT_REPORT_RULE = (
-    "The user has not read this report: it reached you, not them. Tell them what was done and what came of it in a "
+    "The user has not read this report; you have. Tell them what was done and what came of it in a "
     f"reply that stands without the report -- {REPORT_FINDINGS_RULE}; give the grounds the report gives for a "
-    "verdict; and do not point at the report as if they could read it. All of this is in the report: tell it from "
+    "verdict; and do not lean on the report as if they had read it. All of this is in the report: tell it from "
     "there rather than checking it again yourself. Take the space that needs, and leave out what does not change "
     "what they understand or decide."
 )
 """What the host is told where an agent's report reaches it: the user reads only the reply.
 
-A report is delivered to the host alone. The served page folds it into a closed row and
-the terminal draws a one-line marker, so the reply is all most readers see of the work.
+A report is delivered to the host. The served page shows it as a folded row the reader
+can open and the terminal as a one-line marker, so the reply is what most readers go by:
+it is written for a reader who has not opened the report, not one who cannot.
 On one recorded conversation (deepseek-flash, 123 replies to a returned report), a judge
 reading only what the user had seen found about three places a reply leaned on the
 unseen report: findings named by the report's own labels, files and values only the
@@ -399,7 +400,7 @@ def _reply_style(board_shown: bool = False) -> str:
 Whoever reads your reply has not seen your tool results, an agent's report or your reasoning, so the reply has to stand on its own. These rules govern how you write, not which language you write in.
 - The intent you state before tool calls is one sentence, said once before you start; do not narrate each routine tool call after it.
 - Lead with the answer. If something could not be verified, say so first.
-- An agent's report reaches you, not the user. When you pass on what it found, {REPORT_FINDINGS_RULE}.
+- The user has not read an agent's report; you have. When you pass on what it found, {REPORT_FINDINGS_RULE}.
 - Answer a simple question in plain prose: no headers, no bullet list, no closing recap. Use structure only when the content is list-shaped.
 - When a reply covers more than one task -- a result, progress, a one-line status, a late notice -- give each task its own section that opens with a markdown heading naming the task on a line of its own (`### <task>`), even when the section is a single sentence; never put two tasks in one paragraph or one list.{sections_tail}
 - Keep it short by leaving things out, not by compressing what is left into fragments, arrows or abbreviations of your own.

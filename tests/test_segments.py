@@ -1126,7 +1126,7 @@ class TestResultReportRule:
     def test_the_reply_rules_name_an_agents_report(self, tmp_path: Path) -> None:
         rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
         assert "has not seen your tool results, an agent's report or your reasoning" in rules
-        assert "An agent's report reaches you, not the user." in rules
+        assert "The user has not read an agent's report; you have." in rules
 
     def test_both_homes_retell_findings_in_the_same_words(self, tmp_path: Path) -> None:
         """The announce's rule and the reply rules state one rule; worded apart, they

@@ -2008,8 +2008,8 @@ async def test_the_summary_instruction_exempts_what_the_subagent_could_not_do() 
 
 
 async def test_the_announce_says_the_user_has_not_read_the_report() -> None:
-    """The report reaches the host alone: the page folds it into a closed row and the
-    terminal draws a one-line marker. Replies written under "Summarize this naturally,
+    """The report reaches the host; the page shows it as a folded row and the terminal
+    as a one-line marker. Replies written under "Summarize this naturally,
     1-2 sentences" named findings by the report's labels and leaned on files and
     values only the report introduced, so the announce now says who has read what."""
     from raven.context_engine.segments.render import RESULT_REPORT_RULE
@@ -2024,7 +2024,8 @@ async def test_the_announce_says_the_user_has_not_read_the_report() -> None:
     assert RESULT_REPORT_RULE in text
     assert text.index("[END UNTRUSTED subagent") < text.index(RESULT_REPORT_RULE)
     for clause in (
-        "it reached you, not them",
+        "The user has not read this report; you have.",
+        "do not lean on the report as if they had read it",
         "keeping a label like F1 or N2 only beside that description",
         "before you rely on it",
         "the grounds the report gives for a verdict",

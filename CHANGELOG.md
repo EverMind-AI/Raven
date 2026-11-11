@@ -21,12 +21,13 @@ All notable changes to Raven are documented here.
 ### Changed
 
 - When an agent's report comes back, Raven's reply explains it in full in its
-  own words instead of a one-to-two-sentence summary: the user never saw the
-  report, so each finding is named by what it is rather than by the report's
-  label, files and values from the report are explained before they are
-  relied on, and a verdict carries the grounds the report gives. The same rule
-  follows a background DAG run's result and sits in the reply rules, and it
-  tells Raven to retell the report rather than check it again itself.
+  own words instead of a one-to-two-sentence summary: the user has not read
+  the report (the page shows it folded), so each finding is named by what it
+  is rather than by the report's label, files and values from the report are
+  explained before they are relied on, and a verdict carries the grounds the
+  report gives. The same rule follows a background DAG run's result and sits
+  in the reply rules, and it tells Raven to retell the report rather than
+  check it again itself.
 
 - Raven hands a task's work to an agent even when it is small: looking
   something up, checking a result, a cleanup or a one-line edit now go to the
