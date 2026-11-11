@@ -73,9 +73,9 @@ _SEEDS: tuple[dict[str, Any], ...] = (
         # those tools support" is the same honesty about the menu -- the sub-agent
         # prompt withholds any skill whose ``requires.tools`` this row lacks.
         "description": (
-            "Raven's own in-process sub-agent: files, shell and web, plus the skills those tools "
+            "Raven's own in-process subagent: files, shell and web, plus the skills those tools "
             "support, with no capability bias. Put what this step must accomplish in its prompt -- "
-            "that is the only thing that shapes the run. IMPORTANT: it cannot call sub-agents, so "
+            "that is the only thing that shapes the run. IMPORTANT: it cannot call subagents, so "
             "give it only work it can finish on its own."
         ),
     },
@@ -271,7 +271,7 @@ def host_raven_acp_command() -> str:
 
 _ACP_HOST_DESCRIPTION = (
     "Raven's own agent served over ACP: this raven as a separate process, on the same config and "
-    "model, with its own sub-agent delegation."
+    "model, with its own subagent delegation."
 )
 
 

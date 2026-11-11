@@ -113,7 +113,7 @@ class TestTheGenericRowsLimitReachesTheModel:
     """
 
     def test_the_roster_says_it_cannot_call_sub_agents(self) -> None:
-        assert "cannot call sub-agents" in _registry().roster_text()
+        assert "cannot call subagents" in _registry().roster_text()
 
 
 class TestAHiddenRowIsOffTheRosterButOnTheTable:

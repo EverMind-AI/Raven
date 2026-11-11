@@ -2173,7 +2173,7 @@ class TestTheRosterIsSpawnsToSayWhenSpawnIsListed:
 
         assert "Coder [" not in desc
         assert desc.endswith(
-            "Available sub-agents for the `subagent` field: the roster at the end of the `spawn` tool's description."
+            "Available subagents for the `subagent` field: the roster at the end of the `spawn` tool's description."
         )
 
     def test_it_renders_the_roster_when_spawn_is_not(self, tmp_path: Path) -> None:
@@ -2556,7 +2556,7 @@ class TestCapabilityGate:
         )
 
         assert out.startswith("Error: invalid DAG")
-        assert "No sub-agent was run." in out
+        assert "No subagent was run." in out
         assert f'read_skill("{GUIDE_SKILL_ID}")' in out
         # Nothing was dispatched, so no run directory exists to read back.
         assert not (tmp_path / "sessions").exists()
@@ -2584,7 +2584,7 @@ class TestCapabilityGate:
 
         assert out.startswith("Error: invalid DAG")
         assert "{{ a.output }}" in out  # the fix, not just the complaint
-        assert "No sub-agent was run." in out
+        assert "No subagent was run." in out
         assert not (tmp_path / "sessions").exists()
 
     async def test_a_graph_that_respects_the_tags_still_runs(self, tmp_path: Path) -> None:
@@ -2737,7 +2737,7 @@ class TestValidationErrorGuidesRetry:
             ],
         )
 
-        assert "duplicate node ids: ['a']. No sub-agent was run." in out
+        assert "duplicate node ids: ['a']. No subagent was run." in out
 
 
 # --- references across runs in one conversation ---------------------------
@@ -4965,7 +4965,7 @@ async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run
     were written to read. The tool checks the same thing against the registry for
     the model's benefit; this one guards the runner against any caller.
     """
-    with pytest.raises(DagValidationError, match="names unknown sub-agent"):
+    with pytest.raises(DagValidationError, match="names unknown subagent"):
         await run_dag(
             parse_dag_spec(
                 {
@@ -8815,7 +8815,7 @@ def test_the_exception_report_teaches_the_four_choices_and_one_copyable_reassign
 
     for taught in (
         "Use continue when the task is right and something is missing that you or the user can supply",
-        "Use reassign when the task is right and this sub-agent lacks the execution capability",
+        "Use reassign when the task is right and this subagent lacks the execution capability",
         "Use replan when the plan itself is wrong",
         "Use abandon when the task is no longer wanted",
     ):

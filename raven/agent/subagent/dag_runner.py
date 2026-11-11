@@ -734,7 +734,7 @@ async def run_dag(
         for node in spec.nodes:
             resolved = resolve(node)
             if resolved is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+                raise DagValidationError(f"node '{node.id}' names unknown subagent '{node.subagent}'")
             node_backends[node.id] = resolved
         state.effective_nodes = {node.id: node for node in spec.nodes}
         state.backends = dict(node_backends)
@@ -2043,7 +2043,7 @@ def _exception_report(
             quote = quote[: _EVIDENCE_REPORT_MAX - 3].rstrip() + "..."
         lines.append("evidence:\n" + wrap_untrusted(quote, source="subagent"))
     if not verdict.evidence_complete:
-        lines.append("evidence is incomplete: this sub-agent's transport publishes no per-step transcript.")
+        lines.append("evidence is incomplete: this subagent's transport publishes no per-step transcript.")
     lines.append(f"blocked while this waits: {', '.join(blocked) if blocked else '(no dependents)'}")
     if remaining <= 0:
         lines.append(
@@ -2084,10 +2084,10 @@ def _exception_report(
     lines.append(
         f'Or reassign: tool_call with name "resolve_dag_node" and arguments '
         f'{{"run_id": "{run_id}", "node_id": "{node.id}", "decision": "reassign", '
-        f'"agent": "<roster name>", "message": "<what the new sub-agent should do>"}}. '
-        "This hands the node to another sub-agent from the roster, which is shown what the node "
+        f'"agent": "<roster name>", "message": "<what the new subagent should do>"}}. '
+        "This hands the node to another subagent from the roster, which is shown what the node "
         "was asked and answered so far, but not the tools it ran or this verdict: say what went "
-        "wrong in your message. Use reassign when the task is right and this sub-agent lacks the "
+        "wrong in your message. Use reassign when the task is right and this subagent lacks the "
         "execution capability it needs -- a tool, access to the files, a skill, or the strength "
         "for it -- and choose by how well the roster's descriptions and tags fit the task. An "
         "agent that already tried this node is not excluded: a failure may have been chance."
@@ -3098,7 +3098,7 @@ async def _install_move(
             continuations,
             move.node_id,
             f"Node '{move.node_id}' shares instance '{move.source_instance}' with "
-            f"{len(original) - 1} other node(s) in this run, so it can only move to a stateful sub-agent; "
+            f"{len(original) - 1} other node(s) in this run, so it can only move to a stateful subagent; "
             f"'{move.target_agent}' is not one and the move was not applied.",
         )
         if failed is not None:
@@ -3115,7 +3115,7 @@ async def _install_move(
                 backend = move.backends.get(nid)
                 if backend is None:
                     raise DagValidationError(
-                        f"no backend was prepared for node '{nid}' on sub-agent '{move.target_agent}'"
+                        f"no backend was prepared for node '{nid}' on subagent '{move.target_agent}'"
                     )
                 built[nid] = (target_node, backend)
         seed = await _load_handover_seed(
@@ -3211,9 +3211,9 @@ async def _plant_handover(
     if seed.target_named and seed.target_instance is not None:
         if await _destination_occupied(subagents_root, session_key, node.subagent, seed.target_instance):
             raise _DestinationOccupiedError(
-                f"sub-agent '{node.subagent}' already holds a conversation under instance "
+                f"subagent '{node.subagent}' already holds a conversation under instance "
                 f"'{seed.target_instance}'; node '{node.id}' was not dispatched there. Choose another "
-                "sub-agent, or replan with a new instance name."
+                "subagent, or replan with a new instance name."
             )
     rendered = render_handover(
         seed.turns,

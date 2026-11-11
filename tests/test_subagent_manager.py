@@ -1520,7 +1520,7 @@ async def test_dag_tool_refuses_to_run_inside_a_subagent(tmp_path):
         IN_SUBAGENT_RUN.reset(token)
 
     assert blocked.startswith("Error:")
-    assert "not available inside a sub-agent run" in blocked
+    assert "not available inside a subagent run" in blocked
 
     # Same call from the main agent's context is accepted (empty graph → no-op).
     # A refusal is a plain error string; an accepted run comes back as a
@@ -1619,6 +1619,27 @@ def test_instance_is_accepted_for_the_default_subagent():
 
     tool = SpawnTool(manager=_stub_manager())
     assert tool._reject_useless_instance(None, "refactor-auth") is None
+
+
+def test_the_stateless_handle_refusal_spells_subagent_one_way():
+    """The refusal is model-visible, so both halves of it say "subagent".
+
+    The tool's definition, its other refusals and the roster all use the
+    CONTEXT.md term; a hyphenated tail here is the one spelling a model would
+    read twice in the same sentence.
+    """
+    from raven.agent.subagent.backends import AgentMeta
+    from raven.agent.subagent.spawn_tool import SpawnTool
+
+    remote = AgentMeta(name="remote", description="runs elsewhere", stateful=False, reads_local_files=False)
+    helper = AgentMeta(name="helper", description="resumes a session", stateful=True, reads_local_files=False)
+    tool = SpawnTool(manager=_stub_manager(agents=[remote, helper]))
+
+    message = tool._reject_useless_instance("remote", "refactor-auth")
+
+    assert message is not None
+    assert "Subagents that can: ['helper']." in message
+    assert "sub-agent" not in message
 
 
 async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
@@ -2212,6 +2233,18 @@ async def test_the_authored_task_is_carried_beside_the_rendered_one(tmp_path: Pa
 
     assert mgr.authored == ["Make 15 slides from {{ inputs.research }}"]
     assert "LoCoMo 93.05" in mgr.tasks[0]
+
+
+async def test_a_call_without_a_prompt_template_is_refused(tmp_path: Path) -> None:
+    """The schema makes `prompt_template` required, so a call through the registry
+    is refused before it reaches the tool; this is the tool's own backstop for a
+    caller that invokes it directly, and it dispatches nothing."""
+    tool, mgr = _spawn_tool(tmp_path)
+
+    result = await tool.execute(task_summary="t")
+
+    assert result == "Error: `prompt_template` is required -- it is the task the subagent runs."
+    assert mgr.tasks == []
 
 
 async def test_a_spawn_without_inputs_still_carries_its_template(tmp_path: Path) -> None:
