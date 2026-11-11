@@ -201,7 +201,11 @@ The isolated home carries `--model` with its provider named, the operator's
 render time), `memory.backend: null`, and any shipped agent the folder routes
 to; child processes run without the operator's `RAVEN_*` variables and without
 the agent's own env-prefixed settings. The home and the package snapshot are
-removed at the end unless `--keep`; `report.json` stays in the run directory. The agent runs with the permissions
+removed at the end unless `--keep`. The run directory itself -- `report.json`
+and each case's working directory with what the agent wrote -- is kept for you
+to read and delete; it is a fresh `evolver-validate-*` directory under the
+system temp dir unless you pass a run directory programmatically, and
+`--report` writes the report elsewhere. The agent runs with the permissions
 its own config grants, so run the check on a development machine or container.
 
 Defaults: `--model` and `--judge-model` are `deepseek/deepseek-flash`,

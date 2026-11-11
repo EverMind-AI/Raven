@@ -277,8 +277,9 @@ delivered result alone.
 The isolated home carries the model under test (`--model`, default
 `deepseek/deepseek-flash`) with its provider, your `providers`, `tools.web` and
 `tools.media` blocks, and `memory.backend: null`. It and the copy of the folder
-are removed afterwards unless you pass `--keep`. The report is written as
-`report.json`. The agent runs with the permissions its own config grants, so
+are removed afterwards unless you pass `--keep`. The run directory, holding
+`report.json` and what the agent wrote for each case, stays until you delete
+it. The agent runs with the permissions its own config grants, so
 run the check on a development machine or in a container. Exit codes: `0`
 pass, `1` the folder failed, `2` input error, `3` environment failure.
 

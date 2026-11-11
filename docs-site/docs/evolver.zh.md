@@ -244,7 +244,8 @@ uv run python -m evolver validate agents/raven-design --engine plugins-dist/desi
 
 隔离 home 带上被测模型（`--model`，默认 `deepseek/deepseek-flash`）及其 provider、你的
 `providers`、`tools.web` 和 `tools.media`，以及 `memory.backend: null`。它和目录副本在结束后
-都会删除，除非传了 `--keep`。报告写成 `report.json`。智能体按
+都会删除，除非传了 `--keep`。运行目录（`report.json` 和智能体为每个用例写出的文件）会保留，
+看完请自行删除。智能体按
 它自己配置里的权限运行，所以请在开发机或容器里跑校验。退出码：`0` 通过，`1` 目录未通过，
 `2` 输入有误，`3` 环境问题。
 

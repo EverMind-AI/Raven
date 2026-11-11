@@ -216,7 +216,8 @@ build output is never part of a package, and a working checkout of the shipped a
   prefix (for example `CODE_API_KEY`, the state-root and ACP-home overrides) removed. An agent key in
   the environment would switch the agent to own-key mode and bypass `--model`.
 - At the end, close every connection pool and child process; delete the isolated home and the package
-  snapshot unless `--keep`. The snapshot is a copy of the folder as handed in, credentials included
+  snapshot unless `--keep`. The run directory (the report and each case's working directory) is the
+  caller's to keep or delete; by default it is a fresh `evolver-validate-*` temp directory. The snapshot is a copy of the folder as handed in, credentials included
   when the folder carries any.
 
 ### Layer A -- activation
