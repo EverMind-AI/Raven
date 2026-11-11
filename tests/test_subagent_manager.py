@@ -2214,6 +2214,18 @@ async def test_the_authored_task_is_carried_beside_the_rendered_one(tmp_path: Pa
     assert "LoCoMo 93.05" in mgr.tasks[0]
 
 
+async def test_a_call_without_a_prompt_template_is_refused(tmp_path: Path) -> None:
+    """The schema makes `prompt_template` required, so a call through the registry
+    is refused before it reaches the tool; this is the tool's own backstop for a
+    caller that invokes it directly, and it dispatches nothing."""
+    tool, mgr = _spawn_tool(tmp_path)
+
+    result = await tool.execute(task_summary="t")
+
+    assert result == "Error: `prompt_template` is required -- it is the task the subagent runs."
+    assert mgr.tasks == []
+
+
 async def test_a_spawn_without_inputs_still_carries_its_template(tmp_path: Path) -> None:
     """Every dispatch is rendered now, so the template is always the authored
     text and always worth carrying -- not only when inputs were used."""
