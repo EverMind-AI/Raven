@@ -36,7 +36,7 @@ const ROWS = [{ id: 'n1', kind: 'spawn', status: 'running' }] as unknown as Task
 const source = (): TasksSource => ({
   one: async () => null,
   stop: async () => true,
-  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
   roster: async () => [],
   boards: async (includeCompleted) => {
     calls.push(includeCompleted)

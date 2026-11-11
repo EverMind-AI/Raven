@@ -30,7 +30,7 @@ const source: TasksSource = {
   list: async () => [],
   one: async () => null,
   stop: async () => true,
-  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+  node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
   roster: async () => [],
   board: async (key) => { asked.push(key); return answers[key] ?? { board: board([]), lineage: {} } },
 }

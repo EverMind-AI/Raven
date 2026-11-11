@@ -7,7 +7,7 @@ import * as store from './store'
 import { AgentStageView, StageView } from './TranscriptPage'
 
 import type { AgentCtxLike } from './store'
-import type { AnswerData, HistoryMessage, Lane, NoteHandle, StepHandle } from './types'
+import type { AnswerData, HistoryMessage, Lane, NoteHandle, StageOpts, StepHandle } from './types'
 import type { ReactElement } from 'react'
 import type { Root } from 'react-dom/client'
 
@@ -205,7 +205,7 @@ export function history(messages: HistoryMessage[]): void {
 
 export function delivered(p: {
   label: string; isDag: boolean; status?: string; open: () => void; body?: string; output?: string; outputTruncated?: boolean | null
-  at?: number; turnId?: string
+  at?: number; turnId?: string; runId?: string | null; nodeId?: string | null
 }): void {
   store.delivered(mainLane(), p)
 }
@@ -233,8 +233,7 @@ export function redraw(): void {
 /* ── the agent stage: a delegated run in a workspace pane ──────────────
    Painted synchronously (a caller may read the drawn DOM in the same task),
    keeping the reader's scroll unless they were at the tail. */
-export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null,
-  opts?: { key?: string; empty?: string; reset?: boolean } | null): void {
+export function agentStage(box: HTMLElement, ctx: AgentCtxLike | null, opts?: StageOpts | null): void {
   const atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 4
   const top = box.scrollTop
   const lane = laneIn(box, false, (l) => <AgentStageView lane={l} />)

@@ -1748,15 +1748,15 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-size: var(--fs-body); line-height: 26px;
   box-shadow: var(--card-glass-sh); color: var(--chat-ink);
 }
-.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
+.msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer { margin: 0; }
 /* A card holding nothing yet but a live thought, folded, is the design's small
    "thinking" card: the row alone, at its own width, 40px tall. */
-.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)):has(.think.live) {
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer)):has(.think.live) {
   width: fit-content; min-height: 40px; padding: 10px 16px; justify-content: center;
 }
 /* The design draws the line alone; the caret that says it opens arrives with
    the pointer. */
-.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer, .sdlv)) .think.live > .cv {
+.msg.ai:not(:has(.say:not(:empty), .cot:not([hidden]), .wrow:not([hidden]), .answer)) .think.live > .cv {
   opacity: 0; transition: opacity .12s;
 }
 .msg.ai .think.live:hover > .cv, .msg.ai .think.live:focus-visible > .cv { opacity: 1; }
@@ -1923,54 +1923,98 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    out past the clip with it. */
 .dagc .dgr .v.gov > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dagc .dgr .v.gov::after { content: '\2197'; flex: none; color: var(--faint); font-size: 10.5px; }
-/* The delivery seam: where a delegated run's result re-entered the flow. Two
-   things on the row and no more: which task, and how it went. The name is the
-   reading size rather than a mono label -- it is a sentence somebody wrote, not
-   an identifier -- and the verdict is a dot and one word, the same vocabulary a
-   task row uses, so "did it work" is answerable without reading either. */
-.sdlv { margin: 12px 0 2px; min-width: 0; font-size: 12px; color: var(--faint); }
-.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; }
-.sdlv .ic { width: 13px; height: 13px; flex: none; stroke: var(--faint); }
-/* Capped, with the whole of it in the tooltip: a long task sentence must not
-   push the verdict out of sight. */
+/* What the runtime opened rather than a person typed: a scheduled turn, a
+   delegated record's opening brief, a delegated result coming back. One
+   material for all of them, on the reader's side where a turn's opening
+   message stands -- the reply card's white, let through, so it reads as a
+   message without being mistaken for one the reader wrote (the reader's own is
+   ink) or for a reply (a reply is the solid card). */
+.msg.me[data-auto], .sdlv {
+  background: color-mix(in srgb, var(--ink) 66%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3);
+  box-shadow: inset 0 0 0 1px var(--ring-2); border: 0; color: var(--text);
+}
+/* Its own line above the sentence, sized to its words: the bubble is a bubble
+   again, and the chip is what heads it. */
+.transcript-auto {
+  display: flex; width: max-content; max-width: 100%; align-items: center; gap: 6px; margin-bottom: 6px;
+  padding: 3px 9px; border-radius: 8px; background: var(--raised); color: var(--muted);
+  font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap;
+}
+.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
+.transcript-auto:has(> .agent-mark) { padding-left: 4px; }
+.transcript-auto .agent-mark { width: 18px; height: 18px; border-radius: 5px; }
+.transcript-auto .agent-mark img { width: 12px; height: 12px; }
+/* A brief written in markdown is read as markdown; the bubble's pre-wrap is
+   for what a person typed. Set a little tighter than a reply: a brief is a list
+   of instructions to scan, and at the reply's measure its bullets drift apart. */
+.msg.me > .prose { white-space: normal; color: inherit; line-height: 1.65; }
+.msg.me > .prose li { line-height: 1.65; }
+.msg.me > .prose p { margin: 4px 0; }
+.msg.me[data-auto] .prose code { background: color-mix(in srgb, var(--text) 7%, transparent); }
+/* Where an upstream node's output was fenced into the brief: the two marker
+   lines, quieter than the text between them. */
+.transcript-untrusted { font-family: var(--mono); font-size: .86em; color: var(--muted); }
+
+/* A delegated result, re-entering the conversation (TranscriptPage.tsx's
+   DeliveredView): who sent it, the task it was given -- a door to the run --
+   how it went, and what came back folded under a hairline. The secondary words
+   are the muted grey rather than the faint one: on this ground the faint grey
+   falls under 3:1. A verdict's colour rides on its dot, never on its word. */
+.turn.transcript-dlv { max-width: 72%; }
+.turn.transcript-dlv:has(> .sdlv.open) { max-width: 88%; }
+.sdlv { min-width: 0; padding: 10px 14px 11px; border-radius: 12px; font-size: 12px; line-height: 20px; }
+.transcript-dlv-from {
+  display: flex; width: max-content; max-width: 100%; align-items: center; gap: 6px; margin-bottom: 7px;
+  padding: 3px 10px 3px 4px; border-radius: 8px; background: var(--raised); color: var(--muted);
+  font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.transcript-dlv-from .agent-mark { width: 18px; height: 18px; border-radius: 5px; }
+.transcript-dlv-from .agent-mark img, .transcript-dlv-from .agent-mark svg { width: 12px; height: 12px; }
+.transcript-dlv-glyph {
+  width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 5px;
+  background: var(--ink); color: var(--muted);
+}
+.transcript-dlv-glyph svg { width: 12px; height: 12px; }
+/* The task, whole in the tooltip: a long sentence must not push the line that
+   says how it went out of sight. */
 .sdlv .nm {
-  font: inherit; font-size: 12.5px; color: var(--text);
-  padding: 0; border: 0; background: none; cursor: pointer; border-radius: 4px;
-  min-width: 0; max-width: min(340px, 60%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: block; max-width: 100%; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: var(--fs-body); line-height: 24px; color: var(--chat-ink); text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .sdlv .nm:hover {
-  color: var(--amber); text-decoration: underline; text-underline-offset: 3px;
-  text-decoration-color: color-mix(in oklab, var(--amber) 55%, transparent);
+  text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--text) 35%, transparent);
 }
+.sdlv .sdhd { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 22px; margin-top: 3px; color: var(--muted); }
 .sdlv .st { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
 .sdlv .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
 .sdlv.good .st .dot { background: var(--moss); }
-.sdlv.bad .st { color: var(--muted); }
 .sdlv.bad .st .dot { background: var(--muted); }
-.sdlv.warn .st { color: var(--gold); }
 .sdlv.warn .st .dot { background: var(--gold); }
-.sdlv.dim .st { color: var(--faint); }
-/* What came back, folded. It is the sub-agent's words, not Raven's, so the
-   fold sets them apart as a block of their own -- and the caption inside says
-   what they are, which is the text that entered the turn rather than a
-   retelling of it. */
+/* One cell per node, in the order the receipt counts them. */
+.transcript-dlv-bar { display: inline-flex; gap: 2px; flex: none; }
+.transcript-dlv-bar i { width: 14px; height: 4px; border-radius: 2px; background: var(--moss); }
+.transcript-dlv-bar i[data-tone="bad"] { background: var(--muted); }
+.transcript-dlv-bar i[data-tone="no"] { background: var(--line); }
+.transcript-dlv-tally, .transcript-dlv-span { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .sdlv .sdcv {
   display: inline-flex; align-items: center; gap: 1px; flex: none; margin-left: auto;
-  font: inherit; font-size: 11.5px; color: var(--faint);
+  font: inherit; font-size: 12px; color: var(--muted);
   padding: 2px 3px 2px 9px; border-radius: 999px; cursor: pointer;
 }
-.sdlv .sdcv:hover { color: var(--muted); background: var(--hover); }
+.sdlv .sdcv:hover { color: var(--text); background: color-mix(in srgb, var(--text) 6%, transparent); }
 .sdlv .sdcv .cv { width: 12px; height: 12px; transition: transform .15s; }
 .sdlv.open .sdcv .cv { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
+/* What came back, under a hairline inside the bubble rather than in a box of
+   its own: the bubble is already the frame. */
 .sdlv .sdbd {
-  margin: 8px 0 4px 21px; padding: 10px 14px 12px; border-radius: 10px;
-  background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring);
-  min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
+  margin-top: 11px; padding-top: 11px; min-width: 0; max-height: min(50vh, 32rem); overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
 }
-.sdlv .sdbd .cap {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--faint); margin: 12px 0 4px;
-}
+.sdlv .sdbd .cap { font-size: 11.5px; line-height: 16px; color: var(--muted); margin: 12px 0 4px; }
 .sdlv .sdbd .cap:first-child { margin-top: 0; }
 .sdlv .sdbd .raw {
   margin: 0; font-family: var(--mono); font-size: 11px; line-height: 1.6;
@@ -1979,24 +2023,29 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .sdlv .sdbd .prose { font-size: 13px; color: var(--text); line-height: 1.7; }
 .sdlv .sdbd .prose p { margin: 0 0 6px; }
 .sdlv .sdbd .prose p:last-child { margin-bottom: 0; }
-
-/* A turn the runtime opened, on the reader's own side: outlined rather than
-   filled, because nobody typed it. Under the chip is the reader's own sentence
-   and nothing else -- the rest of the entry is wording for the model
-   (raven/agent/loop/_shared.py) -- and an origin whose reminder nothing reads
-   leaves the chip standing alone. */
-.msg.me[data-auto] {
-  background: transparent; color: var(--text); box-shadow: none; border: 1px dashed var(--line);
+/* A graph's node lines: the node, how it ended, and where its output went or
+   why there is none. Rows are `display: contents`, so the three columns line
+   up across every node. */
+.transcript-dlv-nodes {
+  display: grid; grid-template-columns: max-content max-content minmax(0, 1fr); gap: 4px 14px;
+  margin: 2px 0 10px; font-size: 12px; line-height: 18px; color: var(--muted);
 }
-/* Its own line above the sentence, sized to its words: the bubble is a bubble
-   again, and the chip is what heads it. */
-.transcript-auto {
-  display: flex; width: max-content; align-items: center; gap: 6px; margin-bottom: 6px;
-  padding: 3px 9px; border-radius: 8px; background: var(--surface); color: var(--muted);
-  font-size: 12px; font-weight: 500;
+.transcript-dlv-nodes > div { display: contents; }
+.transcript-dlv-nodes > div > span:first-child {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0;
+  font-family: var(--mono); font-size: 11.5px; color: var(--text);
 }
-.transcript-auto svg { width: 12px; height: 12px; flex: none; color: var(--amber); }
-@media (prefers-reduced-motion: reduce) { .sdlv .sdcv .cv { transition: none; } }
+.transcript-dlv-nodes > div > span:first-child::before {
+  content: ''; width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--moss);
+}
+.transcript-dlv-nodes > div[data-st="bad"] > span:first-child::before { background: var(--muted); }
+.transcript-dlv-nodes > div[data-st="no"] > span:first-child::before { background: var(--line); }
+.transcript-dlv-nodes > div > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The run directory the table's relative output paths hang off. */
+.transcript-dlv-rundir {
+  margin: -6px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 18px;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ── the turn's products ──────────────────────────────────────────────
    What a turn delivered, as the design lays it out (Figma: Raven /
@@ -3733,14 +3782,19 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
 /* The panel body stops scrolling so the transcript can: two nested scrollers
    both taking the wheel is how a reader loses their place. */
 .ws-body[data-view="agents"] { display: flex; flex-direction: column; overflow: hidden; }
-.satx { flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px; }
-/* The pane is a run's record beside the conversation, not the conversation:
-   it reads at the body's size throughout. Its segments are the conversation's
-   own, but drawn without the reply's card, so the answer and its markdown stay
-   at their base sizes there while every rule that reads --fs-body unscoped --
-   the user's bubble, the trail, the composer -- would step up past them.
-   Restating the token here, rather than scoping each of those rules, keeps a
-   reader added later from stepping the pane up again. */
+/* One delegated run's record, laid out as the conversation lays itself out (the
+   transcript island's AgentStageView): a column of the same rows with one gap
+   between them, the reply cards white on the conversation's own wash -- on a
+   white pane a white card has no edge to read. */
+.satx {
+  flex: 1; min-height: 0; overflow: auto; padding: 14px 16px 20px;
+  display: flex; flex-direction: column; gap: 12px; background: var(--wash);
+}
+/* The pane is a run's record beside the conversation, not the conversation: it
+   reads one step under the conversation's body size throughout. Restating the
+   token here, rather than scoping each rule that reads it -- the bubble, the
+   card, the trail, the composer -- keeps a reader added later from stepping the
+   pane back up. */
 .satx, .instance-dock { --fs-body: 14px; }
 /* Carrying the conversation on, below the transcript rather than inside its
    scroller: an input that scrolls away with the history is one the reader has
@@ -3760,7 +3814,12 @@ html[data-traj] #trajHost > * { position: relative; z-index: 1 }
    the prose beside them sat in a centred column. The chat does this with one
    `.col` wrapper; a stage box has no wrapper to put it on, so the measure goes
    on the rows. */
-.satx > [data-tsl] > * { max-width: min(var(--col), 100%); margin-left: auto; margin-right: auto; }
+.satx > [data-tsl] > * { flex: none; width: 100%; max-width: var(--col); margin-left: auto; margin-right: auto; }
+/* What opened a turn stands on the reader's side of that column: its right
+   edge is the column's, wherever the centred column sits in a wide pane. */
+.satx > [data-tsl] > .turn.me {
+  width: auto; max-width: min(88%, var(--col)); margin-right: max(0px, calc((100% - var(--col)) / 2));
+}
 /* Which agent ran it. Absent on a raven sub-agent, where the name is still the
    answer, so the row never leaves it unsaid. */
 .sarow .st .who, .sahd .trow .who {
@@ -6735,14 +6794,24 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .desk-pane-body > .diff { min-height: 100%; }
 .desk-pane-body > .fwrap { height: 100%; }
 .instance-conversation { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; }
+/* The wash on the pane rather than on its scroller, the way the conversation
+   keeps it on `.main` rather than `.scroll`: the fade under the composer takes
+   the alpha out of the scroller, and a wash on the scroller would fade with it,
+   leaving the pane's white band behind. */
+.instance-conversation { background: var(--wash); }
+.instance-conversation .satx { flex: 1; min-height: 0; overflow-y: auto; background: none; }
 /* Room for the composer, and the glass the transcript scrolls under -- but only
    where there IS one. A finished node's record has nothing to type into, and
    reserving the composer's 150px there left a blank band under its last line
    that read as the answer having been cut off. */
-.instance-conversation[data-composer="true"] .satx { padding-bottom: 176px; }
-.instance-conversation[data-composer="true"]::after { content: ''; position: absolute; z-index: 4;
-  left: 0; right: 0; bottom: 0; height: 140px; pointer-events: none; background: var(--ink); }
+.instance-conversation[data-composer="true"] .satx { padding-bottom: 176px; --glass: 140px; }
+/* The record stops being painted before it reaches the composer, the way the
+   conversation's own scroller does (see .scroll): a band painted over it would
+   have to match the wash behind it, and a flat band on a gradient is a seam. */
+.instance-conversation[data-composer="true"] .satx {
+  -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - var(--glass) - 32px), transparent calc(100% - var(--glass)));
+  mask-image: linear-gradient(180deg, #000 calc(100% - var(--glass) - 32px), transparent calc(100% - var(--glass)));
+}
 .instance-dock { bottom: calc(18px - var(--desk-pad)); }
 .instance-dock.sasend { display: block; padding: 0 22px; border-top: 0; }
 /* The page's own composer, one size down and one step quieter -- and nothing
@@ -6768,8 +6837,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 .instance-qrow button { width: 20px; height: 20px; flex: none; border: 0; background: transparent; color: var(--faint); cursor: pointer; }
 
 @container desk-pane (max-height: 720px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 148px; }
-  .instance-conversation[data-composer="true"]::after { height: 118px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 148px; --glass: 118px; }
   .instance-dock { bottom: 8px; }
   .instance-dock.sasend { padding: 0 12px; }
   .instance-dock .dock-in { padding: 8px 10px; border-radius: 14px; }
@@ -6780,8 +6848,7 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 }
 
 @container desk-pane (max-height: 500px) {
-  .instance-conversation[data-composer="true"] .satx { padding-bottom: 120px; }
-  .instance-conversation[data-composer="true"]::after { height: 94px; }
+  .instance-conversation[data-composer="true"] .satx { padding-bottom: 120px; --glass: 94px; }
   .instance-dock { bottom: 6px; }
   .instance-dock.sasend { padding: 0 8px; }
   .instance-dock .dock-in { padding: 6px 8px; border-radius: 12px; }
@@ -7710,81 +7777,16 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
   box-shadow: var(--elev); padding: 14px 15px 16px; margin-top: 0; overflow: hidden;
   align-content: start;
 }
+/* A node's record (features/tasks/styles.css's `.tkrecord`) on the
+   conversation's own wash, the whole pane body rather than a
+   panel inside it: a white card on a white pane has no edge to read, and a
+   tinted box around the cards would be one frame too many. Docked, that is the
+   view; full screen, the node's own framed column beside the board. */
+.tkview:not(.full):has(.tkrecord),
+.tkwork .tkcard:has(.tkrecord) {
+  background: var(--wash);
+}
 
-/* ── one node's conversation ───────────────────────────────────────────
-   Covers the detail card rather than sitting beside it: it is the same node,
-   read at a different depth, and two panels about one step is one too many.
-   No input anywhere in here -- the record is read, not continued. This
-   reuses the transcript's own vocabulary for a turn (proto.css says as
-   much): a right-aligned bubble is what was said TO this node, and its own
-   actions and timestamp show only on hover, the way a turn's do -- at rest
-   a message is only its words. */
-.tkdisp { display: flex; flex-direction: column; align-items: flex-end; margin: 4px 0; }
-.tkdispb { max-width: 82%; background: var(--raised); border-radius: 15px 15px 4px 15px;
-  padding: 9px 15px; font-size: 13.5px; line-height: 1.6; color: var(--text);
-  white-space: pre-wrap; overflow-wrap: break-word; }
-/* A mask fades the tail rather than cutting it at a line count -- the clamp
-   reads as "this continues", not as "this ended here". */
-.tkdispb.tkclamp { max-height: 20em; overflow: hidden;
-  -webkit-mask-image: linear-gradient(180deg, #000 70%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 70%, transparent 100%); }
-/* Only the fence markers are set apart -- the injected body between them
-   stays ordinary bubble text, read as prose rather than re-typeset as
-   machinery. */
-.tkuntrusted { color: var(--faint); }
-.tkmore { margin-top: 6px; background: none; border: 0; padding: 0;
-  font-size: 11.5px; color: var(--muted); cursor: pointer; }
-.tkmore:hover { color: var(--text); }
-/* A dispatch's or an answer's footer: a small icon-only copy action and the
-   timestamp it went out or came back at -- shown on hover or focus, not
-   permanently. */
-.tkansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px;
-  opacity: 0; transition: opacity .12s; }
-.tkdisp:hover .tkansfoot, .tkdisp:focus-within .tkansfoot,
-.tkanswer:hover .tkansfoot, .tkanswer:focus-within .tkansfoot {
-  opacity: 1;
-}
-.tkfootcopy { display: grid; place-items: center; width: 22px; height: 22px;
-  border-radius: 6px; color: var(--faint); }
-.tkfootcopy:hover { color: var(--text); background: var(--surface); }
-.tkfootcopy svg { width: 13px; height: 13px; }
-.tkturnmeta { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
-
-/* A bare fold line with a hairline under the whole of it (fold and body
-   alike), and a rotating chevron rather than a swapped glyph -- the
-   prototype's own `.tfold` / `.tfh` / `.cv`, not a bordered box. */
-.tkproc { margin: 14px 0 12px; }
-.tkproc::after { content: ""; display: block; height: 1px; background: var(--line); }
-.tkprock { display: flex; align-items: center; gap: 7px; width: fit-content; max-width: 100%;
-  text-align: left; background: none; border: 0; padding: 3px 8px; margin: 0 -8px 6px;
-  border-radius: 7px; font-size: 13px; color: var(--faint); cursor: pointer; }
-.tkprock:hover { color: var(--text); }
-.tkprocn { color: var(--faint); font-family: var(--mono); font-size: 11px; }
-.tkchev { flex: none; width: 11px; height: 11px; color: var(--faint); transition: transform .16s ease; }
-.tkprock[aria-expanded="true"] .tkchev { transform: rotate(90deg); }
-.tkprocb { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-.tkthink { display: flex; flex-direction: column; }
-.tkthink .tkthh { display: flex; align-items: center; gap: 7px; width: fit-content;
-  background: none; border: 0; padding: 0; font-size: 11.5px; color: var(--faint); cursor: pointer; }
-.tkthink .tkthh:hover { color: var(--text); }
-/* The thinking label shimmers while the thought is still live -- a gradient
-   sweep clipped to the text, with a static fallback under reduced motion. */
-.tkthink.live .tkthlb {
-  background: linear-gradient(90deg, var(--muted) 30%, var(--text) 50%, var(--muted) 70%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: tkthshine 1.7s linear infinite;
-}
-@keyframes tkthshine { to { background-position: -200% 0; } }
-@media (prefers-reduced-motion: reduce) {
-  .tkthink.live .tkthlb { animation: none; color: var(--faint); }
-}
-.tkthink blockquote { margin: 5px 0 0; padding-left: 10px;
-  border-left: 2px solid var(--line); font-size: 12px; line-height: 1.7;
-  color: var(--muted); }
-.tkans { font-size: 12.5px; line-height: 1.8; color: var(--text); white-space: pre-wrap; }
 /* Where the answer would be, when the run stopped instead of answering. */
 .tkstop { font-size: 12px; line-height: 1.7; color: var(--muted);
   background: var(--surface); border-radius: 8px; padding: 9px 11px; }

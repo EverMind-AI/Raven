@@ -48,8 +48,10 @@ describe('the tasks seam installSources grows', () => {
 
   /* The card's task cell and the delivered row both read this verb off the
      seam, so a page that forgot to put it there would draw two doors that open
-     nothing -- and neither renderer test can see the wiring. */
-  it('puts the run opener on the transcript seam', async () => {
+     nothing -- and neither renderer test can see the wiring. The task pane's
+     context tab reads `stagePaint` the same way: a page that forgot it draws a
+     record as an empty box. */
+  it('puts the run opener and the record painter on the transcript seam', async () => {
     const wiring = await harness()
     const { setSources, sources } = await import('../state/sources')
     setSources({ composer: { slash: [] } } as unknown as Partial<Sources>)
@@ -57,6 +59,7 @@ describe('the tasks seam installSources grows', () => {
     wiring.installSources()
 
     expect(typeof sources.transcript!.openDagRun).toBe('function')
+    expect(typeof sources.transcript!.stagePaint).toBe('function')
   })
 
   it('opens the desk task a spawn node id resolves to, and answers false otherwise', async () => {
@@ -74,7 +77,7 @@ describe('the tasks seam installSources grows', () => {
     wiring.installSources()
     const { set: setTasks } = await import('../features/tasks/store')
     setTasks({
-      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {}, folds: {},
+      rows: [row], loaded: true, nodes: {}, tabByPane: {}, nodeVersions: {},
       board: null, lineage: {}, boardLoaded: false, focus: null, moveOn: null,
     })
 

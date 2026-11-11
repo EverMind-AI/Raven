@@ -54,7 +54,7 @@ function wire(): void {
     subagents: { list: async () => [], instances: async () => agentRows },
     tasks: {
       list: async () => taskRows, one: async () => null, stop: async () => false,
-      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false }),
+      node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),
       roster: async () => [],
     },
   })

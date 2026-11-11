@@ -974,7 +974,13 @@ export function paintDag(box: HTMLElement, it: { run_id: string; node: string })
       paintedStatus = row ? row.status || null : null
       src.stagePaint?.(
         box,
-        { messages: (n && n.messages) || [], status: row ? row.status : null },
+        {
+          messages: (n && n.messages) || [],
+          status: row ? row.status : null,
+          /* The run list's node row carries the node's own clock, as ISO strings. */
+          started_at: row?.started_at,
+          ended_at: row?.ended_at,
+        },
         { key: `dag:${it.run_id}:${it.node}`, empty: t('gui.dag.node_empty'), reset: stageFresh },
       )
       stageFresh = false
