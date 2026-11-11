@@ -597,3 +597,13 @@ def test_an_equal_carried_oauth_definition_keeps_its_playbook_scope() -> None:
         folded = source.server("pg")
         assert folded.scope is None
         assert folded.state == "connected"
+
+
+def test_cli_projection_carries_the_servers_provenance_marker() -> None:
+    """The marker survives the child hand-off because the dump does not exclude it."""
+    config = MCPServerConfig(command="mcp-files", cwd="/srv/package", source="package")
+    source = _Source({"files": _view("files", config)})
+
+    grant = resolve_grant(["files"], source, raven_cli_target(allow_secrets=True))
+
+    assert grant.for_child_config()["mcpServers"]["files"]["source"] == "package"
