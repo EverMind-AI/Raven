@@ -744,7 +744,7 @@ button.settings-xname {cursor:pointer}
 .settings-apall:hover {color:var(--text)}
 .settings-apall:hover .settings-aptick {border-color:var(--muted)}
 .settings-apall[aria-checked="true"] .settings-aptick,
-.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-apall[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-amber)}
 .settings-apm {display:flex; align-items:center; gap:9px; width:100%; min-width:0; text-align:left; font:inherit; font-size:14px; background:none; border:0; color:var(--text); padding:6px 8px; border-radius:7px; cursor:pointer}
 .settings-apm:hover {background:var(--surface)}
 /* A tick box: the list is a selection, and the footer commits it. The glyph
@@ -757,7 +757,7 @@ button.settings-xname {cursor:pointer}
 .settings-apm:hover .settings-aptick,.settings-mgroup:hover .settings-aptick {border-color:var(--muted)}
 .settings-apm[aria-checked="true"] .settings-aptick,
 .settings-mgroup[aria-checked="true"] .settings-aptick,
-.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-accent)}
+.settings-mgroup[aria-checked="mixed"] .settings-aptick {background:var(--amber); border-color:var(--amber); color:var(--ink-on-amber)}
 .settings-apnm {flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:13px}
 .settings-apsd {font-family:var(--sans); font-size:11.5px; color:var(--faint); flex:none}
 .settings-apadd {color:var(--gold)}

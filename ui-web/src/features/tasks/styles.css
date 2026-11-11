@@ -1025,7 +1025,7 @@
   cursor: pointer;
 }
 .tkaskbtn:hover { border-color: var(--faint); }
-.tkaskbtn[data-kind="answer"] { border-color: var(--amber); background: var(--amber); color: var(--ink-on-accent); }
+.tkaskbtn[data-kind="answer"] { border-color: var(--amber); background: var(--amber); color: var(--ink-on-amber); }
 .tkaskbtn[data-kind="answer"]:hover { border-color: var(--amber-dp); background: var(--amber-dp); }
 /* The card's foot, under the head and outside it: the meta, the counters,
    and Move on at the right. */

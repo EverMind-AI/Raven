@@ -49,7 +49,7 @@
 .export-btn { font: inherit; font-size: 13.5px; padding: 7px 18px; border-radius: 8px; cursor: pointer; }
 .export-btn:focus-visible { outline: 2px solid var(--warm); outline-offset: 2px; }
 .export-btn:disabled { opacity: .4; cursor: not-allowed; }
-.export-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-accent); font-weight: 600; }
+.export-primary { border: 1px solid var(--amber); background: var(--amber); color: var(--ink-on-amber); font-weight: 600; }
 .export-primary:not(:disabled):hover { filter: brightness(1.05); }
 .export-ghost { border: 1px solid var(--line); background: none; color: var(--muted); }
 .export-ghost:not(:disabled):hover { color: var(--text); border-color: var(--amber); }

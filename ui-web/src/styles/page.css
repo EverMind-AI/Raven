@@ -14,24 +14,24 @@
      is drawn for a light ground, so the dark theme dims the plate and keeps it
      light rather than recolouring what sits on it. */
   --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
-  --surface:  #f7f7f7;
-  --raised:   #f0f0f0;
-  --line:     #e7e7e7;
-  --line-soft:#f0f0f0;
-  --text:     #1f1f1f;
-  --muted:    #6b6b6b;
-  --faint:    #9d9d9d;
+  --surface:  #f8f5ec;
+  --raised:   #f1f0ec;
+  --line:     #e8e1d2;
+  --line-soft:#f0ebe0;
+  --text:     #2b2620;
+  --muted:    #6f675c;
+  --faint:    #9d9587;
   --link:     #3b6fd4;
-  --amber:    #a8801c;
-  --amber-dp: #eee4c8;
+  --amber:    #b5791c;
+  --amber-dp: #f1e3c4;
   /* The warm yellow this palette speaks in: the ring that marks a selected
      item, and the accent on the data marks. It is a token of its own because
      --amber is also the error colour and the focus ring, and those two want
      the deeper, more legible shade. */
-  --warm: #e8b317;
+  --warm: #e0a63a;
   --moss:     #3f7d2c;
   --clay:     #b4402f;
-  --gold:     #9a7016;
+  --gold:     #9a6516;
   --sky:      #2f6d9e;
 
   /* The context parts' colours, from the Raven palette's mist theme: slate and
@@ -64,15 +64,15 @@
      against a warm workspace reads as two applications. So the whole dark ramp
      is neutral now, which is what moves --ink, --surface, --raised, --line and
      the three text greys below as well as the names introduced here. */
-  --page:     #fafaf8;   /* the ground a module page is read on */
+  --page:     #fbf9f4;   /* the ground a module page is read on */
   /* The chat header's frost ground and the halo its controls sit on. The tint
      is deliberately weak: the transcript underneath has to stay visible as
      colour and shape, the way a title bar shows the window behind it. The halo
      is what keeps the name and the corner icons legible when a dark bubble
      passes under them, so the tint does not have to. */
-  --topbar-tint: rgba(250, 250, 248, .3);
-  --topbar-halo: rgba(255, 255, 255, .75);
-  --topbar-plate: rgba(250, 250, 248, .82);
+  --topbar-tint: rgba(253, 251, 245, .3);
+  --topbar-halo: rgba(255, 253, 248, .75);
+  --topbar-plate: rgba(253, 251, 245, .82);
   /* One height and one radius for a row of controls, and the focus glow that
      goes with the focused edge (the control standard above input[type]). */
   --ctl-h: 32px;
@@ -90,10 +90,10 @@
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
     radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
     linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
-  --side-bg:  #ffffff;   /* the rail, one step lighter than the page */
+  --side-bg:  rgba(253, 252, 249, .84);   /* the rail: a pale pane the wash barely shows through */
   --paper:    #ffffff;   /* a card laid on the page: an answer, a sheet */
-  --hover:    #ececea;   /* a row the pointer is on */
-  --selected: #eaeae7;   /* a row that is the one open */
+  --hover:    #f1ece0;   /* a row the pointer is on */
+  --selected: #ece5d6;   /* a row that is the one open */
   /* The trajectory's sheet. The column carries the conversation's own wash
      behind it (--wash), so the trace is read on the same light the transcript
      is; the glass is what separates the sheet from the rail. */
@@ -104,17 +104,17 @@
   --traj-hover:  rgba(255, 255, 255, .52);
   --traj-rule:   rgba(31, 35, 40, .12);
   --traj-solid:  #fbfaf8;
-  --text-3:   #8a8a88;   /* a group label: quieter than muted, louder than faint */
+  --text-3:   #8a8275;   /* a group label: quieter than muted, louder than faint */
   /* The rail's own row ramp, from the design (Figma: Raven / AppSidebar): a
      label, the same label on a hovered or open row, the quiet grey of a group
      heading and an idle row action, and the two grounds a row steps through. */
-  --rail-ink:    #333333;
-  --rail-ink-on: #1a1a1a;
-  --rail-quiet:  #999999;
-  --rail-hover:  #f7f7f7;
-  --rail-on:     #f0f0f0;
-  --rail-tip:    #1a1a1a;
-  --rail-tip-ink: #ffffff;
+  --rail-ink:    #3b342a;
+  --rail-ink-on: #2b2620;
+  --rail-quiet:  #9d9587;
+  --rail-hover:  rgba(181, 121, 28, .06);
+  --rail-on:     rgba(255, 255, 253, .95);
+  --rail-tip:    #2b2620;
+  --rail-tip-ink: #fdfbf5;
   /* The settings dialog's nav, and the composer card and its bar (Figma: Raven
      / ChatComposer, SendButton). */
   --snav-bg:        #fafafa;
@@ -123,19 +123,19 @@
   --composer-bg:    rgba(255, 255, 255, .8);
   --composer-line:  #e6e6e6;
   --composer-sh:    rgba(0, 0, 0, .08);
-  --composer-ink:   #1a1a1a;
-  --composer-ph:    #908f8c;
+  --composer-ink:   #2b2620;
+  --composer-ph:    #9d9587;
   --composer-hover: #f7f7f7;
   --att-bg:         #f0f0f0;
-  --send-off:       #bdbbb8;
-  --send-off-ink:   #faf9f5;
-  --send-on:        #1a1a1a;
-  --send-on-ink:    #ffffff;
-  --ph:       #b8b8b8;   /* placeholder text in a field */
+  --send-off:       rgba(160, 150, 130, .45);
+  --send-off-ink:   #fdfbf5;
+  --send-on:        #2b2620;
+  --send-on-ink:    #fdfbf5;
+  --ph:       #bdb5a6;   /* placeholder text in a field */
   /* The one high-contrast pair on the page: the send button, and the message
      the reader wrote. Both invert in dark, which is why they are tokens and
      not literals. */
-  --black:    #111111;
+  --black:    #2b2620;
   --bubble-me:    #333333;
   --bubble-me-fg: #ffffff;
   /* The conversation's own ramp (Figma: Raven / UserMessage, AssistantMessage,
@@ -144,15 +144,15 @@
      the design's danger red, the half-pixel rule and head ground a table or a
      listing is boxed in, the two greys of a delivered file's name and size,
      and the tag a sent file wears inside the bubble. */
-  --chat-ink:       #1a1a1a;
-  --chat-quiet:     #999999;
+  --chat-ink:       #2b2620;
+  --chat-quiet:     #9d9587;
   --chat-shine:     #e6e6e6;
   --chat-danger:    #d84520;
   --chat-rule:      #e0e0e0;
   --chat-head:      #f7f7f7;
-  --chat-head-ink:  #666666;
-  --chat-file-ink:  #333333;
-  --chat-file-meta: #908f8c;
+  --chat-head-ink:  #6f675c;
+  --chat-file-ink:  #3b342a;
+  --chat-file-meta: #9d9587;
   --bubble-att:     rgba(255, 255, 255, .2);
   --bubble-att-on:  rgba(255, 255, 255, .3);
   --bubble-att-ink: #f0f0f0;
@@ -167,14 +167,14 @@
   --code-deleted:   #d84520;
   /* A card is lifted by a shadow in light and by a brighter rim in dark -- the
      same job, two drawings -- so the rule names these and never a colour. */
-  --ring:     rgba(0, 0, 0, .03);
-  --ring-2:   rgba(0, 0, 0, .05);
-  --sh-soft:  rgba(0, 0, 0, .06);
+  --ring:     rgba(60, 50, 30, .05);
+  --ring-2:   rgba(60, 50, 30, .08);
+  --sh-soft:  rgba(60, 45, 20, .07);
   --seg-on:   #ffffff;   /* the selected half of a segmented control */
   --shadow:   0 14px 34px -22px rgba(28, 27, 25, .35);
   /* Card elevation, two steps: resting and lifted. A tight contact shadow
      plus a wide low-alpha bloom -- paper raised off the desk, not a glow. */
-  --elev:     0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
+  --elev:     0 1px 2px rgba(60, 45, 20, .05), 0 6px 16px -10px rgba(60, 45, 20, .14);
   --elev-up:  0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
   /* The workspace panel shares the chat's white; this soft spill at its left
      edge is the whole boundary. Two layers: a 4% contact edge where the
@@ -183,10 +183,10 @@
 
   /* ---- the settings dialog: warm paper --------------------------------
      The settings dialog is the one place a reader stops to think, so it is
-     the one place the page is allowed to feel like a room rather than a
-     console. These tokens are its own ground, its own ink and its own
-     accent; the page's neutrals stay cold so that arriving here reads as a
-     change of room.
+     solid paper where the page around it is glass. These tokens are its own
+     ground, its own ink and its own accent; the page shares the ink and the
+     gold, so arriving here reads as stepping from a glass room into a paper
+     one of the same house.
 
      The light set is parchment: a warm off-white sheet, a warmer rail beside
      it, and a single gold accent that carries every "this is on" and "this
@@ -275,6 +275,25 @@
      keep literal colors on purpose (theme-preview swatches, mask gradients,
      structural color-mix) are marked literal-by-design at the rule. */
   --ink-on-accent: #fff;
+
+  /* The page is frosted glass over the wash. The rail and the desk are warm
+     panes, so the gradient reads as the room's light rather than as a picture
+     behind white boxes; what is read and typed -- the answer cards, the
+     composer, your own bubble, and every card or sheet laid on --paper, the
+     context popover among them -- stays neutral white (black in the dark),
+     because a warm pane over a warm wash reads as a yellow film over the
+     words. The ink is the settings dialog's warm one throughout.
+     --ink-on-amber is the text on an amber fill; it is dark in the dark theme,
+     where the lit amber is too light for white. */
+  --ink-on-amber: #fff;
+  --rail-edge: rgba(255, 255, 255, .6);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
+  --card-glass: rgba(255, 255, 255, .8);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .8), 0 0 0 1px rgba(0, 0, 0, .03), 0 12px 30px -24px rgba(0, 0, 0, .22);
+  --desk-glass: rgba(254, 253, 250, .86);
+  --desk-edge: rgba(255, 255, 255, .7);
+  --desk-sh: inset 0 1px 0 rgba(255, 255, 255, .7), 0 30px 70px -34px rgba(60, 45, 20, .45), 0 2px 6px rgba(60, 45, 20, .06);
+  --desk-board: rgba(240, 234, 222, .25);
   --paper: #fff;
   --stage-bg: #fff;
   --scrim-soft: #0006;
@@ -335,15 +354,15 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --ink:      #1d1d1d;
+    --ink:      #1a1713;
     --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
-    --surface:  #262626;
-    --raised:   #303030;
-    --line:     #333333;
-    --line-soft:#282828;
-    --text:     #e8e8e6;
-    --muted:    #afafad;
-    --faint:    #8a8a88;
+    --surface:  #211d18;
+    --raised:   #2e2d2a;
+    --line:     #2f2a23;
+    --line-soft:#25211b;
+    --text:     #f1e9da;
+    --muted:    #a2988a;
+    --faint:    #7c7367;
 
     /* The settings dialog under a lamp: the same warm room the light set is,
        lit from one corner. The black is a warm near-black rather than the
@@ -369,12 +388,12 @@
     --set-go:       var(--set-accent);
     --set-go-ink:   #241b0c;
     --link:     #86abe4;
-    --amber:    #e8cf49;
-    --amber-dp: #6f6114;
-    --warm: #f5c518;
+    --amber:    #e9b44c;
+    --amber-dp: #c99a3c;
+    --warm: #f5c46a;
     --moss:     #7fbf6a;
     --clay:     #d96a5b;
-    --gold:     #e0a030;
+    --gold:     #e9b44c;
     --sky:      #6fa8d6;
 
     /* The context parts' colours in the dark: the same roles with the ladder
@@ -391,15 +410,21 @@
     --ctx-chip: #2c3136;
 
     /* The dark counterparts of the light block's surfaces -- see there. */
-    --page:     #141414;
-    --topbar-tint: rgba(20, 20, 20, .3);
+    --page:     #13110e;
+    --topbar-tint: rgba(20, 17, 13, .3);
     --topbar-halo: rgba(0, 0, 0, .65);
-    --topbar-plate: rgba(20, 20, 20, .8);
-    --wash:     linear-gradient(180deg, #151515, #121212);
-    --side-bg:  #333333;
+    --topbar-plate: rgba(30, 26, 21, .66);
+    /* The light theme's wash, dimmed: a cold blue in the top-right and the
+       lamp's amber in the bottom-left, so the glass has a light to frost. */
+    --wash:
+      radial-gradient(60% 55% at 85% 0%, rgba(62, 84, 122, .42) 0%, rgba(62, 84, 122, 0) 70%),
+      radial-gradient(55% 50% at 20% 100%, rgba(126, 88, 30, .34) 0%, rgba(126, 88, 30, 0) 70%),
+      radial-gradient(40% 45% at 70% 90%, rgba(100, 72, 32, .22) 0%, rgba(100, 72, 32, 0) 70%),
+      linear-gradient(180deg, #16130f 0%, #110f0c 100%);
+    --side-bg:  rgba(22, 19, 15, .6);
     --paper:    #202020;
-    --hover:    #242424;
-    --selected: #2e2e2e;
+    --hover:    #24201a;
+    --selected: #2b261f;
     --traj-glass:  rgba(34, 34, 34, .58);
     --traj-edge:   rgba(255, 255, 255, .07);
     --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
@@ -407,12 +432,12 @@
     --traj-hover:  rgba(255, 255, 255, .05);
     --traj-rule:   rgba(255, 255, 255, .10);
     --traj-solid:  #1c1c1c;
-    --text-3:   #9b9b9b;
-    --rail-ink:    #f7f7f7;
-    --rail-ink-on: #ffffff;
-    --rail-quiet:  #999999;
-    --rail-hover:  #474747;
-    --rail-on:     #474747;
+    --text-3:   #8f8578;
+    --rail-ink:    #e6dccb;
+    --rail-ink-on: #fbf5ea;
+    --rail-quiet:  #8f8578;
+    --rail-hover:  rgba(255, 225, 180, .05);
+    --rail-on:     rgba(255, 235, 200, .08);
     --rail-tip:    #1a1a1a;
     --rail-tip-ink: #ffffff;
     --snav-bg:        #262626;
@@ -421,27 +446,27 @@
     --composer-bg:    rgba(32, 32, 32, .85);
     --composer-line:  #333333;
     --composer-sh:    rgba(0, 0, 0, .45);
-    --composer-ink:   #e8e8e6;
-    --composer-ph:    #7a7a78;
+    --composer-ink:   #f1e9da;
+    --composer-ph:    #7c7367;
     --composer-hover: #2e2e2e;
     --att-bg:         #303030;
-    --send-off:       #4a4a4a;
-    --send-off-ink:   #8a8a88;
-    --send-on:        #e8e8e6;
-    --send-on-ink:    #1a1a1a;
-    --ph:       #6e6e6e;
-    --black:    #e8e8e6;
+    --send-off:       #38322a;
+    --send-off-ink:   #7c7367;
+    --send-on:        #e9b44c;
+    --send-on-ink:    #241b0c;
+    --ph:       #6f675c;
+    --black:    #f1e9da;
     --bubble-me:    #343434;
     --bubble-me-fg: #ededeb;
-    --chat-ink:       #e8e8e6;
-    --chat-quiet:     #8a8a88;
+    --chat-ink:       #f1e9da;
+    --chat-quiet:     #8f8578;
     --chat-shine:     #d6d6d4;
     --chat-danger:    #e0775e;
     --chat-rule:      #333333;
     --chat-head:      #262626;
-    --chat-head-ink:  #afafad;
-    --chat-file-ink:  #e8e8e6;
-    --chat-file-meta: #8a8a88;
+    --chat-head-ink:  #a2988a;
+    --chat-file-ink:  #f1e9da;
+    --chat-file-meta: #8f8578;
     --bubble-att:     rgba(255, 255, 255, .12);
     --bubble-att-on:  rgba(255, 255, 255, .2);
     --bubble-att-ink: #ededeb;
@@ -451,8 +476,8 @@
     --code-tag:       #7fb0f0;
     --code-comment:   #7a7a78;
     --code-deleted:   #e0775e;
-    --ring:     rgba(255, 255, 255, .07);
-    --ring-2:   rgba(255, 255, 255, .14);
+    --ring:     rgba(255, 225, 180, .07);
+    --ring-2:   rgba(255, 225, 180, .12);
     --sh-soft:  rgba(0, 0, 0, .5);
     --seg-on:   #333333;
     --shadow:   0 18px 40px -24px #000c;
@@ -460,6 +485,17 @@
     --elev-up:  0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
     --seam:     -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
     --scrim-detail: rgba(6, 6, 8, .55);
+
+    /* The page's glass, under the lamp: see the base block. */
+    --ink-on-amber: #241b0c;
+    --rail-edge: rgba(255, 225, 180, .06);
+    --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
+    --card-glass: rgba(29, 29, 29, .82);
+    --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .04), 0 0 0 1px rgba(255, 255, 255, .07), 0 16px 34px -24px rgba(0, 0, 0, .7);
+    --desk-glass: rgba(28, 24, 19, .74);
+    --desk-edge: rgba(255, 225, 180, .09);
+    --desk-sh: inset 0 1px 0 rgba(255, 235, 200, .05), 0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 90px -30px rgba(233, 180, 76, .12);
+    --desk-board: rgba(44, 39, 32, .45);
   }
 }
 
@@ -467,10 +503,10 @@
 :root[data-theme="dark"] {
   --stage-bg: #0e0e11;
   --mark-plate: #ecebe7; --mark-plate-line: #ecebe7;
-  --ink: #1d1d1d; --surface: #262626; --raised: #303030; --line: #333333;
-  --line-soft: #282828; --text: #e8e8e6; --muted: #afafad; --faint: #8a8a88;
-  --link: #86abe4; --amber: #e8cf49; --amber-dp: #6f6114; --warm: #f5c518; --moss: #7fbf6a;
-  --clay: #d96a5b; --gold: #e0a030; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
+  --ink: #1a1713; --surface: #211d18; --raised: #2e2d2a; --line: #2f2a23;
+  --line-soft: #25211b; --text: #f1e9da; --muted: #a2988a; --faint: #7c7367;
+  --link: #86abe4; --amber: #e9b44c; --amber-dp: #c99a3c; --warm: #f5c46a; --moss: #7fbf6a;
+  --clay: #d96a5b; --gold: #e9b44c; --sky: #6fa8d6; --shadow: 0 18px 40px -24px #000c;
 
   /* The settings dialog, same as the media query's: an explicit dark theme
      has to carry its own copy, because this block outranks that one -- and
@@ -506,57 +542,73 @@
   --ctx-ink-bg: #4a4538;
   --ctx-muted: #cdd6dc;
   --ctx-chip: #2c3136;
-  --page: #141414; --wash: linear-gradient(180deg, #151515, #121212);
-  --topbar-tint: rgba(20, 20, 20, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(20, 20, 20, .8);
-  --side-bg: #333333; --paper: #202020; --hover: #242424;
-  --selected: #2e2e2e; --text-3: #9b9b9b; --ph: #6e6e6e; --black: #e8e8e6;
+  --page: #13110e;
+  --wash:
+    radial-gradient(60% 55% at 85% 0%, rgba(62, 84, 122, .42) 0%, rgba(62, 84, 122, 0) 70%),
+    radial-gradient(55% 50% at 20% 100%, rgba(126, 88, 30, .34) 0%, rgba(126, 88, 30, 0) 70%),
+    radial-gradient(40% 45% at 70% 90%, rgba(100, 72, 32, .22) 0%, rgba(100, 72, 32, 0) 70%),
+    linear-gradient(180deg, #16130f 0%, #110f0c 100%);
+  --topbar-tint: rgba(20, 17, 13, .3); --topbar-halo: rgba(0, 0, 0, .65); --topbar-plate: rgba(30, 26, 21, .66);
+  --side-bg: rgba(22, 19, 15, .6); --paper: #202020; --hover: #24201a;
+  --selected: #2b261f; --text-3: #8f8578; --ph: #6f675c; --black: #f1e9da;
   --traj-glass: rgba(34, 34, 34, .58); --traj-edge: rgba(255, 255, 255, .07);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 60px -38px #000;
   --traj-line: rgba(255, 255, 255, .08);
   --traj-hover: rgba(255, 255, 255, .05);
   --traj-rule: rgba(255, 255, 255, .10); --traj-solid: #1c1c1c;
-  --rail-ink: #f7f7f7; --rail-ink-on: #ffffff; --rail-quiet: #999999;
-  --rail-hover: #474747; --rail-on: #474747; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --rail-ink: #e6dccb; --rail-ink-on: #fbf5ea; --rail-quiet: #8f8578;
+  --rail-hover: rgba(255, 225, 180, .05); --rail-on: rgba(255, 235, 200, .08); --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
   --snav-bg: #262626; --settings-nav-on: #333333; --settings-nav-ico: #999999;
   --composer-bg: rgba(32, 32, 32, .85); --composer-line: #333333; --composer-sh: rgba(0, 0, 0, .45);
-  --composer-ink: #e8e8e6; --composer-ph: #7a7a78; --composer-hover: #2e2e2e; --att-bg: #303030;
-  --send-off: #4a4a4a; --send-off-ink: #8a8a88; --send-on: #e8e8e6; --send-on-ink: #1a1a1a;
+  --composer-ink: #f1e9da; --composer-ph: #7c7367; --composer-hover: #2e2e2e; --att-bg: #303030;
+  --send-off: #38322a; --send-off-ink: #7c7367; --send-on: #e9b44c; --send-on-ink: #241b0c;
   --bubble-me: #343434; --bubble-me-fg: #ededeb;
-  --chat-ink: #e8e8e6; --chat-quiet: #8a8a88; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
-  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #afafad;
-  --chat-file-ink: #e8e8e6; --chat-file-meta: #8a8a88;
+  --chat-ink: #f1e9da; --chat-quiet: #8f8578; --chat-shine: #d6d6d4; --chat-danger: #e0775e;
+  --chat-rule: #333333; --chat-head: #262626; --chat-head-ink: #a2988a;
+  --chat-file-ink: #f1e9da; --chat-file-meta: #8f8578;
   --bubble-att: rgba(255, 255, 255, .12); --bubble-att-on: rgba(255, 255, 255, .2); --bubble-att-ink: #ededeb;
   --code-keyword: #d68fe0; --code-property: #e2b265; --code-string: #8fcf8a; --code-tag: #7fb0f0;
   --code-comment: #7a7a78; --code-deleted: #e0775e;
-  --ring: rgba(255, 255, 255, .07); --ring-2: rgba(255, 255, 255, .14);
+  --ring: rgba(255, 225, 180, .07); --ring-2: rgba(255, 225, 180, .12);
   --sh-soft: rgba(0, 0, 0, .5); --seg-on: #333333;
   --elev: 0 1px 2px rgba(0, 0, 0, .45), 0 6px 16px -8px rgba(0, 0, 0, .5);
   --elev-up: 0 2px 5px rgba(0, 0, 0, .5), 0 16px 34px -12px rgba(0, 0, 0, .65);
   --seam: -1px 0 0 rgba(0, 0, 0, .4), -16px 0 32px -16px rgba(0, 0, 0, .5);
   --scrim-detail: rgba(6, 6, 8, .55);
+
+  /* The page's glass, same as the media query's. */
+  --ink-on-amber: #241b0c;
+  --rail-edge: rgba(255, 225, 180, .06);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 225, 180, .07);
+  --card-glass: rgba(29, 29, 29, .82);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .04), 0 0 0 1px rgba(255, 255, 255, .07), 0 16px 34px -24px rgba(0, 0, 0, .7);
+  --desk-glass: rgba(28, 24, 19, .74);
+  --desk-edge: rgba(255, 225, 180, .09);
+  --desk-sh: inset 0 1px 0 rgba(255, 235, 200, .05), 0 40px 90px -36px rgba(0, 0, 0, .9), 0 0 90px -30px rgba(233, 180, 76, .12);
+  --desk-board: rgba(44, 39, 32, .45);
 }
 :root[data-theme="light"] {
   --mark-plate: #f7f7f7; --mark-plate-line: #f0f0f0;
   --bdg-ink: #faf7ee;
-  --ink: #ffffff; --surface: #f7f7f7; --raised: #f0f0f0; --line: #e7e7e7;
-  --line-soft: #f0f0f0; --text: #1f1f1f; --muted: #6b6b6b; --faint: #9d9d9d;
-  --link: #3b6fd4; --amber: #a8801c; --amber-dp: #eee4c8; --warm: #e8b317; --moss: #3f7d2c;
-  --clay: #b4402f; --gold: #9a7016; --sky: #2f6d9e;
-  --page: #fafaf8; --side-bg: #ffffff; --paper: #ffffff; --hover: #ececea;
+  --ink: #ffffff; --surface: #f8f5ec; --raised: #f1f0ec; --line: #e8e1d2;
+  --line-soft: #f0ebe0; --text: #2b2620; --muted: #6f675c; --faint: #9d9587;
+  --link: #3b6fd4; --amber: #b5791c; --amber-dp: #f1e3c4; --warm: #e0a63a; --moss: #3f7d2c;
+  --clay: #b4402f; --gold: #9a6516; --sky: #2f6d9e;
+  --page: #fbf9f4; --side-bg: rgba(253, 252, 249, .84); --paper: #ffffff; --hover: #f1ece0;
   --traj-glass: rgba(255, 255, 255, .85); --traj-edge: rgba(255, 255, 255, .72);
   --traj-shadow: inset 0 1px 0 rgba(255, 255, 255, .55), 0 24px 60px -38px rgba(31, 35, 40, .38);
   --traj-line: rgba(31, 35, 40, .09);
   --traj-hover: rgba(255, 255, 255, .52);
   --traj-rule: rgba(31, 35, 40, .12); --traj-solid: #fbfaf8;
-  --topbar-tint: rgba(250, 250, 248, .3); --topbar-halo: rgba(255, 255, 255, .75); --topbar-plate: rgba(250, 250, 248, .82);
+  --topbar-tint: rgba(253, 251, 245, .3); --topbar-halo: rgba(255, 253, 248, .75); --topbar-plate: rgba(253, 251, 245, .82);
   --wash:
     radial-gradient(60% 55% at 85% 0%, rgba(195, 212, 237, .62) 0%, rgba(195, 212, 237, 0) 70%),
     radial-gradient(55% 50% at 20% 100%, rgba(244, 230, 200, .80) 0%, rgba(244, 230, 200, 0) 70%),
     radial-gradient(40% 45% at 70% 90%, rgba(239, 226, 200, .55) 0%, rgba(239, 226, 200, 0) 70%),
     linear-gradient(180deg, #f6f5f0 0%, #f1f0ea 100%);
-  --selected: #eaeae7; --text-3: #8a8a88; --ph: #b8b8b8; --black: #111111;
-  --rail-ink: #333333; --rail-ink-on: #1a1a1a; --rail-quiet: #999999;
-  --rail-hover: #f7f7f7; --rail-on: #f0f0f0; --rail-tip: #1a1a1a; --rail-tip-ink: #ffffff;
+  --selected: #ece5d6; --text-3: #8a8275; --ph: #bdb5a6; --black: #2b2620;
+  --rail-ink: #3b342a; --rail-ink-on: #2b2620; --rail-quiet: #9d9587;
+  --rail-hover: rgba(181, 121, 28, .06); --rail-on: rgba(255, 255, 253, .95); --rail-tip: #2b2620; --rail-tip-ink: #fdfbf5;
   --snav-bg: #fafafa; --settings-nav-on: #f0f0f0; --settings-nav-ico: #666666;
   /* The settings dialog, same as the base block's: an explicit light theme
      has to carry its own copy, because this block outranks the media query's
@@ -583,25 +635,35 @@
   --set-go:       var(--set-ink);
   --set-go-ink:   var(--set-paper);
   --composer-bg: rgba(255, 255, 255, .8); --composer-line: #e6e6e6; --composer-sh: rgba(0, 0, 0, .08);
-  --composer-ink: #1a1a1a; --composer-ph: #908f8c; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
-  --send-off: #bdbbb8; --send-off-ink: #faf9f5; --send-on: #1a1a1a; --send-on-ink: #ffffff;
+  --composer-ink: #2b2620; --composer-ph: #9d9587; --composer-hover: #f7f7f7; --att-bg: #f0f0f0;
+  --send-off: rgba(160, 150, 130, .45); --send-off-ink: #fdfbf5; --send-on: #2b2620; --send-on-ink: #fdfbf5;
   --bubble-me: #333333; --bubble-me-fg: #ffffff;
-  --chat-ink: #1a1a1a; --chat-quiet: #999999; --chat-shine: #e6e6e6; --chat-danger: #d84520;
-  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #666666;
-  --chat-file-ink: #333333; --chat-file-meta: #908f8c;
+  --chat-ink: #2b2620; --chat-quiet: #9d9587; --chat-shine: #e6e6e6; --chat-danger: #d84520;
+  --chat-rule: #e0e0e0; --chat-head: #f7f7f7; --chat-head-ink: #6f675c;
+  --chat-file-ink: #3b342a; --chat-file-meta: #9d9587;
   --bubble-att: rgba(255, 255, 255, .2); --bubble-att-on: rgba(255, 255, 255, .3); --bubble-att-ink: #f0f0f0;
   --code-keyword: #94129d; --code-property: #b8812c; --code-string: #488c4b; --code-tag: #1b6ed5;
   --code-comment: #8a8a88; --code-deleted: #d84520;
-  --ring: rgba(0, 0, 0, .03); --ring-2: rgba(0, 0, 0, .05);
-  --sh-soft: rgba(0, 0, 0, .06); --seg-on: #ffffff;
+  --ring: rgba(60, 50, 30, .05); --ring-2: rgba(60, 50, 30, .08);
+  --sh-soft: rgba(60, 45, 20, .07); --seg-on: #ffffff;
   --shadow: 0 14px 34px -22px rgba(26,26,26,.35);
-  --elev: 0 1px 2px rgba(28, 27, 25, .05), 0 6px 16px -10px rgba(28, 27, 25, .14);
+  --elev: 0 1px 2px rgba(60, 45, 20, .05), 0 6px 16px -10px rgba(60, 45, 20, .14);
   --elev-up: 0 2px 4px rgba(28, 27, 25, .06), 0 14px 30px -12px rgba(28, 27, 25, .22);
   --seam: -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
   --scrim-detail: rgba(26, 24, 20, .4);
   --ctx-system: #4f5a63; --ctx-tools: #c4cace; --ctx-skills: #e8c870;
   --ctx-conversation: #8fa9ab; --ctx-memory: #9c7a38;
   --ctx-ink: #6c551e; --ctx-ink-bg: #e8dfb0; --ctx-muted: #4f5a63; --ctx-chip: #eef1f3;
+  /* The page's glass, same as the base block's. */
+  --ink-on-amber: #fff;
+  --rail-edge: rgba(255, 255, 255, .6);
+  --rail-on-lift: inset 0 0 0 1px rgba(255, 255, 255, .7), 0 4px 12px -8px rgba(60, 45, 20, .25);
+  --card-glass: rgba(255, 255, 255, .8);
+  --card-glass-sh: inset 0 1px 0 rgba(255, 255, 255, .8), 0 0 0 1px rgba(0, 0, 0, .03), 0 12px 30px -24px rgba(0, 0, 0, .22);
+  --desk-glass: rgba(254, 253, 250, .86);
+  --desk-edge: rgba(255, 255, 255, .7);
+  --desk-sh: inset 0 1px 0 rgba(255, 255, 255, .7), 0 30px 70px -34px rgba(60, 45, 20, .45), 0 2px 6px rgba(60, 45, 20, .06);
+  --desk-board: rgba(240, 234, 222, .25);
 }
 
 * { box-sizing: border-box; }
@@ -702,20 +764,24 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 /* Measure the viewport directly instead of inheriting a 100% chain: any link
    in that chain resolving to auto leaves the shell short and the page ends in
    a band of empty white. dvh also tracks mobile browser chrome. */
-.app { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; height: 100dvh; }
+/* The wash is the window's ground, under the rail as well as the content pane:
+   the rail is a pane of glass over it, so the gradient runs edge to edge. */
+.app { display: grid; grid-template-columns: var(--rail) 1fr; height: 100vh; height: 100dvh;
+  background: var(--wash); }
 
 /* ── rail ──────────────────────────────────────────────────────────── */
 /* No rule at the seam: the rail's grey against the chat's white is the whole
    boundary, the way the reference renderer does it. The grip hover keeps the
    seam findable. */
-/* The rail is the lightest surface on the page, not a grey panel beside it:
-   --side-bg sits a step above --page, and the seam between them is a hairline
-   rather than a change of shade. Horizontal padding stays 0 -- the rows inset
-   themselves, and the header toggle has to keep the exact --edge offset its
-   collapsed twin is fixed at (see #railShow). */
+/* The rail is a pale pane over the wash, not a grey panel beside it: --side-bg
+   is nearly opaque, so the gradient only warms it, and the seam is a hairline
+   of light rather than a change of shade. It carries no blur -- what is behind
+   it is the wash alone, a gradient a blur would leave unchanged. Horizontal
+   padding stays 0 -- the rows inset themselves, and the header toggle has to
+   keep the exact --edge offset its collapsed twin is fixed at (see #railShow). */
 .rail {
   background: var(--side-bg);
-  border-right: 1px solid var(--line-soft);
+  border-right: 1px solid var(--rail-edge);
   padding: 0 4px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
 }
@@ -1116,24 +1182,23 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    in the strip, so it takes the accent rather than the row's quiet ink. */
 .chrome-nav-badge {
   margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 999px;
-  background: var(--amber); color: var(--ink-on-accent);
+  background: var(--amber); color: var(--ink-on-amber);
   font-size: 11px; font-weight: 600; line-height: 17px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .navi:hover, .sess:hover { background: var(--rail-hover); color: var(--rail-ink-on); }
-/* Selected and hovered are the same move at two depths -- one flat step of
-   ground, --hover then --selected -- and the weight of the label carries the
-   rest. The lift this row used to have (a ring plus a shadow, and an amber
-   glyph) was a third treatment on a surface that now has only two, and on a
-   white rail the ring had nothing left to separate the row from. */
+/* The current row is a sheet laid on the rail with a gold edge, the same mark
+   the settings dialog gives its current section: on a rail this pale a step of
+   ground alone is too faint to find, so the edge and a soft lift carry it. */
 .navi[aria-current="true"], .sess[aria-current="true"] {
   background: var(--rail-on); color: var(--rail-ink-on); font-weight: 500;
+  box-shadow: inset 3px 0 0 var(--amber), var(--rail-on-lift);
 }
 .navi[aria-current="true"]:hover, .sess[aria-current="true"]:hover { background: var(--rail-on); }
 /* A module page covers the chat, so the page is where you are; the session
    behind it keeps a readable label but drops the lift rather than leaving two
    rows looking selected at once. */
-.app[data-page="on"] .sess[aria-current="true"] { background: none; font-weight: 400; }
+.app[data-page="on"] .sess[aria-current="true"] { background: none; box-shadow: none; font-weight: 400; }
 .navi svg, .sess svg { flex: none; }
 /* The import row names the file it is sending, and a file name can be any length. */
 #importedBtn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1159,11 +1224,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    transcript two pixels away stood on the wash, and the join between them read
    as a seam down the middle of the window. One ground under both: the panes are
    transparent over it (`.desk-ready .ws`) and now share the gradient instead of
-   interrupting it. Where no radial stop reaches, the wash's own last layer
-   shows, a shade warmer than --page; a module page, on flat --page, covers
-   this pane whole rather than meeting it at a seam. */
+   interrupting it. The gradient itself is now painted on .app, so the rail
+   shares it too; this pane is transparent over it. A module page, on flat
+   --page, covers this pane whole rather than meeting it at a seam. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  background: var(--wash);
   transition: padding-right .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
@@ -1479,7 +1543,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #atBtn { font-size: 15px; font-weight: 600; }
 #atBtn.chrome-at-set { color: var(--amber); }
 .chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
-  border-radius: 999px; background: var(--amber); color: var(--ink-on-accent); font-size: 9.5px; font-weight: 600;
+  border-radius: 999px; background: var(--amber); color: var(--ink-on-amber); font-size: 9.5px; font-weight: 600;
   line-height: 13px; text-align: center; }
 /* A base's row: the tick, the name, and how many documents are in it. The tick
    holds its width whether or not it is set, so a list does not shuffle as it
@@ -1520,7 +1584,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-wd-btn { padding: 4px 10px; border-radius: 7px; font-size: 12px; color: var(--text); background: var(--surface); }
 .chrome-wd-btn:hover:not(:disabled) { background: color-mix(in oklab, var(--text) 9%, transparent); }
 .chrome-wd-btn:disabled { opacity: .45; }
-.chrome-wd-use { color: var(--ink-on-accent); background: var(--amber); }
+.chrome-wd-use { color: var(--ink-on-amber); background: var(--amber); }
 .chrome-wd-use:hover:not(:disabled) { background: color-mix(in oklab, var(--amber) 88%, var(--text)); }
 
 /* The workspace tag beside a conversation's title (src/chrome/WorkdirTag.tsx):
@@ -1673,16 +1737,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   font-size: var(--fs-body); line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
-/* A white card on the wash, flat the way the design lays it (Figma: Raven /
-   AssistantMessage): 16px all round and one 12px gap between what is in it --
-   the fold, a step, the answer -- so nothing inside carries a margin of its
-   own. The rim is for dark, where a card needs an edge; in light it is all but
-   invisible. */
+/* A pane of frosted glass on the wash (Figma: Raven / AssistantMessage for the
+   geometry): 16px all round and one 12px gap between what is in it -- the fold,
+   a step, the answer -- so nothing inside carries a margin of its own. The
+   glass is a neutral translucent fill, opaque enough that the wash does not
+   tint the words, with a lit top edge and a hairline rim; there is no backdrop
+   blur, because nothing scrolls behind a card but the wash, and a blur over a
+   gradient is the gradient. */
 .msg.ai {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
-  background: var(--ink); border-radius: 12px; padding: 16px;
+  background: var(--card-glass); border-radius: 12px; padding: 16px;
   font-size: var(--fs-body); line-height: 26px;
-  box-shadow: 0 0 0 1px var(--ring); color: var(--chat-ink);
+  box-shadow: var(--card-glass-sh); color: var(--chat-ink);
 }
 .msg.ai > .tfold, .msg.ai > .step, .msg.ai > .answer, .msg.ai > .sdlv { margin: 0; }
 /* A card holding nothing yet but a live thought, folded, is the design's small
@@ -4598,11 +4664,11 @@ details[open] summary { margin-bottom: 8px; }
 /* settings — a dialog with its own two panes: the nav and the panel scroll
    independently, so a long panel never drags the section list off screen.
 
-   The dialog is the one warm room on the page. It runs on its own set of
-   tokens (--set-*), so the light theme is parchment and the dark theme is the
-   same room under a lamp: a warm near-black with an amber light in the top
-   corner. The page's own neutrals stay cold around it, so arriving here reads
-   as a change of room rather than as a dimmer console. */
+   The dialog runs on its own set of tokens (--set-*), so the light theme is
+   parchment and the dark theme is the same room under a lamp: a warm
+   near-black with an amber light in the top corner. The page around it is the
+   same warm ink and gold on frosted glass, so the dialog reads as the solid
+   room of the house rather than as a different palette. */
 .setveil { background: var(--scrim-soft); backdrop-filter: blur(3px); }
 .smodal {
   /* The containing block for the add-model drawer, which is clipped by this
@@ -6216,12 +6282,27 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
      composer card (features/desk/geometry.ts), and a fixed one here would clip
      it short of what that allows. */
   max-width: min(480px, calc(100vw - 16px)); max-height: calc(100vh - 16px);
-  resize: none; pointer-events: auto; color: var(--text); background: var(--ink);
-  border: 1px solid var(--line); border-radius: 14px;
-  box-shadow: 0 16px 42px rgba(0, 0, 0, .16), 0 1px 1px rgba(0, 0, 0, .04);
+  resize: none; pointer-events: auto; color: var(--text);
+  border: 1px solid var(--desk-edge); border-radius: 14px;
+  box-shadow: var(--desk-sh);
   /* Its own handle sits off the top-right corner, so that corner is where the
      palette comes from and goes back to. */
   transform-origin: 100% 0; }
+/* The palette is frosted glass over the transcript. The blur sits on a layer
+   behind the content rather than on the palette itself, the way #trajHost does
+   it: on the palette it would make every fixed-position descendant lay out
+   against the palette, and the rows scrolling in .desk-body would ghost at the
+   clipped edge when the compositor reuses its backdrop snapshot. */
+.desk-palette::after {
+  content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  background: var(--desk-glass);
+  -webkit-backdrop-filter: blur(26px) saturate(1.3);
+  backdrop-filter: blur(26px) saturate(1.3);
+  pointer-events: none;
+}
+@supports not ((backdrop-filter: blur(8px)) or (-webkit-backdrop-filter: blur(8px))) {
+  .desk-palette::after { background: var(--paper); }
+}
 /* Under the capsule and flush with its right edge, not beside it: the
    transcript column is centred, so a desk hung to the LEFT of the launcher
    reached back across what the reader was reading. Kept in step with
@@ -6239,8 +6320,8 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    read as one outline. An imported conversation has no menu, and its chip
    ends at the capsule's padding. */
 .desk-palette[data-anchored="true"]::before { content: ''; position: absolute; top: -6px; right: 48.5px;
-  width: 11px; height: 11px; transform: rotate(45deg); background: inherit;
-  border-top: 1px solid var(--line); border-left: 1px solid var(--line); border-top-left-radius: 2px;
+  width: 11px; height: 11px; transform: rotate(45deg); background: var(--desk-glass);
+  border-top: 1px solid var(--desk-edge); border-left: 1px solid var(--desk-edge); border-top-left-radius: 2px;
   pointer-events: none; }
 body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { right: 11.5px; }
 /* Two curves rather than one duration in both directions: arriving is eased out
@@ -6292,14 +6373,15 @@ body:has(.chat[data-readonly]) .desk-palette[data-anchored="true"]::before { rig
 /* The palette no longer clips its children -- the notch stands above its top
    edge -- so the scroll box rounds its own lower corners to the frame. */
 .desk-body { flex: 1; min-height: 0; overflow: auto; padding: 5px 0; border-radius: 0 0 13px 13px; }
-/* The Tasks tab's board paints on --surface (features/tasks/styles.css's
-   `.tkboard`). The palette's own ground is --ink, which showed through the
-   body's 5px padding as a white band above and below the board. So the body
-   takes the board's ground, and only the body: the tab strip stays the
-   palette's white on every tab, and with it the notch, which inherits the
-   frame's ground. Where white meets the board the header's rule takes the
-   stronger line, and the flat list's hover moves one step up the ramp. */
-.desk-palette[data-tab="tasks"] .desk-body { background: var(--surface); }
+/* The Tasks tab's board keeps the palette's glass rather than its own ground:
+   `.tkboard` paints --surface on a page of its own, and here that opaque layer
+   made the panel read a full step darker than the rail. Inside the palette the
+   board is transparent and the body carries one faint veil, --desk-board,
+   which is just enough step for the cards to stand on. Where the tab strip
+   meets the board the header's rule takes the stronger line, and the flat
+   list's hover moves one step up the ramp. */
+.desk-palette[data-tab="tasks"] .desk-body { background: var(--desk-board); }
+.desk-palette .tkboard { background: none; }
 .desk-palette[data-tab="tasks"] .desk-drag { border-bottom-color: var(--line); }
 .desk-palette[data-tab="tasks"] .salist.tasks .sarow:hover { background: var(--raised); }
 /* The size handle sits on whichever edge is FREE, which anchored is the left
