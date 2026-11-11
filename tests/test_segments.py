@@ -1107,6 +1107,26 @@ class TestWorkToolNote:
         assert render.work_tool_note("exec", {}, self.DISPATCH) == ""
 
 
+class TestResultReportRule:
+    """An agent's report reaches the host, not the user, and the reply has to say so."""
+
+    def test_the_reply_rules_name_an_agents_report(self, tmp_path: Path) -> None:
+        rules = render.identity_text(tmp_path).split("## How you reply", 1)[1]
+        assert "has not seen your tool results, an agent's report or your reasoning" in rules
+        assert "An agent's report reaches you, not the user." in rules
+        assert "not by its label alone" in rules
+
+    def test_the_note_is_the_rule_after_a_fence(self) -> None:
+        note = render.result_report_note()
+        assert note == f"\n\nNote: {render.RESULT_REPORT_RULE}"
+
+    def test_no_note_in_a_process_launched_to_do_one_task(self, monkeypatch) -> None:
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        assert render.result_report_note() == ""
+
+
 class TestDelegationNeedsSomewhereToDelegateTo:
     """The section prohibits a specialist's kind of work, so it must not outlive
     the tools that carry the work away. With every dispatch path withheld a

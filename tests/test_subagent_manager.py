@@ -317,7 +317,8 @@ async def test_announce_dag_result_addresses_the_originating_conversation() -> N
 
 async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
     """The announce carries the run's own summary unaltered, and after it only the
-    reply-rules note a dispatch receipt carries.
+    note that the user has not read it and the reply-rules note a dispatch receipt
+    carries.
 
     A graph's deliverable is its terminal node outputs, so any framing or
     retell-in-two-sentences instruction wrapped around them is lossy, and none is
@@ -326,7 +327,7 @@ async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
     after it shortens nothing; it says how the reply the host writes next is laid
     out, which the resident rules alone did not achieve on a DAG notice.
     """
-    from raven.context_engine.segments.render import reply_rules_note
+    from raven.context_engine.segments.render import reply_rules_note, result_report_note
 
     mgr = _make_manager(max_concurrent=1)
     submitted: list[object] = []
@@ -339,8 +340,9 @@ async def test_announce_dag_result_delivers_the_summary_verbatim() -> None:
     # mints a fresh nonce each time, so two wraps of one string never compare
     # equal. Everything between the markers must be the summary, unaltered.
     text = submitted[0].text
-    note = reply_rules_note()
+    note = result_report_note() + reply_rules_note()
     assert text.endswith(note)
+    assert "The user has not read this report" in note
     assert "gives each task its own `### <task>` section" in note
     lines = text[: -len(note)].splitlines()
     assert lines[0].startswith("[BEGIN UNTRUSTED subagent ")
@@ -1400,7 +1402,7 @@ async def test_a_relayed_result_does_not_teach_the_silence_marker():
     )
 
     assert len(submitted) == 1
-    assert "Summarize this naturally for the user" in submitted[0].text
+    assert "The user has not read this report" in submitted[0].text
     assert not teaches_silence(submitted[0].text)
 
 
@@ -1989,8 +1991,9 @@ async def test_a_failed_run_is_still_announced_as_failed() -> None:
 
 
 async def test_the_summary_instruction_exempts_what_the_subagent_could_not_do() -> None:
-    """The 1-2 sentence budget is what dropped a sub-agent's stated gap: a
-    caveat is the first thing to go when the instruction is to compress."""
+    """A length budget is what dropped a sub-agent's stated gap: a caveat is the
+    first thing to go when the instruction is to compress, so a stated gap is
+    passed on in full and no budget is set."""
     mgr = _make_manager(max_concurrent=1)
     submitted: list[Any] = []
     mgr.set_submit(submitted.append)
@@ -1998,9 +2001,37 @@ async def test_the_summary_instruction_exempts_what_the_subagent_could_not_do() 
     await mgr._announce_result("abcd1234", "Research", "do it", "no input file", _spawn_origin(None, None), "ok")
 
     text = submitted[0].text
-    assert "do not report the task as done merely because this message arrived" in text
+    assert "Do not report the task as done merely because this message arrived" in text
     assert "an unmet precondition" in text
-    assert "outside that length budget" in text
+    assert "pass it on in full" in text
+    assert "1-2 sentences" not in text and "Keep it brief" not in text
+
+
+async def test_the_announce_says_the_user_has_not_read_the_report() -> None:
+    """The report reaches the host alone: the page folds it into a closed row and the
+    terminal draws a one-line marker. Replies written under "Summarize this naturally,
+    1-2 sentences" named findings by the report's labels and leaned on files and
+    values only the report introduced, so the announce now says who has read what."""
+    from raven.context_engine.segments.render import RESULT_REPORT_RULE
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list[Any] = []
+    mgr.set_submit(submitted.append)
+
+    await mgr._announce_result("abcd1234", "Review", "review it", "F1: ...", _spawn_origin(None, None), "ok")
+
+    text = submitted[0].text
+    assert RESULT_REPORT_RULE in text
+    assert text.index("[END UNTRUSTED subagent") < text.index(RESULT_REPORT_RULE)
+    for clause in (
+        "it reached you, not them",
+        "keeping a label like F1 or N2 only beside that description",
+        "before you rely on it",
+        "the grounds the report gives for a verdict",
+        "rather than checking it again yourself",
+    ):
+        assert clause in RESULT_REPORT_RULE
+    assert "Summarize this naturally" not in text
 
 
 async def test_the_summary_instruction_judges_the_outcome_from_the_subagents_own_account() -> None:
@@ -2021,7 +2052,7 @@ async def test_the_summary_instruction_judges_the_outcome_from_the_subagents_own
     await mgr._announce_result("abcd1234", "Research", "do it", "done", _spawn_origin(None, None), "ok")
 
     text = submitted[0].text
-    assert "do not report the task as done merely because this message arrived" in text
+    assert "Do not report the task as done merely because this message arrived" in text
     assert "from what the sub-agent itself says it did" in text
     assert "say what is missing or ask the user how to proceed" in text
     assert "the strength of the text above" not in text

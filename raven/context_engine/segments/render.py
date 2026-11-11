@@ -300,6 +300,44 @@ def board_on_page(task_board: bool, channel: str | None, surface: str | None) ->
     return task_board and channel == PAGE_CHANNEL and surface != TERMINAL_SURFACE
 
 
+RESULT_REPORT_RULE = (
+    "The user has not read this report: it reached you, not them. Tell them what was done and what came of it in a "
+    "reply that stands without the report -- say in plain words what each finding or item is, keeping a label like F1 "
+    "or N2 only beside that description; say what a file, term or value from the report is and why it matters before "
+    "you rely on it; give the grounds the report gives for a verdict; and do not point at the report as if they could "
+    "read it. All of this is in the report: tell it from there rather than checking it again yourself. Take the space "
+    "that needs, and leave out what does not change what they understand or decide."
+)
+"""What the host is told where an agent's report reaches it: the user reads only the reply.
+
+A report is delivered to the host alone. The served page folds it into a closed row and
+the terminal draws a one-line marker, so the reply is all most readers see of the work.
+On one recorded conversation (deepseek-flash, 123 replies to a returned report), a judge
+reading only what the user had seen found about three places a reply leaned on the
+unseen report: findings named by the report's own labels, files and values only the
+report introduced, pointers to "the report" itself, verdicts without their grounds. The
+spawn announce had asked for a natural one-to-two-sentence summary.
+
+Replayed on 24 of those turns (3 runs a side, the prompt otherwise unchanged), and asked
+pairwise which reply to the same report the user would understand without it, the judge
+preferred this rule's reply in 45 pairs and the old one in 3 (both orders agreeing; 8
+split), and 7 to 1 where this reply was not the longer. The last sentence carries as much:
+worded "give what a verdict rests on" instead, the host re-checked the report's claims with
+its own tools before replying (232 own calls against 194 for the old announce); with it,
+45. A reply that does not re-check also reports less live state, which is the trade.
+"""
+
+
+def result_report_note() -> str:
+    """:data:`RESULT_REPORT_RULE` as this system's note after a report's fence, or "".
+
+    Empty in a process launched to do one task, which renders no reply rules either.
+    """
+    from raven.agent.subagent.role import is_subagent_process
+
+    return "" if is_subagent_process() else f"\n\nNote: {RESULT_REPORT_RULE}"
+
+
 def _reply_style(board_shown: bool = False) -> str:
     """The ``## How you reply`` section, for the host alone.
 
@@ -352,9 +390,10 @@ def _reply_style(board_shown: bool = False) -> str:
         "not open."
     )
     return f"""## How you reply
-Whoever reads your reply may not have seen your tool results or your reasoning, so the reply has to stand on its own. These rules govern how you write, not which language you write in.
+Whoever reads your reply has not seen your tool results, an agent's report or your reasoning, so the reply has to stand on its own. These rules govern how you write, not which language you write in.
 - The intent you state before tool calls is one sentence, said once before you start; do not narrate each routine tool call after it.
 - Lead with the answer. If something could not be verified, say so first.
+- An agent's report reaches you, not the user. Pass on what it found in your own words: name each finding by what it is, not by its label alone, and say what a file, term or value from the report is before you rely on it.
 - Answer a simple question in plain prose: no headers, no bullet list, no closing recap. Use structure only when the content is list-shaped.
 - When a reply covers more than one task -- a result, progress, a one-line status, a late notice -- give each task its own section that opens with a markdown heading naming the task on a line of its own (`### <task>`), even when the section is a single sentence; never put two tasks in one paragraph or one list.{sections_tail}
 - Keep it short by leaving things out, not by compressing what is left into fragments, arrows or abbreviations of your own.

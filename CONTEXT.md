@@ -739,7 +739,9 @@ description fits it, to `Raven-General` only when none does; a brief names where
 rather than carrying facts looked up for it, and a report to check goes back out. The host
 answers itself only what needs none of its other tools and belongs to no task, and the first
 task-work result of its own in a turn carries a note to hand the rest over
-(`work_tool_note`). On a turn that dispatches through a
+(`work_tool_note`). A report an agent sends back reaches the host alone, so the reply retells
+it in the host's own words (`RESULT_REPORT_RULE`, said on the spawn and DAG announcements and
+in the reply rules). On a turn that dispatches through a
 **Worker Table** the same rule names the table's workers instead: the worker whose brief
 covers the work, by its label. Work no worker covers is put to the user -- a worker added for
 it, or another Harness -- rather than done by the host or sent to an agent outside the enum,
