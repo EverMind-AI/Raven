@@ -535,10 +535,15 @@ class _StreamingParent(_DirectProvider):
     The parent defines ``chat_stream`` itself, so the wrapper that records the
     call sits on the parent -- the place it sits in the real chain, where
     ``MiniMaxOAuthProvider`` forwards to ``LiteLLMProvider.chat_stream`` and
-    that parent wrapper is the one that records. A parent that only inherited
-    the base fallback would not stand in for it: the fallback calls ``chat``
-    with keyword arguments, which washes the positional error out before the
-    recording wrapper ever sees it.
+    that parent wrapper is the one that records.
+
+    Fidelity is not what makes these tests able to fail, though. A double whose
+    parent was only the base fallback catches the same mutation: with
+    ``_wrap_stream`` reading the position one slot off, both shapes record the
+    provider's default. What made the original double unable to fail was its
+    default, which named the model under test -- so the fallback reproduced the
+    very string the assertion expected. The stream double here keeps a default
+    that differs, and a test pins that.
     """
 
     def __init__(self, reply: LLMResponse | None = None):
@@ -691,11 +696,9 @@ async def test_a_positional_stream_double_does_not_hide_the_lookup_behind_its_de
 
 
 async def test_the_positional_stream_double_reaches_its_parent_by_position():
-    """The parent is the recorder, so it has to be reached the way the real
-    chain reaches it: by position. A double that forwarded by keyword, or a
-    parent that re-called ``chat`` with keyword arguments, would wash the
-    positional error out before the recording wrapper ever saw it, and the
-    stream tests above would stop standing in for the chain.
+    """The parent is where the recording wrapper sits in the real chain, so the
+    double has to reach it the way that chain does: by position, with
+    ``(messages, tools, model)`` in the parent's own arguments.
     """
     provider = _PositionalStreamProvider()
     tools = [{"type": "function", "function": {"name": "read_file"}}]
@@ -891,6 +894,60 @@ async def test_the_seam_reports_a_model_that_is_not_a_name(tmp_path: Path, model
     assert reports, f"the refused value was not reported: {model_warnings}"
     assert "read_file" in reports[0], f"the report does not name the value: {reports}"
     assert "the provider's default" in reports[0], f"the report does not say where the row went: {reports}"
+
+
+async def test_the_seam_reports_a_value_that_cannot_even_be_stringified(tmp_path: Path, model_warnings):
+    """Accounting must never fail the call it accounts.
+
+    The report names the refused value by rendering it, and a value whose
+    ``__str__`` raises would otherwise turn the report into the one exception
+    this module exists not to raise. The description falls back to the type, and
+    the call still produces its row.
+    """
+
+    class _Unstringable:
+        def __str__(self) -> str:
+            raise RuntimeError("cannot stringify this model slot value")
+
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        await provider.chat([{"role": "user", "content": "hi"}], None, _Unstringable())
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == ["direct/default"]
+    reports = [r for r in model_warnings if "implausible model" in r]
+    assert reports, f"the unrenderable value was not reported: {model_warnings}"
+    assert "_Unstringable" in reports[0], f"the report does not name the type: {reports}"
+
+
+async def test_the_seam_reports_an_unrenderable_value_more_than_once(tmp_path: Path, model_warnings):
+    """A report that raised is not a report that was made.
+
+    The dedup key was taken before the value was rendered, so a first call that
+    raised left the key behind and every later one of the same shape passed
+    silently -- the worst pairing of the two.
+    """
+
+    class _Unstringable:
+        def __str__(self) -> str:
+            raise RuntimeError("cannot stringify this model slot value")
+
+    usage_record.reset_model_warnings()
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    provider = _PositionalProvider()
+
+    with usage_record.bind(StrategyRegistry([tracker])):
+        for _ in range(3):
+            await provider.chat([{"role": "user", "content": "hi"}], None, _Unstringable())
+
+    assert len([r for r in model_warnings if "implausible model" in r]) == 1, (
+        f"the dedup did not keep one report per condition: {model_warnings}"
+    )
 
 
 async def test_the_seam_reports_a_call_with_no_model_and_no_default(tmp_path: Path, model_warnings):

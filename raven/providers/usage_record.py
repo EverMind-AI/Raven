@@ -173,6 +173,30 @@ async def _record(response: dict[str, Any], model: str | None) -> None:
 _WARNED_MODEL_FALLBACK: set[str] = set()
 
 
+def _is_missing_model(model: Any) -> bool:
+    """Whether the model slot was left empty.
+
+    Answered without comparing the value: ``==`` reaches a caller's ``__eq__``,
+    and a value whose ``__eq__`` raises would take the call down where the
+    report was only trying to describe it.
+    """
+    return model is None or (isinstance(model, str) and not model)
+
+
+def _describe_model(model: Any) -> str:
+    """A short, safe rendering of the value that reached the model slot.
+
+    The value is whatever the caller passed, so it can be anything -- including
+    something whose ``__str__`` raises. Accounting must never fail the call it
+    accounts, so the type name is the floor rather than an exception.
+    """
+    try:
+        text = str(model)
+    except Exception:  # noqa: BLE001 - a description, not a reason to fail the call
+        return type(model).__name__
+    return f"{text[:120]!r}"
+
+
 def _warn_model_fallback(provider: Any, model: Any, resolved: str | None) -> None:
     """Report a call whose row is not named by the call's own model.
 
@@ -186,11 +210,14 @@ def _warn_model_fallback(provider: Any, model: Any, resolved: str | None) -> Non
     key = f"{type(provider).__name__}:{type(model).__name__}:{'named' if resolved else 'none'}"
     if key in _WARNED_MODEL_FALLBACK:
         return
-    _WARNED_MODEL_FALLBACK.add(key)
-    if model is None or model == "":
+    if _is_missing_model(model):
         what = "the call named no model"
     else:
-        what = f"implausible model name {str(model)[:120]!r}"
+        what = f"implausible model name {_describe_model(model)}"
+    # Recorded only once the report is actually made: a description that raised
+    # would otherwise leave the key behind, and every later call of the same
+    # shape would pass silently.
+    _WARNED_MODEL_FALLBACK.add(key)
     if resolved:
         logger.warning(
             "usage: {}; the row carries the provider's default instead: {}",
@@ -227,7 +254,7 @@ def _model_of(provider: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
     except Exception:  # noqa: BLE001 - a name for the row, not a reason to fail
         default = None
     resolved = default if isinstance(default, str) and default else None
-    if (model is None or model == "") and resolved:
+    if _is_missing_model(model) and resolved:
         # A call that leaves the model to the provider is served by that
         # default (``generate_title`` passes ``model=None`` by design), so the
         # row's name is the true one and there is nothing to warn about.
