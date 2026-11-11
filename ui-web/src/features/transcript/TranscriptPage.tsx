@@ -1317,7 +1317,7 @@ const DELIVERED: Record<DeliveredData['status'], { cls: string; key: string }> =
    -- the manager reports where the work was placed, not how it went -- so the
    word on the row has to come out of this line instead, or every failed graph
    would read as "finished". */
-const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped/
+const DAG_COUNTS = /(\d+) completed, (\d+) failed, (\d+) cancelled, (\d+) skipped(?:, \d+ not executed)?(?:, \d+ carried)?(?: \(of (\d+)\))?/
 
 /* Whether the row is a graph's own result, the one delivery whose `ok` says
    nothing and whose text ends with the counts. A node's report carries its own
@@ -1348,6 +1348,9 @@ interface ReceiptNode { name: string; status: string; said: string }
 
 const NODE_LINE = /^- (.+?) \[([^\]]+)\](?: \(instance: [^)]*\))?: (.*)$/
 const NODE_NOTE = /^\s+(error|reason): (.*)$/
+/* The receipt's own line naming the run's directory. The table's output paths
+   are relative to it, so the table alone cannot reach them. */
+const RUN_DIR = /^Run dir: (.+)$/
 
 function receiptNodes(head: string[]): ReceiptNode[] | null {
   const at = head.findIndex((line) => /^Node output files:/.test(line))
@@ -1405,6 +1408,7 @@ function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
   const headLines = at < 0 ? lines : lines.slice(0, at)
   const nodes = receiptNodes(headLines)
   const head = headLines.join('\n').trimEnd()
+  const runDir = nodes ? headLines.find((line) => RUN_DIR.test(line)) || '' : ''
   const sections: Array<{ cap: string; said: string[] }> = []
   for (const line of at < 0 ? [] : lines.slice(at + 1)) {
     const heading = /^### (.+)$/.exec(line)
@@ -1415,15 +1419,18 @@ function DeliveredBody({ seg }: { seg: DeliveredData }): ReactElement {
     <>
       {caption}
       {nodes ? (
-        <div className="transcript-dlv-nodes">
-          {nodes.map((n) => (
-            <div key={n.name} data-st={nodeTone(n.status)}>
-              <span>{n.name}</span>
-              <span>{n.status}</span>
-              <span title={n.said}>{n.said}</span>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="transcript-dlv-nodes">
+            {nodes.map((n) => (
+              <div key={n.name} data-st={nodeTone(n.status)}>
+                <span>{n.name}</span>
+                <span>{n.status}</span>
+                <span title={n.said}>{n.said}</span>
+              </div>
+            ))}
+          </div>
+          {runDir ? <div className="transcript-dlv-rundir">{runDir}</div> : null}
+        </>
       ) : head ? <pre className="raw">{head}</pre> : null}
       {sections.map((node) => (
         <Fragment key={node.cap}>
@@ -1446,13 +1453,20 @@ function graphTally(seg: DeliveredData): { cells: Array<'ok' | 'bad' | 'no'>; wo
   const m = DAG_COUNTS.exec(seg.body)
   if (!m) return null
   const [done, failed, stopped, skipped] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
-  const n = done + failed + stopped + skipped
+  /* The server's line ends in the run's node total. It is larger than these
+     four terminal counts whenever a branch was not taken (`not executed`) or a
+     replan carried a node, and those nodes have their own rows in the table --
+     so the total, not the sum, is what the bar and the words count. Older
+     lines without it fall back to the sum. */
+  const n = m[5] != null ? Number(m[5]) : done + failed + stopped + skipped
   const words = [t('gui.deleg.dag_done', { ok: String(done), n: String(n) })]
   if (failed) words.push(t('gui.deleg.dag_bad', { n: String(failed) }))
   if (stopped) words.push(t('gui.deleg.dag_stopped', { n: String(stopped) }))
   if (skipped) words.push(t('gui.deleg.dag_skip', { n: String(skipped) }))
   const cells = n > BAR_MAX ? [] : [
-    ...Array<'ok'>(done).fill('ok'), ...Array<'bad'>(failed).fill('bad'), ...Array<'no'>(stopped + skipped).fill('no'),
+    ...Array<'ok'>(done).fill('ok'),
+    ...Array<'bad'>(failed).fill('bad'),
+    ...Array<'no'>(Math.max(0, n - done - failed)).fill('no'),
   ]
   return { cells, words: words.join(' · ') }
 }

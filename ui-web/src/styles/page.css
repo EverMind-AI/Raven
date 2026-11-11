@@ -1869,6 +1869,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .transcript-dlv-nodes > div[data-st="bad"] > span:first-child::before { background: var(--muted); }
 .transcript-dlv-nodes > div[data-st="no"] > span:first-child::before { background: var(--line); }
 .transcript-dlv-nodes > div > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The run directory the table's relative output paths hang off. */
+.transcript-dlv-rundir {
+  margin: -6px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 18px;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ── the turn's products ──────────────────────────────────────────────
    What a turn delivered, as the design lays it out (Figma: Raven /

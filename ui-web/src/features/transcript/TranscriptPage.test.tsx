@@ -2535,6 +2535,38 @@ describe('a delegated result, drawn as the message it is', () => {
     expect($('.sdlv .sdbd')?.textContent).not.toContain('1 completed, 1 failed')
     expect($('.sdlv .sdbd .raw')).toBeNull()
   })
+
+  /* The server's tally line ends in the run's node total, which is larger than
+     the four terminal counts when a branch was not taken: the count it names
+     (`not executed`, or `carried` after a replan) has its own row in the table.
+     The bar and the words must account for every node the table lists. */
+  it('counts every node in a graph whose branch was not taken', () => {
+    wireDelivery()
+    const body = receipt('1 completed, 0 failed, 0 cancelled, 0 skipped, 2 not executed (of 3)', [
+      '- read [completed]: nodes/read/.out.md',
+      '- alt [not_executed]: (no output file)',
+      '- plan [not_executed]: (no output file)',
+    ])
+    act(() => { mount.history([graphBack(body, Date.now() - 9000)]) })
+    const row = $('.sdlv') as HTMLElement
+    expect(row.querySelector('.transcript-dlv-tally')?.textContent)
+      .toBe('en:gui.deleg.dag_done {"ok":"1","n":"3"}')
+    expect([...row.querySelectorAll('.transcript-dlv-bar i')].map((i) => i.getAttribute('data-tone')))
+      .toEqual(['ok', 'no', 'no'])
+    act(() => { (row.querySelector('.sdcv') as HTMLElement).click() })
+    expect(row.querySelectorAll('.sdbd .transcript-dlv-nodes > div')).toHaveLength(3)
+  })
+
+  /* The run directory the receipt names: the table's paths are relative to it,
+     so a reader without it cannot reach the output files. */
+  it('keeps the run directory the receipt named', () => {
+    wireDelivery()
+    const body = receipt('2 completed, 0 failed, 0 cancelled, 0 skipped', ['- read [completed]: nodes/read/.out.md'])
+    act(() => { mount.history([graphBack(body, Date.now() - 9000)]) })
+    act(() => { (($('.sdlv .sdcv')) as HTMLElement).click() })
+    expect($('.sdlv .sdbd .transcript-dlv-rundir')?.textContent).toContain('~/.raven/dag/run-7')
+    expect($$('.sdlv .sdbd .transcript-dlv-nodes > div')).toHaveLength(1)
+  })
 })
 
 describe("the turn's delivered files", () => {
