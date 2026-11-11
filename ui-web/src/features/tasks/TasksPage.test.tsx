@@ -11,6 +11,8 @@ import { resetSources, setSources } from '../../state/sources'
 import { get as toastGet } from '../../state/toast'
 import { installWsPane } from '../../test/wsPaneHarness'
 import * as desk from '../desk/store'
+import { stagePaint as realStagePaint } from '../transcript/source'
+import * as transcriptStore from '../transcript/store'
 import * as workspace from '../workspace/store'
 import * as store from './store'
 import { TaskPane, TasksPanel } from './TasksPage'
@@ -1992,5 +1994,45 @@ describe('the task surfaces\' failure colour', () => {
   it('keeps the destructive stop and the diff deletion count in the warning colour', () => {
     expect(rule('.tkhalt:hover:not(:disabled) {')).toContain('--clay')
     expect(rule('.tkchips .del {')).toContain('--clay')
+  })
+})
+/* The seam end to end: this domain and the real transcript painter in one
+   tree. The cases above stand in for the painter, which is the right test for
+   what this domain hands it; none of them can see the hand-over itself being
+   wrong -- the shape passed, the key, the microtask that lands the paint. */
+describe('the context tab with the real transcript painter', () => {
+  it('paints a settled record through the conversation renderer', async () => {
+    record = {
+      dispatch: 'the rendered prompt', steps: [], answer: 'the answer', outputTruncated: false,
+      messages: [
+        { role: 'user', text: 'the rendered prompt' },
+        { role: 'assistant', reasoning_content: 'think', text: 'reading', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+        { role: 'assistant', text: 'the answer' },
+      ],
+    }
+    transcriptStore._resetForTests()
+    setSources({
+      tasks: source(),
+      workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+      prose: { pathOf: () => null, linkTargetOf: () => null },
+      transcript: {
+        clean: (x: unknown) => String(x ?? ''), okOf: () => true, spawnList: async () => [],
+        stagePaint: realStagePaint,
+      } as never,
+    })
+    const done = task({
+      id: 'a', kind: 'dag', status: 'completed',
+      nodes: [node({ node_id: 'n1', status: 'completed', started_at: 1000, ended_at: 2000 })],
+    })
+    render(<TaskPane task={done} full />)
+    fireEvent.click(document.querySelectorAll('.daggraph .nd')[0] as Element)
+    await act(async () => {})
+    const box = document.querySelector('.tkrecord') as HTMLElement
+    const bubble = box.querySelector('.msg.me[data-auto]') as HTMLElement
+    expect(bubble.textContent).toContain('the rendered prompt')
+    expect(bubble.querySelector('.transcript-auto')?.textContent).toBe('gui.deleg.by_dispatch')
+    expect(box.querySelector('.tfh .lb')?.textContent).toBe('gui.fold.steps')
+    expect(box.querySelector('.answer')?.textContent).toContain('the answer')
   })
 })
