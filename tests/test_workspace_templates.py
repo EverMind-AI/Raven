@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from raven.utils.workspace import _merge_soul, sync_workspace_templates
+from raven.utils.workspace import _digest, _merge_soul, sync_workspace_templates
 
 # The 357-byte SOUL.md shipped through 2026-10-03, before the voice rules.
 _LEGACY_SOUL = (
@@ -119,6 +119,108 @@ def test_merge_normalises_crlf() -> None:
     assert conflicts == ["## A"]
 
 
+def test_the_values_heading_and_body_stay_under_a_values_edit() -> None:
+    ours = _LEGACY_SOUL.replace("- Accuracy over speed", "- Accuracy over speed, as I see it")
+
+    merged, conflicts = _merge_soul(_LEGACY_SOUL, ours, _template("SOUL.md"))
+
+    assert "## My stance" not in merged
+    assert "## Values" in merged
+    assert "- Accuracy over speed, as I see it" in merged
+    assert "## Communication Style" in merged
+    assert conflicts == ["## Values", "## Communication Style"]
+
+
+def test_a_communication_style_edit_does_not_move_values_under_my_stance() -> None:
+    ours = _LEGACY_SOUL.replace("- Ask clarifying questions when needed", "- Ask when the answer changes what I do")
+
+    merged, conflicts = _merge_soul(_LEGACY_SOUL, ours, _template("SOUL.md"))
+
+    assert "## My stance" not in merged
+    assert "## Values\n\n- Accuracy over speed\n- User privacy and safety\n" in merged
+    assert "- Ask when the answer changes what I do" in merged
+    assert conflicts == ["## Values", "## Communication Style"]
+
+
+def test_a_product_values_rename_lands_when_values_is_not_edited() -> None:
+    ours = _LEGACY_SOUL.replace("- Helpful and friendly", "- Helpful and friendly, mine")
+
+    merged, conflicts = _merge_soul(_LEGACY_SOUL, ours, _template("SOUL.md"))
+
+    assert "## My stance" in merged
+    assert "I am a guest in someone's work." in merged
+    assert "## Values" not in merged
+    assert "## Personality" in merged
+    assert conflicts == ["## Personality"]
+
+
+def test_a_conflict_in_one_section_keeps_the_other_sections_changes() -> None:
+    base = "## A\n- a one\n- a two\n\n## B\n- b one\n- b two\n\n## C\n- c one\n- c two\n"
+    ours = "## A\n- a one\n- a two\n\n## B\n- b one mine\n- b two\n\n## C\n- c one\n- c two\n"
+    theirs = "## A new\n- a one new\n- a two\n\n## B\n- b one new\n- b two\n\n## C\n- c one new\n- c two\n"
+
+    merged, conflicts = _merge_soul(base, ours, theirs)
+
+    assert "## A new" in merged
+    assert "- a one new" in merged
+    assert "- b one mine" in merged
+    assert "- b one new" not in merged
+    assert "- c one new" in merged
+    assert conflicts == ["## B"]
+
+
+def test_duplicate_headings_do_not_share_one_conflict() -> None:
+    base = "## Rules\n- a\n- b\n\n## Rules\n- c\n- d\n"
+    ours = "## Rules\n- a mine\n- b\n\n## Rules\n- c\n- d\n"
+    theirs = "## Rules\n- a new\n- b\n\n## Rules\n- c new\n- d\n"
+
+    merged, conflicts = _merge_soul(base, ours, theirs)
+
+    assert "- a mine" in merged
+    assert "- c new" in merged
+    assert conflicts == ["## Rules"]
+
+
+def test_a_fenced_hash_is_not_a_section_boundary() -> None:
+    base = "## A\n```sh\n# check\n```\n- a\n\n## B\n```sh\n# check\n```\n- b\n"
+    ours = "## A\n```sh\n# check\n```\n- a mine\n\n## B\n```sh\n# check\n```\n- b\n"
+    theirs = "## A\n```sh\n# check\n```\n- a new\n\n## B\n```sh\n# check\n```\n- b new\n"
+
+    merged, conflicts = _merge_soul(base, ours, theirs)
+
+    assert "- b new" in merged
+    assert conflicts == ["## A"]
+
+
+def test_a_product_append_lands_when_the_user_edited_elsewhere() -> None:
+    base = "## A\nalpha\n\n## B\nbeta\n"
+    ours = "## A\nalpha mine\n\n## B\nbeta\n"
+    theirs = base + "\n## New\nnew\n"
+
+    merged, conflicts = _merge_soul(base, ours, theirs)
+
+    assert merged == "## A\nalpha mine\n\n## B\nbeta\n\n## New\nnew\n"
+    assert conflicts == []
+
+
+def test_a_product_append_does_not_glue_to_a_user_line_without_a_newline() -> None:
+    merged, conflicts = _merge_soul("## A\nalpha\n", "## A\nalpha mine", "## A\nalpha\n\n## New\nnew\n")
+
+    assert merged == "## A\nalpha mine\n\n## New\nnew\n"
+    assert conflicts == []
+
+
+def test_both_sides_making_the_same_edit_is_not_a_conflict() -> None:
+    merged, conflicts = _merge_soul(
+        "## A\n- a\n- b\n",
+        "## A\n- a\n- b mine\n",
+        "## A\n- a\n- b mine\n",
+    )
+
+    assert merged == "## A\n- a\n- b mine\n"
+    assert conflicts == []
+
+
 def test_a_previous_release_soul_is_replaced(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)
@@ -128,6 +230,25 @@ def test_a_previous_release_soul_is_replaced(tmp_path: Path) -> None:
 
     assert soul.read_text(encoding="utf-8") == _template("SOUL.md")
     assert _base(tmp_path).read_text(encoding="utf-8") == _template("SOUL.md")
+
+
+def test_an_edited_values_section_is_left_whole_by_the_sync(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    edited = _LEGACY_SOUL.replace("- Accuracy over speed", "- Accuracy over speed, as I see it")
+    soul.write_text(edited, encoding="utf-8")
+    messages: list[str] = []
+
+    sync_workspace_templates(tmp_path, notify=messages.append)
+
+    text = soul.read_text(encoding="utf-8")
+    assert "## My stance" not in text
+    assert "## Values" in text
+    assert "- Accuracy over speed, as I see it" in text
+    assert any("not updated:" in message and "## Values" in message for message in messages)
+    first = text
+    sync_workspace_templates(tmp_path, silent=True)
+    assert soul.read_text(encoding="utf-8") == first
 
 
 def test_an_old_copy_keeps_the_users_edit_while_the_rest_updates(tmp_path: Path) -> None:
@@ -150,7 +271,7 @@ def test_an_old_copy_keeps_the_users_edit_while_the_rest_updates(tmp_path: Path)
     assert "- Concise and to the point, but mine" in backups[-1].read_text(encoding="utf-8")
 
 
-def test_a_base_file_merges_a_later_release(tmp_path: Path) -> None:
+def test_a_base_file_equal_to_the_template_is_not_merged_again(tmp_path: Path) -> None:
     soul = _soul(tmp_path)
     soul.parent.mkdir(parents=True)
     soul.write_text(_template("SOUL.md") + "\n## Mine\n\n- Say less.\n", encoding="utf-8")
@@ -160,6 +281,21 @@ def test_a_base_file_merges_a_later_release(tmp_path: Path) -> None:
 
     text = soul.read_text(encoding="utf-8")
     assert text.startswith(_template("SOUL.md").rstrip("\n"))
+    assert "## Mine" in text
+    assert "- Say less." in text
+
+
+def test_a_base_record_from_an_older_release_merges_forward(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    soul.write_text(_LEGACY_SOUL + "\n## Mine\n\n- Say less.\n", encoding="utf-8")
+    _base(tmp_path).write_text(_LEGACY_SOUL, encoding="utf-8")
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    text = soul.read_text(encoding="utf-8")
+    assert text.startswith(_template("SOUL.md").rstrip("\n"))
+    assert "## How I talk" in text
     assert "## Mine" in text
     assert "- Say less." in text
 
@@ -188,6 +324,62 @@ def test_soul_local_is_applied_once(tmp_path: Path) -> None:
 
     assert first.count("## Mine") == 1
     assert soul.read_text(encoding="utf-8") == first
+
+
+def test_a_product_generated_soul_with_a_receipt_is_left_alone_silently(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    generated = _LEGACY_SOUL + "\n## Product note\n\n- generated\n"
+    soul.write_text(generated, encoding="utf-8")
+    soul.with_name(".soul.md.generated.sha256").write_text(f"raven-code {_digest(generated)}\n", encoding="ascii")
+    messages: list[str] = []
+
+    sync_workspace_templates(tmp_path, notify=messages.append)
+
+    assert soul.read_text(encoding="utf-8") == generated
+    assert not _base(tmp_path).exists()
+    assert not any("nothing shows" in message for message in messages)
+
+
+def test_a_receipt_naming_a_shipped_text_is_still_a_merge_base(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    soul.write_text(_LEGACY_SOUL, encoding="utf-8")
+    soul.with_name(".soul.md.generated.sha256").write_text(f"raven {_digest(_LEGACY_SOUL)}\n", encoding="ascii")
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    assert soul.read_text(encoding="utf-8") == _template("SOUL.md")
+
+
+def test_the_shipped_soul_history_merges_cleanly() -> None:
+    current = _template("SOUL.md")
+    legacy = sorted(
+        (entry for entry in (files("raven") / "templates" / "legacy").iterdir() if entry.name.endswith(".md")),
+        key=lambda entry: entry.name,
+    )
+
+    assert legacy
+    assert _digest(current) not in {_digest(entry.read_text(encoding="utf-8")) for entry in legacy}
+    for entry in legacy:
+        text = entry.read_text(encoding="utf-8")
+        merged, conflicts = _merge_soul(text, text, current)
+        assert merged == current
+        assert conflicts == []
+
+
+def test_an_addendum_already_in_the_file_is_not_duplicated(tmp_path: Path) -> None:
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    block = "## Mine\n\n- old rule\n"
+    soul.write_text(_template("SOUL.md") + "\n" + block + "\n## After\n\n- more\n", encoding="utf-8")
+    (soul.parent / "soul.local.md").write_text(block, encoding="utf-8")
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    text = soul.read_text(encoding="utf-8")
+    assert text.count("## Mine") == 1
+    assert "## After" in text
 
 
 def test_a_changed_soul_local_replaces_the_old_block(tmp_path: Path) -> None:

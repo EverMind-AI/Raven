@@ -4,17 +4,20 @@ Agent home once, creating only what is missing.
 ``SOUL.md`` is the host's voice as well as a template, so it is not create-only.
 The sync keeps the product text it last wrote beside the file
 (``.soul.md.template``) and, when a release ships a new voice, merges the
-product's changes into the user's copy. A product change that conflicts with a
-user edit keeps that section as the user has it and is named in the notice;
-every other change follows the new release. The operator's own lines may also
-live in ``soul.local.md``; the sync records the block it appended, withdraws
-that block on the next sync, and appends the file's current contents, so edits
+product's changes into the user's copy. A product hunk that conflicts with a
+user edit leaves every section it touches as the user has it, including a
+heading rename, and is named in the notice; every other hunk follows the new
+release. The operator's own lines may also live in ``soul.local.md``; the sync
+records the block it appended, withdraws that block on the next sync while it is
+still at the end of the file, and appends the file's current contents, so edits
 and removal take effect.
 """
 
 import hashlib
+import re
 import stat
 import sys
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -47,17 +50,122 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()
 
 
-def _heading(lines: list[str], i1: int, i2: int) -> str:
-    """The heading a product hunk belongs to, for a conflict notice."""
-    for line in lines[i1:i2]:
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            return stripped
-    for line in reversed(lines[: min(i1, len(lines) - 1) + 1]):
-        stripped = line.strip()
-        if stripped.startswith("#"):
-            return stripped
-    return "the opening lines"
+_ATX_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+|$)")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _fence_open(line: str) -> tuple[str, int] | None:
+    match = _FENCE.match(line)
+    if match is None:
+        return None
+    marker = match.group(1)
+    if marker[0] == "`" and "`" in match.group(2):
+        return None
+    return marker[0], len(marker)
+
+
+def _fence_closes(line: str, fence: tuple[str, int]) -> bool:
+    marker, length = fence
+    match = re.match(r"^ {0,3}([`~]+)[ \t]*$", line)
+    return match is not None and match.group(1)[0] == marker and len(match.group(1)) >= length
+
+
+def _heading_lines(lines: list[str]) -> list[int]:
+    """The line indices of section headings, fenced code and quotes excluded.
+
+    Setext headings are deliberately not recognised: the shipped SOUL texts use
+    ATX headings, and treating ``---`` / ``===`` as a heading would misread a
+    horizontal rule in a body. A base that uses setext stays one section, which
+    makes the merge keep too much rather than move a heading over a user's body.
+    """
+    headings: list[int] = []
+    fence: tuple[str, int] | None = None
+    for index, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        if fence is not None:
+            if _fence_closes(line, fence):
+                fence = None
+            continue
+        opened = _fence_open(line)
+        if opened is not None:
+            fence = opened
+            continue
+        if line.lstrip().startswith(">"):
+            continue
+        if _ATX_HEADING.match(line):
+            headings.append(index)
+    return headings
+
+
+def _section_of_line(headings: list[int], index: int, line_count: int) -> int:
+    """The section holding ``index``; ``-1`` is the text before the first heading."""
+    if not headings:
+        return -1
+    if index >= line_count:
+        return len(headings) - 1
+    return bisect_right(headings, index) - 1
+
+
+def _section_of_gap(headings: list[int], index: int) -> int:
+    """The section an insertion at ``index`` belongs to.
+
+    At a heading line the insertion goes before that heading, so it belongs to
+    the section above; there is no section of its own to conflict with.
+    """
+    if not headings:
+        return -1
+    return bisect_left(headings, index) - 1
+
+
+def _inserted_heading(lines: list[str], i1: int, i2: int) -> bool:
+    for raw in lines[i1:i2]:
+        line = raw.rstrip("\n")
+        if not line.strip():
+            continue
+        return bool(_ATX_HEADING.match(line))
+    return False
+
+
+def _sections_touched(
+    lines: list[str], headings: list[int], i1: int, i2: int, line_count: int, *, inserted_heading: bool
+) -> tuple[int, ...]:
+    """Every section a base range touches, so a conflict can skip all of them."""
+    if i1 == i2:
+        gap = _section_of_gap(headings, i1)
+        if not inserted_heading:
+            return (gap,)
+        after = _section_of_line(headings, i1, line_count) if i1 < line_count else gap
+        return (gap,) if after == gap else (gap, after)
+    content = [index for index in range(i1, i2) if lines[index].strip()]
+    if content:
+        first = _section_of_line(headings, content[0], line_count)
+        last = _section_of_line(headings, content[-1], line_count)
+    else:
+        first = _section_of_line(headings, i1, line_count)
+        last = _section_of_line(headings, i2 - 1, line_count)
+    return tuple(range(first, last + 1))
+
+
+def _section_title(lines: list[str], headings: list[int], section: int) -> str:
+    if section < 0:
+        return "the opening lines"
+    return lines[headings[section]].strip()
+
+
+def _already_applied(
+    user_ops: list[tuple],
+    ours_lines: list[str],
+    theirs_lines: list[str],
+    i1: int,
+    i2: int,
+    j1: int,
+    j2: int,
+) -> bool:
+    """Whether the user's replacement is already exactly the product's text."""
+    for tag, a1, a2, b1, b2 in user_ops:
+        if tag == "replace" and a1 == i1 and a2 == i2:
+            return ours_lines[b1:b2] == theirs_lines[j1:j2]
+    return False
 
 
 def _conflicts_with_user(user_ops: list[tuple], i1: int, i2: int) -> bool:
@@ -101,10 +209,11 @@ def _merge_soul(base: str, ours: str, theirs: str) -> tuple[str, list[str]]:
     """Apply the base-to-theirs changes to ours, keeping the regions ours changed.
 
     Returns the merged text and the headings of product changes that could not
-    be applied because the user edited the same region. A section a conflict
-    lands in is left wholly as the user has it, so a new heading never sits
-    above an old body. Both sides appending at end of file is not a conflict:
-    the product's text goes first.
+    be applied because the user edited a section they touch. A product hunk is
+    attributed to every base section it touches and is skipped whole, so a
+    heading rename and its body move together and a new heading never sits above
+    an old body. Both sides appending at end of file is not a conflict: the
+    product's text goes first. A product-only append also lands at the end.
     """
     base = base.replace("\r\n", "\n")
     ours = ours.replace("\r\n", "\n")
@@ -116,24 +225,49 @@ def _merge_soul(base: str, ours: str, theirs: str) -> tuple[str, list[str]]:
     base_lines = base.splitlines(keepends=True)
     ours_lines = ours.splitlines(keepends=True)
     theirs_lines = theirs.splitlines(keepends=True)
+    headings = _heading_lines(base_lines)
     user_ops = SequenceMatcher(None, base_lines, ours_lines, autojunk=False).get_opcodes()
     product_ops = [
         op for op in SequenceMatcher(None, base_lines, theirs_lines, autojunk=False).get_opcodes() if op[0] != "equal"
     ]
     conflicts: list[str] = []
-    for _tag, i1, i2, _j1, _j2 in product_ops:
+    conflict_sections: set[int] = set()
+    ops: list[tuple[tuple, tuple[int, ...]]] = []
+    for op in product_ops:
+        tag, i1, i2, j1, j2 = op
         inserted_at_eof = i1 == i2 == len(base_lines) and _user_insert_at(user_ops, i1) is not None
+        appended_heading = tag == "insert" and i1 == i2 == len(base_lines) and _inserted_heading(theirs_lines, j1, j2)
+        if inserted_at_eof or appended_heading:
+            sections: tuple[int, ...] = ()
+        else:
+            sections = _sections_touched(
+                base_lines,
+                headings,
+                i1,
+                i2,
+                len(base_lines),
+                inserted_heading=tag == "insert" and _inserted_heading(theirs_lines, j1, j2),
+            )
+        ops.append((op, sections))
         if _conflicts_with_user(user_ops, i1, i2) and not inserted_at_eof:
-            name = _heading(base_lines, i1, i2)
-            if name not in conflicts:
-                conflicts.append(name)
-    for _tag, i1, i2, j1, j2 in sorted(product_ops, key=lambda op: (op[1], op[2]), reverse=True):
-        if _heading(base_lines, i1, i2) in conflicts:
+            if _already_applied(user_ops, ours_lines, theirs_lines, i1, i2, j1, j2):
+                continue
+            conflict_sections.update(sections)
+            for section in sections:
+                name = _section_title(base_lines, headings, section)
+                if name not in conflicts:
+                    conflicts.append(name)
+    for (tag, i1, i2, j1, j2), sections in sorted(ops, key=lambda pair: (pair[0][1], pair[0][2]), reverse=True):
+        if conflict_sections.intersection(sections):
             continue
         if i1 == i2 == len(base_lines):
             oj = _user_insert_at(user_ops, i1)
             if oj is not None:
                 ours_lines[oj:oj] = theirs_lines[j1:j2]
+            elif ours_lines:
+                if not ours_lines[-1].endswith("\n"):
+                    ours_lines[-1] += "\n"
+                ours_lines.extend(theirs_lines[j1:j2])
             continue
         mapped = _mapped_range(user_ops, i1, i2)
         if mapped is None:
@@ -142,11 +276,7 @@ def _merge_soul(base: str, ours: str, theirs: str) -> tuple[str, list[str]]:
         if ours_lines[oj1:oj2] != base_lines[i1:i2]:
             continue
         ours_lines[oj1:oj2] = theirs_lines[j1:j2]
-    unique: list[str] = []
-    for name in reversed(conflicts):
-        if name not in unique:
-            unique.append(name)
-    return "".join(ours_lines), unique
+    return "".join(ours_lines), conflicts
 
 
 def _with_addendum(text: str, addendum: str | None) -> str:
@@ -211,17 +341,19 @@ def _soul_templates(tpl) -> dict[str, str]:
     return out
 
 
-def _receipt_digest(target: Path) -> str | None:
-    """The product-text digest a previous release's generated-file receipt recorded."""
+def _receipt_digests(target: Path) -> set[str]:
+    """Every text digest a generated-file receipt beside ``target`` names.
+
+    The owner is deliberately not filtered: each product launcher writes its own
+    name (``raven-code``, ``raven-research-ng``, ...), and a receipt that names
+    this file means another product wrote it.
+    """
     receipt = target.with_name(f".{target.name}.generated.sha256")
     try:
-        for line in receipt.read_text(encoding="ascii").splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[0] == "raven":
-                return parts[1]
+        lines = receipt.read_text(encoding="ascii").splitlines()
     except (OSError, UnicodeDecodeError):
-        return None
-    return None
+        return set()
+    return {parts[1] for parts in (line.split() for line in lines) if len(parts) == 2}
 
 
 def _soul_base(target: Path, current: str, templates: dict[str, str]) -> str | None:
@@ -234,11 +366,11 @@ def _soul_base(target: Path, current: str, templates: dict[str, str]) -> str | N
     known = templates.get(_digest(current))
     if known is not None:
         return known
-    receipt = _receipt_digest(target)
-    if receipt is not None:
-        known = templates.get(receipt)
-        if known is not None:
-            return known
+    receipt = _receipt_digests(target)
+    if receipt:
+        for digest, text in templates.items():
+            if digest in receipt:
+                return text
     prefix = [text for text in templates.values() if current.startswith(text)]
     if prefix:
         return max(prefix, key=len)
@@ -352,7 +484,13 @@ def sync_workspace_templates(
         body = _strip_block(current, previous)
         if body == current and addendum:
             body = _strip_block(current, addendum)
-        base = _soul_base(target, body, _soul_templates(tpl))
+        templates = _soul_templates(tpl)
+        current_digest = _digest(body)
+        # Another product's generated prompt is not this sync's to rewrite. A
+        # receipt naming a shipped text is a base instead, which _soul_base reads.
+        if current_digest not in templates and current_digest in _receipt_digests(target):
+            return
+        base = _soul_base(target, body, templates)
         if base is None:
             if say is not None:
                 say(
