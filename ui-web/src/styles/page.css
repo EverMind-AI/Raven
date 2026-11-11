@@ -770,12 +770,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   background: var(--wash); }
 
 /* ── rail ──────────────────────────────────────────────────────────── */
-/* No rule at the seam: the rail's grey against the chat's white is the whole
-   boundary, the way the reference renderer does it. The grip hover keeps the
-   seam findable. */
 /* The rail is a pale pane over the wash, not a grey panel beside it: --side-bg
    is nearly opaque, so the gradient only warms it, and the seam is a hairline
-   of light rather than a change of shade. It carries no blur -- what is behind
+   of light rather than a change of shade; the grip hover keeps that seam
+   findable. It carries no blur -- what is behind
    it is the wash alone, a gradient a blur would leave unchanged. Horizontal
    padding stays 0 -- the rows inset themselves, and the header toggle has to
    keep the exact --edge offset its collapsed twin is fixed at (see #railShow). */

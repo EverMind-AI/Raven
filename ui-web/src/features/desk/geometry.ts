@@ -55,8 +55,9 @@ export const DESK_COLUMN_FLOOR = 520
 /* How much of the chat's width the anchored panel is asking for.
  *
  * The transcript column is centred in the chat and the anchored panel hangs into
- * it. Measured on the running page in a 900px-tall window with the default 300px
- * panel, as the intersection of the two rectangles:
+ * it. Measured on the running page in a 900px-tall window with a 300px panel at
+ * the 330px it opened at before it opened full height, as the intersection of
+ * the two rectangles:
  *
  *     1920px   nothing
  *     1600px   13px wide, 330px tall
@@ -68,9 +69,11 @@ export const DESK_COLUMN_FLOOR = 520
  * where any conversation's does once the reader scrolls back up. At that height
  * it does not reach the composer: the panel ends at y=394 and the composer sits
  * near the bottom of the window, so the two intersect on the x-axis only.
- * Pulled all the way down, it ends level with the composer card's bottom edge
- * (`deskBottomLimit`) -- beside the card, because the reserve moves the composer
- * as well, and short of it where the reserve stands aside.
+ * Pulled all the way down -- where it now opens (`DeskGeometry.fill`) -- it ends
+ * level with the composer card's bottom edge (`deskBottomLimit`): a strip down
+ * the column's whole height rather than a band across its top, beside the card
+ * because the reserve moves the composer as well, and short of it where the
+ * reserve stands aside.
  *
  * So the chat gives the width up instead, and the column re-centres in what is
  * left. That is what already happens when the workspace column opens (`--wsw`),
