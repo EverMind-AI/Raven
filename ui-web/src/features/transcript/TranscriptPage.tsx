@@ -4,7 +4,7 @@ import {
   AiSearch02Icon, AlertCircleIcon, ArrowUpRight01Icon, BookOpen02Icon, DocumentCodeIcon, Download04Icon,
   File01Icon, InternetIcon, PencilEdit01Icon, Wrench01Icon,
 } from '@hugeicons/core-free-icons'
-import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { flushSync } from 'react-dom'
 
 import charmSpec from '../../../../ui-shared/charms.json'
@@ -15,6 +15,7 @@ import * as attachmentCache from '../../lib/attachmentCache'
 import { copy } from '../../lib/clipboard'
 import { readingImported } from '../../lib/imported'
 import { useTick } from '../../lib/tick'
+import * as lang from '../../state/lang'
 import * as lightbox from '../../state/lightbox'
 import { open as openChip } from '../../state/proseChips'
 import * as reveal from '../../state/reveal'
@@ -1088,6 +1089,18 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
   const openAll = (): void => store.expandAskAtts(lane, seg)
   const thumb = (p: string, liveImg: boolean): ReactElement => <AskShot key={p} path={p} live={liveImg} />
   const showClip = seg.clipped && !seg.clipOpen
+  /* The brief is read as markdown once per (body, language) pair. `md()` is
+     quadratic in the fence markers an upstream node can write into it (1.3 s
+     at 136 KB), and a repaint used to pay that again; the body of a message
+     never changes, and the language column is what the rendered copy depends
+     on besides it. The column is not read by the callback -- md()'s own lookup
+     reads it -- so the dependency the rule cannot see is disabled below. */
+  const col = lang.get().lang
+  const mdBody = useMemo(
+    () => (seg.md ? store.markUntrusted(store.mdHtml(seg.body)) : ''),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [seg.md, seg.body, col],
+  )
   return (
     <div className="turn me in" data-ask={seg.id}>
       {/* Pictures above the bubble, files inside it (Figma: Raven / UserMessage).
@@ -1149,7 +1162,7 @@ const AskView = memo(function AskView({ lane, seg }: { lane: Lane; seg: AskData 
             </span>
           ) : null}
           {seg.md
-            ? <div className="prose" dangerouslySetInnerHTML={{ __html: store.markUntrusted(store.mdHtml(seg.body)) }} />
+            ? <div className="prose" dangerouslySetInnerHTML={{ __html: mdBody }} />
             : seg.body}
         </div>
       ) : null}

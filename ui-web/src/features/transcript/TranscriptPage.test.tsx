@@ -9,6 +9,7 @@ import { I18N } from '../../i18n/t'
 import * as attachmentCache from '../../lib/attachmentCache'
 import { _resetForTests as resetSession, setCurrent } from '../../lib/session'
 import * as confirmStore from '../../state/confirm'
+import { _resetForTests as resetLangStore, set as setLang } from '../../state/lang'
 import * as pageStore from '../../state/page'
 import { noteRow } from '../../state/session/conversation'
 import { hold as holdHost } from '../../state/session/hosts'
@@ -123,6 +124,7 @@ afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  resetLangStore()
   resetSources()
 })
 
@@ -3089,6 +3091,54 @@ describe("the turn's delivered files", () => {
       mount.agentStage(box, { ...running, status: 'completed' }, { key: 'tool-tail-1', dispatch: true, shut: true })
     })
     expect(box.querySelector('.tfh')?.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  /* The dispatch is read once per version of its body. The reader sits in a
+     quadratic markdown pass otherwise -- 1.3 s on 136 KB of fence markers an
+     upstream node can write -- and every repaint paid it again. */
+  it('reads a dispatch through markdown once, not on every repaint', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    const brief = '[BEGIN UNTRUSTED '.repeat(200)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [
+          { role: 'user', text: brief },
+          { role: 'assistant', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+        ],
+      }, { key: 'md-once', reset: true, dispatch: true, shut: true })
+    })
+    const html = box.querySelector('.prose')?.innerHTML
+    const read = seen.md
+    act(() => { mount.redraw() })
+    expect(seen.md).toBe(read)
+    expect(box.querySelector('.prose')?.innerHTML).toBe(html)
+  })
+
+  /* Held out of the memo's key on purpose: what md() writes depends on the
+     language (a code block's copy title), so a flip has to read the body
+     again rather than keep the old column. */
+  it('reads a dispatch again when the language moves', () => {
+    const box = document.createElement('div')
+    document.body.append(box)
+    act(() => {
+      mount.agentStage(box, {
+        status: 'completed',
+        messages: [
+          { role: 'user', text: '```\nlet a = 1\n```' },
+          { role: 'assistant', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+          { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+        ],
+      }, { key: 'md-lang', reset: true, dispatch: true, shut: true })
+    })
+    const prose = box.querySelector('.prose') as HTMLElement
+    expect(prose.innerHTML).toContain('en:gui.code.copy')
+    lang = 'zh'
+    act(() => { setLang('zh') })
+    act(() => { mount.redraw() })
+    expect(prose.innerHTML).toContain('zh:gui.code.copy')
   })
 
   it('shows a file the agent explicitly delivered', async () => {
