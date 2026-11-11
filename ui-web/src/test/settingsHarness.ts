@@ -86,6 +86,7 @@ export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
     },
     configPath: '/home/me/.raven/config.json',
     skillHub: { on: false },
+    pictureSearch: { vendor: '', ready: false, fallback: false },
     everos: {
       available: true,
       owned: true,

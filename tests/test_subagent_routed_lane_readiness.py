@@ -225,6 +225,15 @@ def test_a_host_following_lane_closes_with_neither_vendor(lane, tmp_path: Path) 
     assert host._routed_target_ready(LANE, ("image_search",)) is False
 
 
+def test_a_malformed_plugin_slice_is_skipped_when_reading_the_picture_vendor(lane, tmp_path: Path) -> None:
+    lane()
+    (tmp_path / "agents" / FOLDER / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"bad": "not-a-section"}}}), encoding="utf-8"
+    )
+
+    assert va.product_picture_vendor(LANE) == ""
+
+
 def test_a_serper_key_the_host_did_not_select_is_still_the_lanes_to_spend(lane) -> None:
     """The other half of reading the vendor rather than the selection: a host
     running Tavily without Tavily's key may still hold a Serper key, and Serper is

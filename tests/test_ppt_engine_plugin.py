@@ -238,9 +238,7 @@ def test_the_slice_key_is_spent_on_serper_only(tmp_path: Path, monkeypatch) -> N
     web = WebToolsConfig.model_validate(
         {"search": {"provider": "serpapi"}, "providers": {"serpapi": {"apiKey": "serp-key"}}}
     )
-    shared = plugin_module._Shared(
-        _web_ctx({**ENABLED, "imageSearch": {"apiKey": "slice-serper"}}, tmp_path, web)
-    )
+    shared = plugin_module._Shared(_web_ctx({**ENABLED, "imageSearch": {"apiKey": "slice-serper"}}, tmp_path, web))
 
     assert shared.image_search_vendor() == "serpapi"
     assert shared.image_search_key("serpapi") == "serp-key"

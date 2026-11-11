@@ -307,6 +307,47 @@ async def test_a_route_reports_whether_the_picture_search_it_needs_is_ready(tmp_
     assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": True}]
 
 
+def test_routes_payload_reads_a_dict_route_and_no_host() -> None:
+    """The manifest's routes reach this helper as models in production, but a
+    hand-built row may hand it dicts; with no readable host the readiness is
+    unknown rather than asserted."""
+    from types import SimpleNamespace
+
+    from raven.rpc.methods.subagents import _routes_payload
+
+    cfg = SimpleNamespace(routes=[{"to": "Raven-Deck", "needs": ["image_search"]}])
+
+    assert _routes_payload(cfg, None) == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
+async def test_the_roster_renders_when_the_host_config_cannot_load(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Raven-Design",
+                            "kind": "acp",
+                            "command": "x",
+                            "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                        }
+                    ]
+                },
+                "tools": "not-an-object",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
 async def test_list_never_returns_an_api_key(config_path: Path) -> None:
     result = await subagents_list({})
     blob = json.dumps(result)

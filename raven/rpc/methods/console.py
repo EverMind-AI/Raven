@@ -673,11 +673,31 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
     # through the loader's migrations and its boolean rules, and a copy of
     # either in the page drifts from it.
     hub_on = skill_hub_on(raw)
+    from raven.agent.subagent.vendored_agents import picture_search_status, product_secret
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+    from raven.config.loader import load_config
+
+    config = load_config(path)
+    selected = config.tools.web.search.provider
+
+    def lane_key(vendor: str) -> str:
+        return (
+            product_secret("Raven-PPT", f"{vendor.upper()}_API_KEY")
+            or config.effective_web_vendor_key(vendor)
+            or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+        )
+
+    vendor, ready = picture_search_status("Raven-PPT", selected, lane_key)
     return {
         "settings": _mask_secrets(raw),
         "config_path": str(path),
         "raven_version": ver,
         "skill_hub_on": hub_on,
+        "picture_search": {
+            "vendor": vendor if ready else "",
+            "ready": ready,
+            "fallback": bool(ready and vendor != selected),
+        },
     }
 
 
