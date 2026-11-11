@@ -385,8 +385,8 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
     return str(search.get("provider") or "serper")
 
 
-def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str], str]) -> bool:
-    """Whether a routed lane can search pictures under the rule its own tool speaks."""
+def picture_search_status(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool]:
+    """The vendor a routed lane would use for pictures, and whether it has a key."""
     from raven.agent.tools.web import image_search_vendor, ppt_image_vendor
 
     declared = product_picture_vendor(target)
@@ -396,7 +396,12 @@ def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str],
         vendor = declared
     else:
         vendor = image_search_vendor(host_vendor, key_for)
-    return bool(vendor and key_for(vendor))
+    return vendor, bool(vendor and key_for(vendor))
+
+
+def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str], str]) -> bool:
+    """Whether a routed lane can search pictures under the rule its own tool speaks."""
+    return picture_search_status(target, host_vendor, key_for)[1]
 
 
 def _folder_addresses_openrouter(folder: Path) -> bool:

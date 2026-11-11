@@ -4659,6 +4659,20 @@ export interface SettingsGetResult {
    * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.
    */
   skill_hub_on: boolean;
+  /**
+   * The deck engine's picture search as the runtime would resolve it now: the vendor it would use and whether a key resolves, environment and product-folder credentials included.
+   */
+  picture_search: {
+    /**
+     * The picture vendor the deck engine would use now, or an empty string when none resolves. Answered from effective credentials -- the config file, the vendor's environment variable, and the deck lane's own .env -- so it agrees with what ppt_image_search would do.
+     */
+    vendor: string;
+    ready: boolean;
+    /**
+     * True when a keyed vendor other than the selected search vendor is what answered, so the page can say deck generation will fall back to it.
+     */
+    fallback: boolean;
+  };
 }
 export interface SettingsSetParams {
   /**

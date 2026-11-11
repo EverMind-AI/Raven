@@ -144,6 +144,23 @@ const hubOn = (config: Record<string, Json>): boolean => {
   return block.enabled !== false
 }
 
+/* The offline stand-in for the deck engine's picture search. It mirrors the
+   server's rule over the fixture's own config; the live answer comes from
+   settings.get with env and product-folder credentials folded in. */
+const PPT_VENDORS = ['serper', 'serpapi', 'brave', 'firecrawl', 'serply']
+const pictureSearchOf = (config: Record<string, Json>): ResultOf<'settings.get'>['picture_search'] => {
+  const chosen = pick(config, 'tools.web.search.provider')
+  const selected = typeof chosen === 'string' && chosen ? chosen : 'serper'
+  const keyed = (vendor: string): boolean => {
+    const slot = pick(config, `tools.web.providers.${vendor}.apiKey`)
+    if (typeof slot === 'string' && slot) return true
+    return vendor === 'serper' && !!pick(config, 'tools.web.search.apiKey')
+  }
+  if (PPT_VENDORS.includes(selected) && keyed(selected)) return { vendor: selected, ready: true, fallback: false }
+  if (keyed('serper')) return { vendor: 'serper', ready: true, fallback: selected !== 'serper' }
+  return { vendor: '', ready: false, fallback: false }
+}
+
 /* A ledger with nothing in it. The four `*_missing_calls` counts are part of
    the shape rather than decoration: they are how the panel says an answer is
    incomplete, and zero is the truthful value where nothing was spent. */
@@ -204,6 +221,7 @@ export function createSettings(env: FixtureEnv, ext: ExtFixture): SettingsFixtur
         config_path: '~/.raven/config.json',
         raven_version: '0.1.0',
         skill_hub_on: hubOn(config),
+        picture_search: pictureSearchOf(config),
       }),
       'settings.set': (p) => {
         put(config, p.key, p.value)

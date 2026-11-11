@@ -668,6 +668,38 @@ async def test_image_search_returns_url_size_and_source_and_drops_what_a_screen_
 
 
 @pytest.mark.asyncio
+async def test_serply_image_search_sends_the_documented_request(monkeypatch) -> None:
+    class _Recorder:
+        calls: list[tuple] = []
+
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc) -> None:
+            return None
+
+        async def get(self, url, params=None, headers=None, timeout=None, **kwargs):
+            type(self).calls.append((url, params, headers))
+            return _ImageResponse([])
+
+        async def post(self, *args, **kwargs):
+            raise AssertionError("serply's image surface is a GET")
+
+    monkeypatch.setattr("raven.agent.tools.web.httpx.AsyncClient", _Recorder)
+    _Recorder.calls = []
+
+    await ImageSearchTool(api_key="sk-serply", provider="serply").execute(query="vintage bike")
+
+    url, params, headers = _Recorder.calls[0]
+    assert url == "https://api.serply.io/v1/image"
+    assert params == {"q": "vintage bike"}
+    assert headers["X-Api-Key"] == "sk-serply"
+
+
+@pytest.mark.asyncio
 async def test_require_dimensions_drops_a_hit_whose_size_the_vendor_did_not_report(monkeypatch) -> None:
     class _NoSize:
         def __init__(self, *args, **kwargs) -> None:

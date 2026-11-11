@@ -8,7 +8,7 @@ import { t } from '../../../i18n/t'
 import { show as toast } from '../../../state/toast'
 import { Card, Chip, KeyLink, Row, Rov, Switch, Xrow } from '../Fields'
 import { ROLES, RolePill, disabledTools, roleValue } from '../providers/Roles'
-import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, pptImageVendor, str, vendorKey, webKeyReady, webVendor } from '../source'
+import { FETCH_KEYLESS, WEB_VENDOR, WEB_VENDOR_LABEL, WEB_VENDOR_URL, borrowedKey, legacyKey, str, vendorKey, webKeyReady, webVendor } from '../source'
 import * as store from '../store'
 import GROUPS from '../toolGroups.json'
 
@@ -102,15 +102,14 @@ export function VendorSelect({ keyName, value, opts }: { keyName: string; value:
   )
 }
 
-function PictureNote({ raw }: { raw: Record<string, unknown> }): JSX.Element | null {
-  const selected = webVendor('web_search', raw)
-  const picture = pptImageVendor(raw)
-  if (picture === selected) return null
+function PictureNote(): JSX.Element | null {
+  const picture = useSyncExternalStore(store.subscribe, () => store.get().snap.pictureSearch)
+  if (picture.ready && !picture.fallback) return null
   return (
     <Row>
-      <Rov warn={!picture}>
-        {picture
-          ? t('gui.settings.tools.ppt_image_fallback', { name: WEB_VENDOR_LABEL[picture] || picture })
+      <Rov warn={!picture.ready}>
+        {picture.ready
+          ? t('gui.settings.tools.ppt_image_fallback', { name: WEB_VENDOR_LABEL[picture.vendor] || picture.vendor })
           : t('gui.settings.tools.ppt_image_missing')}
       </Rov>
     </Row>
@@ -132,7 +131,7 @@ function Panel({ id, raw }: { id: string; raw: Record<string, unknown> }): JSX.E
         <Row label={t(id === 'web_search' ? 'gui.settings.tools.search_vendor' : 'gui.settings.tools.fetch_vendor')}>
           <VendorSelect keyName={pick.path} value={vendor} opts={pick.vendors.map((v) => [v, WEB_VENDOR_LABEL[v] || v])} />
         </Row>
-        {id === 'web_search' ? <PictureNote raw={raw} /> : null}
+        {id === 'web_search' ? <PictureNote /> : null}
         {(keyed || FETCH_KEYLESS.has(vendor)) && (
           <KeyRow label={t('gui.settings.tools.vendor_key', { name: WEB_VENDOR_LABEL[vendor] || vendor })}
             keyName={vendorKey(vendor)} legacy={legacyKey(id, vendor)} url={WEB_VENDOR_URL[vendor]} raw={raw} />

@@ -1443,6 +1443,73 @@ async def test_settings_get_reports_the_hub_switch_as_the_runtime_reads_it(cfg, 
     assert skill_hub_enabled(LiveConfig(cfg)) is on
 
 
+def _deck_lane(tmp_path, monkeypatch, provider: str = "host"):
+    """The shipped deck folder, and the agents root the secret reader walks."""
+    from raven.agent.subagent import vendored_agents as va
+
+    folder = tmp_path / "agents" / "raven-ppt"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-PPT", "kind": "acp", "description": "decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "run.py").write_text("", encoding="utf-8")
+    (folder / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(va, "agents_root", lambda: tmp_path / "agents")
+    return folder
+
+
+async def test_settings_get_reports_picture_search_from_effective_credentials(cfg, tmp_path, monkeypatch):
+    """The Settings picture status must agree with the runtime: a vendor's bare
+    environment variable counts even when the config file holds no key."""
+    _deck_lane(tmp_path, monkeypatch)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv"}}}}}),
+        encoding="utf-8",
+    )
+
+    missing = await rpc_console.settings_get({})
+    assert missing["picture_search"] == {"vendor": "", "ready": False, "fallback": False}
+
+    monkeypatch.setenv("SERPER_API_KEY", "sk-serper")
+    borrowed = await rpc_console.settings_get({})
+    assert borrowed["picture_search"] == {"vendor": "serper", "ready": True, "fallback": True}
+
+
+async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, monkeypatch):
+    """Route readiness accepts the product folder's own `<PRODUCT>_<VENDOR>_API_KEY`;
+    the Settings note has to read the same source or it contradicts the route."""
+    _deck_lane(tmp_path, monkeypatch)
+    (tmp_path / "agents" / "raven-ppt" / ".env").write_text("PPT_SERPER_API_KEY=sk-lane\n", encoding="utf-8")
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "serper", "ready": True, "fallback": True}
+
+
+async def test_settings_get_uses_a_keyed_ppt_vendor_without_a_fallback(cfg, tmp_path, monkeypatch):
+    _deck_lane(tmp_path, monkeypatch)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "serpapi"}, "providers": {"serpapi": {"apiKey": "sp"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "serpapi", "ready": True, "fallback": False}
+
+
 async def test_settings_set_hub_switch_on_writes_only_the_switch(cfg):
     """The URL has a default, so there is nothing to seed and nothing to wait
     for: the loop serving now already holds the client."""

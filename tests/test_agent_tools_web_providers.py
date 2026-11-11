@@ -1094,13 +1094,18 @@ def test_the_settings_page_knows_which_vendors_need_no_key() -> None:
     assert _tsx_keyless("FETCH_KEYLESS") == {v for v, s in FETCH_PROVIDERS.items() if not s.needs_key}
 
 
-def test_the_settings_page_ppt_picture_set_matches_the_deck_tool() -> None:
-    """The note the Search service panel shows decides from this set whether deck
-    generation has a picture tool; a vendor added on one side and not the other
-    would promise a deck the engine cannot build."""
+def test_the_offline_fixture_ppt_picture_set_matches_the_deck_tool() -> None:
+    """The stub page answers ``settings.get`` from its own config, and its
+    vendor list is the page side's one copy of the deck rule; a vendor added on
+    one side and not the other would make the offline page say a deck it cannot
+    build is possible."""
     from raven.agent.tools.web import PPT_IMAGE_SEARCH_VENDORS
 
-    assert _tsx_keyless("PPT_IMAGE_VENDORS") == set(PPT_IMAGE_SEARCH_VENDORS)
+    fixture = Path(__file__).resolve().parents[1] / "ui-web/src/rpc/fixtures/settings.ts"
+    body = fixture.read_text(encoding="utf-8")
+    found = re.search(r"const PPT_VENDORS = \[(.*?)\]", body, re.S)
+    assert found, f"PPT_VENDORS is gone from {fixture.name}"
+    assert set(re.findall(r"'([^']+)'", found.group(1))) == set(PPT_IMAGE_SEARCH_VENDORS)
 
 
 def test_the_settings_page_names_every_vendor_the_way_the_spec_table_does() -> None:
