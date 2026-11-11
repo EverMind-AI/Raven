@@ -88,6 +88,21 @@ _THRESHOLD_KINDS = frozenset(_CORPUS_KINDS - {"trajectory_regex"})
 _DEFAULT_MAX_CHARS = 80
 
 
+def _validate_pattern(pattern: object) -> None:
+    """Require a non-empty, compilable regex.
+
+    ``from_dict`` and ``evaluate_spec`` share this so a hand-built or mutated
+    spec raises the same ``ValueError`` the parse path promises, instead of
+    letting ``re.error`` escape from the evaluator.
+    """
+    if not isinstance(pattern, str) or not pattern.strip():
+        raise ValueError("trajectory_regex pattern must be a non-empty string")
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
+
+
 def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> int:
     """Parse ``d[key]`` as an int and require ``>= minimum``.
 
@@ -96,6 +111,11 @@ def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> 
     an empty trajectory as reachable. That would turn the zero-hit preflight
     into a guaranteed PASS, so the boundary is enforced here rather than left
     to the evaluator.
+
+    ``max_chars`` fails in the other direction: ``0`` (or negative) makes
+    ``is_short_toolcall_iteration`` never match, so the preflight reads a live
+    mechanism as inert and kills the spec. Both directions are validation
+    errors, not evaluator concerns.
     """
     if isinstance(d[key], bool):
         raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
@@ -132,13 +152,7 @@ class ActivationSpec:
         if kind == "trajectory_regex" and "pattern" not in d:
             raise ValueError("trajectory_regex requires 'pattern'")
         if kind == "trajectory_regex":
-            pattern = d["pattern"]
-            if not isinstance(pattern, str) or not pattern.strip():
-                raise ValueError("trajectory_regex pattern must be a non-empty string")
-            try:
-                re.compile(pattern)
-            except re.error as exc:
-                raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
+            _validate_pattern(d["pattern"])
         if kind in _THRESHOLD_KINDS:
             if "threshold" not in d:
                 raise ValueError(f"{kind} requires 'threshold'")
@@ -182,9 +196,7 @@ def evaluate_spec(spec: ActivationSpec, corpus: list[list[dict]]) -> int:
     if spec.kind == "short_content_run" and "max_chars" in spec.raw:
         _require_positive_int(spec.raw, "max_chars", spec.kind, minimum=1)
     if spec.kind == "trajectory_regex":
-        pattern = spec.raw.get("pattern")
-        if not isinstance(pattern, str) or not pattern.strip():
-            raise ValueError("trajectory_regex pattern must be a non-empty string")
+        _validate_pattern(spec.raw.get("pattern"))
     scope = spec.raw.get("scope", "assistant")
     hits = 0
     if spec.kind == "trajectory_regex":

@@ -38,6 +38,15 @@ def test_max_chars_one_is_accepted():
     assert spec.max_chars == 1
 
 
+def test_integral_float_threshold_and_max_chars_are_accepted():
+    threshold = ActivationSpec.from_dict({"kind": "min_iterations", "threshold": 1.0})
+    assert threshold.threshold == 1
+
+    spec = ActivationSpec.from_dict({"kind": "short_content_run", "threshold": 1.0, "max_chars": 2.0})
+    assert spec.threshold == 1
+    assert spec.max_chars == 2
+
+
 @pytest.mark.parametrize("pattern", ["  ", None, 3])
 def test_empty_or_non_string_trajectory_regex_is_rejected(pattern):
     with pytest.raises(ValueError, match="non-empty string"):
@@ -56,12 +65,46 @@ def test_min_iterations_does_not_count_an_empty_trajectory():
     assert evaluate_spec(spec, [[{"role": "assistant", "content": "hi"}]]) == 1
 
 
-def test_evaluate_spec_rechecks_a_hand_built_or_mutated_spec():
-    hand_built = ActivationSpec(kind="min_iterations", raw={"threshold": 0})
+@pytest.mark.parametrize("kind", sorted(_THRESHOLD_KINDS))
+@pytest.mark.parametrize("threshold", [0, -1])
+def test_evaluate_spec_rechecks_a_hand_built_or_mutated_spec(kind: str, threshold: int):
+    hand_built = ActivationSpec(kind=kind, raw={"threshold": threshold})
     with pytest.raises(ValueError, match="must be >= 1"):
         evaluate_spec(hand_built, [[]])
 
-    parsed = ActivationSpec.from_dict({"kind": "min_iterations", "threshold": 1})
-    mutated = dataclasses.replace(parsed, raw={"threshold": 0})
+    parsed = ActivationSpec.from_dict({"kind": kind, "threshold": 1})
+    mutated = dataclasses.replace(parsed, raw={"threshold": threshold})
     with pytest.raises(ValueError, match="must be >= 1"):
         evaluate_spec(mutated, [[]])
+
+    parsed.raw["threshold"] = threshold
+    with pytest.raises(ValueError, match="must be >= 1"):
+        evaluate_spec(parsed, [[]])
+
+
+def test_evaluate_spec_rechecks_a_hand_built_or_mutated_max_chars():
+    hand_built = ActivationSpec(kind="short_content_run", raw={"threshold": 1, "max_chars": 0})
+    with pytest.raises(ValueError, match="max_chars must be >= 1"):
+        evaluate_spec(hand_built, [[]])
+
+    parsed = ActivationSpec.from_dict({"kind": "short_content_run", "threshold": 1, "max_chars": 2})
+    mutated = dataclasses.replace(parsed, raw={"threshold": 1, "max_chars": 0})
+    with pytest.raises(ValueError, match="max_chars must be >= 1"):
+        evaluate_spec(mutated, [[]])
+
+    parsed.raw["max_chars"] = 0
+    with pytest.raises(ValueError, match="max_chars must be >= 1"):
+        evaluate_spec(parsed, [[]])
+
+
+@pytest.mark.parametrize("raw", [{"pattern": ""}, {}])
+def test_evaluate_spec_rechecks_the_trajectory_regex_pattern(raw: dict):
+    with pytest.raises(ValueError, match="non-empty string"):
+        evaluate_spec(ActivationSpec(kind="trajectory_regex", raw=raw), [[]])
+
+
+def test_invalid_pattern_raises_value_error_from_both_doors():
+    with pytest.raises(ValueError, match="not valid regex"):
+        ActivationSpec.from_dict({"kind": "trajectory_regex", "pattern": "("})
+    with pytest.raises(ValueError, match="not valid regex"):
+        evaluate_spec(ActivationSpec(kind="trajectory_regex", raw={"pattern": "("}), [[]])
