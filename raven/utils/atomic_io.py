@@ -42,7 +42,10 @@ def _replace_with_retry(
     delay = _REPLACE_BACKOFF
     for attempt in range(_REPLACE_ATTEMPTS):
         try:
-            _replace_unlocked(path, data, create_mode=create_mode, newline=newline)
+            if newline is None:
+                _replace_unlocked(path, data, create_mode=create_mode)
+            else:
+                _replace_unlocked(path, data, create_mode=create_mode, newline=newline)
             return
         except PermissionError:
             if attempt + 1 == _REPLACE_ATTEMPTS:
