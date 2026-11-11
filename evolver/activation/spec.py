@@ -83,6 +83,7 @@ _CORPUS_KINDS = {
     "min_iterations",
 }
 _KNOWN_KINDS = _CORPUS_KINDS | {"skill_routing", "presence"}
+_THRESHOLD_KINDS = frozenset(_CORPUS_KINDS - {"trajectory_regex"})
 
 _DEFAULT_MAX_CHARS = 80
 
@@ -96,9 +97,11 @@ def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> 
     into a guaranteed PASS, so the boundary is enforced here rather than left
     to the evaluator.
     """
+    if isinstance(d[key], bool):
+        raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
     try:
         value = int(d[key])
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{kind} {key} must be an int: {d[key]!r}") from exc
     if value < minimum:
         raise ValueError(f"{kind} {key} must be >= {minimum}, got {value}")
@@ -127,16 +130,18 @@ class ActivationSpec:
         if kind == "trajectory_regex" and "pattern" not in d:
             raise ValueError("trajectory_regex requires 'pattern'")
         if kind == "trajectory_regex":
+            if not str(d["pattern"]).strip():
+                raise ValueError("trajectory_regex pattern must be non-empty")
             try:
                 re.compile(d["pattern"])
             except re.error as exc:
                 raise ValueError(f"trajectory_regex pattern is not valid regex: {exc}") from exc
-        if kind in ("consecutive_repeat", "short_content_run", "empty_run", "repeated_failure_run", "min_iterations"):
+        if kind in _THRESHOLD_KINDS:
             if "threshold" not in d:
                 raise ValueError(f"{kind} requires 'threshold'")
             _require_positive_int(d, "threshold", kind)
         if kind == "short_content_run" and "max_chars" in d:
-            _require_positive_int(d, "max_chars", kind, minimum=0)
+            _require_positive_int(d, "max_chars", kind, minimum=1)
         if kind == "skill_routing" and "skill_name" not in d:
             raise ValueError("skill_routing requires 'skill_name'")
         if kind == "presence" and "needle" not in d:
@@ -164,6 +169,17 @@ def _scope_contents(traj: list[dict], scope: str) -> list[str]:
 def evaluate_spec(spec: ActivationSpec, corpus: list[list[dict]]) -> int:
     if spec.kind not in _CORPUS_KINDS:
         raise ValueError(f"{spec.kind} is not corpus-evaluable; use the preflight CLI path")
+    # `from_dict` is the normal door, but ActivationSpec is public and `raw` is
+    # mutable. Re-check the floor here so a hand-built or mutated spec cannot
+    # turn the zero-hit preflight into a guaranteed PASS.
+    if spec.kind in _THRESHOLD_KINDS:
+        if "threshold" not in spec.raw:
+            raise ValueError(f"{spec.kind} requires 'threshold'")
+        _require_positive_int(spec.raw, "threshold", spec.kind)
+    if spec.kind == "short_content_run" and "max_chars" in spec.raw:
+        _require_positive_int(spec.raw, "max_chars", spec.kind, minimum=1)
+    if spec.kind == "trajectory_regex" and not str(spec.raw.get("pattern", "")).strip():
+        raise ValueError("trajectory_regex pattern must be non-empty")
     scope = spec.raw.get("scope", "assistant")
     hits = 0
     if spec.kind == "trajectory_regex":
