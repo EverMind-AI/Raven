@@ -75,10 +75,10 @@ def parse(text: str) -> list[str]:
     for the LF text both writers emit.
 
     A run of ``+`` lines is one entry. Any other line ends the run; trailing
-    and leading separators do not create empty entries. This function splits
-    on ``\\n`` only, so a CRLF string keeps ``\\r`` at the end of each line;
-    the TUI's ``load()`` splits on ``/\\r?\\n/`` and drops it. The two agree on
-    the LF text both writers emit.
+    and leading separators do not create empty entries. Line endings are left
+    alone here, because the readers normalise before they parse: the Python
+    one through ``Path.read_text``, which applies universal-newline
+    translation, and the TUI one through its own split.
     """
     entries: list[str] = []
     current: list[str] = []
@@ -106,9 +106,8 @@ def read_entries(limit: int = MAX_ENTRIES) -> list[str]:
 
     ``Path.read_text`` applies universal-newline translation, so a CRLF file
     converted by an external editor yields clean entries here, as it does in
-    the TUI after its ``/\\r?\\n/`` split. A lone ``\\r`` is folded to ``\\n``
-    here; the TUI's split does not treat it as a line ending, so that file
-    stays one line there. Both writers emit LF.
+    the TUI after its split. A lone ``\\r`` is folded to ``\\n`` on both sides.
+    Both writers emit LF.
     """
     if limit <= 0:
         return []

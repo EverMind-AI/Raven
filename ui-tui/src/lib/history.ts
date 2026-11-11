@@ -29,7 +29,11 @@ export function load() {
     const entries: string[] = []
     let current: string[] = []
 
-    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+    // Split the way the Python reader reads: `Path.read_text` applies
+    // universal-newline translation, which folds a lone CR as well as CRLF.
+    // A CR kept at the end of a line would ride into the entry and defeat the
+    // adjacent-duplicate check.
+    for (const line of readFileSync(file, 'utf8').split(/\r\n|\n|\r/)) {
       if (line.startsWith('+')) {
         current.push(line.slice(1))
       } else if (current.length) {
