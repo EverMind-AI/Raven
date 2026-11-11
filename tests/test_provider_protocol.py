@@ -798,6 +798,116 @@ def test_a_missing_stop_reason_reads_unknown() -> None:
     assert response.finish_reason == "unknown"
 
 
+def test_context_window_exceeded_stop_reason_reads_length() -> None:
+    """``model_context_window_exceeded`` is a cut, like ``max_tokens``; passed through
+    raw it never matched ``flag_truncation``'s ``length`` and a cut reply read as complete."""
+    from raven.providers.anthropic_messages_provider import parse_message
+    from raven.providers.truncation import flag_truncation
+
+    response = parse_message(
+        {
+            "content": [{"type": "text", "text": "partial"}],
+            "stop_reason": "model_context_window_exceeded",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+
+    assert response.finish_reason == "length"
+    _, truncated = flag_truncation(
+        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+    )
+    assert truncated is True
+
+
+@pytest.mark.parametrize("stop_reason", ["max_tokens", "model_context_window_exceeded"])
+def test_a_cut_tool_call_reads_length(stop_reason: str) -> None:
+    """A reply cut at a ceiling must not report ``tool_calls``: the last call may be
+    half-written, and ``flag_truncation`` only refuses it when the finish is ``length``.
+    The streaming path already reports ``length`` beside tool calls; both paths agree."""
+    from raven.providers.anthropic_messages_provider import parse_message
+    from raven.providers.truncation import flag_truncation
+
+    response = parse_message(
+        {
+            "content": [
+                {"type": "text", "text": "calling"},
+                {"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}},
+            ],
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+
+    assert response.finish_reason == "length"
+    _, truncated = flag_truncation(
+        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+    )
+    assert truncated is True
+    assert response.tool_calls[-1].run_meta is not None
+    assert response.tool_calls[-1].run_meta.truncation is not None
+
+
+def test_a_completed_tool_call_still_reads_tool_calls() -> None:
+    """The cut-finish exception must not swallow the ordinary case: a reply that
+    carries calls under a plain ``end_turn`` still reports ``tool_calls``."""
+    from raven.providers.anthropic_messages_provider import parse_message
+
+    response = parse_message(
+        {
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_file", "input": {"path": "a"}}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    )
+
+    assert response.finish_reason == "tool_calls"
+    assert response.tool_calls
+
+
+async def test_context_window_exceeded_reads_length_from_a_stream() -> None:
+    """The mapping answers for both response paths; a streamed cut must read
+    ``length`` too, or the last tool call it carries is dispatched."""
+    from raven.providers.anthropic_messages_provider import consume_message_stream
+
+    body = _anthropic_sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 3}}},
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "partial"}},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "model_context_window_exceeded"},
+            "usage": {"output_tokens": 1},
+        },
+        {"type": "message_stop"},
+    )
+    deltas = [d async for d in consume_message_stream(httpx.Response(200, content=body), timeout=5.0)]
+
+    assert deltas[-1].finish_reason == "length"
+
+
+def test_context_window_exceeded_keeps_its_raw_reason_in_the_log() -> None:
+    """``length`` is what downstream reads, but it no longer says the window -- not the
+    output ceiling -- ran out, and the two need different fixes; the log keeps that."""
+    from loguru import logger
+
+    from raven.providers.anthropic_messages_provider import parse_message
+
+    records: list[str] = []
+    sink_id = logger.add(lambda message: records.append(message.record["message"]), level="WARNING")
+    try:
+        parse_message(
+            {
+                "content": [{"type": "text", "text": "partial"}],
+                "stop_reason": "model_context_window_exceeded",
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            }
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert any("model_context_window_exceeded" in record for record in records)
+
+
 async def test_message_stop_without_a_stop_reason_reads_unknown() -> None:
     """``message_stop`` closes the stream, it does not say why the model stopped;
     that is ``message_delta``'s ``stop_reason``. A stream that closes without one
