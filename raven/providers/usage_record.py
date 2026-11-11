@@ -167,6 +167,52 @@ async def _record(response: dict[str, Any], model: str | None) -> None:
         logger.warning("usage record failed for model={}: {}", model, exc)
 
 
+#: Providers whose model lookup has already been reported, so a provider that
+#: forwards the same wrong value on every call is reported once rather than
+#: once per call.
+_WARNED_MODEL_FALLBACK: set[str] = set()
+
+
+def _warn_model_fallback(provider: Any, model: Any, resolved: str | None) -> None:
+    """Report a call whose row is not named by the call's own model.
+
+    Two shapes reach here: the call named something that is not a model name
+    (the tools list that once reached this field), or it named no model and
+    the provider has no default either. The first lands under the provider's
+    default, which reads like a real model rather than like a lookup that
+    missed; the second lands under no name at all. The value that was passed
+    is named, because that is what says which of the two it was.
+    """
+    key = f"{type(provider).__name__}:{type(model).__name__}:{'named' if resolved else 'none'}"
+    if key in _WARNED_MODEL_FALLBACK:
+        return
+    _WARNED_MODEL_FALLBACK.add(key)
+    if model is None or model == "":
+        what = "the call named no model"
+    else:
+        what = f"implausible model name {str(model)[:120]!r}"
+    if resolved:
+        logger.warning(
+            "usage: {}; the row carries the provider's default instead: {}",
+            what,
+            type(provider).__name__,
+        )
+    else:
+        logger.warning(
+            "usage: {}; the provider has no default either, so the row carries no model name: {}",
+            what,
+            type(provider).__name__,
+        )
+
+
+def reset_model_warnings() -> None:
+    """Clear the set of model fallbacks already reported.
+
+    Only useful for tests -- production code should let the warnings land once.
+    """
+    _WARNED_MODEL_FALLBACK.clear()
+
+
 def _model_of(provider: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> str | None:
     model = kwargs.get("model")
     if model is None and len(args) >= 3:
@@ -174,11 +220,23 @@ def _model_of(provider: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> s
         model = args[2]
     if isinstance(model, str) and model:
         return model
+    # The call named no model, or named something that is not one. The row
+    # still gets a name -- the provider's default -- if there is one.
     try:
         default = provider.get_default_model()
     except Exception:  # noqa: BLE001 - a name for the row, not a reason to fail
-        return None
-    return default if isinstance(default, str) and default else None
+        default = None
+    resolved = default if isinstance(default, str) and default else None
+    if (model is None or model == "") and resolved:
+        # A call that leaves the model to the provider is served by that
+        # default (``generate_title`` passes ``model=None`` by design), so the
+        # row's name is the true one and there is nothing to warn about.
+        logger.debug("usage: no model on the call; the row carries {}'s default", type(provider).__name__)
+        return resolved
+    # Anything else -- a value that is not a name, or no name and no default --
+    # leaves a row that does not say what the call asked for, so it is warned.
+    _warn_model_fallback(provider, model, resolved)
+    return resolved
 
 
 def _wrap_call(method: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
