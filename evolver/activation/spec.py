@@ -99,6 +99,8 @@ def _require_positive_int(d: dict, key: str, kind: str, *, minimum: int = 1) -> 
     """
     if isinstance(d[key], bool):
         raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
+    if isinstance(d[key], float) and not d[key].is_integer():
+        raise ValueError(f"{kind} {key} must be an int, got {d[key]!r}")
     try:
         value = int(d[key])
     except (TypeError, ValueError, OverflowError) as exc:

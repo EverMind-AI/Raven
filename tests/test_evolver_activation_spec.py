@@ -43,7 +43,7 @@ def test_empty_trajectory_regex_is_rejected():
         ActivationSpec.from_dict({"kind": "trajectory_regex", "pattern": "  "})
 
 
-@pytest.mark.parametrize("value", [True, float("inf")])
+@pytest.mark.parametrize("value", [True, 1.9, float("inf")])
 def test_non_integer_threshold_is_rejected(value):
     with pytest.raises(ValueError, match="must be an int"):
         ActivationSpec.from_dict({"kind": "min_iterations", "threshold": value})
