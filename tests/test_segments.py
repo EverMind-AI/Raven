@@ -759,6 +759,7 @@ class TestIdentityDelegationSection:
             tmp_path, specialists=[("Scribe", "owns decks.")], dispatch_tools=render.DISPATCH_TOOLS
         )
         assert render.GENERIC_OWNS not in text
+        assert "`Scribe` owns decks." in text, "the section itself still renders; only the generic line goes"
 
     def test_a_worker_table_turn_lists_no_generic_line(self, tmp_path: Path) -> None:
         """A bound table's enums refuse the generic agent's name, and a generated Persona
