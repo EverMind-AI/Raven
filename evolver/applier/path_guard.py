@@ -131,6 +131,13 @@ _WINDOWS_RESERVED = frozenset(
         "NUL",
         "CONIN$",
         "CONOUT$",
+        "CLOCK$",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
@@ -142,8 +149,8 @@ class UnsafePathError(ValueError):
 
     ``ImmutablePathError`` answers "may the evolver touch this file?"; this
     answers "is this even a repo-relative file path?". Absolute paths,
-    drive-qualified paths, and any ``..`` component are rejected before a
-    caller can join them onto a worktree.
+    drive-qualified paths, any ``..`` component, and Windows reserved device
+    names are rejected before a caller can join them onto a worktree.
     """
 
 
@@ -163,23 +170,32 @@ def _unsafe_reason(path: str) -> str | None:
         return "absolute path"
     if posix.as_posix() in ("", "."):
         return "empty path"
-    if ".." in posix.parts:
-        return "'..' path component"
-    # Windows resolves these base names to devices, not files. ``NUL.txt``
-    # and trailing dots/spaces are the same device, and the check is
-    # case-insensitive.
-    base = posix.name.rstrip(" .").split(".", 1)[0].upper()
-    if base in _WINDOWS_RESERVED:
-        return "Windows reserved device name"
+    for part in posix.parts:
+        normalized = part.strip(" .")
+        if normalized == "":
+            return "'..' path component" if "." in part else "empty path component"
+        if normalized == "..":
+            return "'..' path component"
+        if ":" in part:
+            return "colon in a path component (Windows drive or ADS)"
+        # Windows resolves these base names to devices, not files. ``NUL.txt``,
+        # ``NUL .txt`` and trailing dots/spaces are the same device, and the
+        # check is case-insensitive.
+        base = normalized.split(".", 1)[0].strip().upper()
+        if base in _WINDOWS_RESERVED:
+            return "Windows reserved device name"
     return None
 
 
 def assert_safe_relative_paths(target_files: list[str]) -> None:
-    """Reject absolute, drive-qualified, or ``..``-escaping patch paths.
+    """Reject absolute, drive-qualified, ``..``, and device-name patch paths.
 
     Called by :func:`assert_patch_allowed` before the immutable check, so a
     caller cannot hand a path like ``/etc/passwd`` or ``../outside`` to a
-    worktree join (`worktree / rel`) and write outside the subject tree.
+    worktree join (`worktree / rel`) and write outside the subject tree. The
+    check is deliberately conservative: it rejects every ``..`` component and
+    every Windows device/reserved base name even on POSIX, where some of those
+    are legal file names.
     """
     bad = [(path, _unsafe_reason(path)) for path in target_files]
     bad = [(path, why) for path, why in bad if why is not None]
@@ -262,7 +278,7 @@ def check_patch_paths(target_files: list[str]) -> list[str]:
 
 
 def assert_patch_allowed(target_files: list[str]) -> None:
-    """Raise :class:`ImmutablePathError` if any target is immutable.
+    """Raise on an unsafe path or an :class:`ImmutablePathError` target.
 
     Use this as the first-line gate in the evolver applier:
 

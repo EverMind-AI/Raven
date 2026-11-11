@@ -8,7 +8,6 @@ from evolver.applier.path_guard import (
     UnsafePathError,
     assert_patch_allowed,
     assert_safe_relative_paths,
-    is_immutable,
 )
 
 
@@ -31,6 +30,15 @@ from evolver.applier.path_guard import (
         "LPT9.log",
         "CONIN$",
         "CONOUT$",
+        ".. ",
+        ".. .",
+        "foo/.. /bar",
+        "NUL/foo",
+        "NUL:stream",
+        "NUL .txt",
+        "CLOCK$",
+        "COM¹",
+        "a:b",
     ],
 )
 def test_unsafe_paths_are_rejected(path: str):
@@ -54,5 +62,3 @@ def test_unsafe_paths_are_rejected(path: str):
 )
 def test_relative_repo_paths_are_allowed(path: str):
     assert_safe_relative_paths([path])
-    # allowed by the safety check; immutability is a separate predicate
-    assert isinstance(is_immutable(path), bool)

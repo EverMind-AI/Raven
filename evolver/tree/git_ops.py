@@ -308,19 +308,39 @@ def commit_files_as_child(
         wt = Path(tmp) / "wt"
         create_worktree(repo_root, wt, parent_sha)
         try:
+            from evolver.applier.path_guard import assert_patch_allowed
+
             wt_resolved = wt.resolve()
             for rel, data in files.items():
-                dest = (wt / rel).resolve()
+                assert_patch_allowed([rel])
+                try:
+                    dest = (wt / rel).resolve()
+                except RuntimeError as exc:
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
                 if not dest.is_relative_to(wt_resolved):
                     raise ValueError(f"refusing to write outside the worktree: {rel!r}")
+                resolved_rel = dest.relative_to(wt_resolved).as_posix()
+                assert_patch_allowed([resolved_rel])
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data if isinstance(data, bytes) else str(data).encode())
             for rel in deletions:
-                fp = (wt / rel).resolve()
-                if not fp.is_relative_to(wt_resolved):
+                assert_patch_allowed([rel])
+                link = wt / rel
+                parent = link.parent.resolve()
+                if not parent.is_relative_to(wt_resolved):
                     raise ValueError(f"refusing to delete outside the worktree: {rel!r}")
-                if fp.exists():
-                    fp.unlink()
+                if link.is_symlink():
+                    try:
+                        target = link.resolve()
+                    except RuntimeError as exc:
+                        raise ValueError(f"symlink loop in {rel!r}") from exc
+                    if target.is_relative_to(wt_resolved):
+                        resolved_rel = target.relative_to(wt_resolved).as_posix()
+                        assert_patch_allowed([resolved_rel])
+                # Unlink the authored path, not its resolved target: deleting a
+                # link is safe even when it points outside the worktree.
+                if link.is_symlink() or link.exists():
+                    link.unlink()
             _run(wt, "add", "-A")
             changed = [
                 line for line in _run(wt, "diff", "--cached", "--name-only", parent_sha).splitlines() if line.strip()

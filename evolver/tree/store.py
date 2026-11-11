@@ -288,6 +288,8 @@ class EvolverTreeStore:
             to disk and ready for evaluation
         :raises ImmutablePathError: if the patch hits the immutable
             kernel (spec §22)
+        :raises UnsafePathError: if the patch names an absolute, drive-
+            qualified, ``..``, or device-name path
         :raises ValueError: parent missing, malformed patch
         :raises GitOpError: git command failed (typically because
             the patch didn't apply cleanly to the parent's tree)

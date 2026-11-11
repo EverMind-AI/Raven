@@ -8,6 +8,7 @@ evolver commits stay reachable across git gc via plain refs.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -124,10 +125,69 @@ class TestRefs:
         assert proc.returncode != 0
 
 
+def _commit_symlink(repo_dir: Path, link: str, target: str) -> str:
+    path = repo_dir / link
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, path)
+    _git(repo_dir, "add", "-A")
+    _git(repo_dir, "commit", "-qm", "add symlink")
+    return _git(repo_dir, "rev-parse", "HEAD").strip()
+
+
 class TestCommitFilesAsChildPathEscape:
     @pytest.mark.parametrize("rel", ["/tmp/evolver-escape.txt", "../outside.txt"])
-    def test_refuses_to_write_outside_the_worktree(self, repo, rel, tmp_path, monkeypatch):
+    def test_refuses_unsafe_paths(self, repo, rel):
         repo_dir, sha = repo
-        monkeypatch.setattr(git_ops, "set_ephemeral_root", lambda _: None)
-        with pytest.raises(ValueError, match="refusing to write outside the worktree"):
+        with pytest.raises(ValueError, match="unsafe path"):
             git_ops.commit_files_as_child(repo_dir, sha, {rel: b"pwned"}, "bad path")
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_write_through_a_link_to_an_immutable_file(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "link_kernel", "raven/agent/loop/main.py")
+        with pytest.raises(Exception, match="immutable"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"link_kernel": b"PWNED"}, "bad link")
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_write_through_a_link_to_outside(self, repo, tmp_path):
+        repo_dir, _sha = repo
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_out", str(outside))
+        with pytest.raises(ValueError, match="refusing to write outside the worktree"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"link_out": b"PWNED"}, "bad link")
+        assert outside.read_text() == "keep"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_delete_a_link_to_an_immutable_file(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "link_kernel", "raven/agent/loop/main.py")
+        with pytest.raises(Exception, match="immutable"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "bad link", deletions=("link_kernel",))
+        assert (repo_dir / "link_kernel").is_symlink()
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_deletes_the_link_not_its_mutable_target(self, repo):
+        repo_dir, _sha = repo
+        (repo_dir / "src/target.txt").write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_ok", "src/target.txt")
+        child, changed = git_ops.commit_files_as_child(repo_dir, sha, {}, "delete link", deletions=("link_ok",))
+        assert changed == ["link_ok"]
+        assert (repo_dir / "src/target.txt").read_text() == "keep"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_deletes_a_link_that_points_outside_the_worktree(self, repo, tmp_path):
+        repo_dir, _sha = repo
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_out", str(outside))
+        child, changed = git_ops.commit_files_as_child(repo_dir, sha, {}, "delete link", deletions=("link_out",))
+        assert changed == ["link_out"]
+        assert outside.read_text() == "keep"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_reports_a_symlink_loop_cleanly(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "loop", "loop")
+        with pytest.raises(ValueError, match="symlink loop"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"loop": b"x"}, "loop")
