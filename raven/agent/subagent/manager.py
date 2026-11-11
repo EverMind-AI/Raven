@@ -52,7 +52,13 @@ from raven.agent.subagent_memory import (
 from raven.config.agent_names import canonical_agent_name
 from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
-from raven.context_engine.segments.render import board_on_page, dispatch_language_line, reply_rules_note
+from raven.context_engine.segments.render import (
+    RESULT_REPORT_RULE,
+    board_on_page,
+    dispatch_language_line,
+    reply_rules_note,
+    result_report_note,
+)
 from raven.contracts.llm_provider import LLMProvider
 from raven.contracts.subagent_backend import SubagentNoAnswerError
 from raven.observability import semconv
@@ -2288,7 +2294,7 @@ Task: {asked}
 Result:
 {fenced_result}{record_line}
 
-Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full, outside that length budget. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
+{RESULT_REPORT_RULE} Do not report the task as done merely because this message arrived: judge what the run delivered from what the sub-agent itself says it did, and if that account does not show the work finished, say what is missing or ask the user how to proceed rather than presenting it as complete. Anything the sub-agent stated it could not do -- a missing input, an unmet precondition, a refusal, a gap it flagged -- is part of the outcome: pass it on in full. Keep technical details like the instance handle and task ids out of what you say to the user -- they stay available for your own later calls.{hoard_note}"""
 
         assert self._submit is not None
         mark: dict[str, Any] = {"kind": "spawn", "label": task_summary, "status": status}
@@ -2401,16 +2407,18 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
 
         The summary is delivered verbatim: it is the same text a foreground run
         returns as its tool result, and a graph's deliverable is its terminal
-        node outputs. Framing it or asking for a two-sentence retelling -- as a
-        spawn's announce does, its result being one agent's single answer --
-        would put a lossy instruction between the agent and the work product.
+        node outputs. Framing it or asking for a two-sentence retelling would put
+        a lossy instruction between the agent and the work product.
         The untrusted fence is not part of that text and stays: node output is
         attacker-influenceable, and unlike a tool result (which the agent knows
         it asked for) this arrives shaped like an inbound message.
 
-        After the fence comes the reply-rules note a dispatch receipt carries. It
-        shortens nothing: it says how the reply the host writes next is laid out,
-        and that reply is written right after this message is read. Replayed on a
+        After the fence comes the rule a spawn's announce also carries
+        (``result_report_note``): the user has not read this, so the reply the host
+        writes next has to carry what the nodes found in its own words. Then the
+        reply-rules note a dispatch receipt carries. Neither shortens anything: they
+        say how the reply the host writes next is laid out, and that reply is
+        written right after this message is read. Replayed on a
         recorded live DAG notice (glm-5.3-flash), each task got its own heading in
         0 of 6 replies with the resident rules alone and 5 of 6 with the note.
         ui-web draws only what is inside the fence and ui-tui a one-line marker in
@@ -2422,8 +2430,12 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences), and do not
         if self._submit is None:
             logger.warning("DAG run {} finished with no submit wired; result not announced", run_id)
             return
-        injected = wrap_untrusted(summary, source="subagent") + reply_rules_note(
-            board_shown=board_on_page(self._task_board, origin.get("channel"), origin.get("surface"))
+        injected = (
+            wrap_untrusted(summary, source="subagent")
+            + result_report_note()
+            + reply_rules_note(
+                board_shown=board_on_page(self._task_board, origin.get("channel"), origin.get("surface"))
+            )
         )
         mark = {"kind": "dag", "label": run_id, "status": "ok", "run_id": run_id}
         if not self._inject(injected, origin, mark, dispatch_link=trace.dispatch_link_of(origin)):
