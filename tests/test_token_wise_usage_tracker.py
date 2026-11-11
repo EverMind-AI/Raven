@@ -707,6 +707,25 @@ async def test_a_usage_row_normalizes_an_implausible_model_name(tmp_path: Path, 
     assert [row["model"] for row in rows] == ["?"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [("m" * 200, "m" * 200), ("m" * 201, "?")],
+    ids=["at-the-cap", "over-the-cap"],
+)
+async def test_a_usage_row_accepts_a_model_name_up_to_the_two_hundred_character_cap(
+    tmp_path: Path, model: str, expected: str
+):
+    """The cap is a contract, not a suggestion: a name of exactly the cap is a
+    name, and one character more is the unknown marker."""
+    tracker = UsageTracker(telemetry_dir=tmp_path, flush_every=1)
+    await tracker.after_llm_call({}, UsageSnapshot(model=model, session_key="sess1"))
+
+    rows = [
+        json.loads(line) for line in (tmp_path / f"usage-{date.today().isoformat()}.jsonl").read_text().splitlines()
+    ]
+    assert [row["model"] for row in rows] == [expected]
+
+
 async def test_an_error_that_reached_no_model_is_not_a_row():
     """Nothing was spent, and a row of zeros would read as a cheap call."""
     tracker = _listening()
