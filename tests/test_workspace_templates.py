@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
+import subprocess
 from importlib.resources import files
 from pathlib import Path
 
@@ -439,6 +441,68 @@ def test_the_addendum_record_keeps_the_source_mode(tmp_path: Path) -> None:
 
     record = soul.with_name(".soul.md.addendum")
     assert stat.S_IMODE(record.stat().st_mode) & 0o077 == 0
+
+
+def test_the_addendum_record_is_created_from_its_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Windows mode cannot carry the source's DACL, so the record write must
+    name soul.local.md itself, not only its mode."""
+    import raven.utils.workspace as workspace_module
+
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    local = soul.parent / "soul.local.md"
+    local.write_text("## Mine\n\n- private rule\n", encoding="utf-8")
+    writes: list[dict[str, object]] = []
+    replace = workspace_module.atomic_replace
+
+    def record(path, *args, **kwargs):
+        if Path(path).name == ".soul.md.addendum":
+            writes.append(dict(kwargs))
+        return replace(path, *args, **kwargs)
+
+    monkeypatch.setattr(workspace_module, "atomic_replace", record)
+    sync_workspace_templates(tmp_path, silent=True)
+
+    assert [(entry["like"], entry["mode"]) for entry in writes] == [(local, stat.S_IMODE(local.stat().st_mode))]
+
+
+def _windows_dacl(path: Path, scratch: Path) -> tuple[str, set[str]]:
+    """The DACL's flags and its set of ACE strings, as ``icacls /save`` writes them."""
+    saved = scratch / "dacl.txt"
+    saved.unlink(missing_ok=True)
+    result = subprocess.run(["icacls", str(path), "/save", str(saved)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    raw = saved.read_bytes()
+    text = raw.decode("utf-16-le" if b"\x00" in raw[:4] else "utf-8")
+    dacl = re.search(r"D:([A-Z]*)((?:\([^)]*\))+)", text)
+    assert dacl, text
+    return dacl.group(1), set(re.findall(r"\(([^)]*)\)", dacl.group(2)))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACLs")
+def test_the_addendum_record_keeps_the_private_sources_dacl(tmp_path: Path) -> None:
+    """A new Windows file inherits its folder's ACL, and os.replace carries the
+    temp's onto the record: the operator's private text must not come back
+    readable by every account the folder lets in."""
+    soul = _soul(tmp_path)
+    soul.parent.mkdir(parents=True)
+    folder = soul.parent
+    subprocess.run(["icacls", str(folder), "/grant", "*S-1-5-32-545:(OI)(CI)(RX)"], capture_output=True, check=True)
+    local = folder / "soul.local.md"
+    local.write_text("## Mine\n\n- private rule\n", encoding="utf-8")
+    user = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, check=True)
+    sid = user.stdout.strip().split(",")[-1].strip('"')
+    subprocess.run(["icacls", str(local), "/inheritance:r", "/grant:r", f"*{sid}:(F)"], capture_output=True, check=True)
+    flags, aces = _windows_dacl(local, tmp_path)
+    assert "P" in flags and not any(ace.endswith(";BU") for ace in aces), "the setup made the prompt private"
+
+    sync_workspace_templates(tmp_path, silent=True)
+
+    record = soul.with_name(".soul.md.addendum")
+    assert record.read_text(encoding="utf-8") == "## Mine\n\n- private rule\n"
+    record_flags, record_aces = _windows_dacl(record, tmp_path)
+    assert record_aces == aces
+    assert "P" in record_flags
 
 
 def test_a_refused_soul_write_does_not_stop_the_sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

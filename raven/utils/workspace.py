@@ -318,7 +318,7 @@ def _write_addendum_record(target: Path, addendum: str | None, mode: int) -> Non
     wanted = block + "\n"
     if _read_optional(record) == wanted:
         return
-    atomic_replace(record, wanted, mode=mode, newline="")
+    atomic_replace(record, wanted, mode=mode, newline="", like=target.with_name(_SOUL_LOCAL))
 
 
 def _soul_templates(tpl) -> dict[str, str]:
