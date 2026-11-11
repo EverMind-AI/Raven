@@ -850,6 +850,15 @@ async def test_an_answer_a_cut_stream_left_is_read_with_its_continuation(tmp_pat
     assert await _shown_for(tmp_path, reply_rows) == ["- Should I apply it?"]
 
 
+async def test_an_answer_cut_in_the_middle_of_a_sentence_keeps_the_question_head(tmp_path):
+    reply_rows = [
+        {"role": "assistant", "content": "The suite passes. Should I", "_recovery_synthetic": True},
+        {"role": "assistant", "content": "fix the five findings?"},
+    ]
+
+    assert await _shown_for(tmp_path, reply_rows) == ["- Should I fix the five findings?"]
+
+
 async def test_a_message_with_no_question_lists_none(tmp_path):
     tool = _message_tool()
     rows = await _message_rows(tool, "m1", "Deployed. Logs are clean.")

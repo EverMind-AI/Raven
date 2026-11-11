@@ -266,14 +266,20 @@ def _message_tool_words(call: Any, answered: Collection[str]) -> str:
     return content.strip() if isinstance(content, str) else ""
 
 
+# The loop writes this assistant text only to keep a tool result from being followed by a
+# user message (a 400 on most providers); nobody read it as the reply.
+_EMPTY_PLACEHOLDER = "(empty)"
+
+
 def _reply(rows: Sequence[dict], answered: Collection[str]) -> list[str]:
     """The turn's reply, one entry per message the reader was shown: every assistant message
     among ``rows``, in the order it wrote them, and what each message call that answered this
     conversation sent. The rows are the turn's own (``TurnLog.added``), so a user message among
     them was sent while the turn ran and does not open a new one. What the loop wrote to get an
     answer going again (``_recovery_synthetic``: the part of an answer a cut stream left, or an
-    empty placeholder) opens the entry of the message that follows it, the way the reader saw a
-    cut answer and its continuation as one."""
+    empty placeholder) opens the entry of the message that follows it as a soft-wrapped line, the
+    way the reader saw a cut answer and its continuation as one; the placeholder is not part of
+    the reply."""
     entries: list[str] = []
     carried: list[str] = []
     for message in rows:
@@ -281,19 +287,19 @@ def _reply(rows: Sequence[dict], answered: Collection[str]) -> list[str]:
             continue
         text = _text(message.get("content")).strip()
         if message.get(_RECOVERY_MARK):
-            if text:
+            if text and text != _EMPTY_PLACEHOLDER:
                 carried.append(text)
             continue
         if text:
             carried.append(text)
         if carried:
-            entries.append("\n\n".join(carried))
+            entries.append("\n".join(carried))
             carried = []
         for call in message.get("tool_calls") or ():
             if sent := _message_tool_words(call, answered):
                 entries.append(sent)
     if carried:
-        entries.append("\n\n".join(carried))
+        entries.append("\n".join(carried))
     return entries
 
 
