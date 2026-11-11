@@ -1729,9 +1729,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    answer. The inset is what keeps a one-liner at the design's 40px: it is
    (40px - 1.8 lines of the body) / 2, worked out from --fs-body so it holds
    at whichever size the bubble is read at. */
+/* Capped like the delivered bubble: a runtime-opened brief's wide code block
+   would otherwise hold the bubble at its max-content width and overflow it. */
 .msg.me {
   background: var(--bubble-me); color: var(--bubble-me-fg);
-  border-radius: 12px; padding: calc((40px - 1.8 * var(--fs-body)) / 2) 12px;
+  border-radius: 12px; padding: calc((40px - 1.8 * var(--fs-body)) / 2) 12px; max-width: 100%;
   font-size: var(--fs-body); line-height: 1.8;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
@@ -1963,7 +1965,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    falls under 3:1. A verdict's colour rides on its dot, never on its word. */
 .turn.transcript-dlv { max-width: 72%; }
 .turn.transcript-dlv:has(> .sdlv.open) { max-width: 88%; }
-.sdlv { min-width: 0; padding: 10px 14px 11px; border-radius: 12px; font-size: 12px; line-height: 20px; }
+/* Capped to the turn it sits in: a delivered body's wide table would otherwise
+   hold the bubble at its max-content width and push it out to the left. */
+.sdlv { min-width: 0; max-width: 100%; padding: 10px 14px 11px; border-radius: 12px; font-size: 12px; line-height: 20px; }
 .transcript-dlv-from {
   display: flex; width: max-content; max-width: 100%; align-items: center; gap: 6px; margin-bottom: 7px;
   padding: 3px 10px 3px 4px; border-radius: 8px; background: var(--raised); color: var(--muted);
