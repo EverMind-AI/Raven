@@ -11,7 +11,7 @@ from mcp.types import CallToolResult, TextContent
 from raven.agent.tools.registry import ToolRegistry
 from raven.config.schema import MCPServerConfig
 from raven.contracts.tool import ToolResult
-from raven.mcp.client import MCPToolWrapper, connect_mcp_server, open_mcp_transport
+from raven.mcp.client import MCPToolWrapper, _host_sourced, connect_mcp_server, open_mcp_transport
 
 
 class _Session:
@@ -254,3 +254,11 @@ async def test_the_registry_probe_takes_a_host_servers_cwd_but_not_a_packages(mo
 
     assert seen["cwd"] is None
     assert seen["params_cwd"] == "/pkg"
+
+
+def test_a_config_without_the_marker_is_the_hosts_own() -> None:
+    """A stub that predates the source marker is the host's own, not a carried one."""
+    assert _host_sourced(object()) is True
+    assert _host_sourced(SimpleNamespace()) is True
+    assert _host_sourced(SimpleNamespace(source="package")) is False
+    assert _host_sourced(SimpleNamespace(source="playbook")) is False

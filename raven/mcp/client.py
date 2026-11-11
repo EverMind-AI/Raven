@@ -188,13 +188,16 @@ def _configured_cwd(cfg) -> str | None:
 
 
 def _host_sourced(cfg) -> bool:
-    """Whether *cfg* is the host's own server rather than a package's.
+    """Whether *cfg* is the host's own server rather than a carried one.
 
     ``getattr`` with the host default: a stub configuration that predates the
     source marker is the host's own, the same way a config file that never
-    spelled it stays the host's own.
+    spelled it stays the host's own. The ``isinstance`` guard matches
+    ``_configured_cwd``: an unset attribute on a stub answers with a mock, and
+    a non-string answer names no source this code knows.
     """
-    return getattr(cfg, "source", "host") == "host"
+    value = getattr(cfg, "source", "host")
+    return (value if isinstance(value, str) else "host") == "host"
 
 
 def _child_stderr() -> Any:
@@ -245,11 +248,13 @@ async def open_mcp_transport(
             # would be the choice of registry PlugHub's vetting refuses a
             # catalogue entry (see market/vetting.py). A server the sandbox
             # starts is fetched in there, so only its command line can carry one.
-            # The registry probe stays out of a package server's cwd: a
-            # package root is third-party content, and a .npmrc there must not
-            # choose the registry or the payload. A host server's own project
-            # .npmrc should be seen, so the probe runs in its configured cwd;
-            # the source marker on the config tells the two apart.
+            # The registry probe stays out of a package root, and out of the
+            # cwd a playbook definition names: that content travels with its
+            # file, so its .npmrc must not steer the probe. A host server's own
+            # project .npmrc should be seen, so the probe runs in its configured
+            # cwd; the source marker on the config tells them apart. The launch
+            # is not changed here: a package server still starts in its root,
+            # where npm reads that root's .npmrc.
             sandboxed = executor is not None and executor.supports_process_spawning
             probe_cwd = _configured_cwd(cfg) if _host_sourced(cfg) else None
             command, *args = await mirrors.package_launch_async(
