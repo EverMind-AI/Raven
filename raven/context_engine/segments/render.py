@@ -440,14 +440,18 @@ def _delegation_block(
     had no line here and fell back to the host. Its line comes after every specialist
     and claims only what "no agent above owns", the fit-first order the role keeps. It is
     left out on a turn bound to a Worker Table, whose enums refuse the generic agent's
-    name.
+    name, and in a process launched to do one task, which renders no role to fall back on.
     """
     lines = [f"- `{name}` {owns}" for name, owns in specialists if owns]
     if not lines or not dispatch:
         # This section owns the separator between the platform policy and the
         # guidelines; the template carries none.
         return "\n\n"
-    if not worker_table:
+    from raven.agent.subagent.role import is_subagent_process
+
+    # The line is the role's fallback said again, so it renders where the role does: never
+    # in a process launched to do one task (a product agent included), whatever tools it holds.
+    if not worker_table and not is_subagent_process():
         lines.append(f"- `{GENERIC_AGENT}` {GENERIC_OWNS}")
     return "\n## Delegation\n\nThese sub-agents own their kind of work:\n" + "\n".join(lines) + "\n\n"
 

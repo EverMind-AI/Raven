@@ -749,6 +749,17 @@ class TestIdentityDelegationSection:
         assert "finding things, checking results and state, and small chores" in render.GENERIC_OWNS
         assert "no agent above owns" in render.GENERIC_OWNS
 
+    def test_a_launched_subagent_process_lists_no_generic_line(self, tmp_path: Path, monkeypatch) -> None:
+        """A product agent runs as a process the host launched; it renders no role, so the
+        role's fallback is not said there either, whatever tools that process holds."""
+        from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+        text = render.identity_text(
+            tmp_path, specialists=[("Scribe", "owns decks.")], dispatch_tools=render.DISPATCH_TOOLS
+        )
+        assert render.GENERIC_OWNS not in text
+
     def test_a_worker_table_turn_lists_no_generic_line(self, tmp_path: Path) -> None:
         """A bound table's enums refuse the generic agent's name, and a generated Persona
         never offers it as a worker, so the line would point at a value nothing accepts."""
