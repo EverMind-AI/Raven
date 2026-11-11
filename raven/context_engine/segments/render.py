@@ -671,7 +671,8 @@ def _host_role(dispatch: Sequence[str], worker_table: bool = False, board_shown:
         "or a record; checking a result, a claim, a test run or the state of anything outside this conversation; a "
         "cleanup or a one-line edit; a script, a code change, research, a document, a design, a long run: {where} "
         "Keep your own tools to managing the work: dispatching it, the task board, asking the user, reading a skill, "
-        "checking your own runs, delivering files, scheduling, and keeping your own skills. Answer yourself only "
+        "checking your own runs, delivering files, scheduling, and keeping your own skills (read a skill file before you "
+        "edit it). Answer yourself only "
         "what needs none of your other tools: conversation, what you already know, and which {who} you have and "
         "where each task stands by your own record."
     )

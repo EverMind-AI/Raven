@@ -869,6 +869,7 @@ class TestHostRole:
             for kind in ("finding a file, a PR or a record", "checking a result", "a cleanup or a one-line edit"):
                 assert kind in role
             assert "Keep your own tools to managing the work" in role
+            assert "keeping your own skills (read a skill file before you edit it)" in role
             assert "where each task stands by your own record" in role
             assert "looking up where things stand" not in role
 
@@ -895,7 +896,8 @@ class TestHostRole:
     def test_the_host_role_drops_the_file_editing_guidelines(self, tmp_path: Path, monkeypatch) -> None:
         """How to edit a file is guidance for whoever edits one. Where the role hands all
         work over it read as leave to edit; without a dispatch path, or in a process
-        launched to do one task, it is the guidance that applies."""
+        launched to do one task, it is the guidance that applies. The one file work the
+        role keeps, its own skills, carries the read-first rule in the role itself."""
         from raven.agent.subagent.role import SUBAGENT_ENV_VAR
 
         line = "Before modifying a file, read it first."
