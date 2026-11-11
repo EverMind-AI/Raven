@@ -135,6 +135,11 @@ def _truncation_error(truncation: TruncationInfo) -> str:
     incomplete is not dispatched either way; being wrong costs one retry. What
     to do about it is the tool's, via ``Tool.truncation_hint``.
     """
+    if truncation.reason == "context_window":
+        return (
+            "Error: [truncated] This turn hit the model's context window, and this call was the last thing "
+            "being written, so it may have been cut short. It was not run."
+        )
     at = f" at the {truncation.at_tokens}-token output limit" if truncation.at_tokens else " at the output limit"
     return (
         f"Error: [truncated] This turn stopped{at}, and this call was the last thing "
@@ -956,6 +961,8 @@ class ToolRegistry:
         # A wasted turn is cheaper than a silent overwrite.
         truncation = run_meta.truncation if run_meta else None
         if truncation:
+            if truncation.reason == "context_window":
+                return _truncation_error(truncation) + _received_tail(params)
             # The tail belongs here too, and this is the path it matters most on:
             # ``flag_truncation`` reads ``arguments_repaired`` to reach its verdict
             # and adds ``truncation`` to that same run_meta, so a streamed reply cut

@@ -30,6 +30,7 @@ def flag_truncation(
     usage: dict[str, Any] | None,
     tool_calls: list[ToolCallRequest],
     sent: int | None = None,
+    truncation_reason: str | None = None,
 ) -> tuple[int | None, bool]:
     """Decide whether this turn was cut, and refuse the calls it puts in doubt.
 
@@ -71,7 +72,10 @@ def flag_truncation(
     last_unparsed = bool(last is not None and last.run_meta and last.run_meta.arguments_repaired)
 
     if last is not None and truncated:
-        last.run_meta = replace(last.run_meta or RunMeta(), truncation=TruncationInfo(at_tokens=sent))
+        last.run_meta = replace(
+            last.run_meta or RunMeta(),
+            truncation=TruncationInfo(at_tokens=sent, reason=truncation_reason),
+        )
     elif last_unparsed:
         # Not recorded as a truncation: the two facts are that the arguments did
         # not parse and that nothing arrived after this call. Reading them as a

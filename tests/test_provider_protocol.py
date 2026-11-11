@@ -813,8 +813,12 @@ def test_context_window_exceeded_stop_reason_reads_length() -> None:
     )
 
     assert response.finish_reason == "length"
+    assert response.truncation_reason == "context_window"
     _, truncated = flag_truncation(
-        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+        finish_reason=response.finish_reason,
+        usage=response.usage,
+        tool_calls=response.tool_calls,
+        truncation_reason=response.truncation_reason,
     )
     assert truncated is True
 
@@ -839,12 +843,18 @@ def test_a_cut_tool_call_reads_length(stop_reason: str) -> None:
     )
 
     assert response.finish_reason == "length"
+    expected_reason = "context_window" if stop_reason == "model_context_window_exceeded" else None
+    assert response.truncation_reason == expected_reason
     _, truncated = flag_truncation(
-        finish_reason=response.finish_reason, usage=response.usage, tool_calls=response.tool_calls
+        finish_reason=response.finish_reason,
+        usage=response.usage,
+        tool_calls=response.tool_calls,
+        truncation_reason=response.truncation_reason,
     )
     assert truncated is True
     assert response.tool_calls[-1].run_meta is not None
     assert response.tool_calls[-1].run_meta.truncation is not None
+    assert response.tool_calls[-1].run_meta.truncation.reason == expected_reason
 
 
 def test_a_completed_tool_call_still_reads_tool_calls() -> None:
@@ -883,6 +893,7 @@ async def test_context_window_exceeded_reads_length_from_a_stream() -> None:
     deltas = [d async for d in consume_message_stream(httpx.Response(200, content=body), timeout=5.0)]
 
     assert deltas[-1].finish_reason == "length"
+    assert deltas[-1].truncation_reason == "context_window"
 
 
 def test_context_window_exceeded_keeps_its_raw_reason_in_the_log() -> None:

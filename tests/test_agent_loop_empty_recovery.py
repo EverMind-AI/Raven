@@ -1037,6 +1037,73 @@ async def test_a_cut_reply_with_nothing_in_it_is_continued_with_more_room(worksp
 
 
 @pytest.mark.asyncio
+async def test_context_window_cut_shrinks_prompt_without_doubling_max_tokens(workspace, monkeypatch):
+    from raven.agent.loop.recovery import CONTEXT_WINDOW_CONTINUATION, CONTEXT_WINDOW_FAILURE
+    from raven.contracts.llm_provider import LLMResponse
+
+    calls: list[dict] = []
+    responses = [
+        LLMResponse(
+            content=None,
+            finish_reason="length",
+            truncated=True,
+            truncation_reason="context_window",
+            max_tokens=4096,
+        ),
+        LLMResponse(content="recovered after shrinking", finish_reason="stop"),
+    ]
+
+    class StubProvider:
+        default_model = _MODEL
+        generation = None
+
+        async def chat_with_retry(self, *, messages, tools=None, model=None, max_tokens=None, **_kwargs):
+            calls.append({"messages": list(messages), "max_tokens": max_tokens})
+            return responses.pop(0)
+
+    agent = _make_agent(workspace, StubProvider())
+
+    async def fake_shrink(messages, *, pressure, state, model):
+        from raven.contracts.harness import ShrinkResult, WindowPressure
+
+        if pressure is WindowPressure.OVERFLOW:
+            return ShrinkResult(messages=messages[:1], changed=True)
+        return ShrinkResult(messages=messages, changed=False)
+
+    monkeypatch.setattr(agent.harness.memory, "shrink", fake_shrink)
+
+    out = await agent._process_message(_turn("hi"), session_key="s1")
+
+    assert out is not None and out[0] == "recovered after shrinking"
+    assert len(calls) == 2
+    assert calls[1]["messages"][-1]["content"] == CONTEXT_WINDOW_CONTINUATION
+    assert calls[1]["max_tokens"] != 8192
+
+    # When nothing can be shrunk, stop immediately instead of wasting continuation turns.
+    calls.clear()
+    responses = [
+        LLMResponse(
+            content=None,
+            finish_reason="length",
+            truncated=True,
+            truncation_reason="context_window",
+            max_tokens=4096,
+        )
+    ] * 4
+
+    async def noop_shrink(messages, *, pressure, state, model):
+        from raven.contracts.harness import ShrinkResult
+
+        return ShrinkResult(messages=messages, changed=False)
+
+    monkeypatch.setattr(agent.harness.memory, "shrink", noop_shrink)
+
+    failed = await _run_answerless(agent, "hi")
+    assert len(calls) == 1
+    assert CONTEXT_WINDOW_FAILURE in failed
+
+
+@pytest.mark.asyncio
 async def test_a_continuation_near_the_window_asks_no_more_room_than_the_prompt_leaves(workspace, monkeypatch):
     """Near the window a call is sized to the room beside its prompt, and a provider that checks
     ``prompt + max_tokens <= window`` refuses anything larger, so the doubled ceiling of a

@@ -91,6 +91,8 @@ from raven.agent.loop.dead_end import NO_RESPONSE_FALLBACK, dead_reasons
 from raven.agent.loop.failure_text import attach_full_detail, full_failure_text, response_failure_text
 from raven.agent.loop.first_call import FirstCallGuard
 from raven.agent.loop.recovery import (
+    CONTEXT_WINDOW_CONTINUATION,
+    CONTEXT_WINDOW_FAILURE,
     EMPTY_REPLY_FAILURE,
     MAX_CONTINUATIONS,
     NETWORK_CUT_CONTINUATION,
@@ -220,9 +222,14 @@ def _recovery_failure_text(kind: ReplyKind, response: LLMResponse, visible: str 
         # it the sentence would end on a colon that leads nowhere.
         text = f"{head}\n\n{excerpt}" if excerpt else head.partition(" Its last reasoning")[0]
     elif kind is ReplyKind.TRUNCATED:
-        text = (
-            TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s") if asked else TRUNCATED_UNCONTINUED_FAILURE
-        )
+        if response.truncation_reason == "context_window":
+            text = CONTEXT_WINDOW_FAILURE
+        else:
+            text = (
+                TRUNCATED_FAILURE.format(n=asked, s="" if asked == 1 else "s")
+                if asked
+                else TRUNCATED_UNCONTINUED_FAILURE
+            )
     elif kind is ReplyKind.REFUSAL:
         explanation = visible or reasoning_excerpt(response)
         text = REFUSAL_FAILURE + (
@@ -2608,6 +2615,34 @@ class TurnPathMixin:
                     merge_episode = True
                     continue
                 if action is RecoveryAction.CONTINUE and kind is ReplyKind.TRUNCATED:
+                    if response.truncation_reason == "context_window":
+                        shrunk = await _shrink(WindowPressure.OVERFLOW, active_model)
+                        messages = shrunk.messages
+                        if shrunk.changed:
+                            recovery.continuations += 1
+                            logger.warning(
+                                "empty-recovery: reply cut at the context window with nothing in it; "
+                                "shrank context and continuing ({}/{})",
+                                recovery.continuations,
+                                MAX_CONTINUATIONS,
+                            )
+                            messages = self.context.add_assistant_message(messages, "(empty)")
+                            messages[-1]["_recovery_synthetic"] = True
+                            messages.append(
+                                {"role": "user", "content": CONTEXT_WINDOW_CONTINUATION, "_recovery_synthetic": True}
+                            )
+                            prev_had_tool_calls = False
+                            continue
+                        logger.error(
+                            "empty-recovery: reply cut at the context window and context could not be shrunk; "
+                            "ending the turn as an error"
+                        )
+                        error_full = _recovery_failure_text(kind, response, clean, recovery)
+                        error_detail = bound_failure_text(error_full)
+                        no_output = False
+                        final_content = error_detail
+                        status = "error"
+                        break
                     # Cut at the ceiling with nothing in it: the model is told so
                     # and given more room. Effort is left alone -- there was no
                     # reasoning to blame. The ceiling doubles per continuation from
