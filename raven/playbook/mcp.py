@@ -62,6 +62,10 @@ def playbook_mcp_servers(spec: "PlaybookSpec", values: Mapping[str, str]) -> dic
     did not supply a password" and "the password is the empty string" are
     different states, a server told the second one fails in a way that reads
     like a broken server, and a literal ``{{ params.X }}`` must never be dialed.
+
+    Each copy is marked ``source="playbook"``: a definition that travels with
+    the file is not the host's own, so the registry probe must not read its
+    cwd. The launch still starts there, as the definition says.
     """
     out: dict[str, MCPServerConfig] = {}
     for name, cfg in (spec.mcp_servers or {}).items():
@@ -69,6 +73,7 @@ def playbook_mcp_servers(spec: "PlaybookSpec", values: Mapping[str, str]) -> dic
             update={
                 "env": _filled(cfg.env, values),
                 "headers": _filled(cfg.headers, values),
+                "source": "playbook",
             }
         )
     return out
