@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -129,6 +130,26 @@ class TestGitTimeouts:
                 timeout=0.3,
             )
         assert time.monotonic() - started < 2.0
+
+    def test_run_capture_uses_files_not_pipes(self, tmp_path, monkeypatch):
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            kwargs["stdout"].write(b"out")
+            kwargs["stderr"].write(b"err")
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        code, out, err = git_ops.run_capture(["git"], cwd=tmp_path)
+
+        assert code == 0
+        assert out == "out"
+        assert err == "err"
+        assert seen["stdout"] is not subprocess.PIPE
+        assert hasattr(seen["stdout"], "write")
+        assert seen["stdin"] == subprocess.DEVNULL
+        assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
     def test_run_capture_does_not_wait_for_a_grandchild(self, tmp_path):
         code = (
