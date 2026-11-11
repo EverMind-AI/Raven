@@ -866,10 +866,10 @@ class TestAttemptDefinitions:
         tstore.pin("trace-a", reason="ra", state_dir=tmp_path)
         real = atomic_io._replace_unlocked
 
-        def failing(path, data, create_mode=None):
+        def failing(path, data, create_mode=None, newline=None, like=None):
             if "attempts.json" in path.name:
                 raise OSError("disk full")
-            real(path, data, create_mode)
+            real(path, data, create_mode, newline, like)
 
         monkeypatch.setattr(atomic_io, "_replace_unlocked", failing)
         with pytest.raises(OSError, match="disk full"):
@@ -884,10 +884,10 @@ class TestAttemptDefinitions:
         tstore.pin(x, reason="keep", state_dir=tmp_path)
         real = atomic_io._replace_unlocked
 
-        def failing(path, data, create_mode=None):
+        def failing(path, data, create_mode=None, newline=None, like=None):
             if "attempts.json" in path.name:
                 raise OSError("disk full")
-            real(path, data, create_mode)
+            real(path, data, create_mode, newline, like)
 
         monkeypatch.setattr(atomic_io, "_replace_unlocked", failing)
         with pytest.raises(OSError, match="disk full"):

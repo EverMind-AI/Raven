@@ -643,6 +643,7 @@ class EvolutionOrchestrator:
         ``work_dir/nodes/``, carrying identity + git anchor + final status +
         gate stats. Best-effort — the ledger is the audit trail, not control
         state (resume runs off the journal)."""
+        target = None
         try:
             ndir = self._cfg.nodes_dir
             ndir.mkdir(parents=True, exist_ok=True)
@@ -674,9 +675,10 @@ class EvolutionOrchestrator:
                     rec["paired"] = dataclasses.asdict(o.paired)
                 if o.stats:
                     rec["stats"] = o.stats
-                atomic_replace(ndir / f"{o.node_id}.json", json.dumps(rec, indent=2, default=str))
+                target = ndir / f"{o.node_id}.json"
+                atomic_replace(target, json.dumps(rec, indent=2, default=str))
         except OSError as exc:
-            logger.warning("could not persist the node ledger under %s: %s", self._cfg.nodes_dir, exc)
+            logger.warning("could not persist the node ledger at %s: %s", target or self._cfg.nodes_dir, exc)
 
     def _append_findings(self, rr: RoundResult) -> None:
         """Append the per-round findings-log entry (SOP §3 layer 1) to
