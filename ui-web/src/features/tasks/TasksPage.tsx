@@ -466,8 +466,8 @@ function nodeWhyText(node: TaskNode, row: TaskRow): string {
    conversation draws for its own turns, so the two cannot drift apart. The
    seam is optional: an assembly without the transcript (this domain's own
    tests) still draws the tab around it. */
-function RecordStage({ record, status, nodeKey }: {
-  record: NodeRecord; status: TaskNode['status']; nodeKey: string
+function RecordStage({ record, status, node, nodeKey }: {
+  record: NodeRecord; status: TaskNode['status']; node: TaskNode; nodeKey: string
 }): JSX.Element {
   const box = useRef<HTMLDivElement | null>(null)
   /* A microtask after the commit, never inside it: the painter mounts and
@@ -483,12 +483,19 @@ function RecordStage({ record, status, nodeKey }: {
       if (!live || !el.isConnected) return
       paint(
         el,
-        { status: status === 'running' ? 'run' : status, messages: record.messages as HistoryMessage[] },
+        {
+          status: status === 'running' ? 'run' : status,
+          messages: record.messages as HistoryMessage[],
+          /* The node's own clock, in epoch milliseconds -- the seam takes either
+             unit and the fold reads it as the record's span. */
+          started_at: node.started_at ?? undefined,
+          ended_at: node.ended_at ?? undefined,
+        },
         { key: nodeKey, dispatch: true, shut: true, empty: t('gui.tasks.ctx_none') },
       )
     })
     return () => { live = false }
-  }, [record, status, nodeKey])
+  }, [record, status, nodeKey, node.started_at, node.ended_at])
   return <div className="tkrecord" ref={box} />
 }
 
@@ -527,7 +534,7 @@ function ContextTab({ row, node, rec }: {
   const nodeKey = store.rowKey(row) + ':' + node.node_id
   return (
     <div className="tkctx">
-      <RecordStage record={record} status={node.status} nodeKey={nodeKey} />
+      <RecordStage record={record} status={node.status} node={node} nodeKey={nodeKey} />
       {/* The console tail a cli-channel node is read through while it runs has
          no row in the conversation's renderer, so the tab says why there is
          nothing more to read yet. */}

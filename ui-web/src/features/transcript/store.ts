@@ -16,7 +16,7 @@ import type { DeliveryRow } from '../workspace/types'
 import type {
   AnswerData, ArtsData, AskData, CallData, CallHandle,
   DeliveredData, FoldData, HistoryMessage, Hunk, Lane, NoteData, NoteHandle, QaData, Seg,
-  SpawnListRow, StageOpts, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
+  SpawnListRow, StageCtx, StageOpts, StatusData, StepData, StepHandle, SubagentStatusLike, TranscriptSource,
 } from './types'
 
 /* Plain external store. The callers that drive the transcript are not React:
@@ -783,7 +783,13 @@ export function spawnState(c: CallData): 'ok' | 'bad' | 'run' {
   return c.done ? (c.ok ? 'ok' : 'bad') : 'run'
 }
 
-const msOfIso = (raw: unknown): number => {
+/* Epoch milliseconds from whatever a record carries: the wire's ISO string, or
+   the millisecond number a task row holds. A number is taken as-is -- handing
+   its decimal digits to Date.parse reads them as a year (Date.parse('1000')
+   is the year 1000, and a real epoch lands on NaN) -- and anything unparseable
+   is 0. */
+const msOfTime = (raw: unknown): number => {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : 0
   const ms = Date.parse(String(raw || ''))
   return Number.isFinite(ms) ? ms : 0
 }
@@ -867,8 +873,8 @@ export function resolveSpawn(lane: Lane, c: CallData): void {
     c.spawnInstance = c.spawnInstance || String(row.instance || '')
     c.spawnLabel = c.spawnLabel || String(row.label || '')
     c.spawnStatus = c.spawnStatus || fromListStatus(row.status)
-    c.spawnT0 = c.spawnT0 || msOfIso(row.started_at)
-    c.spawnT1 = c.spawnT1 || msOfIso(row.ended_at)
+    c.spawnT0 = c.spawnT0 || msOfTime(row.started_at)
+    c.spawnT1 = c.spawnT1 || msOfTime(row.ended_at)
     bump(lane, c)
   }).catch(() => {
     /* Asked again if the reader reopens the card, and the memoised promise goes
@@ -2053,11 +2059,11 @@ function lastTurnFold(lane: Lane): FoldData | null {
    start and end are the truer span for a delegated run anyway. Only that turn's
    fold takes it -- a lane paints a whole multi-turn history, and an earlier
    turn's span is its own. */
-function agentFoldTime(lane: Lane, ctx: { started_at?: string; ended_at?: string }): void {
+function agentFoldTime(lane: Lane, ctx: { started_at?: string | number; ended_at?: string | number }): void {
   const fold = lastTurnFold(lane)
   if (!fold) return
-  const from = msOfIso(ctx && ctx.started_at)
-  const to = msOfIso(ctx && ctx.ended_at)
+  const from = msOfTime(ctx && ctx.started_at)
+  const to = msOfTime(ctx && ctx.ended_at)
   if (!from || !to || to <= from) return
   const time = durText(to - from)
   if (fold.time === time) return
@@ -2139,12 +2145,8 @@ export function subscribeBrands(fn: () => void): () => void {
 
 export const brandsVersion = (): number => brandsV
 
-export interface AgentCtxLike {
-  status?: string
-  messages?: HistoryMessage[]
+export interface AgentCtxLike extends StageCtx {
   tool_calls?: unknown[]
-  started_at?: string
-  ended_at?: string
 }
 
 /* The rows a redraw replaces keep the identity the reader is looking at.
@@ -2241,7 +2243,7 @@ export function agentPaintLane(lane: Lane, r: AgentCtxLike | null, opts?: StageO
   const msgs = markDispatch((r && r.messages) || [], !!(opts && opts.dispatch))
   const running = !!(r && r.status === 'run')
   const key = (opts && opts.key) || ''
-  lane.agentStart = msOfIso(r && r.started_at)
+  lane.agentStart = msOfTime(r && r.started_at)
   /* The pane asks for a settled record's work to fold shut. While the run is
      still going its work is what the reader is watching, so the ask binds only
      once the record has settled. */

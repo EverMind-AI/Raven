@@ -2033,6 +2033,41 @@ describe('the context tab with the real transcript painter', () => {
     expect(bubble.textContent).toContain('the rendered prompt')
     expect(bubble.querySelector('.transcript-auto')?.textContent).toBe('gui.deleg.by_dispatch')
     expect(box.querySelector('.tfh .lb')?.textContent).toBe('gui.fold.steps')
+    expect(box.querySelector('.tfh .tm')?.textContent).toBe('1s')
     expect(box.querySelector('.answer')?.textContent).toContain('the answer')
+  })
+
+  /* A node still going: the fold says so and counts from the node's own start.
+     The node carries epoch milliseconds, not the ISO string a spawn record
+     holds, so this also pins the unit conversion at the seam. */
+  it('clocks a running record from the node\'s own start', async () => {
+    record = {
+      dispatch: 'the rendered prompt', steps: [], answer: null, outputTruncated: false,
+      messages: [
+        { role: 'user', text: 'the rendered prompt' },
+        { role: 'assistant', reasoning_content: 'think', tool_calls: [{ id: 'c1', name: 'read_file', arguments: '{}' }] },
+        { role: 'tool', tool_call_id: 'c1', text: 'ok' },
+      ],
+    }
+    transcriptStore._resetForTests()
+    setSources({
+      tasks: source(),
+      workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: false, openPath: () => {} },
+      prose: { pathOf: () => null, linkTargetOf: () => null },
+      transcript: {
+        clean: (x: unknown) => String(x ?? ''), okOf: () => true, spawnList: async () => [],
+        stagePaint: realStagePaint,
+      } as never,
+    })
+    const running = task({
+      id: 'a', kind: 'dag', status: 'running',
+      nodes: [node({ node_id: 'n1', status: 'running', started_at: Date.now() - 5_500 })],
+    })
+    render(<TaskPane task={running} full />)
+    fireEvent.click(document.querySelectorAll('.daggraph .nd')[0] as Element)
+    await act(async () => {})
+    const box = document.querySelector('.tkrecord') as HTMLElement
+    expect(box.querySelector('.tfh .lb')?.textContent).toBe('gui.deleg.st_run')
+    expect(box.querySelector('.tfh .tm')?.textContent).toBe('5s')
   })
 })

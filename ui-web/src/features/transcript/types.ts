@@ -436,6 +436,16 @@ export interface HistoryMessage {
   silent?: boolean
 }
 
+/* What a stage painter is handed: a record's messages, and the clock its fold
+   reads. Times are epoch milliseconds or an ISO string, whichever the pane
+   holds -- a task node carries the first, a spawn record the second. */
+export interface StageCtx {
+  status?: string
+  messages?: HistoryMessage[]
+  started_at?: string | number
+  ended_at?: string | number
+}
+
 /* The pull half of the seam. Event pushes arrive through this island's own
    verbs, which the session pipeline calls directly (features/transcript/mount). */
 export interface TranscriptSource {
@@ -465,8 +475,7 @@ export interface TranscriptSource {
      the conversation's own cards, folds and rows -- so a sibling that shows a
      run's record (features/tasks) draws it the way the conversation draws its
      own rather than keeping a second renderer that drifts from this one. */
-  stagePaint?: (box: HTMLElement, ctx: { status?: string; messages?: HistoryMessage[] } | null,
-    opts?: StageOpts | null) => void
+  stagePaint?: (box: HTMLElement, ctx: StageCtx | null, opts?: StageOpts | null) => void
 }
 
 /* How a delegated record is painted. `key` names the record (a different key

@@ -23,7 +23,7 @@ import { agentStage, history as drawHistory, shownLane } from './mount'
 import { bringUp, goTo as goToTurn } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
-import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg, StageOpts } from './types'
+import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg, StageCtx, StageOpts } from './types'
 
 /* Every delegation verb here is addressed to the conversation on screen, and
    the card that offers it only exists inside one. */
@@ -56,7 +56,7 @@ export function okOf(name: string, preview: string): boolean {
    the sibling neither imports this island nor keeps a renderer of its own.
    The subagents domain exposes its own `stagePaint` for the instance pane;
    this one is the task pane's and carries the extra options a record needs. */
-export const stagePaint = (box: HTMLElement, ctx: { status?: string; messages?: HistoryMessage[] } | null,
+export const stagePaint = (box: HTMLElement, ctx: StageCtx | null,
   opts?: StageOpts | null): void => agentStage(box, ctx, opts)
 
 export function renderHistory(messages: HistoryMessage[]): void {

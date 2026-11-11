@@ -881,6 +881,8 @@ describe('subagents island, the detail', () => {
     expect(document.querySelector('.sahd .trow b')?.textContent).toBe('merge')
     expect(document.querySelector('.sahd .trow .who')?.textContent).toBe('Writer')
     expect(paints[0]!.opts).toMatchObject({ key: 'dag:r1:merge', empty: 'gui.dag.node_empty', reset: true })
+    /* The node's own row carries the run's clock; the painter's fold reads it. */
+    expect(paints[0]!.ctx).toMatchObject({ started_at: node.started_at, ended_at: node.ended_at })
     expect(document.querySelectorAll('.satx > .wsnote')).toHaveLength(1)
   })
 
