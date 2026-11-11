@@ -67,7 +67,7 @@ _SCRATCH_DIRNAME = ".generated"
 
 class PptGenerateImageTool(Tool):
     name = "ppt_generate_image"
-    description = (
+    _DESCRIPTION = (
         "Generate a new raster visual for a page with the image model this deployment configured. Use it for "
         "an illustration, a backdrop or a decorative picture that does not exist yet; use ppt_image_search and "
         "ppt_fetch for a real logo, product screen, published plot or other existing evidence. Every call "
@@ -85,6 +85,21 @@ class PptGenerateImageTool(Tool):
         "generated PNG is added to this deck's sources, ingested immediately, and returned with its figure id so "
         "the build can place it."
     )
+    # MiniMax keeps the character an input image shows and takes one reference per
+    # request (the host's own MiniMax route sends the first and drops the rest), so
+    # on that provider the deck's words promise one picture and put the manner in
+    # the prompt, where a reference cannot carry it. Off it, the default stands.
+    _MINIMAX_DESCRIPTION = _DESCRIPTION.replace(
+        "`references` carries pictures to match or vary: the template's own illustration for its manner, an earlier "
+        "generation for consistency, a user's photograph to restyle.",
+        "`references` carries one picture to match: the character it shows is kept, so a person or place stays "
+        "consistent across the deck. A manner goes in the prompt, not in a reference.",
+    )
+    _MINIMAX_REFERENCES = (
+        "one picture to match: a figure id of this deck, a file name under its sources, or an absolute path. "
+        "MiniMax keeps the character it shows -- one per call -- and a manner goes in the prompt, not here"
+    )
+    description = _DESCRIPTION
     timeout_seconds = 360.0
 
     def __init__(
@@ -210,6 +225,18 @@ class PptGenerateImageTool(Tool):
         """
         return self.media.configured()
 
+    def to_schema(self) -> dict[str, Any]:
+        # Authored so the registry serves it live -- the same reason
+        # ``image_generate`` authors its own: the provider the section runs on may
+        # change between turns, and it decides what a reference is for.
+        if not self.media._runs_on_minimax():
+            return super().to_schema()
+        schema = super().to_schema()
+        function = schema["function"]
+        function["description"] = self._MINIMAX_DESCRIPTION
+        function["parameters"]["properties"]["references"]["description"] = self._MINIMAX_REFERENCES
+        return schema
+
     async def execute(
         self,
         project: str,
@@ -307,6 +334,14 @@ class PptGenerateImageTool(Tool):
             refs = self._references(deck, spec.get("references") or [])
         except FileNotFoundError as exc:
             return {"filename": str(spec.get("filename") or ""), "error": str(exc)}
+        held_back = 0
+        if len(refs) > 1 and self.media._runs_on_minimax():
+            # MiniMax keeps one character per request: the host would send the
+            # first and drop the rest in silence, and the digest would still be
+            # keyed on all of them. Send the first, name the file for it, and say
+            # how many were not, so the model knows what it got.
+            held_back = len(refs) - 1
+            refs = refs[:1]
         if transparent:
             # The image endpoints take no `background` parameter (OpenRouter's gpt-image-2
             # answers "Accepted: auto, opaque", and asked in words it paints a checkerboard),
@@ -364,6 +399,12 @@ class PptGenerateImageTool(Tool):
                     "a subject on the green screen, so this is not a cut-out. Ask again with one subject and "
                     "nothing behind it"
                 )
+        if held_back:
+            note = (
+                f"MiniMax keeps one reference per picture: only the first was sent, and the rest were not "
+                f"({held_back} left out). Keep the character in one picture and put the manner in the prompt"
+            )
+            made["note"] = f"{made['note']} {note}" if made.get("note") else note
         made["width"], made["height"] = _dimensions(payload)
         source = sources.receive(deck, name, payload, f"generated:{made['model']}")
         if source is None:

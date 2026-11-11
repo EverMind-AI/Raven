@@ -23,7 +23,7 @@ import httpx
 import pytest
 
 from raven.agent.tools.media_gen import ImageGenerateTool
-from raven.config.schema import MediaToolConfig
+from raven.config.schema import ImageToolConfig, MediaToolConfig
 from raven_ppt.contracts import Project
 from raven_ppt.tools.generate_image import PptGenerateImageTool
 
@@ -373,3 +373,80 @@ async def test_a_transparent_request_asks_for_a_green_screen_and_keys_it_out(mon
     assert result["transparent_share"] > 0.6
     saved = Image.open(result["path"])
     assert saved.mode == "RGBA" and saved.getpixel((2, 2))[3] == 0
+
+
+def test_the_deck_image_tool_says_what_references_do_on_the_provider_it_runs_on(tmp_path: Path) -> None:
+    """The deck's own words follow the provider its image tool runs on.
+
+    MiniMax keeps the character one input image shows and takes one per request,
+    so a schema that offers six pictures to match or vary is a promise the
+    transport cannot keep -- the model asks for several, the host sends the
+    first, and the rest vanish. The section can change between turns, so the
+    registry has to serve the answer live rather than the shape it admitted.
+    """
+    from types import SimpleNamespace
+
+    from raven.agent.tools.registry import ToolRegistry
+
+    section = SimpleNamespace(provider="", api_base="", api_key="k", model="")
+    media = ImageGenerateTool(lambda: section, workspace=tmp_path)
+    registry = ToolRegistry()
+    registry.register(PptGenerateImageTool(tmp_path, media))
+
+    def offered() -> dict:
+        return next(d["function"] for d in registry.get_definitions() if d["function"]["name"] == "ppt_generate_image")
+
+    served = offered()
+    assert "MiniMax" not in json.dumps(served)
+    assert "Up to six" in served["parameters"]["properties"]["references"]["description"]
+
+    section.provider, section.api_base = "minimax", "https://api.minimax.io/v1"
+    served = offered()
+    assert "character" in served["description"]
+    references = served["parameters"]["properties"]["references"]["description"]
+    assert "one" in references and "Up to six" not in references
+    assert "prompt" in references
+
+
+@pytest.mark.asyncio
+async def test_on_minimax_a_second_reference_is_reported_rather_than_dropped(monkeypatch, tmp_path: Path) -> None:
+    """MiniMax keeps one character per request. The deck used to hand it every
+    reference and let the host send the first in silence; now the first is the
+    one sent, and the result says how many were not, so the model knows what it
+    got rather than believing all of them were matched."""
+    requested: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "data": {"image_base64": [base64.b64encode(_png()).decode("ascii")]},
+                "metadata": {"success_count": "1", "failed_count": "0"},
+                "base_resp": {"status_code": 0, "status_msg": "success"},
+            },
+        )
+
+    deck = Project(workspace=tmp_path, slug="deck")
+    deck.sources_dir.mkdir(parents=True)
+    (deck.sources_dir / "first.png").write_bytes(_png("red", (100, 100)))
+    (deck.sources_dir / "second.png").write_bytes(_png("green", (100, 100)))
+    tool = _tool(
+        tmp_path,
+        ImageToolConfig(provider="minimax", api_base="https://api.minimax.io/v1", api_key="mm-key", model="image-01"),
+    )
+    _mock(monkeypatch, handler)
+
+    out = json.loads(
+        await tool.execute(
+            project="deck",
+            prompt="a portrait in this manner",
+            filename="portrait",
+            references=["first.png", "second.png"],
+        )
+    )
+
+    assert out["ok"] is True, out
+    assert len(requested[0]["subject_reference"]) == 1
+    note = out.get("note") or ""
+    assert "one reference" in note and "not" in note
