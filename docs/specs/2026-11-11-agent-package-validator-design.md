@@ -141,8 +141,9 @@ engine wheel that is not importable is `1`: the folder declares a dependency the
 
 Authoring rules, written into the suite documentation: every criterion must be checkable from the
 task text and the delivered result; a criterion may not demand something the task did not ask for;
-the reference gives exact values the judge needs. `experts/cases/*/questions.json` in the experimental
-fork follows the same shape (task, files, reference) and is a usable source of cases.
+the reference gives exact values the judge needs. Expert cases that already pair a task, its input
+files and a reference answer convert directly; `tests/fixtures/evolver_validator/raven_code_suite`
+is a minimal suite in this layout.
 
 The report records a content digest of the suite and of the agent folder, so a verdict is tied to
 exact inputs.
