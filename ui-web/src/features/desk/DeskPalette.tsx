@@ -506,6 +506,7 @@ export function DeskPalette(): JSX.Element | null {
     const target = event.currentTarget
     const pointerId = event.pointerId
     const controller = new AbortController()
+    let moved = false
     target.setPointerCapture(pointerId)
     /* The reserve follows the width on every frame of this, and the slide the
        stylesheet gives it restarts from where it stands each time, so the card
@@ -515,14 +516,20 @@ export function DeskPalette(): JSX.Element | null {
     root.dataset.deskResize = 'true'
     const move = (e: globalThis.PointerEvent): void => {
       if (e.pointerId !== pointerId) return
+      const dx = e.clientX - start.pointerX
+      const dy = e.clientY - start.pointerY
+      if (!moved) {
+        if (Math.abs(dx) + Math.abs(dy) < DESK_DRAG_THRESHOLD) return
+        moved = true
+      }
       setGeom((now) => clampGeometry({
         ...now,
         /* Anchored, the right edge is pinned (styles/page.css's `right: calc(...)`
            on `[data-anchored="true"]`), so the only way to grow is leftward --
            a rightward drag has to shrink it instead. Detached has no pinned
            edge, so the hand's own direction is the width's. */
-        w: start.w + (start.detached ? 1 : -1) * (e.clientX - start.pointerX),
-        h: Math.min(start.h + e.clientY - start.pointerY, room),
+        w: start.w + (start.detached ? 1 : -1) * dx,
+        h: Math.min(start.h + dy, room),
         fill: false,
       }))
     }
@@ -537,11 +544,18 @@ export function DeskPalette(): JSX.Element | null {
          itself -- the card's bottom edge, not the stop above it -- and the
          desk goes back to reaching it. A pixel of slack, because the room is
          measured from the palette's box and the reach from its anchor's, and
-         the two can disagree by a fraction. */
-      setGeom((now) => {
-        const h = Math.max(DESK_MIN_SIZE, Math.min(now.h, reachRef.current))
-        return { ...now, h, fill: h >= room - 1 }
-      })
+         the two can disagree by a fraction.
+
+         Only a press that became a gesture writes. A filled desk keeps its
+         fallback height in `now.h` while the height on screen comes from
+         `reach`, so settling a click would collapse the panel and clear
+         `fill` in storage. */
+      if (moved) {
+        setGeom((now) => {
+          const h = Math.max(DESK_MIN_SIZE, Math.min(now.h, reachRef.current))
+          return { ...now, h, fill: h >= room - 1 }
+        })
+      }
       if (pointerCleanup.current === cleanup) pointerCleanup.current = null
     }
     const cleanup = (): void => finish()

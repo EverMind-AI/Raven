@@ -1494,6 +1494,137 @@ describe('resizing by the corner grab', () => {
     expect(palette()?.style.height).toBe('600px')
   })
 
+  /* A press on the corner that never becomes a gesture is a click: the reader
+     reached for the grab and let go. It must not be read as "size the panel to
+     the fallback height". A filled desk keeps its fallback
+     (`DESK_DEFAULT_HEIGHT`) in `geom.h` while the height on screen comes from
+     `reach`, so a finish that writes `geom.h` back collapses the panel and
+     clears `fill` in storage. */
+  describe('a corner press that never moves', () => {
+    const full = `${700 - (42 + DESK_ANCHOR_GAP)}px`
+    /* Where the stylesheet hangs it: under the launcher, its top at 54. */
+    const atTheBottom = (): void => {
+      palette()!.getBoundingClientRect = (() => ({
+        left: 674, right: 974, top: 42 + DESK_ANCHOR_GAP, bottom: 700, width: 300, height: 646, x: 674, y: 42 + DESK_ANCHOR_GAP,
+      })) as never
+    }
+
+    it('leaves a filled desk and its stored geometry untouched', async () => {
+      launcherAt(42)
+      composerAt(700)
+      await shelf()
+      atTheBottom()
+      expect(palette()?.style.height).toBe(full)
+      const before = localStorage.getItem(DESK_GEOMETRY_KEY)
+      expect(before).not.toBeNull()
+      expect(JSON.parse(before as string).fill).toBe(true)
+
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+
+      expect(palette()?.style.height).toBe(full)
+      expect(localStorage.getItem(DESK_GEOMETRY_KEY)).toBe(before)
+      expect(JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) as string).fill).toBe(true)
+    })
+
+    it('resizes once the hand leaves the start, and clears fill', async () => {
+      launcherAt(42)
+      composerAt(700)
+      await shelf()
+      atTheBottom()
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 400,
+        }))
+      })
+
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP) - 100}px`)
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 400,
+        }))
+      })
+
+      expect(palette()?.style.height).toBe(`${700 - (42 + DESK_ANCHOR_GAP) - 100}px`)
+      const stored = JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) as string) as { h: number; fill?: boolean }
+      expect(stored.fill).toBeFalsy()
+      expect(stored.h).toBe(700 - (42 + DESK_ANCHOR_GAP) - 100)
+    })
+
+    it('treats a sub-threshold shake as the same click', async () => {
+      launcherAt(42)
+      composerAt(700)
+      await shelf()
+      atTheBottom()
+      const before = localStorage.getItem(DESK_GEOMETRY_KEY)
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, pointerId: 1, clientX: 501, clientY: 501,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, pointerId: 1, clientX: 501, clientY: 501,
+        }))
+      })
+
+      expect(palette()?.style.height).toBe(full)
+      expect(localStorage.getItem(DESK_GEOMETRY_KEY)).toBe(before)
+    })
+
+    it('fills again when a moved corner is released where it started', async () => {
+      launcherAt(42)
+      composerAt(700)
+      await shelf()
+      atTheBottom()
+      grab().setPointerCapture = () => {}
+      await act(async () => {
+        grab().dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 400,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+      await act(async () => {
+        window.dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, pointerId: 1, clientX: 500, clientY: 500,
+        }))
+      })
+
+      expect(palette()?.style.height).toBe(full)
+      expect(JSON.parse(localStorage.getItem(DESK_GEOMETRY_KEY) as string).fill).toBe(true)
+    })
+  })
+
   /* The card moves without the palette rendering: it grows upward with a long
      draft, and slides under the palette or out from under it as the reserve
      comes and goes. happy-dom's ResizeObserver never calls back, so these drive
