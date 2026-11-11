@@ -1035,38 +1035,79 @@ async def test_the_first_task_work_result_of_a_turn_carries_the_hand_off_note(tm
     assert notes["e2"] == ""
 
 
-async def test_only_a_task_work_call_reads_the_dispatch_paths_for_the_note(tmp_path, monkeypatch):
-    # The dispatch paths come off the whole tool list; a call that does no work must
-    # not rebuild it on the way to finding out that no note is due.
+async def _dispatch_reads(tmp_path, monkeypatch, names: list[str], *, dispatch: bool = True) -> int:
+    """How many times one turn reads the dispatch paths, given the tools it calls in order."""
     from raven.context_engine.segments import render
 
-    asked: list[str] = []
-    real = render.work_tool_note
+    reads = [0]
+    real = render.live_dispatch_tools
 
-    def _spy(name, arguments, dispatch):
-        asked.append(name)
-        return real(name, arguments, dispatch)
+    def _count(get_definitions):
+        reads[0] += 1
+        return real(get_definitions)
 
-    monkeypatch.setattr(render, "work_tool_note", _spy)
+    monkeypatch.setattr(render, "live_dispatch_tools", _count)
     provider = _FakeStreamToolProvider(
-        [
-            [_call_by_route("f1", "faketool", "direct")],
-            [_call_by_route("f2", "faketool", "direct")],
-            [_call_by_route("e1", "exec", "direct", {"command": "ls"})],
-            [_call_by_route("e2", "exec", "direct", {"command": "ls"})],
-            [ChatDelta(content="done")],
-        ]
+        [[_call_by_route(f"c{i}", name, "direct", {"command": "ls"})] for i, name in enumerate(names)]
+        + [[ChatDelta(content="done")]]
+    )
+    loop = AgentLoop(provider=provider, workspace=tmp_path)
+    _stub_edges(loop)
+    if dispatch:
+        loop.tools.register(_SpawnReceiptTool())
+    else:
+        for name in ("spawn", "run_subagent_dag"):
+            loop.tools.unregister(name)
+    loop.tools.register(_FakeTool())
+    loop.tools.register(_WorkFake("exec"))
+    _record_tool_results(loop)
+    await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
+    return reads[0]
+
+
+@pytest.mark.parametrize(
+    ("launched", "dispatch", "reads"),
+    [(False, True, 1), (False, False, 1), (True, True, 0)],
+    ids=["host", "host-without-dispatch", "launched-process"],
+)
+async def test_the_dispatch_paths_are_read_for_the_note_at_most_once_a_turn(
+    tmp_path, monkeypatch, launched, dispatch, reads
+):
+    # Read off the whole tool list, so read once, on the turn's first task-work call --
+    # also where that call earns no note, as on a turn with no dispatch path -- and never in
+    # a launched process, which earns none. Measured against a turn of the same length that
+    # does no task work, so the identity's own reads cancel out.
+    from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+    if launched:
+        monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+    working = await _dispatch_reads(
+        tmp_path / "w", monkeypatch, ["faketool", "faketool", "exec", "exec"], dispatch=dispatch
+    )
+    idle = await _dispatch_reads(tmp_path / "i", monkeypatch, ["faketool"] * 4, dispatch=dispatch)
+    assert working - idle == reads
+
+
+@pytest.mark.parametrize("route", ["direct", "tool_call"])
+async def test_a_launched_process_gets_no_hand_off_note(tmp_path, monkeypatch, route):
+    # A product agent runs as a process the host launched; whatever tools it holds, its
+    # task work is its job, so no result of its own carries the note.
+    from raven.agent.subagent.role import SUBAGENT_ENV_VAR
+
+    monkeypatch.setenv(SUBAGENT_ENV_VAR, "1")
+    provider = _FakeStreamToolProvider(
+        [[_call_by_route("e1", "exec", route, {"command": "ls"})], [ChatDelta(content="done")]]
     )
     loop = AgentLoop(provider=provider, workspace=tmp_path)
     _stub_edges(loop)
     loop.tools.register(_SpawnReceiptTool())
-    loop.tools.register(_FakeTool())
     loop.tools.register(_WorkFake("exec"))
-    _record_tool_results(loop)
+    notes, contents = _record_tool_results(loop)
 
     await loop.run_turn(_req("hi"), _EmitCollector(), _drain)
 
-    assert asked == ["exec"]
+    assert "work-ran" in contents["e1"]
+    assert notes["e1"] == ""
 
 
 async def test_task_work_without_a_dispatch_path_earns_no_hand_off_note(tmp_path):

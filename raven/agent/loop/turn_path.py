@@ -1215,9 +1215,13 @@ class TurnPathMixin:
 
         watch_state = _watch_work.TurnWatch()
         watch_request = _watch_work.asked_for(initial_messages, origin=origin)
-        # Turn-local for the same reason: the host's first task-work result of this
-        # turn earns the hand-it-over note (render.work_tool_note), and only the first.
-        work_note_due = True
+        # Local to this run of the loop for the same reason (a retried attempt runs it
+        # again): the first task-work call settles the hand-it-over note
+        # (render.work_tool_note) either way, and a process launched to do one task never
+        # earns one, so it never asks.
+        from raven.agent.subagent.role import is_subagent_process
+
+        work_note_due = not is_subagent_process()
 
         # Read once, here: a mode switched mid-turn lands on the next turn.
         policy = self.session_policy(session_key or "")
@@ -2021,15 +2025,15 @@ class TurnPathMixin:
                         if work_note_due and reached is not None:
                             forward_to = getattr(called, "forwarded_params", None)
                             reached_args = forward_to(call_args) if forward_to is not None else call_args
-                            # Named first: the dispatch paths are read off the whole tool
-                            # list, too much to rebuild for every call that does no work.
-                            if render.is_work_call(reached.name, reached_args) and (
-                                work_note := render.work_tool_note(
+                            # Classified first: the dispatch paths are read off the whole tool
+                            # list, too much to rebuild for a call that does no work. The first
+                            # work call settles it: the paths do not change within the run, so
+                            # a call that earned no note is followed by none that would.
+                            if render.is_work_call(reached.name, reached_args):
+                                work_note_due = False
+                                watch_note += render.work_tool_note(
                                     reached.name, reached_args, render.live_dispatch_tools(self.tools.get_definitions)
                                 )
-                            ):
-                                watch_note += work_note
-                                work_note_due = False
                     # The registry already unwrapped any ToolResult: `result` is
                     # the model-facing text, with the optional display string
                     # riding along on it (ToolOutput). The model always gets the
