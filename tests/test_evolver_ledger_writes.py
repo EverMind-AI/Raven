@@ -51,3 +51,18 @@ def test_node_ledger_uses_atomic_replace(tmp_path: Path, monkeypatch):
 
     assert [p.name for p, _ in calls] == ["n1.json"]
     assert '"node_id": "n1"' in calls[0][1]
+
+
+def test_failed_failure_map_write_keeps_the_previous_file(tmp_path: Path, monkeypatch):
+    path = tmp_path / "failure_map.json"
+    path.write_text('{"old": 1}', encoding="utf-8")
+    orch = SimpleNamespace(_cfg=SimpleNamespace(failure_map_path=path), _failure_map={"new": 2})
+
+    def boom(path, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(loop, "atomic_replace", boom)
+
+    EvolutionOrchestrator._persist_failure_map(orch)
+
+    assert path.read_text(encoding="utf-8") == '{"old": 1}'

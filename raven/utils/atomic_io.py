@@ -23,18 +23,26 @@ T = TypeVar("T")
 
 _held = threading.local()
 
-#: A reader on Windows holds the target open without delete sharing, so a
-#: concurrent ``os.replace`` fails with a sharing violation (WinError 32/5).
-#: The hold is normally brief; retry instead of losing the write.
+#: A reader on Windows holds the target open without delete sharing, so the
+#: temp-file open or ``os.replace`` fails with a sharing violation
+#: (WinError 32/5). The hold is normally brief; retry the whole replacement
+#: instead of losing the write. The bound is deliberately small; callers that
+#: must not block an event loop should reach the helper through a thread.
 _REPLACE_ATTEMPTS = 5
 _REPLACE_BACKOFF = 0.05
 
 
-def _replace_with_retry(tmp_path: Path, path: Path) -> None:
+def _replace_with_retry(
+    path: Path,
+    data: str,
+    create_mode: int | None = None,
+    newline: str | None = None,
+    like: Path | None = None,
+) -> None:
     delay = _REPLACE_BACKOFF
     for attempt in range(_REPLACE_ATTEMPTS):
         try:
-            os.replace(tmp_path, path)
+            _replace_unlocked(path, data, create_mode=create_mode, newline=newline)
             return
         except PermissionError:
             if attempt + 1 == _REPLACE_ATTEMPTS:
@@ -253,7 +261,7 @@ def _replace_unlocked(
         # after every save. Carry the target's own mode onto the replacement.
         if preserve is not None:
             os.chmod(tmp_path, preserve)
-        _replace_with_retry(tmp_path, path)
+        os.replace(tmp_path, path)
     except BaseException:
         # Windows refuses to replace a read-only target after the tmp has
         # taken its mode; the tmp goes too, so making the target writable is
@@ -294,7 +302,7 @@ def atomic_replace(
     no translation of line endings to the platform's.
     """
     with _locked(path):
-        _replace_unlocked(path, data, create_mode=mode, newline=newline, like=like)
+        _replace_with_retry(path, data, create_mode=mode, newline=newline, like=like)
 
 
 # A new Windows file takes its folder's inherited ACL whatever mode os.open is
@@ -364,5 +372,5 @@ def atomic_update(
             current = None
         replacement, result = update(current)
         if replacement is not None:
-            _replace_unlocked(path, replacement, create_mode=mode)
+            _replace_with_retry(path, replacement, create_mode=mode)
         return result

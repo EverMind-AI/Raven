@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
@@ -80,6 +81,8 @@ from evolver.orchestrator.termination import TerminationTracker
 from evolver.scheduler.anchor_selection import AnchorSelection
 from evolver.tree.node import AppliedPatch, HarnessNode, NodeStatus
 from raven.utils.atomic_io import atomic_replace
+
+logger = logging.getLogger(__name__)
 
 
 class DiagnoseFn(Protocol):
@@ -623,8 +626,8 @@ class EvolutionOrchestrator:
             path = self._cfg.failure_map_path
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_replace(path, json.dumps(self._failure_map, indent=2))
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("could not persist the failure map at %s: %s", self._cfg.failure_map_path, exc)
 
     def _reload_failure_map(self) -> None:
         """Re-read the accumulated failure map from disk (resume path)."""
@@ -672,8 +675,8 @@ class EvolutionOrchestrator:
                 if o.stats:
                     rec["stats"] = o.stats
                 atomic_replace(ndir / f"{o.node_id}.json", json.dumps(rec, indent=2, default=str))
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("could not persist the node ledger under %s: %s", self._cfg.nodes_dir, exc)
 
     def _append_findings(self, rr: RoundResult) -> None:
         """Append the per-round findings-log entry (SOP §3 layer 1) to

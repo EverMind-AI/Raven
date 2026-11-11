@@ -421,3 +421,22 @@ class TestReplaceRetry:
             atomic_replace(path, "new")
         assert calls["n"] == atomic_io._REPLACE_ATTEMPTS
         assert path.read_text(encoding="utf-8") == "old"
+        assert not (tmp_path / "state.json.tmp").exists()
+
+    def test_does_not_retry_a_missing_source(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def missing(src, dst):
+            calls["n"] += 1
+            raise FileNotFoundError(src)
+
+        monkeypatch.setattr(atomic_io.os, "replace", missing)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(FileNotFoundError):
+            atomic_replace(path, "new")
+        assert calls["n"] == 1
