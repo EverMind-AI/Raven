@@ -98,6 +98,7 @@ describe('the permission chip', () => {
     const row = rows().find((r) => r.querySelector('.nm')!.textContent === 'gui.perm.ask')!
     const shape = (el: Element): (string | null)[] =>
       [...el.querySelectorAll('path')].map((p) => p.getAttribute('d'))
+    expect(shape(pic).length).toBeGreaterThan(0)
     expect(shape(pic)).toEqual(shape(row.querySelector('.pico')!))
   })
 })
@@ -127,7 +128,7 @@ describe('the permission popover', () => {
     ])
     expect(rows().map((r) => r.getAttribute('title'))).toEqual([null, null, null])
     const glyphs = rows().map((r) => r.querySelector('svg.pico')!.outerHTML)
-    expect(new Set(glyphs).size).toBe(3)
+    expect(new Set(glyphs).size).toBe(rows().length)
     expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
     expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
   })
