@@ -501,19 +501,20 @@ def owning_groups(board: Board, handles: Collection[str], groups: Collection[str
 def confine_update(args: Mapping[str, Any], owners: Collection[str]) -> dict[str, Any]:
     """The update with only what a turn that belongs to ``owners`` may write.
 
-    It keeps the steps on those groups and every step that places work, wherever that
-    goes -- a dispatch has to land somewhere, a new group included -- and the ``groups``
-    changes on the groups those steps keep. What it says about any other matter is
-    dropped rather than refused: the turn was not about it. Arguments of the wrong shape
-    pass through whole, for the rules to refuse with their own reason. No owners, no
-    change.
+    It keeps the steps on those groups, every step that places work, wherever that
+    goes -- a dispatch has to land somewhere, a new group included -- and every step that
+    asks the user something, since a question that went out with the reply has to land
+    somewhere too; and the ``groups`` changes on the groups those steps keep. What it says
+    about any other matter is dropped rather than refused: the turn was not about it.
+    Arguments of the wrong shape pass through whole, for the rules to refuse with their
+    own reason. No owners, no change.
     """
     out = dict(args)
     steps, changes = args.get("steps"), args.get("groups")
     if not owners or not isinstance(steps, list) or not all(isinstance(raw, Mapping) for raw in steps):
         return out
     owned = list(owners)
-    out["steps"] = [raw for raw in steps if raw.get("group") in owned or raw.get("tasks")]
+    out["steps"] = [raw for raw in steps if raw.get("group") in owned or raw.get("tasks") or raw.get("questions")]
     if isinstance(changes, list) and all(isinstance(raw, Mapping) for raw in changes):
         moved = owned + [raw.get("group") for raw in out["steps"]]
         out["groups"] = [raw for raw in changes if raw.get("group") in moved]

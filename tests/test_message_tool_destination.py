@@ -11,6 +11,7 @@ from loguru import logger
 from raven.agent.tools.message import MessageTool
 from raven.channels.intake import Intake
 from raven.gateway.spine import build_gateway
+from raven.permissions.turn import set_current_tool_call_id
 from raven.spine.delivery import Capabilities
 
 OWNER = "123456789"
@@ -74,6 +75,32 @@ class ToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asyncio.gather(one("tui", "project"), one("telegram", OWNER)), [False, True])
         self.assertEqual(sender.await_count, 1)
         self.assertEqual(self.stream.await_count, 1)
+
+    async def test_only_a_same_target_send_records_the_call_that_answered(self):
+        set_current_tool_call_id("call-1")
+        await self.tool.execute("reply")
+        self.assertEqual(self.tool.answered_calls_in_turn, frozenset({"call-1"}))
+
+        set_current_tool_call_id("call-2")
+        await self.tool.execute("milestone", channel="telegram", chat_id=OWNER)
+        self.assertEqual(self.tool.answered_calls_in_turn, frozenset({"call-1"}))
+
+    async def test_a_failed_send_records_no_call(self):
+        self.tool.set_send_callback(AsyncMock(side_effect=RuntimeError("boom")))
+        set_current_tool_call_id("call-1")
+        result = await self.tool.execute("reply")
+        self.assertTrue(result.startswith("Error:"))
+        self.assertEqual(self.tool.answered_calls_in_turn, frozenset())
+
+    async def test_a_send_with_no_call_id_records_no_answered_call(self):
+        await self.tool.execute("reply")
+        self.assertEqual(self.tool.answered_calls_in_turn, frozenset())
+
+    async def test_start_turn_forgets_the_calls_that_answered_before(self):
+        set_current_tool_call_id("call-1")
+        await self.tool.execute("reply")
+        self.tool.start_turn()
+        self.assertEqual(self.tool.answered_calls_in_turn, frozenset())
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):

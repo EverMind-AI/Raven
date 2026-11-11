@@ -3830,7 +3830,8 @@ class TurnPathMixin:
         come from what the turn added -- a spawn still in the history belongs to the
         turn that made it. ``delegated`` (the request's mark of the result that
         opened the turn) and ``moved_on`` (the groups the notes it was shown named)
-        say what the turn is about, when anything does.
+        say what the turn is about, when anything does; a message the user sent while
+        it ran, among what it added, says it is about more than they name.
         """
         from raven.agent.task_board.dispatches import delegated_handle, turn_dispatches
         from raven.agent.task_board.runner import run_post_turn, should_run
@@ -3869,6 +3870,9 @@ class TurnPathMixin:
                     reasoning_effort=effort,
                 )
 
+        message_tool = self.tools.get("message")
+        answered = message_tool.answered_calls_in_turn if isinstance(message_tool, MessageTool) else frozenset()
+
         task = asyncio.create_task(
             run_post_turn(
                 board,
@@ -3880,8 +3884,11 @@ class TurnPathMixin:
                 turn_id=turn_id,
                 now_ms=board.now_ms,
                 generation=board.generation(key),
+                reply_rows=turn_added,
                 delegated=[handle] if (handle := delegated_handle(delegated)) else [],
                 moved_on=moved_on,
+                mid_turn=any(m.get(_MID_TURN_USER_KEY) for m in turn_added),
+                answered_message_calls=answered,
             )
         )
         self._consolidation_tasks.add(task)
