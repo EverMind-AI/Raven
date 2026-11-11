@@ -6,7 +6,7 @@ import type { DeskGeometry, DeskPane } from './types'
    written on the first render, so every reader who has opened the desk once
    already has the old numbers under the old key -- keeping the key would leave
    the new default reaching nobody but a fresh browser. */
-export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v6'
+export const DESK_GEOMETRY_KEY = 'raven.gui.desk.geometry.v7'
 export const DESK_ANCHOR_GAP = 12
 export const DESK_SNAP_DISTANCE = 34
 /* How far the pointer travels before a press on the handle becomes a drag.
@@ -31,7 +31,10 @@ export const DESK_COMPOSER_GAP = 12
    its right edge there, so widening it reaches further back across the centred
    transcript column, which is what put the default at the minimum in the first
    place. Anchored below rather than beside, it covers the top of that column
-   rather than the middle of it, and this much buys a tab that fits. */
+   rather than the middle of it, and this much buys a tab that fits.
+   The height is only a fallback: the default desk reaches the bottom
+   (`DeskGeometry.fill`), and takes this where there is no limit to reach --
+   no anchor drawn -- or once it is dragged loose. */
 export const DESK_DEFAULT_WIDTH = 300
 export const DESK_DEFAULT_HEIGHT = 340
 
@@ -136,6 +139,7 @@ export function clampGeometry(value: DeskGeometry): DeskGeometry {
     w,
     h,
     detached: value.detached,
+    ...(value.fill ? { fill: true } : {}),
   }
 }
 
@@ -188,7 +192,7 @@ export function anchoredRoom(w: number): number {
 export function defaultGeometry(): DeskGeometry {
   const w = Math.min(DESK_DEFAULT_WIDTH, window.innerWidth - 20)
   const h = Math.min(DESK_DEFAULT_HEIGHT, window.innerHeight - 82)
-  return anchoredGeometry({ x: 0, y: 0, w, h, detached: false })
+  return anchoredGeometry({ x: 0, y: 0, w, h, detached: false, fill: true })
 }
 
 /* Where the anchored desk actually sits, for the magnet to snap back to. It

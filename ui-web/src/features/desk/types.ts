@@ -54,4 +54,9 @@ export interface DeskGeometry {
   w: number
   h: number
   detached?: boolean
+  /* Anchored, the palette reaches the bottom limit whatever the window, and
+     `h` is only what it falls back to where there is no limit to reach. Set
+     until the reader sizes the palette, and again once they pull it back down
+     to the bottom. */
+  fill?: boolean
 }
