@@ -8815,7 +8815,7 @@ def test_the_exception_report_teaches_the_four_choices_and_one_copyable_reassign
 
     for taught in (
         "Use continue when the task is right and something is missing that you or the user can supply",
-        "Use reassign when the task is right and this sub-agent lacks the execution capability",
+        "Use reassign when the task is right and this subagent lacks the execution capability",
         "Use replan when the plan itself is wrong",
         "Use abandon when the task is no longer wanted",
     ):
