@@ -63,15 +63,60 @@ skill pool mints one source label per package rather than one per skill, so
 two packages may each ship a skill called `postgres-best-practices` without
 either shadowing the other.
 
-The copy is recorded in the package ledger (`<home>/agent-plugins.json`).
-That record is what makes `remove` safe: only the directories the ledger
-claims are ever deleted. `check` compares the ledger's fingerprint against
-the package on disk, so a package that has been updated since the import is
-reported as stale.
+The copy is recorded in the package ledger (`<home>/agent-plugins.json`),
+one record per workspace: two workspaces sharing a home keep separate
+imports of the same package, and removing from one never touches the
+other. Each directory the copy creates carries a `.raven-install.json`
+marker whose random token is recorded with it, and that record is what
+makes `remove` safe: only a directory whose marker still matches the
+recorded token is ever deleted. `check` compares the ledger's fingerprint
+against the package on disk, so a package that has been updated since the
+import is reported as stale, and also reports whether the installed copy
+is still the one that was imported.
 
 The imported skills are ordinary workspace skills afterwards: the file
 watcher picks them up, the router can retrieve them, and their scripts run
 through the ordinary `exec` tool under the ordinary workspace fence.
+
+## When Raven refuses to touch a directory
+
+A directory that exists where an import wants to write, but that the
+ledger cannot prove Raven installed there, is never written into or
+deleted. That includes:
+
+- **A directory you put there yourself.** The import refuses the whole
+  package and says so.
+- **A replacement at the install path.** Move the installed directory
+  away and put your own at the same path: the record no longer matches
+  the marker, so `import` and `remove` both refuse. Move your directory
+  aside and import again to reinstall.
+- **Another workspace's import.** The record belongs to the workspace it
+  was imported into; a second workspace's `import` and `remove` never
+  reach it, even though the home (and so the ledger file) is shared.
+- **A skill directory you replaced inside an installed package.** It is
+  kept as it is; the import reports it as skipped or released, and
+  `remove` reports it as kept.
+- **A symlink or junction** standing at the install path. Raven does not
+  follow it, whatever sits behind it.
+
+There is no flag that forces any of this: if a directory must go, move it
+yourself and import again.
+
+Ledger files written before the ledger recorded install identities
+(version 1) still load. Their records are kept and shown by `check` as
+unverified, but they can no longer match anything on disk: `remove` on
+such a record deletes nothing and says so. Importing the package again
+installs a fresh, verified copy once the directory is out of the way, and
+supersedes the old record.
+
+If the ledger file itself cannot be read -- a version this Raven does not
+know, or data that is not valid -- `import` and `remove` refuse to run
+rather than risk overwriting it, and the file is left exactly as it was.
+An import whose ledger could not be saved leaves its directories on disk
+unrecorded; a re-import will refuse to touch them until you move them
+away. A `remove` that fails halfway keeps both the ledger record and the
+install marker that proves it, so once the underlying failure clears,
+running the same command again simply finishes the job.
 
 ## What a package cannot do
 
@@ -86,7 +131,9 @@ through the ordinary `exec` tool under the ordinary workspace fence.
   inside a skill run only when the model decides to run them, through
   `exec`.
 - **It cannot overwrite your own skills.** A target directory that exists
-  and is not owned by the ledger is left alone, and the import says so.
+  and is not provably the ledger's -- not this workspace's record, or not
+  the copy its install marker identifies -- is left alone, and the import
+  says so.
 
 ## MCP servers a package ships
 
