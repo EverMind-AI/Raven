@@ -45,9 +45,14 @@ def _replace_with_retry(
     for attempt in range(_REPLACE_ATTEMPTS):
         try:
             if newline is None:
-                _replace_unlocked(path, data, create_mode=create_mode)
-            else:
+                if like is None:
+                    _replace_unlocked(path, data, create_mode=create_mode)
+                else:
+                    _replace_unlocked(path, data, create_mode=create_mode, like=like)
+            elif like is None:
                 _replace_unlocked(path, data, create_mode=create_mode, newline=newline)
+            else:
+                _replace_unlocked(path, data, create_mode=create_mode, newline=newline, like=like)
             return
         except (PermissionError, FileExistsError):
             if attempt + 1 == _REPLACE_ATTEMPTS:
