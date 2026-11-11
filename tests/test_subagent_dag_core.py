@@ -1739,11 +1739,15 @@ def test_which_nodes_of_a_branch_need_its_route_is_the_guides_rule() -> None:
     guard names the route, so nothing may tell the model that the entry's guard covers
     it. The rule is the branch's own: a merge node meant to run on every route, like the
     guide's `reply`, keeps `<node>.done`, and unscoped the rule would forbid it. The
-    guide's Conditional branches states it once; the schema points there."""
+    schema states the fail-open case on its own -- a branch node that also depends on
+    something outside the branch needs the branch's route -- and points to the guide
+    for the rest, so a model that never opens the guide still gets that case right."""
     when_doc = _NODE_SCHEMA["properties"]["when"]["description"]
     branches = _flat(_heading_span(_repo_text(_SKILL), "## Conditional branches"))
 
-    assert "which atom each node needs is in the guide's Conditional branches" in when_doc
+    assert "Which atom each node needs is in the guide's Conditional branches" in when_doc
+    assert "A branch node depending on anything outside its branch needs that branch's route" in when_doc
+    assert "or runs on the route not taken" in when_doc
     assert "a branch node needs no guard beyond naming any decision node it depends on" in branches
     assert (
         "A node of the branch that also depends on something outside it, such as the decision node itself or a "
@@ -1755,6 +1759,29 @@ def test_which_nodes_of_a_branch_need_its_route_is_the_guides_rule() -> None:
     )
     for stale in ("one that also depends on a node outside the branch", "Only a branch's first node needs a guard"):
         assert stale not in when_doc and stale not in branches
+
+
+def test_the_instance_sentence_says_a_handle_is_not_the_agent() -> None:
+    """A handle groups nodes of one agent; it never supplies the agent itself.
+
+    A graph that named an instance but left `subagent` off every node was refused
+    with only "required", which does not connect the two. The sentence is
+    model-visible text, so it is pinned against a later trim rather than trusted
+    to survive one.
+    """
+    instance_doc = _NODE_SCHEMA["properties"]["instance"]["description"]
+
+    assert "A handle never stands in for the agent: every node still names its subagent." in instance_doc
+
+
+def test_the_dag_description_says_background_is_the_default(tmp_path: Path) -> None:
+    """`background: false` exists, so an unqualified "runs in the background" reads
+    as the only mode. The qualification is model-visible text and is pinned."""
+    from raven.agent.subagent.dag_tool import SubAgentDagTool
+
+    described = SubAgentDagTool(workspace=tmp_path).description
+
+    assert "By default the graph runs in the background" in described
 
 
 def _guide_text() -> str:

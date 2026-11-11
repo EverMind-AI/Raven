@@ -662,7 +662,7 @@ _NODE_SCHEMA: dict[str, Any] = {
         "when": {
             "type": "string",
             "description": (
-                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here; which atom each node needs is in the guide's Conditional branches."
+                "Set this node's guard: run it only if the guard holds once every dependency settles. Atoms <node>.<route> and <node>.done name a decision node in depends_on and combine with not, and, or and parentheses; the keywords are lowercase. Every decision node in depends_on must appear here. A branch node depending on anything outside its branch needs that branch's route, <node>.<route>, or runs on the route not taken. Which atom each node needs is in the guide's Conditional branches."
             ),
         },
     },
