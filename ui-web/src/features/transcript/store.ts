@@ -1405,18 +1405,20 @@ export function collapse(lane: Lane, time?: string | null, live = false): void {
     return
   }
   if (!loose.some(stepSolid)) return
-  /* A delegated lane's fold is born open. That pane IS one sub-agent's work, and
-     its steps are what the reader opened it for -- putting them behind a click
-     hid the only thing there was to see. Every turn's, not just the last: one
-     instance's conversation is short enough to read at once, which is why
-     `shutAutoFolds` stays on the live path, where a whole session's folds
-     accumulate. Marked `auto` either way, so the reader's own collapse takes it
-     over from the runtime (`toggleFold`) and survives the next poll.
+  /* A delegated lane's fold is born open unless the pane asked for settled work
+     to fold shut (`agentShut`, which a run still going never sets). The direct
+     chat IS one sub-agent's work, and its steps are what the reader opened it
+     for -- putting them behind a click hid the only thing there was to see.
+     Every turn's, not just the last: one instance's conversation is short
+     enough to read at once. Marked `auto` either way, so the reader's own
+     collapse takes it over from the runtime (`toggleFold`) and survives the
+     next poll.
 
      The main conversation's fold opens on the same rule when its work carries
      a long message or a delegation (`foldKeepsOpen`), and stays open across
      later turns because `shutAutoFolds` re-reads that rule rather than the one
-     decision made here. */
+     decision made here. Shutting a record's untouched folds when its run
+     settles is `agentPaintLane`'s call, where that run's state is known. */
   const born = !lane.main && !lane.agentShut
   const keepOpen = born || foldKeepsOpen(loose)
   const f: FoldData = {
