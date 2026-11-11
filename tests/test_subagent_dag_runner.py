@@ -4965,7 +4965,7 @@ async def test_a_node_naming_an_agent_nothing_resolves_is_refused_before_the_run
     were written to read. The tool checks the same thing against the registry for
     the model's benefit; this one guards the runner against any caller.
     """
-    with pytest.raises(DagValidationError, match="names unknown sub-agent"):
+    with pytest.raises(DagValidationError, match="names unknown subagent"):
         await run_dag(
             parse_dag_spec(
                 {

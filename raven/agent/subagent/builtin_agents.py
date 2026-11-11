@@ -271,7 +271,7 @@ def host_raven_acp_command() -> str:
 
 _ACP_HOST_DESCRIPTION = (
     "Raven's own agent served over ACP: this raven as a separate process, on the same config and "
-    "model, with its own sub-agent delegation."
+    "model, with its own subagent delegation."
 )
 
 

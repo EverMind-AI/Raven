@@ -734,7 +734,7 @@ async def run_dag(
         for node in spec.nodes:
             resolved = resolve(node)
             if resolved is None:
-                raise DagValidationError(f"node '{node.id}' names unknown sub-agent '{node.subagent}'")
+                raise DagValidationError(f"node '{node.id}' names unknown subagent '{node.subagent}'")
             node_backends[node.id] = resolved
         state.effective_nodes = {node.id: node for node in spec.nodes}
         state.backends = dict(node_backends)

@@ -345,6 +345,26 @@ class TestAnAcpRowCanReplaceTheSeed:
 
         assert [(row.name, row.kind) for row in merged] == [(GENERIC_AGENT, "acp")]
 
+    def test_the_host_roster_line_spells_it_subagent(self, monkeypatch) -> None:
+        """The description is what ``roster_text`` renders into both tools.
+
+        An acp redeclaration therefore puts this line in front of the model, and
+        a hyphen here would sit in the same roster as the seed row's "subagent".
+        """
+        from raven.config.schema import ThirdPartyAcpSubagentConfig
+
+        monkeypatch.setattr(builtin_agents, "host_raven_acp_command", lambda: "/usr/bin/raven acp")
+        row = ThirdPartyAcpSubagentConfig.model_validate(
+            {"name": GENERIC_AGENT, "kind": "acp", "command": "/usr/bin/raven acp", "enabled": True}
+        )
+        registry = AgentRegistry()
+        registry.apply([row])
+
+        roster = registry.roster_text()
+
+        assert "own subagent delegation" in roster
+        assert "sub-agent" not in roster
+
     def test_env_carries_the_host_raven_home(self, monkeypatch, tmp_path) -> None:
         home = tmp_path / "host"
         monkeypatch.setenv("RAVEN_HOME", str(home))

@@ -211,7 +211,7 @@ const ACP_ROW: SubagentRow = {
 const BUILTIN_ROW: SubagentRow = {
   builtin: true,
   configured: false,
-  description: "Raven's own in-process sub-agent: files, shell and web. IMPORTANT: it cannot call sub-agents.",
+  description: "Raven's own in-process subagent: files, shell and web. IMPORTANT: it cannot call subagents.",
   enabled: true,
   group: 'builtin',
   has_api_key: false,
@@ -1645,7 +1645,7 @@ describe('SubagentsHub built-in row', () => {
 
   it('fills the status column with its description, having no probe to report', async () => {
     const h = mount({ rows: [BUILTIN_ROW] })
-    await waitForFrame(h, 'in-process sub-agent')
+    await waitForFrame(h, 'in-process subagent')
 
     h.unmount()
   })

@@ -1621,6 +1621,27 @@ def test_instance_is_accepted_for_the_default_subagent():
     assert tool._reject_useless_instance(None, "refactor-auth") is None
 
 
+def test_the_stateless_handle_refusal_spells_subagent_one_way():
+    """The refusal is model-visible, so both halves of it say "subagent".
+
+    The tool's definition, its other refusals and the roster all use the
+    CONTEXT.md term; a hyphenated tail here is the one spelling a model would
+    read twice in the same sentence.
+    """
+    from raven.agent.subagent.backends import AgentMeta
+    from raven.agent.subagent.spawn_tool import SpawnTool
+
+    remote = AgentMeta(name="remote", description="runs elsewhere", stateful=False, reads_local_files=False)
+    helper = AgentMeta(name="helper", description="resumes a session", stateful=True, reads_local_files=False)
+    tool = SpawnTool(manager=_stub_manager(agents=[remote, helper]))
+
+    message = tool._reject_useless_instance("remote", "refactor-auth")
+
+    assert message is not None
+    assert "Subagents that can: ['helper']." in message
+    assert "sub-agent" not in message
+
+
 async def test_subagent_reuses_main_provider_and_forwards_api_key(monkeypatch):
     """A subagent runs in-process against the exact provider instance the main
     agent was built with (manager.provider), not a fresh one — so an api_key

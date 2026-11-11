@@ -374,7 +374,7 @@ class SpawnTool(Tool):
         if not instance or self._is_stateful(agent):
             return None
         names = sorted(a.name for a in self._agents() if a.stateful)
-        alt = f" Sub-agents that can: {names}." if names else ""
+        alt = f" Subagents that can: {names}." if names else ""
         return (
             f"Error: subagent {agent!r} is stateless, so the handle {instance!r} continues nothing -- "
             f"each run starts a fresh session regardless.{alt} Call spawn again without `instance`, "
