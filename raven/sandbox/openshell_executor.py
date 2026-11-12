@@ -88,12 +88,32 @@ class InteractiveStream(ExecStream, Protocol):
     def close_input(self) -> None: ...
 
 
+# The fields a plain proposal sets, as OpenShell writes one after a denial (an
+# endpoint also carries its own advisor_proposed mark). Anything else on it --
+# an address range, credentials, an L7 setting -- may open more than the host
+# and port, so such a proposal is never approved in a grant's place.
+_PLAIN_RULE = frozenset({"name", "endpoints", "binaries"})
+_PLAIN_ENDPOINT = frozenset({"host", "port", "ports", "advisor_proposed"})
+_PLAIN_BINARY = frozenset({"path"})
+
+
+def _widened(rule: Any) -> bool:
+    from google.protobuf.json_format import MessageToDict
+
+    shape = MessageToDict(rule, preserving_proto_field_name=True)
+    return (
+        not set(shape) <= _PLAIN_RULE
+        or any(not set(endpoint) <= _PLAIN_ENDPOINT for endpoint in shape.get("endpoints", []))
+        or any(not set(binary) <= _PLAIN_BINARY for binary in shape.get("binaries", []))
+    )
+
+
 @dataclass(frozen=True)
 class DraftChunk:
     """One rule OpenShell proposed after a denial: the programs, and the hosts and ports it would open.
 
-    ``widened`` marks a rule that also opens address ranges (``allowed_ips``),
-    which no host and port names.
+    ``widened`` marks a rule that sets anything beyond a plain proposal's
+    host, ports and programs (``_widened``).
     """
 
     id: str
@@ -956,7 +976,7 @@ class SDKControlPlane:
                 id=chunk.id,
                 binary=chunk.binary,
                 binaries=tuple(binary.path for binary in chunk.proposed_rule.binaries),
-                widened=any(endpoint.allowed_ips for endpoint in chunk.proposed_rule.endpoints),
+                widened=_widened(chunk.proposed_rule),
                 targets=tuple(
                     (endpoint.host, port)
                     for endpoint in chunk.proposed_rule.endpoints
