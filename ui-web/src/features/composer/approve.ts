@@ -34,7 +34,7 @@ import { ESC_LABEL, chordLabel, sendChord } from '../../lib/platform'
 import { add as sheetAdd, dropClass, remove as sheetRemove, session } from '../../state/sheetRack'
 import { ds } from '../../state/sources'
 import { AskApproveSheet } from './AskApproveSheet'
-import { configRows, GateSheet, LandedSheet } from './GateSheet'
+import { blockedTargets, configRows, GateSheet, LandedSheet } from './GateSheet'
 import { composing } from './store'
 
 import type { SheetOptionRow } from '../../chrome/SheetRack'
@@ -246,6 +246,7 @@ function wordsFor(req: ApprovalReq): GateWords {
   const kind = req.kind || 'unknown'
   const ev = req.evidence || {}
   const path = str(ev.path)
+  const targets = blockedTargets(ev)
   const vars = {
     /* A name is a value, not copy: the catalogue translates the sentence around
        it and leaves names, commands and paths alone (the same rule the
@@ -261,11 +262,16 @@ function wordsFor(req: ApprovalReq): GateWords {
     name: path.slice(path.lastIndexOf('/') + 1) || path,
     server: str(ev.server),
     tool: str(ev.tool),
+    /* A blocked connection is asked about by its address; several are counted. */
+    target: targets[0] ? `${str(targets[0].host)}:${String(targets[0].port ?? '')}` : '',
+    count: targets.length,
   }
   const slot = kind === 'shell.exec' ? (req.family || 'shell')
     : kind === 'file.write' ? 'file_write'
       : kind === 'mcp.call' ? 'mcp_call'
-        : kind === 'config.change' ? 'config_change' : 'unknown'
+        : kind === 'config.change' ? 'config_change'
+          : kind === 'sandbox.network' ? (targets.length > 1 ? 'sandbox_network_many' : 'sandbox_network')
+            : 'unknown'
   const cfg = kind === 'config.change'
     ? {
       reset: t('gui.confirm.cfg.reset'),
@@ -300,6 +306,7 @@ function wordsFor(req: ApprovalReq): GateWords {
     nodiff: t('gui.confirm.ev.nodiff'),
     cut: t('gui.confirm.ev.cut'),
     cfg,
+    net: kind === 'sandbox.network' ? { shared: t('gui.confirm.ev.net_shared') } : undefined,
   }
 }
 

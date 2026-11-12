@@ -166,6 +166,30 @@ class TestTheRequest:
         assert kinds == ["allow_once", "allow_always", "reject_once"]
         assert [o["name"] for o in client.request["params"]["options"]][1] == "Allow for this session"
 
+    async def test_a_blocked_sandbox_connection_is_asked_as_a_fetch_with_the_same_three_options(self):
+        client, _, broker = _rig(_allow)
+
+        await _ask(
+            broker,
+            command="/usr/bin/curl -> example.com:443",
+            description="The sandbox blocked these connections. Allow them?",
+            kind="sandbox.network",
+            evidence={"targets": [{"binary": "/usr/bin/curl", "host": "example.com", "port": 443}], "command": "curl"},
+        )
+
+        params = client.request["params"]
+        validate_def("RequestPermissionRequest", params)
+        assert params["toolCall"]["kind"] == "fetch"
+        assert "rawInput" not in params["toolCall"]
+        assert [option["kind"] for option in params["options"]] == ["allow_once", "allow_always", "reject_once"]
+
+    async def test_a_shell_command_is_still_asked_as_an_execute(self):
+        client, _, broker = _rig(_allow)
+
+        await _ask(broker, kind="shell.exec", evidence={"command": "git push origin main"})
+
+        assert client.request["params"]["toolCall"]["kind"] == "execute"
+
     async def test_the_always_option_answers_as_a_session_grant(self):
         def pick_session(frame: dict) -> dict:
             option = next(o for o in frame["params"]["options"] if o["kind"] == "allow_always")

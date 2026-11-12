@@ -126,8 +126,13 @@ async def _ask(
                 for denial in shown
             ],
             "command": command,
+            # The main sandbox is every conversation's: what is opened in it
+            # stays open for all of them until Raven restarts, and the card says so.
+            "shared": executor is not None and GRANTS.is_shared(executor),
         },
-        suggested_pattern=f"{shown[0].host}:{shown[0].port}",
+        # No rule is offered to save: a card's saved rule, its undo and its
+        # editor are the exec pattern's, so the broader grant offered is the session.
+        suggested_pattern="",
         review=None,
         # A deny rule names hosts, so an address given as an IP (a cloud
         # metadata endpoint among them) is never opened without a person.
