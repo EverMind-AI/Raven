@@ -944,6 +944,11 @@ _SURFACE_GLOSS: dict[str, str] = {
 
 CONVERSATION_HEADING = "# This Conversation"
 
+# What the conversation block may write into the system prompt: a name, never
+# prose. Every path that sets a channel or a surface reaches the block, not only
+# the RPC that refuses such a value, so the block checks again.
+_CONVERSATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+
 
 def build_conversation_context(channel: str | None, surface: str | None) -> str:
     """Where this conversation is held, for the end of the system prompt; ``""`` when nothing is known.
@@ -959,9 +964,9 @@ def build_conversation_context(channel: str | None, surface: str | None) -> str:
     channel alone has the agent telling a browser reader to press Ctrl+C.
     """
     lines = []
-    if channel:
+    if channel and _CONVERSATION_TOKEN.fullmatch(channel):
         lines.append(f"Channel: {channel}")
-    if surface:
+    if surface and _CONVERSATION_TOKEN.fullmatch(surface):
         gloss = _SURFACE_GLOSS.get(surface)
         lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
     return "\n".join([CONVERSATION_HEADING, *lines]) if lines else ""

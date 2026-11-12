@@ -1599,7 +1599,8 @@ written mid-turn for the working transcript and is never filed.
 The block each turn's user message opens with: the current time, the chat id, and
 any tool or session notices. The channel tag and the surface hold for the whole
 conversation, so they close the system prompt instead, under `# This Conversation`
-(`segments/render.py:build_conversation_context`); that prompt is shared by every
+(`segments/render.py:build_conversation_context`), which writes them only when they are
+names, never prose, and `turn.send` refuses any other channel; that prompt is shared by every
 conversation on the same channel and surface, which is why the chat id stays in the
 block. The assembler records the
 lines on the message, the session write keeps the user's words in `content` and

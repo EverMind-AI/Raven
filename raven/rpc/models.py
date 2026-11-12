@@ -12,9 +12,10 @@ schema (or vice versa) within the same commit.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ---------------------------------------------------------------------------
 # Re-usable model config.  ``extra="forbid"`` makes Pydantic emit
@@ -2208,6 +2209,9 @@ class SessionHistoryResult(_Strict):
 # ---------------------------------------------------------------------------
 
 
+_CHANNEL_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+
+
 class TurnSendParams(_Strict):
     session_key: str
     content: str
@@ -2238,6 +2242,15 @@ class TurnSendParams(_Strict):
     # submitted, so the note and the message arrive together; ignored for a
     # message merged into a running turn or sent to an instance.
     move_on: str | None = None
+
+    @field_validator("channel")
+    @classmethod
+    def _channel_is_a_token(cls, value: str | None) -> str | None:
+        # The channel is written into the system prompt, so a client may not put
+        # prose in it: a newline would open a heading of its own there.
+        if value and not _CHANNEL_TOKEN.fullmatch(value):
+            raise ValueError("channel must be a short token such as 'tui' or 'telegram'")
+        return value
 
 
 class TurnSendResult(_Strict):
