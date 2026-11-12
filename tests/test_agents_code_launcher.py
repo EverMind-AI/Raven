@@ -540,6 +540,53 @@ def test_the_inherited_key_resolves_through_trunks_own_predicate(grounded, tmp_p
     assert config.effective_web_vendor_key("serper") == "host-serper"
 
 
+def test_an_own_web_key_keeps_its_vendor_against_a_host_that_chose_another(grounded, tmp_path, monkeypatch):
+    """The host's choice must not switch this render off the key it already pays with.
+
+    Before the own-key guard, a host on Tavily moved the selection to Tavily
+    while CODE_SERPER_API_KEY sat in the pre-vendor leaf unread: the product
+    paid for a key nothing used.
+    """
+    from raven.agent.tools.web import WebSearchTool
+    from raven.config.loader import load_config
+
+    monkeypatch.setenv("CODE_SERPER_API_KEY", "sk-own-serper")
+    _host_web(
+        tmp_path,
+        {
+            "providers": {"tavily": {"apiKey": "host-tavily"}},
+            "search": {"provider": "tavily"},
+            "fetch": {"provider": "tavily"},
+        },
+    )
+
+    config = load_config(_render(grounded))
+    provider = config.tools.web.search.provider
+
+    assert provider == "serper", "the product's own key keeps its default vendor"
+    assert WebSearchTool.is_configured(config.effective_web_vendor_key(provider), provider)
+
+
+def test_a_host_choice_that_resolves_no_key_does_not_withhold_web_search(grounded, tmp_path, monkeypatch):
+    """The worse half: a host naming Tavily with no Tavily key anywhere.
+
+    Following the name alone moved this render from configured (its own Serper
+    key) to withheld, which is the symptom the vendor-table inheritance exists
+    to remove.
+    """
+    from raven.agent.tools.web import WebSearchTool
+    from raven.config.loader import load_config
+
+    monkeypatch.setenv("CODE_SERPER_API_KEY", "sk-own-serper")
+    _host_web(tmp_path, {"search": {"provider": "tavily"}, "fetch": {"provider": "tavily"}})
+
+    config = load_config(_render(grounded))
+    provider = config.tools.web.search.provider
+
+    assert provider == "serper"
+    assert WebSearchTool.is_configured(config.effective_web_vendor_key(provider), provider)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
 def test_the_rendered_file_is_owner_only(grounded):
     assert stat.S_IMODE(_render(grounded).stat().st_mode) == 0o600

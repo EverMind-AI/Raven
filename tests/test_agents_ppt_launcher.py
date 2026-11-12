@@ -736,12 +736,26 @@ def test_a_borrowed_web_key_falls_back_to_the_hosts_llm_provider(grounded, tmp_p
     assert data["tools"]["web"]["fetch"]["provider"] == "deepseek"
 
 
-def test_the_launcher_borrows_nothing_under_a_raven_without_the_helper(grounded, monkeypatch):
-    """A stamped launcher can load on a raven that predates the web-key borrow;
-    the missing name must read as "borrow nothing" rather than ImportError."""
-    from raven.config import schema
+def test_the_shared_library_owns_the_vendor_policy(grounded, monkeypatch):
+    """The deck hands its own vocabulary to the one policy code and oncall use."""
+    seen = {}
 
-    monkeypatch.delattr(schema, "borrowed_web_key")
+    def inherit(config, host, *, own_keys=None, lookup):
+        seen.update(config=config, host=host, own_keys=own_keys, lookup=lookup)
+        return ["sentinel"]
+
+    monkeypatch.setattr(grounded.render, "inherit_web_vendors", inherit)
+    config = {"tools": {"web": {}}}
+    host = {"tools": {"web": {"search": {"provider": "tavily"}}}}
+
+    assert grounded.inherit_web_vendors(config, host) == ["sentinel"]
+    assert seen == {"config": config, "host": host, "own_keys": grounded.OWN_WEB_KEYS, "lookup": grounded.env_value}
+
+
+def test_the_launcher_carries_nothing_under_a_raven_without_the_helper(grounded, monkeypatch):
+    """A stamped launcher can load on a raven that predates the shared helper;
+    the missing name must read as "carry nothing" rather than AttributeError."""
+    monkeypatch.delattr(grounded.render, "inherit_web_vendors")
     config = {"tools": {"web": {}}}
 
     carried = grounded.inherit_web_vendors(config, {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}})

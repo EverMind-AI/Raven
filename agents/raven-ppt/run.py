@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Any
 
 from raven.config import product_render as render
-from raven.config.schema import WEB_VENDOR_ENV_VARS
 from raven.home import raven_home
 
 HERE = Path(__file__).resolve().parent
@@ -117,7 +116,6 @@ PROXY_ENV = ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_prox
 # The vendor for which this product holds a key of its own, by the env name
 # that sets it; that key wins, so the host's vendor slot is not inherited over it.
 OWN_WEB_KEYS = {"serper": "PPT_SERPER_API_KEY", "jina": "PPT_JINA_API_KEY"}
-WEB_SELECTION_SLOTS = (("tools", "web", "search", "provider"), ("tools", "web", "fetch", "provider"))
 
 # The one secret whose absence is fatal: no pictures makes a poorer deck, no
 # model makes no deck at all.
@@ -185,39 +183,22 @@ def openrouter_key_in_force(config: dict) -> str:
 def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     """Carry the host's vendor-table web keys and vendor selection into ``config``.
 
-    Per vendor, a key this product already holds wins: one its config states in
-    the vendor slot, or the own-key env var of a vendor with a pre-vendor leaf
-    (that key sits in the leaf, which trunk reads only after an empty vendor
-    slot, so inheriting the host's slot would silently outrank it). A vendor
-    with no slot of its own on the host borrows the LLM provider key it shares
-    an account with (DeepSeek's web endpoints run on its chat account), so the
-    product carries that key like any other. The search and fetch vendor
-    choices follow the host where this config names none, so a host that
-    searches through another vendor hands over the key and the choice together.
-    Returns the vendors whose key was carried.
-    """
-    carried = []
-    # This file can outlive its raven, so a name this PR introduced is looked up
-    # at call time: a stamped launcher must load (and borrow nothing) on a raven
-    # that predates the helper.
-    from raven.config import schema
+    The shared launcher library owns the policy -- which key wins, when a
+    borrowed LLM key is materialized, and when the host's vendor choice may
+    move this product's own -- so a deck cannot drift from code and oncall
+    about whose key pays for a search. ``OWN_WEB_KEYS`` and this product's
+    settings lookup are handed in because those are its vocabulary, not the
+    library's.
 
-    borrow = getattr(schema, "borrowed_web_key", None)
-    for vendor in WEB_VENDOR_ENV_VARS:
-        slot = ("tools", "web", "providers", vendor, "apiKey")
-        own = OWN_WEB_KEYS.get(vendor)
-        if render.dig(config, slot) or (own and env_value(own)):
-            continue
-        candidate = render.dig(host, slot)
-        if not candidate and borrow is not None:
-            candidate = borrow(vendor, host.get("providers") or {})
-        if candidate:
-            render.put(config, slot, candidate)
-            carried.append(vendor)
-    for slot in WEB_SELECTION_SLOTS:
-        if not render.dig(config, slot) and (chosen := render.dig(host, slot)):
-            render.put(config, slot, chosen)
-    return carried
+    This file can outlive its raven: a stamped launcher loads under a raven
+    that predates the library helper, where it carries nothing rather than
+    failing to start. That is the same floor code and oncall keep; there is no
+    second implementation here to drift from the shared one.
+    """
+    inherit = getattr(render, "inherit_web_vendors", None)
+    if inherit is None:
+        return []
+    return inherit(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)
 
 
 def serper_key_in_force(config: dict) -> str:
