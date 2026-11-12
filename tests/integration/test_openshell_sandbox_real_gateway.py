@@ -167,7 +167,7 @@ async def test_a_denied_request_is_reported_on_the_result(workspace):
         reads = []
         for _ in range(5):
             t0 = time.perf_counter()
-            await asyncio.to_thread(plane.denial_messages, name, time.time())
+            await asyncio.to_thread(plane.ocsf_lines, name, time.time())
             reads.append(time.perf_counter() - t0)
             assert (await ex.exec("echo ok")).denials == ()
         median = sorted(reads)[2]

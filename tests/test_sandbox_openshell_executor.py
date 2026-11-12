@@ -99,7 +99,7 @@ class FakeControlPlane:
         self.waited.append(version)
         return self.policy_loads
 
-    def denial_messages(self, name, since):
+    def ocsf_lines(self, name, since):
         self.denial_reads.append(since)
         if not self.denial_script:
             return []
@@ -107,8 +107,9 @@ class FakeControlPlane:
         if isinstance(item, Exception):
             raise item
         if callable(item):
-            return item()
-        return item
+            item = item(since)
+        now = time.time()
+        return [line if isinstance(line, tuple) else (now, line) for line in item]
 
     def list_labeled(self, selector):
         self.selector = selector
@@ -494,66 +495,97 @@ class TestExec:
 
 
 TCP_DENIAL = "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]"
+DNS_REFUSAL = "NET:REFUSE [MED] DENIED example.com [reason:policy_dns_ineligible]"
+RELAY_CLOSED = "EVENT [INFO] ssh relay closed (channel_id=c1, target=unix:/run/openshell/ssh.sock)"
 
 
 class TestDenials:
-    async def _started(self, tmp_path, exit_code=7):
+    @pytest.fixture(autouse=True)
+    def _quick_polls(self, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_POLL_SECONDS", 0.0)
+
+    async def _started(self, tmp_path, exit_code=7, *, runs_for=0.0):
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp)
         await ex.start()
-        cp.exec_script = lambda argv: FakeStream([("exit", exit_code)])
+
+        def script(argv):
+            time.sleep(runs_for)
+            return FakeStream([("exit", exit_code)])
+
+        cp.exec_script = script
         return cp, ex
 
     async def test_a_command_carries_the_denials_logged_during_it(self, tmp_path):
         cp, ex = await self._started(tmp_path)
-        cp.denial_script = [[TCP_DENIAL]]
+        cp.denial_script = [[TCP_DENIAL, RELAY_CLOSED]]
         result = await ex.exec("curl https://example.com")
         assert [(d.binary, d.host, d.port) for d in result.denials] == [("/usr/bin/curl", "example.com", 443)]
 
-    async def test_a_failing_command_rereads_once_after_the_settle_delay(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
+    async def test_a_failing_command_reads_until_its_relay_closed_line_arrives(self, tmp_path):
         cp, ex = await self._started(tmp_path)
-        cp.denial_script = [[], [TCP_DENIAL]]
+        cp.denial_script = [[], [DNS_REFUSAL], [DNS_REFUSAL, TCP_DENIAL, RELAY_CLOSED]]
+        result = await ex.exec("curl https://example.com")
+        assert len(cp.denial_reads) == 3
+        assert [(d.binary, d.host, d.port) for d in result.denials] == [("/usr/bin/curl", "example.com", 443)]
+
+    async def test_a_relay_closed_before_the_command_ended_does_not_end_the_wait(self, tmp_path):
+        cp, ex = await self._started(tmp_path, runs_for=0.6)
+        cp.denial_script = [
+            lambda since: [(since + 0.01, RELAY_CLOSED), DNS_REFUSAL],
+            lambda since: [(since + 0.01, RELAY_CLOSED), DNS_REFUSAL, TCP_DENIAL, RELAY_CLOSED],
+        ]
         result = await ex.exec("curl https://example.com")
         assert len(cp.denial_reads) == 2
+        assert [d.port for d in result.denials] == [443]
+
+    async def test_the_wait_for_the_relay_ends_at_its_deadline(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_WAIT_SECONDS", 0.2)
+        monkeypatch.setattr(ox, "_DENIAL_POLL_SECONDS", 0.01)
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [[DNS_REFUSAL]] * 1000
+        t0 = time.monotonic()
+        result = await ex.exec("curl https://example.com")
+        assert time.monotonic() - t0 < 1.0
+        assert [(d.host, d.port) for d in result.denials] == [("example.com", None)]
+
+    async def test_a_timed_out_command_reads_once_and_does_not_wait(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_WAIT_SECONDS", 5.0)
+        cp, ex = await self._started(tmp_path, exit_code=-1)
+        cp.denial_script = [[TCP_DENIAL]]
+        t0 = time.monotonic()
+        result = await ex.exec("sleep 60", timeout=1)
+        assert len(cp.denial_reads) == 1 and time.monotonic() - t0 < 1.0
         assert [d.host for d in result.denials] == ["example.com"]
 
-    async def test_a_failing_log_read_returns_the_result_without_denials(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
+    async def test_a_failing_log_read_returns_the_result_without_denials(self, tmp_path):
         cp, ex = await self._started(tmp_path)
         cp.denial_script = [RuntimeError("gateway gone"), RuntimeError("gateway gone")]
         result = await ex.exec("curl https://example.com")
         assert (result.exit_code, result.denials) == (7, ())
 
     async def test_a_hung_log_read_is_abandoned_after_its_timeout(self, tmp_path, monkeypatch):
-        import time as _time
-
         monkeypatch.setattr(ox, "_DENIAL_READ_TIMEOUT", 0.05)
-        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
         cp, ex = await self._started(tmp_path)
-        cp.denial_script = [lambda: _time.sleep(1) or [TCP_DENIAL], lambda: _time.sleep(1) or [TCP_DENIAL]]
-        t0 = _time.monotonic()
+        cp.denial_script = [lambda since: time.sleep(1) or [TCP_DENIAL, RELAY_CLOSED]] * 2
+        t0 = time.monotonic()
         result = await ex.exec("curl https://example.com")
-        assert _time.monotonic() - t0 < 0.8
+        assert time.monotonic() - t0 < 0.8
         assert result.denials == ()
 
     async def test_denials_outside_the_command_window_are_ignored(self, tmp_path):
-        import time as _time
-
         cp, ex = await self._started(tmp_path, exit_code=0)
-        before = _time.time()
+        before = time.time()
         await ex.exec("true")
         assert abs(cp.denial_reads[0] - before) < 0.05
 
     async def test_a_successful_command_reads_once_and_does_not_wait(self, tmp_path, monkeypatch):
-        import time as _time
-
-        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 5.0)
+        monkeypatch.setattr(ox, "_DENIAL_WAIT_SECONDS", 5.0)
         cp, ex = await self._started(tmp_path, exit_code=0)
-        t0 = _time.monotonic()
+        t0 = time.monotonic()
         result = await ex.exec("true")
         assert len(cp.denial_reads) == 1 and result.denials == ()
-        assert _time.monotonic() - t0 < 1.0
+        assert time.monotonic() - t0 < 1.0
 
 
 class TestLiveNetwork:
@@ -756,7 +788,7 @@ class _FakeStub:
         self.conditions: list[dict] = []
         self.get_error: Exception | None = None
         self.events: list = []
-        self.log_lines: list[tuple[str, str]] = []
+        self.log_lines: list[tuple[str, str, float]] = []
         self.active_versions: list[int] = []
         self.revision_status = 0
 
@@ -790,8 +822,9 @@ class _FakeStub:
 
         self.calls.append(("GetSandboxLogs", request, timeout))
         response = openshell_pb2.GetSandboxLogsResponse()
-        for target, message in self.log_lines:
-            response.logs.add(target=target, message=message)
+        for target, message, at in self.log_lines:
+            line = response.logs.add(target=target, message=message)
+            line.event_time.FromMicroseconds(int(at * 1_000_000))
         return response
 
     def ExecSandbox(self, request, timeout):
@@ -961,17 +994,14 @@ class TestSDKControlPlane:
         assert plane.list_labeled("raven.owner=abc") == [("rv1", {"raven.pid": "3"})]
         assert client.calls[-1] == ("list_all", {"workspace": "team", "label_selector": "raven.owner=abc"})
 
-    def test_denial_messages_keeps_the_ocsf_lines_since_the_start(self, sdk):
+    def test_ocsf_lines_keeps_the_sandbox_log_since_the_start_with_event_times(self, sdk):
         plane, client = sdk
         client._stub.log_lines = [
-            (
-                "ocsf",
-                "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]",
-            ),
-            ("openshell_sandbox", "supervisor started"),
+            ("ocsf", TCP_DENIAL, 1_700_000_001.5),
+            ("openshell_sandbox", "supervisor started", 1_700_000_001.0),
         ]
-        messages = plane.denial_messages("rvx", 1_700_000_000.25)
-        assert messages == [client._stub.log_lines[0][1]]
+        lines = plane.ocsf_lines("rvx", 1_700_000_000.25)
+        assert lines == [(1_700_000_001.5, TCP_DENIAL)]
         ((kind, request, _timeout),) = client._stub.calls
         assert kind == "GetSandboxLogs"
         assert request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
