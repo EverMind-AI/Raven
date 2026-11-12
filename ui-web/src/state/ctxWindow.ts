@@ -149,6 +149,7 @@ export function set(
       system: nextParts.system ?? 0,
       tools: nextParts.tools ?? 0,
       conversation: nextParts.conversation ?? 0,
+      files: nextParts.files ?? 0,
       memory: nextParts.memory ?? 0,
       skills: nextParts.skills ?? 0,
     }

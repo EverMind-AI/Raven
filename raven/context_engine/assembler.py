@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from raven.agent.window.parts import ATTACHMENT_NOTES_KEY
 from raven.context_engine.scent import ScentMenu
 from raven.context_engine.scratch import mark_turn_scratch, render_turn_scratch
 from raven.context_engine.segments import render
@@ -383,17 +384,27 @@ class ContextAssembler(ContextEngine):
         )
         if ctx.scent_text:
             runtime_ctx = f"{runtime_ctx}\n{_scent_in_envelope(ctx.scent_text)}"
+        notes: list[str] = []
         user_content = render.build_user_content(
             ctx.current_message,
             ctx.media,
             can_see_images=ctx.can_see_images,
             describe_tool=ctx.describe_tool,
+            notes_sink=notes,
         )
         if isinstance(user_content, str):
             merged: Any = f"{runtime_ctx}\n\n{user_content}"
         else:
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
-        return {"role": "user", "content": merged}
+        message: dict[str, Any] = {"role": "user", "content": merged}
+        # The notes as they ride in the content, recorded the way the turn
+        # scratch is: the window measurement takes them out of the conversation
+        # and counts them as files by this text, never by the ``[Attachment:``
+        # shape a user could paste. The save gate drops the record with the
+        # notes whenever it files the user's own words instead.
+        if notes:
+            message[ATTACHMENT_NOTES_KEY] = "\n".join(notes)
+        return message
 
 
 def _scent_in_envelope(text: str) -> str:

@@ -7,10 +7,13 @@ import { describe, expect, it } from 'vitest'
 
 import { CELLS, ctxCells } from './ctxGrid'
 
-const parts = (over: Partial<Record<'system' | 'tools' | 'conversation' | 'memory' | 'skills', number>>) => ({
+const parts = (
+  over: Partial<Record<'system' | 'tools' | 'conversation' | 'files' | 'memory' | 'skills', number>>,
+) => ({
   system: 0,
   tools: 0,
   conversation: 0,
+  files: 0,
   memory: 0,
   skills: 0,
   ...over,

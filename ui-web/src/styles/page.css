@@ -36,13 +36,15 @@
 
   /* The context parts' colours, from the Raven palette's mist theme: slate and
      silver for what every request carries (the system prompt, the tools), mist
-     teal for the conversation, and bronze and gold for what this turn recalled
-     -- the memory and the skills, which are what Raven itself added. Neighbours
-     alternate in lightness, so two parts side by side never rest on hue alone. */
+     teal for the conversation, dusty blue for the files riding in it, and
+     bronze and gold for what this turn recalled -- the memory and the skills,
+     which are what Raven itself added. Neighbours alternate in lightness, so
+     two parts side by side never rest on hue alone. */
   --ctx-system: #4f5a63;
   --ctx-tools: #c4cace;
   --ctx-skills: #e8c870;
   --ctx-conversation: #8fa9ab;
+  --ctx-files: #5f7595;
   --ctx-memory: #9c7a38;
   /* The popover's one warm accent, in the palette's ink gold: the percentage
      badge and the room left. Its secondary text and model chip lean to the
@@ -402,11 +404,13 @@
 
     /* The context parts' colours in the dark: the same roles with the ladder
        turned over -- the overhead lightest, the conversation a calm mid teal,
-       and the bright gold on the memory, where it lands on the dark card. */
+       the files a lighter blue beside it, and the bright gold on the memory,
+       where it lands on the dark card. */
     --ctx-system: #cdd6dc;
     --ctx-tools: #8796a1;
     --ctx-skills: #9c7a38;
     --ctx-conversation: #5e7678;
+    --ctx-files: #8fa8c9;
     --ctx-memory: #e8c870;
     --ctx-ink: #e8c870;
     --ctx-ink-bg: #4a4538;
@@ -541,6 +545,7 @@
   --ctx-tools: #8796a1;
   --ctx-skills: #9c7a38;
   --ctx-conversation: #5e7678;
+  --ctx-files: #8fa8c9;
   --ctx-memory: #e8c870;
   --ctx-ink: #e8c870;
   --ctx-ink-bg: #4a4538;
@@ -656,7 +661,7 @@
   --seam: -1px 0 0 rgba(28, 27, 25, .05), -16px 0 32px -18px rgba(28, 27, 25, .16);
   --scrim-detail: rgba(26, 24, 20, .4);
   --ctx-system: #4f5a63; --ctx-tools: #c4cace; --ctx-skills: #e8c870;
-  --ctx-conversation: #8fa9ab; --ctx-memory: #9c7a38;
+  --ctx-conversation: #8fa9ab; --ctx-files: #5f7595; --ctx-memory: #9c7a38;
   --ctx-ink: #6c551e; --ctx-ink-bg: #e8dfb0; --ctx-muted: #4f5a63; --ctx-chip: #eef1f3;
   /* The page's glass, same as the base block's. */
   --ink-on-amber: #fff;
@@ -1488,6 +1493,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-cell[data-part="tools"] { background: var(--ctx-tools); }
 .chrome-ctx-cell[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-cell[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-cell[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-cell[data-part="memory"] { background: var(--ctx-memory); }
 .chrome-ctx-rows { list-style: none; margin: 0; padding: 0; }
 .chrome-ctx-row { display: flex; align-items: center; gap: 9px; padding: 4px 0; font-size: 13px; }
@@ -1496,6 +1502,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 .chrome-ctx-dot[data-part="tools"] { background: var(--ctx-tools); }
 .chrome-ctx-dot[data-part="skills"] { background: var(--ctx-skills); }
 .chrome-ctx-dot[data-part="conversation"] { background: var(--ctx-conversation); }
+.chrome-ctx-dot[data-part="files"] { background: var(--ctx-files); }
 .chrome-ctx-dot[data-part="memory"] { background: var(--ctx-memory); }
 .chrome-ctx-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chrome-ctx-num { font-family: var(--mono); font-size: 11.5px; color: var(--ctx-muted); font-variant-numeric: tabular-nums; }

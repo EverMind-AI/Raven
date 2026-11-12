@@ -146,12 +146,13 @@ async def test_usage_sink_carries_context_gauge_and_cost(workspace):
 async def test_usage_sink_carries_the_window_divided(workspace):
     """The window is divided as well as counted, so a page can say what fills it.
 
-    Four parts are the request the turn sent: the system prompt, the tool
-    schemas, the conversation, and the memory this turn recalled. The recalled
-    segment reaches ``measure_parts`` only through the stash the assembler
-    fills (``_last_window_parts``); without it ``memory`` is always zero,
-    and a key-set assertion would pass on a window nobody divided. So the
-    profile on disk has to be counted here.
+    The parts are the request the turn sent: the system prompt, the tool
+    schemas, the conversation with the files it carried, and the memory and
+    skills this turn recalled. The recalled segments reach ``measure_parts``
+    only through the stash the assembler fills (``_last_window_parts``);
+    without it ``memory`` is always zero, and a key-set assertion would pass
+    on a window nobody divided. So the profile on disk has to be counted
+    here.
     """
     profile = workspace / "user_memory" / "profile"
     profile.mkdir(parents=True, exist_ok=True)
@@ -174,7 +175,7 @@ async def test_usage_sink_carries_the_window_divided(workspace):
     )
 
     parts = sink["context_parts"]
-    assert set(parts) == {"system", "tools", "conversation", "memory", "skills"}
+    assert set(parts) == {"system", "tools", "conversation", "files", "memory", "skills"}
     assert parts["system"] > 0
     assert parts["conversation"] > 0
     assert parts["memory"] > 0

@@ -264,6 +264,22 @@ class TestRenderAttachments:
         assert "understand_media" not in bare
         assert "summarize this" in out
 
+    def test_notes_sink_receives_every_note_appended(self, tmp_path: Path) -> None:
+        """The caller records the notes so the window can count them as files."""
+        from raven.context_engine.segments import render
+
+        pdf = tmp_path / "report.pdf"
+        pdf.write_bytes(b"%PDF-1.4 data")
+        sink: list[str] = []
+        out = render.build_user_content("summarize this", [str(pdf)], notes_sink=sink)
+        assert isinstance(out, str)
+        assert len(sink) == 1
+        assert sink[0] in out
+        # No media, no notes: the sink stays empty rather than carrying stale text.
+        quiet: list[str] = []
+        assert render.build_user_content("hi", None, notes_sink=quiet) == "hi"
+        assert quiet == []
+
     def test_image_inlined_as_block(self, tmp_path: Path) -> None:
         import base64 as _b64
 

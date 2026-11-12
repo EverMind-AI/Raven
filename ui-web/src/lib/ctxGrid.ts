@@ -11,12 +11,13 @@
  * of window".
  */
 
-export type CtxPart = 'system' | 'tools' | 'conversation' | 'memory' | 'skills'
+export type CtxPart = 'system' | 'tools' | 'conversation' | 'files' | 'memory' | 'skills'
 
 export interface CtxParts {
   readonly system: number
   readonly tools: number
   readonly conversation: number
+  readonly files: number
   readonly memory: number
   readonly skills: number
 }
@@ -27,8 +28,9 @@ export interface CtxCell {
 }
 
 /** The parts, in the order they fill the window: what is fixed first, then the
-    conversation, and last what this turn recalled on top of it. */
-export const PARTS: readonly CtxPart[] = ['system', 'tools', 'conversation', 'memory', 'skills']
+    conversation with the files riding in it, and last what this turn recalled
+    on top of it. */
+export const PARTS: readonly CtxPart[] = ['system', 'tools', 'conversation', 'files', 'memory', 'skills']
 
 /** The cells a full window is drawn with: a hundred and twelve, twenty-eight
     across. The stylesheet's grid has those twenty-eight columns, and the two

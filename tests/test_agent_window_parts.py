@@ -14,7 +14,9 @@ from __future__ import annotations
 import pytest
 
 from raven.agent.window.parts import (
+    ATTACHMENT_NOTES_KEY,
     CONVERSATION,
+    FILES,
     MEMORY,
     SKILLS,
     SYSTEM,
@@ -160,7 +162,7 @@ def test_the_parts_add_up_to_the_prompt() -> None:
 
 
 def test_an_empty_prompt_has_no_parts() -> None:
-    assert measure_parts([]) == {SYSTEM: 0, TOOLS: 0, CONVERSATION: 0, MEMORY: 0, SKILLS: 0}
+    assert measure_parts([]) == {SYSTEM: 0, TOOLS: 0, CONVERSATION: 0, FILES: 0, MEMORY: 0, SKILLS: 0}
 
 
 # The always-on digest a pull-mode turn carries in its system prompt, and the
@@ -294,3 +296,86 @@ def test_the_sum_guard_catches_a_recorded_segment_the_prompt_does_not_carry() ->
 
     whole = estimate_prompt_tokens(messages)
     assert abs(sum(parts.values()) - whole) > 5
+
+
+# The files a request carries: the attachment notes the assembler recorded on
+# the message, and the pictures sent as image blocks. Both are taken out of
+# the conversation and measured on their own content.
+
+
+def test_the_notes_recorded_on_a_message_are_the_files_not_the_conversation() -> None:
+    """What the assembler recorded as attachment notes is counted as files.
+
+    The notes are cut from the conversation by the recorded text -- a
+    note-shaped line the user typed, with no record on the message, stays
+    conversation.
+    """
+    note = "[Attachment: report.pdf (path: /tmp/report.pdf) - use the read_file tool to read its contents]"
+    parts = measure_parts(
+        [
+            {"role": "system", "content": "you are raven"},
+            {"role": "user", "content": f"summarize this\n\n{note}", ATTACHMENT_NOTES_KEY: note},
+        ]
+    )
+
+    assert parts[FILES] > 0
+    assert parts[CONVERSATION] > 0
+    # The note is out of the conversation: what is left is the user's words.
+    assert parts[CONVERSATION] < estimate_prompt_tokens([{"role": "user", "content": "summarize this"}]) + 30
+
+
+def test_a_note_shaped_line_without_a_record_stays_conversation() -> None:
+    """Cutting by the ``[Attachment:`` shape would take the user's own words."""
+    typed = "the log said [Attachment: fake.pdf (path: /x)] and I pasted it"
+    parts = measure_parts([{"role": "user", "content": typed}])
+
+    assert parts[FILES] == 0
+    assert parts[CONVERSATION] == estimate_prompt_tokens([{"role": "user", "content": typed}])
+
+
+def test_a_picture_is_files_not_conversation() -> None:
+    """An image block is counted on its own content and dropped from the talk."""
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    note = "[Image: cat.png (path: /tmp/cat.png) | 64x64px - re-read it with read_file if you need another look]"
+    with_picture = measure_parts(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": f"look\n\n{note}"}, picture],
+                ATTACHMENT_NOTES_KEY: note,
+            }
+        ]
+    )
+    without = measure_parts([{"role": "user", "content": "look"}])
+
+    assert with_picture[FILES] > 0
+    # The note is cut and the block dropped: the talk is the user's word alone.
+    assert with_picture[CONVERSATION] <= without[CONVERSATION] + 5
+
+
+def test_the_parts_still_add_up_when_files_are_in_the_prompt() -> None:
+    """Files are measured on their own content, so the account still closes."""
+    note = "[Attachment: report.pdf (path: /tmp/report.pdf)]"
+    picture = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    messages = [
+        {"role": "system", "content": "you are raven"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": f"look\n\n{note}"}, picture],
+            ATTACHMENT_NOTES_KEY: note,
+        },
+    ]
+    parts = measure_parts(messages)
+
+    whole = estimate_prompt_tokens(messages)
+    assert parts[FILES] > 0
+    assert abs(sum(parts.values()) - whole) <= 20
+
+
+def test_a_block_message_with_no_picture_is_left_whole() -> None:
+    """Blocks are the common shape once anything multimodal has been in the
+    turn; without a picture there is nothing to drop."""
+    parts = measure_parts([{"role": "user", "content": [{"type": "text", "text": "hello there"}]}])
+
+    assert parts[CONVERSATION] > 0
+    assert parts[FILES] == 0

@@ -1497,7 +1497,7 @@ export interface TurnUsage {
   context_max?: number;
   context_percent?: number;
   /**
-   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills. Absent when no breakdown was measured for this turn.
    */
   context_parts?: {
     [k: string]: number;
@@ -1936,7 +1936,7 @@ export interface TurnUsage1 {
   context_max?: number;
   context_percent?: number;
   /**
-   * The window divided: tokens by part, keyed system / tools / conversation / memory / skills. Absent when no breakdown was measured for this turn.
+   * The window divided: tokens by part, keyed system / tools / conversation / files / memory / skills. Absent when no breakdown was measured for this turn.
    */
   context_parts?: {
     [k: string]: number;
