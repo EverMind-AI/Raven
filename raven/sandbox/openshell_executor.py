@@ -90,12 +90,18 @@ class InteractiveStream(ExecStream, Protocol):
 
 @dataclass(frozen=True)
 class DraftChunk:
-    """One rule OpenShell proposed after a denial: the program, and the hosts and ports it would open."""
+    """One rule OpenShell proposed after a denial: the programs, and the hosts and ports it would open.
+
+    ``widened`` marks a rule that also opens address ranges (``allowed_ips``),
+    which no host and port names.
+    """
 
     id: str
     binary: str
+    binaries: tuple[str, ...]
     targets: tuple[tuple[str, int], ...]
     review_token: str
+    widened: bool = False
 
 
 class OpenShellControlPlane(Protocol):
@@ -478,11 +484,15 @@ class OpenShellExecutor(SandboxExecutor):
             return grants
         left = []
         for grant in grants:
+            # Only a proposal that opens exactly what was granted: one approved
+            # in its place must not open another port, host, program or range.
             proposal = next(
                 (
                     chunk
                     for chunk in proposals
-                    if chunk.binary == grant.binary and (grant.host, grant.port) in chunk.targets
+                    if not chunk.widened
+                    and chunk.binaries == (grant.binary,)
+                    and chunk.targets == ((grant.host, grant.port),)
                 ),
                 None,
             )
@@ -945,6 +955,8 @@ class SDKControlPlane:
             DraftChunk(
                 id=chunk.id,
                 binary=chunk.binary,
+                binaries=tuple(binary.path for binary in chunk.proposed_rule.binaries),
+                widened=any(endpoint.allowed_ips for endpoint in chunk.proposed_rule.endpoints),
                 targets=tuple(
                     (endpoint.host, port)
                     for endpoint in chunk.proposed_rule.endpoints

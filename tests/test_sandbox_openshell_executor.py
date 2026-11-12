@@ -689,10 +689,30 @@ class TestLiveNetwork:
         assert cp.merges[-1] == ({"raven_rule_a": {"name": "raven_rule_a"}}, [])
 
     @staticmethod
-    def _proposal(binary="/usr/bin/curl", host="example.com", port=443):
+    def _proposal(binary="/usr/bin/curl", host="example.com", port=443, **wider):
         from raven.sandbox.openshell_executor import DraftChunk
 
-        return DraftChunk(id="chunk-1", binary=binary, targets=((host, port),), review_token="token-1")
+        fields = {"binaries": (binary,), "targets": ((host, port),), "widened": False, **wider}
+        return DraftChunk(id="chunk-1", binary=binary, review_token="token-1", **fields)
+
+    @pytest.mark.parametrize(
+        "wider",
+        [
+            {"targets": (("example.com", 443), ("example.com", 80))},
+            {"targets": (("example.com", 443), ("files.example.net", 443))},
+            {"binaries": ("/usr/bin/curl", "/usr/bin/wget")},
+            {"targets": (("*.example.com", 443),)},
+            {"widened": True},
+        ],
+        ids=["another-port", "another-endpoint", "another-program", "wildcard-host", "ip-range"],
+    )
+    async def test_a_proposal_wider_than_the_grant_is_not_approved(self, tmp_path, wider):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        cp.chunks = [self._proposal(**wider)]
+        await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)])
+        assert cp.approved == [] and len(cp.merges) == 1
 
     async def test_a_closed_sandbox_approves_openshells_own_proposal(self, tmp_path):
         from raven.sandbox.network_policy import NetworkGrant
@@ -1141,17 +1161,26 @@ class TestSDKControlPlane:
         chunk = openshell_pb2.PolicyChunk(id="c1", status="pending", binary="/usr/bin/curl", review_token="tok")
         chunk.proposed_rule.CopyFrom(
             sandbox_pb2.NetworkPolicyRule(
-                endpoints=[sandbox_pb2.NetworkEndpoint(host="example.com", port=443, ports=[443])]
+                endpoints=[sandbox_pb2.NetworkEndpoint(host="example.com", port=443, ports=[443])],
+                binaries=[sandbox_pb2.NetworkBinary(path="/usr/bin/curl")],
             )
         )
-        client._stub.draft = [chunk]
-        (proposal,) = plane.draft_chunks("rvx")
-        assert (proposal.id, proposal.binary, proposal.targets, proposal.review_token) == (
+        wide = openshell_pb2.PolicyChunk(id="c2", status="pending", binary="/usr/bin/curl", review_token="tok2")
+        wide.proposed_rule.CopyFrom(
+            sandbox_pb2.NetworkPolicyRule(
+                endpoints=[sandbox_pb2.NetworkEndpoint(host="", ports=[443], allowed_ips=["10.0.0.0/8"])]
+            )
+        )
+        client._stub.draft = [chunk, wide]
+        proposal, widened = plane.draft_chunks("rvx")
+        assert (proposal.id, proposal.binary, proposal.binaries, proposal.targets, proposal.review_token) == (
             "c1",
             "/usr/bin/curl",
+            ("/usr/bin/curl",),
             (("example.com", 443),),
             "tok",
         )
+        assert proposal.widened is False and widened.widened is True
         ((kind, request, _timeout),) = client._stub.calls
         assert kind == "GetDraftPolicy" and request.sandbox == "rvx" and request.status_filter == "pending"
 
