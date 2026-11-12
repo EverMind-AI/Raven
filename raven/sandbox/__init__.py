@@ -8,7 +8,7 @@ Public API (import everything from here, not from sub-modules):
     SandboxConfig      — Pydantic config model
     DirectExecutor     — host-process fallback (no isolation)
     build_executor()   — factory: SandboxConfig → SandboxExecutor
-    sandbox_install_hint() — the command that installs the OpenShell SDK here
+    sandbox_install_hint() — how to get the OpenShell SDK into this environment
 """
 
 from __future__ import annotations
@@ -41,24 +41,56 @@ __all__ = [
 
 
 def sandbox_install_hint() -> str:
-    """A copy-pasteable command that installs the OpenShell SDK into this raven's environment.
+    """The advice that tells the user how to get the OpenShell SDK into this raven's environment.
 
     raven is not distributed under this name on package indexes, so naming the
     ``raven[sandbox]`` extra in a command would fetch an unrelated project.
     The hint therefore installs the pinned SDK requirement itself, into the
     interpreter raven is running under (a uv tool venv or a project venv).
+
+    The SDK is not published for Windows, so there the answer is that the
+    backend is unavailable rather than a command that cannot work.
     """
+    if sys.platform == "win32":
+        return "The OpenShell SDK is not published for Windows, so the OpenShell sandbox backend needs Linux or macOS."
 
     spec = "openshell"
     try:
         for requirement in importlib.metadata.requires("raven") or []:
             candidate = requirement.split(";", 1)[0].strip()
             if re.match(r"openshell\b", candidate):
-                spec = candidate
+                spec = _install_spec(requirement)
                 break
     except importlib.metadata.PackageNotFoundError:
         pass
-    return f"uv pip install --python {shlex.quote(sys.executable)} {shlex.quote(spec)}"
+    return (
+        "Install the OpenShell SDK into this raven's environment: "
+        f"uv pip install --python {_quote(sys.executable)} {_quote(spec)}"
+    )
+
+
+def _quote(value: str) -> str:
+    """Quote a path or a requirement for the shell that will read it."""
+    if sys.platform == "win32":
+        return f'"{value}"'
+    return shlex.quote(value)
+
+
+def _install_spec(requirement: str) -> str:
+    """The requirement as a command that installs it names it.
+
+    The marker of a requirement that lives in an extra carries two
+    conditions: the platform the dependency is for, and the extra that pulls
+    it in. The extra is a packaging context the command does not have -- it
+    names the package itself -- so only the platform condition stays, and its
+    quotes are doubled so the shell quoting around it stays readable.
+    """
+    name, _, marker = requirement.partition(";")
+    if not marker:
+        return name.strip()
+    platform = re.sub(r"\s+and\s+extra\s*==\s*['\"][^'\"]*['\"]", "", marker)
+    single, double = "'", '"'
+    return f"{name.strip()}; {platform.strip().replace(single, double)}"
 
 
 def build_executor(
@@ -94,10 +126,7 @@ def build_executor(
         try:
             import openshell as _  # noqa: F401 — probe availability before constructing executor
         except ImportError as exc:
-            raise SandboxInitError(
-                f"No sandbox backend available: {exc}\n"
-                f"  • Install the OpenShell SDK into this raven's environment: {sandbox_install_hint()}"
-            ) from exc
+            raise SandboxInitError(f"No sandbox backend available: {exc}\n  • {sandbox_install_hint()}") from exc
         from raven.sandbox.openshell_executor import OpenShellExecutor
 
         return OpenShellExecutor(

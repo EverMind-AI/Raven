@@ -19,7 +19,6 @@ from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from raven.config.paths import get_data_dir
 from raven.sandbox import (
     DirectExecutor,
     ExecResult,
@@ -253,7 +252,7 @@ class TestSandboxInstallHint:
         from raven.sandbox import sandbox_install_hint
 
         hint = sandbox_install_hint()
-        assert hint.startswith("uv pip install --python")
+        assert "uv pip install --python" in hint
         assert sys.executable in hint
         assert ">=0.1.8" in hint and "<0.2" in hint
         # The specifier carries "<", so it must be quoted to paste into a shell.
@@ -269,6 +268,31 @@ class TestSandboxInstallHint:
 
         monkeypatch.setattr(metadata_mod, "requires", _missing)
         assert sandbox_install_hint().endswith(" openshell")
+
+    def test_the_requirement_keeps_the_platform_marker(self, monkeypatch):
+        """The requirement and its marker are one thing: naming half of it
+        asks for a package the project does not depend on."""
+        import importlib.metadata as metadata_mod
+
+        from raven.sandbox import sandbox_install_hint
+
+        monkeypatch.setattr(
+            metadata_mod,
+            "requires",
+            lambda name: ["openshell<0.2,>=0.1.8; (sys_platform != 'win32') and extra == 'sandbox'"],
+        )
+        hint = sandbox_install_hint()
+        assert 'sys_platform != "win32"' in hint
+        # The extra is a packaging context the command does not have.
+        assert "extra ==" not in hint
+
+    def test_windows_is_told_the_sdk_is_not_published_there(self, monkeypatch):
+        import raven.sandbox as sandbox_mod
+
+        monkeypatch.setattr(sandbox_mod.sys, "platform", "win32")
+        hint = sandbox_mod.sandbox_install_hint()
+        assert "not published for Windows" in hint
+        assert "uv pip install" not in hint
 
 
 async def _stop_holder(pid: int) -> None:
