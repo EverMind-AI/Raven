@@ -25,7 +25,7 @@ its context.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from loguru import logger
@@ -53,6 +53,7 @@ from raven.permissions.rules import (
     user_tier,
     validate_exec_pattern,
 )
+from raven.permissions.runtime import RuntimeAnswer, RuntimeChoice, deadline_stopped
 from raven.permissions.session import remember_allowed, session_allows, session_mode
 from raven.permissions.turn import current_tool_call_id, current_turn, note_refusal
 from raven.tracing import trace
@@ -374,6 +375,155 @@ class PermissionGate:
             "User denied this action." + feedback,
             source="approval_denied",
         )
+
+    async def authorize_runtime(
+        self,
+        *,
+        tool_name: str,
+        kind: str,
+        action: str,
+        description: str,
+        digest: str,
+        session_keys: tuple[str, ...],
+        evidence: dict[str, Any],
+        suggested_pattern: str,
+        review: Callable[[], Awaitable[bool]] | None,
+    ) -> RuntimeAnswer:
+        """Ask about an action ``tool_name`` found while it ran, the way ``enforce`` asks before dispatch.
+
+        The caller knows the action and refuses what a rule refuses before it
+        gets here; this is the asking half, in ``enforce``'s order: this turn's
+        earlier answers, the conversation's grants, the mode, the smart-mode
+        reviewer (``review``), then the person. Full mode grants for the
+        session, as a person choosing that would. A person deciding stops the
+        tool's deadline (``raven.permissions.runtime.deadline_stopped``).
+        """
+        turn = current_turn()
+        if digest in turn.lapsed_digests:
+            return self._runtime_refusal(
+                tool_name,
+                action,
+                kind,
+                RuntimeChoice.LAPSED,
+                "lapsed_earlier",
+                "The approval for this lapsed earlier in this turn",
+            )
+        if digest in turn.denied_digests:
+            return self._runtime_refusal(
+                tool_name,
+                action,
+                kind,
+                RuntimeChoice.DENY,
+                "denied_earlier",
+                "User denied this earlier in the current turn",
+            )
+        if session_allows(turn.session_key, session_keys):
+            self._annotate_runtime(kind, "allow", DecisionSource.SESSION.value)
+            return RuntimeAnswer(RuntimeChoice.SESSION)
+        try:
+            mode = PermissionMode(session_mode(turn.session_key) or self._config_source().mode)
+        except ValueError:
+            mode = PermissionMode.ASK
+        if mode is PermissionMode.FULL:
+            remember_allowed(turn.session_key, session_keys)
+            self._annotate_runtime(kind, "allow", DecisionSource.MODE.value)
+            return RuntimeAnswer(RuntimeChoice.SESSION)
+        if mode is PermissionMode.SMART and review is not None and await self._review_runtime(tool_name, kind, review):
+            self._annotate_runtime(kind, "allow", DecisionSource.JUDGE.value)
+            return RuntimeAnswer(RuntimeChoice.ONCE)
+        if not self._allow_ask or turn.responder is None or not turn.conversation_id:
+            return self._runtime_refusal(
+                tool_name,
+                action,
+                kind,
+                RuntimeChoice.UNATTENDED,
+                DecisionSource.UNATTENDED.value,
+                f"{description}, but this turn is not interactive",
+            )
+        try:
+            with deadline_stopped():
+                outcome = await turn.responder.await_approval(
+                    conversation_id=turn.conversation_id,
+                    turn_id=turn.turn_id,
+                    tool_call_id=current_tool_call_id(),
+                    command=action,
+                    description=description,
+                    suggested_pattern=suggested_pattern,
+                    kind=kind,
+                    family="",
+                    origin=turn.origin,
+                    origin_name=turn.origin_name,
+                    evidence=_clamped(evidence),
+                )
+        except Exception as exc:  # noqa: BLE001 - a broken transport must refuse, not allow
+            logger.exception("permissions: runtime approval transport failed for {}", tool_name)
+            # Not recorded as this turn's answer: nobody gave one, so a later ask may reach someone.
+            return self._runtime_refusal(
+                tool_name,
+                action,
+                kind,
+                RuntimeChoice.LAPSED,
+                "approval_transport_error",
+                f"The approval request could not be delivered ({exc})",
+            )
+        self._annotate_runtime(
+            kind,
+            "allow" if outcome.approved else "deny",
+            DecisionSource.APPROVAL.value,
+            {
+                "permission.runtime.approval.choice": outcome.choice.value,
+                "permission.runtime.approval.answered": outcome.answered,
+            },
+        )
+        if outcome.approved:
+            if outcome.choice is ApprovalChoice.ALLOW_SESSION:
+                remember_allowed(turn.session_key, session_keys)
+                return RuntimeAnswer(RuntimeChoice.SESSION)
+            if outcome.choice is ApprovalChoice.ALLOW_ALWAYS:
+                return RuntimeAnswer(RuntimeChoice.ALWAYS)
+            return RuntimeAnswer(RuntimeChoice.ONCE)
+        turn.denied_digests.add(digest)
+        if not outcome.answered:
+            turn.lapsed_digests.add(digest)
+            note_refusal(tool_name, action, "The approval request expired with no answer", "approval_lapsed")
+            return RuntimeAnswer(RuntimeChoice.LAPSED)
+        if outcome.choice is ApprovalChoice.DENY_STOP:
+            note_refusal(tool_name, action, "User denied this and asked to stop here", "approval_deny_stop")
+            return RuntimeAnswer(RuntimeChoice.DENY_STOP, outcome.feedback)
+        note_refusal(tool_name, action, "User denied this", "approval_denied")
+        return RuntimeAnswer(RuntimeChoice.DENY, outcome.feedback)
+
+    def _runtime_refusal(
+        self, tool_name: str, action: str, kind: str, choice: RuntimeChoice, source: str, reason: str
+    ) -> RuntimeAnswer:
+        self._annotate_runtime(kind, "deny", source)
+        note_refusal(tool_name, action, reason, source)
+        return RuntimeAnswer(choice)
+
+    def _annotate_runtime(self, kind: str, decision: str, source: str, extra: dict[str, Any] | None = None) -> None:
+        # Keys of their own: the same tool.call span already holds the decision
+        # that let the call run, and that record must survive this one.
+        self._annotate(
+            {
+                "permission.runtime.kind": kind,
+                "permission.runtime.decision": decision,
+                "permission.runtime.source": source,
+                **(extra or {}),
+            }
+        )
+
+    async def _review_runtime(self, tool_name: str, kind: str, review: Callable[[], Awaitable[bool]]) -> bool:
+        """The caller's smart-mode review; a reviewer that fails hands the question to the person."""
+        await self._notify_review("started", tool_name)
+        try:
+            allowed = bool(await review())
+        except Exception:  # noqa: BLE001 - a failed review escalates, it never allows
+            logger.warning("permissions: runtime review failed for {}; asking the person", kind, exc_info=True)
+            allowed = False
+        finally:
+            await self._notify_review("ended", tool_name)
+        self._annotate({"permission.runtime.judge.decision": "allow" if allowed else "escalate"})
+        return allowed
 
     def _refuse(
         self,
