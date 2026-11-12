@@ -279,7 +279,7 @@ const UNSENT = new Set([
   'system.hello.platform',
   // turn.cancel: 1 -- the offline stop always lands, and busy rides a refusal alone
   'turn.cancel.busy',
-  // session.compress / session.create: 1 each -- only resuming an Imported Conversation sets read_only
+  // session.compress / session.create: 1 each -- only resuming an Imported Session sets read_only
   'session.compress.info.read_only', 'session.create.info.read_only',
   // session.resume: 1 -- the page reads no message-tool verdict; the ACP replay and the session list do
   'session.resume.messages[].replied_via_tool',

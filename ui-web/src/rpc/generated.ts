@@ -182,7 +182,7 @@ export interface SessionInitInfo {
    */
   reasoning_effort?: string | null;
   /**
-   * True for an Imported Conversation, which nothing can change; absent on every other session.
+   * True for an Imported Session, which nothing can change; absent on every other session.
    */
   read_only?: boolean;
   /**
@@ -775,7 +775,7 @@ export interface SessionListItem {
    */
   workdir?: string;
   /**
-   * Present only on an Imported Conversation's row (source 'imported').
+   * Present only on an Imported Session's row (source 'imported').
    */
   imported?: {
     /**
@@ -3057,7 +3057,7 @@ export interface SessionListParams {
    */
   limit?: number;
   /**
-   * Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one).
+   * Session channels to include; defaults to tui. 'imported' adds the Imported Sessions to a list of live sessions (never to the archived one).
    */
   channels?: string[];
   /**

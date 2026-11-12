@@ -95,7 +95,7 @@ factory = "example_agent_flow.plugin:make_hook"
 面向 Agent 判断，当前 `AgentParticipant` paper 提供只读 `StepView` 输入和可选
 verbs，如 `intake`、`select_tools`、`advise`、`system_addendum`、`review`、
 `salvage`、`outbound`、`archive`。宿主拥有 timing，并通过 hook contribution 路径
-适配支持的 participant 工厂。Participant 每轮构建，避免轮次状态泄漏到其他并发对话。
+适配支持的 participant 工厂。Participant 每轮构建，避免轮次状态泄漏到其他并发会话。
 
 选择前读 `raven/contracts/participant.py` 和 `raven/contracts/loop_hooks.py`。
 遵守契约版本/tier 边界，不要直接写 loop transcript 或深入 scheduler。
@@ -127,7 +127,7 @@ example-agent-engine = "example_agent_engine"
 2. 在实际 runtime 环境导入工厂，覆盖 enabled、disabled 和错误配置。
 3. 不使用真实模型，测试工具参数/结果以及拒绝或 rollback 路径。
 4. 经实际托管入口验证工具 roster，并执行一个低风险真实任务。
-5. 测试两个并发对话、service 关闭和缺少依赖。
+5. 测试两个并发会话、service 关闭和缺少依赖。
 
 维护者回归检查：
 

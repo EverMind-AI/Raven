@@ -116,7 +116,7 @@ const COLUMN_TRANSITION_DELTA = WORKSPACE_EDGE_GUTTER + COLUMN_GAP
    see `anchoredRoom` -- it is the gap above the card instead: the landing page
    and a chat too narrow for the reserve leave the card there, where its bottom
    edge would put the palette on the field and the send button. A dock that is
-   not drawn -- an imported conversation has none -- leaves the window's gutter
+   not drawn -- an imported session has none -- leaves the window's gutter
    as the limit, the case `dockLift` reads the same way. */
 export function deskBottomLimit(column?: { left: number; right: number }): number {
   const card = document.querySelector('.chat > .dock > .dock-in')

@@ -253,7 +253,7 @@ describe('the send button', () => {
     expect(calls.sent).toEqual([])
   })
 
-  it('sends nothing from an imported conversation, and never offers the model setup', async () => {
+  it('sends nothing from an imported session, and never offers the model setup', async () => {
     const { setCurrent, _resetForTests: resetSession } = await import('../../lib/session')
     const beforeSend = vi.fn(() => false)
     const { calls } = wire({ beforeSend })

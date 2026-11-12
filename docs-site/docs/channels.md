@@ -11,7 +11,7 @@ enabling Telegram does not create another agent.
 Platform message
   -> channel adapter: sender/group checks and media handling
   -> Intake: TurnRequest
-  -> Gateway / Spine: conversation scheduling
+  -> Gateway / Spine: session scheduling
   -> Agent Loop: tools, memory, delegation
   -> DeliveryHub / ChannelOutletAdapter
   -> originating channel and chat
@@ -124,8 +124,8 @@ participant authorized.
 
 ## Sessions and working directories
 
-The normal conversation address derives from the channel and chat id. An
-adapter may provide a more specific key: Slack can scope a group conversation
+The normal session address derives from the channel and chat id. An
+adapter may provide a more specific key: Slack can scope a group chat
 to its thread. Do not assume every sender gets a private memory/session when
 they share a room or thread.
 

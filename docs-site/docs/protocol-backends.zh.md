@@ -34,7 +34,7 @@
 | 后端构造 | `raven/agent/subagent/backends/__init__.py` |
 
 Canonical names 见 `CONTEXT-MAP.md` 和 `CONTEXT.md`。后端 session、宿主 conversation、
-A2A task 与 DAG node id 生命周期不同，应显式映射，避免结果或凭据跨对话。
+A2A task 与 DAG node id 生命周期不同，应显式映射，避免结果或凭据跨会话。
 
 ## 实现子 Agent 后端 { #implement-a-sub-agent-backend }
 

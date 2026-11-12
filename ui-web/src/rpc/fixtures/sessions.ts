@@ -34,12 +34,12 @@ interface Fixture {
       default puts it -- which is what the rail groups by and what the tag
       beside the title says. */
   workdir?: string
-  /** The package an Imported Conversation came from; such a row is listed
+  /** The package an Imported Session came from; such a row is listed
       only when the imported channel is asked for, as the gateway does. */
   imported?: { kind: string; source_name: string }
 }
 
-/** The Imported Conversation this canvas starts with: a bug report someone sent. */
+/** The Imported Session this canvas starts with: a bug report someone sent. */
 export const IMPORTED_DEMO = 'imported:3fa9c1d2e8b74a6f9c0d5e1b2a3c4d5e'
 
 const MIN = 60000

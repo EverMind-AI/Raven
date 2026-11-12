@@ -417,12 +417,24 @@ rather than in the order they are asked for.
 **Popover**:
 A panel anchored to the control that opened it and floating over the page: the
 permission modes (`#permPop`), the session tier (`#tierPop`), the context
-window (`#ctxPop`, the ring's analysis of what fills it) and the model
-picker (`.mpick`). `src/lib/popover.ts` decides what one has to clear -- the
+window (`#ctxPop`, the ring's analysis of what fills it), the model
+picker (`.mpick`) and the rail's **More group** (`#chrome-navfly`).
+`src/lib/popover.ts` decides what one has to clear -- the
 composer card when its anchor sits on one, the anchor itself when it does not --
 and `src/chrome/PermPopover.tsx` and `CtxPopover.tsx` are the two the dock
 raises.
 _Avoid_: "pop" and "panel" for this.
+
+**More group**:
+The rail's last row (`#navMoreBtn`, `src/chrome/MoreFly.tsx`) and the popover it
+opens (`#chrome-navfly`): what the strip does not show waits behind one row
+rather than taking a row of the column of its own. The row is an action rather
+than a destination -- the **Imported Session**'s file dialog today -- so the
+group marks nothing: there is no page behind it to light. `src/state/navfly.ts`
+holds whether it stands open. The popover shuts on a pointer outside it and on
+Escape (the **Escape order**), and the imported domain shuts it when the package
+is through.
+_Avoid_: "fold" or "expander" for this -- it is a popover, not a fold.
 
 **Kind**:
 Which bucket a model list files a model under: `text`, `image`, `audio`,
@@ -592,9 +604,13 @@ exactly when it says no.
 _Avoid_: "report dialog" for the bug report -- it is this wizard on another
 flow, not a dialog of its own.
 
-**Imported Conversation** (page side; the runtime term is in `../CONTEXT.md`):
-A package read back in, shown read-only. The rail's `#importedBtn`
-(`src/chrome/Rail.tsx`, under the module rows) opens a file dialog through the
+**Imported Session** (page side; the runtime term is in `../CONTEXT.md`):
+A package read back in, shown read-only. The page's own words for it are a
+**session**: the button reads Import session and the export wizard reads Export
+session, the way the rest of the page calls a conversation. The rail's
+`#importedBtn`
+(`src/chrome/MoreFly.tsx`, in the popover the **More group** opens) opens a file
+dialog through the
 `imported` domain's store, which holds one claim from reading the file to
 dealing with the answer: while it is held the button names the file and takes
 no second one, and the second copy a duplicate offers goes through the same

@@ -370,7 +370,7 @@ await loop.run_turn(
         origin=Origin.USER,
         source=Source(channel="cli", chat_id="sandbox-demo", sender_id="user", chat_type=ChatType.DM),
         text="write a hello-world Python script and run it",
-        conversation="cli:sandbox-demo",
+        session="cli:sandbox-demo",
     ),
     emit,
     lambda: [],  # drain (INJECT/INTERRUPT) — empty for a plain turn

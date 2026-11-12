@@ -5733,10 +5733,10 @@ describe('transcript island, a shut body is not built', () => {
   })
 })
 
-/* An imported conversation is read on a machine that has none of its runs,
+/* An imported session is read on a machine that has none of its runs,
    files or instances: nothing here asks this gateway for them, and nothing
    offers to change the conversation. */
-describe('transcript island, an imported conversation', () => {
+describe('transcript island, an imported session', () => {
   const KEY = 'imported:' + 'a'.repeat(32)
 
   beforeEach(() => { setCurrent(KEY) })

@@ -70,7 +70,7 @@ keys or passwords in a task message.
 
 An agent can register a machine too. The `ops_connection_add` tool (on in
 raven-oncall and raven-code through `tools.connectionAdd`; off elsewhere) takes
-what the owner said in conversation -- this computer or another, what they
+what the owner said in the session -- this computer or another, what they
 call it, an address if another -- fills a port, user or key they left out from
 their own ssh config, reaches the machine, and only then writes the row. When
 the registry lists no machine that fits, the agent asks the owner rather than

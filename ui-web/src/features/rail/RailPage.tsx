@@ -56,7 +56,7 @@ function sessItems(s: SessRow): Array<MenuItem | '-'> {
   ]
 }
 
-/* An Imported Conversation's menu: it cannot be pinned or archived, and its
+/* An Imported Session's menu: it cannot be pinned or archived, and its
    name is changed here on the row, never in the conversation's header. */
 function importedItems(s: SessRow, startEdit: () => void): Array<MenuItem | '-'> {
   return [

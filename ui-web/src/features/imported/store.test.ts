@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetTranslator, setTranslator } from '../../i18n/t'
 import { RpcError } from '../../rpc/transport'
 import * as confirm from '../../state/confirm'
+import * as navfly from '../../state/navfly'
 import { resetSources, setSources } from '../../state/sources'
 
 import type { ImportedUpload } from './types'
@@ -76,6 +77,7 @@ const flush = async (): Promise<void> => { for (let i = 0; i < 5; i += 1) await 
 beforeEach(() => {
   setTranslator((key, vars) => (vars ? `${key} ${JSON.stringify(vars)}` : key))
   setSources({ imported: { upload } })
+  navfly._resetForTests()
   HeldReader.made = []
   vi.stubGlobal('FileReader', HeldReader)
   uploads = []
@@ -93,6 +95,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   store._resetForTests()
   confirm._resetForTests()
+  navfly._resetForTests()
   resetSources()
   resetTranslator()
 })
@@ -121,6 +124,19 @@ describe('importing a package', () => {
     expect(rail.open).toHaveBeenCalledWith(rail.rows[0])
     expect(toast).toHaveBeenCalledWith(`gui.imported.done ${JSON.stringify({ title: 'Trip' })}`)
     expect(store.get().busy).toBeNull()
+  })
+
+  /* The group in the rail that holds this row closes with it: the reader is in
+     the conversation the import became, and a panel left standing over it
+     covers what they came to read. */
+  it('closes the rail group that holds its row when the package is through', async () => {
+    navfly.open()
+    const done = store.importFile(file())
+    HeldReader.made[0]!.finish('QUJD')
+    await flush()
+    uploads[0]!.reply.resolve(answer('imported'))
+    await done
+    expect(navfly.isOpen()).toBe(false)
   })
 
   it('starts nothing else while a file is still being read', async () => {

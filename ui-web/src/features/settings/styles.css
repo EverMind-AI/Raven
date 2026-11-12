@@ -82,7 +82,14 @@ h1 {font-size:34px; font-weight:700; letter-spacing:-.02em; margin:8px 0 8px}
 .settings-card > .settings-ch .settings-t {font-family:var(--disp); font-size:14px; font-weight:600}
 .settings-card > .settings-ch .settings-d {color:var(--faint); font-size:13px; margin-top:2px}
 .settings-rows {display:flex; flex-direction:column}
-.settings-row {display:grid; grid-template-columns:1fr auto; gap:4px 14px; align-items:center; padding:11px 15px; border-bottom:1px solid var(--line-soft)}
+/* The label gives way, the control does not. A row's first column is what is
+   left of the card, and `1fr` makes its floor the label's own min-content --
+   so a label that cannot wrap (the chat role's parameters disclosure carries a
+   nowrap summary) pushed the control column out of the card: that row's model
+   pill sat a column's width to the right of every other row's and ran past the
+   card's edge. `minmax(0, 1fr)` lets the label shrink and ellipsize instead,
+   and every row's control lands on the same line. */
+.settings-row {display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 14px; align-items:center; padding:11px 15px; border-bottom:1px solid var(--line-soft)}
 .settings-row:last-child {border-bottom:none}
 .settings-row .settings-k {font-size:14px; display:flex; flex-wrap:wrap; align-items:center; gap:6px}
 .settings-row .settings-hint {color:var(--faint); font-size:13px; grid-column:1/-1; margin-top:0}

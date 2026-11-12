@@ -1914,7 +1914,7 @@ TurnEvent = Annotated[
 
 
 class SessionListImported(_Strict):
-    """What an Imported Conversation's row says about the package it came from."""
+    """What an Imported Session's row says about the package it came from."""
 
     kind: str = Field(..., description="'export', 'bugreport' or 'report'.")
     source_name: str = Field(..., description="The file name the package was imported from.")
@@ -1941,7 +1941,7 @@ class SessionListItem(_Strict):
         ),
     )
     imported: SessionListImported | None = Field(
-        default=None, description="Present only on an Imported Conversation's row (source 'imported')."
+        default=None, description="Present only on an Imported Session's row (source 'imported')."
     )
 
 
@@ -1950,7 +1950,7 @@ class SessionListParams(_Strict):
     channels: list[str] | None = Field(
         default=None,
         description=(
-            "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations "
+            "Session channels to include; defaults to tui. 'imported' adds the Imported Sessions "
             "to a list of live sessions (never to the archived one)."
         ),
     )
@@ -4312,7 +4312,7 @@ class SessionInitInfo(_Strict):
     )
     read_only: bool | None = Field(
         default=None,
-        description="True for an Imported Conversation, which nothing can change; absent on every other session.",
+        description="True for an Imported Session, which nothing can change; absent on every other session.",
     )
     running_ms: int | None = Field(
         default=None,
@@ -7492,7 +7492,7 @@ class BugReportOkResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
-# imported.* -- packages read back in as read-only Imported Conversations
+# imported.* -- packages read back in as read-only Imported Sessions
 # ---------------------------------------------------------------------------
 
 

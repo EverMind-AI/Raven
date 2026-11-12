@@ -125,7 +125,7 @@ prompts: |
   Do not edit files or contact external services.
 ```
 
-对话中，`load_playbook` 返回已填充的指导，由调用方组图并提交
+会话中，`load_playbook` 返回已填充的指导，由调用方组图并提交
 `run_subagent_dag`。CLI 则使用已配置模型组图，允许有限次数的修复尝试。
 两条路径都使用普通 DAG 契约。Prompt 模式是组图指导，只在组图时读取一次，
 图运行时不做任何判断；分支由所组成图中的决策节点选择。应检查实际提交图的选项，
@@ -221,7 +221,7 @@ OAuth token 位于 `<credentials>/playbooks/brief-review/mcp/`，与宿主服务
 执行 Playbook。模型显式调用 `load_playbook`；即使检索没有选中完整描述，
 启用的名称仍然可达。
 
-CLI `run` 同步等待；对话中的 DAG 加载通常后台调度。缺少普通参数或必需字段
+CLI `run` 同步等待；会话中的 DAG 加载通常后台调度。缺少普通参数或必需字段
 会阻止调度并返回命名缺口。Prompt 模式加载只返回指导，本身不调度。
 
 Playbook 的 `confirm` 默认 true，executor 调度时会将它传给图。

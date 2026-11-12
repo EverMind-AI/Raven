@@ -1,7 +1,7 @@
 # Evolver：使用与实验
 
 Evolver 是独立的、由基准驱动的 Agent harness 改进工具：诊断失败任务、设计候选
-修改、执行评估，并将有效修改保留为 Git 提交。它在 Agent 对话循环之外独立运行，
+修改、执行评估，并将有效修改保留为 Git 提交。它在 Agent 会话循环之外独立运行，
 在 harness 研发过程中以库的形式调用 Raven。
 
 本页负责入门和操作；[设计与实现](self-evolution-map.md)继续作为方法论到代码的

@@ -255,7 +255,7 @@ def register_aligned_methods_except_system(
     register_trajectory_methods(dispatcher)
     register_trajectory_export_methods(dispatcher, agent_loop_factory=agent_loop_factory)
     register_bugreport_methods(dispatcher, agent_loop_factory=agent_loop_factory)
-    # imported.* plus the guard that keeps every write off an Imported Conversation.
+    # imported.* plus the guard that keeps every write off an Imported Session.
     register_imported_methods(dispatcher)
     register_knowledge_methods(dispatcher)
     # playbooks.* -- read-only view of the two-layer playbook library, so the

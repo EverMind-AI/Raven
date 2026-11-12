@@ -322,10 +322,10 @@ raven web
 The command opens the WebUI in your browser and keeps Raven running in the background. Use `raven web --stop` to stop the background service.
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a"><img src="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a"><img src="https://github.com/user-attachments/assets/e03a1aeb-9e16-494d-bc66-4dea8804b14a" alt="Raven WebUI new session page" width="90%"></a>
 </p>
 
-<p align="center"><em>New task: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
+<p align="center"><em>New session: one composer, with skills, playbooks, knowledge and memory a click away.</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139"><img src="https://github.com/user-attachments/assets/6b48e038-e761-4aa2-b62a-d63472c45139" alt="Raven WebUI subagents page" width="90%"></a>

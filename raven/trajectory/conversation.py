@@ -153,7 +153,7 @@ def _read_artifact(state: Path, path: str, limit: int = _ARTIFACT_LIMIT) -> tupl
     not just the returned text, because the pointer may name any file under
     ``logs/`` (a rotated multi-GB log included). Non-regular files (a FIFO
     would block the read) are rejected outright. A relative pointer is read
-    against ``state``: an Imported Conversation's store records them that way
+    against ``state``: an Imported Session's store records them that way
     so it still reads after the raven home moves.
     """
     try:

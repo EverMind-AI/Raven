@@ -378,7 +378,7 @@ def _map_to_wire(
       from a Silent Turn.
 
     ``deliveries_on_disk`` is false for a transcript recorded on another
-    machine (an Imported Conversation): its delivered files are drawn as
+    machine (an Imported Session): its delivered files are drawn as
     missing whatever this machine has at their paths (``_delivered_file``).
 
     A ``role="tool"`` entry's ``text`` is cut to ``TOOL_RESULT_VIEW_MAX_CHARS``
@@ -926,48 +926,48 @@ def _auto_archive_stale(mgr: Any, entries: list[dict]) -> None:
         entry["metadata"] = {**meta, "archived": True, "archivedBy": "auto"}
 
 
-# ── Imported Conversations ─────────────────────────────────────────────
+# ── Imported Sessions ──────────────────────────────────────────────────
 #
-# What session.* answers for an imported key: the conversation is served from
+# What session.* answers for an imported key: the session is served from
 # its own directory under the raven home (raven/trajectory/imported.py) and the
 # SessionManager is never asked about it. Disk work runs in a worker thread.
 
 
-def _imported_row(conversation: imported.ImportedConversation) -> dict[str, Any]:
+def _imported_row(session: imported.ImportedSession) -> dict[str, Any]:
     try:
-        at = datetime.fromisoformat(conversation.imported_at).timestamp()
+        at = datetime.fromisoformat(session.imported_at).timestamp()
     except ValueError:
         at = 0.0
     return {
-        "id": conversation.key,
-        "message_count": conversation.message_count,
-        "preview": conversation.title,
+        "id": session.key,
+        "message_count": session.message_count,
+        "preview": session.title,
         "last_message_preview": "",
         "source": imported.CHANNEL,
         "started_at": at,
         "updated_at": at,
-        "title": conversation.title,
+        "title": session.title,
         "pinned": False,
         "running": False,
         "workdir": None,
-        "imported": {"kind": conversation.kind, "source_name": conversation.source_name},
+        "imported": {"kind": session.kind, "source_name": session.source_name},
     }
 
 
 async def _imported_rows() -> list[dict[str, Any]]:
-    conversations = await asyncio.to_thread(imported.list_conversations)
-    return [_imported_row(conversation) for conversation in conversations]
+    sessions = await asyncio.to_thread(imported.list_sessions)
+    return [_imported_row(session) for session in sessions]
 
 
 async def _imported_resume(key: str, config: "Config") -> dict[str, Any]:
-    conversation = await asyncio.to_thread(imported.get, key)
-    if conversation is None:
-        raise SessionNotFoundError(f"no imported conversation {key!r}")
+    imported_session = await asyncio.to_thread(imported.get, key)
+    if imported_session is None:
+        raise SessionNotFoundError(f"no imported session {key!r}")
     session = await asyncio.to_thread(imported.read_session, key)
     # No loop and no key: the banner is the configured default's, and nothing
-    # here may ask the SessionManager about a conversation it does not keep.
+    # here may ask the SessionManager about a session it does not keep.
     info = await _default_session_info(None, config, None)
-    info["title"] = conversation.title
+    info["title"] = imported_session.title
     info["read_only"] = True
     info["running"] = False
     messages: list[dict[str, Any]] = []
@@ -979,15 +979,15 @@ async def _imported_resume(key: str, config: "Config") -> dict[str, Any]:
 
 async def _imported_title(key: str, new_title: Any) -> dict[str, Any]:
     if new_title is None:
-        conversation = await asyncio.to_thread(imported.get, key)
-        if conversation is None:
-            raise SessionNotFoundError(f"no imported conversation {key!r}")
-        return {"title": conversation.title, "session_key": key, "pending": False}
+        imported_session = await asyncio.to_thread(imported.get, key)
+        if imported_session is None:
+            raise SessionNotFoundError(f"no imported session {key!r}")
+        return {"title": imported_session.title, "session_key": key, "pending": False}
     if not isinstance(new_title, str):
         raise InvalidParamsError("title: must be a string")
     cleaned = collapse_to_line(new_title)
     if not cleaned:
-        raise InvalidParamsError("title: an imported conversation keeps a name; it cannot be emptied")
+        raise InvalidParamsError("title: an imported session keeps a name; it cannot be emptied")
     if len(cleaned) > TITLE_STORAGE_MAX:
         raise SessionTitleTooLongError(
             f"session title is {len(cleaned)} characters; the maximum is {TITLE_STORAGE_MAX}",
@@ -996,7 +996,7 @@ async def _imported_title(key: str, new_title: Any) -> dict[str, Any]:
     try:
         renamed = await asyncio.to_thread(imported.rename, key, cleaned)
     except LookupError:
-        raise SessionNotFoundError(f"no imported conversation {key!r}") from None
+        raise SessionNotFoundError(f"no imported session {key!r}") from None
     return {"title": renamed.title, "session_key": key, "pending": False}
 
 

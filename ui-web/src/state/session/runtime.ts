@@ -375,7 +375,7 @@ export function sendMidTurn(text: string): void {
 /** Send, into the turn that is running or as one of its own. */
 export function send(text: string): void {
   /* Every way of sending ends here, the ones that skip the composer's own
-     button included; an imported conversation takes none of them. */
+     button included; an imported session takes none of them. */
   if (isImportedKey(sessionCurrent())) return
   const moveOn = beforeSend?.take(sessionCurrent())
   route(moveOn ? { text, moveOn } : { text })

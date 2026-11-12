@@ -30,7 +30,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Conversations to a list of live sessions (never to the archived one)."
+            "description": "Session channels to include; defaults to tui. 'imported' adds the Imported Sessions to a list of live sessions (never to the archived one)."
           }
         },
         {
@@ -12803,7 +12803,7 @@
     },
     {
       "name": "imported.upload",
-      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Conversation; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
+      "summary": "Import a Trajectory Export, Bug Report Package or Trajectory Report as a read-only Imported Session; the same bytes imported before answer with that copy and write nothing, unless force asks for a second one.",
       "params": [
         {
           "name": "name",
@@ -13090,7 +13090,7 @@
           },
           "read_only": {
             "type": "boolean",
-            "description": "True for an Imported Conversation, which nothing can change; absent on every other session."
+            "description": "True for an Imported Session, which nothing can change; absent on every other session."
           },
           "running_ms": {
             "type": [
@@ -14448,7 +14448,7 @@
           },
           "imported": {
             "type": "object",
-            "description": "Present only on an Imported Conversation's row (source 'imported').",
+            "description": "Present only on an Imported Session's row (source 'imported').",
             "additionalProperties": false,
             "required": [
               "kind",

@@ -64,7 +64,7 @@ display name that is not in the current roster does not select an agent.
 | `run_subagent_dag` node | Advertised roster agents | Put the roster name in `subagent`; generated Worker Table labels are turn-local and cannot be used in stored Playbooks. |
 | Playbook | Registered roster agents | A Playbook ultimately dispatches through the same DAG registry; use Raven-Design for the normal Raven-PPT route. |
 | Direct ACP over stdio | All five | Start the product launcher and speak newline-delimited JSON-RPC. Raven-Research starts ACP without an `--acp` flag. |
-| One-shot CLI hosting | Raven-Code only | Use its launcher with `--task` or `--prompt-file`; `--session` continues the CLI conversation. |
+| One-shot CLI hosting | Raven-Code only | Use its launcher with `--task` or `--prompt-file`; `--session` continues the CLI session. |
 | Messaging channels | All host-delegated agents | The channel reaches Raven first; delegation then uses the same roster and permissions. |
 | Direct A2A call to one native agent | Not supported | A2A exposes a Raven host, not five independent native-agent endpoints. |
 
@@ -82,7 +82,7 @@ applies to the next launch.
 
 | Key | Default | What it does |
 | --- | --- | --- |
-| `idleCloseS` | `600` | Closes an agent's process once it has been idle this many seconds: no request in flight either way and nothing said. An agent that still holds an armed reminder or a running plugin service is kept. Only an agent that can reopen its sessions (it declares `loadSession` or `sessionCapabilities.resume`) is closed, so the next turn resumes the conversation in a fresh process. `0` or `null` keeps agents until the host exits. |
+| `idleCloseS` | `600` | Closes an agent's process once it has been idle this many seconds: no request in flight either way and nothing said. An agent that still holds an armed reminder or a running plugin service is kept. Only an agent that can reopen its sessions (it declares `loadSession` or `sessionCapabilities.resume`) is closed, so the next turn resumes the session in a fresh process. `0` or `null` keeps agents until the host exits. |
 | `llmRelay` | `true` | The host makes a native agent's LiteLLM calls, so the agent never loads LiteLLM. The agent still builds each request, retries and records usage itself. An agent whose own `env` sets an LLM endpoint, a cloud credential, a proxy or a CA bundle makes its calls itself. |
 | `forkTemplate` | `true` | On Linux, native agents are forked from one process that has already loaded Raven, and share those pages instead of each loading its own copy. Other systems launch agents as before. |
 
@@ -226,7 +226,7 @@ grouped under the agent's own name, `Mirasim` (the platform's quota) and `Own ke
 Code, Codex, Kimi Code and ZCode CLI, so for those four each such model is listed in
 both of the first two groups: under the agent's name it runs on your own account,
 under `Mirasim` on the platform's quota. Every turn names the route its model
-runs on, so choosing the other one moves an existing conversation to that route
+runs on, so choosing the other one moves an existing session to that route
 from its next turn. A session with no model chosen runs on Mirasim's default for
 the agent, route included.
 
@@ -239,9 +239,9 @@ when it ends. A cancel stops the turn. Text sent to a running turn is taken into
 it for Claude Code, Codex, DSH, Pi and ZCode CLI. Images reach Claude Code
 inline; another agent gets an image linked as a local file as that file's path,
 and refuses one sent inline. Sessions can be listed -- this agent's
-conversations in the given directory, including ones begun in Mirasim itself --
+sessions in the given directory, including ones begun in Mirasim itself --
 resumed, loaded with their whole history, closed and deleted. Deleting one
-also deletes its Mirasim conversation; the agent's own transcript files stay
+also deletes its Mirasim session; the agent's own transcript files stay
 where it keeps them. A turn Mirasim starts on its own in a session Raven holds,
 such as a background job's report, is forwarded to Raven too, and what it stops
 to ask is left to the Mirasim app.
@@ -333,7 +333,7 @@ stdin delivery. A `resumeCommand` must use `{agent_id}`; id provisioning and
 transcript parsing must agree with the CLI. Do not copy those fields into ACP.
 
 For an HTTP backend, configure `baseUrl`, `model`, and credentials instead of
-a command. Host-side replay may provide conversation history, but it is not a
+a command. Host-side replay may provide session history, but it is not a
 remote native session. This backend cannot read local paths or accept MCP
 delivery. An OpenAI-compatible agent endpoint is distinct from changing Raven's
 main model provider.
@@ -347,7 +347,7 @@ main model provider.
 | Agent state root | Launcher-rendered config and agent working state |
 | Agent ACP home | The child engine's identity, transcripts, and skill pool |
 | `instance` | Continue a child session where that backend supports it |
-| Node id | Address a recorded task/output in the host conversation |
+| Node id | Address a recorded task/output in the host session |
 
 A CLI's `readsLocalFiles` is a declaration about its environment. ACP
 capabilities are negotiated and interpreted by its adapter. The HTTP backend

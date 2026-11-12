@@ -88,13 +88,13 @@ come from GitHub Releases, which has no mirror.
 Update Raven the same way you installed it. Running an installer again stops
 the running WebUI and finishes by starting a new one in the foreground: press
 Ctrl-C to stop it, then run `raven web` to keep Raven running in the
-background. Your settings and conversations in `~/.raven` are kept.
+background. Your settings and sessions in `~/.raven` are kept.
 
 ### Update from the page
 
 When the bottom of the sidebar says a new version is available, click it and
 confirm. Raven shows the download's progress, installs the new version,
-restarts, and the page reloads by itself. Your settings and conversations are
+restarts, and the page reloads by itself. Your settings and sessions are
 kept. While a turn, a sub-agent or a question waiting for an answer is still
 running, including in an IM channel, the page asks you to let it finish first.
 A Raven started by hand with `raven gateway` or `raven web --foreground` has

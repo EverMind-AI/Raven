@@ -512,7 +512,7 @@ describe('where a tab lands', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   it('reads back no run and no window: they were on the machine that recorded it', async () => {
     const KEY = 'imported:' + 'a'.repeat(32)
     await resume(KEY, ['run-7'])

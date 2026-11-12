@@ -12,7 +12,7 @@
 | 入口 | 运行时接入 | 执行 | 状态所有者 |
 | --- | --- | --- | --- |
 | WebUI / TUI | 共享 RPC 与 Spine | 宿主 Agent Loop | 宿主会话和 Agent home |
-| 消息平台 | Adapter、Intake、Gateway / Spine | 宿主 loop 与获准委派 | Channel/chat 对话、适配器账户状态 |
+| 消息平台 | Adapter、Intake、Gateway / Spine | 宿主 loop 与获准委派 | Channel/chat 会话、适配器账户状态 |
 | 编辑器/本地 ACP 宿主 | ACP server 与 RPC 栈 | 作为 Agent 提供服务的 Raven | Server ACP 会话和配置 home |
 | 入站 A2A peer | 已认证 HTTP、单次轮次适配 | 宿主 Agent Loop | 内存 A2A task store，加运行时 session 记录 |
 | 宿主委派 | Roster 与子 Agent manager | Built-in、ACP、CLI 或 HTTP 后端 | 宿主调用历史，加后端会话状态 |

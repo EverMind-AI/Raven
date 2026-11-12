@@ -553,7 +553,7 @@ export function openDeskTab(tab: DeskTab): void {
    some other reason. A change is marked read where a change is actually shown
    -- `openDeskDiff`. */
 export function openDeskFile(path: string): void {
-  /* An imported conversation names files on the machine that recorded it, and
+  /* An imported session names files on the machine that recorded it, and
      whatever answers to that path here is not that file. Every way of opening
      one comes through this door, so this is the one place that says so. */
   if (readingImported()) {

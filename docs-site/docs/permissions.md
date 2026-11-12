@@ -40,9 +40,9 @@ also lists questions nobody could answer. Those do not change the exit
 status, because the turn continued with its best judgment. Pass
 `--permission-mode full` when a one-shot must mutate.
 
-The global config supplies the starting mode. A conversation can override it
-through session-scoped `config.set`; that mode is saved with the conversation.
-Check the conversation's mode as well as the global value during troubleshooting.
+The global config supplies the starting mode. A session can override it
+through session-scoped `config.set`; that mode is saved with the session.
+Check the session's mode as well as the global value during troubleshooting.
 
 ## Configure tools and shell prefixes
 
@@ -100,7 +100,7 @@ paste another product's permission schema or precedence into Raven. Avoid
 | Choice | Scope |
 | --- | --- |
 | Allow once | The pending action |
-| Allow for this session | Still-asking action keys in that conversation |
+| Allow for this session | Still-asking action keys in that session |
 | Don't ask again | A validated, user-confirmed `exec` prefix persisted in config |
 | Deny | Refuse the action; normally the turn can continue |
 | Deny and stop | Refuse and end the current turn |
@@ -179,7 +179,7 @@ and review/redact diagnostic exports before sharing.
 | Smart mode asks unexpectedly | Reviewer escalation, timeout, or unavailable provider |
 | Headless task refuses a mutation | No approval responder; configure narrowly before launching |
 | A compound command asks | Every segment and redirection must be covered |
-| A previous grant no longer applies | Different directory, machine, site, conversation, or process restart |
+| A previous grant no longer applies | Different directory, machine, site, session, or process restart |
 | A child acted without asking | Outbound ACP/native child policy, not just the host gate |
 
 Inspect `permission.decision`, `permission.source`, and smart reviewer fields

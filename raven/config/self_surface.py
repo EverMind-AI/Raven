@@ -308,7 +308,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.NEXT_TURN,
                 writer="model.fields",
                 nullable=True,
-                sensitive="sends this provider's API key, and every conversation on it, to the address given",
+                sensitive="sends this provider's API key, and every session on it, to the address given",
                 note="a raven serve or TUI process keeps its startup default binding until restarted",
             ),
             Setting(

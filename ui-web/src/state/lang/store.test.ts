@@ -104,7 +104,7 @@ describe('the language the page resolves', () => {
     localStorage.setItem('raven.gui.lang', 'en')
     const lang = await fresh()
     expect(lang.get().lang).toBe('en')
-    expect((await words())('gui.new_task')).toBe('New task')
+    expect((await words())('gui.new_task')).toBe('New session')
   })
 
   /* A remembered pick is the one case that moves the declaration, and it moves
@@ -159,7 +159,7 @@ describe('applying a language', () => {
     const lang = await fresh()
     const t = await words()
     lang.set('en')
-    expect(t('gui.new_task')).toBe('New task')
+    expect(t('gui.new_task')).toBe('New session')
     lang.set('zh')
     expect(t('gui.new_task')).toBe(ZH_NEW_TASK)
   })

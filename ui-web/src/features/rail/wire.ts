@@ -125,7 +125,7 @@ export async function archive(s: SessRow): Promise<void> {
 }
 
 /* The settings page's "delete everything" is about the workspace's own
-   conversations. An Imported Conversation lives under the raven home and is
+   sessions. An Imported Session lives under the raven home and is
    removed from its own row, so it is neither deleted here nor counted. */
 export async function deleteAll(): Promise<void> {
   const gone: string[] = []

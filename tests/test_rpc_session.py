@@ -4345,7 +4345,7 @@ async def test_session_create_refuses_a_harness_a_build_cannot_bind() -> None:
     assert exc.value.data["field"] == "harness"
 
 
-# ── Imported Conversations through session.* ───────────────────────────
+# ── Imported Sessions through session.* ───────────────────────────
 
 
 def _import_export(tmp_path: Path, **source: object) -> str:
@@ -4353,7 +4353,7 @@ def _import_export(tmp_path: Path, **source: object) -> str:
     from tests import imported_package_builders as builders
 
     package, _ = builders.build_export(tmp_path / f"src-{len(list(tmp_path.glob('src-*')))}")
-    return imported.import_bytes(package.read_bytes(), package.name).conversation.key
+    return imported.import_bytes(package.read_bytes(), package.name).session.key
 
 
 def _imported_with_record(rows: list[dict]) -> str:
@@ -4365,7 +4365,7 @@ def _imported_with_record(rows: list[dict]) -> str:
 
     record = "".join(json.dumps(r) + "\n" for r in rows).encode()
     entries = _export_entries(extra=[(f"{EXP}/session.jsonl", tarfile.REGTYPE, record)])
-    return imported.import_bytes(gzip.compress(_raw(entries), mtime=0), "record.tar.gz", force=True).conversation.key
+    return imported.import_bytes(gzip.compress(_raw(entries), mtime=0), "record.tar.gz", force=True).session.key
 
 
 async def test_session_list_adds_imported_rows_when_asked(tmp_path: Path) -> None:
@@ -4374,16 +4374,16 @@ async def test_session_list_adds_imported_rows_when_asked(tmp_path: Path) -> Non
     key = _import_export(tmp_path)
     rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
     row = next(r for r in rows if r["id"] == key)
-    conversation = imported.get(key)
+    imported_session = imported.get(key)
     assert row == {
         "id": key,
         "message_count": 4,
-        "preview": conversation.title,
+        "preview": imported_session.title,
         "last_message_preview": "",
         "source": "imported",
-        "started_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
-        "updated_at": datetime.fromisoformat(conversation.imported_at).timestamp(),
-        "title": conversation.title,
+        "started_at": datetime.fromisoformat(imported_session.imported_at).timestamp(),
+        "updated_at": datetime.fromisoformat(imported_session.imported_at).timestamp(),
+        "title": imported_session.title,
         "pinned": False,
         "running": False,
         "workdir": None,
@@ -4415,13 +4415,13 @@ async def test_auto_archive_never_touches_an_imported_conversation(tmp_path: Pat
     from raven.trajectory import imported
 
     key = _import_export(tmp_path)
-    conversation = imported.get(key)
-    meta = dict(conversation.meta, imported_at="2020-01-01T00:00:00+00:00")
-    (conversation.path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
-    before = (conversation.path / "meta.json").read_bytes()
+    imported_session = imported.get(key)
+    meta = dict(imported_session.meta, imported_at="2020-01-01T00:00:00+00:00")
+    (imported_session.path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    before = (imported_session.path / "meta.json").read_bytes()
     rows = (await session_list({"channels": ["tui", "imported"]}))["sessions"]
     assert key in [r["id"] for r in rows]
-    assert (conversation.path / "meta.json").read_bytes() == before
+    assert (imported_session.path / "meta.json").read_bytes() == before
 
 
 async def test_resume_serves_an_imported_conversation_read_only(tmp_path: Path) -> None:

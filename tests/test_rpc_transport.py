@@ -1025,7 +1025,7 @@ async def test_a_socket_that_will_not_close_does_not_stop_the_others() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Imported Conversations
+# Imported Sessions
 # ---------------------------------------------------------------------------
 
 

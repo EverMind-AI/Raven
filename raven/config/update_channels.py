@@ -47,7 +47,7 @@ _SOCKET_SCHEMA: dict[str, dict[str, Any]] = {
     "workspace": {
         "type": "string",
         "default": "",
-        "sensitive": "moves where this channel's conversations read and write files",
+        "sensitive": "moves where this channel's sessions read and write files",
     },
 }
 

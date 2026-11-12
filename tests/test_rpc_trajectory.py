@@ -616,7 +616,7 @@ async def test_health_reports_the_trajectory_view_flag():
     assert off["trajectory_view"] is False
 
 
-# ── Imported Conversations ────────────────────────────────────────────
+# ── Imported Sessions ─────────────────────────────────────────────────
 
 
 async def _imported_entries(dispatcher: Dispatcher, key: str) -> tuple[list[dict], dict]:
@@ -658,7 +658,7 @@ async def test_an_imported_export_reads_through_its_own_store(tmp_path):
 
     tpol.arm(True)
     package, source = builders.build_export(tmp_path / "src", long_input=True)
-    key = imported.import_bytes(package.read_bytes(), package.name).conversation.key
+    key = imported.import_bytes(package.read_bytes(), package.name).session.key
     dispatcher = _dispatcher()
     entries, first = await _imported_entries(dispatcher, key)
     assert {e["turn_number"] for e in entries if e["origin"] == "main"} == {1, 3}
@@ -675,13 +675,13 @@ async def test_an_imported_export_reads_through_its_own_store(tmp_path):
     assert await _all_messages(dispatcher, key, llm, first["epoch"]) == source.first_call
 
 
-async def test_an_imported_bug_report_reads_its_long_conversation_whole(tmp_path):
+async def test_an_imported_bug_report_reads_its_long_session_whole(tmp_path):
     from raven.trajectory import imported
     from tests import imported_package_builders as builders
 
     tpol.arm(True)
     package, source = builders.build_bug_report(tmp_path / "src", long_input=True)
-    key = imported.import_bytes(package.read_bytes(), package.name).conversation.key
+    key = imported.import_bytes(package.read_bytes(), package.name).session.key
     dispatcher = _dispatcher()
     entries, first = await _imported_entries(dispatcher, key)
     llm = next(e for e in entries if e["kind"] == "llm.input")
@@ -706,9 +706,9 @@ async def test_an_import_whose_spans_name_no_session_lists_nothing(tmp_path):
     spans = (json.dumps(_span("t", "s", "session.turn", attrs={"session.key": None})) + "\n").encode()
     manifest = {"format_version": 1, "attempt_id": ATT, "session_key": None}
     data = gzip.compress(_raw(_report_tree(manifest=manifest, spans=spans)), mtime=0)
-    conversation = imported.import_bytes(data, "r.tar.gz").conversation
-    assert conversation.original_session_key is None
-    entries, _ = await _imported_entries(_dispatcher(), conversation.key)
+    imported_session = imported.import_bytes(data, "r.tar.gz").session
+    assert imported_session.original_session_key is None
+    entries, _ = await _imported_entries(_dispatcher(), imported_session.key)
     assert entries == []
 
 

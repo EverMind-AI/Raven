@@ -1,4 +1,4 @@
-/* Whether the open conversation is an Imported Conversation, read off its key. */
+/* Whether the open conversation is an Imported Session, read off its key. */
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { isImportedKey, readingImported } from './imported'

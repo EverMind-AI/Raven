@@ -177,7 +177,13 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  padding: 6px 0 8px;
+  /* The gutter the conversation's action row hangs into. That row sits a 5px
+     negative margin outside the card it belongs to -- the chat's column has
+     the room for it, and so does the agent stage (.satx), but the record's
+     body is a scroll box flush with its cards: the row widened the column by
+     5px and the body answered with 5px of sideways scroll, a place to drag
+     the record to one side. */
+  padding: 6px 5px 8px;
   --fs-body: 14px;
 }
 .tkrecord > [data-tsl] > * { flex: none; min-width: 0; }

@@ -125,7 +125,7 @@ export function touchSession(id: string | null, preview?: string): void {
   sessionDraw()
 }
 
-/* `imported` brings the Imported Conversations, which the gateway lists only
+/* `imported` brings the Imported Sessions, which the gateway lists only
    beside live sessions: a current imported row that a refresh did not return
    would read as deleted under the reader (state/session/registry.ts). */
 export const SESS_CHANNELS = ['tui', 'cron', 'imported']

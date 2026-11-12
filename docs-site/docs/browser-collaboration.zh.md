@@ -41,7 +41,7 @@ uv run --extra browser playwright install --with-deps chromium
 
 ## 尝试只读任务 { #try-a-read-only-task }
 
-1. 在与对话相同的宿主中打开 Browser 面板。
+1. 在与会话相同的宿主中打开 Browser 面板。
 2. 请求：“打开我提供的文档 URL，总结安装前置条件。不提交表单、不下载文件、不改设置。”
 3. 观察选中的标签页，对照实际页面检查回答。
 4. 如果继续前页面发生变化，请求截图或重新读取 snapshot。
@@ -54,7 +54,7 @@ uv run --extra browser playwright install --with-deps chromium
 遇到登录、CAPTCHA、支付或意外授权页时：
 
 1. 要求 Agent 先停下并询问你。
-2. 自己在共享浏览器中完成敏感步骤，不将密码、恢复码或 token 粘贴进对话。
+2. 自己在共享浏览器中完成敏感步骤，不将密码、恢复码或 token 粘贴进会话。
 3. 明确告知可以继续，以及剩余允许范围。
 4. 要求下次动作前重新获取 snapshot。
 
@@ -63,7 +63,7 @@ uv run --extra browser playwright install --with-deps chromium
 
 ## 标签页与多个 Agent { #tabs-and-multiple-agents }
 
-Owner 是当前进程内子 Agent 运行，否则是主对话。它会取得未被占用的当前标签页，
+Owner 是当前进程内子 Agent 运行，否则是主会话。它会取得未被占用的当前标签页，
 或新建标签页。后续调用绑定该页，即使面板显示另一页也不改变地址。
 
 Agent 的动作会将自己的页切到前台，单纯读取不会。其他 owner 的页标为 held，

@@ -1,4 +1,4 @@
-/* Whether the conversation on screen is an Imported Conversation.
+/* Whether the session on screen is an Imported Session.
  *
  * One is addressed as `imported:<id>` (the runtime defines it in the repo's
  * CONTEXT.md), and the page needs the answer before `session.resume` has said

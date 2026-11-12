@@ -400,7 +400,7 @@ describe('the model a message goes out on', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   it('sends nothing, by any door', async () => {
     const h = await harness({ current: 'imported:' + 'a'.repeat(32) })
     h.runtime.send('can I add to it?')

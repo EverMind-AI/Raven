@@ -2,7 +2,7 @@
 
 Turn a real failure into inspectable evidence and, when useful, a deterministic
 regression test. Tracing records what ran; a trajectory groups the relevant
-attempt, model/tool artifacts, conversation context, and outcome labels.
+attempt, model/tool artifacts, session context, and outcome labels.
 Use [Tracing and Instrumentation API](tracing-api.md) when adding instrumentation;
 this page covers the operator's replay workflow.
 
@@ -29,7 +29,7 @@ artifacts/messages and whether session context was included. A bundle with
 missing evidence is not necessarily replayable.
 
 Keep raw bundles local and outside git. They can contain source files,
-prompts, credentials, tool outputs, and private conversation history.
+prompts, credentials, tool outputs, and private session history.
 
 ## Produce a reviewed report
 
@@ -60,7 +60,7 @@ before sharing. `--yes` is not sensitive-data risk consent. Do not routinely
 bypass findings with `--accept-risk` or declare every token harmless.
 
 The WebUI's **Report a problem** runs the same pipeline on the turns you pick
-in a conversation, with the decisions made on a page instead of a prompt; see
+in a session, with the decisions made on a page instead of a prompt; see
 [Export and report a problem](webui.md#export-and-report-a-problem).
 
 ### Remembered redaction decisions
