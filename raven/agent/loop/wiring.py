@@ -415,13 +415,20 @@ class WiringMixin:
         from raven.agent.subagent.vendored_agents import picture_search_ready, product_secret
 
         def key_for(vendor: str) -> str:
+            # A vendor this build does not ship has no key to find; the name may
+            # come from a newer raven's manifest.
+            spec = SEARCH_PROVIDERS.get(vendor)
             return (
                 product_secret(target, f"{vendor.upper()}_API_KEY")
                 or self._live_vendor_key(vendor)
-                or os.environ.get(SEARCH_PROVIDERS[vendor].env_var, "")
+                or (os.environ.get(spec.env_var, "") if spec else "")
             )
 
-        return picture_search_ready(target, self.web_search_provider, key_for)
+        try:
+            return picture_search_ready(target, self.web_search_provider, key_for)
+        except Exception:  # noqa: BLE001 - a probe that cannot answer must refuse, not raise
+            logger.warning("Could not answer the picture-search readiness of {!r}; closing the route", target)
+            return False
 
     def _live_vendor_key(self, vendor: str) -> str:
         """One named web vendor's key the file holds now, whatever the host selected.

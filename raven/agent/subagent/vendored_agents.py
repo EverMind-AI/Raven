@@ -348,16 +348,64 @@ def product_image_pin(row_name: str, root: Path | None = None) -> tuple[str, str
     return _folder_setting(folder, "IMAGE_PROVIDER"), _folder_setting(folder, "IMAGE_MODEL")
 
 
+def _product_config(folder: Path) -> dict | None:
+    """A product folder's declared ``config.json``, or ``None`` when it does not read."""
+    try:
+        declared = json.loads((folder / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return declared if isinstance(declared, dict) else None
+
+
+def _declared_image_search(declared: dict) -> dict | None:
+    """The ``imageSearch`` object a declared config carries, from any plugin slice.
+
+    The engine parses the same keys off its own slice (``EngineConfig``:
+    ``provider`` defaults to ``"host"``, ``apiKey`` is Serper's override), so
+    this is the host-side reader of that one declaration.
+    """
+    plugins = declared.get("plugins")
+    slices = plugins.get("config") if isinstance(plugins, dict) else None
+    for section in slices.values() if isinstance(slices, dict) else ():
+        if isinstance(section, dict):
+            image_search = section.get("imageSearch")
+            if isinstance(image_search, dict):
+                return image_search
+    return None
+
+
+def product_picture_slice(row_name: str, root: Path | None = None) -> dict | None:
+    """The picture-search declaration a product's folder carries, or ``None``.
+
+    ``plugins.config.<slice>.imageSearch``, read off the folder's own
+    ``config.json`` rather than through ``raven_ppt``: the host cannot depend on
+    the optional distribution, and these are the keys the engine's config
+    parses.
+    """
+    folder = product_folder(row_name, root)
+    if folder is None:
+        return None
+    declared = _product_config(folder)
+    return None if declared is None else _declared_image_search(declared)
+
+
 def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
     """The web vendor a product's own picture search speaks, or the host's rule.
 
     Three answers. ``""``: the product keeps the host ``image_search`` tool, so it
     follows the host's vendor rule. ``"host"``: the product has its own picture
     tool, and that tool rides the host's selected vendor -- the deck engine's
-    declaration, read from ``plugins.config`` -- which also narrows it to the
-    vendors whose hits carry dimensions and a source page. A vendor name: the
-    product's own plugin is pinned to that vendor (``tools.web.search.provider``
-    in the folder's ``config.json``, Serper when it names none).
+    declaration -- which also narrows it to the vendors whose hits carry
+    dimensions and a source page. A vendor name: the product's own plugin is
+    pinned to that vendor.
+
+    The declaration is ``imageSearch`` in any ``plugins.config`` slice, read the
+    way the engine's config reads it: ``provider`` absent or ``"host"`` means
+    the host rule, any other name is a pin. A folder with no ``imageSearch``
+    object at all is the engine default, ``"host"``: its own
+    ``tools.web.search.provider`` selects the page search, not this tool, and
+    reading it here answered for a tool the engine would not build (a Tavily
+    folder read as ready while the engine fell back to a keyless Serper).
 
     Here beside :func:`product_secret` for the same reason: a route asking
     whether a lane can search pictures has to read the lane's contract, not the
@@ -367,36 +415,90 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
     folder = product_folder(row_name, root)
     if folder is None:
         return ""
-    try:
-        declared = json.loads((folder / "config.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    declared = _product_config(folder)
+    if declared is None:
         return ""
-    slices = (declared.get("plugins") or {}).get("config") or {}
-    for section in slices.values() if isinstance(slices, dict) else ():
-        if not isinstance(section, dict):
-            continue
-        image_search = section.get("imageSearch")
-        if isinstance(image_search, dict) and image_search.get("provider") == "host":
-            return "host"
-    tools = declared.get("tools") or {}
-    if "image_search" not in (tools.get("disabledTools") or []):
+    image_search = _declared_image_search(declared)
+    if image_search is not None:
+        provider = image_search.get("provider")
+        return "host" if provider in (None, "", "host") else str(provider)
+    tools = declared.get("tools")
+    tools = tools if isinstance(tools, dict) else {}
+    disabled = tools.get("disabledTools")
+    if not isinstance(disabled, list) or "image_search" not in disabled:
         return ""
-    search = (tools.get("web") or {}).get("search") or {}
-    return str(search.get("provider") or "serper")
+    return "host"
+
+
+def product_picture_slice_key(row_name: str, root: Path | None = None) -> str:
+    """The deck slice's own Serper key, the override the engine reads first."""
+    image_search = product_picture_slice(row_name, root)
+    key = image_search.get("apiKey") if image_search is not None else None
+    return key if isinstance(key, str) else ""
+
+
+def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool, str]:
+    """The picture vendor a routed lane would use, whether it has a key, and why.
+
+    The vendor is the effective one, modelled on the deck engine's own
+    resolution (``EngineConfig.image_search_vendor`` and ``Plugin.image_search``):
+    a lane keeping the host ``image_search`` tool follows that tool's rule
+    (Tavily included), a lane declaring ``"host"`` follows the deck rule, and a
+    lane pinned to a vendor answers with that vendor while the lane's key
+    resolves and with the host rule otherwise.
+
+    The reason explains a fallback the settings page has to word differently:
+    ``ok`` when the vendor answering is the one the lane is configured to use,
+    ``fallback_no_key`` when the selected search vendor has a picture surface
+    but no key, ``no_surface`` when the selected vendor has none, and
+    ``not_ready`` when no vendor resolves at all.
+    """
+    from raven.agent.tools.web import (
+        IMAGE_SEARCH_VENDORS,
+        PPT_IMAGE_SEARCH_VENDORS,
+        image_search_vendor,
+        ppt_image_vendor,
+    )
+
+    slice_key = product_picture_slice_key(target)
+
+    def key(vendor: str) -> str:
+        if vendor == "serper" and slice_key:
+            return slice_key
+        return key_for(vendor) or ""
+
+    declared = product_picture_vendor(target)
+    pinned = False
+    if declared == "host":
+        surface = PPT_IMAGE_SEARCH_VENDORS
+        vendor = ppt_image_vendor(host_vendor, key)
+    elif declared:
+        surface = PPT_IMAGE_SEARCH_VENDORS
+        keyed = bool(key(declared))
+        if declared not in PPT_IMAGE_SEARCH_VENDORS:
+            # A pin the engine's config refuses casts its fail-closed sentinel:
+            # the whole slice declines, so no picture tool is registered.
+            return "", False, "not_ready"
+        pinned = keyed
+        vendor = declared if keyed else ppt_image_vendor(host_vendor, key)
+    else:
+        surface = IMAGE_SEARCH_VENDORS
+        vendor = image_search_vendor(host_vendor, key)
+
+    ready = bool(vendor and key(vendor))
+    if not ready:
+        return vendor, False, "not_ready"
+    if pinned or vendor == host_vendor:
+        return vendor, True, "ok"
+    if host_vendor not in surface:
+        return vendor, True, "no_surface"
+    return vendor, True, "fallback_no_key"
 
 
 def picture_search_status(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool]:
     """The vendor a routed lane would use for pictures, and whether it has a key."""
-    from raven.agent.tools.web import image_search_vendor, ppt_image_vendor
-
-    declared = product_picture_vendor(target)
-    if declared == "host":
-        vendor = ppt_image_vendor(host_vendor, key_for)
-    elif declared:
-        vendor = declared
-    else:
-        vendor = image_search_vendor(host_vendor, key_for)
-    return vendor, bool(vendor and key_for(vendor))
+    vendor, ready, _reason = picture_search_report(target, host_vendor, key_for)
+    return vendor, ready
 
 
 def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str], str]) -> bool:

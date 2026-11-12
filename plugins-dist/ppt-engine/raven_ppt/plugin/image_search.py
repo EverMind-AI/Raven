@@ -13,7 +13,7 @@ size nobody reported, so such a hit is dropped rather than offered.
 
 from __future__ import annotations
 
-from raven.agent.tools.web import IMAGE_MAX_QUERIES, ImageSearchTool
+from raven.agent.tools.web import IMAGE_MAX_QUERIES, PPT_IMAGE_SEARCH_VENDORS, ImageSearchTool
 
 MAX_QUERIES = IMAGE_MAX_QUERIES
 
@@ -40,6 +40,13 @@ class PptImageSearchTool(ImageSearchTool):
         proxy: str | None = None,
         provider: str = "serper",
     ) -> None:
+        # Tavily belongs to the host `image_search`: its hits carry neither
+        # dimensions nor a source page, so a deck tool built on it would drop
+        # every result.
+        if provider not in PPT_IMAGE_SEARCH_VENDORS:
+            raise ValueError(
+                f"unknown ppt_image_search provider {provider!r}; one of {sorted(PPT_IMAGE_SEARCH_VENDORS)}"
+            )
         super().__init__(
             api_key=api_key,
             max_results=max_results,

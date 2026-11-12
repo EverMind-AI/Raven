@@ -63,6 +63,10 @@ def grounded(launcher, tmp_path, monkeypatch):
         "PPT_MODEL",
         "PPT_API_BASE",
         "PPT_SERPER_API_KEY",
+        "PPT_SERPAPI_API_KEY",
+        "PPT_BRAVE_API_KEY",
+        "PPT_FIRECRAWL_API_KEY",
+        "PPT_SERPLY_API_KEY",
         "PPT_JINA_API_KEY",
         "PPT_IMAGE_API_KEY",
         "PPT_IMAGE_API_BASE",
@@ -1568,6 +1572,38 @@ def test_the_serper_key_reaches_both_search_consumers(grounded, tmp_path, monkey
     data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
     assert data["tools"]["web"]["search"]["apiKey"] == "sk-serper"
     assert data["plugins"]["config"]["ppt-engine"]["imageSearch"]["apiKey"] == "sk-serper"
+
+
+def test_a_lane_key_for_another_deck_vendor_reaches_the_vendor_slot(grounded, tmp_path, monkeypatch):
+    """Readiness accepts the lane's own `<PREFIX>_<VENDOR>_API_KEY` for every
+    deck picture vendor. The render has to put that key where the engine's
+    `image_search` reads it -- the vendor slot -- or the route opens on a key
+    the deck cannot see."""
+    monkeypatch.setenv("PPT_SERPAPI_API_KEY", "sk-serpapi")
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-serpapi"
+
+
+def test_a_lane_key_outranks_the_hosts_slot_for_the_same_vendor(grounded, tmp_path, monkeypatch):
+    monkeypatch.setenv("PPT_SERPAPI_API_KEY", "sk-lane-serpapi")
+    _host(tmp_path, {"providers": {"serpapi": {"apiKey": "host-serpapi"}}})
+    data = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text())
+
+    assert data["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-lane-serpapi"
+
+
+def test_a_lane_key_reaches_the_vendor_slot_under_a_raven_without_the_helper(grounded, monkeypatch):
+    """The deck key is written before the shared policy runs, so a stamped
+    launcher on a raven that predates the helper still carries it."""
+    monkeypatch.delattr(grounded.render, "inherit_web_vendors")
+    monkeypatch.setenv("PPT_SERPAPI_API_KEY", "sk-lane-serpapi")
+    config = {"tools": {"web": {}}}
+    host = {"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "sk-host-tavily"}}}}}
+
+    grounded.inherit_web_vendors(config, host)
+
+    assert config["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-lane-serpapi"
 
 
 def test_a_web_proxy_reaches_both_tool_families(grounded, tmp_path):

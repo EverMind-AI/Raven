@@ -307,6 +307,76 @@ async def test_a_route_reports_whether_the_picture_search_it_needs_is_ready(tmp_
     assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": True}]
 
 
+def _unknown_vendor_route(tmp_path: Path, monkeypatch) -> None:
+    """A deck folder pinning a vendor this build does not ship, routed to."""
+    root = tmp_path / "agents"
+    folder = root / "raven-deck"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Deck", "kind": "acp", "description": "builds decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "google"}}}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "google"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Raven-Design",
+                            "kind": "acp",
+                            "command": "x",
+                            "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                        }
+                    ]
+                },
+                "tools": {"web": {"search": {"provider": "serper"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: root)
+    for name in ("SERPER_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+async def test_a_route_to_a_lane_naming_an_unknown_vendor_still_lists(tmp_path: Path, monkeypatch) -> None:
+    """A folder written by a newer raven, or by hand, may name a vendor this
+    build does not ship. An unknown name answers "not ready"; it must not take
+    the roster -- the page routes are read from -- down with it."""
+    _unknown_vendor_route(tmp_path, monkeypatch)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": False}]
+
+
+async def test_a_probe_that_cannot_answer_leaves_the_route_unknown(tmp_path: Path, monkeypatch) -> None:
+    """An answer this build cannot produce is reported as unknown, not as a
+    refusal: the roster still renders, and nothing claims the route is closed."""
+    _unknown_vendor_route(tmp_path, monkeypatch)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.picture_search_ready", explode)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
 def test_routes_payload_reads_a_dict_route_and_no_host() -> None:
     """The manifest's routes reach this helper as models in production, but a
     hand-built row may hand it dicts; with no readable host the readiness is

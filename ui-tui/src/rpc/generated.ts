@@ -5993,9 +5993,13 @@ export interface SettingsGetResult {
     vendor: string;
     ready: boolean;
     /**
-     * True when a keyed vendor other than the selected search vendor is what answered, so the page can say deck generation will fall back to it.
+     * True when the deck could not use the selected search vendor and a keyed fallback vendor answers instead, so the page can say deck generation will fall back to it. A deck pinned to its own vendor is not a fallback.
      */
     fallback: boolean;
+    /**
+     * Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key, `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.
+     */
+    reason?: 'ok' | 'fallback_no_key' | 'no_surface' | 'not_ready';
   };
 }
 /**
