@@ -163,7 +163,7 @@ export interface ApprovalReq {
      when there is none, and then the sheet offers no such choice. */
   suggestedPattern?: string
   /* The prompt's view, as the engine sent it: the layout (`shell.exec`,
-     `file.write`, `mcp.call`, `config.change`, `unknown`), the shell command family that words
+     `file.write`, `mcp.call`, `config.change`, `sandbox.network`, `unknown`), the shell command family that words
      it, who is asking, and the tool's own account of the call. */
   kind?: string
   family?: string

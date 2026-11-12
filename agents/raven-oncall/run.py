@@ -237,8 +237,9 @@ def apply_approval_policy(config: dict, flow_slice: dict, host: dict, workspace:
     Most of this product's turns are wakes it scheduled itself, where the trunk
     gate has no one to ask and refuses -- which once refused the call that
     schedules the next wake. So the trunk gate is rendered at ``full``, where
-    only builtin denials and the host's deny rules (carried by
-    ``inherit_host_denials``) refuse, and ``oncall_flow.approval`` applies the
+    only builtin denials and the host's deny rules refuse (the host's rules
+    arrive with ``inherit_host_permissions``, which keeps this mode), and
+    ``oncall_flow.approval`` applies the
     mode per call. The mode is the first one set of: this slice's own
     ``approval.mode``, this product config's ``permissions.mode``, the host's
     ``permissions.mode``, then the trunk default ``smart``. It is read once,

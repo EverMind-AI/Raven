@@ -1476,8 +1476,8 @@ def test_write_rendered_carries_the_hosts_permission_set(homed):
         encoding="utf-8",
     )
     rendered = json.loads(render.write_rendered({"permissions": {"mode": "full"}}, homed).read_text())
-    # The host's set, not the product's own mode: one permission set for every agent.
-    assert rendered["permissions"] == {"tools": {"exec": {"curl *": "deny"}}}
+    # The host's rules; a mode the product states is its launcher's to keep.
+    assert rendered["permissions"] == {"mode": "full", "tools": {"exec": {"curl *": "deny"}}}
     assert rendered["tools"]["exec"]["extraDenyPatterns"] == [r"\bcurl\b"], "either host spelling is read"
 
 
@@ -1798,6 +1798,15 @@ def test_a_products_own_refusal_still_wins_over_the_hosts_set():
     render.inherit_host_permissions(config, {"permissions": _HOST_SET})
     assert config["permissions"]["mode"] == "smart"
     assert config["permissions"]["tools"]["exec"]["git push *"] == "deny"
+    assert config["permissions"]["network"] == _HOST_SET["network"]
+
+
+def test_a_mode_the_product_states_is_kept_beside_the_hosts_rules():
+    """raven-oncall renders its trunk gate at full and applies the owner's mode in a gate of its own."""
+    config = {"permissions": {"mode": "full"}}
+    render.inherit_host_permissions(config, {"permissions": _HOST_SET})
+    assert config["permissions"]["mode"] == "full"
+    assert config["permissions"]["tools"] == _HOST_SET["tools"]
     assert config["permissions"]["network"] == _HOST_SET["network"]
 
 
