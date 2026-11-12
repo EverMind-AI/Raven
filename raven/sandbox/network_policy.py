@@ -11,11 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
-    from raven.config.schema import NetworkPermissions
+    from raven.config.schema import NetworkPermissions, NetworkRule
 
 # OpenShell has no allow-any-host selector (NVIDIA/OpenShell#3856): "*", "**"
 # and two-label wildcards are rejected, hostless allowed_ips endpoints do not
@@ -104,6 +105,32 @@ class NetworkGrant(NamedTuple):
     binary: str
     host: str
     port: int
+
+
+def _host_pattern(host: str) -> re.Pattern[str]:
+    # OpenShell's host wildcards: "*" is one label, "**" one label or more.
+    labels = [{"*": r"[^.]+", "**": r"[^.]+(?:\.[^.]+)*"}.get(label, re.escape(label)) for label in host.split(".")]
+    return re.compile(r"\.".join(labels))
+
+
+def refusing_rule(network: NetworkPermissions, binary: str, host: str, port: int | None) -> NetworkRule | None:
+    """The user's deny rule that refuses ``binary`` reaching ``host:port``; None when no rule does.
+
+    A deny rule with no ports refuses every port, and one with no program
+    refuses every program: what it names is a host the user does not want
+    reached, and the open set already drops a denied host on every port.
+    """
+    host = host.lower()
+    for rule in network.rules:
+        if rule.tier != "deny":
+            continue
+        if rule.ports and port not in rule.ports:
+            continue
+        if rule.binary and rule.binary != binary:
+            continue
+        if _host_pattern(rule.host).fullmatch(host):
+            return rule
+    return None
 
 
 def _digest(*parts: Any) -> str:

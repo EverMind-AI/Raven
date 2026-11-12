@@ -107,6 +107,10 @@ class PermissionGate:
         self._judge_provider_for = judge_provider_for
         self._allow_ask = allow_ask
 
+    def permissions(self) -> PermissionsConfig:
+        """The permission set this gate decides by, read now."""
+        return self._config_source()
+
     async def check(self, tool_name: str, params: dict[str, Any]) -> Decision:
         """The waterfall: builtin deny, user deny, user
         allow, then the mode's reading of the ask tier."""

@@ -126,3 +126,27 @@ def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(caplog):
         compile_network_policy(network)
     warnings = [r.getMessage() for r in caplog.records if "evil.example.com" in r.getMessage()]
     assert len(warnings) == 1
+
+
+@pytest.mark.parametrize(
+    ("rule", "target", "refuses"),
+    [
+        (NetworkRule(host="example.com", tier="deny"), ("/usr/bin/curl", "example.com", 443), True),
+        (NetworkRule(host="example.com", tier="deny"), ("/usr/bin/curl", "example.com", 2222), True),
+        (NetworkRule(host="example.com", ports=[22], tier="deny"), ("/usr/bin/curl", "example.com", 443), False),
+        (
+            NetworkRule(host="example.com", binary="/usr/bin/git", tier="deny"),
+            ("/usr/bin/curl", "example.com", 443),
+            False,
+        ),
+        (NetworkRule(host="*.example.com", tier="deny"), ("/usr/bin/curl", "api.example.com", 443), True),
+        (NetworkRule(host="*.example.com", tier="deny"), ("/usr/bin/curl", "a.b.example.com", 443), False),
+        (NetworkRule(host="**.example.com", tier="deny"), ("/usr/bin/curl", "a.b.example.com", 443), True),
+        (NetworkRule(host="example.com"), ("/usr/bin/curl", "example.com", 443), False),
+        (NetworkRule(host="example.com", tier="deny"), ("/usr/bin/curl", "EXAMPLE.com", 443), True),
+    ],
+)
+def test_a_deny_rule_refuses_by_host_port_and_program(rule, target, refuses):
+    from raven.sandbox.network_policy import refusing_rule
+
+    assert (refusing_rule(NetworkPermissions(rules=[rule]), *target) is not None) is refuses
