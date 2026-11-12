@@ -41,3 +41,23 @@ async def test_no_denials_leave_the_output_unchanged():
     turn = start_permission_turn(None, conversation_id="c", turn_id="t")
     assert await handle_denials(None, [], command="true") == ""
     assert turn.refusals == []
+
+
+async def test_a_flood_of_denials_names_ten_and_counts_the_rest():
+    turn = start_permission_turn(None, conversation_id="c", turn_id="t")
+    flood = [NetworkDenial("/usr/bin/curl", f"h{i}.example.com", 443, "x") for i in range(50)]
+    text = await handle_denials(None, flood, command="for h in ...; do curl $h; done")
+    assert "h9.example.com:443" in text and "h10.example.com" not in text
+    assert "and 40 more" in text
+    assert len(text) < 2500
+    assert len(turn.refusals) == 11
+    assert turn.refusals[-1].action == "and 40 more blocked targets"
+
+
+async def test_a_long_target_line_is_shortened():
+    turn = start_permission_turn(None, conversation_id="c", turn_id="t")
+    long_host = "a" * 60 + "." + "b" * 60 + "." + "c" * 60 + ".example.com"
+    text = await handle_denials(None, [NetworkDenial("/usr/bin/curl", long_host, 443, "x")], command="curl")
+    (refusal,) = turn.refusals
+    assert len(refusal.action) <= 160 and refusal.action.endswith("...")
+    assert refusal.action in text
