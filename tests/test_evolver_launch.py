@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -220,6 +221,62 @@ class TestWhitelistValidation:
         repo, sha = subject_repo
         with pytest.raises(ValueError, match="empty"):
             validate_whitelist(repo, sha, ())
+
+    def test_git_timeout_refuses(self, subject_repo, monkeypatch):
+        repo, sha = subject_repo
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr("evolver.launch.contract.run_capture", boom)
+        with pytest.raises(ValueError, match="timed out"):
+            validate_whitelist(repo, sha, ("raven/agent/",))
+
+
+class TestLaunchTimeouts:
+    def test_resolve_head_wraps_a_timeout(self, tmp_path, monkeypatch):
+        from evolver.launch import config as config_mod
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(config_mod, "run_capture", boom)
+        with pytest.raises(RunSpecError, match="timed out"):
+            config_mod._resolve_head(tmp_path)
+
+    def test_note_defaulted_base_survives_a_status_timeout(self, tmp_path, monkeypatch):
+        from evolver.launch import runner
+
+        said: list[str] = []
+        monkeypatch.setattr(runner, "_say", said.append)
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(runner.git_ops, "run_capture", boom)
+        runner._note_defaulted_base(SimpleNamespace(repo_root=tmp_path, base_sha="a" * 40, base_sha_defaulted=True))
+
+        assert any("skipping the uncommitted-changes probe" in msg for msg in said)
+        assert any("timed out" in msg for msg in said)
+
+    def test_claim_ephemeral_root_survives_a_prune_timeout(self, tmp_path, monkeypatch):
+        from evolver.launch import runner
+
+        work_dir = tmp_path / "work"
+        (work_dir / "tmp").mkdir(parents=True)
+        said: list[str] = []
+        monkeypatch.setattr(runner, "_say", said.append)
+        claimed: list = []
+        monkeypatch.setattr(runner.git_ops, "set_ephemeral_root", claimed.append)
+
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(runner.git_ops, "run_capture", boom)
+        runner._claim_ephemeral_root(SimpleNamespace(repo_root=tmp_path, work_dir=work_dir))
+
+        assert claimed == [work_dir / "tmp"]
+        assert any("stale worktrees may remain" in msg for msg in said)
 
 
 class TestAppWorldEntry:
