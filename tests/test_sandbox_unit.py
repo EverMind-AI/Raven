@@ -174,6 +174,12 @@ class TestSandboxConfigValidators:
         assert config.backend == "openshell"
         assert not hasattr(config, "debug") and not hasattr(config, "disk_size_gb")
 
+    def test_a_block_that_is_not_a_mapping_is_left_to_the_model_to_refuse(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            SandboxConfig.model_validate(["openshell"])
+
     def test_a_star_entry_is_a_valid_allowlist(self):
         assert SandboxConfig(allow_net=["*", "example.com"]).allow_net == ["*", "example.com"]
 

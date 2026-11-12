@@ -457,3 +457,20 @@ def test_refused_workdir_is_not_created(tmp_path, monkeypatch) -> None:
     with pytest.raises(ValueError, match="outside the sandbox mount"):
         loop.session_workdir("web:abc")
     assert not outside.exists()
+
+
+async def test_closing_the_executor_gives_up_on_slow_sandbox_deletes(monkeypatch) -> None:
+    """Deletions run in the background; teardown waits only its budget for them."""
+    import asyncio
+
+    from raven.sandbox import openshell_executor as ox
+
+    started = asyncio.Event()
+
+    async def never_drains() -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(ox, "drain_pending_deletes", never_drains)
+    await asyncio.wait_for(AgentLoop._drain_sandbox_deletes(budget_s=0.05), 2)
+    assert started.is_set()
