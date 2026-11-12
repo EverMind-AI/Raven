@@ -362,16 +362,16 @@ def _compiles(pattern: str) -> bool:
     return True
 
 
-def inherit_host_permissions(config: dict, host: dict) -> None:
+def inherit_host_permissions(config: dict, host: dict, *, keep_own_mode: bool = False) -> None:
     """Run a product under the host's one permission set, and in the host's sandbox where one can run.
 
     The user perceives one permission set: the mode, the tool rules and the
     network rules a product's own gate reads are the host's, so a product
-    asks about what the host asks about and grants what it grants. A product
-    that states a mode of its own keeps it (its launcher applies the owner's
-    mode another way), one that brings refusals of its own keeps them on top,
-    since a refusal always wins, and the host's extra deny patterns reach it
-    as before
+    asks about what the host asks about and grants what it grants. A product's
+    own mode gives way to the host's unless its launcher asks to keep it
+    (``keep_own_mode``) because it applies the owner's mode another way. A
+    product that brings refusals of its own keeps them on top, since a refusal
+    always wins, and the host's extra deny patterns reach it as before
     (:func:`inherit_host_denials`). The host's file is read the way its own
     loader reads it, an unpersisted ``tools.sandbox.allowNet`` included.
 
@@ -389,11 +389,11 @@ def inherit_host_permissions(config: dict, host: dict) -> None:
     if isinstance(host_permissions, dict):
         config["permissions"] = copy.deepcopy(host_permissions)
         if isinstance(own, dict):
-            # A mode the product states is its launcher's choice of how the
-            # owner's mode is applied: raven-oncall renders its trunk gate at
-            # full and applies the owner's mode, read from the host, in a gate
-            # of its own. Overriding it would refuse the wakes nobody attends.
-            if "mode" in own:
+            # Only on the launcher's word: raven-oncall renders its trunk gate
+            # at full and applies the owner's mode, read from the host, in a
+            # gate of its own, and the host's mode there would refuse the wakes
+            # nobody attends. A product config alone cannot widen the mode.
+            if keep_own_mode and "mode" in own:
                 config["permissions"]["mode"] = own["mode"]
             inherit_host_denials(config, {"permissions": own})
     host_tools = host.get("tools")
@@ -1024,7 +1024,7 @@ def sweep_stale_renders(root: Path) -> None:
             stale.unlink(missing_ok=True)
 
 
-def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
+def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = (), keep_own_mode: bool = False) -> Path:
     """Write the rendered config under ``root``, owner-only on POSIX, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
@@ -1039,10 +1039,11 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     launcher: every product render ends in this call, so a launcher cannot
     write a config that forgot them. ``own_plugins`` is the product's engine,
     which the opt-outs leave alone; a launcher that names none inherits them
-    all.
+    all. ``keep_own_mode`` is for a launcher that applies the owner's mode in a
+    gate of its own (:func:`inherit_host_permissions`).
     """
     host = host_config()
-    inherit_host_permissions(config, host)
+    inherit_host_permissions(config, host, keep_own_mode=keep_own_mode)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
     inherit_memory_backend(config, host)
     return _write_owner_only(config, root / f".config.rendered.{os.getpid()}.json")
