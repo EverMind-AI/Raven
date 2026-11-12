@@ -66,6 +66,12 @@ def test_min_iterations_does_not_count_an_empty_trajectory():
 
 
 @pytest.mark.parametrize("kind", sorted(_THRESHOLD_KINDS))
+def test_evaluate_spec_rejects_a_hand_built_spec_without_a_threshold(kind: str):
+    with pytest.raises(ValueError, match="requires 'threshold'"):
+        evaluate_spec(ActivationSpec(kind=kind, raw={}), [[]])
+
+
+@pytest.mark.parametrize("kind", sorted(_THRESHOLD_KINDS))
 @pytest.mark.parametrize("threshold", [0, -1])
 def test_evaluate_spec_rechecks_a_hand_built_or_mutated_spec(kind: str, threshold: int):
     hand_built = ActivationSpec(kind=kind, raw={"threshold": threshold})
