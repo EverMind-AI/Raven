@@ -203,6 +203,7 @@ class TestBuildExecutor:
         assert isinstance(e, DirectExecutor)
 
     def test_backend_openshell_builds_an_openshell_executor_from_the_config(self, tmp_path):
+        pytest.importorskip("openshell")
         owned: set[str] = set()
         cfg = SandboxConfig(
             backend="openshell",
@@ -228,6 +229,7 @@ class TestBuildExecutor:
         ]
 
     def test_a_retired_backend_name_still_builds_the_openshell_executor(self, tmp_path):
+        pytest.importorskip("openshell")
         cfg = SandboxConfig.model_validate({"backend": "boxlite"})
         assert isinstance(build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir), OpenShellExecutor)
 
@@ -250,6 +252,8 @@ class TestBuildExecutor:
     @pytest.mark.parametrize("backend", ["none", "openshell"])
     def test_no_backend_resolves_a_local_state_dir(self, tmp_path, backend):
         """Resolving one creates it, and neither backend keeps local state."""
+        if backend == "openshell":
+            pytest.importorskip("openshell")
         asked: list[str] = []
 
         def _resolver(name: str) -> Path:
