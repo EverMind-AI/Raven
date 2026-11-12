@@ -172,3 +172,14 @@ async def test_more_targets_than_one_prompt_holds_are_escalated_unread() -> None
     provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "allow"})]))
     outcome = await review_network(provider, targets=[_PIP] * 11, command="pip install a b c")
     assert outcome.allow is False and provider.messages == []
+
+
+@pytest.mark.asyncio
+async def test_a_long_program_path_cannot_cut_the_address_out_of_a_target() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "escalate"})]))
+    deep = "/" + "/".join(["very-long-directory-name"] * 20) + "/curl"
+    target = {"binary": deep, "host": "exfil.example.net", "port": 8443, "reason": "r" * 500}
+    await review_network(provider, targets=[target], command="curl")
+    user = provider.messages[1]["content"]
+    assert "-> exfil.example.net:8443" in user
+    assert deep[-60:] in user
