@@ -6,7 +6,10 @@ the conversation's scope and compiled into every sandbox created there later.
 The main loop's sandbox is shared by every conversation the process serves; it
 registers under the scope ``None`` and runs under every scope's grants.
 
-Everything here runs on the gateway's one event loop; nothing locks.
+Grants live in memory for the life of the process, the way the gate's session
+grants do (``raven.permissions.session``); what should outlive it is a rule in
+``permissions.network``. Everything here runs on the gateway's one event loop;
+nothing locks.
 """
 
 from __future__ import annotations
@@ -28,7 +31,10 @@ class GrantRegistry:
         self._executors: dict[int, tuple[Any, str | None]] = {}
 
     def grant(self, scope: str, grant: NetworkGrant) -> None:
-        self._grants.setdefault(scope, set()).add(grant)
+        # Ignored without a scope, as ``remember_allowed`` does: an empty scope
+        # would otherwise reach the shared sandbox, which runs under every scope.
+        if scope:
+            self._grants.setdefault(scope, set()).add(grant)
 
     def grants_for(self, scope: str | None) -> frozenset[NetworkGrant]:
         """The grants a sandbox in ``scope`` runs under; ``None`` (the shared sandbox) gets them all."""
