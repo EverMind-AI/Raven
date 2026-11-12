@@ -396,7 +396,10 @@ def test_the_digest_follows_the_sessions_mode_not_the_base_config(tmp_path):
 def test_the_digest_sees_the_page_up_to_the_configured_cap(tmp_path):
     """Everything past the cap is invisible to the digest and so to the turn:
     a profile that reads long pages has to be able to move it, and the default
-    has to be the class default rather than a number frozen in the closure."""
+    has to be the class default rather than a number frozen in the closure.
+
+    Under map-reduce the cap is the total across the chunks, which is what the sum
+    below counts: no single call carries the whole page any more."""
     import asyncio
     from types import SimpleNamespace
 
@@ -417,12 +420,16 @@ def test_the_digest_sees_the_page_up_to_the_configured_cap(tmp_path):
         root.mkdir()
         ctx = _ctx(root, {"enabled": True, "digest": digest, **_NO_LLM_GATES}, provider=_Provider())
         tool = make_web_fetch(ctx)
-        page = "x" * 300_000
+        # 'q', not 'x': the extractor prompt wraps every chunk and carries its own
+        # x's ("extraction", "exactly"), which a page of x's would count as page.
+        page = "q" * 1_500_000
         asyncio.run(tool._try_digest(page, "the founding date", "https://a.example/one"))
-        return sent.pop().count("x")
+        read = sum(call.count("q") for call in sent)
+        sent.clear()
+        return read
 
     assert digest_with(1000) == 1000
-    assert digest_with(None) == DigestConfig().source_cap_chars == 200_000
+    assert digest_with(None) == DigestConfig().source_cap_chars == 1_000_000
 
 
 def test_a_keyless_search_tool_is_not_contributed(tmp_path, monkeypatch):

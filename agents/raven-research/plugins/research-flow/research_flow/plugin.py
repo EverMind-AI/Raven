@@ -23,7 +23,11 @@ vendor, key and proxy keys above are not consulted).
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import re
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -32,7 +36,7 @@ from loguru import logger
 
 from research_flow.config import DigestConfig, FlowConfig, ModelEndpointConfig
 from research_flow.flow import ResearchFlowHook, SessionGear, ToolHandles, evidence_round_for, saturation_for
-from research_flow.prompts import _DIGEST_SYSTEM
+from research_flow.prompts import _DIGEST_SYSTEM, _EXTRACT_SYSTEM, _INCREMENTAL_EXTRACTOR
 from research_flow.state import SessionStore
 from research_flow.support.answer_text import visible_answer
 from research_flow.support.guard_audit import set_audit_dir
@@ -61,48 +65,262 @@ if TYPE_CHECKING:
 _DEFAULT_MAX_ITERATIONS = 40
 
 
+_FENCED_JSON = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+_D = DigestConfig.model_fields
+
+
+def _split_by_chars(text: str, max_chars: int) -> list[str]:
+    """HyWe's ``_split_text_by_chars``: cut at the last paragraph, line or space break.
+
+    Ported rather than imported, and denominated in characters rather than tokens,
+    because this flow carries no tokenizer (``DigestConfig.chunk_chars`` says what the
+    two denominations are worth to each other). A break counts only in the window's
+    second half, so a page with no whitespace still advances a whole chunk instead of
+    crawling forward a character at a time.
+    """
+    if max_chars <= 0 or len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    start, length = 0, len(text)
+    while start < length:
+        end = min(start + max_chars, length)
+        if end < length:
+            split_at = text.rfind("\n\n", start, end)
+            if split_at <= start + max_chars // 2:
+                split_at = text.rfind("\n", start, end)
+            if split_at <= start + max_chars // 2:
+                split_at = text.rfind(" ", start, end)
+            if split_at > start:
+                end = split_at
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end
+        while start < length and text[start].isspace():
+            start += 1
+    return chunks or [text[:max_chars]]
+
+
+def _parsed_json(raw: str) -> "dict[str, Any] | None":
+    """HyWe's ``_parse_json_output``: a fenced block first, then the whole reply."""
+    if not raw:
+        return None
+    candidates = [raw.strip()]
+    if fenced := _FENCED_JSON.search(raw):
+        candidates.insert(0, fenced.group(1).strip())
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except Exception:
+            continue
+        return value if isinstance(value, dict) else None
+    return None
+
+
+def _field_text(value: Any) -> str:
+    """HyWe's ``_stringify_summary_field``: a list becomes lines, a dict its own JSON."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return "\n".join(t for t in (_field_text(v) for v in value) if t).strip()
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2).strip()
+        except Exception:
+            return str(value).strip()
+    return str(value).strip()
+
+
+def _carried(parsed: "dict[str, Any] | None", raw: str) -> str:
+    """What the next chunk is shown as ``existing_summary`` (HyWe's accumulator).
+
+    The reply's own JSON when it parsed, its raw text when it did not: a chunk whose
+    output the next call cannot read would otherwise drop everything read so far.
+    """
+    if isinstance(parsed, dict):
+        sections = []
+        if evidence := _field_text(parsed.get("evidence")):
+            sections.append(f"Evidence:\n{evidence}")
+        if summary := _field_text(parsed.get("summary")):
+            sections.append(f"Summary:\n{summary}")
+        if sections:
+            return "\n\n".join(sections).strip()
+    return (raw or "").strip()
+
+
+def _assembled(parsed: "dict[str, Any] | None", raw: str, notes: "list[str]") -> str:
+    """The last chunk's extraction as the model reads it, HyWe's section order.
+
+    Without HyWe's ``The useful information in '<url>' for user goal '<goal>'`` header:
+    the fetch result is a JSON envelope that already carries ``url`` and
+    ``info_to_extract``, so the header would repeat them inside the one field the
+    model is meant to read as page content.
+    """
+    note = " ".join(n for n in notes if n)
+    if isinstance(parsed, dict):
+        parts = []
+        if evidence := _field_text(parsed.get("evidence")):
+            parts.append(f"Evidence in page:\n{evidence}")
+        if summary := _field_text(parsed.get("summary")):
+            parts.append(f"Summary:\n{summary}")
+        if parts:
+            body = "\n\n".join(parts)
+            return f"{body}\n\nNote:\n{note}" if note else body
+    body = (raw or "").strip()
+    if not note:
+        return body
+    return f"Note:\n{note}\n\n{body}" if body else f"Note:\n{note}"
+
+
+def _answer(response: Any) -> str:
+    """The reply's visible text, with an exhausted retry ladder raised, not read.
+
+    ``chat_with_retry`` does not raise when its ladder runs out: it returns
+    ``finish_reason == "error"`` carrying the provider's error text as the content.
+    Read as an extraction, that text becomes the page the model is shown, and the
+    documented fallback to truncation never fires because nothing raised.
+    """
+    if getattr(response, "finish_reason", None) == "error":
+        raise RuntimeError(f"digest call failed: {getattr(response, 'content', '')}"[:300])
+    # visible_answer, not a paired-tag regex: unless ``digest.model`` names another
+    # endpoint, the digest model is the same served student, whose template prefills
+    # the opening tag, so its reply is "reasoning</think>extraction" with no opener. A
+    # paired regex matches nothing there and the whole chain of thought was being
+    # appended to the tool result and persisted into the trajectory.
+    return visible_answer(getattr(response, "content", None)) or ""
+
+
 def _make_digest_fn(
     provider: "LLMProvider",
     model: str | None,
     verbatim_head_chars: int = 0,
     *,
-    source_cap_chars: int = DigestConfig.model_fields["source_cap_chars"].default,
+    source_cap_chars: int = _D["source_cap_chars"].default,
+    map_reduce: bool = _D["map_reduce"].default,
+    chunk_chars: int = _D["chunk_chars"].default,
+    max_chunks: int = _D["max_chunks"].default,
+    per_call_timeout_s: float = _D["timeout_seconds"].default,
+    total_timeout_s: float = _D["total_timeout_seconds"].default,
     resolve: "Callable[[], tuple[str | None, int]] | None" = None,
 ):
     """The fork's digest closure: targeted extraction for web_fetch.
+
+    Under ``map_reduce`` the page is read in ``chunk_chars`` pieces and the extraction
+    rolls forward from one to the next (HyWe's ``INCREMENTAL_EXTRACTOR_PROMPT``, same
+    prompt, same section order), so the tail of a long page reaches the model instead
+    of falling off ``source_cap_chars``. Off, the single call on a truncated page that
+    every run before 2026-11-12 made.
 
     ``resolve`` is what makes the digest follow the session's mode. The fetch
     tool is built once from the base config, but a mode overlay may move
     ``digest.model`` / ``digest.verbatimHeadChars``; when given, ``resolve()`` is
     consulted per call and returns the pair in force for the current session,
-    falling back to the base values handed in here. The threshold, the timeout
-    and ``source_cap_chars`` stay the tool's constructor arguments and
-    therefore the base config's.
+    falling back to the base values handed in here. The threshold, the timeouts and
+    the chunking stay the tool's constructor arguments and therefore the base
+    config's.
     """
 
-    async def digest(text: str, info_to_extract: str) -> str:
-        use_model, use_head = (model, verbatim_head_chars) if resolve is None else resolve()
-        response = await provider.chat_with_retry(
-            messages=[
-                {"role": "system", "content": _DIGEST_SYSTEM},
-                {
-                    "role": "user",
-                    "content": (f"Information needed: {info_to_extract}\n\nPage content:\n{text[:source_cap_chars]}"),
-                },
-            ],
-            model=use_model,
-            temperature=0.1,
-        )
-        # visible_answer, not a paired-tag regex: unless ``digest.model`` names another
-        # endpoint, the digest model is the same served student, whose template
-        # prefills the opening tag, so its reply is
-        # "reasoning</think>extraction" with no opener. A paired regex matches nothing
-        # there and the whole chain of thought was being appended to the tool result and
-        # persisted into the trajectory.
-        digested = visible_answer(getattr(response, "content", None))
+    def _with_head(digested: str | None, text: str, use_head: int) -> str | None:
         if digested and use_head > 0:
-            digested = f"{digested}\n\n[page head, verbatim]\n{text[:use_head]}"
+            return f"{digested}\n\n[page head, verbatim]\n{text[:use_head]}"
         return digested
+
+    async def _extract(prompt: str, use_model: str | None, timeout: float) -> str:
+        # No max_tokens, where HyWe caps its summariser at 4000: unless ``digest.model``
+        # names another endpoint this is the served student, whose reasoning is billed
+        # against the same cap, and a cap that cuts inside the reasoning returns nothing.
+        response = await asyncio.wait_for(
+            provider.chat_with_retry(
+                messages=[
+                    {"role": "system", "content": _EXTRACT_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                model=use_model,
+                temperature=0.0,
+            ),
+            timeout=timeout,
+        )
+        return _answer(response)
+
+    async def digest(text: str, info_to_extract: str) -> str | None:
+        use_model, use_head = (model, verbatim_head_chars) if resolve is None else resolve()
+        notes: list[str] = []
+        source = text
+        if len(source) > source_cap_chars:
+            notes.append(f"Reader output was capped at {source_cap_chars} of {len(text)} characters.")
+            source = source[:source_cap_chars]
+
+        if not map_reduce:
+            response = await provider.chat_with_retry(
+                messages=[
+                    {"role": "system", "content": _DIGEST_SYSTEM},
+                    {
+                        "role": "user",
+                        "content": (f"Information needed: {info_to_extract}\n\nPage content:\n{source}"),
+                    },
+                ],
+                model=use_model,
+                temperature=0.1,
+            )
+            return _with_head(_answer(response), text, use_head)
+
+        chunks = _split_by_chars(source, chunk_chars)
+        if len(chunks) > max_chunks:
+            read = sum(len(c) for c in chunks[:max_chunks])
+            chunks = chunks[:max_chunks]
+            notes.append(f"Only the first {max_chunks} chunks ({read} characters) were read.")
+        if len(chunks) > 1:
+            notes.append(
+                f"Webpage content summarized incrementally in {len(chunks)} chunks of up to {chunk_chars} characters."
+            )
+
+        carried, raw, parsed = "", "", None
+        deadline = time.monotonic() + total_timeout_s
+        for index, chunk in enumerate(chunks, 1):
+            left = deadline - time.monotonic()
+            if index > 1 and left <= 0:
+                notes.append(f"Extraction stopped after chunk {index - 1} of {len(chunks)} on its time budget.")
+                break
+            prompt = _INCREMENTAL_EXTRACTOR.format(
+                existing_summary=carried,
+                webpage_content=chunk,
+                goal=info_to_extract,
+                chunk_index=index,
+                chunk_count=len(chunks),
+            )
+            try:
+                reply = await _extract(prompt, use_model, max(1.0, min(per_call_timeout_s, left)))
+            except Exception as e:
+                # The first chunk's failure is the whole digest's, and the tool falls
+                # back to truncation, which is where a digest that cannot run belongs.
+                # A later chunk's leaves the ones already read standing, which is
+                # strictly more of the page than truncation would have shown.
+                if index == 1:
+                    raise
+                logger.warning(
+                    "research-flow: digest chunk {}/{} failed ({}: {}); keeping the {} already read",
+                    index,
+                    len(chunks),
+                    type(e).__name__,
+                    e,
+                    index - 1,
+                )
+                notes.append(f"Extraction stopped after chunk {index - 1} of {len(chunks)}: {type(e).__name__}.")
+                break
+            if not reply.strip():
+                # HyWe would overwrite the accumulator here and lose the page. An empty
+                # reply is a call that said nothing, not a page that holds nothing.
+                logger.warning(
+                    "research-flow: digest chunk {}/{} returned nothing; keeping what was read", index, len(chunks)
+                )
+                continue
+            raw = reply
+            parsed = _parsed_json(raw)
+            carried = _carried(parsed, raw)
+
+        return _with_head(_assembled(parsed, raw, notes), text, use_head)
 
     return digest
 
@@ -331,10 +549,24 @@ class _Shared:
                             cfg.digest.model,
                             verbatim_head_chars=cfg.digest.verbatim_head_chars,
                             source_cap_chars=cfg.digest.source_cap_chars,
+                            map_reduce=cfg.digest.map_reduce,
+                            chunk_chars=cfg.digest.chunk_chars,
+                            max_chunks=cfg.digest.max_chunks,
+                            per_call_timeout_s=cfg.digest.timeout_seconds,
+                            total_timeout_s=cfg.digest.total_timeout_seconds,
                             resolve=digest_knobs,
                         ),
                         digest_threshold_chars=cfg.digest.threshold_chars,
-                        digest_timeout_s=cfg.digest.timeout_seconds,
+                        # Under map-reduce the closure budgets the page itself and
+                        # returns what it managed to read, so the tool's own deadline is
+                        # the outer one: it must catch a closure that is stuck, never cut
+                        # a page short, because a cut here drops the digest and truncates
+                        # the page at ``fetchMaxChars``.
+                        digest_timeout_s=(
+                            cfg.digest.total_timeout_seconds + 60.0
+                            if cfg.digest.map_reduce
+                            else cfg.digest.timeout_seconds
+                        ),
                     )
             if self.corpus_endpoint:
                 self._web_fetch = WebFetchTool(corpus_endpoint=self.corpus_endpoint, **kwargs)

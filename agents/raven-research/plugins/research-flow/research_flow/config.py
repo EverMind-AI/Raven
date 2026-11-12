@@ -108,23 +108,47 @@ class BenchmarkGuardConfig(_Base):
 
 
 class DigestConfig(_Base):
-    """Targeted extraction for web_fetch: long pages distilled to the request."""
+    """Targeted extraction for web_fetch: long pages distilled to the request.
+
+    Under ``mapReduce`` the page is read in chunks and the extraction rolls forward
+    from chunk to chunk, so the tail of a long page reaches the model instead of
+    falling off a cap. The shape and the prompt are HyWe's ``INCREMENTAL_EXTRACTOR``
+    (``harness/inference/hybrid_visit.py``), ported so the two harnesses' page
+    handling can be compared rather than guessed at.
+    """
 
     enabled: bool = True
     model: str | None = None
     threshold_chars: int = 8000
+    #: Per model call. Under ``mapReduce`` the whole page is bounded by
+    #: ``totalTimeoutSeconds`` instead, and this bounds one chunk's call.
     timeout_seconds: float = 120.0
     verbatim_head_chars: int = 800
-    #: How much of the page the digest model is shown. Everything past it is
-    #: invisible to the digest and therefore to the turn, so the cap is a
-    #: retrieval ceiling, not a cost knob only. Denominated in characters
-    #: because the flow has no tokenizer and the digest model is swappable, so
-    #: the default is set for the worst ratio rather than the usual one: an
-    #: English page runs about 8 characters per token and a CJK page about 3.3,
-    #: but a digit-dense page (a JSON price series) was measured at 1.01, where
-    #: 200k characters is already about 198k tokens. That leaves a 256k-context
-    #: model room for the prompt and the reply; a smaller one should lower it.
-    source_cap_chars: int = 200_000
+    #: How much of the page is read at all. Everything past it is invisible to the
+    #: digest and therefore to the turn, so the cap is a retrieval ceiling, not a cost
+    #: knob only. Under ``mapReduce`` it is the total across chunks rather than one
+    #: call's window, which is what lets it sit at HyWe's own reader cap
+    #: (``VISIT_MAX_RAW_CHARS``, 1M chars) instead of a single model's context.
+    source_cap_chars: int = 1_000_000
+    #: Rolling chunked extraction instead of one call on a truncated page. Off falls
+    #: back to the single call with ``_DIGEST_SYSTEM``, which is what every run before
+    #: 2026-11-12 did.
+    map_reduce: bool = True
+    #: One chunk, denominated in characters because the flow has no tokenizer and the
+    #: digest model is swappable. HyWe chunks at 32000 TOKENS with the student's
+    #: tokenizer; 100k characters is that for the CJK pages this is measured on (about
+    #: 3.3 characters per token, so about 30k tokens) and less for an English page
+    #: (about 8 characters per token here). The worst ratio measured, a digit-dense
+    #: JSON series at 1.01, makes a chunk about 99k tokens, which still fits the
+    #: 256k-context digest model the previous 200k cap already assumed.
+    chunk_chars: int = 100_000
+    #: Chunks read per page. At the defaults this is ``sourceCapChars`` exactly; it
+    #: exists so lowering the chunk size does not silently multiply the calls.
+    max_chunks: int = 10
+    #: The whole page's budget, across chunks. A page that runs out keeps the
+    #: extraction the chunks it did read produced, with a note -- unlike a timeout at
+    #: the tool, which drops the digest and truncates the page at ``fetchMaxChars``.
+    total_timeout_seconds: float = 420.0
 
 
 class VerifyConfig(_Base):
@@ -404,9 +428,16 @@ class VerifyRestartConfig(_Base):
 
     ``contextResetTokens`` also restarts an attempt, before it answers, once its context
     reaches that many tokens: the discard-all of DeepSeek-V3.2, which Iris (arXiv
-    2609.04304) runs at 131072. The dropped attempt names nothing to vote for, and the
-    last attempt is never dropped. On a 100-question batch, runs whose context passed
-    131072 were right 8 of 47 times, against 47 of 53 below it. 0 (the default) is off.
+    2609.04304) runs at 131072, which is the default here. The dropped attempt names
+    nothing to vote for, and the last attempt is never dropped. On a 100-question batch,
+    runs whose context passed 131072 were right 8 of 47 times, against 47 of 53 below
+    it; on the 289-item BrowseComp-ZH base run (11-11) the same line is crossed by 13
+    items scoring 23%, against 60% below it, so the line drops few attempts and the ones
+    it drops were being lost anyway. 0 is off.
+
+    The cost is a restart's: the reset spends one of ``maxAttempts``, and under
+    ``freshClock`` the dropped attempt's clock is not charged to its successor, so an
+    item that resets can run twice as long against the caller's own timeout.
     """
 
     enabled: bool = False
@@ -414,7 +445,7 @@ class VerifyRestartConfig(_Base):
     fresh_clock: bool = True
     require_first_pass: bool = False
     pick: Literal["vote", "last"] = "vote"
-    context_reset_tokens: int = Field(default=0, ge=0)
+    context_reset_tokens: int = Field(default=131_072, ge=0)
 
 
 class BestGuessConfig(_Base):

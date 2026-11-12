@@ -28,6 +28,35 @@ _DIGEST_SYSTEM = (
     "say so explicitly and list the closest related information it does "
     "contain. Be concise; no preamble."
 )
+# The two below are NOT the fork's. They are HyWe's page extractor
+# (``harness/inference/hybrid_visit.py``: ``INCREMENTAL_EXTRACTOR_PROMPT`` and the
+# system line of ``_summarize_visit_content``), copied byte-for-byte so that the two
+# harnesses' page handling differs in no way we did not choose. ``_DIGEST_SYSTEM``
+# above is still what runs when ``digest.mapReduce`` is off.
+_EXTRACT_SYSTEM = "You extract useful page information for a web agent."
+_INCREMENTAL_EXTRACTOR = """Please process the following webpage chunk and user goal to update the accumulated extraction.
+
+## Existing Extraction
+{existing_summary}
+
+## New Webpage Chunk ({chunk_index}/{chunk_count})
+{webpage_content}
+
+## User Goal
+{goal}
+
+## Task Guidelines
+1. Use the existing extraction as the starting point, then merge in any relevant evidence from the new chunk.
+2. Preserve important names, numbers, dates, URLs, titles, table values, and constraints that may help answer the user goal.
+3. Remove duplicates and ignore content that is not useful for the goal.
+4. If the new chunk has no relevant information, keep the useful existing extraction.
+5. Keep the final extraction concise but complete enough for downstream reasoning.
+6. Keep "rational" to one short sentence.
+7. Keep "evidence" to at most 8 concise items.
+8. Keep "summary" to at most 250 words.
+
+Final Output Format:
+Return exactly one complete JSON object with keys "rational", "evidence", and "summary". Do not use markdown fences or extra text."""
 _DR_IDENTITY = """# Raven — Deep Research
 
 You are a research agent. Your whole job is to answer one hard question from

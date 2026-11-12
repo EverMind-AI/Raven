@@ -105,7 +105,7 @@ def test_the_digest_pinned_to_an_endpoint_model_is_served_there(tmp_path, monkey
 
     assert out == "from fixed-flash"
     assert lent.calls == []
-    assert "Information needed: the founding year" in endpoints["fixed-flash"].calls[0]["messages"][1]["content"]
+    assert "## User Goal\nthe founding year" in endpoints["fixed-flash"].calls[0]["messages"][1]["content"]
 
 
 def test_a_key_variable_that_is_unset_refuses_instead_of_falling_back(tmp_path, monkeypatch, endpoints):

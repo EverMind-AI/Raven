@@ -261,6 +261,17 @@ TWIN_LEADS: dict[str, str] = {
 #: fields; this table is the declared exception, and a field outside it on the twin's side
 #: is a drift, not a feature. A row nothing on the twin matches is stale and fails too.
 PRODUCT_ONLY_FIELDS: dict[str, str] = {
+    "digest.map_reduce": (
+        "read a long page in chunks and roll the extraction forward instead of one call "
+        "on a page cut at sourceCapChars (HyWe's INCREMENTAL_EXTRACTOR, ported 11-12 so "
+        "the two harnesses' page handling differs only where we chose it to). The fork "
+        "had one call and one cap, so it carried no knob for either"
+    ),
+    "digest.chunk_chars": "how much page one extraction call is shown; see digest.map_reduce",
+    "digest.max_chunks": "how many such calls one page may cost; see digest.map_reduce",
+    "digest.total_timeout_seconds": (
+        "the whole page's budget across chunks, where timeoutSeconds now bounds one chunk's call; see digest.map_reduce"
+    ),
     "wall_clock_seconds": (
         "how long one turn may run, checked between iterations. The product path had no "
         "clock of any kind: only the iteration cap could end a turn, so a research turn "

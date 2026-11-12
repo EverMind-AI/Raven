@@ -52,7 +52,8 @@ def test_on_it_budgets_the_attempts_and_a_fresh_clock():
 def test_the_context_reset_line_rides_only_a_restart():
     on = {"verifyRestart": {"enabled": True, "contextResetTokens": 131072}}
     assert _budgets(on)["context_reset_tokens"] == 131072
-    assert _budgets({"verifyRestart": {"enabled": True}})["context_reset_tokens"] == 0, "0 is off"
+    assert _budgets({"verifyRestart": {"enabled": True}})["context_reset_tokens"] == 131072, "the default"
+    assert _budgets({"verifyRestart": {"enabled": True, "contextResetTokens": 0}})["context_reset_tokens"] == 0
     assert _budgets({**on, "verify": {"enabled": False}})["context_reset_tokens"] is None
 
 
