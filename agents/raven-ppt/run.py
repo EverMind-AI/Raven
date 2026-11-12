@@ -32,9 +32,9 @@ import json
 import os
 import subprocess
 import sys
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from raven.config import product_render as render
 from raven.home import raven_home
@@ -191,14 +191,91 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     library's.
 
     This file can outlive its raven: a stamped launcher loads under a raven
-    that predates the library helper, where it carries nothing rather than
-    failing to start. That is the same floor code and oncall keep; there is no
-    second implementation here to drift from the shared one.
+    that predates the library helper, and that raven runs the frozen snapshot
+    below rather than launching keyless. A raven that has the helper never
+    reaches it.
     """
     inherit = getattr(render, "inherit_web_vendors", None)
     if inherit is None:
-        return []
+        return _inherit_web_vendors_frozen(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)
     return inherit(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)
+
+
+def _inherit_web_vendors_frozen(
+    config: dict,
+    host: dict,
+    *,
+    own_keys: dict[str, str] | None = None,
+    lookup: Callable[[str], str | None],
+) -> list[str]:
+    """The shared vendor policy frozen for a raven that predates it.
+
+    Only ``inherit_web_vendors`` above runs this, and only when
+    ``product_render`` has no helper: without it a stamped deck on an older
+    raven would carry nothing and launch keyless. It is a snapshot of the
+    shared rule as of the release that added the helper, not a second home for
+    it: it is not expected to evolve beside the library, and a policy change
+    there is not back-ported here by default. Revisit it only when a deck on
+    an old raven actually misinherits; the snapshot test in
+    ``tests/test_agents_ppt_launcher.py`` runs both over the same inputs, so a
+    one-sided edit fails there.
+
+    The rules mirrored from ``product_render.inherit_web_vendors``: a vendor
+    whose slot or own leaf key the product holds is its own and is never
+    overwritten; a vendor the host holds a slot for is carried as it stands; a
+    borrowed LLM key is written only for a vendor that ends up selected; and
+    the host's search/fetch choice moves only when the product names none,
+    when the move strands no key the product pays for, and when the host's
+    vendor resolves a key here.
+    """
+    from raven.config.schema import (
+        WEB_VENDOR_ENV_VARS,
+        WebFetchProvider,
+        WebSearchProvider,
+        borrowed_web_key,
+    )
+
+    own_keys = own_keys or {}
+    own = {
+        vendor
+        for vendor in WEB_VENDOR_ENV_VARS
+        if render.dig(config, ("tools", "web", "providers", vendor, "apiKey"))
+        or ((name := own_keys.get(vendor)) and lookup(name))
+    }
+    for vendors, slot in (
+        (frozenset(get_args(WebSearchProvider)), ("tools", "web", "search", "provider")),
+        (frozenset(get_args(WebFetchProvider)), ("tools", "web", "fetch", "provider")),
+    ):
+        if render.dig(config, slot) or not (chosen := render.dig(host, slot)):
+            continue
+        payable = (
+            chosen in own
+            or bool(render.dig(host, ("tools", "web", "providers", chosen, "apiKey")))
+            or bool(borrowed_web_key(chosen, config.get("providers") or {}))
+            or bool(borrowed_web_key(chosen, host.get("providers") or {}))
+        )
+        if (any(vendor in vendors for vendor in own) and chosen not in own) or not payable:
+            continue
+        render.put(config, slot, chosen)
+
+    selected = {
+        render.dig(config, ("tools", "web", "search", "provider")),
+        render.dig(config, ("tools", "web", "fetch", "provider")),
+    }
+    carried: list[str] = []
+    for vendor in WEB_VENDOR_ENV_VARS:
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        if vendor in own:
+            continue
+        if host_key := render.dig(host, slot):
+            render.put(config, slot, host_key)
+            carried.append(vendor)
+            continue
+        borrowed = borrowed_web_key(vendor, host.get("providers") or {})
+        if borrowed and vendor in selected:
+            render.put(config, slot, borrowed)
+            carried.append(vendor)
+    return carried
 
 
 def serper_key_in_force(config: dict) -> str:
