@@ -1004,18 +1004,16 @@ class SDKControlPlane:
 
     def ocsf_lines(self, name: str, since: float) -> list[tuple[float, str]]:
         """The sandbox's OCSF log lines since ``since`` (epoch seconds), as event time and message."""
-        from google.protobuf.timestamp_pb2 import Timestamp
         from openshell._proto import datamodel_pb2, openshell_pb2
 
-        response = self._client._stub.GetSandboxLogs(
-            openshell_pb2.GetSandboxLogsRequest(
-                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
-                sandbox=name,
-                since_time=Timestamp(seconds=int(since), nanos=int((since - int(since)) * 1_000_000_000)),
-                lines=500,
-            ),
-            timeout=_DENIAL_READ_TIMEOUT,
+        request = openshell_pb2.GetSandboxLogsRequest(
+            workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+            sandbox=name,
+            lines=500,
         )
+        request.since_time.seconds = int(since)
+        request.since_time.nanos = int((since - int(since)) * 1_000_000_000)
+        response = self._client._stub.GetSandboxLogs(request, timeout=_DENIAL_READ_TIMEOUT)
         return [
             (line.event_time.ToMicroseconds() / 1_000_000, line.message)
             for line in response.logs
