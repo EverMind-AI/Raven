@@ -198,9 +198,14 @@ def _pid_alive(pid: int) -> bool:
 
 
 async def drain_pending_deletes() -> None:
-    """Wait for every background sandbox deletion this process started."""
-    while _pending_deletes:
-        await asyncio.gather(*list(_pending_deletes), return_exceptions=True)
+    """Wait for the background sandbox deletions started on the running loop.
+
+    The registry is process-wide; a deletion another loop started can only be
+    awaited there, and one stranded on a closed loop never finishes.
+    """
+    loop = asyncio.get_running_loop()
+    while mine := [task for task in _pending_deletes if task.get_loop() is loop]:
+        await asyncio.gather(*mine, return_exceptions=True)
 
 
 def _spawn_delete(control_plane: OpenShellControlPlane, name: str, owned_ids: set[str] | None) -> None:
