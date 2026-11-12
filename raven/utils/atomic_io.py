@@ -23,6 +23,35 @@ T = TypeVar("T")
 
 _held = threading.local()
 
+#: A reader on Windows holds the target open without delete sharing, so the
+#: replacement fails at its temp-file open or at ``os.replace`` with a sharing
+#: violation (WinError 32/5). A scanner can also hold the new ``.tmp`` itself,
+#: so the retry's ``O_EXCL`` create fails with ``FileExistsError`` until the
+#: handle is released. The hold is normally brief; retry the whole replacement
+#: instead of losing the write. The bound is deliberately small; callers that
+#: must not block an event loop should reach the helper through a thread.
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF = 0.05
+
+
+def _replace_with_retry(
+    path: Path,
+    data: str,
+    create_mode: int | None = None,
+    newline: str | None = None,
+    like: Path | None = None,
+) -> None:
+    delay = _REPLACE_BACKOFF
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            _replace_unlocked(path, data, create_mode=create_mode, newline=newline, like=like)
+            return
+        except (PermissionError, FileExistsError):
+            if attempt + 1 == _REPLACE_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
 
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
@@ -275,7 +304,7 @@ def atomic_replace(
     no translation of line endings to the platform's.
     """
     with _locked(path):
-        _replace_unlocked(path, data, create_mode=mode, newline=newline, like=like)
+        _replace_with_retry(path, data, create_mode=mode, newline=newline, like=like)
 
 
 # A new Windows file takes its folder's inherited ACL whatever mode os.open is
@@ -345,5 +374,5 @@ def atomic_update(
             current = None
         replacement, result = update(current)
         if replacement is not None:
-            _replace_unlocked(path, replacement, create_mode=mode)
+            _replace_with_retry(path, replacement, create_mode=mode)
         return result

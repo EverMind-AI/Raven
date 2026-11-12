@@ -145,6 +145,32 @@ def test_atomic_update_concurrent_increments_lose_nothing(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == "16"
 
 
+def test_atomic_update_retries_a_transient_sharing_violation(tmp_path: Path, monkeypatch):
+    """The transaction's write goes through the retry path too: a reader that
+    releases the target a moment later must not cost an update already read."""
+    from raven.utils import atomic_io
+
+    path = tmp_path / "state.json"
+    path.write_text("1", encoding="utf-8")
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("sharing violation")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(atomic_io.os, "replace", flaky)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    result = atomic_update(path, lambda current: (str(int(current) + 1), "ok"))
+
+    assert result == "ok"
+    assert path.read_text(encoding="utf-8") == "2"
+    assert calls["n"] == 2
+
+
 def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
     """Secret-bearing files (serve.json's token) need their mode from the very
     first byte; an explicit mode wins over both umask and a leftover tmp's
@@ -379,3 +405,87 @@ def test_write_transaction_excludes_other_processes(tmp_path: Path):
     proc2.start()
     assert q2.get(timeout=10) == "acquired"
     proc2.join(10)
+
+
+class TestReplaceRetry:
+    def test_retries_a_transient_sharing_violation(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_replace = os.replace
+        calls = {"n": 0}
+
+        def flaky(src, dst):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise PermissionError("sharing violation")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(atomic_io.os, "replace", flaky)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert path.read_text(encoding="utf-8") == "new"
+        assert calls["n"] == 3
+
+    def test_raises_after_the_retry_budget(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def always_denied(src, dst):
+            calls["n"] += 1
+            raise PermissionError("sharing violation")
+
+        monkeypatch.setattr(atomic_io.os, "replace", always_denied)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(PermissionError):
+            atomic_replace(path, "new")
+        # Literal, not the constant: asserting against it stays green when the
+        # budget is cut, and only "all five attempts" is the behaviour under test.
+        assert calls["n"] == 5
+        assert path.read_text(encoding="utf-8") == "old"
+        assert not (tmp_path / "state.json.tmp").exists()
+
+    def test_retries_a_held_temp_file(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        real_create = atomic_io._create_like
+        attempts = {"n": 0}
+
+        def flaky_create(tmp_path_arg, path_arg, preserve):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise FileExistsError(80, "held temp file")
+            return real_create(tmp_path_arg, path_arg, preserve)
+
+        monkeypatch.setattr(atomic_io, "_create_like", flaky_create)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        atomic_replace(path, "new")
+        assert attempts["n"] == 2
+        assert path.read_text(encoding="utf-8") == "new"
+
+    def test_does_not_retry_a_missing_source(self, tmp_path: Path, monkeypatch):
+        import raven.utils.atomic_io as atomic_io
+
+        path = tmp_path / "state.json"
+        path.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+
+        def missing(src, dst):
+            calls["n"] += 1
+            raise FileNotFoundError(src)
+
+        monkeypatch.setattr(atomic_io.os, "replace", missing)
+        monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+        with pytest.raises(FileNotFoundError):
+            atomic_replace(path, "new")
+        assert calls["n"] == 1

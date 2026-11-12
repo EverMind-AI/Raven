@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from evolver.judge.schema import PatchWhere, PatchWhy
+from raven.utils.atomic_io import atomic_replace
 
 # ---------------------------------------------------------------------------
 # Status enum
@@ -642,19 +643,12 @@ class HarnessNode:
         """Write this node's metadata to ``path`` as pretty JSON.
 
         Parent dirs are created on demand so callers can pass
-        ``evolver/nodes/<node_id>.json`` without pre-mkdir.
+        ``evolver/nodes/<node_id>.json`` without pre-mkdir. Going through
+        :func:`atomic_replace` also takes the same sidecar lock as the
+        round's ledger writer: both name their temp ``<node>.json.tmp``, so
+        an unlocked save could delete or overwrite the other's in flight.
         """
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Write through a temp + rename so an interrupted write doesn't
-        # leave a half-formed JSON file — common pattern for crash-safe
-        # file replacement on POSIX.
-        tmp = p.with_suffix(p.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        tmp.replace(p)
+        atomic_replace(Path(path), json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n")
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "HarnessNode":

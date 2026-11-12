@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol
 
@@ -79,6 +80,9 @@ from evolver.orchestrator.sealed.runner import assert_no_test_leak
 from evolver.orchestrator.termination import TerminationTracker
 from evolver.scheduler.anchor_selection import AnchorSelection
 from evolver.tree.node import AppliedPatch, HarnessNode, NodeStatus
+from raven.utils.atomic_io import atomic_replace
+
+logger = logging.getLogger(__name__)
 
 
 class DiagnoseFn(Protocol):
@@ -621,9 +625,9 @@ class EvolutionOrchestrator:
         try:
             path = self._cfg.failure_map_path
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._failure_map, indent=2))
-        except OSError:
-            pass
+            atomic_replace(path, json.dumps(self._failure_map, indent=2))
+        except OSError as exc:
+            logger.warning("could not persist the failure map at %s: %s", self._cfg.failure_map_path, exc)
 
     def _reload_failure_map(self) -> None:
         """Re-read the accumulated failure map from disk (resume path)."""
@@ -639,6 +643,7 @@ class EvolutionOrchestrator:
         ``work_dir/nodes/``, carrying identity + git anchor + final status +
         gate stats. Best-effort — the ledger is the audit trail, not control
         state (resume runs off the journal)."""
+        target = None
         try:
             ndir = self._cfg.nodes_dir
             ndir.mkdir(parents=True, exist_ok=True)
@@ -670,9 +675,10 @@ class EvolutionOrchestrator:
                     rec["paired"] = dataclasses.asdict(o.paired)
                 if o.stats:
                     rec["stats"] = o.stats
-                (ndir / f"{o.node_id}.json").write_text(json.dumps(rec, indent=2, default=str))
-        except OSError:
-            pass
+                target = ndir / f"{o.node_id}.json"
+                atomic_replace(target, json.dumps(rec, indent=2, default=str))
+        except OSError as exc:
+            logger.warning("could not persist the node ledger at %s: %s", target or self._cfg.nodes_dir, exc)
 
     def _append_findings(self, rr: RoundResult) -> None:
         """Append the per-round findings-log entry (SOP §3 layer 1) to

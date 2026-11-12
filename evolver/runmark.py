@@ -29,12 +29,6 @@ VERSION = 1
 #: Payload keys this module derives; supplemental metadata cannot replace them.
 RESERVED = ("version", "run_id", "at", "harness")
 
-#: How long :func:`mark_complete` keeps retrying a denied rename, and the
-#: first backoff. Foreign handles (scanners, indexers, backups) hold the
-#: marker or its tmp only briefly, so the total wait stays well under a second.
-_REPLACE_ATTEMPTS = 5
-_REPLACE_BACKOFF = 0.05
-
 
 def _ignored(rel: Path) -> bool:
     """Whether ``rel``, relative to the harness root, is not harness content.
@@ -121,31 +115,8 @@ def mark_complete(
     where = Path(where)
     where.mkdir(parents=True, exist_ok=True)
     path = where / MARK
-    _replace_with_retry(path, json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True))
+    atomic_replace(path, json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True))
     return path
-
-
-def _replace_with_retry(path: Path, data: str) -> None:
-    """Write ``path``, retrying a rename that a foreign handle denied.
-
-    The sidecar lock only serializes this module's own readers and writers. A
-    virus scanner, indexer or backup tool can hold the marker or its tmp open
-    and make ``os.replace`` fail with ``PermissionError`` on Windows; the
-    trial has already been paid for by then, so a transient denial is retried
-    with exponential backoff instead of failing the caller outright.
-    :func:`raven.utils.atomic_io.atomic_replace` discards a leftover tmp on
-    every failed attempt, and the rename removes it on success.
-    """
-    delay = _REPLACE_BACKOFF
-    for attempt in range(_REPLACE_ATTEMPTS):
-        try:
-            atomic_replace(path, data)
-            return
-        except PermissionError:
-            if attempt + 1 == _REPLACE_ATTEMPTS:
-                raise
-            time.sleep(delay)
-            delay *= 2
 
 
 def read_mark(where: Path) -> dict[str, Any] | None:
