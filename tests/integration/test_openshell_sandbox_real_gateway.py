@@ -246,7 +246,7 @@ async def test_sandboxes_left_by_a_dead_process_are_reaped(workspace, monkeypatc
     plane.create(
         name=orphan,
         image=IMAGE,
-        policy=ox.sandbox_policy(allow_net=False, mounts=[], uid=0),
+        policy=ox.sandbox_policy(network_policies={}, mounts=[], uid=0),
         driver_config={},
         resources={},
         labels={"raven.owner": ox._owner_digest(), "raven.pid": "999999"},

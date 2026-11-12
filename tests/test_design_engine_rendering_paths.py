@@ -300,7 +300,7 @@ def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: 
 
     assert isinstance(executor, OpenShellExecutor)
     assert (executor._image, executor._cpus, executor._memory_mib) == ("renderer:test", 1, 512)
-    assert executor._allow_net is False
+    assert executor._network_source() == {}
 
 
 @pytest.mark.parametrize(
@@ -318,7 +318,11 @@ def test_the_render_network_setting_maps_onto_the_sandbox_policy(
         memory_mib=512,
         create_timeout_seconds=1,
     )
-    assert backend._executor(tmp_path / "job")._allow_net == expected
+    from raven.sandbox.network_policy import compile_network_policy, network_from_allow_net
+
+    assert backend._executor(tmp_path / "job")._network_source() == compile_network_policy(
+        network_from_allow_net(expected)
+    )
 
 
 @pytest.mark.parametrize("name", ["auto", "sandbox", "boxlite"])

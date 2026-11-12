@@ -207,7 +207,9 @@ class TestBuildExecutor:
         )
         e = build_executor(cfg, tmp_path, (("/home/u", "/agent-home", "rw"),))
         assert isinstance(e, OpenShellExecutor)
-        assert (e._image, e._cpus, e._memory_mib, e._allow_net) == ("img:1", 4, 4096, ["pypi.org"])
+        assert (e._image, e._cpus, e._memory_mib) == ("img:1", 4, 4096)
+        ((rule_name, rule),) = e._network_source().items()
+        assert rule["endpoints"] == [{"host": "pypi.org", "ports": [80, 443], "tls": "NETWORK_TLS_MODE_SKIP"}]
         assert (e._default_timeout, e._verify_timeout, e._create_timeout) == (11, 12, 13)
         assert e._gateway == "lab"
         assert e._mounts.mounts() == [
@@ -215,6 +217,15 @@ class TestBuildExecutor:
             ("/data", "/data", True),
             ("/home/u", "/agent-home", False),
         ]
+
+    def test_a_network_source_reaches_the_executor(self, tmp_path):
+        pytest.importorskip("openshell")
+
+        def source():
+            return {"raven_rule_x": {"name": "raven_rule_x"}}
+
+        e = build_executor(SandboxConfig(backend="openshell"), tmp_path, network_source=source)
+        assert e._network_source is source
 
     def test_a_retired_backend_name_still_builds_the_openshell_executor(self, tmp_path):
         pytest.importorskip("openshell")

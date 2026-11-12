@@ -20,7 +20,7 @@ import secrets
 import socket
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,6 +28,7 @@ from typing import Any, Protocol
 from raven.sandbox.denials import NetworkDenial, parse_denials
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 from raven.sandbox.mounts import WORKSPACE_MOUNT, MountTable
+from raven.sandbox.network_policy import compile_network_policy, network_from_allow_net, policy_digest
 from raven.utils.pid import pid_alive
 
 logger = logging.getLogger(__name__)
@@ -49,71 +50,6 @@ _DENIAL_SETTLE_SECONDS = 0.6
 _SERVER_TIMEOUT_EXIT = 124
 _OWNER_LABEL = "raven.owner"
 _PID_LABEL = "raven.pid"
-
-
-# OpenShell has no allow-any-host selector (NVIDIA/OpenShell#3856): "*", "**"
-# and two-label wildcards are rejected, hostless allowed_ips endpoints do not
-# match names under the Docker driver's policy DNS, and an "a*.*"-style
-# pattern passes the gateway but stops the sandbox from activating. "Open"
-# is therefore every host of three or more labels on every port, plus the
-# two-label names developer tooling reaches directly. One all-ports endpoint
-# already takes most of the gateway's 256 KiB policy budget, so the apex names
-# get the common ports only.
-_OPEN_WILDCARD = "**.*.*"
-_ALL_PORTS = list(range(1, 65536))
-_COMMON_PORTS = [22, 80, 443, 8080, 8443, 9418]
-_APEX_DOMAINS = (
-    "pypi.org",
-    "python.org",
-    "anaconda.org",
-    "npmjs.org",
-    "npmjs.com",
-    "yarnpkg.com",
-    "nodejs.org",
-    "jsdelivr.net",
-    "unpkg.com",
-    "github.com",
-    "githubusercontent.com",
-    "gitlab.com",
-    "bitbucket.org",
-    "gitee.com",
-    "crates.io",
-    "rustup.rs",
-    "rust-lang.org",
-    "golang.org",
-    "go.dev",
-    "docker.io",
-    "docker.com",
-    "quay.io",
-    "ghcr.io",
-    "gcr.io",
-    "maven.org",
-    "gradle.org",
-    "rubygems.org",
-    "nuget.org",
-    "ubuntu.com",
-    "debian.org",
-    "alpinelinux.org",
-    "huggingface.co",
-    "openai.com",
-    "anthropic.com",
-    "openrouter.ai",
-    "deepseek.com",
-)
-_OPEN_ENTRY = "*"
-
-
-def _endpoint(host: str, ports: list[int]) -> dict:
-    # tls: skip relays the connection without terminating TLS; these rules
-    # carry no request inspection, and inspected egress measured an order of
-    # magnitude slower.
-    return {"host": host, "ports": ports, "tls": "NETWORK_TLS_MODE_SKIP"}
-
-
-def _open_rule(extra_hosts: list[str]) -> dict:
-    hosts = list(dict.fromkeys([*_APEX_DOMAINS, *extra_hosts]))
-    endpoints = [_endpoint(_OPEN_WILDCARD, _ALL_PORTS), *(_endpoint(host, _COMMON_PORTS) for host in hosts)]
-    return {"name": "allow_open", "endpoints": endpoints, "binaries": [{"path": "/**"}]}
 
 
 _reaped = False
@@ -164,7 +100,7 @@ class OpenShellControlPlane(Protocol):
 
 
 def sandbox_policy(
-    *, allow_net: bool | list[str], mounts: list[tuple[str, str, bool]], uid: int | None, gid: int | None = None
+    *, network_policies: dict[str, dict], mounts: list[tuple[str, str, bool]], uid: int | None, gid: int | None = None
 ) -> dict:
     """The OpenShell policy for one sandbox, in the field names of its ``SandboxPolicy`` proto.
 
@@ -186,18 +122,8 @@ def sandbox_policy(
         # user; a non-root host runs as itself so bind-mounted files stay
         # writable. A host without a uid leaves the identity to the driver.
         policy["process"] = {"run_as_user": str(uid), "run_as_group": str(gid if gid else uid)}
-    if allow_net is True or (isinstance(allow_net, list) and _OPEN_ENTRY in allow_net):
-        extra = [] if allow_net is True else [host for host in allow_net if host != _OPEN_ENTRY]
-        policy["network_policies"] = {"allow_open": _open_rule(extra)}
-    elif allow_net:
-        policy["network_policies"] = {
-            f"allow_{index}": {
-                "name": f"allow_{index}",
-                "endpoints": [_endpoint(host, [80, 443])],
-                "binaries": [{"path": "/**"}],
-            }
-            for index, host in enumerate(allow_net)
-        }
+    if network_policies:
+        policy["network_policies"] = network_policies
     return policy
 
 
@@ -296,12 +222,19 @@ class OpenShellExecutor(SandboxExecutor):
         control_plane: OpenShellControlPlane | None = None,
         gateway: str | None = None,
         gateway_workspace: str = "default",
+        network_source: Callable[[], dict[str, dict]] | None = None,
     ) -> None:
         self._image = image
         self._mounts = MountTable(Path(workspace), extra_volumes or [])
         self._cpus = cpus
         self._memory_mib = memory_mib
-        self._allow_net = allow_net
+        # The network policies this sandbox should run under, read when it
+        # starts; ``allow_net`` is the fixed policy of a caller that names none.
+        if network_source is None:
+            fixed = compile_network_policy(network_from_allow_net(allow_net))
+            network_source = lambda: fixed  # noqa: E731
+        self._network_source = network_source
+        self._applied_digest: str | None = None
         self._default_timeout = default_timeout
         self._verify_timeout = verify_timeout
         self._create_timeout = create_timeout
@@ -332,12 +265,13 @@ class OpenShellExecutor(SandboxExecutor):
             plane = await asyncio.to_thread(self._plane)
             await self._reap_orphans(plane)
             name = f"rv{secrets.token_hex(6)}"
+            network_policies = self._network_source()
             await asyncio.to_thread(
                 plane.create,
                 name=name,
                 image=self._image,
                 policy=sandbox_policy(
-                    allow_net=self._allow_net, mounts=self._mounts.mounts(), uid=_host_uid(), gid=_host_gid()
+                    network_policies=network_policies, mounts=self._mounts.mounts(), uid=_host_uid(), gid=_host_gid()
                 ),
                 driver_config=self._driver_config(),
                 resources={"limits": {"cpu": str(self._cpus), "memory": f"{self._memory_mib}Mi"}},
@@ -364,6 +298,7 @@ class OpenShellExecutor(SandboxExecutor):
             _spawn_delete(plane, name)
             raise
         self._name = name
+        self._applied_digest = policy_digest(network_policies)
         logger.info("OpenShell sandbox %s started (image=%s)", name, self._image)
 
     def _not_ready_advice(self, name: str, exc: Exception) -> str:

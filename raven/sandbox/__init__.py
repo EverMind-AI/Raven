@@ -17,6 +17,7 @@ import importlib.metadata
 import re
 import shlex
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -97,6 +98,8 @@ def build_executor(
     sandbox_cfg: SandboxConfig | None,
     workspace: Path,
     extra_volumes: tuple[tuple[str, str, str], ...] = (),
+    *,
+    network_source: Callable[[], dict[str, dict]] | None = None,
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
@@ -140,6 +143,7 @@ def build_executor(
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
             gateway=sandbox_cfg.gateway,
+            network_source=network_source,
         )
 
     raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'openshell'.")
