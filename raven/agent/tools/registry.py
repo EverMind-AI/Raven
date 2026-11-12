@@ -1,6 +1,7 @@
 """Tool registry for dynamic tool management."""
 
 import asyncio
+import contextlib
 import copy
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -16,7 +17,6 @@ from raven.agent.tools.params import cast_params, render_param_errors, validate_
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.observability import semconv
-from raven.permissions.runtime import tool_body
 from raven.tracing import trace
 
 if TYPE_CHECKING:
@@ -878,6 +878,18 @@ class ToolRegistry:
             return tool.to_schema()
         return copy.deepcopy(spec.schema)
 
+    def _tool_body(self, deadline: asyncio.Timeout | None = None) -> contextlib.AbstractContextManager[None]:
+        """Bind this registry's gate, and the body's deadline, for the length of one tool body.
+
+        Imported only when there is a gate to bind: a registry without one (a
+        raven node's) must not load the permission package and what it imports.
+        """
+        if self._permission_gate is None:
+            return contextlib.nullcontext()
+        from raven.permissions.runtime import tool_body
+
+        return tool_body(self._permission_gate, deadline)
+
     @trace.instrument("tool.call", extract=semconv.tool_call)
     async def execute(
         self,
@@ -1037,7 +1049,7 @@ class ToolRegistry:
             # while it runs is asked about the same way (raven.permissions.runtime).
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
-                with tool_body(self._permission_gate):
+                with self._tool_body():
                     result = await tool.execute(**params)
             else:
                 # The heartbeat is a bystander: it neither holds the result nor
@@ -1047,7 +1059,7 @@ class ToolRegistry:
                 try:
                     # A deadline the gate can stop while a person decides.
                     async with asyncio.timeout(ceiling) as deadline:
-                        with tool_body(self._permission_gate, deadline):
+                        with self._tool_body(deadline):
                             result = await tool.execute(**params)
                 finally:
                     beat.cancel()
