@@ -195,7 +195,7 @@ class PermissionGate:
         keys = session_keys(tool_name, params, ask_segments)
         if session_allows(current_turn().session_key, keys):
             return Allow(source=DecisionSource.SESSION)
-        # Deliberately NOT auto-allowing a sandboxed exec here: the Boxlite VM
+        # Deliberately NOT auto-allowing a sandboxed exec here: the sandbox
         # mounts the real workspace at /workspace read-write (plus any
         # configured rw volumes), so "the sandbox holds it" is false for host
         # data -- rm -rf /workspace deletes real files. Auto-allow can return

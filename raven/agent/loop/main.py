@@ -6,6 +6,8 @@ Module-level names live in ``_shared``; method groups live in mixins
 
 from __future__ import annotations
 
+import sys
+
 from raven.agent import knowledge_scope
 from raven.agent.harness import bind_harness, default_harness_modules
 from raven.agent.loop._shared import (
@@ -62,7 +64,6 @@ if TYPE_CHECKING:
     from raven.mcp.manager import MCPConnectionManager
     from raven.providers.pool import ProviderPool
     from raven.routing.router import ModelRouter
-    from raven.sandbox.debug_server import SandboxDebugServer
     from raven.spine.runner import Drain, Emit, TurnOutcome
     from raven.spine.turn import TurnRequest
 
@@ -631,7 +632,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._executor_stack: AsyncExitStack | None = None
         self._executor_started: bool = False
         self._executor_start_lock = asyncio.Lock()
-        self._debug_server: SandboxDebugServer | None = None
 
         self.router = router
         self._playbooks = None
@@ -797,49 +797,30 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             self._executor_stack = stack
             self._executor_started = True
 
-    async def _start_debug_server(self) -> None:
-        """Start the sandbox debug socket server if debug mode is enabled."""
-        cfg = self._sandbox_config
-        if cfg is None or not cfg.debug.enabled:
-            return
-        if cfg.backend == "none":
-            logger.warning(
-                "sandbox.debug.enabled=true is ignored because backend='none' (no boxlite runtime is active)"
-            )
+    @staticmethod
+    async def _drain_sandbox_deletes(budget_s: float = 20.0) -> None:
+        """Wait, briefly, for sandbox deletions this process started in the background.
+
+        A sandbox stop only starts its deletion; one still pending when the
+        process exits is collected by the next start instead.
+        """
+        module = sys.modules.get("raven.sandbox.openshell_executor")
+        if module is None:
             return
         try:
-            from raven.config.paths import get_data_dir, get_sandbox_dir
-            from raven.sandbox.debug_server import SandboxDebugServer
-
-            socket_path = SandboxDebugServer.resolve_socket_path(cfg.debug.socket, get_data_dir())
-            server = SandboxDebugServer(
-                socket_path=socket_path,
-                owned_ids=self._owned_ids,
-                max_message_bytes=cfg.debug.max_message_bytes,
-                sandbox_home=get_sandbox_dir("boxlite"),
-            )
-            await server.start()
-            self._debug_server = server
-        except Exception as exc:
-            # The user explicitly opted in to debug mode; failing silently here
-            # leaves them puzzled when `raven sandbox` later says "socket not
-            # found". Log loud so the reason is visible.
-            logger.error("Failed to start sandbox debug server: %s", exc)
+            await asyncio.wait_for(module.drain_pending_deletes(), budget_s)
+        except asyncio.TimeoutError:
+            logger.warning("Sandbox deletions still pending after {}s; the next start collects them", budget_s)
 
     async def close_executor(self) -> None:
         """Tear down the sandbox executor."""
-        if self._debug_server is not None:
-            try:
-                await self._debug_server.stop()
-            except Exception as exc:
-                logger.warning("Error stopping sandbox debug server: %s", exc)
-            self._debug_server = None
         if self._executor_stack:
             try:
                 await self._executor_stack.aclose()
             except (RuntimeError, BaseExceptionGroup):
                 pass
             self._executor_stack = None
+        await self._drain_sandbox_deletes()
         self._executor_started = False
         if self._skill_hub_client is not None:
             try:
@@ -1144,14 +1125,13 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         """Bring the agent runtime up and stay alive.
 
         Turns arrive through the spine (``run_turn``); this coroutine no longer
-        drains an inbound bus. It starts the executor / debug server / MCP, then
+        drains an inbound bus. It starts the executor / MCP, then
         idles on ``self._running`` so the gateway can gather it as a long-lived
         task and tear it down via ``stop()`` on shutdown.
         """
         self._running = True
         try:
             await self._start_executor()
-            await self._start_debug_server()
             await self._connect_mcp()
         except SandboxInitError as exc:
             logger.error("Sandbox failed to start: {}", exc)

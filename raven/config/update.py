@@ -428,7 +428,7 @@ def set_sandbox_backend(
     """Patch ``sandbox.backend`` on the on-disk config. Returns previous value.
 
     Used by the onboarding wizard's run-location step. ``backend`` must be one
-    of ``SandboxConfig``'s literal values (``none`` / ``auto`` / ``boxlite``);
+    of ``SandboxConfig``'s literal values (``none`` / ``openshell``);
     the loader validates on next read.
     """
     path = config_path or get_config_path()

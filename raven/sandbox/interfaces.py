@@ -1,6 +1,6 @@
 """Public interfaces for the sandbox package.
 
-Import from here (or from raven.sandbox) — never from boxlite_executor.py
+Import from here (or from raven.sandbox) — never from openshell_executor.py
 or direct_executor.py directly, so callers remain decoupled from concrete backends.
 """
 
@@ -14,8 +14,8 @@ from typing import Any
 class SandboxInitError(RuntimeError):
     """Raised when the sandbox backend cannot be started or probed.
 
-    Defined here rather than in ``boxlite_executor`` so it can be imported
-    without boxlite installed: the agent loop and the MCP client import this
+    Defined here rather than in ``openshell_executor`` so it can be imported
+    without the OpenShell SDK installed: the agent loop and the MCP client import this
     type for error handling and must not fail because a backend is absent.
     """
 
@@ -46,7 +46,7 @@ class SandboxExecutor(ABC):
     """
     Abstraction for isolated command execution.
 
-    Implementations: BoxliteExecutor (boxlite microVM), DirectExecutor (host fallback).
+    Implementations: OpenShellExecutor (OpenShell sandbox), DirectExecutor (host fallback).
     ExecTool holds this interface and is unaware of the concrete backend.
     """
 

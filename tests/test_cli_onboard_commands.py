@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 import shutil
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -1323,11 +1324,11 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
-def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Boxlite probe failure → submenu → fall back to host."""
+def test_sandbox_probe_failure_falls_back(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OpenShell probe failure → submenu → fall back to host."""
     import questionary
 
-    answers = iter(["boxlite"])
+    answers = iter(["openshell"])
 
     class _FQ:
         def __init__(self, a):
@@ -1338,7 +1339,7 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
     monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
-    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (False, "missing"))
     # Failure submenu picks "fall back to host".
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "host")
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
@@ -1346,14 +1347,14 @@ def test_sandbox_boxlite_probe_failure_falls_back(tmp_env: Path, monkeypatch: py
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
-def test_sandbox_boxlite_missing_advises_the_running_environment(
+def test_sandbox_missing_sdk_advises_the_running_environment(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The missing-boxlite screen prints a copy-pasteable uv command that targets
+    """The missing-SDK screen prints a copy-pasteable uv command that targets
     this raven's interpreter, not a global install of an index-resolvable name."""
     import questionary
 
-    answers = iter(["boxlite"])
+    answers = iter(["openshell"])
 
     class _FQ:
         def __init__(self, a):
@@ -1363,7 +1364,7 @@ def test_sandbox_boxlite_missing_advises_the_running_environment(
             return self._a
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
-    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (False, "missing"))
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
 
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
@@ -1373,14 +1374,14 @@ def test_sandbox_boxlite_missing_advises_the_running_environment(
     assert "raven\\[sandbox]" not in out
 
 
-def test_sandbox_boxlite_hint_survives_long_interpreter_paths(
+def test_sandbox_install_hint_survives_long_interpreter_paths(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The install hint stays on one line even when the interpreter path pushes it
     past the console width, so copy-paste yields a single runnable command."""
     import questionary
 
-    answers = iter(["boxlite"])
+    answers = iter(["openshell"])
 
     class _FQ:
         def __init__(self, a):
@@ -1391,17 +1392,17 @@ def test_sandbox_boxlite_hint_survives_long_interpreter_paths(
 
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
     monkeypatch.setattr("sys.executable", "/home/someone/.local/share/uv/tools/raven/bin/python")
-    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (False, "missing"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (False, "missing"))
     monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
 
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
 
-    assert onboard_commands.boxlite_install_hint() in capsys.readouterr().out
+    assert onboard_commands.sandbox_install_hint() in capsys.readouterr().out
 
 
 def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Declining the host confirm inside the failure submenu returns to the
-    submenu directly: no second boxlite probe, no reprinted failure banner."""
+    submenu directly: no second probe, no reprinted failure banner."""
     import questionary
 
     class _FQ:
@@ -1424,9 +1425,9 @@ def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monk
         fc_calls.append(True)
         return next(fc_answers)
 
-    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("boxlite"))
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("openshell"))
     monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
-    monkeypatch.setattr(onboard_commands, "_probe_boxlite", probe)
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", probe)
     monkeypatch.setattr(onboard_commands, "_failure_choice", fake_failure_choice)
 
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
@@ -1439,7 +1440,7 @@ def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.Mo
     """An already-configured sandbox offers a 'keep current' first choice."""
     from raven.config.update import set_sandbox_backend
 
-    set_sandbox_backend("boxlite")
+    set_sandbox_backend("openshell")
     captured: dict[str, list] = {}
     import questionary
 
@@ -1455,7 +1456,74 @@ def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.Mo
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
     assert "keep" in captured["choices"]
     # 'keep' leaves the backend untouched.
-    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "boxlite"
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "openshell"
+
+
+def test_sandbox_unreachable_gateway_prints_install_guidance(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the SDK installed but no gateway answering, the screen says how to get one running."""
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("openshell"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (False, "unreachable"))
+    monkeypatch.setattr(onboard_commands, "_failure_choice", lambda options, *, non_interactive: "skip")
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    out = capsys.readouterr().out
+    assert "openshell status" in out
+    assert "docs.nvidia.com/openshell" in out
+
+
+def test_sandbox_probe_success_persists_openshell(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import questionary
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ("openshell"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (True, "ok"))
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "openshell"
+
+
+class TestProbeOpenShell:
+    def test_a_missing_sdk_is_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "openshell", None)
+        assert onboard_commands._probe_openshell() == (False, "missing")
+
+    def test_a_gateway_that_does_not_answer_is_unreachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import openshell
+
+        def _refuse(**_kw):
+            raise ConnectionError("connection refused")
+
+        monkeypatch.setattr(openshell.SandboxClient, "from_active_cluster", staticmethod(_refuse))
+        assert onboard_commands._probe_openshell() == (False, "unreachable")
+
+    def test_a_gateway_that_lists_sandboxes_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import openshell
+
+        class _Client:
+            def list_all(self, **_kw):
+                return []
+
+        monkeypatch.setattr(openshell.SandboxClient, "from_active_cluster", staticmethod(lambda **_kw: _Client()))
+        assert onboard_commands._probe_openshell() == (True, "ok")
 
 
 # --------------------------------------------------------------------------- memory step
@@ -6985,7 +7053,7 @@ def test_sandbox_host_choice_warns_and_confirms(
 
 def test_sandbox_host_decline_returns_to_menu(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Declining the host confirmation re-shows the run-location menu instead
-    of persisting; the next pick (boxlite) wins."""
+    of persisting; the next pick (openshell) wins."""
     import questionary
 
     class _FQ:
@@ -6995,12 +7063,12 @@ def test_sandbox_host_decline_returns_to_menu(tmp_env: Path, monkeypatch: pytest
         def ask(self):
             return self._a
 
-    answers = iter(["none", "boxlite"])
+    answers = iter(["none", "openshell"])
     monkeypatch.setattr(questionary, "select", lambda *a, **kw: _FQ(next(answers)))
     monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(False))
-    monkeypatch.setattr(onboard_commands, "_probe_boxlite", lambda: (True, "ok"))
+    monkeypatch.setattr(onboard_commands, "_probe_openshell", lambda: (True, "ok"))
     onboard_commands._step2_sandbox(skip=False, non_interactive=False)
-    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "boxlite"
+    assert json.loads(tmp_env.read_text())["tools"]["sandbox"]["backend"] == "openshell"
 
 
 def test_sandbox_non_interactive_host_warns(
@@ -7018,14 +7086,14 @@ def test_sandbox_non_interactive_host_warns(
 
 def test_step2_skip_path_reports_the_backend_it_actually_keeps(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
     """[N7-F7] The skip/non-interactive branch used to print "host (direct)"
-    unconditionally while writing nothing -- re-running over a boxlite config
-    kept boxlite and told the user it kept host. The message must render the
+    unconditionally while writing nothing -- re-running over a sandboxed config
+    kept the sandbox and told the user it kept host. The message must render the
     backend it actually keeps."""
     monkeypatch.setattr(onboard_commands.console, "_width", 200)
-    monkeypatch.setattr(onboard_commands, "_current_sandbox_backend", lambda: "boxlite")
+    monkeypatch.setattr(onboard_commands, "_current_sandbox_backend", lambda: "openshell")
     onboard_commands._step2_sandbox(skip=True, non_interactive=False)
     out = capsys.readouterr().out
-    assert "Sandbox (boxlite)" in out
+    assert "Sandbox (OpenShell)" in out
     assert "Host (direct)" not in out
 
 

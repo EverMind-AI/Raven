@@ -1,766 +1,353 @@
 # Sandbox
 
-With sandboxing enabled, shell commands and stdio MCP server processes dispatched
-through `BoxliteExecutor` run in a **Boxlite microVM**. The VM has its own kernel,
-resource limits, and network policy. Mounted directories remain accessible
-according to their configured permissions, including the shared workspace.
+With sandboxing enabled, shell commands and stdio MCP server processes run in an
+NVIDIA OpenShell sandbox instead of on the host. Each sandbox is a container whose filesystem access, process identity
+and network egress are enforced by the kernel (Landlock and seccomp) and by an
+OpenShell supervisor outside the container. Mounted directories, including the
+shared workspace, stay accessible according to their configured permissions.
+
+Raven talks to a local OpenShell gateway, which creates and deletes the
+sandboxes. Raven does not run its own virtual machines.
 
 ## 1. Installation
 
-The sandbox backend (`boxlite`) is an optional dependency. Install it from your
-Raven source checkout:
+Two pieces are needed: the OpenShell SDK inside Raven's environment, and a
+running OpenShell gateway on the same machine.
+
+### 1.1 The SDK
+
+The SDK is the optional `sandbox` extra. From a source checkout:
 
 ```bash
 uv sync --extra sandbox
 ```
 
-When the backend is `"auto"` or `"boxlite"`, a missing dependency raises
-`SandboxInitError`. Raven does not silently fall back to host execution.
-`DirectExecutor` is used only when the backend is `"none"` or no sandbox configuration
-is supplied.
+For an installed Raven, `raven onboard` prints the exact command for its own
+interpreter when the SDK is missing. It looks like this:
 
-The `sandbox` extra pins `boxlite==0.9.5` in `pyproject.toml`. Use the pinned
-version to keep the backend compatible with Raven's executor implementation.
+```bash
+uv pip install --python /path/to/raven/python 'openshell>=0.1.8,<0.2'
+```
+
+The extra pins `openshell>=0.1.8,<0.2`. The SDK and the gateway are released
+together, so keep them on the same minor version.
+
+### 1.2 The gateway
+
+Install OpenShell 0.1.8 with its official installer, pinned to the release tag.
+Turn telemetry off before the first start; the packaged gateway reads
+`~/.config/openshell/gateway.env`:
+
+```bash
+mkdir -p ~/.config/openshell
+printf 'OPENSHELL_TELEMETRY_ENABLED=false\n' > ~/.config/openshell/gateway.env
+curl -fsSL -o /tmp/openshell-install.sh https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.1.8/install.sh
+OPENSHELL_VERSION=v0.1.8 sh /tmp/openshell-install.sh
+```
+
+On Linux the installer adds a systemd user service; on macOS it installs with
+Homebrew. Both register the gateway with the `openshell` CLI and listen on
+`127.0.0.1:17670` only.
+
+Raven mounts the workspace into each sandbox, so the gateway must allow bind
+mounts. Write `~/.config/openshell/gateway.toml`:
+
+```toml
+[openshell]
+version = 2
+
+[openshell.gateway]
+compute_driver = "docker"
+
+[openshell.drivers.docker]
+allow_driver_config = true
+enable_bind_mounts = true
+
+[openshell.drivers.docker.resource_admission]
+enabled = false
+```
+
+Then restart the gateway and check it:
+
+```bash
+systemctl --user restart openshell-gateway        # Linux
+brew services restart nvidia/openshell/openshell  # macOS
+openshell status                                  # expect: Status: Connected
+```
+
+On macOS with colima instead of Docker Desktop, the supervisor cannot reach the
+gateway through the container's loopback. If sandboxes stay in
+`ControlSupervisorStartFailed`, add this to the Docker driver table:
+
+```toml
+supervisor_network_mode = "bridge"
+grpc_endpoint = "https://host.docker.internal:17670"
+```
 
 ## 2. Configuration
 
-Add a `sandbox` block under `tools` in `config.json`. The loader accepts JSON,
-not YAML. Invalid JSON produces a warning and falls back to defaults, including
-`tools.sandbox.backend = "none"`, so check startup warnings before relying on
-sandbox isolation:
+Add a `sandbox` block under `tools` in `config.json`. Invalid JSON produces a
+warning and falls back to defaults, including `tools.sandbox.backend = "none"`,
+so check the startup warnings before relying on sandbox isolation:
 
 ```json
 {
   "tools": {
     "sandbox": {
-      "backend": "auto"
+      "backend": "openshell"
     }
   }
 }
 ```
 
-The default backend is `"none"`. Enable `"auto"` or `"boxlite"` to use a microVM.
+With `backend = "openshell"`, a missing SDK or an unreachable gateway raises
+`SandboxInitError`. Raven never falls back to the host on its own; host
+execution happens only when the backend is `"none"`.
 
 ### Full reference
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `backend` | `"none" \| "auto" \| "boxlite"` | `"none"` | `"none"` runs commands on the host. Both `"auto"` and `"boxlite"` currently select Boxlite and raise `SandboxInitError` if it cannot be initialized. |
-| `image` | `str` | `"ubuntu:22.04"` | OCI image used for the microVM root filesystem. |
-| `cpus` | `int` | `2` | vCPU count allocated to the VM. |
-| `memory_mib` | `int` | `2048` | RAM in MiB. |
-| `disk_size_gb` | `int \| null` | `null` | Disk size in GB. `null` = ephemeral (boxlite default, no persistent disk). |
-| `allow_net` | `bool \| list[str]` | `true` | `true` = unrestricted; `false` = no network; `["pypi.org", ...]` = domain allowlist. An empty list `[]` is rejected at config validation time — use `false` to disable networking entirely. |
-| `extra_volumes` | `list[[host, vm, mode]]` | `[]` | Additional host paths to mount into the VM. Both paths must be absolute. `mode` is `"ro"` or `"rw"`. |
-| `default_timeout` | `int` | `120` | Per-`exec()` timeout in seconds when no explicit timeout is passed. |
-| `verify_timeout` | `int` | `30` | Timeout in seconds for the startup `echo ok` probe that confirms the VM is responsive. |
-| `create_timeout` | `int` | `300` | Timeout in seconds for image pull + VM creation. Increase for large images or slow registries; decrease if images are always pre-pulled. |
-| `debug` | `object` | Disabled | Set `debug.enabled` to `true` to enable the local sandbox inspection service used by `raven sandbox`. Ignored when `backend` is `"none"`. |
+| `backend` | `"none"` \| `"openshell"` | `"none"` | `"none"` runs commands on the host with no isolation. |
+| `gateway` | string \| null | `null` | Name of a gateway registered with the `openshell` CLI; `null` uses the active one. |
+| `image` | string | `"ubuntu:22.04"` | Container image each sandbox starts from. |
+| `cpus` | int | `2` | CPU limit per sandbox. |
+| `memoryMib` | int | `2048` | Memory limit per sandbox, in MiB. |
+| `allowNet` | bool \| list | `true` | Network egress; see [Network policy](#41-network-policy). |
+| `extraVolumes` | list | `[]` | Extra bind mounts, each `[host_path, sandbox_path, "ro"\|"rw"]`. |
+| `defaultTimeout` | int | `120` | Seconds per command when no explicit timeout is given. |
+| `verifyTimeout` | int | `30` | Seconds for the startup probe. |
+| `createTimeout` | int | `300` | Seconds for image pull and sandbox creation. |
 
-### Common presets
+### Migrating from the boxlite backend
 
-**Automatic backend selection:** currently selects Boxlite and verifies the VM
-at startup. Initialization fails if the backend is unavailable:
+The boxlite microVM backend is retired. Configs written for it still load:
 
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "auto" }
-  }
-}
-```
-
-**Explicit Boxlite backend:** selects Boxlite with the same startup checks:
-
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "boxlite" }
-  }
-}
-```
-
-**Custom image, resource limits, and a network allowlist:**
-
-```json
-{
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "image": "python:3.11-slim",
-      "cpus": 4,
-      "memory_mib": 4096,
-      "disk_size_gb": 20,
-      "allow_net": ["pypi.org", "files.pythonhosted.org", "api.github.com"],
-      "default_timeout": 120
-    }
-  }
-}
-```
-
-**Disable network access in the working VM:**
-
-```json
-{
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "allow_net": false
-    }
-  }
-}
-```
-
-**Disabled (default):**
-
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "none" }
-  }
-}
-```
+- `backend: "boxlite"` and `backend: "auto"` load as `"openshell"`, with a
+  warning. Update the file to say `"openshell"`.
+- `debug` and `diskSizeGb` are ignored, with a warning.
+- `raven sandbox list/exec/shell` is gone. Use the OpenShell CLI instead; see
+  [Inspecting sandboxes](#35-inspecting-sandboxes).
+- The old boxlite state under Raven's data directory (`sandbox/boxlite`) is no
+  longer used and can be deleted.
 
 ## 3. How It Works
 
-`SandboxExecutor`, defined in `raven/sandbox/interfaces.py`, provides a shared
-interface for two execution backends:
+`SandboxExecutor` (`raven/sandbox/interfaces.py`) has two implementations:
 
 | Implementation | When used | Isolation |
 |----------------|-----------|-----------|
-| `BoxliteExecutor` | `backend = "auto"` or `"boxlite"` | boxlite microVM — separate kernel, capped resources |
-| `DirectExecutor` | `backend = "none"` | None — `asyncio.create_subprocess_shell()` on the host |
-
-The workspace is mounted at `/workspace` with read-write access. Filesystem
-tools such as `ReadFileTool` and `WriteFileTool` use the host path directly.
-Reading or writing `/workspace/foo.py` inside the VM accesses the same file.
-
-`AgentLoop.__init__` creates the executor object synchronously without starting
-a VM. At runtime startup or before a turn, `_start_executor()` calls
-`BoxliteExecutor.start()` to create and verify the working VM:
-
-- **`allow_net=True` (default):** Boxlite creates the working VM directly and
-  downloads the image if it is not already cached.
-- **`allow_net=False` or a domain list:** a temporary VM with unrestricted
-  networking first pulls and caches the image. Raven then creates the working
-  VM with the configured network restrictions.
-
-Network restrictions apply to the working VM; image preparation still needs
-registry access. An unavailable backend or unsupported platform raises
-`SandboxInitError` before sandboxed work can run.
-
-## 4. Using `SandboxExecutor` Directly
-
-### 4.1 `BoxliteExecutor`
-
-```python
-import asyncio
-from pathlib import Path
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
-
-async def main():
-    sandbox_cfg = SandboxConfig(
-        backend="boxlite",
-        image="ubuntu:22.04",
-        cpus=2,
-        memory_mib=2048,
-    )
-    workspace = Path("/tmp/my-workspace")
-    workspace.mkdir(exist_ok=True)
-
-    # build_executor() returns BoxliteExecutor for backend="auto"/"boxlite"
-    # __aenter__ creates and verifies the working VM; raises SandboxInitError if unavailable
-    # sandbox_dir tells the sandbox where a backend keeps its state. It is the
-    # resolver, not a path: resolving one creates the directory, and this call
-    # only reaches it when the backend is not "none".
-    async with build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir) as executor:
-        result = await executor.exec("echo hello from the VM")
-        print(result.as_text())
-        # → "hello from the VM\n\nExit code: 0"
-
-        result = await executor.exec("python3 --version")
-        print(result.as_text())
-
-        # cwd is translated from host path → /workspace/... automatically
-        result = await executor.exec("ls -la", cwd=str(workspace))
-        print(result.as_text())
-
-asyncio.run(main())
-```
-
-`exec()` returns an `ExecResult` dataclass:
-
-```python
-@dataclass
-class ExecResult:
-    stdout: str
-    stderr: str
-    exit_code: int
-
-    def as_text(self, max_chars: int = 10_000) -> str: ...
-```
-
-`as_text()` combines stdout, a `STDERR:` block when stderr contains non-whitespace
-characters, and an `Exit code: N` line into a single string before truncation.
-Output longer than `max_chars` is truncated in the middle, with a
-`... (N chars truncated) ...` marker indicating the omitted content. Very small
-limits can truncate the exit-code line itself; read `result.exit_code` directly
-when the complete exit code is required independently of the formatted output.
-
-**Lifecycle — explicit start/stop:**
-
-```python
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import SandboxInitError
-from raven.sandbox.boxlite_executor import BoxliteExecutor
-
-executor = BoxliteExecutor(
-    image="ubuntu:22.04",
-    workspace=Path("/tmp/ws"),
-    sandbox_home=get_sandbox_dir("boxlite"),
-)
-
-try:
-    await executor.start()   # creates and verifies the working VM
-except SandboxInitError as e:
-    print(f"Sandbox unavailable: {e}")
-    raise SystemExit(1)
-
-result = await executor.exec("uname -r")
-await executor.stop()    # tears down the working VM
-```
-
-**Lifecycle — context manager (recommended):**
-
-```python
-from raven.sandbox import SandboxInitError
-
-try:
-    async with BoxliteExecutor(
-        image="ubuntu:22.04", workspace=Path("/tmp/ws"), sandbox_home=get_sandbox_dir("boxlite")
-    ) as executor:
-        result = await executor.exec("uname -r")
-        print(result.stdout)
-except SandboxInitError as e:
-    print(f"Sandbox unavailable: {e}")
-```
-
-**Timeout:**
-
-```python
-# Uses default_timeout (120 s) when timeout=None
-result = await executor.exec("sleep 10", timeout=5)
-print(result.exit_code)   # -1
-print(result.stderr)      # "Command timed out after 5s"
-```
-
-**Environment variables:**
-
-```python
-result = await executor.exec(
-    "echo $MY_VAR",
-    env={"MY_VAR": "hello"},
-)
-print(result.stdout)  # "hello\n"
-```
-
-### 4.2 `DirectExecutor`
-
-`DirectExecutor` implements the same `SandboxExecutor` interface but runs commands directly on the host. Use it in tests or when sandboxing is explicitly disabled.
-
-```python
-from raven.sandbox.direct_executor import DirectExecutor
-
-async with DirectExecutor() as executor:
-    result = await executor.exec("pwd")
-    print(result.as_text())
-```
-
-`build_executor()` returns a `DirectExecutor` when `backend` is `"none"` or when `sandbox_cfg` is `None`:
-
-```python
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
-
-# No config — returns DirectExecutor
-executor = build_executor(None, workspace, sandbox_dir=get_sandbox_dir)
-
-# Explicit "none" — also returns DirectExecutor (no probe, no VM).
-# sandbox_dir is never called on this path, so no boxlite home is created.
-executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=get_sandbox_dir)
-```
-
-## 5. Injecting an Executor into `ExecTool`
-
-Pass an executor through the optional `executor` parameter. If omitted,
-`ExecTool` creates a `DirectExecutor` and runs commands on the host.
-
-```python
-from pathlib import Path
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
-from raven.agent.tools.shell import ExecTool
-
-sandbox_cfg = SandboxConfig(backend="boxlite")
-workspace = Path("/tmp/ws")
-
-executor = build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir)
-await executor.start()   # creates and verifies the working VM; raises SandboxInitError if unavailable
-
-tool = ExecTool(
-    working_dir=str(workspace),
-    timeout=60,
-    executor=executor,          # inject the sandboxed executor
-)
-
-# ExecTool.execute() returns a plain string (the formatted output)
-output = await tool.execute(command="python3 -c 'print(42)'")
-print(output)
-# → "42\n\nExit code: 0"
-
-await executor.stop()
-```
-
-Sandboxing does not relax command permissions. The tool registry applies the
-same denial and approval rules before dispatching commands to either backend.
-Because `/workspace` is a read-write mount, deleting a file there also deletes
-it on the host.
-
-`ExecTool` enforces its own command and workspace restrictions.
-`restrict_to_workspace` applies to both backends: it checks command text for
-recognizable paths outside the allowed working directories and rejects those
-commands. It cannot inspect every filesystem access performed by the programs
-a command launches. Use VM mounts and OS permissions for isolation.
-
-## 6. Wiring into `AgentLoop`
-
-Pass `SandboxConfig` when constructing `AgentLoop`. The executor object is
-created immediately; the VM starts when the runtime or a turn needs it:
-
-```python
-from raven.agent.loop import AgentLoop
-from raven.sandbox import SandboxConfig
-
-loop = AgentLoop(
-    provider=provider,
-    workspace=workspace,
-    sandbox_config=SandboxConfig(
-        backend="boxlite",
-        image="python:3.11-slim",
-        cpus=2,
-        memory_mib=2048,
-    ),
-)
-
-# run() calls _start_executor() before _connect_mcp(), unconditionally
-await loop.run()
-```
-
-**`run_turn()` (spine turn entry — CLI / cron / channels):**
-
-```python
-from raven.spine import ChatType, Origin, Source, TurnRequest
-
-async def emit(event):  # receives StreamDelta / Text / ToolEvent / ... events
-    ...
-
-await loop.run_turn(
-    TurnRequest(
-        origin=Origin.USER,
-        source=Source(channel="cli", chat_id="sandbox-demo", sender_id="user", chat_type=ChatType.DM),
-        text="write a hello-world Python script and run it",
-        conversation="cli:sandbox-demo",
-    ),
-    emit,
-    lambda: [],  # drain (INJECT/INTERRUPT) — empty for a plain turn
-    stream=False,
-)
-```
-
-The executor lifecycle is managed by `AgentLoop`:
-
-| Method | When called | What it does |
-|--------|-------------|-------------|
-| `_start_executor()` | Entry of `run_turn()` | Creates and verifies the working VM via `executor.start()`; idempotent — second call is a no-op; raises `SandboxInitError` on failure (the spine turns it into a TurnFailed event) |
-| `close_executor()` | Shutdown (also called by `close_mcp()`) | Calls `_executor_stack.aclose()` → `executor.stop()` → bridge tasks cancelled → VM torn down |
-
-**Teardown:**
-
-```python
-await loop.close_mcp()   # closes MCP connections and the sandbox executor together
-```
-
-`close_mcp()` also calls `close_executor()`. MCP connections must close before
-the VM stops because their stdio server processes run inside it. Repeating
-`close_executor()` after cleanup has no effect.
-
-**MCP stdio servers:**
-
-When `sandbox.backend` is `"auto"` or `"boxlite"`, stdio MCP servers are launched
-**inside the VM** rather than on the host. Raven creates two pairs of `anyio`
-memory object streams and passes a receive stream and a send stream to
-`ClientSession`. Three asyncio tasks bridge stdout and stdin to those streams
-and forward stderr to the application log:
-
-- `_stdout_bridge` — reads VM stdout chunks, buffers until `\n`, parses JSON-RPC, wraps in `SessionMessage`, forwards to read stream
-- `_stdin_bridge` — receives `SessionMessage` from write stream, extracts the inner `JSONRPCMessage`, serialises to JSON + newline, writes to VM stdin
-- `_stderr_bridge` — reads VM stderr and forwards to application log at `WARNING` level
-
-Stderr is the primary signal for diagnosing MCP server startup failures:
+| `OpenShellExecutor` | `backend = "openshell"` | One OpenShell sandbox per executor |
+| `DirectExecutor` | `backend = "none"` | None; commands run on the host |
+
+### 3.1 One sandbox per agent
+
+The main agent loop owns one executor for its lifetime. Every subagent run and
+every DAG node gets an executor of its own, so each has its own sandbox: its
+files, processes, network rules and audit records are separate from the
+others'. A sandbox is created when its executor starts and deleted when it
+stops.
+
+Deleting a sandbox takes several seconds on the gateway, so `stop()` only
+starts the deletion. When Raven shuts down it waits up to 20 seconds for
+pending deletions. A sandbox left behind by a crash carries the labels
+`raven.owner` and `raven.pid`, and the next Raven on the same host and user
+deletes it when it starts its first sandbox.
+
+### 3.2 Mounts and identity
+
+The workspace is bind mounted at `/workspace` with read-write access. File
+tools such as `read_file` and `write_file` use the host path directly, so
+`/workspace/foo.py` inside the sandbox is the same file. Raven also mounts:
+
+- the agent home at `/agent-home` when it lies outside the workspace;
+- the plugin data root at `/plugin-data` when a plugin package runs a stdio
+  MCP server;
+- every entry of `extraVolumes`.
+
+The sandbox replaces OpenShell's default filesystem policy: system paths
+(`/bin`, `/usr`, `/lib`, `/etc`, `/proc`, `/var/log`, `/dev/urandom`) are
+read-only, `/tmp` and the mounts are writable, and everything else is
+unreachable.
+
+On a non-root host the sandbox runs as the same user and group as Raven, so
+files it writes in the workspace belong to you. OpenShell refuses to run a
+workload as root, so on a root host the sandbox runs as the image's user (UID
+1000 for an image that declares none), and that user must be able to write the
+workspace. Raven checks this when a sandbox starts and stops with a clear
+error if it cannot.
+
+### 3.3 Commands
+
+Each command runs as `sh -c <command>` through the gateway, in the sandbox path
+that corresponds to the requested host directory. When a command exceeds its
+timeout, OpenShell stops it, and Raven reports exit code `-1` with
+`Command timed out after Ns`, the same result the host executor gives.
+Cancelling a turn cancels the gateway call that runs the command.
+
+### 3.4 MCP stdio servers
+
+With the sandbox enabled, stdio MCP servers start inside the sandbox rather
+than on the host. Their command, arguments, environment values and working
+directory are translated from host paths to sandbox paths; a working directory
+outside every mount is refused rather than replaced. Raven bridges the server's
+stdin and stdout over the gateway, and forwards its stderr to the log:
 
 ```
 WARNING  MCP server stderr [npx]: cannot find module '@scope/server'
-WARNING  MCP server stderr [npx]: Error: ENOENT ...
 ```
 
-Non-JSON stdout lines, such as npm progress messages during `npx -y ...`
-startup, are logged at DEBUG level and skipped without interrupting
-`ClientSession`. HTTP/SSE MCP servers use remote connections, so this process
-bridge does not apply to them.
+Non-JSON stdout lines, such as npm progress during `npx -y ...`, are skipped.
+HTTP and SSE MCP servers connect directly and are not affected.
 
-## 7. Wiring into `SubagentManager`
+### 3.5 Inspecting sandboxes
 
-With sandboxing enabled, the built-in `raven-loop` subagent backend uses its
-own sandbox executor for shell commands rather than sharing the parent agent's
-VM. This does not place the entire subagent process or its host-side filesystem
-tools inside the VM.
+Raven's sandboxes are named `rv` followed by twelve hex digits. Use the
+OpenShell CLI to look at them:
 
-External ACP and CLI agents still launch as host processes. Passing a sandbox
-executor to a backend does not sandbox that backend's own process or tools;
-configure isolation in the external agent separately when required.
-
-```python
-from raven.agent.subagent import SubagentManager
-from raven.sandbox import SandboxConfig
-
-manager = SubagentManager(
-    provider=provider,
-    workspace=workspace,
-    sandbox_config=SandboxConfig(backend="boxlite"),
-)
-
-# spawn() returns immediately; the sub-agent runs in the background
-handle = await manager.spawn(task="run the test suite and report failures")
+```bash
+openshell sandbox list
+openshell sandbox exec -n rv1a2b3c4d5e6f -- ls -la /workspace
+openshell sandbox connect rv1a2b3c4d5e6f   # interactive shell
+openshell logs rv1a2b3c4d5e6f              # supervisor log, including denied connections
 ```
 
-`_run_subagent()` creates an executor for the subagent's workspace and passes it
-to the backend inside `async with executor:`. The VM starts before backend
-execution and is cleaned up when the task finishes, including when it fails.
-Only operations the backend sends through that executor run inside the VM.
+## 4. Advanced Configuration
 
-Each VM starts independently. Pre-pulling images can avoid repeated downloads
-when many subagents start concurrently; VM creation still has its own cost.
+### 4.1 Network policy
 
-`AgentLoop` passes its `sandbox_config` to `SubagentManager`, so the executors
-created for subagent tasks inherit the same configuration:
+OpenShell denies all egress that no rule allows, and checks each connection
+against the hostname it was made to.
 
-```python
-# In AgentLoop.__init__ (simplified)
-self.subagents = SubagentManager(
-    ...,
-    sandbox_config=sandbox_config,
-)
+```json
+{ "allowNet": true }
 ```
 
-## 8. Advanced Configuration
+The default opens every hostname of three or more labels (`api.github.com`,
+`files.pythonhosted.org`, `www.example.com`) on every port, plus a list of
+common two-label names on ports 22, 80, 443, 8080, 8443 and 9418: package
+registries (`pypi.org`, `npmjs.org`, `crates.io`, `rubygems.org`, ...), code
+hosts (`github.com`, `gitlab.com`, ...), container registries (`docker.io`,
+`ghcr.io`, ...) and model APIs. Any other two-label name, such as
+`example.com`, is denied.
 
-### 8.1 Network policy
+OpenShell has no rule that allows every hostname (NVIDIA/OpenShell#3856), so
+this is the closest open setting it supports. Add the names you need on top of
+it with `"*"`:
 
-```python
-from raven.sandbox import SandboxConfig
-
-# Full network access (default)
-SandboxConfig(backend="boxlite", allow_net=True)
-
-# No network
-SandboxConfig(backend="boxlite", allow_net=False)
-
-# Domain allowlist — only these hosts are reachable from inside the VM
-SandboxConfig(
-    backend="boxlite",
-    allow_net=["pypi.org", "files.pythonhosted.org", "api.github.com"],
-)
+```json
+{ "allowNet": ["*", "example.com", "example.org"] }
 ```
 
-> **Note:** `allow_net=[]` (empty list) is rejected at config validation time with a `ValueError`. Use `allow_net=False` to disable networking entirely.
+Without `"*"`, a list allows only those names, on ports 80 and 443:
 
-When `allow_net` is a domain list or `False`, `BoxliteExecutor.start()` uses a
-temporary VM with unrestricted networking to prepare the OCI image, then
-creates the working VM with the restricted policy. This adds an image
-preparation step before the working VM starts.
-
-### 8.2 Extra volume mounts
-
-Mount additional host paths into the VM as read-only data or read-write scratch space. Both the host path and the VM path must be **absolute**.
-
-```python
-SandboxConfig(
-    backend="boxlite",
-    extra_volumes=[
-        # [host_path, vm_path, mode]
-        ["/Users/alice/datasets",  "/data",    "ro"],   # read-only dataset
-        ["/tmp/sandbox-cache",     "/cache",   "rw"],   # writable scratch
-    ],
-)
+```json
+{ "allowNet": ["pypi.org", "files.pythonhosted.org"] }
 ```
 
-JSON equivalent:
+`false` allows no egress at all. An empty list is rejected as ambiguous.
+
+These rules relay TLS without terminating it, so egress runs at full speed.
+Whatever the policy, OpenShell always blocks loopback, link-local addresses
+and the cloud metadata address `169.254.169.254`.
+
+Raven's own web tools run on the host and are not affected by this policy. It
+applies to commands in the sandbox (`pip`, `npm`, `git`, `curl`) and to stdio
+MCP servers.
+
+### 4.2 Extra volume mounts
 
 ```json
 {
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "extra_volumes": [
-        ["/Users/alice/datasets", "/data", "ro"],
-        ["/tmp/sandbox-cache",    "/cache", "rw"]
-      ]
-    }
-  }
+  "extraVolumes": [
+    ["/data/datasets", "/datasets", "ro"],
+    ["/home/me/cache", "/cache", "rw"]
+  ]
 }
 ```
 
-### 8.3 Resource limits
+Both paths must be absolute. The gateway must allow bind mounts (section 1.2).
+Use host directories outside `/tmp`: the packaged Linux gateway runs with
+systemd `PrivateTmp`, so it cannot see the host's `/tmp`, and a mount from
+there fails with `bind source path does not exist`.
 
-```python
-SandboxConfig(
-    backend="boxlite",
-    cpus=4,
-    memory_mib=8192,
-    disk_size_gb=50,        # omit or set null for ephemeral disk (default)
-    default_timeout=300,    # 5-minute default per command
-    create_timeout=600,     # increase for large images or slow registries
-)
+### 4.3 Resources and timeouts
+
+```json
+{ "cpus": 4, "memoryMib": 4096, "defaultTimeout": 300 }
 ```
 
-Per-call timeout overrides the default:
+`cpus` and `memoryMib` become the container's limits. A tool call may still
+pass its own timeout, which overrides `defaultTimeout` for that call.
 
-```python
-# This call gets 10 s regardless of default_timeout
-result = await executor.exec("sleep 20", timeout=10)
-```
+## 5. Performance
 
-## 9. How to Run Tests
+Measured on Linux 6.8 with Docker 29 and OpenShell 0.1.8:
 
-### 9.1 Prerequisites
+| Operation | Cost |
+|-----------|------|
+| Create to ready | about 2 s; about 4 s for 8 created at once |
+| Command round trip | about 20 ms |
+| Delete | about 5 s on the gateway, in the background for Raven |
+| Memory per idle sandbox | about 31 MiB on the host |
+| CPU per sandbox creation | about 1.5 CPU-seconds |
 
-| Requirement | Notes |
-|-------------|-------|
-| Python 3.12+ | Check with `python3 --version` |
-| `uv` | Project package manager; install with `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| boxlite (integration tests only) | macOS Apple Silicon M1+ **or** Linux x86_64/ARM64 with `/dev/kvm` |
-| Node.js / npx (MCP roundtrip test only) | Provided by the `node:20-slim` OCI image — no local Node required |
+Opening a file in a sandbox costs about ten times what it costs in a plain
+container, because OpenShell mediates the call. Workloads that open many small
+files, such as installing dependencies or `git add` on a large tree, run
+several times slower than on the host.
 
-Unit tests mock Boxlite and do not require a running VM or KVM. Use Python 3.12
-or newer, as required by the project.
+## 6. How to Run Tests
 
-### 9.2 Set up the virtual environment
-
-The project uses `uv` for dependency management.
+Unit tests need neither OpenShell nor a gateway:
 
 ```bash
-# Clone and enter the repo
-git clone <repo-url>
-cd raven
-
-# Create the virtual environment and install all project dependencies
-uv sync
+uv run --frozen --all-extras pytest tests/test_sandbox_unit.py \
+  tests/test_sandbox_openshell_executor.py tests/test_sandbox_mounts.py -v
 ```
 
-`uv sync` creates the project environment and installs the locked dependencies.
-Use `uv run` for the commands below; manual activation is not required.
-
-### 9.3 Install dependencies
-
-**Unit tests:** install the core dependencies and development tools:
+The integration tests drive a real local gateway. They need an image with `sh`,
+`python3` and `curl`, and a workspace root outside `/tmp`:
 
 ```bash
-# Core project and development tools
-uv sync
+RAVEN_OPENSHELL_IT=1 \
+RAVEN_OPENSHELL_IT_IMAGE=my-image:latest \
+uv run --frozen --all-extras pytest tests/integration/test_openshell_sandbox_real_gateway.py -v -s
 ```
 
-MCP is already a core dependency and does not need to be added separately.
+`RAVEN_OPENSHELL_IT_ROOT` overrides where the test workspaces live,
+`RAVEN_OPENSHELL_IT_HOST` names a reachable HTTPS host, and
+`RAVEN_OPENSHELL_IT_UNLISTED_APEX` names a two-label host outside the default
+list.
 
-**Integration tests** — additionally require the sandbox optional extra:
+## 7. Troubleshooting
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `No sandbox backend available` | The SDK is not in Raven's environment | Run the install command from section 1.1 |
+| `Cannot create an OpenShell sandbox` | No gateway answers | `openshell status`; restart the gateway |
+| `did not become ready: ... bind source path does not exist` | Mount source under `/tmp`, or bind mounts disabled | Move the workspace out of `/tmp`; check `gateway.toml` |
+| `ConfigurationInvalid` on start | The gateway rejected the policy | `openshell logs <name>` |
+| `cannot write the workspace` | Root host, and the sandbox user does not own the workspace | Run Raven as a non-root user, or give the workspace to that UID |
+| `curl: (7) ... Couldn't connect` within milliseconds | The network policy denied the host | Add it to `allowNet` with `"*"` |
+
+## 8. Platform Requirements
+
+| Platform | Support |
+|----------|---------|
+| Linux x86_64 / arm64 | Kernel 6.2 or newer with Landlock ABI 3 enabled, Docker 28 or newer |
+| macOS Apple Silicon | Docker Desktop, or colima with the settings in section 1.2 |
+| Windows | Not supported; the `sandbox` extra installs nothing there |
+
+Check a Linux host with:
 
 ```bash
-# Install the pinned Boxlite backend
-uv sync --extra sandbox
+uname -r
+cat /sys/kernel/security/lsm   # must include landlock
+python3 -c "import ctypes;print(ctypes.CDLL(None,use_errno=True).syscall(444,None,0,1))"   # Landlock ABI, need >= 3
+docker version --format '{{.Server.Version}}'
 ```
 
-Verify the installation:
-
-```bash
-# Sandbox package should import cleanly
-uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print('sandbox ok')"
-
-# boxlite binary should be available (integration tests only)
-uv run python -c "import boxlite; print('boxlite ok')"
-```
-
-### 9.4 Run unit tests
-
-Unit tests cover `SandboxConfig`, `DirectExecutor`, a mocked `BoxliteExecutor`,
-`ExecTool` restrictions, the `AgentLoop` executor lifecycle, and MCP bridge
-tasks. They require no VM or KVM access.
-
-```bash
-uv run python -m pytest tests/test_sandbox_unit.py -v
-```
-
-Use pytest's summary for the current pass and skip counts. Test counts and
-runtime depend on the revision and environment.
-
-**Useful flags:**
-
-```bash
-# Stop on first failure
-uv run python -m pytest tests/test_sandbox_unit.py -x
-
-# Run a specific test class
-uv run python -m pytest tests/test_sandbox_unit.py::TestSandboxConfigValidators -v
-
-# Show log output (useful for DEBUG-level bridge tracing)
-uv run python -m pytest tests/test_sandbox_unit.py -v -s
-
-# Filter by test name substring
-uv run python -m pytest tests/test_sandbox_unit.py -k "translate_cwd"
-```
-
-### 9.5 Run integration tests
-
-Integration tests start real Boxlite VMs. They require:
-
-- The sandbox extra, installed with `uv sync --extra sandbox`
-- macOS Apple Silicon M1+ **or** Linux with `/dev/kvm` accessible
-
-On Linux without `/dev/kvm`, pytest skips the entire module.
-
-**First run — pre-pull OCI images:**
-
-A session-scoped fixture in `test_sandbox_real_vm.py` prepares `ubuntu:22.04`
-and `node:20-slim` before the first test. Boxlite caches downloaded images for
-later runs. Preparation time depends on the registry, network, and local cache.
-
-If an image cannot be pulled, pytest skips the tests and reports the reason:
-
-```
-SKIPPED  OCI image pull failed for 'ubuntu:22.04' — likely a network issue, not a code bug.
-         Fix: check connectivity or pre-pull manually: boxlite pull ubuntu:22.04
-```
-
-**Run all integration tests:**
-
-```bash
-uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
-```
-
-The MCP roundtrip test (`test_npx_mcp_server_everything`) installs
-`@modelcontextprotocol/server-everything` via `npm install -g` inside the `node:20-slim` VM
-on each run, then starts the MCP server and validates the full `initialize` +
-`list_tools` flow.
-
-**Run unit and integration tests together:**
-
-```bash
-uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
-```
-
-**Run the project tests without integration tests:**
-
-```bash
-uv run pytest tests/ --ignore=tests/integration -q
-```
-
-### 9.6 Run a single test
-
-```bash
-# A single test case by full name
-uv run python -m pytest "tests/test_sandbox_unit.py::TestBoxliteTranslateCwd::test_subdir_translates_correctly" -v
-
-# A single integration test
-uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
-```
-
-### 9.7 Troubleshooting
-
-**`ModuleNotFoundError: No module named 'boxlite'`**
-
-```bash
-uv sync --extra sandbox
-```
-
-**`ModuleNotFoundError: No module named 'mcp'`**
-
-Restore the core dependencies in the project environment:
-
-```bash
-uv sync
-```
-
-**`PanicException: Another BoxliteRuntime is already using directory`**
-
-A Boxlite runtime is already using the same state directory. List the
-candidates, then stop the one that owns the directory:
-
-```bash
-pgrep -af boxlite   # command lines, so you can tell which process owns it
-kill <pid>          # then wait a couple of seconds and retry
-```
-
-Kill by pid rather than by pattern: a pattern wide enough to match the runtime
-also matches the shell you typed it in. If you need concurrent runtimes, give
-them separate sandbox state directories.
-
-**Integration tests skipped on Linux**
-
-Check that `/dev/kvm` exists and is accessible:
-
-```bash
-ls -la /dev/kvm
-```
-
-If KVM is unavailable or access is denied, ask the machine administrator to
-enable virtualization and grant the required device access to your account.
-
-**Image pull timeout (`create_timeout` exceeded)**
-
-The default `create_timeout` is 300 s. On a slow connection, increase it or pre-pull images manually:
-
-```bash
-# Pre-pull via a one-off Python script
-uv run python -c "
-import asyncio, boxlite
-async def pull(img):
-    async with boxlite.SimpleBox(image=img, cpus=1, memory_mib=256): pass
-for img in ['ubuntu:22.04', 'node:20-slim']:
-    print(f'Pulling {img}...')
-    asyncio.run(pull(img))
-    print(f'  done')
-"
-```
-
-## 10. Platform Requirements
-
-| Platform | Requirement |
-|----------|------------|
-| macOS | Apple Silicon M1+, macOS 12+ (uses `Hypervisor.framework`) |
-| Linux | x86_64 or ARM64, KVM enabled (`/dev/kvm` accessible to the current user) |
-| Windows | x86_64 WSL2 with KVM enabled (`/dev/kvm` accessible to the current user) |
-
-On unsupported platforms, `sandbox.backend = "none"` uses `DirectExecutor`.
-Commands then run directly on the host without VM isolation.
-
-Verify boxlite is installed and the sandbox package is importable:
-
-```bash
-uv run python -c "import boxlite; print('boxlite ok')"
-uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print('sandbox ok')"
-```
-
-To verify end-to-end (requires KVM / Apple Silicon):
-
-```bash
-uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
-```
+A container inherits its host's kernel, so a Raven running inside a container
+on an older kernel cannot use the sandbox either. The gateway must run on the
+same machine as Raven, because the workspace is bind mounted by host path.

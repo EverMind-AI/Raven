@@ -66,7 +66,7 @@ from raven.providers.registry import (
     auth_shape,
 )
 from raven.providers.wire import stored_model_id
-from raven.sandbox import boxlite_install_hint
+from raven.sandbox import sandbox_install_hint
 
 if TYPE_CHECKING:
     from raven.plugins import OnboardStep, OnboardUI
@@ -1786,19 +1786,24 @@ def _persist_sandbox_backend(backend: str) -> None:
     set_sandbox_backend(backend)
 
 
-def _probe_boxlite() -> tuple[bool, str]:
-    """Probe boxlite availability. Returns ``(ok, reason)``.
+def _probe_openshell() -> tuple[bool, str]:
+    """Probe the OpenShell sandbox backend. Returns ``(ok, reason)``.
 
-    ``reason`` ∈ ``"ok"`` / ``"missing"`` / ``"error"``. The runtime import is
-    the same availability gate ``build_executor`` uses for the boxlite backend.
+    ``reason`` ∈ ``"ok"`` / ``"missing"`` (the SDK is not installed) /
+    ``"unreachable"`` (no registered gateway answers). Listing sandboxes is the
+    cheapest call that proves both the connection and the client credentials.
     """
     console.print(t("  [dim]⏳ Checking sandbox availability…[/dim]"))
     try:
-        import boxlite  # noqa: F401
+        from openshell import SandboxClient
     except ImportError:
         return False, "missing"
+    gateway = (((_load_raw_config().get("tools") or {}).get("sandbox") or {}).get("gateway")) or None
+    try:
+        client = SandboxClient.from_active_cluster(cluster=gateway, timeout=5.0)
+        client.list_all(workspace="default", page_size=1)
     except Exception:
-        return False, "error"
+        return False, "unreachable"
     return True, "ok"
 
 
@@ -1828,11 +1833,11 @@ def _confirm_host_run(questionary: Any) -> bool:
 
 
 def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
-    """Step 2 — choose run location (host / boxlite sandbox)."""
+    """Step 2 — choose run location (host / OpenShell sandbox)."""
     _step_header(2, t("Choose where Raven runs code / commands"))
 
     if skip or non_interactive:
-        run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
+        run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (OpenShell)")
         console.print(t("  [dim]Keeping run location: {location}.[/dim]", location=run_loc))
         if _current_sandbox_backend() == "none":
             _warn_host_risk()
@@ -1844,7 +1849,7 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     current = _current_sandbox_backend()
     choices: list[Any] = []
     if current != "none":
-        choices.append(questionary.Choice(t("Keep current: sandbox (boxlite)"), value="keep"))
+        choices.append(questionary.Choice(t("Keep current: sandbox (OpenShell)"), value="keep"))
     choices.extend(
         [
             questionary.Choice(
@@ -1852,8 +1857,10 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
                 value="none",
             ),
             questionary.Choice(
-                t("Sandbox isolation (boxlite) — isolated in a lightweight VM, safer (needs platform support)"),
-                value="boxlite",
+                t(
+                    "Sandbox isolation (OpenShell) — kernel-enforced isolation, safer (needs Docker and an OpenShell gateway)"
+                ),
+                value="openshell",
             ),
             questionary.Choice(t("Back"), value=_BACK),
         ]
@@ -1875,11 +1882,11 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         console.print(t("  [green]✓ Running directly on the host.[/green]"))
         return None
 
-    # boxlite — probe before committing.
+    # OpenShell — probe before committing.
     while True:
-        ok, reason = _probe_boxlite()
+        ok, reason = _probe_openshell()
         if ok:
-            _persist_sandbox_backend("boxlite")
+            _persist_sandbox_backend("openshell")
             console.print(
                 t(
                     "  [green]✓ Sandbox available. Using default resources "
@@ -1890,18 +1897,18 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
         if reason == "missing":
             console.print(
                 t(
-                    "  [yellow]✗ Sandbox runtime (boxlite) isn't installed.[/yellow]\n"
+                    "  [yellow]✗ The OpenShell SDK isn't installed.[/yellow]\n"
                     "  [dim]Install it, then choose “Retry after install”:[/dim]"
                 )
             )
-            console.print(f"  [dim]  {boxlite_install_hint()}[/dim]", soft_wrap=True)
-        else:  # reason == "error": importable but failed to initialize
+            console.print(f"  [dim]  {sandbox_install_hint()}[/dim]", soft_wrap=True)
+        else:  # reason == "unreachable": the SDK is here but no gateway answers
             console.print(
                 t(
-                    "  [yellow]✗ Sandbox runtime (boxlite) is installed but failed to "
-                    "start.[/yellow]\n"
-                    "  [dim]Your machine may lack the required virtualization support. "
-                    "Fall back to host, or check the boxlite setup docs.[/dim]"
+                    "  [yellow]✗ No OpenShell gateway is reachable.[/yellow]\n"
+                    "  [dim]Install OpenShell and start its gateway "
+                    "(https://docs.nvidia.com/openshell/latest/about/installation), "
+                    "check it with `openshell status`, then choose “Retry after install”.[/dim]"
                 )
             )
         while True:
@@ -2149,7 +2156,7 @@ def _print_next_steps(*, warnings: list[str], show_next_steps: bool = True) -> N
 
     # Recap what was configured (read from disk) so the user has closure.
     provs = ", ".join(_provider_label(n).split(" (")[0] for n in _configured_providers()) or "—"
-    run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (boxlite)")
+    run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (OpenShell)")
     chans = ", ".join(onboard_channels._enabled_channels()) or t("none")
     mem = _selected_backend() if _memory_enabled() else t("[yellow]off[/yellow]")
     # Onboarding provisions the token but never opens the face, so the recap

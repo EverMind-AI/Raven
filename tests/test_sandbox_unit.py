@@ -1,6 +1,6 @@
 """Unit tests for the sandbox package and sandbox-related ExecTool / AgentLoop behaviour.
 
-All tests run without boxlite installed and without KVM/Hypervisor access.
+All tests run without an OpenShell gateway.
 """
 
 from __future__ import annotations
@@ -12,8 +12,8 @@ import sys
 import tempfile
 import textwrap
 import time
-from pathlib import Path, PurePosixPath, PureWindowsPath
-from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -29,11 +29,11 @@ from raven.sandbox import (
     SandboxInitError,
     build_executor,
 )
-from raven.sandbox.boxlite_executor import BoxliteExecutor
+from raven.sandbox.openshell_executor import OpenShellExecutor
 
-# The boxlite runtime is mocked in every test below, so this path is inert data:
-# it names where a real backend would keep its state, and is never touched.
-_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-boxlite-home"
+# No backend keeps local state any more, so this path is inert data: it names
+# where one would, and is never touched.
+_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-sandbox-home"
 
 
 def _test_sandbox_dir(backend: str) -> Path:
@@ -156,43 +156,30 @@ class TestSandboxConfigValidators:
 
     def test_aliases_accept_both_camel_and_snake(self):
         """populate_by_name=True + alias_generator=to_camel must let users
-        pass either ``max_message_bytes`` or ``maxMessageBytes`` (and same for
-        the rest of the snake_case fields). This locks down the loader contract
-        so a future field rename can't silently drop snake_case support."""
-        from raven.sandbox.config import SandboxDebugConfig
+        pass either ``memory_mib`` or ``memoryMib`` (and the same for the rest
+        of the snake_case fields)."""
+        snake = SandboxConfig.model_validate({"backend": "openshell", "memory_mib": 4096, "allow_net": False})
+        camel = SandboxConfig.model_validate({"backend": "openshell", "memoryMib": 4096, "allowNet": False})
+        assert snake.memory_mib == camel.memory_mib == 4096
+        assert snake.allow_net is camel.allow_net is False
 
-        snake = SandboxDebugConfig.model_validate(
-            {
-                "enabled": True,
-                "socket": "x.sock",
-                "max_message_bytes": 2048,
-            }
-        )
-        camel = SandboxDebugConfig.model_validate(
-            {
-                "enabled": True,
-                "socket": "x.sock",
-                "maxMessageBytes": 2048,
-            }
-        )
-        assert snake.max_message_bytes == camel.max_message_bytes == 2048
+    @pytest.mark.parametrize("retired", ["auto", "boxlite"])
+    def test_a_retired_backend_loads_as_openshell(self, retired):
+        assert SandboxConfig.model_validate({"backend": retired}).backend == "openshell"
 
-        snake_outer = SandboxConfig.model_validate(
-            {
-                "backend": "auto",
-                "memory_mib": 4096,
-                "allow_net": False,
-            }
-        )
-        camel_outer = SandboxConfig.model_validate(
-            {
-                "backend": "auto",
-                "memoryMib": 4096,
-                "allowNet": False,
-            }
-        )
-        assert snake_outer.memory_mib == camel_outer.memory_mib == 4096
-        assert snake_outer.allow_net is camel_outer.allow_net is False
+    @pytest.mark.parametrize("key", ["debug", "diskSizeGb", "disk_size_gb"])
+    def test_retired_boxlite_keys_are_dropped_not_rejected(self, key):
+        value = {"enabled": True} if key == "debug" else 20
+        config = SandboxConfig.model_validate({"backend": "boxlite", key: value})
+        assert config.backend == "openshell"
+        assert not hasattr(config, "debug") and not hasattr(config, "disk_size_gb")
+
+    def test_a_star_entry_is_a_valid_allowlist(self):
+        assert SandboxConfig(allow_net=["*", "example.com"]).allow_net == ["*", "example.com"]
+
+    def test_the_gateway_defaults_to_the_active_one(self):
+        assert SandboxConfig().gateway is None
+        assert SandboxConfig.model_validate({"gateway": "lab"}).gateway == "lab"
 
 
 # ---------------------------------------------------------------------------
@@ -209,23 +196,42 @@ class TestBuildExecutor:
         e = build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_test_sandbox_dir)
         assert isinstance(e, DirectExecutor)
 
-    def test_backend_auto_without_boxlite_raises(self, tmp_path):
-        with patch.dict("sys.modules", {"boxlite": None}):
-            with pytest.raises(SandboxInitError, match="No sandbox backend available"):
-                build_executor(SandboxConfig(backend="auto"), tmp_path, sandbox_dir=_test_sandbox_dir)
+    def test_backend_openshell_builds_an_openshell_executor_from_the_config(self, tmp_path):
+        owned: set[str] = set()
+        cfg = SandboxConfig(
+            backend="openshell",
+            gateway="lab",
+            image="img:1",
+            cpus=4,
+            memory_mib=4096,
+            allow_net=["pypi.org"],
+            extra_volumes=[["/data", "/data", "ro"]],
+            default_timeout=11,
+            verify_timeout=12,
+            create_timeout=13,
+        )
+        e = build_executor(cfg, tmp_path, owned, (("/home/u", "/agent-home", "rw"),), sandbox_dir=_test_sandbox_dir)
+        assert isinstance(e, OpenShellExecutor)
+        assert (e._image, e._cpus, e._memory_mib, e._allow_net) == ("img:1", 4, 4096, ["pypi.org"])
+        assert (e._default_timeout, e._verify_timeout, e._create_timeout) == (11, 12, 13)
+        assert e._gateway == "lab" and e._owned_ids is owned
+        assert e._mounts.mounts() == [
+            (str(tmp_path), "/workspace", False),
+            ("/data", "/data", True),
+            ("/home/u", "/agent-home", False),
+        ]
 
-    def test_backend_boxlite_without_boxlite_raises(self, tmp_path):
-        with patch.dict("sys.modules", {"boxlite": None}):
-            with pytest.raises(SandboxInitError, match="No sandbox backend available"):
-                build_executor(SandboxConfig(backend="boxlite"), tmp_path, sandbox_dir=_test_sandbox_dir)
+    def test_a_retired_backend_name_still_builds_the_openshell_executor(self, tmp_path):
+        cfg = SandboxConfig.model_validate({"backend": "boxlite"})
+        assert isinstance(build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir), OpenShellExecutor)
 
-    def test_backend_boxlite_without_boxlite_advises_the_running_environment(self, tmp_path):
-        """The install advice must not send the user to a package index for
-        ``raven``: that name there belongs to another project, and boxlite has
-        to land in this interpreter's environment, not the system one."""
-        with patch.dict("sys.modules", {"boxlite": None}):
-            with pytest.raises(SandboxInitError) as exc_info:
-                build_executor(SandboxConfig(backend="boxlite"), tmp_path, sandbox_dir=_test_sandbox_dir)
+    def test_backend_openshell_without_the_sdk_raises_with_install_advice(self, tmp_path):
+        """The advice must not send the user to a package index for ``raven``:
+        that name there belongs to another project, and the SDK has to land in
+        this interpreter's environment."""
+        with patch.dict("sys.modules", {"openshell": None}):
+            with pytest.raises(SandboxInitError, match="No sandbox backend available") as exc_info:
+                build_executor(SandboxConfig(backend="openshell"), tmp_path, sandbox_dir=_test_sandbox_dir)
         message = str(exc_info.value)
         assert "uv pip install --python" in message
         assert "raven[sandbox]" not in message
@@ -235,103 +241,50 @@ class TestBuildExecutor:
         with pytest.raises(SandboxInitError, match="Unknown sandbox backend"):
             build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir)
 
-    def test_the_sandbox_home_stays_unresolved_for_a_backend_that_has_none(self, tmp_path):
-        """Resolving one creates it, and 'none' is the default backend -- an eager
-        path would leave every install a boxlite home it never uses."""
+    @pytest.mark.parametrize("backend", ["none", "openshell"])
+    def test_no_backend_resolves_a_local_state_dir(self, tmp_path, backend):
+        """Resolving one creates it, and neither backend keeps local state."""
         asked: list[str] = []
 
-        def _resolver(backend: str) -> Path:
-            asked.append(backend)
-            return tmp_path / backend
+        def _resolver(name: str) -> Path:
+            asked.append(name)
+            return tmp_path / name
 
-        build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_resolver)
+        build_executor(SandboxConfig(backend=backend), tmp_path, sandbox_dir=_resolver)
 
         assert asked == []
 
-    def test_the_home_the_executor_was_given_is_the_one_the_runtime_gets(self, tmp_path, monkeypatch):
-        """The whole point of the parameter: the sandbox package no longer reads
-        raven's configuration to find out where its state lives."""
-        from raven.sandbox import _runtime as rt_mod
-
-        seen: list[Path] = []
-        fake_runtime = MagicMock()
-        fake_runtime.remove = AsyncMock()
-
-        def _capture(home: Path):
-            seen.append(home)
-            return fake_runtime
-
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", _capture)
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=tmp_path / "vm-home")
-        box = MagicMock()
-        box.id = "vm-1"
-        box.stop = AsyncMock()
-        executor._box = box
-        asyncio.run(executor._cleanup_box())
-
-        assert seen == [tmp_path / "vm-home"]
-
 
 # ---------------------------------------------------------------------------
-# boxlite install advice
+# sandbox install advice
 # ---------------------------------------------------------------------------
 
 
-class TestBoxliteInstallHint:
-    """boxlite_install_hint() must name this interpreter and boxlite's pinned
-    spec: the ``raven`` distribution name does not resolve to this project on
-    a package index, so the extra cannot be named in the command."""
+class TestSandboxInstallHint:
+    """sandbox_install_hint() must name this interpreter and the pinned OpenShell
+    SDK spec: the ``raven`` distribution name does not resolve to this project
+    on a package index, so the extra cannot be named in the command."""
 
     def test_targets_the_running_interpreter_with_the_pinned_spec(self):
-        from raven.sandbox import boxlite_install_hint
+        from raven.sandbox import sandbox_install_hint
 
-        hint = boxlite_install_hint()
+        hint = sandbox_install_hint()
         assert hint.startswith("uv pip install --python")
         assert sys.executable in hint
-        assert "boxlite==" in hint
+        assert ">=0.1.8" in hint and "<0.2" in hint
+        # The specifier carries "<", so it must be quoted to paste into a shell.
+        assert "'openshell" in hint
 
     def test_falls_back_to_the_bare_name_without_installed_metadata(self, monkeypatch):
         import importlib.metadata as metadata_mod
 
-        from raven.sandbox import boxlite_install_hint
+        from raven.sandbox import sandbox_install_hint
 
         def _missing(name):
             raise metadata_mod.PackageNotFoundError(name)
 
         monkeypatch.setattr(metadata_mod, "requires", _missing)
-        assert boxlite_install_hint().endswith(" boxlite")
-
-
-class TestInitFailureAdvice:
-    """The boxlite-installed-but-failing paths must not advise a reinstall:
-    by the time they run, the import already succeeded."""
-
-    async def test_pre_pull_failure_keeps_platform_advice_without_install_hint(self, monkeypatch, tmp_path):
-        fake_boxlite = MagicMock()
-        fake_boxlite.SimpleBox = MagicMock(side_effect=RuntimeError("no KVM"))
-        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        with pytest.raises(SandboxInitError) as exc_info:
-            await executor._pull_image()
-
-        message = str(exc_info.value)
-        assert "Cannot initialise sandbox (image pre-pull failed)" in message
-        assert "pip install" not in message
-        assert "/dev/kvm" in message
-
-    async def test_verify_failure_keeps_platform_advice_without_install_hint(self, tmp_path):
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        broken_box = MagicMock()
-        broken_box.exec = MagicMock(side_effect=RuntimeError("vmm crash"))
-
-        with pytest.raises(SandboxInitError) as exc_info:
-            await executor._verify(broken_box)
-
-        message = str(exc_info.value)
-        assert "pip install" not in message
-        assert "/dev/kvm" in message
+        assert sandbox_install_hint().endswith(" openshell")
 
 
 async def _stop_holder(pid: int) -> None:
@@ -990,814 +943,6 @@ class TestExecToolWithMockExecutor:
 
 
 # ---------------------------------------------------------------------------
-# BoxliteExecutor._translate_cwd
-# ---------------------------------------------------------------------------
-
-
-class TestBoxliteTranslateCwd:
-    def _make_executor(self, workspace: Path) -> BoxliteExecutor:
-        return BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-    def test_none_returns_workspace_mount(self, tmp_path):
-        e = self._make_executor(tmp_path)
-        assert e._translate_cwd(None) == "/workspace"
-
-    def test_workspace_root_returns_workspace_mount(self, tmp_path):
-        e = self._make_executor(tmp_path)
-        assert e._translate_cwd(str(tmp_path)) == "/workspace"
-
-    def test_subdir_translates_correctly(self, tmp_path):
-        sub = tmp_path / "sub" / "dir"
-        e = self._make_executor(tmp_path)
-        assert e._translate_cwd(str(sub)) == "/workspace/sub/dir"
-
-    def test_outside_path_falls_back_to_workspace(self, tmp_path):
-        e = self._make_executor(tmp_path)
-        result = e._translate_cwd("/completely/outside")
-        assert result == "/workspace"
-
-    def test_extra_volume_root_translates_to_its_own_guest_path(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        home.mkdir()
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-        assert e._translate_cwd(str(home)) == "/agent-home"
-
-    def test_extra_volume_subdir_translates_correctly(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        (home / "skills").mkdir(parents=True)
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-        assert e._translate_cwd(str(home / "skills")) == "/agent-home/skills"
-
-    def test_path_outside_every_volume_falls_back_to_workspace(self, tmp_path):
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        home = tmp_path / "home"
-        home.mkdir()
-        e = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            extra_volumes=[[str(home), "/agent-home", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-        assert e._translate_cwd("/completely/outside") == "/workspace"
-
-
-class TestBoxliteTranslateProcessCwd:
-    """The strict twin used to launch a long-running server."""
-
-    def _make_executor(self, workspace: Path) -> BoxliteExecutor:
-        return BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=workspace,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-    def test_none_returns_workspace_mount(self, tmp_path):
-        assert self._make_executor(tmp_path)._translate_process_cwd(None) == "/workspace"
-
-    def test_a_subdirectory_translates(self, tmp_path):
-        e = self._make_executor(tmp_path)
-        assert e._translate_process_cwd(str(tmp_path / "sub")) == "/workspace/sub"
-
-    def test_a_path_outside_every_volume_is_refused(self, tmp_path):
-        """A server must not be launched in the wrong directory.
-
-        ``_translate_cwd`` falls back to the workspace mount because a
-        one-shot command still has work to do; a server would answer with
-        the wrong files for as long as it lives, so this raises instead.
-        """
-        e = self._make_executor(tmp_path)
-        with pytest.raises(ValueError, match="not inside any volume mounted into the sandbox"):
-            e._translate_process_cwd("/completely/outside")
-
-    def test_guest_mount_path_uses_posix_separators(self):
-        relative = PureWindowsPath("packages/demo/bin").relative_to(PureWindowsPath("."))
-
-        assert BoxliteExecutor._guest_mount_path("/workspace", relative) == "/workspace/packages/demo/bin"
-
-
-class TestBoxliteTranslateProcessPath:
-    def test_windows_path_suffix_uses_posix_separators(self, tmp_path, monkeypatch):
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-        monkeypatch.setattr(
-            executor,
-            "_mount_roots",
-            lambda: [(PureWindowsPath("C:/workspace"), "/workspace")],
-        )
-
-        translated = executor._translate_process_path(r"C:\workspace\packages\demo\bin;C:\outside\bin")
-
-        assert translated == r"/workspace/packages/demo/bin;C:\outside\bin"
-
-    def test_every_occurrence_of_one_root_is_translated(self, tmp_path):
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        root = str(tmp_path.resolve())
-
-        translated = executor._translate_process_path(f"cd {root}/pkgs/p && node {root}/pkgs/p/server.js")
-
-        assert translated == "cd /workspace/pkgs/p && node /workspace/pkgs/p/server.js"
-
-    def test_a_posix_tail_keeps_its_backslashes(self, tmp_path, monkeypatch):
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        # A POSIX-shaped root keeps the premise of this test true on every host;
-        # tmp_path on Windows would make the translator take the Windows branch.
-        monkeypatch.setattr(
-            executor,
-            "_mount_roots",
-            lambda: [(PurePosixPath("/srv/work"), "/workspace")],
-        )
-        backslash = "\\"
-
-        translated = executor._translate_process_path(f"--data=/srv/work/d --sep={backslash}t")
-
-        assert translated == f"--data=/workspace/d --sep={backslash}t"
-
-
-# ---------------------------------------------------------------------------
-# BoxliteExecutor._collect
-# ---------------------------------------------------------------------------
-
-
-class TestBoxliteCollect:
-    async def _collect(self, lines: list[str]) -> str:
-        async def _gen():
-            for line in lines:
-                yield line
-
-        return await BoxliteExecutor._collect(_gen())
-
-    async def test_empty_stream(self):
-        assert await self._collect([]) == ""
-
-    async def test_lines_with_newlines_not_doubled(self):
-        result = await self._collect(["hello\n", "world\n"])
-        assert result == "hello\nworld\n"
-
-    async def test_lines_without_newlines_get_one_appended(self):
-        result = await self._collect(["hello", "world"])
-        assert result == "hello\nworld\n"
-
-    async def test_mixed_lines(self):
-        result = await self._collect(["hello\n", "world"])
-        assert result == "hello\nworld\n"
-
-
-# ---------------------------------------------------------------------------
-# BoxliteExecutor bridge logic (mock Execution)
-# ---------------------------------------------------------------------------
-
-
-def _make_mock_execution(stdout_lines=None, stderr_lines=None):
-    """Build a mock boxlite.Execution object."""
-
-    async def _stdout_iter():
-        for line in stdout_lines or []:
-            yield line
-
-    async def _stderr_iter():
-        for line in stderr_lines or []:
-            yield line
-
-    exec_result = MagicMock()
-    exec_result.exit_code = 0
-
-    execution = MagicMock()
-    execution.stdout.return_value = _stdout_iter()
-    execution.stderr.return_value = _stderr_iter()
-    execution.wait = AsyncMock(return_value=exec_result)
-    execution.kill = AsyncMock()
-    execution.stdin.return_value = MagicMock(send_input=AsyncMock())
-    return execution
-
-
-class TestBoxliteExecTimeout:
-    async def test_timeout_kills_and_returns_minus_one(self, tmp_path):
-        """exec() times out: execution.kill() is called, exit_code=-1 returned."""
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
-
-        mock_box = MagicMock()
-        execution = _make_mock_execution()
-
-        async def _slow_exec(*a, **kw):
-            await asyncio.sleep(10)
-            return execution
-
-        mock_box.exec = _slow_exec
-        executor._box = mock_box
-
-        result = await executor.exec("sleep 10", timeout=0.05)
-        assert result.exit_code == -1
-        assert "timed out" in result.stderr.lower()
-
-    async def test_exec_timeout_execution_kill_called(self, tmp_path):
-        """When execution handle is obtained before timeout, kill() must be called."""
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
-
-        execution = _make_mock_execution()
-        execution.stdout.return_value = _infinite_stream()
-        execution.stderr.return_value = _infinite_stream()
-
-        async def _slow_wait():
-            await asyncio.sleep(10)
-            return MagicMock(exit_code=0)
-
-        execution.wait = AsyncMock(side_effect=_slow_wait)
-
-        mock_box = MagicMock()
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-
-        result = await executor.exec("cmd", timeout=0.05)
-        assert result.exit_code == -1
-        execution.kill.assert_awaited_once()
-
-
-class TestBoxliteExecCancel:
-    @staticmethod
-    def _wedged_executor(tmp_path):
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, default_timeout=60, sandbox_home=_TEST_SANDBOX_HOME
-        )
-        execution = _make_mock_execution()
-        execution.stdout.return_value = _infinite_stream()
-        execution.stderr.return_value = _infinite_stream()
-
-        async def _slow_wait():
-            await asyncio.sleep(30)
-            return MagicMock(exit_code=0)
-
-        execution.wait = AsyncMock(side_effect=_slow_wait)
-        mock_box = MagicMock()
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-        return executor, execution
-
-    async def test_cancel_kills_the_vm_side_execution(self, tmp_path):
-        """A cancelled turn must stop the command inside the VM, not just drop it."""
-        executor, execution = self._wedged_executor(tmp_path)
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        execution.kill.assert_awaited_once()
-
-    async def test_cancel_tolerates_a_failing_kill(self, tmp_path):
-        """A kill that fails must not replace the cancellation with its own error.
-
-        The VM can already be gone by the time the turn is cancelled; reporting
-        that as the reason the turn ended would be wrong twice over.
-        """
-        executor, execution = self._wedged_executor(tmp_path)
-        execution.kill = AsyncMock(side_effect=RuntimeError("box is gone"))
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        execution.kill.assert_awaited_once()
-
-    async def test_cancel_still_raises_after_the_kill(self, tmp_path):
-        """The cleanup must not convert a cancellation into a returned result."""
-        executor, _ = self._wedged_executor(tmp_path)
-
-        task = asyncio.create_task(executor.exec("cmd", timeout=60))
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-        assert task.cancelled()
-
-
-async def _infinite_stream():
-    while True:
-        await asyncio.sleep(10)
-        yield "line"
-
-
-class TestBoxliteVerifyTimeout:
-    async def test_verify_timeout_raises_init_error(self, tmp_path):
-        """_verify() timeout → SandboxInitError with 'timed out' message."""
-        execution = _make_mock_execution()
-
-        async def _slow_wait():
-            await asyncio.sleep(10)
-            return MagicMock(exit_code=0)
-
-        execution.wait = AsyncMock(side_effect=_slow_wait)
-        execution.stdout.return_value = _infinite_stream()
-        execution.stderr.return_value = _infinite_stream()
-
-        mock_box = MagicMock()
-        mock_box.exec = AsyncMock(return_value=execution)
-
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04", workspace=tmp_path, verify_timeout=0.05, sandbox_home=_TEST_SANDBOX_HOME
-        )
-        with pytest.raises(SandboxInitError, match="timed out"):
-            await executor._verify(mock_box)
-        execution.kill.assert_awaited_once()
-
-
-class TestBoxliteStop:
-    async def test_stop_kills_executions_and_cancels_tasks(self, tmp_path):
-        """stop() kills each stored execution and cancels each stored task."""
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-
-        exec1 = MagicMock()
-        exec1.kill = AsyncMock()
-        exec2 = MagicMock()
-        exec2.kill = AsyncMock()
-        executor._process_executions = [exec1, exec2]
-
-        done_event = asyncio.Event()
-
-        async def _long_task():
-            await done_event.wait()
-
-        task = asyncio.create_task(_long_task())
-        executor._process_tasks = [task]
-
-        await executor.stop()
-
-        exec1.kill.assert_awaited_once()
-        exec2.kill.assert_awaited_once()
-        assert executor._process_executions == []
-        assert executor._process_tasks == []
-        assert task.cancelled()
-
-
-class TestBoxliteCleanupOrdering:
-    """P2.1: a VM ID must remain in owned_ids until cleanup actually finishes."""
-
-    async def test_owned_ids_kept_until_after_box_stop(self, tmp_path, monkeypatch):
-        owned: set[str] = set()
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        mock_box = MagicMock()
-        mock_box.id = "vm-cleanup-1"
-        owned_during_stop: list[bool] = []
-
-        async def _stop():
-            # While box.stop() is running, ownership must still be claimed —
-            # otherwise a concurrent `sandbox ls` would mark the VM as orphan.
-            owned_during_stop.append(mock_box.id in owned)
-
-        mock_box.stop = AsyncMock(side_effect=_stop)
-        executor._box = mock_box
-        owned.add(mock_box.id)
-
-        # Stub out the runtime.remove() call so we don't import boxlite.
-        from raven.sandbox import _runtime as rt_mod
-
-        fake_runtime = MagicMock()
-        fake_runtime.remove = AsyncMock()
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
-
-        await executor._cleanup_box()
-
-        assert owned_during_stop == [True], "owned_ids.discard() must run AFTER box.stop(), not before."
-        assert "vm-cleanup-1" not in owned, "ownership must be released after cleanup"
-        assert executor._box is None
-
-
-class TestBoxliteStartFailureCleanup:
-    """R1: a partial-start failure must run cleanup so we don't leak VMs.
-
-    `loop.py` enters the executor via AsyncExitStack; when start() raises,
-    __aexit__ is *not* called by Python's context-manager protocol, so the
-    executor itself must clean up before re-raising.
-    """
-
-    async def test_box_start_failure_runs_cleanup_box(self, tmp_path, monkeypatch):
-        owned: set[str] = set()
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        mock_box = MagicMock()
-        mock_box.id = "vm-partial-start"
-        # box.start() blows up after create() succeeded — the partial-start case.
-        mock_box.start = AsyncMock(side_effect=RuntimeError("vm refused to boot"))
-        cleanup_called: list[str] = []
-
-        async def _stop():
-            cleanup_called.append("stop")
-
-        mock_box.stop = AsyncMock(side_effect=_stop)
-
-        fake_runtime = MagicMock()
-        fake_runtime.create = AsyncMock(return_value=mock_box)
-        fake_runtime.remove = AsyncMock()
-
-        from raven.sandbox import _runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
-
-        # Patch boxlite.BoxOptions so we can construct it without the real package.
-        import sys
-
-        fake_boxlite = MagicMock()
-        fake_boxlite.BoxOptions = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
-
-        with pytest.raises(RuntimeError, match="vm refused to boot"):
-            await executor.start()
-
-        assert cleanup_called == ["stop"], "box.stop() must be called when start() fails mid-way"
-        assert "vm-partial-start" not in owned, "ownership must be released on failed start"
-        assert executor._box is None
-
-    async def test_runtime_create_failure_runs_cleanup_without_box(self, tmp_path, monkeypatch):
-        """If runtime.create() itself fails, no box was ever created — cleanup
-        must still complete cleanly without leaking a VM ID into owned_ids and
-        without raising over the missing _box."""
-        owned: set[str] = set()
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            owned_ids=owned,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        fake_runtime = MagicMock()
-        fake_runtime.create = AsyncMock(side_effect=RuntimeError("create failed"))
-
-        from raven.sandbox import _runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
-
-        import sys
-
-        fake_boxlite = MagicMock()
-        fake_boxlite.BoxOptions = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
-
-        with pytest.raises(RuntimeError, match="create failed"):
-            await executor.start()
-
-        assert owned == set(), "no VM was created → owned_ids must remain empty"
-        assert executor._box is None
-
-    async def test_verify_failure_runs_cleanup_box(self, tmp_path, monkeypatch):
-        """_verify() failure during start() must run the registered cleanup so
-        a box that booted but failed the echo-ok probe doesn't leak. Pairs
-        with TestBoxliteVerifyTimeout, which only exercises _verify() directly
-        — this test covers the start()-level integration.
-        """
-        owned: set[str] = set()
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            owned_ids=owned,
-            verify_timeout=0.05,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        mock_box = MagicMock()
-        mock_box.id = "vm-verify-fails"
-        mock_box.start = AsyncMock()  # boot succeeds
-        cleanup_called: list[str] = []
-
-        async def _stop():
-            cleanup_called.append("stop")
-
-        mock_box.stop = AsyncMock(side_effect=_stop)
-
-        # _verify runs `echo ok`; make wait() hang so verify_timeout fires.
-        async def _slow_wait():
-            await asyncio.sleep(10)
-            return MagicMock(exit_code=0)
-
-        execution = _make_mock_execution()
-        execution.wait = AsyncMock(side_effect=_slow_wait)
-        execution.stdout.return_value = _infinite_stream()
-        execution.stderr.return_value = _infinite_stream()
-        mock_box.exec = AsyncMock(return_value=execution)
-
-        fake_runtime = MagicMock()
-        fake_runtime.create = AsyncMock(return_value=mock_box)
-        fake_runtime.remove = AsyncMock()
-
-        from raven.sandbox import _runtime as rt_mod
-
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
-
-        import sys
-
-        fake_boxlite = MagicMock()
-        fake_boxlite.BoxOptions = MagicMock(return_value=MagicMock())
-        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
-
-        with pytest.raises(SandboxInitError, match="timed out"):
-            await executor.start()
-
-        assert cleanup_called == ["stop"], (
-            "_verify failure must trigger _cleanup_after_failed_start → _cleanup_box → box.stop()"
-        )
-        assert "vm-verify-fails" not in owned, "ownership must be released on _verify failure"
-        assert executor._box is None
-
-
-class TestBoxliteEnsureBoxNetworkSpec:
-    """boxlite 0.9.5 replaced string/list BoxOptions network kwargs with NetworkSpec (#797)."""
-
-    @staticmethod
-    def _setup_boxlite_mocks(monkeypatch):
-        from raven.sandbox import _runtime as rt_mod
-
-        mock_box = MagicMock()
-        mock_box.id = "vm-net-1"
-        mock_box.start = AsyncMock()
-        mock_box.stop = AsyncMock()
-
-        fake_runtime = MagicMock()
-        fake_runtime.create = AsyncMock(return_value=mock_box)
-        fake_runtime.remove = AsyncMock()
-        monkeypatch.setattr(rt_mod, "get_boxlite_runtime", lambda home: fake_runtime)
-
-        fake_boxlite = MagicMock()
-        fake_boxlite.BoxOptions = MagicMock(return_value=MagicMock())
-        fake_boxlite.NetworkSpec = MagicMock(side_effect=lambda **kw: ("NetworkSpec", kw))
-        monkeypatch.setitem(sys.modules, "boxlite", fake_boxlite)
-        return fake_boxlite
-
-    async def test_allow_net_false_passes_disabled_network_spec(self, tmp_path, monkeypatch):
-        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            allow_net=False,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        await executor._ensure_box()
-
-        fake_boxlite.NetworkSpec.assert_called_once_with(mode="disabled")
-        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
-        assert box_options_kwargs["network"] == ("NetworkSpec", {"mode": "disabled"})
-        assert "allow_net" not in box_options_kwargs
-
-    async def test_allow_net_domain_list_passes_enabled_network_spec(self, tmp_path, monkeypatch):
-        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
-        domains = ["pypi.org", "files.pythonhosted.org"]
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            allow_net=domains,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        await executor._ensure_box()
-
-        fake_boxlite.NetworkSpec.assert_called_once_with(mode="enabled", allow_net=domains)
-        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
-        assert box_options_kwargs["network"] == (
-            "NetworkSpec",
-            {"mode": "enabled", "allow_net": domains},
-        )
-        assert "allow_net" not in box_options_kwargs
-
-    async def test_allow_net_true_omits_network_spec(self, tmp_path, monkeypatch):
-        fake_boxlite = self._setup_boxlite_mocks(monkeypatch)
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            allow_net=True,
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-
-        await executor._ensure_box()
-
-        fake_boxlite.NetworkSpec.assert_not_called()
-        box_options_kwargs = fake_boxlite.BoxOptions.call_args.kwargs
-        assert "network" not in box_options_kwargs
-        assert "allow_net" not in box_options_kwargs
-
-
-class TestBoxliteStartProcessBridges:
-    """Bridge behaviour tests via mock Execution."""
-
-    async def test_stdout_bridge_forwards_valid_json(self, tmp_path):
-        """Valid JSON lines from VM stdout reach the anyio read stream as SessionMessage."""
-        mcp_types = pytest.importorskip("mcp.types", reason="mcp not installed")
-        from mcp.shared.message import SessionMessage
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        mock_box = MagicMock()
-
-        # Real boxlite yields chunks with trailing \n (lines)
-        json_line = '{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
-
-        async def _stdout():
-            yield json_line
-
-        async def _stderr():
-            return
-            yield  # make it an async generator
-
-        execution = MagicMock()
-        execution.stdout.return_value = _stdout()
-        execution.stderr.return_value = _stderr()
-        execution.stdin.return_value = MagicMock(send_input=AsyncMock())
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-
-        read_recv, write_send = await executor.start_process("mcp-server", [])
-
-        # Give bridge tasks a moment to run
-        await asyncio.sleep(0.05)
-
-        msg = await asyncio.wait_for(read_recv.receive(), timeout=1.0)
-        # MCP SDK 2.x: read stream carries SessionMessage wrapping JSONRPCMessage
-        assert isinstance(msg, SessionMessage)
-        assert isinstance(msg.message, mcp_types.JSONRPCMessage)
-
-    async def test_stdout_bridge_skips_non_json_lines(self, tmp_path):
-        """Non-JSON stdout lines (e.g. npm progress) are logged and skipped, not forwarded.
-
-        Forwarding them as Exception objects would break ClientSession before the MCP
-        server has a chance to start (e.g. during npx package download).
-        """
-        pytest.importorskip("mcp", reason="mcp not installed")
-        from mcp.types import JSONRPCMessage
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        mock_box = MagicMock()
-
-        json_line = '{"jsonrpc":"2.0","id":1,"method":"ping"}\n'
-
-        async def _stdout():
-            yield "npm warn: some download progress\n"  # non-JSON — must be skipped
-            yield json_line  # valid JSON — must arrive
-
-        async def _stderr():
-            return
-            yield
-
-        execution = MagicMock()
-        execution.stdout.return_value = _stdout()
-        execution.stderr.return_value = _stderr()
-        execution.stdin.return_value = MagicMock(send_input=AsyncMock())
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-
-        read_recv, _ = await executor.start_process("mcp-server", [])
-        await asyncio.sleep(0.05)
-
-        from mcp.shared.message import SessionMessage as SM
-
-        # The first (and only) message must be a SessionMessage wrapping the valid JSON line
-        msg = await asyncio.wait_for(read_recv.receive(), timeout=1.0)
-        assert isinstance(msg, SM), f"Expected SessionMessage, got {type(msg)}: {msg}"
-        assert isinstance(msg.message, JSONRPCMessage)
-
-    async def test_stdin_bridge_sends_json(self, tmp_path):
-        """JSONRPCMessage sent to write stream is forwarded to ExecStdin.send_input()."""
-        JSONRPCMessage = pytest.importorskip("mcp.types", reason="mcp not installed").JSONRPCMessage
-
-        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
-        mock_box = MagicMock()
-
-        stdin_mock = MagicMock()
-        stdin_mock.send_input = AsyncMock()
-
-        async def _stdout():
-            return
-            yield
-
-        async def _stderr():
-            return
-            yield
-
-        execution = MagicMock()
-        execution.stdout.return_value = _stdout()
-        execution.stderr.return_value = _stderr()
-        execution.stdin.return_value = stdin_mock
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-
-        _, write_send = await executor.start_process("mcp-server", [])
-
-        # MCP SDK 2.x: write stream carries SessionMessage
-        from mcp.shared.message import SessionMessage
-        from pydantic import TypeAdapter
-
-        rpc_msg = TypeAdapter(JSONRPCMessage).validate_python({"jsonrpc": "2.0", "id": 1, "method": "ping"})
-        await write_send.send(SessionMessage(message=rpc_msg))
-        await asyncio.sleep(0.05)
-
-        stdin_mock.send_input.assert_awaited()
-        raw = stdin_mock.send_input.call_args[0][0]
-        assert raw.endswith(b"\n")
-        import json
-
-        payload = json.loads(raw.decode())
-        assert payload["method"] == "ping"
-
-    async def test_start_process_translates_command_args_and_env(self, tmp_path):
-        """Every host path handed to the VM is translated, not only the cwd.
-
-        A package server's command, its placeholder-expanded arguments and its
-        PLUGIN_ROOT/PLUGIN_DATA variables are host paths. Boxlite knows only
-        its own mounts, so passing them through unchanged launches a path that
-        does not exist inside the VM.
-        """
-        pytest.importorskip("mcp", reason="mcp not installed")
-        plugin_data = tmp_path / "plugin-data"
-        plugin_data.mkdir()
-        executor = BoxliteExecutor(
-            image="ubuntu:22.04",
-            workspace=tmp_path,
-            extra_volumes=[[str(plugin_data), "/plugin-data", "rw"]],
-            sandbox_home=_TEST_SANDBOX_HOME,
-        )
-        mock_box = MagicMock()
-
-        async def _stdout():
-            return
-            yield
-
-        async def _stderr():
-            return
-            yield
-
-        execution = MagicMock()
-        execution.stdout.return_value = _stdout()
-        execution.stderr.return_value = _stderr()
-        execution.stdin.return_value = MagicMock(send_input=AsyncMock())
-        mock_box.exec = AsyncMock(return_value=execution)
-        executor._box = mock_box
-
-        package_root = tmp_path / "packages" / "demo"
-        await executor.start_process(
-            str(package_root / "bin" / "server"),
-            ["--assets", str(package_root / "assets"), "--plugin-data", str(plugin_data)],
-            env={
-                "PLUGIN_ROOT": str(package_root),
-                "PLUGIN_DATA": str(plugin_data),
-                "PATH": f"{package_root / 'bin'}:/usr/bin",
-                "KEEP": "value",
-            },
-            cwd=str(package_root),
-        )
-
-        command, args, env_tuples = mock_box.exec.call_args.args
-        assert command == "/workspace/packages/demo/bin/server"
-        assert args == [
-            "--assets",
-            "/workspace/packages/demo/assets",
-            "--plugin-data",
-            "/plugin-data",
-        ]
-        assert dict(env_tuples) == {
-            "PLUGIN_ROOT": "/workspace/packages/demo",
-            "PLUGIN_DATA": "/plugin-data",
-            "PATH": "/workspace/packages/demo/bin:/usr/bin",
-            "KEEP": "value",
-        }
-        assert mock_box.exec.call_args.kwargs["cwd"] == "/workspace/packages/demo"
-
-
-# ---------------------------------------------------------------------------
 # AgentLoop executor lifecycle (mock executor + mock bus/provider)
 # ---------------------------------------------------------------------------
 
@@ -2353,11 +1498,11 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
 
 
 def test_a_backend_gets_its_own_home_under_the_data_dir() -> None:
-    """boxlite keeps its db, images and layers here rather than in ~/.boxlite,
-    so the directory has to exist by the time the backend is handed the path."""
-    home = get_sandbox_dir("boxlite")
+    """A backend that keeps local state gets it under raven's data dir, and the
+    directory has to exist by the time the backend is handed the path."""
+    home = get_sandbox_dir("example")
 
-    assert home == get_data_dir() / "sandbox" / "boxlite"
+    assert home == get_data_dir() / "sandbox" / "example"
     assert home.is_dir()
     assert get_sandbox_dir("other") == home.parent / "other"
 

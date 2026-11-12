@@ -249,7 +249,8 @@ def test_doctor_warns_for_the_default_sandbox_and_not_for_smart_mode(healthy_con
 
 
 def test_doctor_warns_for_full_permission_and_not_for_an_enabled_sandbox(healthy_config: Path) -> None:
-    """``full`` skips the ask tier. ``auto`` is a sandbox, so only the first warns."""
+    """``full`` skips the ask tier. A retired ``auto`` loads as the openshell
+    sandbox, so only the first warns."""
     _save_safety("full", "auto")
     r = runner.invoke(app, ["doctor"])
     plain = re.sub(r"\s+", " ", re.sub(r"\x1b\[[0-9;]*m", "", r.stdout))
@@ -257,17 +258,17 @@ def test_doctor_warns_for_full_permission_and_not_for_an_enabled_sandbox(healthy
     assert "ask-tier calls run without asking" in plain
     assert "built-in denials and deny rules still hold" in plain
     assert "commands run on this machine with no isolation" not in plain
-    assert "Sandbox: auto" in plain
+    assert "Sandbox: openshell" in plain
 
 
-def test_doctor_is_quiet_when_permission_mode_asks_and_sandbox_is_boxlite(healthy_config: Path) -> None:
-    _save_safety("ask", "boxlite")
+def test_doctor_is_quiet_when_permission_mode_asks_and_sandbox_is_openshell(healthy_config: Path) -> None:
+    _save_safety("ask", "openshell")
     r = runner.invoke(app, ["doctor"])
     assert r.exit_code == 0, r.stdout
     assert "ask-tier calls run without asking" not in r.stdout
     assert "commands run on this machine with no isolation" not in r.stdout
     assert "Permissions: ask" in r.stdout
-    assert "Sandbox:     boxlite" in r.stdout
+    assert "Sandbox:     openshell" in r.stdout
 
 
 def test_the_safety_settings_reach_the_json_output(healthy_config: Path) -> None:

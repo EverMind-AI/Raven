@@ -55,7 +55,6 @@ TOP_LEVEL_COMMANDS = [
     "channels",
     "cron",
     "provider",
-    "sandbox",
     "sentinel",
     "skill",
 ]
@@ -211,7 +210,6 @@ REGISTERED_COMMAND_NAMES = {
     # the command the two "not installed" errors name, and the one a one-line
     # install runs for itself.
     "resources",
-    "sandbox",
     "sentinel",
     "serve",
     "sessions",

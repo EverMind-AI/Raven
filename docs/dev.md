@@ -38,7 +38,7 @@ For optional extras:
 
 ```bash
 uv sync --extra channels   # messaging integrations (Telegram, Slack, etc.)
-uv sync --extra sandbox    # boxlite sandbox execution
+uv sync --extra sandbox    # OpenShell sandbox SDK
 uv sync --extra tools      # web/readability tools
 # or all at once:
 uv sync --all-extras

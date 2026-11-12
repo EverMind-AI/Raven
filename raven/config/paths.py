@@ -81,9 +81,9 @@ def get_package_data_root() -> Path:
 def get_sandbox_dir(backend: str) -> Path:
     """Return the sandbox runtime home directory for the given backend.
 
-    e.g. backend='boxlite' → <data_dir>/sandbox/boxlite (used as boxlite's
-    home_dir so its DB, images, and layers live under raven's data dir
-    instead of ~/.boxlite).
+    e.g. backend='example' → <data_dir>/sandbox/example, so a backend that
+    keeps local state keeps it under raven's data dir rather than in a
+    dotdir of its own.
     """
     return ensure_dir(get_runtime_subdir("sandbox") / backend)
 

@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven_design.rendering.backend import (
-    BoxLiteRenderBackend,
+    SandboxRenderBackend,
     _copy_asset_tree,
     _outcome_from_wire,
     _posix_locale,
@@ -186,7 +186,7 @@ def test_worker_request_schema_rejects_unknown_config_fields(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
+async def test_cancelling_a_sandboxed_job_stops_the_sandbox_and_removes_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,7 +208,7 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
         async def stop(self):
             stopped.set()
 
-    backend = BoxLiteRenderBackend(
+    backend = SandboxRenderBackend(
         RenderConfig(chrome_path=None, libreoffice_path=None),
         policy,
         image="renderer:test",
@@ -237,14 +237,13 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
     assert list(policy.runtime_root.iterdir()) == []
 
 
-def test_the_boxlite_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
+def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
     """The constructor call crosses the raven/design-engine seam, so a new
-    required argument on raven's side fails here synchronously, before any VM.
+    required argument on raven's side fails here synchronously, before any sandbox.
     The cancellation test above replaces ``_executor``, so it cannot see that."""
-    from raven.config.paths import get_sandbox_dir
-    from raven.sandbox.boxlite_executor import BoxliteExecutor
+    from raven.sandbox.openshell_executor import OpenShellExecutor
 
-    backend = BoxLiteRenderBackend(
+    backend = SandboxRenderBackend(
         RenderConfig(chrome_path=None, libreoffice_path=None),
         _policy(tmp_path),
         image="renderer:test",
@@ -255,5 +254,39 @@ def test_the_boxlite_backend_can_build_the_executor_it_asks_raven_for(tmp_path: 
 
     executor = backend._executor(tmp_path / "job")
 
-    assert isinstance(executor, BoxliteExecutor)
-    assert executor._sandbox_home == get_sandbox_dir("boxlite")
+    assert isinstance(executor, OpenShellExecutor)
+    assert (executor._image, executor._cpus, executor._memory_mib) == ("renderer:test", 1, 512)
+    assert executor._allow_net is False
+
+
+@pytest.mark.parametrize(
+    ("allow_network", "allowlist", "expected"),
+    [(False, ("a.example",), False), (True, (), True), (True, ("a.example",), ["a.example"])],
+)
+def test_the_render_network_setting_maps_onto_the_sandbox_policy(
+    tmp_path: Path, allow_network: bool, allowlist: tuple[str, ...], expected: object
+) -> None:
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None, allow_network=allow_network, network_allowlist=allowlist),
+        _policy(tmp_path),
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    assert backend._executor(tmp_path / "job")._allow_net == expected
+
+
+@pytest.mark.parametrize("name", ["auto", "sandbox", "boxlite"])
+def test_every_isolated_backend_name_builds_the_sandbox_renderer(tmp_path: Path, name: str) -> None:
+    from raven_design.rendering.service import RenderService
+
+    built = RenderService._build_backend(
+        SimpleNamespace(config=RenderConfig(chrome_path=None, libreoffice_path=None), path_policy=_policy(tmp_path)),
+        name,
+        worker_image="renderer:test",
+        worker_cpus=1,
+        worker_memory_mib=512,
+        worker_create_timeout_seconds=1,
+    )
+    assert isinstance(built, SandboxRenderBackend)

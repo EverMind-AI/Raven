@@ -504,7 +504,7 @@ async def test_run_dag_without_a_factory_leaves_the_executor_unset() -> None:
 
 
 async def test_a_node_whose_vm_cannot_start_still_reaps_its_stall_watcher() -> None:
-    """A VM that fails to boot (an unavailable Boxlite) is an expected
+    """A sandbox that fails to boot (an unavailable gateway) is an expected
     operational failure, not a crash: the node is recorded failed and the
     watcher that started before the VM was asked for is cancelled with it --
     one that outlives its node publishes a false stall notice afterwards."""

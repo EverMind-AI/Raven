@@ -177,7 +177,7 @@ tools = [
 ]
 sandbox = [
     "anyio>=4.0",
-    "boxlite==0.9.5 ; sys_platform != 'win32'",
+    "openshell>=0.1.8,<0.2 ; sys_platform != 'win32'",
 ]
 # Driving a real browser is an opt-in extra: playwright pulls a browser binary
 # of its own, which no other capability needs. raven.browser imports it lazily

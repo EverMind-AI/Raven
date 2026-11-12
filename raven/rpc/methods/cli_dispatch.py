@@ -10,8 +10,8 @@ Design summary:
    that is NOT in ``_DISPATCH_BLACKLIST`` and NOT ``agent``-without-``-m``
    is accepted, so a CLI rename or a new command needs no TUI-side list.
    Interactive Rich widgets remain
-   blocked by the blacklist (``provider login`` / ``channels login`` /
-   ``sandbox shell``) + recursive ``tui`` / ``onboard`` wizard.
+   blocked by the blacklist (``provider login`` / ``channels login``)
+   + recursive ``tui`` / ``onboard`` wizard.
 3. **``standalone_mode=False``**: Click library mode — suppresses
    ``sys.exit()``, surfaces errors as exceptions. We still defensively catch
    ``SystemExit`` (Typer's ``typer.Exit`` inherits from it).
@@ -86,7 +86,6 @@ _DISPATCH_BLACKLIST: set[tuple[str, ...]] = {
     # run fine in-process, so gate per-channel rather than the whole subcommand.
     ("channels", "login", "weixin"),  # QR long-poll loop — terminal-only
     ("channels", "login", "whatsapp"),  # npm subprocess owns the TTY — terminal-only
-    ("sandbox", "shell"),  # interactive shell — hijacks stdin
     # tui and onboard were unreachable under the old _DISPATCH_WHITELIST.
     # Reflection makes them and the registered upgrade command reachable, so
     # the blacklist hard-rejects all three to preserve safety.
@@ -188,7 +187,7 @@ def _is_dispatch_compatible(argv: list[str]) -> bool:
         False
         >>> _is_dispatch_compatible(["agent"])  # REPL — blacklist special
         False
-        >>> _is_dispatch_compatible(["sandbox", "shell"])  # blacklist
+        >>> _is_dispatch_compatible(["provider", "login"])  # blacklist
         False
     """
     if not argv:

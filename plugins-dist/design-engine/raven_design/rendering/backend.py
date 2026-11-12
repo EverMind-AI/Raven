@@ -1,8 +1,9 @@
-"""Execution backends for direct and BoxLite-isolated rendering."""
+"""Execution backends for direct and sandbox-isolated rendering."""
 
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import os
 import shutil
@@ -48,7 +49,7 @@ class DirectRenderBackend:
         return self._engine.run(request, preview_limit=preview_limit)
 
 
-class BoxLiteRenderBackend:
+class SandboxRenderBackend:
     _REQUEST_VERSION = 1
 
     def __init__(
@@ -89,6 +90,12 @@ class BoxLiteRenderBackend:
             )
             executor = None
             try:
+                if importlib.util.find_spec("openshell") is None:
+                    raise ImportError("openshell")
+                if os.getuid() == 0:
+                    # A root host leaves the sandbox user to the image, so the
+                    # throwaway job directory must be writable by whoever that is.
+                    os.chmod(job_root, 0o777)
                 executor = self._executor(job_root)
                 await executor.start()
                 result = await executor.exec(
@@ -104,7 +111,7 @@ class BoxLiteRenderBackend:
             except ImportError as exc:
                 raise RenderError(
                     "renderer_unavailable",
-                    "BoxLite is not installed.",
+                    "The OpenShell SDK is not installed.",
                 ) from exc
             except asyncio.CancelledError:
                 raise
@@ -221,14 +228,13 @@ class BoxLiteRenderBackend:
         }
 
     def _executor(self, job_root: Path):
-        from raven.config.paths import get_sandbox_dir
-        from raven.sandbox.boxlite_executor import BoxliteExecutor
+        from raven.sandbox.openshell_executor import OpenShellExecutor
 
         if self.config.allow_network:
             allow_net: bool | list[str] = list(self.config.network_allowlist) or True
         else:
             allow_net = False
-        return BoxliteExecutor(
+        return OpenShellExecutor(
             image=self.image,
             workspace=job_root,
             cpus=self.cpus,
@@ -236,7 +242,6 @@ class BoxLiteRenderBackend:
             allow_net=allow_net,
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
-            sandbox_home=get_sandbox_dir("boxlite"),
         )
 
     @staticmethod

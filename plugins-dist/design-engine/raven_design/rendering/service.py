@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from raven.contracts.tool import ContentPart
-from raven_design.rendering.backend import BoxLiteRenderBackend, DirectRenderBackend, RenderExecutionBackend
+from raven_design.rendering.backend import DirectRenderBackend, RenderExecutionBackend, SandboxRenderBackend
 from raven_design.rendering.models import (
     DEFAULT_CAPTURE_DURATION_SECONDS,
     DEFAULT_VIEWPORT,
@@ -21,6 +21,9 @@ from raven_design.rendering.models import (
 )
 from raven_design.rendering.paths import RenderPathPolicy
 from raven_design.rendering.result import preview_tool_result, render_tool_result
+
+# "boxlite" names the retired VM backend; configs that still say it get the sandbox.
+_SANDBOXED_BACKENDS = frozenset({"auto", "sandbox", "boxlite"})
 
 
 class RenderService:
@@ -51,7 +54,7 @@ class RenderService:
             worker_memory_mib=worker_memory_mib,
             worker_create_timeout_seconds=worker_create_timeout_seconds,
         )
-        startup_budget = worker_create_timeout_seconds if backend in {"auto", "boxlite"} else 0
+        startup_budget = worker_create_timeout_seconds if backend in _SANDBOXED_BACKENDS else 0
         self.tool_timeout_seconds = startup_budget + self.config.timeout_seconds + 30
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -208,8 +211,8 @@ class RenderService:
     ) -> RenderExecutionBackend:
         if backend == "direct":
             return DirectRenderBackend(self.config, self.path_policy)
-        if backend in {"auto", "boxlite"}:
-            return BoxLiteRenderBackend(
+        if backend in _SANDBOXED_BACKENDS:
+            return SandboxRenderBackend(
                 self.config,
                 self.path_policy,
                 image=worker_image,

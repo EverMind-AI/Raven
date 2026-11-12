@@ -629,7 +629,7 @@ async def test_smart_mode_review_is_announced_to_the_surface(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_sandboxing_earns_no_relaxation_at_the_gate():
-    # The Boxlite VM mounts the real workspace read-write, so "the sandbox
+    # The sandbox mounts the real workspace read-write, so "the sandbox
     # holds it" is false for host data: rm -rf /workspace deletes real files.
     # The gate never reads the executor's sandbox flag -- the ask tier asks
     # and the deny list refuses inside the VM exactly as on the host.
