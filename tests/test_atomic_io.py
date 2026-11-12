@@ -145,6 +145,32 @@ def test_atomic_update_concurrent_increments_lose_nothing(tmp_path: Path):
     assert path.read_text(encoding="utf-8") == "16"
 
 
+def test_atomic_update_retries_a_transient_sharing_violation(tmp_path: Path, monkeypatch):
+    """The transaction's write goes through the retry path too: a reader that
+    releases the target a moment later must not cost an update already read."""
+    from raven.utils import atomic_io
+
+    path = tmp_path / "state.json"
+    path.write_text("1", encoding="utf-8")
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise PermissionError("sharing violation")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(atomic_io.os, "replace", flaky)
+    monkeypatch.setattr(atomic_io, "_REPLACE_BACKOFF", 0.001)
+
+    result = atomic_update(path, lambda current: (str(int(current) + 1), "ok"))
+
+    assert result == "ok"
+    assert path.read_text(encoding="utf-8") == "2"
+    assert calls["n"] == 2
+
+
 def test_atomic_replace_with_explicit_mode_holds_from_creation(tmp_path: Path):
     """Secret-bearing files (serve.json's token) need their mode from the very
     first byte; an explicit mode wins over both umask and a leftover tmp's
@@ -419,7 +445,9 @@ class TestReplaceRetry:
 
         with pytest.raises(PermissionError):
             atomic_replace(path, "new")
-        assert calls["n"] == atomic_io._REPLACE_ATTEMPTS
+        # Literal, not the constant: asserting against it stays green when the
+        # budget is cut, and only "all five attempts" is the behaviour under test.
+        assert calls["n"] == 5
         assert path.read_text(encoding="utf-8") == "old"
         assert not (tmp_path / "state.json.tmp").exists()
 

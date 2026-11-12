@@ -158,9 +158,9 @@ class EvolverTreeStore:
     def save_node(self, node: HarnessNode) -> Path:
         """Write ``node``'s metadata JSON to ``nodes_dir/<node_id>.json``.
 
-        Atomic on POSIX (temp + rename, inherited from
-        :meth:`HarnessNode.save`). Idempotent — overwriting an existing
-        file with the same node id is allowed.
+        Atomic on every platform and serialised with the round's ledger
+        writer through :meth:`HarnessNode.save`'s sidecar lock. Idempotent —
+        overwriting an existing file with the same node id is allowed.
         """
         path = self._node_path(node.node_id)
         node.save(path)
