@@ -161,9 +161,7 @@ class Exploration:
         self.start_attempted = False
         self.start_lock = asyncio.Lock()
         try:
-            self.executor = executor or build_executor(
-                self.config.tools.sandbox, self.root, sandbox_dir=lambda name: self.root / ".sandbox" / name
-            )
+            self.executor = executor or build_executor(self.config.tools.sandbox, self.root)
             gate = PermissionGate(
                 config_source=lambda: self.config.permissions,
                 builtin=BuiltinRulings(extra_deny_patterns=self.config.tools.exec.extra_deny_patterns),

@@ -535,7 +535,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         self._pending_recovery: dict[str, dict] = {}
 
         self._sandbox_config = sandbox_config
-        self._owned_ids: set[str] = set()
         # The catalogue's default stands in for a session that never set a tier:
         # `_apply_mode` stamps a policy only on the ACP turn path, so a terminal,
         # gateway or channel turn would otherwise resolve to no tier at all.
@@ -561,7 +560,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_config=sandbox_config,
-            owned_ids=self._owned_ids,
             max_concurrent=max_concurrent_subagents,
             max_spawns_per_hour=max_subagent_spawns_per_hour,
             agents=agents,
@@ -599,7 +597,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
-        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root, get_sandbox_dir
+        from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
@@ -624,9 +622,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             else build_executor(
                 sandbox_config,
                 mount_root,
-                self._owned_ids,
                 (*home_volume, *data_volume),
-                sandbox_dir=get_sandbox_dir,
             )
         )
         self._executor_stack: AsyncExitStack | None = None

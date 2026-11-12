@@ -50,7 +50,6 @@ from raven.agent.subagent_memory import (
     trace_session_id,
 )
 from raven.config.agent_names import canonical_agent_name
-from raven.config.paths import get_sandbox_dir
 from raven.config.schema import TIER_LADDER, ExecToolConfig
 from raven.context_engine.segments.render import (
     RESULT_REPORT_RULE,
@@ -252,7 +251,6 @@ class SubagentManager:
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         sandbox_config: "SandboxConfig | None" = None,
-        owned_ids: set[str] | None = None,
         jina_api_key: str | None = None,
         web_search_provider: str = "serper",
         web_fetch_provider: str = "jina",
@@ -334,7 +332,6 @@ class SubagentManager:
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self._sandbox_config = sandbox_config
-        self._owned_ids = owned_ids
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
         # Why a run is being cancelled, by task id: written by the cancel
@@ -1756,17 +1753,15 @@ class SubagentManager:
     def sandbox_executor_for(self, workspace: Path) -> "SandboxExecutor":
         """The executor a sandboxed run execs in: a spawn's or a graph node's.
 
-        The one sandbox config this manager holds, with the owned-id set and
-        home mount a spawn's executor gets, so both dispatch routes raise their
-        VMs the same way. Cheap to call: construction is synchronous, the VM
-        itself starts inside the caller's ``async with``.
+        The one sandbox config this manager holds, with the home mount a
+        spawn's executor gets, so both dispatch routes raise their VMs the
+        same way. Cheap to call: construction is synchronous, the VM itself
+        starts inside the caller's ``async with``.
         """
         return build_executor(
             self._sandbox_config,
             workspace,
-            self._owned_ids,
             self._home_volume(workspace),
-            sandbox_dir=get_sandbox_dir,
         )
 
     def session_dir_for(self, session_key: str) -> Path:
