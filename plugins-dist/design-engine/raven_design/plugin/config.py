@@ -27,6 +27,7 @@ factory declines (the D6 admission shape). The shipped product slice spells
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -117,6 +118,23 @@ class SelectorConfig:
 #: exact attribute set it has always read; the shipped slice spells five.
 _OFFICE_BACKENDS = ("onlyoffice", "libreoffice", "graph")
 
+# The renderer's own network switch, retired (decision D11): a render job runs
+# no agent command and stays offline, and a switch of its own read as a second
+# permission set beside permissions.network. An old key is ignored, once said.
+_RETIRED_RENDER_KEYS = ("allowNetwork", "networkAllowlist")
+_warned_retired: set[str] = set()
+
+
+def _warn_retired(keys: list[str]) -> None:
+    fresh = [key for key in keys if key not in _warned_retired]
+    if fresh:
+        _warned_retired.update(fresh)
+        logging.getLogger(__name__).warning(
+            "render.%s no longer does anything: the renderer always runs offline. Remove it from the config.",
+            " and render.".join(fresh),
+        )
+
+
 _RENDER_SPEC: tuple[tuple[str, str, str, Any, tuple[Any, Any] | None], ...] = (
     ("enabled", "enabled", "flag", True, None),
     # Fail-closed by default: the fork seat passed the HOST's
@@ -131,8 +149,6 @@ _RENDER_SPEC: tuple[tuple[str, str, str, Any, tuple[Any, Any] | None], ...] = (
     ("workerCpus", "worker_cpus", "count", 2, (1, 64)),
     ("workerMemoryMib", "worker_memory_mib", "count", 4096, (512, 1_048_576)),
     ("workerCreateTimeoutSeconds", "worker_create_timeout_seconds", "count", 300, (1, 86_400)),
-    ("allowNetwork", "allow_network", "flag", False, None),
-    ("networkAllowlist", "network_allowlist", "texts", (), None),
     ("officeBackendOrder", "office_backend_order", "texts", ("onlyoffice", "libreoffice"), None),
     ("allowCloudOffice", "allow_cloud_office", "flag", False, None),
     ("maxInputBytes", "max_input_bytes", "count", 100 * 1024 * 1024, (1, 1 << 40)),
@@ -184,8 +200,6 @@ class RenderSettings:
     worker_cpus: int = 2
     worker_memory_mib: int = 4096
     worker_create_timeout_seconds: int = 300
-    allow_network: bool = False
-    network_allowlist: tuple[str, ...] = ()
     office_backend_order: tuple[str, ...] = ("onlyoffice", "libreoffice")
     allow_cloud_office: bool = False
     max_input_bytes: int = 100 * 1024 * 1024
@@ -222,7 +236,9 @@ class RenderSettings:
     @classmethod
     def from_section(cls, raw: dict[str, Any]) -> "RenderSettings":
         known = {row[0] for row in _RENDER_SPEC}
-        if unknown := set(raw) - known:
+        if retired := sorted(set(raw) & set(_RETIRED_RENDER_KEYS)):
+            _warn_retired(retired)
+        if unknown := set(raw) - known - set(_RETIRED_RENDER_KEYS):
             raise ValueError(f"unknown render keys: {sorted(unknown)}")
         values: dict[str, Any] = {}
         for key, attr, kind, default, bounds in _RENDER_SPEC:

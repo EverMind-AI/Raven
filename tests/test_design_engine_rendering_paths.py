@@ -303,26 +303,20 @@ def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: 
     assert executor._network_source() == {}
 
 
-@pytest.mark.parametrize(
-    ("allow_network", "allowlist", "expected"),
-    [(False, ("a.example",), False), (True, (), True), (True, ("a.example",), ["a.example"])],
-)
-def test_the_render_network_setting_maps_onto_the_sandbox_policy(
-    tmp_path: Path, allow_network: bool, allowlist: tuple[str, ...], expected: object
-) -> None:
+def test_the_renderer_sandbox_has_no_network(tmp_path: Path) -> None:
+    """Decision D11: a render job runs no agent command, so it stays offline and has no switch of its own."""
+    import dataclasses
+
+    assert "allow_network" not in {field.name for field in dataclasses.fields(RenderConfig)}
     backend = SandboxRenderBackend(
-        RenderConfig(chrome_path=None, libreoffice_path=None, allow_network=allow_network, network_allowlist=allowlist),
+        RenderConfig(chrome_path=None, libreoffice_path=None),
         _policy(tmp_path),
         image="renderer:test",
         cpus=1,
         memory_mib=512,
         create_timeout_seconds=1,
     )
-    from raven.sandbox.network_policy import compile_network_policy, network_from_allow_net
-
-    assert backend._executor(tmp_path / "job")._network_source() == compile_network_policy(
-        network_from_allow_net(expected)
-    )
+    assert backend._executor(tmp_path / "job")._network_source() == {}
 
 
 @pytest.mark.parametrize("name", ["auto", "sandbox", "boxlite"])

@@ -228,16 +228,13 @@ class SandboxRenderBackend:
     def _executor(self, job_root: Path):
         from raven.sandbox.openshell_executor import OpenShellExecutor
 
-        if self.config.allow_network:
-            allow_net: bool | list[str] = list(self.config.network_allowlist) or True
-        else:
-            allow_net = False
         return OpenShellExecutor(
             image=self.image,
             workspace=job_root,
             cpus=self.cpus,
             memory_mib=self.memory_mib,
-            allow_net=allow_net,
+            # A render job runs no agent command; it stays offline (decision D11).
+            network_source=lambda: {},
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
         )

@@ -165,8 +165,6 @@ class RenderConfig:
     ffmpeg_path: str | None = None
     ffprobe_path: str | None = None
     qpdf_path: str | None = None
-    allow_network: bool = False
-    network_allowlist: tuple[str, ...] = ()
     office_backend_order: tuple[str, ...] = ("onlyoffice", "libreoffice")
     allow_cloud_office: bool = False
     raster_dpi: int = 144
