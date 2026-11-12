@@ -198,6 +198,10 @@ def _gated_exec(executor, responder, tmp_path, *, mode: str = "ask", families=()
 
 
 class _DeniedExecutor(_RecordingExecutor):
+    def __init__(self, *, sandboxed: bool) -> None:
+        super().__init__(sandboxed=sandboxed)
+        self.granted: list[list] = []
+
     async def exec(self, command: str, **kwargs) -> ExecResult:
         from raven.sandbox.denials import NetworkDenial
 
@@ -205,15 +209,61 @@ class _DeniedExecutor(_RecordingExecutor):
         denial = NetworkDenial("/usr/bin/curl", "example.com", 443, "transparent_tcp_policy_denied")
         return ExecResult(stdout="", stderr="curl: (7) Couldn't connect", exit_code=7, denials=(denial,))
 
+    async def grant_network(self, grants) -> bool:
+        self.granted.append(list(grants))
+        return True
 
-async def test_a_sandbox_network_denial_is_named_in_the_exec_output(tmp_path) -> None:
+
+class _ChoiceResponder:
+    def __init__(self, choices: list[ApprovalChoice]) -> None:
+        self.choices = choices
+        self.requests: list[dict] = []
+
+    async def await_approval(self, **request) -> ApprovalOutcome:
+        self.requests.append(request)
+        return ApprovalOutcome(choice=self.choices.pop(0))
+
+
+@pytest.fixture
+def fresh_grants(monkeypatch):
+    from raven.permissions import sandbox_network
+    from raven.permissions import session as session_module
+    from raven.permissions.network_grants import GrantRegistry
+
+    registry = GrantRegistry()
+    monkeypatch.setattr(sandbox_network, "GRANTS", registry)
+    monkeypatch.setattr(session_module, "_GRANTS", {})
+    return registry
+
+
+async def test_full_mode_opens_a_blocked_connection_for_the_session(tmp_path, fresh_grants) -> None:
+    from raven.sandbox.network_policy import NetworkGrant
+
     executor = _DeniedExecutor(sandboxed=True)
     registry = _gated_exec(executor, _ApprovalResponder([]), tmp_path, mode="full")
 
     result = await registry.execute("exec", {"command": "curl https://example.com"})
 
     assert "Exit code: 7" in result
-    assert "[sandbox] The sandbox network policy blocked: /usr/bin/curl -> example.com:443." in result
+    assert (
+        "[sandbox] Network access for /usr/bin/curl -> example.com:443 was approved; run the command again." in result
+    )
+    grant = NetworkGrant("/usr/bin/curl", "example.com", 443)
+    assert executor.granted == [[grant]]
+    assert fresh_grants.grants_for("session-a") == frozenset({grant})
+
+
+async def test_deny_and_stop_on_a_blocked_connection_ends_the_turn(tmp_path, fresh_grants) -> None:
+    executor = _DeniedExecutor(sandboxed=True)
+    responder = _ChoiceResponder([ApprovalChoice.ALLOW, ApprovalChoice.DENY_STOP])
+    registry = _gated_exec(executor, responder, tmp_path)
+
+    result = await registry.execute("exec", {"command": "curl https://example.com"})
+
+    assert [request["kind"] for request in responder.requests] == ["shell.exec", "sandbox.network"]
+    assert result.continuation is Continuation.ABORT_TURN
+    assert "declined network access to /usr/bin/curl -> example.com:443 and asked to stop here" in result
+    assert executor.granted == []
 
 
 async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
