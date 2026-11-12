@@ -42,6 +42,7 @@ to set up one this refuses to advertise.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -406,7 +407,7 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
     ``tools.web.search.provider`` is then the selection the engine follows, but
     a selection is not this function's answer -- returning it here would report
     a pin for a lane that follows the host. :func:`product_page_search_vendor`
-    reads that selection for the readiness probe.
+    derives that selection for the readiness probe the way the launcher does.
 
     Here beside :func:`product_secret` for the same reason: a route asking
     whether a lane can search pictures has to read the lane's contract, not the
@@ -438,33 +439,75 @@ def product_picture_slice_key(row_name: str, root: Path | None = None) -> str:
     return key if isinstance(key, str) else ""
 
 
-def product_page_search_vendor(row_name: str, host_vendor: str, root: Path | None = None) -> str:
-    """The page-search vendor a product folder names, or the host's selection.
+_OWN_WEB_VENDORS = ("serper", "jina")
+"""Vendors whose own key ``agents/raven-ppt/run.py`` resolves to a pre-vendor
+leaf (``OWN_WEB_KEYS``). Spelled here so the readiness probe hands the shared
+policy the same input the launcher does; a contract test in
+``tests/test_agents_ppt_launcher.py`` holds the two tables equal."""
 
-    ``tools.web.search.provider`` in the folder's own ``config.json`` is the
-    selection its launcher preserves: inheritance moves the host's choice in
-    only where the product names none. The deck engine resolves its picture
-    vendor through that rendered selection, so the readiness probe has to read
-    the same field -- otherwise a lane the engine runs on its own vendor is
-    refused (or opened) on the outer host's.
+_DECK_PICTURE_VENDORS = ("serpapi", "brave", "firecrawl", "serply")
+"""Vendors whose own key the launcher writes into the vendor slot before the
+policy reads ownership (``DECK_VENDOR_KEYS``). Only these four are read from
+``<PREFIX>_<VENDOR>_API_KEY``: any other vendor's bare name is not a lane key,
+and counting one would open a route the launch would not equip."""
 
-    Only the folder's own declaration is modelled here. Where the folder names
-    none this answers ``host_vendor``, while the launcher's inheritance may
-    still decline to carry the host's choice; that residue stays with the
-    launcher rather than growing a second copy here.
+
+def product_page_search_vendor(
+    row_name: str,
+    host_vendor: str,
+    root: Path | None = None,
+    *,
+    host: dict | None = None,
+) -> str:
+    """The page-search vendor a routed lane would render with.
+
+    The launcher's inheritance decides this, not the folder's declaration
+    alone: a lane naming no choice follows the host only when the host's
+    vendor is payable here, and an env-only host key or a lane key for another
+    vendor makes the launcher decline. So the probe runs
+    :func:`raven.config.product_render.inherit_web_vendors` -- the same
+    function, over the same folder config, host config and lane keys -- and
+    reads the ``tools.web.search.provider`` it leaves. The deck engine
+    resolves its picture vendor through that rendered selection, so anything
+    else here is the probe opening a route into a lane that has no picture
+    tool.
+
+    ``host`` is the host's raw config, the file the launcher renders from.
+    Without it there is no policy to run: the answer falls back to the
+    folder's own declaration, else ``host_vendor``.
     """
     folder = product_folder(row_name, root)
-    if folder is None:
+    declared = _product_config(folder) if folder is not None else None
+    if folder is None or declared is None:
         return host_vendor
-    declared = _product_config(folder)
-    tools = declared.get("tools") if isinstance(declared, dict) else None
-    web = tools.get("web") if isinstance(tools, dict) else None
-    search = web.get("search") if isinstance(web, dict) else None
-    provider = search.get("provider") if isinstance(search, dict) else None
-    return provider if isinstance(provider, str) and provider else host_vendor
+
+    from raven.config.product_render import dig
+
+    if not host:
+        return dig(declared, ("tools", "web", "search", "provider")) or host_vendor
+
+    from raven.config.product_render import env_value, inherit_web_vendors
+    from raven.config.schema import WEB_VENDOR_ENV_VARS
+
+    prefix = env_prefix(folder.name)
+    draft = copy.deepcopy(declared)
+    inherit_web_vendors(
+        draft,
+        host,
+        own_keys={vendor: f"{prefix}_{WEB_VENDOR_ENV_VARS[vendor]}" for vendor in _OWN_WEB_VENDORS},
+        deck_keys={vendor: f"{prefix}_{WEB_VENDOR_ENV_VARS[vendor]}" for vendor in _DECK_PICTURE_VENDORS},
+        lookup=lambda name: env_value(name, env_file=folder / ".env"),
+    )
+    return dig(draft, ("tools", "web", "search", "provider")) or "serper"
 
 
-def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool, str]:
+def picture_search_report(
+    target: str,
+    host_vendor: str,
+    key_for: Callable[[str], str],
+    *,
+    host: dict | None = None,
+) -> tuple[str, bool, str]:
     """The picture vendor a routed lane would use, whether it has a key, and why.
 
     The vendor is the effective one, modelled on the deck engine's own
@@ -474,10 +517,10 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     lane pinned to a vendor answers with that vendor while the lane's key
     resolves and with the host rule otherwise.
 
-    ``host_vendor`` is the outer host's ``tools.web.search.provider``, used
-    only where the lane's folder names none of its own: a folder carrying a
-    page-search vendor keeps it through the launcher's render, and that is the
-    selection the engine reads (:func:`product_page_search_vendor`).
+    ``host_vendor`` is the outer host's ``tools.web.search.provider`` and
+    ``host`` its raw config. The rendered selection the engine reads is
+    :func:`product_page_search_vendor`'s answer, which runs the launcher's own
+    inheritance over both.
 
     The reason explains a fallback the settings page has to word differently:
     ``ok`` when the vendor answering is the one the lane is configured to use,
@@ -493,7 +536,7 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     )
 
     slice_key = product_picture_slice_key(target)
-    effective = product_page_search_vendor(target, host_vendor)
+    effective = product_page_search_vendor(target, host_vendor, host=host)
 
     def key(vendor: str) -> str:
         if vendor == "serper" and slice_key:
@@ -528,15 +571,27 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     return vendor, True, "fallback_no_key"
 
 
-def picture_search_status(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool]:
+def picture_search_status(
+    target: str,
+    host_vendor: str,
+    key_for: Callable[[str], str],
+    *,
+    host: dict | None = None,
+) -> tuple[str, bool]:
     """The vendor a routed lane would use for pictures, and whether it has a key."""
-    vendor, ready, _reason = picture_search_report(target, host_vendor, key_for)
+    vendor, ready, _reason = picture_search_report(target, host_vendor, key_for, host=host)
     return vendor, ready
 
 
-def picture_search_ready(target: str, host_vendor: str, key_for: Callable[[str], str]) -> bool:
+def picture_search_ready(
+    target: str,
+    host_vendor: str,
+    key_for: Callable[[str], str],
+    *,
+    host: dict | None = None,
+) -> bool:
     """Whether a routed lane can search pictures under the rule its own tool speaks."""
-    return picture_search_status(target, host_vendor, key_for)[1]
+    return picture_search_status(target, host_vendor, key_for, host=host)[1]
 
 
 def _folder_addresses_openrouter(folder: Path) -> bool:

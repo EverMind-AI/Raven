@@ -36,7 +36,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable, get_args
+from typing import Any, Callable, Iterable, Mapping, get_args
 
 from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
@@ -153,6 +153,7 @@ def inherit_web_vendors(
     host: dict,
     *,
     own_keys: dict[str, str] | None = None,
+    deck_keys: Mapping[str, str] | None = None,
     lookup: Callable[[str], str | None],
 ) -> list[str]:
     """Carry the host's vendor-table web keys and vendor selection into ``config``.
@@ -164,10 +165,14 @@ def inherit_web_vendors(
     this product holds of its own wins -- in the vendor slot, or in the
     pre-vendor leaf ``own_keys`` names, which trunk reads only after an empty
     slot, so inheriting the host's slot beside it would have the host's key
-    silently answer for the product's own. A vendor with no slot of its own on
-    the host borrows the LLM provider key it shares an account with, and that
-    borrowed key is written only when the vendor is one this render selects:
-    an unselected credential is exposure with no reader.
+    silently answer for the product's own. ``deck_keys`` is that same
+    ownership for a vendor whose key this product keeps nowhere but the slot:
+    each one is written there before ownership is read, so a filled slot is
+    the product's own and the host's key for that vendor is not inherited
+    over it. A vendor with no slot of its own on the host borrows the LLM
+    provider key it shares an account with, and that borrowed key is written
+    only when the vendor is one this render selects: an unselected credential
+    is exposure with no reader.
 
     The search and fetch vendor choices follow the host only when all three
     hold: the product names no choice of its own; the host's vendor is either
@@ -180,6 +185,10 @@ def inherit_web_vendors(
     tool that was configured before. A product that names no choice and holds
     no key of its own follows the host, which is the case this function
     exists for. Returns the vendors whose key was carried.
+
+    This one function is the whole decision: the launcher renders through it
+    and the readiness probe derives the lane's vendor through it, so a route
+    cannot open on a vendor the rendered lane does not search with.
     """
     from raven.config.schema import (
         WEB_VENDOR_ENV_VARS,
@@ -187,6 +196,11 @@ def inherit_web_vendors(
         WebSearchProvider,
         borrowed_web_key,
     )
+
+    for vendor, name in (deck_keys or {}).items():
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        if not dig(config, slot) and (own := lookup(name)):
+            put(config, slot, own)
 
     own_keys = own_keys or {}
     own = {

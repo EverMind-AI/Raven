@@ -1488,7 +1488,13 @@ async def test_settings_get_reports_picture_search_from_effective_credentials(cf
 
 async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, monkeypatch):
     """Route readiness accepts the product folder's own `<PRODUCT>_<VENDOR>_API_KEY`;
-    the Settings note has to read the same source or it contradicts the route."""
+    the Settings note has to read the same source or it contradicts the route.
+
+    The lane's own Serper key is a vendor it pays for, so the launcher does not
+    inherit the host's Tavily choice: the rendered selection is the schema
+    default Serper, and the note must report the vendor it configured rather
+    than a fallback the launch never takes.
+    """
     _deck_lane(tmp_path, monkeypatch)
     (tmp_path / "agents" / "raven-ppt" / ".env").write_text("PPT_SERPER_API_KEY=sk-lane\n", encoding="utf-8")
     monkeypatch.delenv("SERPER_API_KEY", raising=False)
@@ -1502,8 +1508,8 @@ async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, m
     assert result["picture_search"] == {
         "vendor": "serper",
         "ready": True,
-        "fallback": True,
-        "reason": "no_surface",
+        "fallback": False,
+        "reason": "ok",
     }
 
 
@@ -1541,8 +1547,21 @@ async def test_settings_get_reads_the_deck_slices_own_serper_key(cfg, tmp_path, 
 async def test_settings_get_names_a_key_missing_on_a_vendor_that_can_search_pictures(cfg, tmp_path, monkeypatch):
     """The two fallback causes are different answers: SerpApi has a picture
     surface and is missing its key, while Tavily has none for a deck. The page
-    cannot tell them apart from ``fallback`` alone."""
-    _deck_lane(tmp_path, monkeypatch)
+    cannot tell them apart from ``fallback`` alone.
+
+    The lane names SerpApi itself, so the launcher keeps that selection while
+    its key is missing -- the rendered lane falls back to the host's Serper.
+    """
+    folder = _deck_lane(tmp_path, monkeypatch)
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "serpapi"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
     for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY", "SERPAPI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     cfg.write_text(
@@ -1550,7 +1569,7 @@ async def test_settings_get_names_a_key_missing_on_a_vendor_that_can_search_pict
             {
                 "tools": {
                     "web": {
-                        "search": {"provider": "serpapi"},
+                        "search": {"provider": "serper"},
                         "providers": {"serper": {"apiKey": "sk-fallback"}},
                     }
                 }

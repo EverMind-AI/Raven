@@ -704,7 +704,7 @@ async def settings_get(params: dict, *, agent_loop_factory=None) -> dict:
         )
 
     try:
-        vendor, ready, reason = picture_search_report("Raven-PPT", selected, lane_key)
+        vendor, ready, reason = picture_search_report("Raven-PPT", selected, lane_key, host=raw)
     except Exception:  # noqa: BLE001 - a probe that cannot answer must not fail the page
         vendor, ready, reason = "", False, "not_ready"
     return {

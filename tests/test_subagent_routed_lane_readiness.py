@@ -16,6 +16,7 @@ measures once a route has asked for it.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -23,7 +24,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.subagent import vendored_agents as va
-from raven.config.schema import MediaGenConfig
+from raven.config.schema import WEB_VENDOR_ENV_VARS, MediaGenConfig
 from raven.providers.base import LLMProvider, LLMResponse
 from tests._wiring import wire
 
@@ -84,13 +85,26 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _host(**kw) -> AgentLoop:
-    """A loop holding only what a case names, and a live config file that has
-    nothing in it -- the host's own credentials are the variable under test."""
+    """A loop holding only what a case names, and the host config file behind it.
+
+    The web section is written into the file the readiness probe runs the
+    launcher's inheritance over, built from the same fields the loop booted
+    with: a real host raven keeps its selection and vendor slots there, and the
+    probe reads that file rather than the boot values.
+    """
     workspace = Path(tempfile.mkdtemp())
+    web: dict = {
+        "search": {"provider": kw.get("web_search_provider", "serper")},
+        "providers": {vendor: {"apiKey": key} for vendor, key in (kw.get("web_provider_keys") or {}).items()},
+    }
+    if key := kw.get("search_api_key"):
+        web["search"]["apiKey"] = key
+    host_file = workspace / "host.json"
+    host_file.write_text(json.dumps({"tools": {"web": web}}), encoding="utf-8")
     loop = AgentLoop(provider=_StubProvider(), workspace=workspace, model="stub", **wire(**kw))
     from raven.config.live import LiveConfig
 
-    loop._live_config = LiveConfig(workspace / "absent-config.json")
+    loop._live_config = LiveConfig(host_file)
     return loop
 
 
@@ -375,6 +389,82 @@ def test_the_probe_and_the_engine_pick_one_vendor_for_a_legacy_folder(lane, tmp_
         True,
         "ok",
     )
+
+
+def _lane_key(host: AgentLoop, row: str = LANE):
+    """The key lookup the router uses, over a loop's live host config."""
+
+    def key_for(vendor: str) -> str:
+        return (
+            va.product_secret(row, f"{vendor.upper()}_API_KEY")
+            or host._live_vendor_key(vendor)
+            or os.environ.get(WEB_VENDOR_ENV_VARS.get(vendor, ""), "")
+        )
+
+    return key_for
+
+
+class TestTheRouteOpensOnlyWhereTheRenderedLaneHasAPictureTool:
+    """The launcher's inheritance is the answer, not the host's picker.
+
+    Four configurations measured on two trees. The first two are the fail-open:
+    the probe assumed the lane inherited the host's Brave choice while the
+    launch declined it -- an env-only host key is not payable, and a deck key
+    for another vendor blocks the move -- so the lane rendered on the schema
+    default Serper with no Serper key, and the engine built no picture tool
+    while the route was open.
+    """
+
+    def test_a_host_key_that_lives_only_in_the_environment_is_not_payable(
+        self, lane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        monkeypatch.setenv("BRAVE_API_KEY", "sk-host-brave-env")
+        host = _host(web_search_provider="brave")
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is False
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            False,
+            "not_ready",
+        )
+
+    def test_a_deck_key_for_another_vendor_blocks_the_host_choice(self, lane, tmp_path: Path) -> None:
+        lane(SERPAPI_API_KEY="sk-lane-serpapi", IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="brave", web_provider_keys={"brave": "sk-host-brave"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is False
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            False,
+            "not_ready",
+        )
+
+    def test_a_payable_host_slot_opens_the_lane_on_that_vendor(self, lane, tmp_path: Path) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="brave", web_provider_keys={"brave": "sk-host-brave"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is True
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "brave",
+            True,
+            "ok",
+        )
+
+    def test_a_serper_host_still_opens_the_lane_on_serper(self, lane, tmp_path: Path) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="serper", web_provider_keys={"serper": "sk-host-serper"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is True
+        assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            True,
+            "ok",
+        )
 
 
 def test_a_lane_own_key_for_its_pinned_vendor_opens_the_route(lane, tmp_path: Path) -> None:

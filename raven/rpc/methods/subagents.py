@@ -176,6 +176,9 @@ def _routes_payload(cfg: Any, config: Any) -> list[dict]:
     from raven.agent.tools.web import SEARCH_PROVIDERS
 
     selected = "" if config is None else config.tools.web.search.provider
+    # The validated model with its defaults left out is the file the launcher
+    # reads: a selection the file never wrote must not become a host choice here.
+    host = None if config is None else config.model_dump(by_alias=True, exclude_defaults=True, exclude_none=True)
 
     def key_for(target: str):
         def key(name: str) -> str:
@@ -202,7 +205,7 @@ def _routes_payload(cfg: Any, config: Any) -> list[dict]:
         ready = None
         if "image_search" in needs and config:
             try:
-                ready = picture_search_ready(to, selected, key_for(to))
+                ready = picture_search_ready(to, selected, key_for(to), host=host)
             except Exception:  # noqa: BLE001 - an unreadable lane must not close the roster
                 ready = None
         out.append({"to": to, "image_search_ready": ready})

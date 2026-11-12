@@ -98,6 +98,45 @@ def test_inherit_web_vendors_leaves_an_own_key_alone():
     assert carried == []
 
 
+def test_inherit_web_vendors_writes_the_products_deck_keys_before_ownership():
+    """A lane key for a deck picture vendor fills the vendor slot first, so the
+    policy reads it as the product's own: the host's different choice is not
+    carried and the host's key for that vendor does not replace it."""
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"brave": {"apiKey": "host-brave"}, "serpapi": {"apiKey": "host-serpapi"}},
+                "search": {"provider": "brave"},
+            }
+        }
+    }
+    config = {"tools": {"web": {"search": {"maxResults": 10}}}}
+
+    render.inherit_web_vendors(
+        config,
+        host,
+        deck_keys={"serpapi": "P_SERPAPI_API_KEY"},
+        lookup={"P_SERPAPI_API_KEY": "sk-own-serpapi"}.get,
+    )
+
+    assert config["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-own-serpapi"
+    assert "provider" not in config["tools"]["web"]["search"], "the lane's own vendor blocks the move"
+
+
+def test_inherit_web_vendors_never_overwrites_a_slot_the_product_already_filled():
+    host = {"tools": {"web": {"search": {"provider": "brave"}, "providers": {"brave": {"apiKey": "host-brave"}}}}}
+    config = {"tools": {"web": {"providers": {"serpapi": {"apiKey": "sk-config-serpapi"}}}}}
+
+    render.inherit_web_vendors(
+        config,
+        host,
+        deck_keys={"serpapi": "P_SERPAPI_API_KEY"},
+        lookup={"P_SERPAPI_API_KEY": "sk-env-serpapi"}.get,
+    )
+
+    assert config["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-config-serpapi"
+
+
 def test_inherit_web_vendors_borrows_the_llm_key_only_for_a_selected_vendor():
     host = {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}}
 
