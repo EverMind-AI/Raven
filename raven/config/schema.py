@@ -1496,6 +1496,54 @@ class ToolSearchConfig(Base):
     """Extra tool names kept exposed every turn, on top of the core set."""
 
 
+class NetworkRule(Base):
+    """One host a sandbox may (``allow``) or may not (``deny``) reach.
+
+    ``ports`` empty means the common ports (22, 80, 443, 8080, 8443, 9418);
+    ``binary`` empty means any program. A wildcard host needs three labels or
+    more (``*.example.com``): OpenShell refuses ``*``, ``**`` and ``*.com``.
+    """
+
+    host: str
+    ports: list[int] = Field(default_factory=list)
+    binary: str = ""
+    tier: Literal["allow", "deny"] = "allow"
+
+    @field_validator("host")
+    @classmethod
+    def _enforceable_host(cls, host: str) -> str:
+        host = host.strip().lower()
+        if not host:
+            raise ValueError("a host is required")
+        if "/" in host or ":" in host:
+            raise ValueError(f"{host!r} is not a host name; put the port under ports and leave out the scheme")
+        if "*" in host and (len(host.split(".")) < 3 or not all(host.split("."))):
+            raise ValueError(f"{host!r}: a wildcard host needs three labels or more, such as *.example.com")
+        return host
+
+    @field_validator("ports")
+    @classmethod
+    def _real_ports(cls, ports: list[int]) -> list[int]:
+        bad = [port for port in ports if not 1 <= port <= 65535]
+        if bad:
+            raise ValueError(f"ports must be between 1 and 65535, got {bad}")
+        return ports
+
+    @field_validator("binary")
+    @classmethod
+    def _absolute_binary(cls, binary: str) -> str:
+        if binary and not binary.startswith("/"):
+            raise ValueError(f"{binary!r}: name the program by its absolute path in the sandbox, such as /usr/bin/curl")
+        return binary
+
+
+class NetworkPermissions(Base):
+    """What every sandbox may reach: the open default, or only the ``allow`` rules."""
+
+    default: Literal["open", "closed"] = "open"
+    rules: list[NetworkRule] = Field(default_factory=list)
+
+
 class PermissionsConfig(Base):
     """Permission gating over tool dispatch (``raven.permissions``).
 
@@ -1516,6 +1564,7 @@ class PermissionsConfig(Base):
 
     mode: Literal["ask", "smart", "full"] = "smart"
     tools: dict[str, str | dict[str, str]] = Field(default_factory=dict)
+    network: NetworkPermissions = Field(default_factory=NetworkPermissions)
     judge_model: str = ""
     judge_timeout_seconds: float = 10.0
 
