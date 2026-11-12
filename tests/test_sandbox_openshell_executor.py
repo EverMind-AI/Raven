@@ -617,6 +617,16 @@ class TestLiveNetwork:
         assert await ex.sync_network() is True
         assert cp.merges == [({}, ["allow_open"])]
 
+    async def test_a_rule_whose_body_changed_is_removed_and_added_in_one_merge(self, tmp_path):
+        # OpenShell merges an add_rule into a rule of the same name, so a
+        # narrowed rule sent as an add alone would keep what it dropped.
+        wide = {"name": "allow_open", "endpoints": [{"host": "pypi.org"}, {"host": "github.com"}]}
+        narrow = {"name": "allow_open", "endpoints": [{"host": "github.com"}]}
+        cp, ex, state = await self._started(tmp_path, {"allow_open": wide})
+        state["policies"] = {"allow_open": narrow}
+        await ex.exec("true")
+        assert cp.merges == [({"allow_open": narrow}, ["allow_open"])]
+
     async def test_a_failed_merge_is_retried_on_the_next_command(self, tmp_path):
         cp, ex, state = await self._started(tmp_path, {})
         state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}}
@@ -1007,7 +1017,7 @@ class TestSDKControlPlane:
         assert request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
         assert request.since_time.seconds == 1_700_000_000 and request.since_time.nanos == 250_000_000
 
-    def test_merge_rules_adds_and_removes_named_rules_in_one_update(self, sdk):
+    def test_merge_rules_removes_then_adds_named_rules_in_one_update(self, sdk):
         plane, client = sdk
         rule = {
             "name": "raven_grant_x",
@@ -1017,7 +1027,7 @@ class TestSDKControlPlane:
         assert plane.merge_rules("rvx", {"raven_grant_x": rule}, ["allow_open"]) == 7
         ((kind, request, _timeout),) = client._stub.calls
         assert kind == "UpdateConfig" and request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
-        add, remove = request.merge_operations
+        remove, add = request.merge_operations
         assert add.add_rule.rule_name == "raven_grant_x"
         assert add.add_rule.rule.endpoints[0].host == "example.com" and list(add.add_rule.rule.endpoints[0].ports) == [
             443

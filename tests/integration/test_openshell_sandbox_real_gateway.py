@@ -212,6 +212,25 @@ async def test_a_changed_permission_set_reaches_the_running_sandbox(workspace):
         await ex.stop()
 
 
+async def test_a_narrowed_permission_set_closes_a_host_on_the_running_sandbox(workspace):
+    from raven.config.schema import NetworkPermissions, NetworkRule
+    from raven.sandbox.network_policy import compile_network_policy
+
+    state = {"policies": compile_network_policy(NetworkPermissions())}
+    ex = OpenShellExecutor(image=IMAGE, workspace=workspace, network_source=lambda: state["policies"])
+    await ex.start()
+    try:
+        probe = "curl -sS -m 10 -o /dev/null https://pypi.org/simple/"
+        assert [d for d in (await ex.exec(probe)).denials if d.host == "pypi.org"] == []
+        denied = NetworkPermissions(rules=[NetworkRule(host="pypi.org", tier="deny")])
+        state["policies"] = compile_network_policy(denied)
+        blocked = await ex.exec(probe)
+        assert ("pypi.org", 443) in [(d.host, d.port) for d in blocked.denials], blocked
+        assert (await ex.exec(f"curl -sS -m 10 -o /dev/null https://{HOST}/")).exit_code == 0
+    finally:
+        await ex.stop()
+
+
 async def test_egress_follows_allow_net(workspace):
     closed = _make(workspace)
     opened = _make(workspace, allow_net=[HOST])

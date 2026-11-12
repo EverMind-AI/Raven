@@ -453,7 +453,10 @@ class OpenShellExecutor(SandboxExecutor):
             self._last_source = source
             return True
         add = {rule: body for rule, body in desired.items() if self._applied_policies.get(rule) != body}
-        remove = [rule for rule in self._applied_policies if rule not in desired]
+        # A rule whose body changed is removed and added again: OpenShell merges
+        # an added rule into one of the same name, so a narrowed rule sent as an
+        # add alone would keep what it dropped.
+        remove = [rule for rule in self._applied_policies if rule not in desired or rule in add]
         try:
             version = await asyncio.to_thread(plane.merge_rules, name, add, remove)
             loaded = await asyncio.to_thread(plane.wait_policy, name, version, _POLICY_WAIT_SECONDS)
@@ -794,21 +797,22 @@ class SDKControlPlane:
         return [(ref.name, dict(ref.labels)) for ref in refs]
 
     def merge_rules(self, name: str, add: dict[str, dict], remove: list[str]) -> int:
-        """Add and remove named network rules in one policy update; returns the new policy version."""
+        """Remove, then add, named network rules in one policy update; returns the new policy version."""
         from google.protobuf.json_format import ParseDict
         from openshell._proto import datamodel_pb2, openshell_pb2, sandbox_pb2
 
+        # Removals first, so a rule both removed and added is replaced, not dropped.
         operations = [
+            openshell_pb2.PolicyMergeOperation(remove_rule=openshell_pb2.RemoveNetworkRule(rule_name=rule_name))
+            for rule_name in remove
+        ]
+        operations += [
             openshell_pb2.PolicyMergeOperation(
                 add_rule=openshell_pb2.AddNetworkRule(
                     rule_name=rule_name, rule=ParseDict(rule, sandbox_pb2.NetworkPolicyRule())
                 )
             )
             for rule_name, rule in add.items()
-        ]
-        operations += [
-            openshell_pb2.PolicyMergeOperation(remove_rule=openshell_pb2.RemoveNetworkRule(rule_name=rule_name))
-            for rule_name in remove
         ]
         response = self._client._stub.UpdateConfig(
             openshell_pb2.UpdateConfigRequest(
