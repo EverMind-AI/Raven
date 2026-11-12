@@ -19,16 +19,30 @@ if TYPE_CHECKING:
     from raven.sandbox.interfaces import SandboxExecutor
 
 REFUSAL_SOURCE = "sandbox_network"
+# A command can be refused hundreds of hosts in one run (a script looping over
+# a list); the output it appends to is already capped, so this notice is too.
+_MAX_LISTED = 10
+_MAX_LINE = 160
 
 
 async def handle_denials(executor: SandboxExecutor | None, denials: Sequence[NetworkDenial], *, command: str) -> str:
     """The text to append to the tool's output for ``denials``; empty when there are none."""
     if not denials:
         return ""
-    lines = [denial_line(denial) for denial in denials]
+    lines = [_shortened(denial_line(denial)) for denial in denials[:_MAX_LISTED]]
     for line in lines:
         note_refusal("exec", line, "blocked by the sandbox network policy", REFUSAL_SOURCE)
+    rest = len(denials) - len(lines)
+    if rest:
+        note_refusal(
+            "exec", f"and {rest} more blocked targets", "blocked by the sandbox network policy", REFUSAL_SOURCE
+        )
+    listed = ", ".join(lines) + (f", and {rest} more" if rest else "")
     return (
-        f"\n\n[sandbox] The sandbox network policy blocked: {', '.join(lines)}. "
+        f"\n\n[sandbox] The sandbox network policy blocked: {listed}. "
         "This is a policy block, not a network failure. Tell the user; it can be allowed under permissions.network."
     )
+
+
+def _shortened(line: str) -> str:
+    return line if len(line) <= _MAX_LINE else line[: _MAX_LINE - 3] + "..."
