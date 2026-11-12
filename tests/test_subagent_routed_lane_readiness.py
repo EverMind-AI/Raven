@@ -225,6 +225,107 @@ def test_a_host_following_lane_closes_with_neither_vendor(lane, tmp_path: Path) 
     assert host._routed_target_ready(LANE, ("image_search",)) is False
 
 
+def _pinned_to(folder: Path, provider: str) -> None:
+    """Declare the product's own picture tool pinned to one vendor."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_lane_pinned_to_a_picture_vendor_is_read_on_that_pin(lane, tmp_path: Path) -> None:
+    """``imageSearch.provider`` naming a vendor is the deck engine's pin: the
+    deck searches that vendor whatever the host selected. With the host on
+    Serper and no Serper key anywhere, the SerpApi key is what opens the route."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _pinned_to(tmp_path / "agents" / FOLDER, "serpapi")
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serpapi": "sp-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_lane_with_no_picture_declaration_follows_the_engine_default(lane, tmp_path: Path) -> None:
+    """A folder copied before ``imageSearch`` existed carries no declaration,
+    and the engine defaults it to ``host``. Its own page-search vendor is not
+    that declaration: a Tavily host on Tavily's key leaves the engine falling
+    back to Serper, and no Serper key means the deck gets no picture tool."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "tavily"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+    # Nor does a vendor the deck could actually use: the field is the page
+    # search's selection, and reading it would open a route the engine closes.
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "serpapi"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with_serpapi = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host", "serpapi": "sp-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+    assert with_serpapi._routed_target_ready(LANE, ("image_search",)) is False
+
+
+def test_a_lane_own_key_for_its_pinned_vendor_opens_the_route(lane, tmp_path: Path) -> None:
+    """``<PREFIX>_<VENDOR>_API_KEY`` is the lane's own credential for the vendor
+    its slice pins; the launcher bridges the same name into the rendered config,
+    so readiness and the engine resolve one source."""
+    lane(SERPAPI_API_KEY="sk-lane-serpapi", IMAGE_API_KEY="sk-lane-image")
+    _pinned_to(tmp_path / "agents" / FOLDER, "serpapi")
+    host = _host(
+        web_search_provider="serper",
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_probe_that_cannot_answer_closes_the_route_instead_of_raising(lane, tmp_path: Path, monkeypatch) -> None:
+    """The gate re-reads credentials on every dispatch; a reader that breaks
+    must refuse the route, not take the turn down with it."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(va, "picture_search_ready", explode)
+    host = _host(media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}))
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+
 def test_a_malformed_plugin_slice_is_skipped_when_reading_the_picture_vendor(lane, tmp_path: Path) -> None:
     lane()
     (tmp_path / "agents" / FOLDER / "config.json").write_text(

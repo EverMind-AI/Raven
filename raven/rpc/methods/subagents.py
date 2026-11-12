@@ -179,10 +179,14 @@ def _routes_payload(cfg: Any, config: Any) -> list[dict]:
 
     def key_for(target: str):
         def key(name: str) -> str:
+            # A vendor this build does not ship has no key to find: the name may
+            # come from a newer raven's manifest, and the missing entry must not
+            # take the roster down with it.
+            spec = SEARCH_PROVIDERS.get(name)
             return (
                 product_secret(target, f"{name.upper()}_API_KEY")
                 or (config.effective_web_vendor_key(name) if config is not None else "")
-                or os.environ.get(SEARCH_PROVIDERS[name].env_var, "")
+                or (os.environ.get(spec.env_var, "") if spec else "")
             )
 
         return key
@@ -195,7 +199,12 @@ def _routes_payload(cfg: Any, config: Any) -> list[dict]:
         else:
             to = str(getattr(route, "to", "") or "")
             needs = tuple(getattr(route, "needs", None) or ())
-        ready = picture_search_ready(to, selected, key_for(to)) if "image_search" in needs and config else None
+        ready = None
+        if "image_search" in needs and config:
+            try:
+                ready = picture_search_ready(to, selected, key_for(to))
+            except Exception:  # noqa: BLE001 - an unreadable lane must not close the roster
+                ready = None
         out.append({"to": to, "image_search_ready": ready})
     return out
 

@@ -116,6 +116,17 @@ PROXY_ENV = ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_prox
 # The vendor for which this product holds a key of its own, by the env name
 # that sets it; that key wins, so the host's vendor slot is not inherited over it.
 OWN_WEB_KEYS = {"serper": "PPT_SERPER_API_KEY", "jina": "PPT_JINA_API_KEY"}
+# A lane's own key for a deck picture vendor, by the env name that sets it.
+# Serper is not here: PPT_SERPER_API_KEY already reaches both readers through
+# the pre-vendor leaf and the slice copy below. For the rest the vendor slot is
+# the one place trunk's web_search and the engine's image_search both read, so
+# a key written here is the same key at both ends.
+DECK_VENDOR_KEYS = {
+    "serpapi": "PPT_SERPAPI_API_KEY",
+    "brave": "PPT_BRAVE_API_KEY",
+    "firecrawl": "PPT_FIRECRAWL_API_KEY",
+    "serply": "PPT_SERPLY_API_KEY",
+}
 
 # The one secret whose absence is fatal: no pictures makes a poorer deck, no
 # model makes no deck at all.
@@ -190,11 +201,19 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     settings lookup are handed in because those are its vocabulary, not the
     library's.
 
+    A deck picture vendor's own key is written into the vendor slot it would
+    otherwise inherit over, before the policy reads whose key wins: a filled
+    slot is the product's own, so the lane key is not replaced by the host's.
+
     This file can outlive its raven: a stamped launcher loads under a raven
     that predates the library helper, and that raven runs the frozen snapshot
     below rather than launching keyless. A raven that has the helper never
     reaches it.
     """
+    for vendor, name in DECK_VENDOR_KEYS.items():
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        if not render.dig(config, slot) and (own := env_value(name)):
+            render.put(config, slot, own)
     inherit = getattr(render, "inherit_web_vendors", None)
     if inherit is None:
         return _inherit_web_vendors_frozen(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)

@@ -169,6 +169,13 @@ async def test_a_missing_key_is_said_once_rather_than_per_query() -> None:
     assert _Client.asked == []
 
 
+def test_the_deck_tool_refuses_a_vendor_the_deck_cannot_use() -> None:
+    """Tavily's hits carry no dimensions and no source page, so it belongs to
+    the host `image_search` only; a deck tool built on it would drop every hit."""
+    with pytest.raises(ValueError, match="tavily"):
+        PptImageSearchTool(provider="tavily")
+
+
 async def test_what_a_slide_cannot_use_is_dropped_before_it_is_offered(monkeypatch) -> None:
     """The floor the tool was written for, still applied per query in a batch."""
 
