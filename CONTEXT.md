@@ -1600,9 +1600,12 @@ The block each turn's user message opens with: the current time, the channel and
 chat id, the surface, and any tool or session notices. The assembler records the
 lines on the message, the session write keeps the user's words in `content` and
 files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
-joins them back the way they were sent, so a later turn replays the message byte
-for byte and the provider's cached prefix still matches. The scent menu rides in
-the same paragraph when the message is sent but is not filed.
+joins them back the way they were sent, so a later turn replays the block byte
+for byte and the provider's cached prefix still matches through it. The scent menu
+rides in the same paragraph when the message is sent but is not filed. Tool notices
+are sent as changes: a plugin's line goes out when it differs from what the replayed
+blocks already say, a plugin no longer noted gets a cleared line, and a compaction
+that takes the blocks out has them told again.
 
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only

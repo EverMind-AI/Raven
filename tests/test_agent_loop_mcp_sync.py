@@ -649,6 +649,49 @@ async def test_a_turn_overtaking_the_prewarm_is_told_the_servers_are_connecting(
     assert loop._mcp_tool_notices() == []
 
 
+async def test_every_notice_names_its_plugin_the_way_the_engine_reads_it(workspace) -> None:
+    """The engine sends a plugin's line again only when it changes, keyed by the
+    name it reads back out of the line; a line it cannot key is sent every turn."""
+    import asyncio
+
+    from raven.config.schema import ToolSearchConfig
+    from raven.context_engine.runtime_context import notice_subject
+    from raven.mcp.oauth import OAuthWaitTimeoutError
+
+    async def refused(name, cfg, registry, stack, executor=None, http_auth=None):
+        raise OAuthWaitTimeoutError("nobody clicked")
+
+    waiting = _loop(workspace, {"asana": MCPServerConfig(url="https://asana.test/mcp", auth="oauth")})
+    with patch(_PATCH, new=refused):
+        await waiting._connect_mcp()
+    assert [notice_subject(n) for n in waiting._mcp_tool_notices()] == ["asana"]
+
+    folded = _loop(
+        workspace,
+        {"svc": MCPServerConfig(url="https://svc.test/mcp")},
+        tool_search_config=ToolSearchConfig(enabled=True, compaction_threshold=0),
+    )
+    with patch(_PATCH, new=_fake_connect(["search"])):
+        await folded._connect_mcp()
+    assert [notice_subject(n) for n in folded._mcp_tool_notices()] == ["svc"]
+
+    gate = asyncio.Event()
+    entered = asyncio.Event()
+
+    async def slow(name, cfg, registry, stack, executor=None, http_auth=None):
+        entered.set()
+        await gate.wait()
+        return _connected([])
+
+    connecting = _loop(workspace, {"svc": MCPServerConfig(url="https://svc.test/mcp")})
+    with patch(_PATCH, new=slow):
+        connecting.prewarm_mcp()
+        await asyncio.wait_for(entered.wait(), timeout=2.0)
+        assert [notice_subject(n) for n in connecting._mcp_tool_notices()] == ["svc"]
+        gate.set()
+        await connecting._mcp_prewarm_task
+
+
 async def test_prewarm_reports_a_sandbox_that_cannot_start_instead_of_vanishing(workspace) -> None:
     """Nobody awaits the prewarm task, so an exception left in it is only a
     'never retrieved' warning at shutdown. ``run()`` shuts the loop down on this

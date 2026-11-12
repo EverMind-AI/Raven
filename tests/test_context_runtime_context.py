@@ -291,3 +291,256 @@ class TestTheEstimateCountsTheLines:
 
         assert estimate_message_tokens(filed) > estimate_message_tokens(bare)
         assert abs(estimate_message_tokens(filed) - estimate_message_tokens(replayed)) <= 2
+
+
+_HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
+_AUTH = "MCP plugin 'github': installed, awaiting authorization."
+_CONNECTING = "MCP plugin 'notion': installed, still connecting."
+_FOLDED = "MCP plugin 'notion': connected, offering 3 tool(s)."
+_GITHUB_CLEARED = (
+    "MCP plugin 'github': the earlier note about it no longer applies; "
+    "this turn's tool definitions show what it offers."
+)
+
+
+class _Recording:
+    """A history builder that records the user message it budgets with, then defers to ``inner``."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.name = inner.name
+        self.order = inner.order
+        self.needs_prefix = True
+        self.stable = False
+        self.seen: list[Any] = []
+
+    async def build(self, ctx: Any) -> Any:
+        self.seen.append(ctx.prefix.user_message["content"])
+        return await self.inner.build(ctx)
+
+
+class _Forgetful:
+    """A history builder whose history keeps none of the session, the way a compaction can."""
+
+    name = "forgetful"
+    order = 6
+    needs_prefix = True
+    stable = False
+
+    async def build(self, ctx: Any) -> Any:
+        from raven.contracts.context import Segment
+
+        return Segment(text="", history=[])
+
+
+def _noticing_engine(workspace: Path, clock: _Clock, notices: list[str], history: Any = None) -> ContextAssembler:
+    history = history or CompactingHistoryBuilder(
+        workspace,
+        ContextConfig(),
+        _StubProvider(),  # type: ignore[arg-type]
+        "stub",
+        WINDOW,
+        lambda: [],
+    )
+    return ContextAssembler(
+        [IdentitySegmentBuilder(workspace), history],
+        lambda: [],
+        now_fn=clock,
+        get_tool_notices=lambda: list(notices),
+    )
+
+
+def _block_lines(content: Any) -> list[str]:
+    text = content if isinstance(content, str) else content[0]["text"]
+    return text.split("\n\n", 1)[0].splitlines()
+
+
+def _mcp_lines(message: dict[str, Any]) -> list[str]:
+    return [line for line in _block_lines(message["content"]) if line.startswith("MCP plugin")]
+
+
+class TestToolNoticesAreSentWhenTheyChange:
+    async def _turns(self, tmp_path: Path, *rounds: list[str]) -> list[list[dict[str, Any]]]:
+        clock = _Clock()
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        sent = []
+        for i, notices in enumerate(rounds):
+            # A fresh engine every turn: what the model was told is read back from
+            # the session, so a restart in between changes nothing.
+            messages = await _turn(_noticing_engine(tmp_path, clock, notices), session, f"q{i}")
+            sent.append(messages)
+            _save(session, [messages[-1], {"role": "assistant", "content": f"a{i}"}])
+            clock.now = datetime(2026, 11, 12, 9, 1 + i)
+        return sent
+
+    async def test_a_notice_is_said_once_while_nothing_changes(self, tmp_path: Path) -> None:
+        first, second, third = await self._turns(tmp_path, [_AUTH], [_AUTH], [_AUTH])
+
+        assert _mcp_lines(first[-1]) == [_HEADER, _AUTH]
+        assert _mcp_lines(second[-1]) == []
+        assert _mcp_lines(third[-1]) == []
+        assert _mcp_lines([m for m in third if m["role"] == "user"][0]) == [_HEADER, _AUTH]
+
+    async def test_a_changed_notice_is_said_again(self, tmp_path: Path) -> None:
+        _, second = await self._turns(tmp_path, [_CONNECTING], [_FOLDED])
+
+        assert _mcp_lines(second[-1]) == [_HEADER, _FOLDED]
+
+    async def test_only_the_plugin_that_changed_is_said(self, tmp_path: Path) -> None:
+        _, second = await self._turns(tmp_path, [_AUTH, _CONNECTING], [_AUTH, _FOLDED])
+
+        assert _mcp_lines(second[-1]) == [_HEADER, _FOLDED]
+
+    async def test_a_notice_that_no_longer_holds_is_cleared_once(self, tmp_path: Path) -> None:
+        _, second, third = await self._turns(tmp_path, [_AUTH], [], [])
+
+        assert _mcp_lines(second[-1]) == [_HEADER, _GITHUB_CLEARED]
+        assert _mcp_lines(third[-1]) == []
+
+    async def test_a_cleared_plugin_that_comes_back_is_said_again(self, tmp_path: Path) -> None:
+        *_, fourth = await self._turns(tmp_path, [_AUTH], [], [], [_AUTH])
+
+        assert _mcp_lines(fourth[-1]) == [_HEADER, _AUTH]
+
+    async def test_the_filed_lines_are_the_lines_sent(self, tmp_path: Path) -> None:
+        first, second = await self._turns(tmp_path, [_AUTH], [_AUTH])
+
+        assert _AUTH in first[-1][RUNTIME_CONTEXT_KEY]
+        assert "MCP plugin" not in second[-1][RUNTIME_CONTEXT_KEY]
+        assert second[-1]["content"].startswith(second[-1][RUNTIME_CONTEXT_KEY] + "\n\n")
+
+    async def test_a_line_that_names_no_plugin_is_sent_every_turn(self, tmp_path: Path) -> None:
+        other = "Tool search: the catalog is folded."
+        first, second = await self._turns(tmp_path, [other], [other])
+
+        for messages in (first, second):
+            lines = _block_lines(messages[-1]["content"])
+            assert other in lines
+            assert _HEADER not in lines
+
+    async def test_what_the_history_no_longer_carries_is_said_again(self, tmp_path: Path) -> None:
+        clock = _Clock()
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        first = await _turn(_noticing_engine(tmp_path, clock, [_AUTH]), session, "q0")
+        _save(session, [first[-1], {"role": "assistant", "content": "a0"}])
+
+        after_compaction = await _turn(_noticing_engine(tmp_path, clock, [_AUTH], _Forgetful()), session, "q1")
+
+        assert _mcp_lines(after_compaction[-1]) == [_HEADER, _AUTH]
+
+    async def test_a_session_filed_before_the_lines_were_kept_hears_the_notice(self, tmp_path: Path) -> None:
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        session.record({"role": "user", "content": "q0"})
+        session.record({"role": "assistant", "content": "a0"})
+
+        messages = await _turn(_noticing_engine(tmp_path, _Clock(), [_AUTH]), session, "q1")
+
+        assert _mcp_lines(messages[-1]) == [_HEADER, _AUTH]
+
+    async def test_the_users_own_words_do_not_count_as_a_notice(self, tmp_path: Path) -> None:
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        session.record({"role": "user", "content": f"why did you say\n{_AUTH}", RUNTIME_CONTEXT_FIELD: _LINES})
+        session.record({"role": "assistant", "content": "a0"})
+
+        messages = await _turn(_noticing_engine(tmp_path, _Clock(), [_AUTH]), session, "q1")
+
+        assert _mcp_lines(messages[-1]) == [_HEADER, _AUTH]
+
+    async def test_the_history_is_budgeted_with_no_less_than_is_sent(self, tmp_path: Path) -> None:
+        clock = _Clock()
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        for i, notices in enumerate(([_AUTH, _CONNECTING], [_AUTH, _FOLDED], [_FOLDED])):
+            recording = _Recording(
+                CompactingHistoryBuilder(
+                    tmp_path,
+                    ContextConfig(),
+                    _StubProvider(),  # type: ignore[arg-type]
+                    "stub",
+                    WINDOW,
+                    lambda: [],
+                )
+            )
+            messages = await _turn(_noticing_engine(tmp_path, clock, notices, recording), session, f"q{i}")
+            [budgeted] = recording.seen
+            sent = messages[-1]["content"]
+            assert set(_mcp_lines(messages[-1])) <= set(_block_lines(budgeted))
+            assert len(budgeted) >= len(sent)
+            _save(session, [messages[-1], {"role": "assistant", "content": f"a{i}"}])
+
+    async def test_words_filed_without_lines_do_not_count_as_a_notice(self, tmp_path: Path) -> None:
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        session.record({"role": "user", "content": f"I saw this earlier:\n{_AUTH}"})
+        session.record({"role": "assistant", "content": "a0"})
+
+        messages = await _turn(_noticing_engine(tmp_path, _Clock(), [_AUTH]), session, "q1")
+
+        assert _mcp_lines(messages[-1]) == [_HEADER, _AUTH]
+
+    async def test_a_notice_sent_with_a_picture_is_read_back(self, tmp_path: Path) -> None:
+        from PIL import Image
+
+        picture = tmp_path / "p.png"
+        Image.new("RGB", (8, 8), "red").save(picture)
+        clock = _Clock()
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        engine = _noticing_engine(tmp_path, clock, [_AUTH])
+        turn = TurnContext(
+            current_message="look", channel="cli", chat_id="x", media=[str(picture)], can_see_images=True
+        )
+        first = (await engine.assemble(session.key, [], _budget(), turn=turn)).messages
+        assert isinstance(first[-1]["content"], list)
+        _save(session, [first[-1], {"role": "assistant", "content": "a red square"}])
+
+        second = await _turn(engine, session, "and now?")
+
+        assert isinstance([m for m in second if m["role"] == "user"][0]["content"], list)
+        assert _mcp_lines(second[-1]) == []
+
+    async def test_only_a_user_message_is_read_for_notices(self, tmp_path: Path) -> None:
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        session.record({"role": "user", "content": "read my log", RUNTIME_CONTEXT_FIELD: _LINES})
+        session.record({"role": "assistant", "content": f"{_TAG}\n{_AUTH}\n\nthat is what the log says"})
+
+        messages = await _turn(_noticing_engine(tmp_path, _Clock(), [_AUTH]), session, "q1")
+
+        assert _mcp_lines(messages[-1]) == [_HEADER, _AUTH]
+
+    async def test_the_envelope_rebuilt_with_the_changes_keeps_its_turn_scratch(self, tmp_path: Path) -> None:
+        from raven.context_engine.scratch import TURN_SCRATCH_KEY
+
+        class _Recall:
+            name = "recall"
+            order = 4
+            needs_prefix = False
+            stable = False
+
+            async def build(self, ctx: Any) -> Any:
+                from raven.contracts.context import Segment
+
+                return Segment(text="the user likes tea")
+
+        def engine() -> ContextAssembler:
+            history = CompactingHistoryBuilder(
+                tmp_path,
+                ContextConfig(),
+                _StubProvider(),  # type: ignore[arg-type]
+                "stub",
+                WINDOW,
+                lambda: [],
+            )
+            return ContextAssembler(
+                [IdentitySegmentBuilder(tmp_path), _Recall(), history],
+                lambda: [],
+                now_fn=_Clock(),
+                get_tool_notices=lambda: [_AUTH],
+            )
+
+        session = SessionManager(tmp_path / "sessions").get_or_create("cli:x")
+        first = await _turn(engine(), session, "q0")
+        _save(session, [first[-1], {"role": "assistant", "content": "a0"}])
+
+        second = await _turn(engine(), session, "q1")
+
+        assert _mcp_lines(second[-1]) == []
+        assert "the user likes tea" in second[-1][TURN_SCRATCH_KEY]
+        assert second[-1]["content"].endswith(second[-1][TURN_SCRATCH_KEY])
