@@ -368,8 +368,10 @@ def inherit_host_permissions(config: dict, host: dict) -> None:
     The user perceives one permission set: the mode, the tool rules and the
     network rules a product's own gate reads are the host's, so a product
     asks about what the host asks about and grants what it grants. A product
-    that brings refusals of its own keeps them on top, since a refusal always
-    wins, and the host's extra deny patterns reach it as before
+    that states a mode of its own keeps it (its launcher applies the owner's
+    mode another way), one that brings refusals of its own keeps them on top,
+    since a refusal always wins, and the host's extra deny patterns reach it
+    as before
     (:func:`inherit_host_denials`). The host's file is read the way its own
     loader reads it, an unpersisted ``tools.sandbox.allowNet`` included.
 
@@ -387,6 +389,12 @@ def inherit_host_permissions(config: dict, host: dict) -> None:
     if isinstance(host_permissions, dict):
         config["permissions"] = copy.deepcopy(host_permissions)
         if isinstance(own, dict):
+            # A mode the product states is its launcher's choice of how the
+            # owner's mode is applied: raven-oncall renders its trunk gate at
+            # full and applies the owner's mode, read from the host, in a gate
+            # of its own. Overriding it would refuse the wakes nobody attends.
+            if "mode" in own:
+                config["permissions"]["mode"] = own["mode"]
             inherit_host_denials(config, {"permissions": own})
     host_tools = host.get("tools")
     inherit_host_denials(config, {"tools": host_tools})

@@ -3507,9 +3507,10 @@ The same trust boundary the cli transport already ran under (`codex -a never`,
 The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
 codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
 `tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
-operator, so it is answered with the agent's reject option. Raven's own products carry the
-same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
-their own gate allows never reaches this handler.
+operator, so it is answered with the agent's reject option. Raven's own products run under
+the host's whole permission set, these refusals included, in their rendered config
+(`product_render.inherit_host_permissions`), because a call their own gate allows never
+reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.
