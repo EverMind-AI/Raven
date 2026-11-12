@@ -232,6 +232,27 @@ class TestBuildExecutor:
             ("/home/u", "/agent-home", False),
         ]
 
+    @pytest.mark.parametrize(
+        ("body", "opens"),
+        [
+            ('{"permissions": ', False),
+            ('{"tools": {"sandbox": {"allowNet": false}}}', False),
+            ('{"permissions": {"network": {"default": "ajar"}}}', False),
+            (None, True),
+        ],
+    )
+    def test_an_executor_with_no_source_runs_under_the_permission_set_on_disk(self, tmp_path, body, opens):
+        pytest.importorskip("openshell")
+        from raven.home import get_config_path
+
+        path = get_config_path()
+        if body is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(body)
+        e = build_executor(SandboxConfig(backend="openshell"), tmp_path)
+        assert ("allow_open" in e._network_source()) is opens
+
     def test_a_network_source_reaches_the_executor(self, tmp_path):
         pytest.importorskip("openshell")
 

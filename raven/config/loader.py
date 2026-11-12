@@ -725,9 +725,16 @@ def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> b
         sandbox.pop(key)
     permissions = data.setdefault("permissions", {})
     if isinstance(permissions, dict) and "network" not in permissions:
+        from pydantic import TypeAdapter
+
         from raven.sandbox.network_policy import network_from_allow_net
 
-        allow_net = value if isinstance(value, bool | list) else True
+        # Read as the old ``bool | list[str]`` field read it, so "false" still
+        # closes; a value that field would have refused closes the network too.
+        try:
+            allow_net = TypeAdapter(bool | list[str]).validate_python(value)
+        except ValidationError:
+            allow_net = False
         permissions["network"] = network_from_allow_net(allow_net).model_dump(mode="json", by_alias=True)
         notice = (
             f"Moved `tools.sandbox.{keys[0]}` to `permissions.network`: what sandboxes may reach is now part of "

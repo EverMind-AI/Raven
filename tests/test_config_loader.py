@@ -2369,6 +2369,16 @@ def test_the_sandbox_network_floor_runs_once_and_is_silent_the_second_time(tmp_p
     assert drain_migration_notices() == []
 
 
+@pytest.mark.parametrize(
+    ("value", "default"),
+    [("false", "closed"), (0, "closed"), ("true", "open"), (5, "closed"), ({"hosts": []}, "closed"), (None, "closed")],
+)
+def test_an_allow_net_value_is_read_the_way_the_old_field_read_it(tmp_path: Path, value, default) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": value})
+    assert on_disk["permissions"]["network"]["default"] == default
+    assert cfg.permissions.network.default == default
+
+
 def test_a_returning_allow_net_is_still_read_into_permissions_in_memory(tmp_path: Path) -> None:
     p = tmp_path / "config.json"
     _write(p, {"tools": {"sandbox": {"backend": "openshell", "allowNet": False}}})

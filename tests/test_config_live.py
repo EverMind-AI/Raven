@@ -826,6 +826,31 @@ def test_permissions_node_invalid_from_the_start_answers_defaults(tmp_path):
     assert fresh.tools == {}
 
 
+def test_network_permissions_read_a_returning_allow_net_the_way_the_loader_does(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+    from raven.config.loader import load_config
+
+    body = '{"tools": {"sandbox": {"allowNet": false}}}'
+    path, loaded = tmp_path / "config.json", tmp_path / "loaded.json"
+    path.write_text(body)
+    loaded.write_text(body)
+    assert network_permissions(LiveConfig(path)).default == "closed"
+    assert load_config(loaded).permissions.network.default == "closed"
+
+
+def test_network_permissions_keep_the_last_valid_set_and_close_when_none_ever_validated(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}}')
+    live = LiveConfig(path)
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    path.write_text('{"permissions": {"network": {"default": "ajar"}}}')
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    fresh = network_permissions(LiveConfig(path))
+    assert (fresh.default, fresh.rules) == ("closed", [])
+
+
 def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
     """The key used to lift a recursive-delete refusal that no longer exists.
     An old config still carrying it must load, must not change any ruling, and
