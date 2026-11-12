@@ -333,7 +333,7 @@ class ExecTool(Tool):
             if guard_error:
                 return self._boundary_error(guard_error)
         elif self.restrict_to_workspace:
-            # Sandboxed: the microVM provides real isolation, but the workspace
+            # Sandboxed: the sandbox provides real isolation, but the workspace
             # fence is an operator-set boundary and still holds.
             workspace_error = self._check_workspace_restriction(command, cwd)
             if workspace_error:
@@ -385,8 +385,8 @@ class ExecTool(Tool):
         env: dict[str, str] | None = None
         if self.path_append:
             if self._executor.is_sandboxed:
-                # Inject path inside the VM via command wrapper; never pass os.environ
-                # to a sandboxed executor — it would leak host credentials into the VM.
+                # Inject path inside the sandbox via command wrapper; never pass os.environ
+                # to a sandboxed executor — it would leak host credentials into the sandbox.
                 command = f'export PATH="$PATH:{shlex.quote(self.path_append)}" && {command}'
             else:
                 # Pass ONLY the PATH override. Copying os.environ here would hand

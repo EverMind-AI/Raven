@@ -251,7 +251,7 @@ class AgentDefaults(Base):
     # which is the state a turn that never issued a request went unnoticed in.
     llm_first_byte_timeout: int = 120
     max_tool_iterations: int = 40
-    # Cap on subagent VMs running at once, counting spawns and DAG nodes
+    # Cap on subagent sandboxes running at once, counting spawns and DAG nodes
     # together (excess queues). ge=1: a 0/negative cap would deadlock every
     # subagent (Semaphore(0)).
     max_concurrent_subagents: int = Field(default=8, ge=1)

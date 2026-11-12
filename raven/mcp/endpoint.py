@@ -202,7 +202,7 @@ async def _upstream_executor(up: _Upstream) -> Any:
     main loop or by a bridged sub-agent.
 
     The socket is unaffected by where the server ends up. The host is the client
-    on this hop, and under a microVM executor it reaches the server over the
+    on this hop, and under a sandboxed executor it reaches the server over the
     streams ``start_process`` hands back -- the sub-agent's socket stays on the
     host side of that, touched only by this process.
     """

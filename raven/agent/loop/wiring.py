@@ -1627,7 +1627,7 @@ class WiringMixin:
                 adopt=self.subagents.adopt_background_run,
                 charge=self.subagents.charge_dag_run,
                 # The manager's own sandbox builder, so a graph node's exec
-                # runs in the VM its tools.sandbox configured rather than on
+                # runs in the sandbox its tools.sandbox configured rather than on
                 # the host -- the silent fallback the sandbox docs disown.
                 sandbox_for=self.subagents.sandbox_executor_for,
                 ask=self._confirm_graph,
@@ -2186,7 +2186,7 @@ class WiringMixin:
     def check_workdir_mounted(self, path: Path, session_key: str | None = None) -> None:
         """Refuse a working directory a sandboxed run could not see.
 
-        A VM's volumes are fixed when the box is created, so a directory
+        A sandbox's volumes are fixed when it is created, so a directory
         outside the mount cannot be served by adding one later.
         """
         if self._workdir_resolver is None or not self._executor.is_sandboxed:

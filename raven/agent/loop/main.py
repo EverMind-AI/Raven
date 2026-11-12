@@ -586,15 +586,15 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
         self._skills_sink = None
 
-        # Executor: synchronous construction only; VM starts in _start_executor()
-        # A sandboxed VM mounts one host root at /workspace, not one per
+        # Executor: synchronous construction only; the sandbox starts in _start_executor()
+        # A sandbox mounts one host root at /workspace, not one per
         # session, so it must be wide enough to cover every working directory
         # the resolver can hand out. Agent home is usually somewhere else
         # entirely -- under PER_CHANNEL the root is ``<agent home>/../tmp``, a
         # sibling, and an explicit ``-w`` cannot be an ancestor of agent home
         # because ``validate_override`` refuses one -- so it is mounted
         # separately at /agent-home to keep memory/skills/session state
-        # reachable from inside the VM.
+        # reachable from inside the sandbox.
         #
         # The check is not dead: under LAUNCH_DIR the root is wherever the user
         # started raven, and launching from ``~`` puts agent home inside it. A
@@ -603,7 +603,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
-        # A package stdio server gets PLUGIN_DATA as a host path, and the VM
+        # A package stdio server gets PLUGIN_DATA as a host path, and the sandbox
         # reaches it only through a mount. The fixed guest path is what lets
         # the executor translate the variable with the rest of the server's
         # paths; without the volume it would stay a host path that cannot
