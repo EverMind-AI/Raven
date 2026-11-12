@@ -294,3 +294,95 @@ async def test_smart_mode_with_no_reviewer_asks_the_person(grants):
     responder = Responder(ApprovalChoice.DENY)
     await _handle(responder, [CURL], FakeSandbox(), config=PermissionsConfig(mode="smart"))
     assert len(responder.calls) == 1
+
+
+class HeldResponder:
+    """Answers only when released, so a second request can arrive while the first is open."""
+
+    def __init__(self, choice: ApprovalChoice, **outcome: Any):
+        import asyncio
+
+        self.outcome = ApprovalOutcome(choice, **outcome)
+        self.calls: list[dict[str, Any]] = []
+        self.release = asyncio.Event()
+
+    async def await_approval(self, **kwargs: Any) -> ApprovalOutcome:
+        self.calls.append(kwargs)
+        await self.release.wait()
+        return self.outcome
+
+
+async def _concurrently(responder, first, second, *, conversation: str):
+    """Two agents of one conversation meet blocked connections at about the same time."""
+    import asyncio
+
+    gate = PermissionGate(config_source=lambda: PermissionsConfig(), builtin=BuiltinRulings())
+
+    async def run(sandbox, denials):
+        start_permission_turn(responder, conversation_id=conversation, turn_id=f"t-{uuid4().hex}")
+        with tool_body(gate):
+            return await handle_denials(sandbox, denials, command="curl a b")
+
+    one = asyncio.create_task(run(*first))
+    while not responder.calls:
+        await asyncio.sleep(0)
+    two = asyncio.create_task(run(*second))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    responder.release.set()
+    return await asyncio.wait_for(one, 5), await asyncio.wait_for(two, 5)
+
+
+async def test_concurrent_requests_for_one_target_share_one_prompt(grants):
+    conversation = f"conv-{uuid4().hex}"
+    responder, a, b = HeldResponder(ApprovalChoice.ALLOW_SESSION), FakeSandbox(), FakeSandbox()
+    first, second = await _concurrently(responder, (a, [CURL]), (b, [CURL]), conversation=conversation)
+    assert len(responder.calls) == 1
+    assert a.granted == [[CURL_GRANT]] and b.granted == [[CURL_GRANT]]
+    assert "was approved; run the command again" in first.text and "was approved; run the command again" in second.text
+
+
+async def test_a_new_target_beside_a_pending_one_gets_its_own_prompt(grants):
+    conversation = f"conv-{uuid4().hex}"
+    responder, a, b = HeldResponder(ApprovalChoice.ALLOW), FakeSandbox(), FakeSandbox()
+    await _concurrently(responder, (a, [CURL]), (b, [CURL, ORG]), conversation=conversation)
+    assert [[t["host"] for t in call["evidence"]["targets"]] for call in responder.calls] == [
+        ["example.com"],
+        ["example.org"],
+    ]
+    assert sorted(b.granted) == [[CURL_GRANT], [ORG_GRANT]]
+
+
+async def test_a_stop_ends_only_the_turn_that_asked(grants):
+    conversation = f"conv-{uuid4().hex}"
+    responder = HeldResponder(ApprovalChoice.DENY_STOP)
+    first, second = await _concurrently(
+        responder, (FakeSandbox(), [CURL]), (FakeSandbox(), [CURL]), conversation=conversation
+    )
+    assert (first.stop, second.stop) == (True, False)
+    assert "declined network access to /usr/bin/curl -> example.com:443; do not try another route" in second.text
+
+
+async def test_a_prompt_whose_turn_is_torn_down_releases_its_waiters(grants):
+    import asyncio
+
+    conversation = f"conv-{uuid4().hex}"
+    responder = HeldResponder(ApprovalChoice.ALLOW)
+    gate = PermissionGate(config_source=lambda: PermissionsConfig(), builtin=BuiltinRulings())
+
+    async def run(sandbox):
+        start_permission_turn(responder, conversation_id=conversation, turn_id=f"t-{uuid4().hex}")
+        with tool_body(gate):
+            return await handle_denials(sandbox, [CURL], command="curl a b")
+
+    one = asyncio.create_task(run(FakeSandbox()))
+    while not responder.calls:
+        await asyncio.sleep(0)
+    waiter = FakeSandbox()
+    two = asyncio.create_task(run(waiter))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    one.cancel()
+    notice = await asyncio.wait_for(two, 2)
+    assert "expired with no answer" in notice.text and waiter.granted == []
+    assert len(responder.calls) == 1
