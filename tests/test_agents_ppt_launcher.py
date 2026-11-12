@@ -770,6 +770,7 @@ def test_the_shared_library_owns_the_vendor_policy(grounded, monkeypatch):
 def test_a_raven_whose_helper_predates_the_deck_keys_still_writes_them(grounded, monkeypatch):
     """A stamped launcher can load on a raven whose helper takes no deck keys;
     the frozen snapshot must still put the lane's own key in its slot."""
+
     def inherit(config, host, *, own_keys=None, lookup):
         return []
 
