@@ -21,7 +21,7 @@
  */
 
 import { FileImportIcon, Layers01Icon } from '@hugeicons/core-free-icons'
-import { useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 import { Icon } from '../components/Icon'
 import * as imported from '../features/imported/store'
@@ -39,6 +39,22 @@ export function MoreFly(): JSX.Element {
      the row before it: the file's name is in here, and it is the only place
      the reader can see it. */
   const open = s.open || busy !== null
+  const row = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const wasOpen = useRef(false)
+  useLayoutEffect(() => {
+    if (open) {
+      wasOpen.current = true
+      return
+    }
+    if (!wasOpen.current) return
+    wasOpen.current = false
+    /* The panel is hidden by the stylesheet rather than unmounted, so a row
+       focused inside it would drop focus to <body>; the row that opened the
+       panel takes it back before the browser does. */
+    const active = document.activeElement
+    if (active instanceof Node && panel.current?.contains(active)) row.current?.focus()
+  }, [open])
   const toggle = (): void => {
     if (busy !== null) return
     navfly.toggle()
@@ -48,7 +64,9 @@ export function MoreFly(): JSX.Element {
       <button
         className="navi chrome-more"
         id="navMoreBtn"
+        ref={row}
         aria-expanded={open}
+        aria-haspopup="true"
         aria-controls="chrome-navfly"
         onClick={toggle}
       >
@@ -58,8 +76,9 @@ export function MoreFly(): JSX.Element {
       <div
         className="chrome-navfly"
         id="chrome-navfly"
+        ref={panel}
         data-open={open ? 'true' : 'false'}
-        role="menu"
+        role="dialog"
         aria-label={t('gui.nav.more')}
       >
         <button

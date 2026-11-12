@@ -49,6 +49,26 @@ describe('the More group', () => {
     expect(more().getAttribute('aria-expanded')).toBe('false')
   })
 
+  it('announces one action as a dialog, not a menu', () => {
+    render(<MoreFly />)
+
+    expect(more().getAttribute('aria-haspopup')).toBe('true')
+    expect(more().getAttribute('aria-controls')).toBe('chrome-navfly')
+    expect(panel().getAttribute('role')).toBe('dialog')
+  })
+
+  it('hands focus back to its row when it shuts from inside the panel', () => {
+    render(<MoreFly />)
+    act(() => more().click())
+    const row = document.getElementById('importedBtn') as HTMLButtonElement
+    act(() => row.focus())
+    expect(document.activeElement).toBe(row)
+
+    act(() => navfly.close())
+
+    expect(document.activeElement).toBe(more())
+  })
+
   it('shuts when a pointer lands outside it', async () => {
     /* The popover has no close button: a pointer outside is one way back out
        and Escape is the other (state/escapeOrder.ts), so a group that nobody

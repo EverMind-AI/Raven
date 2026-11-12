@@ -3078,6 +3078,10 @@ textarea:focus, textarea:focus-visible,
   opacity: 0; transition: opacity .12s;
 }
 .att.img:hover .rm, .att.img .rm:focus-visible { opacity: 1; }
+/* The action row hangs 5px outside its card. Every column that hosts it gives
+   that overhang a gutter -- .col's 36px sides, .satx's 16px, and the task
+   record's own 5px (features/tasks/styles.css) -- so a wider hang has to widen
+   the narrowest gutter first. */
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
 .turn.ai > .ansfoot { margin-top: 0; }
 .ansfoot .acts { margin-top: 0; }
