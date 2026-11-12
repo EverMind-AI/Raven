@@ -1572,6 +1572,12 @@ def test_instance_identity_survives_into_the_child(monkeypatch):
     assert "ONCALL_API_KEY" not in env, "the allowlist stays a list of paths, never keys"
 
 
+async def test_a_direct_executor_reports_no_denials(tmp_path):
+    import time as _time
+
+    assert await DirectExecutor().denials_since(_time.time()) == []
+
+
 async def test_a_direct_executor_has_no_network_to_grant():
     from raven.sandbox.network_policy import NetworkGrant
 

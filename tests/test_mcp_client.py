@@ -265,3 +265,111 @@ def test_a_config_without_the_marker_is_the_hosts_own() -> None:
     assert _host_sourced(SimpleNamespace()) is True
     assert _host_sourced(SimpleNamespace(source="package")) is False
     assert _host_sourced(SimpleNamespace(source="playbook")) is False
+
+
+def _node_denial():
+    from raven.sandbox.denials import NetworkDenial
+
+    return NetworkDenial("/usr/bin/node", "registry.example.com", 443, "transparent_tcp_policy_denied")
+
+
+class _Sandbox:
+    """A sandbox an MCP server runs in, and what it was refused while a call ran."""
+
+    def __init__(self, denials: list) -> None:
+        self.denials = denials
+        self.reads: list[bool] = []
+        self.granted: list = []
+
+    async def denials_since(self, since: float, *, wait: bool = False) -> list:
+        self.reads.append(wait)
+        return list(self.denials)
+
+    async def grant_network(self, grants) -> bool:
+        self.granted.append(list(grants))
+        return True
+
+    async def sync_network(self) -> bool:
+        return True
+
+
+def _sandboxed(session: _Session, sandbox: _Sandbox) -> MCPToolWrapper:
+    tool_def = SimpleNamespace(name="fetch", description="fetch", input_schema={"type": "object", "properties": {}})
+    return MCPToolWrapper(session, "server-x", tool_def, tool_timeout=30, taken=frozenset(), executor=sandbox)
+
+
+async def test_a_sandboxed_servers_refused_connection_is_named_with_its_result() -> None:
+    from raven.permissions.turn import start_permission_turn
+
+    start_permission_turn(None, conversation_id="c", turn_id="t")
+    sandbox = _Sandbox([_node_denial()])
+    result = await _sandboxed(_Session(_result(is_error=True, text="fetch failed")), sandbox).execute()
+    assert isinstance(result, ToolResult) and result.ok is False
+    assert result.model_text.startswith("fetch failed")
+    assert (
+        "[sandbox] The sandbox network policy blocked: /usr/bin/node -> registry.example.com:443." in result.model_text
+    )
+    assert sandbox.reads == [True]
+
+
+async def test_a_clean_sandboxed_call_reads_its_denials_without_waiting() -> None:
+    sandbox = _Sandbox([])
+    result = await _sandboxed(_Session(_result(is_error=False, text="all good")), sandbox).execute()
+    assert result == "all good" and sandbox.reads == [False]
+
+
+async def test_a_timed_out_call_names_what_its_server_was_refused() -> None:
+    from raven.permissions.turn import start_permission_turn
+
+    start_permission_turn(None, conversation_id="c", turn_id="t")
+    sandbox = _Sandbox([_node_denial()])
+    result = await _sandboxed(_Session(asyncio.TimeoutError()), sandbox).execute()
+    assert "timed out" in result.model_text and "registry.example.com:443" in result.model_text
+
+
+async def test_a_stop_on_a_servers_refused_connection_ends_the_turn() -> None:
+    from raven.config.schema import PermissionsConfig
+    from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+    from raven.contracts.tool import Continuation
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+    from raven.permissions.runtime import tool_body
+    from raven.permissions.turn import start_permission_turn
+
+    class Stop:
+        async def await_approval(self, **kwargs):
+            return ApprovalOutcome(ApprovalChoice.DENY_STOP)
+
+    start_permission_turn(Stop(), conversation_id="c-stop", turn_id="t")
+    gate = PermissionGate(config_source=lambda: PermissionsConfig(), builtin=BuiltinRulings())
+    sandbox = _Sandbox([_node_denial()])
+    with tool_body(gate):
+        result = await _sandboxed(_Session(_result(is_error=True, text="fetch failed")), sandbox).execute()
+    assert result.continuation is Continuation.ABORT_TURN
+
+
+async def test_only_a_server_the_sandbox_started_has_its_refusals_read(monkeypatch) -> None:
+    import raven.mcp.client as client_mod
+
+    tool_def = SimpleNamespace(name="fetch", description="fetch", input_schema={"type": "object", "properties": {}})
+
+    @asynccontextmanager
+    async def fake_connection(cfg, transport_type, executor, http_auth=None):
+        yield object(), SimpleNamespace(capabilities=None), [tool_def]
+
+    monkeypatch.setattr(client_mod, "_mcp_server_connection", fake_connection)
+
+    class _Spawning(_Sandbox):
+        is_sandboxed = True
+        supports_process_spawning = True
+
+    sandbox = _Spawning([])
+    for cfg, reads_from in (
+        (MCPServerConfig(command="node", args=["server.js"]), sandbox),
+        (MCPServerConfig(url="https://example.test/mcp"), None),
+    ):
+        reg = ToolRegistry()
+        async with AsyncExitStack() as stack:
+            connected = await connect_mcp_server("srv", cfg, reg, stack, executor=sandbox)
+        (name,) = connected.names
+        assert reg.get(name)._executor is reads_from

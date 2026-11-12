@@ -471,6 +471,29 @@ class OpenShellExecutor(SandboxExecutor):
         self._last_source = source
         return True
 
+    async def denials_since(self, since: float, *, wait: bool = False) -> list[NetworkDenial]:
+        """Connections this sandbox refused since ``since``; none when it is not running.
+
+        With ``wait``, the log is read again until each refusal names the
+        program and the port, or the wait runs out: a long-lived process has
+        no relay close to wait for.
+        """
+        if self._name is None:
+            return []
+        plane, name = self._plane(), self._name
+        deadline = time.monotonic() + (_DENIAL_WAIT_SECONDS if wait else 0.0)
+        denials: list[NetworkDenial] = []
+        while True:
+            try:
+                lines = await asyncio.wait_for(asyncio.to_thread(plane.ocsf_lines, name, since), _DENIAL_READ_TIMEOUT)
+            except Exception as exc:  # noqa: BLE001 - a missing denial list must not cost the call's result
+                logger.debug("Could not read network denials for OpenShell sandbox %s: %s", name, exc)
+                return denials
+            denials = parse_denials(message for _, message in lines)
+            if (denials and all(denial.port is not None for denial in denials)) or time.monotonic() >= deadline:
+                return denials
+            await asyncio.sleep(_DENIAL_POLL_SECONDS)
+
     async def _denials(
         self, plane: OpenShellControlPlane, name: str, since: float, *, wait: bool
     ) -> list[NetworkDenial]:
