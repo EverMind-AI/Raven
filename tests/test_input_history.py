@@ -240,6 +240,23 @@ def test_read_entries_replaces_undecodable_bytes(history_home: Path) -> None:
     assert read_entries() == ["�"]
 
 
+def test_a_crlf_file_reads_as_its_lf_twin(history_home: Path) -> None:
+    """Both readers drop the \r an external CRLF conversion introduces (#1193).
+
+    The Python reader goes through ``Path.read_text``, whose universal-newline
+    translation folds CRLF; the TUI's ``load()`` splits on ``/\r?\n/``. A file
+    converted by an external editor must therefore yield the same entries in
+    both, which this pins with the TUI's own rules as the second reader.
+    """
+    path = history_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lf = "".join(_block(text) for text in ("first", "second", "line a\nline b"))
+    path.write_bytes(lf.replace("\n", "\r\n").encode("utf-8"))
+
+    assert read_entries() == ["first", "second", "line a\nline b"]
+    assert _tui_load(path.read_bytes().decode("utf-8")) == ["first", "second", "line a\nline b"]
+
+
 def test_the_default_cap_is_the_tui_in_memory_cap_and_the_file_is_not_trimmed(history_home: Path) -> None:
     # The TUI keeps only the newest 1000 entries in memory but never truncates
     # the file, and so does this module: the cap belongs at the read boundary.
