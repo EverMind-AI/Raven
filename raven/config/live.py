@@ -852,6 +852,28 @@ def network_permissions_of(raw: dict[str, Any]) -> Any:
     return NetworkPermissions() if node is None else NetworkPermissions.model_validate(node)
 
 
+def network_on_disk() -> Any:
+    """``permissions.network`` as the config file says it now, for a sandbox built with no live reader.
+
+    The file is read here rather than through ``load_config``, which runs on
+    defaults when the file is not valid JSON: a config that cannot be read or
+    does not validate closes the network, and only a missing one answers the
+    open default.
+    """
+    from raven.config.loader import get_config_path
+    from raven.config.schema import NetworkPermissions
+
+    path = get_config_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(raw, dict):
+            raise ValueError("the config is not a JSON object")
+        return network_permissions_of(raw)
+    except Exception as exc:  # noqa: BLE001 - no readable permission set means no network
+        logger.warning("Could not read permissions.network for a sandbox ({}); it gets no network", exc)
+        return NetworkPermissions(default="closed")
+
+
 _LAST_VALID_NETWORK: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
 
 
