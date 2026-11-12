@@ -1227,7 +1227,8 @@ def test_sweep_preserves_a_running_child_and_removes_its_render_after_exit(tmp_p
         child.wait(timeout=10)
 
 
-def test_write_rendered_is_owner_only_and_pid_named(tmp_path):
+def test_write_rendered_is_owner_only_and_pid_named(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "host_config", dict)
     rendered = render.write_rendered({"a": 1}, tmp_path)
     assert rendered.name == f".config.rendered.{os.getpid()}.json"
     if os.name != "nt":
@@ -1236,6 +1237,7 @@ def test_write_rendered_is_owner_only_and_pid_named(tmp_path):
 
 
 def test_write_rendered_works_without_fchmod(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "host_config", dict)
     monkeypatch.delattr(os, "fchmod", raising=False)
 
     rendered = render.write_rendered({"a": 1}, tmp_path)
@@ -1245,7 +1247,8 @@ def test_write_rendered_works_without_fchmod(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
-def test_write_rendered_narrows_existing_permissions(tmp_path):
+def test_write_rendered_narrows_existing_permissions(tmp_path, monkeypatch):
+    monkeypatch.setattr(render, "host_config", dict)
     rendered = tmp_path / f".config.rendered.{os.getpid()}.json"
     rendered.write_text("{}", encoding="utf-8")
     rendered.chmod(0o644)
@@ -1462,7 +1465,7 @@ def test_a_host_with_nothing_to_refuse_leaves_the_render_untouched(host):
     assert config == {"agents": {"defaults": {"model": "m"}}}, "no empty permissions block appears"
 
 
-def test_write_rendered_carries_the_hosts_denials(homed):
+def test_write_rendered_carries_the_hosts_permission_set(homed):
     (homed / "config.json").write_text(
         json.dumps(
             {
@@ -1472,8 +1475,9 @@ def test_write_rendered_carries_the_hosts_denials(homed):
         ),
         encoding="utf-8",
     )
-    rendered = json.loads(render.write_rendered({"permissions": {"mode": "ask"}}, homed).read_text())
-    assert rendered["permissions"] == {"mode": "ask", "tools": {"exec": {"curl *": "deny"}}}
+    rendered = json.loads(render.write_rendered({"permissions": {"mode": "full"}}, homed).read_text())
+    # The host's set, not the product's own mode: one permission set for every agent.
+    assert rendered["permissions"] == {"tools": {"exec": {"curl *": "deny"}}}
     assert rendered["tools"]["exec"]["extraDenyPatterns"] == [r"\bcurl\b"], "either host spelling is read"
 
 
@@ -1771,3 +1775,63 @@ def test_every_launcher_names_its_engine_when_it_writes_the_render():
         assert keyword is not None, f"{path} writes its render without naming its engine"
         named = {constants[e.id] for e in keyword.value.elts if isinstance(e, ast.Name) and e.id in constants}
         assert named == set(constants.values()) and named, path
+
+
+# --- inherit_host_permissions: a product runs under the host's one permission set ---
+
+
+_HOST_SET = {
+    "mode": "smart",
+    "tools": {"exec": {"git push *": "allow", "rm *": "deny"}, "write_file": "ask"},
+    "network": {"default": "closed", "rules": [{"host": "pypi.org", "ports": [443]}]},
+}
+
+
+def test_a_product_runs_under_the_hosts_whole_permission_set():
+    config: dict = {"tools": {"exec": {"timeout": 600}}}
+    render.inherit_host_permissions(config, {"permissions": _HOST_SET})
+    assert config["permissions"] == _HOST_SET
+
+
+def test_a_products_own_refusal_still_wins_over_the_hosts_set():
+    config = {"permissions": {"tools": {"exec": {"git push *": "deny"}}}}
+    render.inherit_host_permissions(config, {"permissions": _HOST_SET})
+    assert config["permissions"]["mode"] == "smart"
+    assert config["permissions"]["tools"]["exec"]["git push *"] == "deny"
+    assert config["permissions"]["network"] == _HOST_SET["network"]
+
+
+def test_the_hosts_extra_deny_patterns_still_reach_the_product():
+    config: dict = {}
+    render.inherit_host_permissions(config, {"tools": {"exec": {"extraDenyPatterns": [r"\bnc\b"]}}})
+    assert config["tools"]["exec"]["extraDenyPatterns"] == [r"\bnc\b"]
+
+
+def test_a_product_runs_in_the_hosts_openshell_sandbox(monkeypatch):
+    monkeypatch.setattr(render.sys, "platform", "linux")
+    host = {"tools": {"sandbox": {"backend": "openshell", "gateway": "lab", "image": "raven:1", "cpus": 8}}}
+    config = {"tools": {"sandbox": {"backend": "none", "cpus": 2}}}
+    render.inherit_host_permissions(config, host)
+    assert config["tools"]["sandbox"] == {"backend": "openshell", "gateway": "lab", "image": "raven:1", "cpus": 2}
+
+
+def test_a_windows_host_leaves_the_product_outside_a_sandbox(monkeypatch):
+    monkeypatch.setattr(render.sys, "platform", "win32")
+    host = {"tools": {"sandbox": {"backend": "openshell", "gateway": "lab"}}}
+    config = {"tools": {"sandbox": {"backend": "none"}}}
+    render.inherit_host_permissions(config, host)
+    assert config["tools"]["sandbox"] == {"backend": "none"}
+
+
+def test_a_hosts_unpersisted_allow_net_reaches_the_product():
+    config: dict = {}
+    render.inherit_host_permissions(config, {"tools": {"sandbox": {"backend": "openshell", "allowNet": False}}})
+    assert config["permissions"]["network"]["default"] == "closed"
+
+
+def test_every_render_carries_the_hosts_permission_set(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr(render, "host_config", lambda: {"permissions": _HOST_SET})
+    path = render.write_rendered({"agents": {}}, tmp_path)
+    assert json.loads(path.read_text())["permissions"] == _HOST_SET

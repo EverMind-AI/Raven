@@ -31,10 +31,12 @@ requirement.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, get_args
 
@@ -358,6 +360,45 @@ def _compiles(pattern: str) -> bool:
     except re.error:
         return False
     return True
+
+
+def inherit_host_permissions(config: dict, host: dict) -> None:
+    """Run a product under the host's one permission set, and in the host's sandbox where one can run.
+
+    The user perceives one permission set: the mode, the tool rules and the
+    network rules a product's own gate reads are the host's, so a product
+    asks about what the host asks about and grants what it grants. A product
+    that brings refusals of its own keeps them on top, since a refusal always
+    wins, and the host's extra deny patterns reach it as before
+    (:func:`inherit_host_denials`). The host's file is read the way its own
+    loader reads it, an unpersisted ``tools.sandbox.allowNet`` included.
+
+    A product runs its commands where the host runs its own: the host's
+    OpenShell backend, gateway and image, on a platform OpenShell runs on.
+    The product's other sandbox settings stay its own.
+    """
+    from raven.config.loader import _migrate_retired_sandbox_backend, _migrate_sandbox_network
+
+    host = copy.deepcopy(host)
+    _migrate_retired_sandbox_backend(host)
+    _migrate_sandbox_network(host)
+    own = config.get("permissions")
+    host_permissions = host.get("permissions")
+    if isinstance(host_permissions, dict):
+        config["permissions"] = copy.deepcopy(host_permissions)
+        if isinstance(own, dict):
+            inherit_host_denials(config, {"permissions": own})
+    host_tools = host.get("tools")
+    inherit_host_denials(config, {"tools": host_tools})
+    host_sandbox = host_tools.get("sandbox") if isinstance(host_tools, dict) else None
+    if isinstance(host_sandbox, dict) and host_sandbox.get("backend") == "openshell" and sys.platform != "win32":
+        tools = config.setdefault("tools", {})
+        sandbox = tools.setdefault("sandbox", {})
+        if not isinstance(sandbox, dict):
+            sandbox = tools["sandbox"] = {}
+        for key in ("backend", "gateway", "image"):
+            if key in host_sandbox:
+                sandbox[key] = host_sandbox[key]
 
 
 def inherit_host_denials(config: dict, host: dict) -> list[str]:
@@ -984,7 +1025,7 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     secrets landed; Windows uses the containing directory's inherited ACLs.
     The pid in the name is what :func:`sweep_stale_renders` reads back.
 
-    The host's refusals (:func:`inherit_host_denials`), plugin opt-outs
+    The host's permission set and sandbox (:func:`inherit_host_permissions`), plugin opt-outs
     (:func:`inherit_plugin_opt_outs`) and memory address
     (:func:`inherit_memory_backend`) are merged in here rather than by each
     launcher: every product render ends in this call, so a launcher cannot
@@ -993,7 +1034,7 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     all.
     """
     host = host_config()
-    inherit_host_denials(config, host)
+    inherit_host_permissions(config, host)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
     inherit_memory_backend(config, host)
     return _write_owner_only(config, root / f".config.rendered.{os.getpid()}.json")
