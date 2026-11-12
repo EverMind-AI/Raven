@@ -73,7 +73,7 @@ def _ephemeral_dir() -> Optional[str]:
 
 
 class GitOpError(RuntimeError):
-    """Raised when a git command exits non-zero."""
+    """Raised when a git command fails: a non-zero exit or a timeout (returncode -1)."""
 
     def __init__(self, cmd: list[str], returncode: int, stderr: str, stdout: str = ""):
         self.cmd = cmd

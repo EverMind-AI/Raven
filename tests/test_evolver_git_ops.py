@@ -172,6 +172,18 @@ class TestGitTimeouts:
         assert seen["stdin"] == subprocess.DEVNULL
         assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
 
+    def test_run_forces_git_terminal_prompt_over_caller_env(self, tmp_path, monkeypatch):
+        seen: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", fake_run)
+        git_ops._run(tmp_path, "status", env={"GIT_TERMINAL_PROMPT": "1"})
+
+        assert seen["env"]["GIT_TERMINAL_PROMPT"] == "0"
+
     def test_run_capture_does_not_wait_for_a_grandchild(self, tmp_path):
         # Only Windows can fail this: subprocess.run waits for the grandchild's
         # pipe handles there, while POSIX waits for the direct child alone, so
@@ -195,7 +207,7 @@ class TestGitTimeouts:
         with pytest.raises(git_ops.GitOpError) as exc:
             git_ops._run(tmp_path, "status")
         assert "stderr-part" in str(exc.value)
-        assert "stdout-part" in str(exc.value)
+        assert str(exc.value).count("stdout-part") == 1
 
     def test_commit_exists_propagates_a_timeout(self, repo, monkeypatch):
         repo_dir, _sha = repo
@@ -206,6 +218,32 @@ class TestGitTimeouts:
         monkeypatch.setattr(git_ops.subprocess, "run", boom)
         with pytest.raises(git_ops.GitOpError, match="timed out"):
             git_ops.commit_exists(repo_dir, "deadbeef")
+
+    def test_read_file_at_wraps_a_timeout(self, tmp_path, monkeypatch):
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", boom)
+        with pytest.raises(git_ops.GitOpError) as exc:
+            git_ops.read_file_at(tmp_path, "0" * 40, "src/x.py")
+        assert exc.value.returncode == -1
+        assert "timed out" in str(exc.value)
+
+    def test_branch_exists_wraps_a_timeout(self, tmp_path, monkeypatch):
+        def boom(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=1)
+
+        monkeypatch.setattr(git_ops.subprocess, "run", boom)
+        with pytest.raises(git_ops.GitOpError) as exc:
+            git_ops.branch_exists(tmp_path, "main")
+        assert exc.value.returncode == -1
+        assert "timed out" in str(exc.value)
+
+    def test_branch_exists_reports_local_branches(self, repo):
+        repo_dir, sha = repo
+        git_ops.create_branch(repo_dir, "evolver-test", sha)
+        assert git_ops.branch_exists(repo_dir, "evolver-test")
+        assert not git_ops.branch_exists(repo_dir, "evolver-missing")
 
 
 class TestRecombineTimeout:
