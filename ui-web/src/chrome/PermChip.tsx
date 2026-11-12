@@ -24,12 +24,9 @@
 import { useSyncExternalStore } from 'react'
 
 import * as perm from '../state/perm'
-import { PermGlyph } from './PermGlyph'
+import { PermGlyph, SERVED_SHIELD } from './PermGlyph'
 
 import type { JSX } from 'react'
-
-/** The shield page.html serves before the store has drawn a tier. */
-const SERVED = '<path d="M12 3.5 19 6v5.5c0 4-2.9 7.4-7 9-4.1-1.6-7-5-7-9V6l7-2.5Z"/>'
 
 export function PermChip(): JSX.Element {
   const s = useSyncExternalStore(perm.subscribe, perm.get)
@@ -53,8 +50,9 @@ export function PermChip(): JSX.Element {
             stroke="currentColor"
             strokeWidth="1.8"
             aria-hidden="true"
-            dangerouslySetInnerHTML={{ __html: SERVED }}
-          />
+          >
+            <path d={SERVED_SHIELD} />
+          </svg>
         )}
       <span id="permName">{p ? p.label : 'Smart mode'}</span>
     </button>

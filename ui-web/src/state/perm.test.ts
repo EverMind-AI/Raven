@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
+import { act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { resetTranslator, setTranslator } from '../i18n/t'
+import { resetTranslator, setTranslator, t } from '../i18n/t'
+import * as lang from '../state/lang'
 import { mountPageRoot } from '../test/pageRoot'
 import * as store from './perm'
 
@@ -40,6 +42,7 @@ afterEach(() => {
   unmount()
   unmount = () => {}
   store._resetForTests()
+  lang._resetForTests()
   resetTranslator()
   document.body.innerHTML = ''
   localStorage.clear()
@@ -116,6 +119,15 @@ describe('the permission popover', () => {
     ])
     expect(rows().map((r) => r.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
     expect(rows().map((r) => r.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false'])
+    /* The dialog and the group take their name from the visible heading, so a
+       reader who has not picked a language still has one, and the words are
+       not repeated by an aria-label. */
+    expect(pop().getAttribute('aria-label')).toBeNull()
+    expect(pop().getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    const group = pop().querySelector('[role="radiogroup"]')!
+    expect(group.getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    expect(group.querySelectorAll('[role="radio"]').length).toBe(3)
+    expect(document.getElementById('perm-pop-title')!.textContent).toBe('gui.perm.title')
     /* Only the risky tier wears the class, and only the chosen one has a tick. */
     expect(rows().filter((r) => r.classList.contains('risk')).length).toBe(1)
     expect(pop().querySelectorAll('svg.tick').length).toBe(1)
@@ -145,6 +157,23 @@ describe('the permission popover', () => {
     })).toBe(true)
     expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
     expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
+  })
+
+  it('reads the heading and the note in the language in force', async () => {
+    const perm = await load()
+    /* The rows are built at open and stay in that language; the heading and the
+       note name the control, so they follow the catalogue as it stands. */
+    resetTranslator()
+    act(() => { lang.set('en') })
+    perm.open()
+    const heading = pop().querySelector('.hd .lab')!
+    const note = pop().querySelector('.chrome-perm-note')!
+    const en = [heading.textContent, note.textContent]
+    act(() => { lang.set('zh') })
+    expect([heading.textContent, note.textContent]).toEqual([t('gui.perm.title'), t('gui.perm.note')])
+    expect([heading.textContent, note.textContent]).not.toEqual(en)
+    expect(pop().getAttribute('aria-labelledby')).toBe('perm-pop-title')
+    expect(document.getElementById('perm-pop-title')!.textContent).toBe(t('gui.perm.title'))
   })
 
   it('hangs off the chip inside the card, and measures nothing', async () => {
