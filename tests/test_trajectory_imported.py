@@ -103,6 +103,31 @@ def test_imports_live_under_the_raven_home(tmp_path, monkeypatch):
     assert imp.imports_root() == tmp_path / "home" / "imports"
 
 
+# ── the on-disk schema id ──────────────────────────────────────────────
+
+
+def test_the_on_disk_schema_id_keeps_the_spelling_earlier_builds_wrote():
+    # Spelled out rather than taken from SCHEMA: packages already on disk name
+    # themselves with this id, and a reader that followed a renamed constant to
+    # a new spelling would read back nothing but its own new packages.
+    assert imp.SCHEMA == "raven_imported_conversation"
+
+
+def test_a_package_from_an_earlier_build_is_read_back(tmp_path, root):
+    package, _ = builders.build_export(tmp_path / "src")
+    imported_session = imp.import_bytes(package.read_bytes(), package.name, root=root).session
+    meta_path = imported_session.path / imp.META_FILE
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["schema"] = "raven_imported_conversation"
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    again = imp.get(imported_session.key, root)
+    assert again is not None
+    assert again.id == imported_session.id
+    assert again.meta["schema"] == "raven_imported_conversation"
+    assert [item.id for item in imp.list_sessions(root)] == [imported_session.id]
+
+
 # ── importing real packages ────────────────────────────────────────────
 
 

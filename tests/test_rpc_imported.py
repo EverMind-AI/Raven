@@ -372,6 +372,7 @@ async def test_the_writes_named_by_the_requirement_are_refused(dispatcher, metho
     response = await _call(dispatcher, method, params)
     assert _code(response) == -32029
     assert response["error"]["message"] == "imported_read_only"
+    assert response["error"]["data"]["detail"] == f"{method} does not apply to an imported session"
 
 
 async def test_set_mode_may_report_but_not_change(dispatcher):

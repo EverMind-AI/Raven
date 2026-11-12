@@ -17,9 +17,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import catalog from '../../../../i18n/messages.json'
 
-/* The zh copy read from the catalogue rather than written out here: the repo's
-   source is English, and a value quoted in a test would be a second copy of
-   the one the catalogue owns. */
+/* The zh copy read from the catalogue, with one literal assertion below: a
+   test that compares the catalogue only with itself passes whatever the
+   catalogue says. The literal is escaped because the source-language gate
+   keeps this file ASCII. */
 const ZH_NEW_TASK = catalog.ui['gui.new_task'].zh
 
 /* Fresh module state per case: the language is resolved as the module loads, so
@@ -57,6 +58,7 @@ describe('the language the page resolves', () => {
     const lang = await fresh()
     expect(lang.get().lang).toBe('zh')
     expect(await (await words())('gui.new_task')).toBe(ZH_NEW_TASK)
+    expect(ZH_NEW_TASK).toBe('\u65b0\u4f1a\u8bdd')
   })
 
   /* The step this exists for: a page that never reaches the gateway -- a failed
