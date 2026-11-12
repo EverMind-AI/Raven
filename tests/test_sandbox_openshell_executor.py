@@ -417,6 +417,15 @@ class TestStop:
         await ox.drain_pending_deletes()
         assert len(cp.deleted) == 1
 
+    async def test_draining_waits_only_for_this_loop_s_deletes(self, monkeypatch):
+        other = asyncio.new_event_loop()
+        try:
+            stranded = other.create_future()
+            monkeypatch.setattr(ox, "_pending_deletes", {stranded})
+            await asyncio.wait_for(ox.drain_pending_deletes(), 1)
+        finally:
+            other.close()
+
     async def test_a_failing_delete_is_logged_not_raised(self, tmp_path):
         cp = FakeControlPlane()
 
