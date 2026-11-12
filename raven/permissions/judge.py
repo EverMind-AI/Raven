@@ -156,18 +156,23 @@ async def review(
 # The targets come first and whole: they are what is decided, and a command
 # long enough to push them past a cap would leave the reviewer judging blind.
 _MAX_TARGETS = 10
-_MAX_TARGET_LINE = 300
+_MAX_PROGRAM = 100
+_MAX_REASON = 80
 _MAX_COMMAND = 2000
 
 
+def _tail(text: str, limit: int) -> str:
+    return text if len(text) <= limit else "..." + text[-(limit - 3) :]
+
+
 def _network_text(targets: list[dict[str, Any]], command: str) -> str:
-    lines = []
-    for target in targets:
-        line = (
-            f"- {target.get('binary', '')} -> {target.get('host', '')}:{target.get('port', '')} "
-            f"({target.get('reason', '')})"
-        )
-        lines.append(line if len(line) <= _MAX_TARGET_LINE else line[: _MAX_TARGET_LINE - 3] + "...")
+    # The address is never shortened: it is what is decided. The program keeps
+    # its end, where its name is, and the reason its start.
+    lines = [
+        f"- {_tail(str(target.get('binary', '')), _MAX_PROGRAM)} -> {target.get('host', '')}:{target.get('port', '')} "
+        f"({str(target.get('reason', ''))[:_MAX_REASON]})"
+        for target in targets
+    ]
     cut = len(command) - _MAX_COMMAND
     shown = command if cut <= 0 else f"{command[:_MAX_COMMAND]}... ({cut} more characters cut)"
     return "refused connections:\n" + "\n".join(lines) + f"\ncommand: {shown}"
