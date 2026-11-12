@@ -237,6 +237,7 @@ MESSAGES: dict[str, str] = {
     "Keep current: sandbox (OpenShell)": "沿用当前:沙箱(OpenShell)",
     "Host (direct) — simplest, runs right on your machine": "本机直接运行 — 最简单,直接在你的电脑上执行",
     "Sandbox isolation (OpenShell) — kernel-enforced isolation, safer (needs Docker and an OpenShell gateway)": "沙箱隔离(OpenShell)— 由内核强制隔离,更安全,需要 Docker 和 OpenShell gateway",
+    "  [dim]Sandbox isolation (OpenShell) needs Linux or macOS; commands on this host run directly.[/dim]": "  [dim]沙箱隔离(OpenShell)需要 Linux 或 macOS;本机上的命令直接执行。[/dim]",
     "  [green]✓ Sandbox available. Using default resources (2 CPU / 2 GB / network); tune in the config file if needed.[/green]": "  [green]✓ 沙箱可用。将使用默认资源(2 CPU / 2 GB / 联网);如需调整可改配置文件。[/green]",
     "  [yellow]✗ The OpenShell SDK isn't installed.[/yellow]\n  [dim]Install it, then choose “Retry after install”:[/dim]": "  [yellow]✗ 还没安装 OpenShell SDK。[/yellow]\n  [dim]先安装,再选「安装后重试」:[/dim]",
     "  [yellow]✗ No OpenShell gateway is reachable.[/yellow]\n  [dim]Install OpenShell and start its gateway (https://docs.nvidia.com/openshell/latest/about/installation), check it with `openshell status`, then choose “Retry after install”.[/dim]": "  [yellow]✗ 还没有可用的 OpenShell gateway。[/yellow]\n  [dim]先安装 OpenShell 并启动 gateway(https://docs.nvidia.com/openshell/latest/about/installation),用 `openshell status` 确认,再选「安装后重试」。[/dim]",
