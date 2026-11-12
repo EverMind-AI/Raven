@@ -401,6 +401,57 @@ describe('the permission approval sheet', () => {
 
   beforeEach(() => { said.length = 0 })
 
+  /* A connection the sandbox refused while a command ran: asked about after the
+     fact, by the address and the program, with the command that met it. */
+  const net = {
+    ...base, approvalId: 'ap-net', command: '/usr/bin/curl -> example.com:443; /usr/bin/git -> github.com:22',
+    kind: 'sandbox.network', family: '',
+    evidence: {
+      targets: [
+        { binary: '/usr/bin/curl', host: 'example.com', port: 443, reason: 'transparent_tcp_policy_denied' },
+        { binary: '/usr/bin/git', host: 'github.com', port: 22, reason: 'transparent_tcp_policy_denied' },
+      ],
+      command: 'curl https://example.com && git fetch',
+    } as Record<string, unknown>,
+  }
+  const oneTarget = {
+    ...net, approvalId: 'ap-net1',
+    evidence: { targets: [(net.evidence.targets as unknown[])[0]], command: 'curl https://example.com' },
+  }
+
+  it('lists every blocked connection and the command that met them', () => {
+    openApproval(fresh(net), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('gui.confirm.title.sandbox_network_many')
+    expect(document.querySelector('.cp-why')!.textContent).toBe('gui.confirm.why.sandbox_network_many')
+    expect([...document.querySelectorAll('.csheet .cp-ev-path')].map((el) => el.textContent)).toEqual(
+      ['/usr/bin/curl -> example.com:443', '/usr/bin/git -> github.com:22'])
+    expect(document.querySelector('.csheet .what .cp-ev-cmd')!.textContent).toBe('curl https://example.com && git fetch')
+  })
+
+  it('asks about a single blocked connection by its address', () => {
+    setTranslator((k, vars) => (k === 'gui.confirm.title.sandbox_network' ? `reach ${String(vars?.target)}?` : k))
+    openApproval(fresh(oneTarget), handlers())
+    expect(document.querySelector('.csheet .q')!.textContent).toBe('reach example.com:443?')
+  })
+
+  it('offers the session as the broader grant of a blocked connection, and no rule to save', () => {
+    openApproval(fresh(net), handlers())
+    expect(opts().map((b) => b.textContent)).toEqual(
+      [`gui.confirm.deny${ESC_LABEL}`, `gui.confirm.allow_session${chordLabel(true)}`, `gui.confirm.allow${chordLabel()}`])
+    expect(rack().querySelector('.cp-rule')).toBeNull()
+  })
+
+  /* The main sandbox is every conversation's, so what is opened in it stays
+     open for all of them until Raven restarts; the card says so there and
+     only there. */
+  it('says an allowed connection lasts until Raven restarts only on the shared sandbox', () => {
+    openApproval(fresh({ ...net, evidence: { ...net.evidence, shared: true } }), handlers())
+    expect(document.querySelector('.csheet .cp-ev-note')!.textContent).toBe('gui.confirm.ev.net_shared')
+    sheets().forEach((el) => el.remove())
+    openApproval(fresh(net), handlers())
+    expect(document.querySelector('.csheet .cp-ev-note')).toBeNull()
+  })
+
   it('words the question by the family and quotes the command as the evidence', () => {
     openApproval(base, handlers())
     expect(sheets()[0]!.getAttribute('aria-label')).toBe('gui.confirm.title.delete_command')

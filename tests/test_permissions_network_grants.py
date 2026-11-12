@@ -57,3 +57,11 @@ def test_a_grant_without_a_scope_is_ignored():
     registry = GrantRegistry()
     registry.grant("", CURL)
     assert registry.grants_for(None) == frozenset()
+
+
+def test_a_sandbox_registered_without_a_scope_is_the_shared_one():
+    registry = GrantRegistry()
+    shared, own, stranger = object(), object(), object()
+    registry.register(shared, None)
+    registry.register(own, "conv-a")
+    assert (registry.is_shared(shared), registry.is_shared(own), registry.is_shared(stranger)) == (True, False, False)

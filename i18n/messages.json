@@ -6619,6 +6619,14 @@
       "en": "Allow {who} to use {tool}?",
       "zh": "允许 {who} 使用 {tool} 吗？"
     },
+    "gui.confirm.title.sandbox_network": {
+      "en": "Allow {who} to connect to {target}?",
+      "zh": "允许 {who} 连接 {target} 吗？"
+    },
+    "gui.confirm.title.sandbox_network_many": {
+      "en": "Allow {who} to connect to these {count} addresses?",
+      "zh": "允许 {who} 连接这 {count} 个地址吗？"
+    },
     "gui.confirm.title.unknown": {
       "en": "Allow {who} to do this?",
       "zh": "允许 {who} 执行这个操作吗？"
@@ -6662,6 +6670,14 @@
     "gui.confirm.why.mcp_call": {
       "en": "{who} wants to use the external tool {server}; you have not allowed it yet.",
       "zh": "{who} 要用外部工具 {server}，你还没授权过这个工具。"
+    },
+    "gui.confirm.why.sandbox_network": {
+      "en": "The sandbox blocked this connection while {who} was running a command.",
+      "zh": "{who} 运行命令时，沙箱拦下了这个连接。"
+    },
+    "gui.confirm.why.sandbox_network_many": {
+      "en": "The sandbox blocked these connections while {who} was running a command.",
+      "zh": "{who} 运行命令时，沙箱拦下了这些连接。"
     },
     "gui.confirm.why.unknown": {
       "en": "{who} wants to do this; you have not allowed it yet.",
@@ -7170,6 +7186,10 @@
     "gui.confirm.ev.cut": {
       "en": "Shortened to what fits -- the rest is not shown",
       "zh": "内容过长，这里只显示了前一部分"
+    },
+    "gui.confirm.ev.net_shared": {
+      "en": "Every conversation shares this sandbox, so what you allow here stays allowed until Raven restarts.",
+      "zh": "所有会话共用这个沙箱，这里允许的连接会一直有效，直到 Raven 重启。"
     },
     "gui.confirm.land.always": {
       "en": "Won't ask again for: {pattern}, in every working directory",

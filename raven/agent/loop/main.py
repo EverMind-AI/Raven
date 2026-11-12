@@ -787,6 +787,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         async with self._executor_start_lock:
             if self._executor_started:
                 return
+            from raven.permissions import network_grants
+
             stack = AsyncExitStack()
             try:
                 await stack.__aenter__()
@@ -794,6 +796,10 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             except Exception:
                 await stack.aclose()
                 raise
+            # Every conversation this loop serves runs in this one sandbox, so a
+            # network grant made in any of them is synced to it at once.
+            network_grants.GRANTS.register(self._executor, None)
+            stack.callback(network_grants.GRANTS.unregister, self._executor)
             self._executor_stack = stack
             self._executor_started = True
 

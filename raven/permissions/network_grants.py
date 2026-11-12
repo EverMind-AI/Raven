@@ -48,6 +48,11 @@ class GrantRegistry:
     def unregister(self, executor: Any) -> None:
         self._executors.pop(id(executor), None)
 
+    def is_shared(self, executor: Any) -> bool:
+        """Whether ``executor`` is the sandbox every conversation runs in (registered under ``None``)."""
+        entry = self._executors.get(id(executor))
+        return entry is not None and entry[1] is None
+
     def executors_for(self, scope: str) -> list[Any]:
         """The running sandboxes a grant in ``scope`` must reach: its own and the shared one."""
         return [executor for executor, own in self._executors.values() if own is None or own == scope]

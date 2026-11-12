@@ -498,3 +498,28 @@ def test_the_main_sandbox_reads_the_live_permission_set(tmp_path, monkeypatch) -
     assert "allow_open" in source()
     get_config_path().write_text(json.dumps({"permissions": {"network": {"default": "closed"}}}))
     assert source() == {}
+
+
+@pytest.mark.asyncio
+async def test_the_loops_sandbox_is_every_conversations_while_it_runs(tmp_path: Path, monkeypatch) -> None:
+    """A grant in any conversation reaches the one sandbox the loop runs them all in."""
+    from raven.permissions import network_grants
+
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+
+    class _Sandbox:
+        is_sandboxed = True
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    sandbox = _Sandbox()
+    loop = AgentLoop(provider=_FakeChatProvider(), workspace=tmp_path, executor=sandbox)
+    await loop._start_executor()
+    assert registry.is_shared(sandbox) and registry.executors_for("conv-a") == [sandbox]
+    await loop.close_executor()
+    assert registry.executors_for("conv-a") == []

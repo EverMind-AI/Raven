@@ -129,7 +129,9 @@ async def test_one_prompt_covers_every_target_of_a_command(grants):
     assert call["kind"] == "sandbox.network"
     assert [target["host"] for target in call["evidence"]["targets"]] == ["example.com", "example.org"]
     assert call["evidence"]["command"] == "curl a b"
-    assert call["suggested_pattern"] == "example.com:443"
+    # No card offers a rule to save for a connection: its undo and its editor
+    # are the exec pattern's, so the broader grant offered is the session.
+    assert call["suggested_pattern"] == ""
     assert sandbox.granted == [[CURL_GRANT, ORG_GRANT]]
 
 
@@ -259,3 +261,12 @@ async def test_an_address_given_as_an_ip_stays_blocked_with_nobody_to_ask(grants
     notice, _ = await _handle(None, [metadata], sandbox, config=PermissionsConfig(mode="full"))
     assert sandbox.granted == []
     assert "The sandbox network policy blocked: /usr/bin/curl -> 169.254.169.254:80." in notice.text
+
+
+async def test_the_prompt_says_when_the_sandbox_is_every_conversations(grants):
+    shared, own = FakeSandbox(), FakeSandbox()
+    grants.register(shared, None)
+    responder = Responder(ApprovalChoice.DENY)
+    await _handle(responder, [CURL], shared)
+    await _handle(responder, [CURL], own)
+    assert [call["evidence"]["shared"] for call in responder.calls] == [True, False]
