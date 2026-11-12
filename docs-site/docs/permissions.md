@@ -150,7 +150,7 @@ partitioned working files when allowing unattended child agents.
 
 ## Sandbox, files, and untrusted content
 
-Sandboxing controls execution placement. A BoxLite VM can mount the real
+Sandboxing controls execution placement. An OpenShell sandbox mounts the real
 workspace read-write; deleting inside that mount deletes real files. The gate
 therefore does not auto-approve a command simply because a sandbox exists.
 Third-party backends may not use Raven's executor. See [Sandbox](sandbox.md).

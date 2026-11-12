@@ -1,731 +1,311 @@
 # 沙箱
 
-启用沙箱后，通过 `BoxliteExecutor` 派发的 Shell 命令和 stdio MCP 服务进程
-在 **Boxlite 微虚拟机**中运行。
-虚拟机具有独立内核、资源限制和网络策略。挂载目录仍按配置的权限开放，其中包括共享工作区。
+启用沙箱后，Shell 命令和 stdio MCP 服务进程会在 NVIDIA OpenShell 沙箱中运行，不再直接在宿主机上执行。
+每个沙箱是一个容器，它能访问哪些文件、以什么身份运行、能连哪些网络，由内核（Landlock 和 seccomp）
+和容器外的 OpenShell supervisor 强制执行。挂载目录（包括共享工作区）仍按配置的权限开放。
+
+Raven 通过本机的 OpenShell gateway 创建和删除沙箱，自己不再运行虚拟机。
 
 ## 1. 安装 { #1-installation }
 
-沙箱后端（`boxlite`）是可选依赖。请在 Raven 源码仓库中安装：
+需要两样东西：Raven 环境里的 OpenShell SDK，以及同一台机器上运行着的 OpenShell gateway。
+
+### 1.1 SDK { #11-the-sdk }
+
+SDK 是可选依赖 `sandbox`。在源码仓库中安装：
 
 ```bash
 uv sync --extra sandbox
 ```
 
-后端设为 `"auto"` 或 `"boxlite"` 时，缺少依赖会抛出 `SandboxInitError`，不会静默回退到宿主机
-执行。只有后端设为 `"none"` 或未提供沙箱配置时，才使用 `DirectExecutor`。
+对于已安装的 Raven，缺少 SDK 时 `raven onboard` 会打印出针对它自身解释器的安装命令，形如：
 
-`pyproject.toml` 中的 `sandbox` 可选依赖固定为 `boxlite==0.9.5`。请使用固定版本，以保持
-后端与 Raven 执行器实现兼容。
+```bash
+uv pip install --python /path/to/raven/python 'openshell>=0.1.8,<0.2'
+```
+
+这个可选依赖锁定 `openshell>=0.1.8,<0.2`。SDK 和 gateway 同步发布，请让两者保持在同一个小版本。
+
+### 1.2 gateway { #12-the-gateway }
+
+用官方安装脚本安装 OpenShell 0.1.8，并锁定到发布标签。首次启动前先关闭遥测，打包版 gateway 会读取
+`~/.config/openshell/gateway.env`：
+
+```bash
+mkdir -p ~/.config/openshell
+printf 'OPENSHELL_TELEMETRY_ENABLED=false\n' > ~/.config/openshell/gateway.env
+curl -fsSL -o /tmp/openshell-install.sh https://raw.githubusercontent.com/NVIDIA/OpenShell/v0.1.8/install.sh
+OPENSHELL_VERSION=v0.1.8 sh /tmp/openshell-install.sh
+```
+
+Linux 上安装脚本会添加一个 systemd 用户服务，macOS 上则通过 Homebrew 安装。两者都会把 gateway 登记到
+`openshell` CLI，并且只监听 `127.0.0.1:17670`。
+
+Raven 会把工作区挂载进每个沙箱，所以 gateway 必须允许 bind mount。写入
+`~/.config/openshell/gateway.toml`：
+
+```toml
+[openshell]
+version = 2
+
+[openshell.gateway]
+compute_driver = "docker"
+
+[openshell.drivers.docker]
+allow_driver_config = true
+enable_bind_mounts = true
+
+[openshell.drivers.docker.resource_admission]
+enabled = false
+```
+
+然后重启 gateway 并检查：
+
+```bash
+systemctl --user restart openshell-gateway        # Linux
+brew services restart nvidia/openshell/openshell  # macOS
+openshell status                                  # 应显示：Status: Connected
+```
+
+在 macOS 上用 colima 而不是 Docker Desktop 时，supervisor 无法通过容器的回环地址连到 gateway。
+如果沙箱一直停在 `ControlSupervisorStartFailed`，在 Docker 驱动那一节加上：
+
+```toml
+supervisor_network_mode = "bridge"
+grpc_endpoint = "https://host.docker.internal:17670"
+```
 
 ## 2. 配置 { #2-configuration }
 
-在 `config.json` 的 `tools` 下添加 `sandbox` 配置块。加载器仅接受 JSON，不支持 YAML。
-JSON 无效时会发出警告并回退到默认配置，包括 `tools.sandbox.backend = "none"`；
-因此，在依赖沙箱隔离前请检查启动警告：
+在 `config.json` 的 `tools` 下添加 `sandbox` 块。JSON 无效时会打出警告并回退到默认值，其中包括
+`tools.sandbox.backend = "none"`，所以依赖沙箱隔离之前请先检查启动警告：
 
 ```json
 {
   "tools": {
     "sandbox": {
-      "backend": "auto"
+      "backend": "openshell"
     }
   }
 }
 ```
 
-默认后端为 `"none"`。如需使用微虚拟机，请启用 `"auto"` 或 `"boxlite"`。
+`backend = "openshell"` 时，缺少 SDK 或连不上 gateway 都会抛出 `SandboxInitError`。
+Raven 不会自行退回宿主机执行；只有 backend 为 `"none"` 时才在宿主机上运行。
 
-### 完整参考 { #full-reference }
+### 完整配置项 { #full-reference }
 
 | 键 | 类型 | 默认值 | 说明 |
 |-----|------|---------|-------------|
-| `backend` | `"none" \| "auto" \| "boxlite"` | `"none"` | `"none"` 在宿主机上执行命令。`"auto"` 和 `"boxlite"` 当前均选择 Boxlite；初始化失败时抛出 `SandboxInitError`。 |
-| `image` | `str` | `"ubuntu:22.04"` | 用作微虚拟机根文件系统的 OCI 镜像。 |
-| `cpus` | `int` | `2` | 分配给虚拟机的 vCPU 数量。 |
-| `memory_mib` | `int` | `2048` | 内存大小，单位 MiB。 |
-| `disk_size_gb` | `int \| null` | `null` | 磁盘大小，单位 GB。`null` 表示临时磁盘（boxlite 默认，无持久化磁盘）。 |
-| `allow_net` | `bool \| list[str]` | `true` | `true` 表示不受限；`false` 表示无网络；`["pypi.org", ...]` 表示域名白名单。空列表 `[]` 会在配置校验阶段被拒绝——要完全禁用网络请使用 `false`。 |
-| `extra_volumes` | `list[[host, vm, mode]]` | `[]` | 额外挂载进虚拟机的宿主路径。两侧路径都必须是绝对路径。`mode` 取 `"ro"` 或 `"rw"`。 |
-| `default_timeout` | `int` | `120` | 未显式传入超时时，单次 `exec()` 的超时秒数。 |
-| `verify_timeout` | `int` | `30` | 启动时用 `echo ok` 探测虚拟机是否响应的超时秒数。 |
-| `create_timeout` | `int` | `300` | 拉取镜像与创建虚拟机的超时秒数。镜像较大或镜像源较慢时调大；镜像总是预先拉取时可调小。 |
-| `debug` | `object` | 禁用 | 将 `debug.enabled` 设为 `true`，启用 `raven sandbox` 使用的本地沙箱检查服务。`backend` 为 `"none"` 时忽略此设置。 |
+| `backend` | `"none"` \| `"openshell"` | `"none"` | `"none"` 在宿主机上运行命令，没有隔离。 |
+| `gateway` | 字符串 \| null | `null` | 在 `openshell` CLI 中登记的 gateway 名称；`null` 表示使用当前激活的那个。 |
+| `image` | 字符串 | `"ubuntu:22.04"` | 每个沙箱启动所用的容器镜像。 |
+| `cpus` | 整数 | `2` | 每个沙箱的 CPU 上限。 |
+| `memoryMib` | 整数 | `2048` | 每个沙箱的内存上限，单位 MiB。 |
+| `allowNet` | 布尔 \| 列表 | `true` | 出网策略，见[网络策略](#41-network-policy)。 |
+| `extraVolumes` | 列表 | `[]` | 额外的 bind mount，每项为 `[宿主路径, 沙箱路径, "ro"\|"rw"]`。 |
+| `defaultTimeout` | 整数 | `120` | 未指定超时时每条命令的秒数。 |
+| `verifyTimeout` | 整数 | `30` | 启动探测的秒数。 |
+| `createTimeout` | 整数 | `300` | 拉取镜像并创建沙箱的秒数。 |
 
-### 常用预设 { #common-presets }
+### 从 boxlite 后端迁移 { #migrating-from-the-boxlite-backend }
 
-**自动选择后端：** 当前选择 Boxlite，并在启动时验证虚拟机。后端不可用时初始化失败：
+boxlite 微虚拟机后端已经退役。为它写的配置仍然能加载：
 
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "auto" }
-  }
-}
-```
-
-**显式选择 Boxlite：** 指定 Boxlite 后端，并执行相同的启动检查：
-
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "boxlite" }
-  }
-}
-```
-
-**自定义镜像、资源限制和网络白名单：**
-
-```json
-{
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "image": "python:3.11-slim",
-      "cpus": 4,
-      "memory_mib": 4096,
-      "disk_size_gb": 20,
-      "allow_net": ["pypi.org", "files.pythonhosted.org", "api.github.com"],
-      "default_timeout": 120
-    }
-  }
-}
-```
-
-**禁用工作虚拟机的网络访问：**
-
-```json
-{
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "allow_net": false
-    }
-  }
-}
-```
-
-**禁用（默认）：**
-
-```json
-{
-  "tools": {
-    "sandbox": { "backend": "none" }
-  }
-}
-```
+- `backend: "boxlite"` 和 `backend: "auto"` 会按 `"openshell"` 加载，并给出警告。请把文件里的值改成
+  `"openshell"`。
+- `debug` 和 `diskSizeGb` 会被忽略，并给出警告。
+- `raven sandbox list/exec/shell` 已移除，请改用 OpenShell CLI，见[查看沙箱](#35-inspecting-sandboxes)。
+- Raven 数据目录下旧的 boxlite 状态目录（`sandbox/boxlite`）不再使用，可以删除。
 
 ## 3. 工作原理 { #3-how-it-works }
 
-`SandboxExecutor` 定义在 `raven/sandbox/interfaces.py` 中，为两个执行后端提供统一接口：
+`SandboxExecutor`（`raven/sandbox/interfaces.py`）有两个实现：
 
-| 实现 | 何时使用 | 隔离性 |
+| 实现 | 何时使用 | 隔离方式 |
 |----------------|-----------|-----------|
-| `BoxliteExecutor` | `backend = "auto"` 或 `"boxlite"` | boxlite 微虚拟机——独立内核，资源受限 |
-| `DirectExecutor` | `backend = "none"` | 无——在宿主机上调用 `asyncio.create_subprocess_shell()` |
+| `OpenShellExecutor` | `backend = "openshell"` | 每个执行器一个 OpenShell 沙箱 |
+| `DirectExecutor` | `backend = "none"` | 无，命令在宿主机上运行 |
 
-工作区以可读写方式挂载到虚拟机的 `/workspace`。`ReadFileTool`、`WriteFileTool` 等文件系统
-工具直接操作宿主机路径；虚拟机内读写 `/workspace/foo.py` 时，访问的是同一个文件。
+### 3.1 每个智能体一个沙箱 { #31-one-sandbox-per-agent }
 
-`AgentLoop.__init__` 同步创建执行器对象，此时不会启动虚拟机。运行时启动或处理轮次前，
-`_start_executor()` 调用 `BoxliteExecutor.start()` 创建并验证工作虚拟机：
+主智能体循环在整个生命周期里持有一个执行器。每次 subagent 运行、每个 DAG 节点都有自己的执行器，
+因而各有一个沙箱：它们的文件、进程、网络规则和审计记录彼此分开。执行器启动时创建沙箱，停止时删除沙箱。
 
-- **`allow_net=True`（默认）：** 直接创建工作虚拟机；如果镜像尚未缓存，Boxlite 会先下载镜像。
-- **`allow_net=False` 或域名列表：** 先用网络不受限的临时虚拟机拉取并缓存镜像，再按配置的
-  网络限制创建工作虚拟机。
+在 gateway 上删除一个沙箱要好几秒，所以 `stop()` 只发起删除就返回。Raven 关闭时最多等待 20 秒，
+让未完成的删除做完。因崩溃而遗留的沙箱带有 `raven.owner` 和 `raven.pid` 两个标签，同一台机器、
+同一用户下的下一个 Raven 在启动第一个沙箱时会把它删掉。
 
-网络限制作用于工作虚拟机，镜像准备阶段仍需访问镜像仓库。后端不可用或平台不受支持时，
-会在沙箱任务执行前抛出 `SandboxInitError`。
+### 3.2 挂载与运行身份 { #32-mounts-and-identity }
 
-## 4. 直接使用 `SandboxExecutor` { #4-using-sandboxexecutor-directly }
+工作区以读写方式挂载到 `/workspace`。`read_file`、`write_file` 等文件工具直接使用宿主路径，
+所以沙箱里的 `/workspace/foo.py` 就是同一个文件。Raven 还会挂载：
 
-### 4.1 `BoxliteExecutor` { #41-boxliteexecutor }
+- 智能体主目录不在工作区内时，挂载到 `/agent-home`；
+- 插件包运行 stdio MCP 服务时，把插件数据根目录挂载到 `/plugin-data`；
+- `extraVolumes` 里的每一项。
 
-```python
-import asyncio
-from pathlib import Path
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
+沙箱会替换掉 OpenShell 默认的文件系统策略：系统路径（`/bin`、`/usr`、`/lib`、`/etc`、`/proc`、
+`/var/log`、`/dev/urandom`）只读，`/tmp` 和各挂载点可写，其余路径一律不可访问。
 
-async def main():
-    sandbox_cfg = SandboxConfig(
-        backend="boxlite",
-        image="ubuntu:22.04",
-        cpus=2,
-        memory_mib=2048,
-    )
-    workspace = Path("/tmp/my-workspace")
-    workspace.mkdir(exist_ok=True)
+在非 root 宿主上，沙箱以和 Raven 相同的用户和组运行，所以它在工作区写出的文件归你所有。
+OpenShell 不允许以 root 身份运行工作负载，所以在 root 宿主上，沙箱以镜像指定的用户运行
+（镜像没有声明用户时为 UID 1000），这个用户必须能写工作区。Raven 在沙箱启动时会检查这一点，
+写不了就直接给出明确的错误。
 
-    # build_executor() returns BoxliteExecutor for backend="auto"/"boxlite"
-    # __aenter__ creates and verifies the working VM; raises SandboxInitError if unavailable
-    # sandbox_dir tells the sandbox where a backend keeps its state. It is the
-    # resolver, not a path: resolving one creates the directory, and this call
-    # only reaches it when the backend is not "none".
-    async with build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir) as executor:
-        result = await executor.exec("echo hello from the VM")
-        print(result.as_text())
-        # → "hello from the VM\n\nExit code: 0"
+### 3.3 命令 { #33-commands }
 
-        result = await executor.exec("python3 --version")
-        print(result.as_text())
+每条命令都以 `sh -c <命令>` 的形式经 gateway 执行，工作目录是所请求宿主目录在沙箱里对应的路径。
+命令超时时由 OpenShell 终止，Raven 报告退出码 `-1` 和 `Command timed out after Ns`，
+与宿主机执行器的结果一致。取消一轮对话时，会取消执行该命令的 gateway 调用。
 
-        # cwd is translated from host path → /workspace/... automatically
-        result = await executor.exec("ls -la", cwd=str(workspace))
-        print(result.as_text())
+### 3.4 MCP stdio 服务 { #34-mcp-stdio-servers }
 
-asyncio.run(main())
-```
-
-`exec()` 返回一个 `ExecResult` 数据类：
-
-```python
-@dataclass
-class ExecResult:
-    stdout: str
-    stderr: str
-    exit_code: int
-
-    def as_text(self, max_chars: int = 10_000) -> str: ...
-```
-
-`as_text()` 先将 stdout、stderr 包含非空白字符时生成的 `STDERR:` 块，以及 `Exit code: N` 行
-合并为一个字符串，再进行截断。输出超过 `max_chars` 时，中间内容会被截断，并用
-`... (N chars truncated) ...` 标记省略部分。上限过小时，退出码行本身也可能被截断；
-如需不受格式化输出影响的完整退出码，请直接读取 `result.exit_code`。
-
-**生命周期——显式 start/stop：**
-
-```python
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import SandboxInitError
-from raven.sandbox.boxlite_executor import BoxliteExecutor
-
-executor = BoxliteExecutor(
-    image="ubuntu:22.04",
-    workspace=Path("/tmp/ws"),
-    sandbox_home=get_sandbox_dir("boxlite"),
-)
-
-try:
-    await executor.start()   # creates and verifies the working VM
-except SandboxInitError as e:
-    print(f"Sandbox unavailable: {e}")
-    raise SystemExit(1)
-
-result = await executor.exec("uname -r")
-await executor.stop()    # tears down the working VM
-```
-
-**生命周期——上下文管理器（推荐）：**
-
-```python
-from raven.sandbox import SandboxInitError
-
-try:
-    async with BoxliteExecutor(
-        image="ubuntu:22.04", workspace=Path("/tmp/ws"), sandbox_home=get_sandbox_dir("boxlite")
-    ) as executor:
-        result = await executor.exec("uname -r")
-        print(result.stdout)
-except SandboxInitError as e:
-    print(f"Sandbox unavailable: {e}")
-```
-
-**超时：**
-
-```python
-# Uses default_timeout (120 s) when timeout=None
-result = await executor.exec("sleep 10", timeout=5)
-print(result.exit_code)   # -1
-print(result.stderr)      # "Command timed out after 5s"
-```
-
-**环境变量：**
-
-```python
-result = await executor.exec(
-    "echo $MY_VAR",
-    env={"MY_VAR": "hello"},
-)
-print(result.stdout)  # "hello\n"
-```
-
-### 4.2 `DirectExecutor` { #42-directexecutor }
-
-`DirectExecutor` 实现同一套 `SandboxExecutor` 接口，但直接在宿主机上执行命令。适用于测试，或明确禁用沙箱的场景。
-
-```python
-from raven.sandbox.direct_executor import DirectExecutor
-
-async with DirectExecutor() as executor:
-    result = await executor.exec("pwd")
-    print(result.as_text())
-```
-
-当 `backend` 为 `"none"` 或 `sandbox_cfg` 为 `None` 时，`build_executor()` 返回 `DirectExecutor`：
-
-```python
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
-
-# No config — returns DirectExecutor
-executor = build_executor(None, workspace, sandbox_dir=get_sandbox_dir)
-
-# Explicit "none" — also returns DirectExecutor (no probe, no VM).
-# sandbox_dir is never called on this path, so no boxlite home is created.
-executor = build_executor(SandboxConfig(backend="none"), workspace, sandbox_dir=get_sandbox_dir)
-```
-
-## 5. 向 `ExecTool` 注入执行器 { #5-injecting-an-executor-into-exectool }
-
-通过可选参数 `executor` 传入执行器。省略该参数时，`ExecTool` 会创建 `DirectExecutor`，
-在宿主机上执行命令。
-
-```python
-from pathlib import Path
-from raven.config.paths import get_sandbox_dir
-from raven.sandbox import build_executor, SandboxConfig
-from raven.agent.tools.shell import ExecTool
-
-sandbox_cfg = SandboxConfig(backend="boxlite")
-workspace = Path("/tmp/ws")
-
-executor = build_executor(sandbox_cfg, workspace, sandbox_dir=get_sandbox_dir)
-await executor.start()   # creates and verifies the working VM; raises SandboxInitError if unavailable
-
-tool = ExecTool(
-    working_dir=str(workspace),
-    timeout=60,
-    executor=executor,          # inject the sandboxed executor
-)
-
-# ExecTool.execute() returns a plain string (the formatted output)
-output = await tool.execute(command="python3 -c 'print(42)'")
-print(output)
-# → "42\n\nExit code: 0"
-
-await executor.stop()
-```
-
-沙箱不会放宽命令权限。工具注册表在向任一后端派发命令前，都会应用相同的拒绝和审批规则。
-由于 `/workspace` 是可读写挂载，在其中删除文件也会删除宿主机上的对应文件。
-
-`ExecTool` 还会执行自身的命令和工作区检查。`restrict_to_workspace` 对两个后端均生效：
-它检查命令文本中可识别的路径，并拒绝超出允许工作目录的命令，但无法检查被调用程序
-内部的每一次文件访问。需要隔离时，仍应配置虚拟机挂载范围和操作系统权限。
-
-## 6. 接入 `AgentLoop` { #6-wiring-into-agentloop }
-
-创建 `AgentLoop` 时传入 `SandboxConfig`。执行器对象会立即创建，虚拟机则在运行时启动或
-轮次处理需要时启动：
-
-```python
-from raven.agent.loop import AgentLoop
-from raven.sandbox import SandboxConfig
-
-loop = AgentLoop(
-    provider=provider,
-    workspace=workspace,
-    sandbox_config=SandboxConfig(
-        backend="boxlite",
-        image="python:3.11-slim",
-        cpus=2,
-        memory_mib=2048,
-    ),
-)
-
-# run() calls _start_executor() before _connect_mcp(), unconditionally
-await loop.run()
-```
-
-**`run_turn()`（spine 的轮次入口——CLI / 定时任务 / 消息渠道）：**
-
-```python
-from raven.spine import ChatType, Origin, Source, TurnRequest
-
-async def emit(event):  # receives StreamDelta / Text / ToolEvent / ... events
-    ...
-
-await loop.run_turn(
-    TurnRequest(
-        origin=Origin.USER,
-        source=Source(channel="cli", chat_id="sandbox-demo", sender_id="user", chat_type=ChatType.DM),
-        text="write a hello-world Python script and run it",
-        conversation="cli:sandbox-demo",
-    ),
-    emit,
-    lambda: [],  # drain (INJECT/INTERRUPT) — empty for a plain turn
-    stream=False,
-)
-```
-
-执行器的生命周期由 `AgentLoop` 管理：
-
-| 方法 | 何时调用 | 做什么 |
-|--------|-------------|-------------|
-| `_start_executor()` | `run_turn()` 入口 | 通过 `executor.start()` 创建并校验工作虚拟机；幂等——第二次调用无副作用；失败时抛出 `SandboxInitError`（spine 会将其转为 TurnFailed 事件） |
-| `close_executor()` | 关闭时（`close_mcp()` 也会调用） | 依次执行 `_executor_stack.aclose()` → `executor.stop()` → 取消桥接任务 → 清理虚拟机 |
-
-**清理资源：**
-
-```python
-await loop.close_mcp()   # closes MCP connections and the sandbox executor together
-```
-
-`close_mcp()` 也会调用 `close_executor()`。由于 stdio MCP 服务进程运行在虚拟机内，必须先
-关闭 MCP 连接，再停止虚拟机。清理完成后重复调用 `close_executor()` 不会产生额外影响。
-
-**MCP stdio 服务：**
-
-当 `sandbox.backend` 为 `"auto"` 或 `"boxlite"` 时，stdio MCP 服务在**虚拟机内**启动，而非宿主机。
-Raven 创建两组配对的 `anyio` 内存对象流，并将一个接收流和一个发送流传给 `ClientSession`。
-三个 asyncio 任务分别将 stdout、stdin 桥接到这些流，并将 stderr 转发到应用日志：
-
-- `_stdout_bridge`——读取虚拟机 stdout 分片，缓冲至 `\n`，解析 JSON-RPC，包装为 `SessionMessage`，转发到读取流
-- `_stdin_bridge`——从写入流接收 `SessionMessage`，取出内层 `JSONRPCMessage`，序列化为 JSON 加换行，写入虚拟机 stdin
-- `_stderr_bridge`——读取虚拟机 stderr，以 `WARNING` 级别转发到应用日志
-
-诊断 MCP 服务启动失败时，stderr 是首要信号：
+启用沙箱后，stdio MCP 服务在沙箱内启动，而不是在宿主机上。它们的命令、参数、环境变量值和工作目录
+都会从宿主路径翻译成沙箱路径；工作目录不在任何挂载点内时会被拒绝，不会被悄悄替换成别的目录。
+Raven 经 gateway 桥接服务的 stdin 和 stdout，并把 stderr 转到日志：
 
 ```
 WARNING  MCP server stderr [npx]: cannot find module '@scope/server'
-WARNING  MCP server stderr [npx]: Error: ENOENT ...
 ```
 
-stdout 中的非 JSON 行（例如 `npx -y ...` 启动时的 npm 进度信息）会以 DEBUG 级别记录并跳过，
-不会中断 `ClientSession`。HTTP/SSE MCP 服务使用远程连接，不经过这一进程桥接机制。
+非 JSON 的 stdout 行（例如 `npx -y ...` 启动时 npm 的进度输出）会被跳过。HTTP 和 SSE 类型的
+MCP 服务直接连接，不受影响。
 
-## 7. 接入 `SubagentManager` { #7-wiring-into-subagentmanager }
+### 3.5 查看沙箱 { #35-inspecting-sandboxes }
 
-启用沙箱后，内置的 `raven-loop` 子 Agent 后端使用独立的沙箱执行器执行 Shell 命令，
-不与父 Agent 共用虚拟机。这并不意味着整个子 Agent 进程或其宿主机文件系统工具都在虚拟机内运行。
+Raven 的沙箱名为 `rv` 加十二位十六进制数字。用 OpenShell CLI 查看：
 
-外部 ACP 和 CLI Agent 仍作为宿主机进程启动。向后端传入沙箱执行器，不会自动隔离该后端
-自身的进程或工具；如需隔离，请另行配置外部 Agent 的隔离机制。
-
-```python
-from raven.agent.subagent import SubagentManager
-from raven.sandbox import SandboxConfig
-
-manager = SubagentManager(
-    provider=provider,
-    workspace=workspace,
-    sandbox_config=SandboxConfig(backend="boxlite"),
-)
-
-# spawn() returns immediately; the sub-agent runs in the background
-handle = await manager.spawn(task="run the test suite and report failures")
+```bash
+openshell sandbox list
+openshell sandbox exec -n rv1a2b3c4d5e6f -- ls -la /workspace
+openshell sandbox connect rv1a2b3c4d5e6f   # 交互式 shell
+openshell logs rv1a2b3c4d5e6f              # supervisor 日志，包括被拒绝的连接
 ```
 
-`_run_subagent()` 为子 Agent 的工作区创建执行器，并在 `async with executor:` 中将其传给后端。
-虚拟机在后端执行前启动，并在任务结束时清理，包括任务失败的情况。
-只有后端通过该执行器派发的操作才会在虚拟机内运行。
+## 4. 高级配置 { #4-advanced-configuration }
 
-每个虚拟机都需要独立启动。预先拉取镜像可以避免多个子 Agent 并发启动时重复下载，
-但创建虚拟机本身仍有开销。
+### 4.1 网络策略 { #41-network-policy }
 
-`AgentLoop` 会将自身的 `sandbox_config` 传给 `SubagentManager`，
-使其为子 Agent 任务创建的执行器继承相同配置：
+OpenShell 拒绝所有没有规则放行的出网，并按每个连接所访问的域名来判断。
 
-```python
-# In AgentLoop.__init__ (simplified)
-self.subagents = SubagentManager(
-    ...,
-    sandbox_config=sandbox_config,
-)
+```json
+{ "allowNet": true }
 ```
 
-## 8. 进阶配置 { #8-advanced-configuration }
+默认值放行所有三段及以上的域名（如 `api.github.com`、`files.pythonhosted.org`、`www.example.com`）
+的全部端口，另外在 22、80、443、8080、8443、9418 端口放行一份常用的两段域名：包仓库
+（`pypi.org`、`npmjs.org`、`crates.io`、`rubygems.org` 等）、代码托管（`github.com`、`gitlab.com` 等）、
+容器镜像仓库（`docker.io`、`ghcr.io` 等）和模型 API。其他两段域名（例如 `example.com`）会被拒绝。
 
-### 8.1 网络策略 { #81-network-policy }
+OpenShell 没有放行任意域名的规则（NVIDIA/OpenShell#3856），这是它目前支持的最接近"全部放行"的设置。
+需要更多域名时，用 `"*"` 在默认值基础上追加：
 
-```python
-from raven.sandbox import SandboxConfig
-
-# Full network access (default)
-SandboxConfig(backend="boxlite", allow_net=True)
-
-# No network
-SandboxConfig(backend="boxlite", allow_net=False)
-
-# Domain allowlist — only these hosts are reachable from inside the VM
-SandboxConfig(
-    backend="boxlite",
-    allow_net=["pypi.org", "files.pythonhosted.org", "api.github.com"],
-)
+```json
+{ "allowNet": ["*", "example.com", "example.org"] }
 ```
 
-> **注意：** `allow_net=[]`（空列表）会在配置校验阶段以 `ValueError` 被拒绝。要完全禁用网络请使用 `allow_net=False`。
+不带 `"*"` 时，列表只放行列出的域名，端口为 80 和 443：
 
-当 `allow_net` 为域名列表或 `False` 时，`BoxliteExecutor.start()` 会先用网络不受限的临时
-虚拟机准备 OCI 镜像，再按受限策略创建工作虚拟机。因此，启动工作虚拟机前会增加镜像准备步骤。
-
-### 8.2 额外的卷挂载 { #82-extra-volume-mounts }
-
-把额外的宿主路径挂载进虚拟机，作为只读数据或可读写的临时空间。宿主路径与虚拟机路径都必须是**绝对路径**。
-
-```python
-SandboxConfig(
-    backend="boxlite",
-    extra_volumes=[
-        # [host_path, vm_path, mode]
-        ["/Users/alice/datasets",  "/data",    "ro"],   # read-only dataset
-        ["/tmp/sandbox-cache",     "/cache",   "rw"],   # writable scratch
-    ],
-)
+```json
+{ "allowNet": ["pypi.org", "files.pythonhosted.org"] }
 ```
 
-等价的 JSON 写法：
+`false` 表示不允许任何出网。空列表有歧义，会被拒绝。
+
+这些规则转发 TLS 时不解密，所以出网速度不受影响。无论策略如何，OpenShell 始终禁止访问回环地址、
+链路本地地址和云元数据地址 `169.254.169.254`。
+
+Raven 自己的网页工具在宿主机上运行，不受此策略影响。策略作用于沙箱里的命令（`pip`、`npm`、
+`git`、`curl`）和 stdio MCP 服务。
+
+### 4.2 额外挂载 { #42-extra-volume-mounts }
 
 ```json
 {
-  "tools": {
-    "sandbox": {
-      "backend": "boxlite",
-      "extra_volumes": [
-        ["/Users/alice/datasets", "/data", "ro"],
-        ["/tmp/sandbox-cache",    "/cache", "rw"]
-      ]
-    }
-  }
+  "extraVolumes": [
+    ["/data/datasets", "/datasets", "ro"],
+    ["/home/me/cache", "/cache", "rw"]
+  ]
 }
 ```
 
-### 8.3 资源限制 { #83-resource-limits }
+两个路径都必须是绝对路径，gateway 也必须允许 bind mount（见 1.2 节）。宿主目录请放在 `/tmp` 之外：
+打包版 Linux gateway 以 systemd `PrivateTmp` 运行，看不到宿主的 `/tmp`，从那里挂载会报
+`bind source path does not exist`。
 
-```python
-SandboxConfig(
-    backend="boxlite",
-    cpus=4,
-    memory_mib=8192,
-    disk_size_gb=50,        # omit or set null for ephemeral disk (default)
-    default_timeout=300,    # 5-minute default per command
-    create_timeout=600,     # increase for large images or slow registries
-)
+### 4.3 资源与超时 { #43-resources-and-timeouts }
+
+```json
+{ "cpus": 4, "memoryMib": 4096, "defaultTimeout": 300 }
 ```
 
-单次调用的超时会覆盖默认值：
+`cpus` 和 `memoryMib` 会成为容器的资源上限。工具调用仍可传入自己的超时，该次调用以它为准，
+覆盖 `defaultTimeout`。
 
-```python
-# This call gets 10 s regardless of default_timeout
-result = await executor.exec("sleep 20", timeout=10)
-```
+## 5. 性能 { #5-performance }
 
-## 9. 如何运行测试 { #9-how-to-run-tests }
+在 Linux 6.8、Docker 29、OpenShell 0.1.8 上实测：
 
-### 9.1 前置条件 { #91-prerequisites }
+| 操作 | 开销 |
+|-----------|------|
+| 创建到就绪 | 约 2 秒；同时创建 8 个约 4 秒 |
+| 命令往返 | 约 20 毫秒 |
+| 删除 | gateway 上约 5 秒，对 Raven 来说在后台完成 |
+| 每个空闲沙箱的内存 | 宿主机上约 31 MiB |
+| 每次创建沙箱的 CPU | 约 1.5 CPU 秒 |
 
-| 要求 | 说明 |
-|-------------|-------|
-| Python 3.12+ | 运行 `python3 --version` 检查版本 |
-| `uv` | 项目使用的包管理器；安装命令为 `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
-| boxlite（仅集成测试需要） | macOS Apple Silicon M1+ **或** 带 `/dev/kvm` 的 Linux x86_64/ARM64 |
-| Node.js / npx（仅 MCP 往返测试需要） | 由 `node:20-slim` OCI 镜像提供——本地无需安装 Node |
+在沙箱里打开一个文件的开销约为普通容器的十倍，因为 OpenShell 要介入这次调用。
+打开大量小文件的工作（例如安装依赖、对大目录执行 `git add`）会比在宿主机上慢好几倍。
 
-单元测试通过模拟 Boxlite 运行，无需启动虚拟机或访问 KVM。请使用项目要求的 Python 3.12
-或更高版本。
+## 6. 运行测试 { #6-how-to-run-tests }
 
-### 9.2 准备虚拟环境 { #92-set-up-the-virtual-environment }
-
-项目使用 `uv` 管理依赖。
+单元测试既不需要 OpenShell，也不需要 gateway：
 
 ```bash
-# Clone and enter the repo
-git clone <repo-url>
-cd raven
-
-# Create the virtual environment and install all project dependencies
-uv sync
+uv run --frozen --all-extras pytest tests/test_sandbox_unit.py \
+  tests/test_sandbox_openshell_executor.py tests/test_sandbox_mounts.py -v
 ```
 
-`uv sync` 会创建项目环境并安装锁定的依赖。下方命令均通过 `uv run` 运行，无需手动激活环境。
-
-### 9.3 安装依赖 { #93-install-dependencies }
-
-**单元测试：** 安装核心依赖和开发工具：
+集成测试会驱动本机真实的 gateway。它需要一个带有 `sh`、`python3` 和 `curl` 的镜像，
+以及一个位于 `/tmp` 之外的工作区根目录：
 
 ```bash
-# Core project and development tools
-uv sync
+RAVEN_OPENSHELL_IT=1 \
+RAVEN_OPENSHELL_IT_IMAGE=my-image:latest \
+uv run --frozen --all-extras pytest tests/integration/test_openshell_sandbox_real_gateway.py -v -s
 ```
 
-MCP 已是核心依赖，无需单独添加。
+`RAVEN_OPENSHELL_IT_ROOT` 指定测试工作区的位置，`RAVEN_OPENSHELL_IT_HOST` 指定一个可访问的 HTTPS 主机，
+`RAVEN_OPENSHELL_IT_UNLISTED_APEX` 指定一个不在默认清单里的两段域名。
 
-**集成测试**——还需要 sandbox 可选组件：
+## 7. 故障排查 { #7-troubleshooting }
+
+| 现象 | 原因 | 处理 |
+|---------|-------|-----|
+| `No sandbox backend available` | Raven 环境里没有 SDK | 运行 1.1 节的安装命令 |
+| `Cannot create an OpenShell sandbox` | 没有 gateway 响应 | `openshell status`，重启 gateway |
+| `did not become ready: ... bind source path does not exist` | 挂载源在 `/tmp` 下，或 bind mount 未开启 | 把工作区移出 `/tmp`；检查 `gateway.toml` |
+| 启动时报 `ConfigurationInvalid` | gateway 拒绝了策略 | `openshell logs <名称>` |
+| `cannot write the workspace` | root 宿主，且沙箱用户不拥有工作区 | 以非 root 用户运行 Raven，或把工作区交给该 UID |
+| 几毫秒内就报 `curl: (7) ... Couldn't connect` | 网络策略拒绝了该主机 | 用 `"*"` 把它加进 `allowNet` |
+
+## 8. 平台要求 { #8-platform-requirements }
+
+| 平台 | 支持情况 |
+|----------|---------|
+| Linux x86_64 / arm64 | 内核 6.2 或更新，且启用 Landlock ABI 3；Docker 28 或更新 |
+| macOS Apple Silicon | Docker Desktop，或按 1.2 节设置的 colima |
+| Windows | 不支持；在 Windows 上 `sandbox` 可选依赖不会安装任何东西 |
+
+在 Linux 主机上检查：
 
 ```bash
-# Install the pinned Boxlite backend
-uv sync --extra sandbox
+uname -r
+cat /sys/kernel/security/lsm   # 必须包含 landlock
+python3 -c "import ctypes;print(ctypes.CDLL(None,use_errno=True).syscall(444,None,0,1))"   # Landlock ABI，需 >= 3
+docker version --format '{{.Server.Version}}'
 ```
 
-验证安装结果：
-
-```bash
-# Sandbox package should import cleanly
-uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print('sandbox ok')"
-
-# boxlite binary should be available (integration tests only)
-uv run python -c "import boxlite; print('boxlite ok')"
-```
-
-### 9.4 运行单元测试 { #94-run-unit-tests }
-
-单元测试覆盖 `SandboxConfig`、`DirectExecutor`、模拟的 `BoxliteExecutor`、`ExecTool` 的限制、
-`AgentLoop` 执行器生命周期和 MCP 桥接任务，无需虚拟机或 KVM。
-
-```bash
-uv run python -m pytest tests/test_sandbox_unit.py -v
-```
-
-通过和跳过的测试数量以 pytest 当前运行的汇总为准。测试数量和耗时会随代码版本与运行环境变化。
-
-**常用参数：**
-
-```bash
-# Stop on first failure
-uv run python -m pytest tests/test_sandbox_unit.py -x
-
-# Run a specific test class
-uv run python -m pytest tests/test_sandbox_unit.py::TestSandboxConfigValidators -v
-
-# Show log output (useful for DEBUG-level bridge tracing)
-uv run python -m pytest tests/test_sandbox_unit.py -v -s
-
-# Filter by test name substring
-uv run python -m pytest tests/test_sandbox_unit.py -k "translate_cwd"
-```
-
-### 9.5 运行集成测试 { #95-run-integration-tests }
-
-集成测试会启动真实的 Boxlite 虚拟机，需要：
-
-- 通过 `uv sync --extra sandbox` 安装沙箱可选依赖
-- macOS Apple Silicon M1+ **或** 可访问 `/dev/kvm` 的 Linux
-
-Linux 环境中若不存在 `/dev/kvm`，pytest 会跳过整个测试模块。
-
-**首次运行——预拉取 OCI 镜像：**
-
-`test_sandbox_real_vm.py` 使用会话级 fixture，在首个测试前准备 `ubuntu:22.04` 和
-`node:20-slim` 镜像。Boxlite 会缓存已下载的镜像供后续运行使用。准备时间取决于镜像仓库、
-网络和本地缓存。
-
-如果镜像拉取失败，pytest 会跳过测试并报告原因：
-
-```
-SKIPPED  OCI image pull failed for 'ubuntu:22.04' — likely a network issue, not a code bug.
-         Fix: check connectivity or pre-pull manually: boxlite pull ubuntu:22.04
-```
-
-**运行全部集成测试：**
-
-```bash
-uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
-```
-
-MCP 往返测试（`test_npx_mcp_server_everything`）每次运行都会在 `node:20-slim` 虚拟机内，
-通过 `npm install -g` 安装 `@modelcontextprotocol/server-everything`，随后启动 MCP 服务，
-验证完整的 `initialize` 和 `list_tools` 流程。
-
-**同时运行单元测试与集成测试：**
-
-```bash
-uv run python -m pytest tests/test_sandbox_unit.py tests/integration/test_sandbox_real_vm.py -v
-```
-
-**运行项目测试，但排除集成测试：**
-
-```bash
-uv run pytest tests/ --ignore=tests/integration -q
-```
-
-### 9.6 运行单个测试 { #96-run-a-single-test }
-
-```bash
-# A single test case by full name
-uv run python -m pytest "tests/test_sandbox_unit.py::TestBoxliteTranslateCwd::test_subdir_translates_correctly" -v
-
-# A single integration test
-uv run python -m pytest "tests/integration/test_sandbox_real_vm.py::TestBoxliteStdioMCPRoundtrip::test_npx_mcp_server_everything" -v -s
-```
-
-### 9.7 排障 { #97-troubleshooting }
-
-**`ModuleNotFoundError: No module named 'boxlite'`**
-
-```bash
-uv sync --extra sandbox
-```
-
-**`ModuleNotFoundError: No module named 'mcp'`**
-
-在项目环境中重新同步核心依赖：
-
-```bash
-uv sync
-```
-
-**`PanicException: Another BoxliteRuntime is already using directory`**
-
-已有 Boxlite 运行时占用了相同的状态目录。先列出候选进程，再停止占用该目录的那一个：
-
-```bash
-pgrep -af boxlite   # 带完整命令行，便于辨认占用者
-kill <pid>          # 等待两秒后重试
-```
-
-请按 pid 结束进程，不要按模式匹配：能匹配到运行时的模式，同样会匹配到你输入该命令的那个
-shell。如需同时运行多个实例，请为它们配置独立的沙箱状态目录。
-
-**集成测试在 Linux 上被跳过**
-
-检查 `/dev/kvm` 是否存在且可访问：
-
-```bash
-ls -la /dev/kvm
-```
-
-如果 KVM 不可用或当前账号没有访问权限，请联系机器管理员启用虚拟化，并为账号配置所需的
-设备访问权限。
-
-**镜像拉取超时（超过 `create_timeout`）**
-
-`create_timeout` 默认为 300 秒。网络较慢时可调大，或手动预拉取镜像：
-
-```bash
-# Pre-pull via a one-off Python script
-uv run python -c "
-import asyncio, boxlite
-async def pull(img):
-    async with boxlite.SimpleBox(image=img, cpus=1, memory_mib=256): pass
-for img in ['ubuntu:22.04', 'node:20-slim']:
-    print(f'Pulling {img}...')
-    asyncio.run(pull(img))
-    print(f'  done')
-"
-```
-
-## 10. 平台要求 { #10-platform-requirements }
-
-| 平台 | 要求 |
-|----------|------------|
-| macOS | Apple Silicon M1+、macOS 12+（使用 `Hypervisor.framework`） |
-| Linux | x86_64 或 ARM64，启用 KVM（当前用户可访问 `/dev/kvm`） |
-| Windows | 启用 KVM 的 x86_64 WSL2（当前用户可访问 `/dev/kvm`） |
-
-在不受支持的平台上，`sandbox.backend = "none"` 会使用 `DirectExecutor`。
-此时命令直接在宿主机上执行，不具备虚拟机隔离。
-
-验证 boxlite 已安装且 sandbox 包可导入：
-
-```bash
-uv run python -c "import boxlite; print('boxlite ok')"
-uv run python -c "from raven.sandbox import build_executor, SandboxConfig; print('sandbox ok')"
-```
-
-端到端验证（需要 KVM / Apple Silicon）：
-
-```bash
-uv run python -m pytest tests/integration/test_sandbox_real_vm.py -v
-```
+容器沿用宿主机的内核，所以运行在旧内核宿主上的容器里的 Raven 同样用不了沙箱。gateway 必须和 Raven
+运行在同一台机器上，因为工作区是按宿主路径 bind mount 的。

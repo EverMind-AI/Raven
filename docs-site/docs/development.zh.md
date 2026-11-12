@@ -44,7 +44,7 @@ uv sync
 
 ```bash
 uv sync --extra channels   # 消息渠道集成（Telegram、Slack 等）
-uv sync --extra sandbox    # boxlite 沙箱执行
+uv sync --extra sandbox    # OpenShell 沙箱 SDK
 uv sync --extra tools      # 网页与正文提取工具
 uv sync --all-extras       # 安装全部可选依赖
 ```

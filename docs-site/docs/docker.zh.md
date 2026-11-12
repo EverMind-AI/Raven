@@ -117,7 +117,7 @@ docker compose run --rm raven status
   `127.0.0.1` 绑定；如需远程暴露，请设置 `RAVEN_AUTO_LOGIN=0`，并在服务前配置访问控制代理。
 - 镜像不负责 TLS 终止。远程部署时，请在容器前配置 HTTPS 反向代理。
 - 镜像不包含 TUI 构建产物。`raven tui` 需要 `ui-tui/` 中的构建包。
-- `sandbox` 可选依赖默认关闭，命令在容器内执行。如需同时使用 Boxlite，可通过
-  `RAVEN_EXTRAS` 添加该依赖。
+- `sandbox` 可选依赖默认关闭，命令在容器内执行。OpenShell 沙箱按宿主路径 bind mount
+  工作区，所以需要宿主机上一个与 Raven 看到相同路径的 gateway，详见[沙箱](sandbox.md)。
 - 镜像包含用于办公文件预览的 LibreOffice。如果不需要预览办公文件，可以用
   `RAVEN_OFFICE=0` 构建。

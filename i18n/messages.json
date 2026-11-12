@@ -10832,8 +10832,8 @@
       "en": "Uses a sandbox when one is available"
     },
     "gui.set.prm.sb_box_w": {
-      "zh": "在轻量沙箱内运行命令",
-      "en": "Runs commands inside the boxlite sandbox"
+      "zh": "在 OpenShell 沙箱内运行命令",
+      "en": "Runs commands inside an OpenShell sandbox"
     },
     "gui.set.prm.sb_none": {
       "zh": "不隔离",

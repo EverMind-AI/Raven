@@ -126,7 +126,7 @@ _RENDER_SPEC: tuple[tuple[str, str, str, Any, tuple[Any, Any] | None], ...] = (
     # shipped product slice spells false (fork parity for this product);
     # any other installer gets a fenced render lane until they choose.
     ("restrictToWorkspace", "restrict_to_workspace", "flag", True, None),
-    ("backend", "backend", "choice", "auto", ("auto", "direct", "boxlite")),
+    ("backend", "backend", "choice", "auto", ("auto", "direct", "sandbox", "boxlite")),
     ("workerImage", "worker_image", "text", "", None),
     ("workerCpus", "worker_cpus", "count", 2, (1, 64)),
     ("workerMemoryMib", "worker_memory_mib", "count", 4096, (512, 1_048_576)),

@@ -144,7 +144,8 @@ docker compose run --rm raven status
 - **The TUI is not in this image.** `raven tui` needs the Node bundle from
   `ui-tui/`, which the image does not build.
 - **`sandbox`.** The extra is off by default: inside a container the container
-  is the boundary. Turn it on with `RAVEN_EXTRAS` if you want boxlite as well.
+  is the boundary. The OpenShell sandbox bind mounts the workspace by host path,
+  so it also needs a gateway on the host that sees the same paths as Raven.
 - **LibreOffice is in the image.** The gateway uses it to convert `.docx`,
   `.xlsx`, and `.pptx` files to PDF for browser previews. LibreOffice and the
   CJK fonts add roughly 500 MB to the image. Build with

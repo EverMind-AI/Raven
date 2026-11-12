@@ -301,7 +301,7 @@ async def test_hard_denied_command_never_requests_approval(tmp_path) -> None:
 
 
 async def test_a_sandboxed_executor_earns_no_relaxation(tmp_path) -> None:
-    # Boxlite mounts the real workspace read-write into the VM, so a
+    # The sandbox mounts the real workspace read-write, so a
     # filesystem catastrophe inside it reaches host data. The deny list
     # holds through a sandboxed executor exactly as through a direct one.
     executor = _RecordingExecutor(sandboxed=True)
@@ -931,7 +931,7 @@ class TestAGlobalOptionValueIsNotASubcommand:
 
 
 class TestSandboxingDoesNotRelaxClassification:
-    """The classifier has no sandbox input: the Boxlite VM mounts the real
+    """The classifier has no sandbox input: the sandbox mounts the real
     workspace read-write, so the filesystem rules a sandbox supposedly
     contains still reach host data through that mount."""
 

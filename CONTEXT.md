@@ -2578,7 +2578,8 @@ second owner, and that distinction is what keeps it off its parent's tab.
 ### Execution & Evaluation
 
 **SandBox** (`sandbox/`):
-Isolated command execution (microVM / boxlite); owns the debug server and VM lifecycle.
+Isolated command execution: one OpenShell sandbox per executor on a local gateway, or direct host
+execution when disabled; owns sandbox lifecycle, mounts, and the egress policy.
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three

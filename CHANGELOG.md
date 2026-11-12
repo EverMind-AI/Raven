@@ -20,6 +20,22 @@ All notable changes to Raven are documented here.
 
 ### Changed
 
+- Sandboxed commands run in NVIDIA OpenShell, on its Docker driver, instead of
+  boxlite micro-VMs. `tools.sandbox.backend` takes `"openshell"` or `"none"`;
+  a config that still says `"auto"` or `"boxlite"` is read as `"openshell"`,
+  and the retired `debug` and `diskSizeGb` keys are dropped with a warning.
+  Each executor gets its own sandbox on a local OpenShell gateway, with the
+  workspace and extra volumes mounted and the same CPU and memory limits.
+  Network egress stays open by default: any host name with three or more
+  labels on any port, plus common package, code-hosting and model-provider
+  domains on common ports, since OpenShell cannot yet match every host name;
+  an `allowNet` host list still limits it to those hosts. The `raven sandbox`
+  command group and the sandbox debug server are gone, and
+  `openshell sandbox list`, `exec` and `connect` do those jobs. The `sandbox`
+  extra installs the OpenShell SDK instead of boxlite, `raven onboard` checks
+  that the SDK imports and the gateway answers, and the design engine's
+  sandboxed renderer runs on OpenShell too.
+
 - When an agent's report comes back, Raven's reply explains it in full in its
   own words instead of a one-to-two-sentence summary: the user has not read
   the report (the page shows it folded), so each finding is named by what it

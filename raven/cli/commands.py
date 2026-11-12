@@ -16,7 +16,6 @@ group. The actual implementations live in per-feature modules:
     - ``channels`` → ``raven/cli/channel_commands.py``
     - ``cron``     → ``raven/cli/cron_commands.py``
     - ``provider`` → ``raven/cli/provider_commands.py``
-    - ``sandbox``  → ``raven/cli/sandbox_commands.py``
     - ``sentinel`` → ``raven/cli/sentinel_commands.py``
     - ``sessions`` → ``raven/cli/session_commands.py``
     - ``import``   → ``raven/cli/import_commands.py``
@@ -167,7 +166,6 @@ from raven.cli.mcp_commands import mcp_app
 from raven.cli.ops_connection_commands import ops_app
 from raven.cli.playbook_commands import playbook_app
 from raven.cli.provider_commands import provider_app
-from raven.cli.sandbox_commands import sandbox_app
 from raven.cli.sentinel_commands import sentinel_app
 from raven.cli.skill_commands import skill_app
 from raven.cli.trajectory_commands import trajectory_app
@@ -180,7 +178,6 @@ app.add_typer(ops_app, name="ops")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(playbook_app, name="playbook")
 app.add_typer(provider_app, name="provider")
-app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(sentinel_app, name="sentinel")
 app.add_typer(skill_app, name="skill")
 app.add_typer(trajectory_app, name="trajectory")

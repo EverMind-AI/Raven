@@ -274,7 +274,7 @@ def test_sandbox_mounts_the_plugin_data_root_for_package_stdio_servers(tmp_path:
     AgentLoop(
         provider=_FakeChatProvider(),
         workspace=tmp_path,
-        sandbox_config=SandboxConfig(backend="boxlite"),
+        sandbox_config=SandboxConfig(backend="openshell"),
         package_mcp_servers={"demo__search": MCPServerConfig(type="stdio", command="demo")},
     )
 

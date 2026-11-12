@@ -2,7 +2,7 @@
 
 Both run host-side and reuse ``_FsTool``'s workspace/allowed_dirs resolution so
 they share the exact same path boundary as read_file/write_file/list_dir — never
-the SandboxExecutor (avoids shuttling large result sets across a VM edge).
+the SandboxExecutor (avoids shuttling large result sets across a sandbox edge).
 
 ``grep`` prefers the ``rg`` binary installed by ripgrep-bin for speed and
 .gitignore awareness, then a system rg on PATH. If neither is available, it

@@ -64,7 +64,7 @@ WORKDIR /app
 
 # Optional extras baked in. `channels` is what makes the gateway more than a
 # web page; `tools` is the readability extractor. `sandbox`, `browser` and
-# `eval` are opt-in -- each pulls a payload (boxlite, a browser binary, the
+# `eval` are opt-in -- each pulls a payload (the OpenShell SDK, a browser binary, the
 # huggingface client) that a default deployment does not open.
 ARG RAVEN_EXTRAS="channels,tools"
 
