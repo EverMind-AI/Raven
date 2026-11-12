@@ -13,6 +13,7 @@ live-repo writes; eval checks the commit out into its own worktree).
 from __future__ import annotations
 
 import ast
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -74,6 +75,38 @@ class Sandbox:
     def _snapshot(self) -> dict[str, bytes]:
         return {rel: p.read_bytes() for rel, p in self._iter_whitelist()}
 
+    def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(self.repo_root), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+
+    def _origin_state(self) -> tuple[str, str] | None:
+        """Origin HEAD plus working-tree status, or None when git is unavailable."""
+        try:
+            head = self._git("rev-parse", "HEAD").stdout.strip()
+            status = self._git("status", "--porcelain", "-uall").stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return head, status
+
+    def _origin_gitdir(self) -> Path | None:
+        """The origin gitdir named by this worktree's .git file, if it is one."""
+        gitfile = self.root / ".git"
+        try:
+            text = gitfile.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if not text.startswith("gitdir:"):
+            return None
+        try:
+            return Path(text.split(":", 1)[1].strip()).resolve()
+        except OSError:
+            return None
+
     def bash(self, command: str, timeout: float = 60.0) -> str:
         # The candidate is the diff of THIS worktree vs base; a command that
         # names the origin repo escapes the experiment — reads see the wrong
@@ -81,13 +114,18 @@ class Sandbox:
         # every later measurement AND are never captured into the candidate.
         # The path is discoverable in-sandbox (the worktree's .git file names
         # the origin gitdir), so an in-context prohibition alone is not enough.
-        if str(self.repo_root.resolve()) in command:
+        origin_gitdir = self._origin_gitdir()
+        blocked = [str(self.repo_root.resolve())]
+        if origin_gitdir is not None:
+            blocked.append(str(origin_gitdir))
+        if any(path in command for path in blocked):
             return (
                 f"[refused: command references the origin repo "
                 f"({self.repo_root}). Work ONLY inside your cwd (this worktree "
                 "holds the exact code version you are patching); the origin is "
                 "a different checkout and out of bounds.]"
             )
+        before = self._origin_state()
         try:
             r = subprocess.run(
                 ["bash", "-c", command],
@@ -104,6 +142,9 @@ class Sandbox:
             )
         except Exception as e:  # noqa: BLE001 — a bad command must not crash the run
             return f"[bash error: {type(e).__name__}: {str(e)[:150]}]"
+        after = self._origin_state()
+        if before is not None and after != before:
+            raise RuntimeError("sandbox command modified the origin repository; candidate aborted")
         out = (r.stdout or "")[-4000:]
         err = (r.stderr or "")[-1500:]
         return f"[exit {r.returncode}]\n{out}" + (f"\n[stderr]\n{err}" if err else "")
