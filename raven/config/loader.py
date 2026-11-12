@@ -695,7 +695,9 @@ def _migrate_retired_sandbox_backend(data: dict[str, Any], *, notify: bool = Fal
     for key in RETIRED_KEYS:
         if key in sandbox:
             sandbox.pop(key)
-            notices.append(f"Removed `tools.sandbox.{key}` from your config: it applied to the retired boxlite backend.")
+            notices.append(
+                f"Removed `tools.sandbox.{key}` from your config: it applied to the retired boxlite backend."
+            )
     if notify:
         _migration_notices.extend(n for n in notices if n not in _migration_notices)
     return bool(notices)
