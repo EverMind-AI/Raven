@@ -51,3 +51,9 @@ def test_the_network_source_reads_the_live_permissions_and_the_scopes_grants():
     assert [name.startswith("raven_grant_") for name in source()] == [True]
     current["config"] = PermissionsConfig()
     assert "allow_open" in source()
+
+
+def test_a_grant_without_a_scope_is_ignored():
+    registry = GrantRegistry()
+    registry.grant("", CURL)
+    assert registry.grants_for(None) == frozenset()
