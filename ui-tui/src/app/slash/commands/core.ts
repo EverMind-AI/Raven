@@ -138,7 +138,7 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'permission mode [ask|smart|full], or `default [ask|smart|full]` for new conversations',
+    help: 'permission mode [ask|smart|full], or `default [ask|smart|full]` for new sessions',
     name: 'perm',
     run: (arg, ctx) => {
       const words = arg.trim().toLowerCase().split(/\s+/).filter(Boolean)

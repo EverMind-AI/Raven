@@ -10,7 +10,7 @@
 Platform message
   -> channel adapter: sender/group checks and media handling
   -> Intake: TurnRequest
-  -> Gateway / Spine: conversation scheduling
+  -> Gateway / Spine: session scheduling
   -> Agent Loop: tools, memory, delegation
   -> DeliveryHub / ChannelOutletAdapter
   -> originating channel and chat

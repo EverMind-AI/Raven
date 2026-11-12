@@ -306,7 +306,7 @@ export const disarmEscape = (target: DirectTargetRef | null) => disarmEscapeKey(
 
 // The one line a direct view shows before its first read lands. Muted, because
 // it is a status and not something anybody said.
-const READING = 'reading this instance\u2019s conversation\u2026'
+const READING = 'reading this instance\u2019s session\u2026'
 const UNUSED = 'nothing said to this instance yet \u2014 type to start'
 
 /**

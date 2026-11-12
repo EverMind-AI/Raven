@@ -673,7 +673,7 @@ class RavenConfigTool(Tool):
             parts[0] += f" {lo}..{hi}"
         parts.append(_EFFECT_SHORT[setting.effect])
         if setting.session:
-            parts.append("this conversation only")
+            parts.append("this session only")
         return ", ".join(parts)
 
     @staticmethod

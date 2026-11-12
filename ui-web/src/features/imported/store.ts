@@ -101,7 +101,7 @@ function claim(name: string): boolean {
 function release(): void {
   set({ busy: null })
   /* The group that holds this row closes with it: the reader is in the
-     conversation the import became, and the row that named the file has
+     session the import became, and the row that named the file has
      nothing left to say. */
   navfly.close()
 }

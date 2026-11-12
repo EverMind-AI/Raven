@@ -313,7 +313,7 @@ Learn more about Raven on the documentation site.
 
 ## ❯❯ Launch WebUI
 
-Raven's WebUI brings conversations, multi-agent collaboration, and workspace management into your browser. Chat with agents, follow task progress, inspect files and outputs, and browse memory and skills in one place.
+Raven's WebUI brings sessions, multi-agent collaboration, and workspace management into your browser. Chat with agents, follow task progress, inspect files and outputs, and browse memory and skills in one place.
 
 ```bash
 raven web

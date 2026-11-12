@@ -306,10 +306,10 @@ raven web
 该命令会在浏览器中打开 WebUI，并让 Raven 在后台持续运行；执行 `raven web --stop` 即可停止后台服务。
 
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/6cc51f4e-3eac-4f3a-9471-fd1c3e322efd"><img src="https://github.com/user-attachments/assets/6cc51f4e-3eac-4f3a-9471-fd1c3e322efd" alt="Raven WebUI new task page" width="90%"></a>
+  <a href="https://github.com/user-attachments/assets/6cc51f4e-3eac-4f3a-9471-fd1c3e322efd"><img src="https://github.com/user-attachments/assets/6cc51f4e-3eac-4f3a-9471-fd1c3e322efd" alt="Raven WebUI new session page" width="90%"></a>
 </p>
 
-<p align="center"><em>新建任务：一个输入框，技能、Playbook、知识库与记忆一键可达。</em></p>
+<p align="center"><em>新会话：一个输入框，技能、Playbook、知识库与记忆一键可达。</em></p>
 
 <p align="center">
   <a href="https://github.com/user-attachments/assets/88791886-59db-41e9-a8b6-563cc39e627e"><img src="https://github.com/user-attachments/assets/88791886-59db-41e9-a8b6-563cc39e627e" alt="Raven WebUI subagents page" width="90%"></a>

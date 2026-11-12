@@ -607,7 +607,7 @@ flow, not a dialog of its own.
 **Imported Session** (page side; the runtime term is in `../CONTEXT.md`):
 A package read back in, shown read-only. The page's own words for it are a
 **session**: the button reads Import session and the export wizard reads Export
-session, the way the rest of the page calls a conversation. The rail's
+session, the way the rest of the page calls a session. The rail's
 `#importedBtn`
 (`src/chrome/MoreFly.tsx`, in the popover the **More group** opens) opens a file
 dialog through the

@@ -10,7 +10,7 @@
  * the chat's own ground, rendered by src/chrome/ChatTop.tsx's neighbours and
  * owned by nobody who could be handed the flag instead. So is `data-readonly`,
  * the column of an Imported Session: set by the session registry as a
- * switch begins -- before the conversation is even asked for -- and read by the
+ * switch begins -- before the session is even asked for -- and read by the
  * stylesheet, which takes the composer away and the header's verbs with it.
  */
 

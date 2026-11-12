@@ -1436,8 +1436,8 @@ export function ModelPicker({ gw, launcher, onCancel, onSelect, scope, sessionId
 
       <Text color={t.color.muted} wrap="truncate-end">
         {scope === 'default'
-          ? 'scope: the default new conversations start on'
-          : 'scope: this conversation  ·  /model <provider> <id> --default sets the new-session default'}
+          ? 'scope: the default new sessions start on'
+          : 'scope: this session  ·  /model <provider> <id> --default sets the new-session default'}
       </Text>
       <OverlayHint t={t}>
         {models.length

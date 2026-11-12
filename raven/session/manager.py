@@ -34,7 +34,7 @@ SUBAGENT_CHANNEL = "sub"
 # Key prefix of an Imported Session (raven/trajectory/imported.py). Those
 # live under the raven home, never in this store: a save under this channel is
 # refused, so nothing that resolves a key to a file here can give an imported
-# conversation a writable twin that pickers, sweeps and delivery targets see.
+# session a writable twin that pickers, sweeps and delivery targets see.
 IMPORTED_CHANNEL = "imported"
 
 # Metadata keys the loop stamps on a session with the message index a cut turn
