@@ -20,9 +20,11 @@ import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from io import StringIO
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from raven.cli import tracing_commands as tc
@@ -201,6 +203,34 @@ def test_tracing_reuses_live_instance_from_pidfile(tmp_path, monkeypatch):
     tc._open_dashboard(4318)
 
     assert opened == ["http://127.0.0.1:5555/"]
+
+
+def test_tracing_adopts_unrecorded_viewer_and_says_stop_will_not_manage_it(tmp_path, monkeypatch):
+    """A viewer this CLI did not start has no pid record, so stop cannot reach it.
+
+    The launcher adopts it (healthy viewer on the requested port) and has to
+    say so: the alternative is handing out a dashboard that no command in the
+    CLI can shut down.
+    """
+    monkeypatch.setenv("RAVEN_TRACING_DIR", str(tmp_path))
+    monkeypatch.setattr(tc, "_port_live", lambda port: True)
+    monkeypatch.setattr(tc, "_viewer_health", lambda port: True)
+    opened = []
+    monkeypatch.setattr(tc.webbrowser, "open", lambda url: opened.append(url))
+
+    def no_spawn(*args, **kwargs):
+        raise AssertionError("must adopt the live viewer, not spawn a new one")
+
+    monkeypatch.setattr(tc.subprocess, "Popen", no_spawn)
+    buf = StringIO()
+    monkeypatch.setattr(tc, "console", Console(file=buf, width=200))
+
+    tc._open_dashboard(4318)
+
+    out = buf.getvalue()
+    assert opened == ["http://127.0.0.1:4318/"]
+    assert "no pid record" in out
+    assert "will not manage" in out
 
 
 def test_pid_is_viewer_rejects_foreign_process():

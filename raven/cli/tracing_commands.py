@@ -241,6 +241,14 @@ def _open_dashboard(port: int) -> None:
         if _viewer_health(port):
             url = f"http://127.0.0.1:{port}/"
             console.print(f"Tracing dashboard already running at [cyan]{url}[/cyan]")
+            # This viewer has no pid record (there was none, or the record we
+            # had was stale and has just been cleared), so nothing in the CLI
+            # can stop it later. Say so instead of handing out a dashboard the
+            # user cannot shut down.
+            console.print(
+                "[yellow]It has no pid record, so `raven tracing stop` will not manage it; "
+                "stop that instance by hand.[/yellow]"
+            )
             webbrowser.open(url)
             return
         # Port is held by something that is NOT our viewer (a stale instance or

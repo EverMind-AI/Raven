@@ -5,7 +5,7 @@ chat exchange via :func:`raven.core.provider_stack.send_probe`.
 
 Exit codes:
   0  — all green (and probe ok if requested)
-  1  — static check failed (config missing / schema invalid / unresolved routing)
+  1  — static check failed (config missing / unparseable / schema invalid / unresolved routing)
   2  — static checks ok but ``--probe`` failed (lets CI distinguish from 1)
 """
 
