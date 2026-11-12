@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
 import os
 import shutil
@@ -13,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
+from raven.sandbox.interfaces import SandboxInitError
 from raven_design.rendering.bundle import validate_published_bundle
 from raven_design.rendering.models import Detection, RenderConfig, RenderError, RenderOutcome, RenderRequest
 from raven_design.rendering.paths import RenderPathPolicy
@@ -90,9 +90,7 @@ class SandboxRenderBackend:
             )
             executor = None
             try:
-                if importlib.util.find_spec("openshell") is None:
-                    raise ImportError("openshell")
-                if os.getuid() == 0:
+                if getattr(os, "getuid", lambda: -1)() == 0:
                     # A root host leaves the sandbox user to the image, so the
                     # throwaway job directory must be writable by whoever that is.
                     os.chmod(job_root, 0o777)
@@ -108,10 +106,10 @@ class SandboxRenderBackend:
                         "TZ": self.config.timezone,
                     },
                 )
-            except ImportError as exc:
+            except SandboxInitError as exc:
                 raise RenderError(
                     "renderer_unavailable",
-                    "The OpenShell SDK is not installed.",
+                    str(exc),
                 ) from exc
             except asyncio.CancelledError:
                 raise
