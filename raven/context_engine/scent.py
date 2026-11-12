@@ -10,8 +10,9 @@ Judgement errors are engineered to be near-free in both directions: a turn
 wrongly judged fat costs one sub-millisecond local lookup (plus one light
 Hub query when wired); a turn wrongly judged lean costs only that turn's
 menu, with ``find_skill`` as the backstop. (The menu is stripped from the
-persisted session together with the runtime-context block, so it never
-carries over between turns.) That asymmetry is why the classifier below is
+persisted session, so it never carries over between turns; the runtime-context
+lines it rides with are filed apart and replayed, the menu is not.) That
+asymmetry is why the classifier below is
 a handful of rules and not a model.
 """
 

@@ -1595,6 +1595,15 @@ re-summarises it.
 _Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
 written mid-turn for the working transcript and is never filed.
 
+**Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
+The block each turn's user message opens with: the current time, the channel and
+chat id, the surface, and any tool or session notices. The assembler records the
+lines on the message, the session write keeps the user's words in `content` and
+files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
+joins them back the way they were sent, so a later turn replays the message byte
+for byte and the provider's cached prefix still matches. The scent menu rides in
+the same paragraph when the message is sent but is not filed.
+
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only
 store; for the session log the scope is the Session Revision's

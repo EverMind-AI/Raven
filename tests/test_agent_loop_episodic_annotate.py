@@ -345,8 +345,11 @@ class TestOrigins:
         await _settle(loop)
         assert len(fake.tails) == 2
         assert fake.tails[1][0] == {
-            k: v for k, v in fake.tails[1][0].items() if k in ("role", "content", "timestamp", "trace_id")
+            k: v
+            for k, v in fake.tails[1][0].items()
+            if k in ("role", "content", "timestamp", "trace_id", "runtime_context")
         }
+        assert fake.tails[1][0]["runtime_context"].startswith("[Runtime Context")
         assert fake.tails[1][0]["content"] == "again"
         assert fake.tails[1][0]["trace_id"].startswith("trace-")
 

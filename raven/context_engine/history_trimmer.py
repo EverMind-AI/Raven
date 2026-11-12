@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from raven.context_engine.runtime_context import replayed_content
 from raven.contracts.llm_provider import LLMProvider
 from raven.providers.binding import ModelBinding, active_window, resolve
 from raven.utils.tokens import estimate_prompt_tokens_chain, reuse_prompt_tokenization
@@ -162,11 +163,19 @@ class HistoryTrimmer:
 
     @staticmethod
     def history_from_ids(messages: list[dict[str, Any]], ids: list[int]) -> list[dict[str, Any]]:
-        """Project the selected messages down to provider-safe keys."""
+        """Project the selected messages down to provider-safe keys.
+
+        A user message is replayed with the runtime-context lines it was sent
+        with (:mod:`raven.context_engine.runtime_context`): the session keeps the
+        user's words and the lines apart, and the request has to carry them
+        joined as they were sent for the provider's cached prefix to match.
+        """
         history: list[dict[str, Any]] = []
         for mid in ids:
             clean = {k: v for k, v in messages[mid].items() if k in _ALLOWED_KEYS}
             if clean.get("role"):
+                if "content" in clean:
+                    clean["content"] = replayed_content(messages[mid])
                 history.append(clean)
         return history
 

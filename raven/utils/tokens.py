@@ -202,6 +202,11 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
             parts.append(value)
     if message.get("tool_calls"):
         parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+    # Filed beside a user message's words and joined back when it is replayed
+    # (raven.context_engine.runtime_context), so a filed message costs them too.
+    runtime_lines = message.get("runtime_context")
+    if isinstance(runtime_lines, str) and runtime_lines:
+        parts.append(runtime_lines)
     reasoning = message.get("reasoning_content")
     if isinstance(reasoning, str) and reasoning:
         parts.append(reasoning)
