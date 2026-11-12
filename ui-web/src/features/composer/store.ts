@@ -238,14 +238,11 @@ export function goPaint(): void {
   b.setAttribute('aria-label', t('gui.send'))
 }
 
-/* What the empty field says: the task on a draft, a continuation once the
-   session exists, and while a turn is running, that a message typed now goes
-   into that turn (`sendMidTurn` merges it at the turn's next gap) rather than
-   waiting for it to end -- the one fact about sending mid-turn a reader
-   cannot see. */
+/* What the empty field says: what the reader can ask for on a draft, and what
+   they can say next once the session exists. */
 function placeholder(): string {
   if (currentSession() === null) return t('gui.composer_ph')
-  return t(turn.busy() ? 'gui.composer.ph_busy' : 'gui.composer.ph_session')
+  return t('gui.composer.ph_session')
 }
 
 /* The field may take half the visual viewport, computed when asked rather than

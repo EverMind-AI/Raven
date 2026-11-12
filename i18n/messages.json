@@ -9655,10 +9655,6 @@
       "en": "Continue the conversation…",
       "zh": "继续对话……"
     },
-    "gui.composer.ph_busy": {
-      "en": "Continue the session; Raven will receive your new instruction directly",
-      "zh": "继续会话，Raven 将直接收到你的新指令"
-    },
     "gui.composer.resize": {
       "en": "Drag to resize the composer",
       "zh": "拖动调整输入框高度"
