@@ -112,11 +112,13 @@ def grants(monkeypatch) -> GrantRegistry:
     return registry
 
 
-async def _handle(responder, denials, sandbox, *, config=None, conversation=None):
+async def _handle(responder, denials, sandbox, *, config=None, conversation=None, judge=None):
     turn = start_permission_turn(
         responder, conversation_id=f"conv-{uuid4().hex}" if conversation is None else conversation, turn_id="t"
     )
-    gate = PermissionGate(config_source=lambda: config or PermissionsConfig(), builtin=BuiltinRulings())
+    gate = PermissionGate(
+        config_source=lambda: config or PermissionsConfig(), builtin=BuiltinRulings(), judge_provider_for=judge
+    )
     with tool_body(gate):
         notice = await handle_denials(sandbox, denials, command="curl a b")
     return notice, turn
@@ -270,3 +272,25 @@ async def test_the_prompt_says_when_the_sandbox_is_every_conversations(grants):
     await _handle(responder, [CURL], shared)
     await _handle(responder, [CURL], own)
     assert [call["evidence"]["shared"] for call in responder.calls] == [True, False]
+
+
+async def test_smart_mode_lets_the_reviewer_open_what_the_command_needs(grants, monkeypatch):
+    from raven.permissions.judge import JudgeOutcome
+
+    seen: dict[str, Any] = {}
+
+    async def fake_review(provider, *, targets, command, model, timeout_s):
+        seen.update(targets=targets, command=command)
+        return JudgeOutcome(allow=True, reason="the install needs its index")
+
+    monkeypatch.setattr(sandbox_network, "review_network", fake_review)
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    await _handle(responder, [CURL], sandbox, config=PermissionsConfig(mode="smart"), judge=lambda: object())
+    assert responder.calls == [] and sandbox.granted == [[CURL_GRANT]]
+    assert seen["command"] == "curl a b" and seen["targets"][0]["host"] == "example.com"
+
+
+async def test_smart_mode_with_no_reviewer_asks_the_person(grants):
+    responder = Responder(ApprovalChoice.DENY)
+    await _handle(responder, [CURL], FakeSandbox(), config=PermissionsConfig(mode="smart"))
+    assert len(responder.calls) == 1

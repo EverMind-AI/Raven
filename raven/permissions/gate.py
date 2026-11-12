@@ -391,7 +391,7 @@ class PermissionGate:
         session_keys: tuple[str, ...],
         evidence: dict[str, Any],
         suggested_pattern: str,
-        review: Callable[[], Awaitable[bool]] | None,
+        review: Callable[[Any, PermissionsConfig], Awaitable[JudgeOutcome]] | None,
         needs_person: bool = False,
     ) -> RuntimeAnswer:
         """Ask about an action ``tool_name`` found while it ran, the way ``enforce`` asks before dispatch.
@@ -399,7 +399,9 @@ class PermissionGate:
         The caller knows the action and refuses what a rule refuses before it
         gets here; this is the asking half, in ``enforce``'s order: this turn's
         earlier answers, the conversation's grants, the mode, the smart-mode
-        reviewer (``review``), then the person. Full mode grants for the
+        reviewer, then the person. ``review`` says what the reviewer is shown:
+        it is called with the judge provider and the permission set, and the
+        gate resolves the provider, as it does before dispatch. Full mode grants for the
         session, as a person choosing that would. ``needs_person`` takes the
         mode and the reviewer out of it, for an action no rule of the user's
         can name (an address given as an IP). A person deciding stops the
@@ -524,18 +526,29 @@ class PermissionGate:
             }
         )
 
-    async def _review_runtime(self, tool_name: str, kind: str, review: Callable[[], Awaitable[bool]]) -> bool:
-        """The caller's smart-mode review; a reviewer that fails hands the question to the person."""
+    async def _review_runtime(
+        self, tool_name: str, kind: str, review: Callable[[Any, PermissionsConfig], Awaitable[JudgeOutcome]]
+    ) -> bool:
+        """The caller's smart-mode review, recorded like the one before dispatch; a failure asks the person."""
+        provider = self._judge_provider_for() if self._judge_provider_for is not None else None
+        if provider is None:
+            return False
         await self._notify_review("started", tool_name)
         try:
-            allowed = bool(await review())
-        except Exception:  # noqa: BLE001 - a failed review escalates, it never allows
+            outcome = await review(provider, self._config_source())
+        except Exception as exc:  # noqa: BLE001 - a failed review escalates, it never allows
             logger.warning("permissions: runtime review failed for {}; asking the person", kind, exc_info=True)
-            allowed = False
+            outcome = JudgeOutcome(allow=False, reason=f"review failed: {exc}", failed=True)
         finally:
             await self._notify_review("ended", tool_name)
-        self._annotate({"permission.runtime.judge.decision": "allow" if allowed else "escalate"})
-        return allowed
+        self._annotate(
+            {
+                "permission.runtime.judge.decision": "allow" if outcome.allow else "escalate",
+                "permission.runtime.judge.reason": outcome.reason,
+                "permission.runtime.judge.failed": outcome.failed,
+            }
+        )
+        return outcome.allow
 
     def _refuse(
         self,

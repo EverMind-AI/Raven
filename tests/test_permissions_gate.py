@@ -1855,13 +1855,15 @@ class TestRuntimeApproval:
     async def test_an_action_that_needs_a_person_is_not_granted_by_the_mode(self):
         from raven.permissions.runtime import RuntimeChoice
 
-        async def approve() -> bool:
-            return True
+        async def approve(provider, cfg):
+            from raven.permissions.judge import JudgeOutcome
+
+            return JudgeOutcome(allow=True, reason="the install needs its index")
 
         responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
         _fresh_turn(responder)
         full = await gate_for(PermissionsConfig(mode="full")).authorize_runtime(**_runtime(), needs_person=True)
-        smart = await gate_for(PermissionsConfig(mode="smart")).authorize_runtime(
+        smart = await gate_for(PermissionsConfig(mode="smart"), judge=lambda: object()).authorize_runtime(
             **_runtime(review=approve, digest="other"), needs_person=True
         )
         assert (full.choice, smart.choice) == (RuntimeChoice.DENY, RuntimeChoice.DENY)
@@ -1874,10 +1876,12 @@ class TestRuntimeApproval:
         responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
         _fresh_turn(responder)
 
-        async def approve() -> bool:
-            return True
+        async def approve(provider, cfg):
+            from raven.permissions.judge import JudgeOutcome
 
-        gate = gate_for(PermissionsConfig(mode="smart"))
+            return JudgeOutcome(allow=True, reason="the install needs its index")
+
+        gate = gate_for(PermissionsConfig(mode="smart"), judge=lambda: object())
         assert (await gate.authorize_runtime(**_runtime(review=approve))).choice is RuntimeChoice.ONCE
         assert responder.calls == []
 
@@ -1889,14 +1893,47 @@ class TestRuntimeApproval:
         responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
         _fresh_turn(responder)
 
-        async def review() -> bool:
+        async def review(provider, cfg):
+            from raven.permissions.judge import JudgeOutcome
+
             if verdict == "error":
                 raise RuntimeError("reviewer down")
-            return False
+            return JudgeOutcome(allow=False, reason="not what the command needs")
 
-        gate = gate_for(PermissionsConfig(mode="smart"))
+        gate = gate_for(PermissionsConfig(mode="smart"), judge=lambda: object())
         assert (await gate.authorize_runtime(**_runtime(review=review))).choice is RuntimeChoice.ONCE
         assert len(responder.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_the_reviewers_reason_is_kept_on_the_trace(self, monkeypatch):
+        from raven.permissions.judge import JudgeOutcome
+
+        recorded: dict[str, Any] = {}
+        monkeypatch.setattr(PermissionGate, "_annotate", staticmethod(recorded.update))
+
+        async def approve(provider, cfg):
+            return JudgeOutcome(allow=True, reason="the clone needs its host")
+
+        _fresh_turn(Responder(ApprovalOutcome(ApprovalChoice.DENY)))
+        await gate_for(PermissionsConfig(mode="smart"), judge=lambda: object()).authorize_runtime(
+            **_runtime(review=approve)
+        )
+        assert recorded["permission.runtime.judge.decision"] == "allow"
+        assert recorded["permission.runtime.judge.reason"] == "the clone needs its host"
+        assert recorded["permission.runtime.judge.failed"] is False
+
+    @pytest.mark.asyncio
+    async def test_smart_mode_with_no_reviewer_configured_asks_the_person(self):
+        from raven.permissions.judge import JudgeOutcome
+        from raven.permissions.runtime import RuntimeChoice
+
+        async def approve(provider, cfg):
+            return JudgeOutcome(allow=True)
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+        _fresh_turn(responder)
+        answer = await gate_for(PermissionsConfig(mode="smart")).authorize_runtime(**_runtime(review=approve))
+        assert answer.choice is RuntimeChoice.ONCE and len(responder.calls) == 1
 
     @pytest.mark.asyncio
     async def test_an_unattended_turn_is_refused_without_asking(self):

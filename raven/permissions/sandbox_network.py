@@ -23,12 +23,13 @@ import hashlib
 import ipaddress
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from raven.config.update import allow_network_rule
 from raven.contracts.permissions import DecisionSource
+from raven.permissions.judge import JudgeOutcome, review_network
 from raven.permissions.network_grants import GRANTS
 from raven.permissions.runtime import RuntimeChoice, current_gate
 from raven.permissions.turn import current_turn, note_refusal
@@ -36,6 +37,7 @@ from raven.sandbox.denials import NetworkDenial, denial_line
 from raven.sandbox.network_policy import NetworkGrant, refusing_rule
 
 if TYPE_CHECKING:
+    from raven.config.schema import PermissionsConfig
     from raven.permissions.gate import PermissionGate
     from raven.sandbox.interfaces import SandboxExecutor
 
@@ -113,6 +115,19 @@ async def _ask(
     unasked = f" {rest} more blocked targets were not asked about." if rest else ""
     grants = [NetworkGrant(denial.binary, denial.host, denial.port) for denial in shown]
     keys = tuple(f"net:{grant.binary}@{grant.host}:{grant.port}" for grant in grants)
+    targets = [
+        {"binary": denial.binary, "host": denial.host, "port": denial.port, "reason": denial.reason} for denial in shown
+    ]
+
+    async def review(provider: Any, config: PermissionsConfig) -> JudgeOutcome:
+        return await review_network(
+            provider,
+            targets=targets,
+            command=command,
+            model=config.judge_model or None,
+            timeout_s=config.judge_timeout_seconds,
+        )
+
     answer = await gate.authorize_runtime(
         tool_name=tool_name,
         kind=KIND,
@@ -121,10 +136,7 @@ async def _ask(
         digest=f"{KIND}:" + hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()[:16],
         session_keys=keys,
         evidence={
-            "targets": [
-                {"binary": denial.binary, "host": denial.host, "port": denial.port, "reason": denial.reason}
-                for denial in shown
-            ],
+            "targets": targets,
             "command": command,
             # The main sandbox is every conversation's: what is opened in it
             # stays open for all of them until Raven restarts, and the card says so.
@@ -133,7 +145,7 @@ async def _ask(
         # No rule is offered to save: a card's saved rule, its undo and its
         # editor are the exec pattern's, so the broader grant offered is the session.
         suggested_pattern="",
-        review=None,
+        review=review,
         # A deny rule names hosts, so an address given as an IP (a cloud
         # metadata endpoint among them) is never opened without a person.
         needs_person=any(_is_address(denial.host) for denial in shown),
