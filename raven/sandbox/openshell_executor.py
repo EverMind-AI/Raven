@@ -48,11 +48,18 @@ _TIMEOUT_GRACE_SECONDS = 10.0
 # call is killed. The gateway enforces the same budget and answers with its
 # own exit 124, so this only covers the report, not the command.
 _KILL_GRACE_SECONDS = 1.0
-# The gateway serves a denial about half a second after the connection was
-# refused, so a command that failed early is read again once after a short
-# wait; a read that does not answer in time is given up rather than waited on.
+# A sandbox ships its log lines to the gateway in batches, a quarter second to
+# about two seconds after they happen, so a failed command's denials may not be
+# readable yet when it ends. The sandbox logs the close of each command's relay
+# after everything the command did: once a close at least that late is
+# readable, so are the command's denials. A read that does not answer in time
+# is given up rather than waited on.
 _DENIAL_READ_TIMEOUT = 2.0
-_DENIAL_SETTLE_SECONDS = 0.6
+_DENIAL_WAIT_SECONDS = 3.0
+_DENIAL_POLL_SECONDS = 0.15
+_RELAY_CLOSED = "ssh relay closed"
+# How much earlier than the caller sees a command end the sandbox may log its close.
+_RELAY_CLOSE_SLACK = 0.25
 # How long a changed network policy may take to load in a running sandbox:
 # about 1 s with the gateway's push delivery, about 11 s with poll.
 _POLICY_WAIT_SECONDS = 15.0
@@ -106,7 +113,7 @@ class OpenShellControlPlane(Protocol):
 
     def list_labeled(self, selector: str) -> list[tuple[str, dict[str, str]]]: ...
 
-    def denial_messages(self, name: str, since: float) -> list[str]: ...
+    def ocsf_lines(self, name: str, since: float) -> list[tuple[float, str]]: ...
 
     def merge_rules(self, name: str, add: dict[str, dict], remove: list[str]) -> int: ...
 
@@ -415,7 +422,7 @@ class OpenShellExecutor(SandboxExecutor):
         await self._sync_network(plane, name)
         since = time.time()
         result = await self._run(plane, name, command, cwd, timeout, env)
-        denials = await self._denials(plane, name, since, settle=result.exit_code != 0)
+        denials = await self._denials(plane, name, since, wait=result.exit_code > 0)
         return replace(result, denials=tuple(denials)) if denials else result
 
     async def sync_network(self) -> bool:
@@ -462,23 +469,27 @@ class OpenShellExecutor(SandboxExecutor):
         return True
 
     async def _denials(
-        self, plane: OpenShellControlPlane, name: str, since: float, *, settle: bool
+        self, plane: OpenShellControlPlane, name: str, since: float, *, wait: bool
     ) -> list[NetworkDenial]:
-        """The network denials logged for this sandbox since ``since``; none when the log cannot be read."""
-        for attempt in range(2 if settle else 1):
-            if attempt:
-                await asyncio.sleep(_DENIAL_SETTLE_SECONDS)
+        """The network denials logged for this sandbox since ``since``; none when the log cannot be read.
+
+        With ``wait``, the log is read until the close of the command's relay has
+        arrived, or until the wait runs out.
+        """
+        closed_after = time.time() - _RELAY_CLOSE_SLACK
+        deadline = time.monotonic() + (_DENIAL_WAIT_SECONDS if wait else 0.0)
+        denials: list[NetworkDenial] = []
+        while True:
             try:
-                messages = await asyncio.wait_for(
-                    asyncio.to_thread(plane.denial_messages, name, since), _DENIAL_READ_TIMEOUT
-                )
+                lines = await asyncio.wait_for(asyncio.to_thread(plane.ocsf_lines, name, since), _DENIAL_READ_TIMEOUT)
             except Exception as exc:  # noqa: BLE001 - a missing denial list must not cost the command's result
                 logger.debug("Could not read network denials for OpenShell sandbox %s: %s", name, exc)
-                continue
-            denials = parse_denials(messages)
-            if denials:
                 return denials
-        return []
+            denials = parse_denials(message for _, message in lines)
+            closed = any(at >= closed_after and _RELAY_CLOSED in message for at, message in lines)
+            if closed or time.monotonic() >= deadline:
+                return denials
+            await asyncio.sleep(_DENIAL_POLL_SECONDS)
 
     async def _run(
         self,
@@ -829,8 +840,8 @@ class SDKControlPlane:
                 return False
             time.sleep(_POLICY_POLL_SECONDS)
 
-    def denial_messages(self, name: str, since: float) -> list[str]:
-        """The sandbox's OCSF log messages since ``since`` (epoch seconds), where denials are reported."""
+    def ocsf_lines(self, name: str, since: float) -> list[tuple[float, str]]:
+        """The sandbox's OCSF log lines since ``since`` (epoch seconds), as event time and message."""
         from google.protobuf.timestamp_pb2 import Timestamp
         from openshell._proto import datamodel_pb2, openshell_pb2
 
@@ -843,4 +854,8 @@ class SDKControlPlane:
             ),
             timeout=_DENIAL_READ_TIMEOUT,
         )
-        return [line.message for line in response.logs if line.target == "ocsf"]
+        return [
+            (line.event_time.ToMicroseconds() / 1_000_000, line.message)
+            for line in response.logs
+            if line.target == "ocsf"
+        ]
