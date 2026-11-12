@@ -1596,8 +1596,12 @@ _Avoid_: confusing it with the in-turn head summary (`agent/window`), which is
 written mid-turn for the working transcript and is never filed.
 
 **Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
-The block each turn's user message opens with: the current time, the channel and
-chat id, the surface, and any tool or session notices. The assembler records the
+The block each turn's user message opens with: the current time, the chat id, and
+any tool or session notices. The channel tag and the surface hold for the whole
+conversation, so they close the system prompt instead, under `# This Conversation`
+(`segments/render.py:build_conversation_context`); that prompt is shared by every
+conversation on the same channel and surface, which is why the chat id stays in the
+block. The assembler records the
 lines on the message, the session write keeps the user's words in `content` and
 files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
 joins them back the way they were sent, so a later turn replays the block byte

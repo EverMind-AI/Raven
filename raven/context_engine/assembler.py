@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
@@ -53,6 +54,8 @@ if TYPE_CHECKING:
 
 
 _SEG_SEP = "\n\n---\n\n"
+_CONVERSATION_ORDER = sys.maxsize
+"""Sorts the conversation block after every phase-A segment, whatever order a plugin declares."""
 
 # The phase-A segments a reader of the window can tell apart even though they
 # are not turn-scoped: the always-on skill digest is stable and rides the
@@ -203,6 +206,11 @@ class ContextAssembler(ContextEngine):
                 prefix_parts.append((builder.order, seg.text, bool(getattr(builder, "stable", False))))
             if turn_scoped or builder.name in _WINDOW_SEGMENTS:
                 window_parts[builder.name] = seg.text
+        # Channel and surface hold for the whole conversation, so they close the
+        # system prompt rather than ride every user message, after everything
+        # that every conversation shares.
+        if conversation := render.build_conversation_context(ctx.channel, ctx.surface):
+            prefix_parts.append((_CONVERSATION_ORDER, conversation, True))
         prefix_parts.sort(key=lambda t: t[0])
         scratch_parts.sort(key=lambda t: t[0])
         system_prefix = _SEG_SEP.join(text for _, text, _ in prefix_parts)
@@ -420,7 +428,6 @@ class ContextAssembler(ContextEngine):
             lambda: parts.now,
             ctx.channel,
             ctx.chat_id,
-            surface=ctx.surface,
             tool_notices=tool_notices,
             session_notices=parts.session_notices,
         )
