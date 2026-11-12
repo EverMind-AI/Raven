@@ -392,6 +392,7 @@ class PermissionGate:
         evidence: dict[str, Any],
         suggested_pattern: str,
         review: Callable[[], Awaitable[bool]] | None,
+        needs_person: bool = False,
     ) -> RuntimeAnswer:
         """Ask about an action ``tool_name`` found while it ran, the way ``enforce`` asks before dispatch.
 
@@ -399,7 +400,9 @@ class PermissionGate:
         gets here; this is the asking half, in ``enforce``'s order: this turn's
         earlier answers, the conversation's grants, the mode, the smart-mode
         reviewer (``review``), then the person. Full mode grants for the
-        session, as a person choosing that would. A person deciding stops the
+        session, as a person choosing that would. ``needs_person`` takes the
+        mode and the reviewer out of it, for an action no rule of the user's
+        can name (an address given as an IP). A person deciding stops the
         tool's deadline (``raven.permissions.runtime.deadline_stopped``).
         """
         turn = current_turn()
@@ -428,11 +431,16 @@ class PermissionGate:
             mode = PermissionMode(session_mode(turn.session_key) or self._config_source().mode)
         except ValueError:
             mode = PermissionMode.ASK
-        if mode is PermissionMode.FULL:
+        if mode is PermissionMode.FULL and not needs_person:
             remember_allowed(turn.session_key, session_keys)
             self._annotate_runtime(kind, "allow", DecisionSource.MODE.value)
             return RuntimeAnswer(RuntimeChoice.SESSION)
-        if mode is PermissionMode.SMART and review is not None and await self._review_runtime(tool_name, kind, review):
+        if (
+            mode is PermissionMode.SMART
+            and not needs_person
+            and review is not None
+            and await self._review_runtime(tool_name, kind, review)
+        ):
             self._annotate_runtime(kind, "allow", DecisionSource.JUDGE.value)
             return RuntimeAnswer(RuntimeChoice.ONCE)
         if not self._allow_ask or turn.responder is None or not turn.conversation_id:

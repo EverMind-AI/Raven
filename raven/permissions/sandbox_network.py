@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -128,6 +129,9 @@ async def _ask(
         },
         suggested_pattern=f"{shown[0].host}:{shown[0].port}",
         review=None,
+        # A deny rule names hosts, so an address given as an IP (a cloud
+        # metadata endpoint among them) is never opened without a person.
+        needs_person=any(_is_address(denial.host) for denial in shown),
     )
     choice = answer.choice
     if choice.approved:
@@ -173,6 +177,14 @@ async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], ch
     for outcome in await asyncio.gather(*loads, return_exceptions=True):
         if outcome is not True:
             logger.warning("A sandbox did not load an approved network grant: {}", outcome)
+
+
+def _is_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return False
+    return True
 
 
 def _blocked(denials: Sequence[NetworkDenial]) -> str:

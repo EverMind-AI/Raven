@@ -244,3 +244,18 @@ async def test_full_mode_without_a_conversation_grants_this_sandbox(grants):
     await _handle(None, [CURL], trigger, config=PermissionsConfig(mode="full"), conversation="")
     assert trigger.granted == [[CURL_GRANT]]
     assert grants.grants_for(None) == frozenset()
+
+
+async def test_an_address_given_as_an_ip_is_asked_even_in_full_mode(grants):
+    metadata = NetworkDenial("/usr/bin/curl", "169.254.169.254", 80, "transparent_tcp_policy_denied")
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    await _handle(responder, [metadata], sandbox, config=PermissionsConfig(mode="full"))
+    assert len(responder.calls) == 1 and sandbox.granted == []
+
+
+async def test_an_address_given_as_an_ip_stays_blocked_with_nobody_to_ask(grants):
+    metadata = NetworkDenial("/usr/bin/curl", "169.254.169.254", 80, "transparent_tcp_policy_denied")
+    sandbox = FakeSandbox()
+    notice, _ = await _handle(None, [metadata], sandbox, config=PermissionsConfig(mode="full"))
+    assert sandbox.granted == []
+    assert "The sandbox network policy blocked: /usr/bin/curl -> 169.254.169.254:80." in notice.text
