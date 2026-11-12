@@ -177,6 +177,41 @@ async def test_a_denied_request_is_reported_on_the_result(workspace):
         await ex.stop()
 
 
+async def test_a_grant_opens_a_blocked_host_on_the_running_sandbox(workspace):
+    from raven.sandbox.network_policy import NetworkGrant
+
+    ex = _make(workspace, allow_net=True)
+    await ex.start()
+    try:
+        probe = f"curl -sS -m 10 -o /dev/null -w '%{{http_code}}' https://{UNLISTED_APEX}/"
+        blocked = await ex.exec(probe)
+        (denial,) = [d for d in blocked.denials if d.host == UNLISTED_APEX]
+        t0 = time.perf_counter()
+        assert await ex.grant_network([NetworkGrant(denial.binary, UNLISTED_APEX, 443)]) is True
+        applied = time.perf_counter() - t0
+        opened = await ex.exec(probe)
+        assert opened.exit_code == 0 and opened.stdout.strip() in {"200", "301", "302"}, opened
+        print(f"grant loaded in {applied:.1f}s")
+    finally:
+        await ex.stop()
+
+
+async def test_a_changed_permission_set_reaches_the_running_sandbox(workspace):
+    from raven.config.schema import NetworkPermissions
+    from raven.sandbox.network_policy import compile_network_policy
+
+    state = {"policies": compile_network_policy(NetworkPermissions())}
+    ex = OpenShellExecutor(image=IMAGE, workspace=workspace, network_source=lambda: state["policies"])
+    await ex.start()
+    try:
+        probe = f"curl -sS -m 10 -o /dev/null -w '%{{http_code}}' https://{HOST}/"
+        assert (await ex.exec(probe)).exit_code == 0
+        state["policies"] = compile_network_policy(NetworkPermissions(default="closed"))
+        assert (await ex.exec(probe)).exit_code != 0
+    finally:
+        await ex.stop()
+
+
 async def test_egress_follows_allow_net(workspace):
     closed = _make(workspace)
     opened = _make(workspace, allow_net=[HOST])

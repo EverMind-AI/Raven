@@ -20,7 +20,7 @@ import secrets
 import socket
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
@@ -28,7 +28,13 @@ from typing import Any, Protocol
 from raven.sandbox.denials import NetworkDenial, parse_denials
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 from raven.sandbox.mounts import WORKSPACE_MOUNT, MountTable
-from raven.sandbox.network_policy import compile_network_policy, network_from_allow_net, policy_digest
+from raven.sandbox.network_policy import (
+    NetworkGrant,
+    compile_network_policy,
+    grant_rules,
+    network_from_allow_net,
+    policy_digest,
+)
 from raven.utils.pid import pid_alive
 
 logger = logging.getLogger(__name__)
@@ -47,6 +53,10 @@ _KILL_GRACE_SECONDS = 1.0
 # wait; a read that does not answer in time is given up rather than waited on.
 _DENIAL_READ_TIMEOUT = 2.0
 _DENIAL_SETTLE_SECONDS = 0.6
+# How long a changed network policy may take to load in a running sandbox:
+# about 1 s with the gateway's push delivery, about 11 s with poll.
+_POLICY_WAIT_SECONDS = 15.0
+_POLICY_POLL_SECONDS = 0.25
 _SERVER_TIMEOUT_EXIT = 124
 _OWNER_LABEL = "raven.owner"
 _PID_LABEL = "raven.pid"
@@ -97,6 +107,10 @@ class OpenShellControlPlane(Protocol):
     def list_labeled(self, selector: str) -> list[tuple[str, dict[str, str]]]: ...
 
     def denial_messages(self, name: str, since: float) -> list[str]: ...
+
+    def merge_rules(self, name: str, add: dict[str, dict], remove: list[str]) -> int: ...
+
+    def wait_policy(self, name: str, version: int, timeout: float) -> bool: ...
 
 
 def sandbox_policy(
@@ -235,6 +249,10 @@ class OpenShellExecutor(SandboxExecutor):
             network_source = lambda: fixed  # noqa: E731
         self._network_source = network_source
         self._applied_digest: str | None = None
+        self._applied_policies: dict[str, dict] = {}
+        self._last_source: dict[str, dict] | None = None
+        # Rules granted for this sandbox only ("allow once"), kept across syncs.
+        self._local_rules: dict[str, dict] = {}
         self._default_timeout = default_timeout
         self._verify_timeout = verify_timeout
         self._create_timeout = create_timeout
@@ -248,6 +266,10 @@ class OpenShellExecutor(SandboxExecutor):
 
     @property
     def supports_process_spawning(self) -> bool:
+        return True
+
+    @property
+    def supports_network_grants(self) -> bool:
         return True
 
     def _plane(self) -> OpenShellControlPlane:
@@ -298,7 +320,9 @@ class OpenShellExecutor(SandboxExecutor):
             _spawn_delete(plane, name)
             raise
         self._name = name
+        self._applied_policies = dict(network_policies)
         self._applied_digest = policy_digest(network_policies)
+        self._last_source = network_policies
         logger.info("OpenShell sandbox %s started (image=%s)", name, self._image)
 
     def _not_ready_advice(self, name: str, exc: Exception) -> str:
@@ -388,10 +412,54 @@ class OpenShellExecutor(SandboxExecutor):
         env: dict[str, str] | None = None,
     ) -> ExecResult:
         plane, name = await self._running()
+        await self._sync_network(plane, name)
         since = time.time()
         result = await self._run(plane, name, command, cwd, timeout, env)
         denials = await self._denials(plane, name, since, settle=result.exit_code != 0)
         return replace(result, denials=tuple(denials)) if denials else result
+
+    async def sync_network(self) -> bool:
+        """Bring the running sandbox's network policy up to its source; False when it is not running or did not load."""
+        if self._name is None:
+            return False
+        return await self._sync_network(self._plane(), self._name)
+
+    async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
+        """Open ``grants`` in this sandbox only, until it stops; False when it is not running or did not load."""
+        if self._name is None:
+            return False
+        self._local_rules.update(grant_rules(grants))
+        self._last_source = None
+        return await self._sync_network(self._plane(), self._name)
+
+    async def _sync_network(self, plane: OpenShellControlPlane, name: str) -> bool:
+        try:
+            source = self._network_source()
+        except Exception as exc:  # noqa: BLE001 - keep running under the policy already loaded
+            logger.warning("Could not read the network policy for OpenShell sandbox %s: %s", name, exc)
+            return False
+        if source is self._last_source:
+            return True
+        desired = {**source, **self._local_rules}
+        digest = policy_digest(desired)
+        if digest == self._applied_digest:
+            self._last_source = source
+            return True
+        add = {rule: body for rule, body in desired.items() if self._applied_policies.get(rule) != body}
+        remove = [rule for rule in self._applied_policies if rule not in desired]
+        try:
+            version = await asyncio.to_thread(plane.merge_rules, name, add, remove)
+            loaded = await asyncio.to_thread(plane.wait_policy, name, version, _POLICY_WAIT_SECONDS)
+        except Exception as exc:  # noqa: BLE001 - retried before the next command
+            logger.warning("Could not update the network policy of OpenShell sandbox %s: %s", name, exc)
+            return False
+        if not loaded:
+            logger.warning("OpenShell sandbox %s did not load network policy version %s in time", name, version)
+            return False
+        self._applied_policies = desired
+        self._applied_digest = digest
+        self._last_source = source
+        return True
 
     async def _denials(
         self, plane: OpenShellControlPlane, name: str, since: float, *, settle: bool
@@ -713,6 +781,53 @@ class SDKControlPlane:
     def list_labeled(self, selector: str) -> list[tuple[str, dict[str, str]]]:
         refs = self._client.list_all(workspace=self._workspace, label_selector=selector)
         return [(ref.name, dict(ref.labels)) for ref in refs]
+
+    def merge_rules(self, name: str, add: dict[str, dict], remove: list[str]) -> int:
+        """Add and remove named network rules in one policy update; returns the new policy version."""
+        from google.protobuf.json_format import ParseDict
+        from openshell._proto import datamodel_pb2, openshell_pb2, sandbox_pb2
+
+        operations = [
+            openshell_pb2.PolicyMergeOperation(
+                add_rule=openshell_pb2.AddNetworkRule(
+                    rule_name=rule_name, rule=ParseDict(rule, sandbox_pb2.NetworkPolicyRule())
+                )
+            )
+            for rule_name, rule in add.items()
+        ]
+        operations += [
+            openshell_pb2.PolicyMergeOperation(remove_rule=openshell_pb2.RemoveNetworkRule(rule_name=rule_name))
+            for rule_name in remove
+        ]
+        response = self._client._stub.UpdateConfig(
+            openshell_pb2.UpdateConfigRequest(
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+                sandbox=name,
+                merge_operations=operations,
+            ),
+            timeout=_POLICY_WAIT_SECONDS,
+        )
+        return int(response.version)
+
+    def wait_policy(self, name: str, version: int, timeout: float) -> bool:
+        """Whether the sandbox has loaded policy ``version`` within ``timeout``; False at once when it failed to."""
+        from openshell._proto import datamodel_pb2, openshell_pb2
+
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self._client._stub.GetSandboxPolicyStatus(
+                openshell_pb2.GetSandboxPolicyStatusRequest(
+                    workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+                    sandbox=name,
+                    version=version,
+                ),
+                timeout=_DENIAL_READ_TIMEOUT,
+            )
+            if status.active_version >= version:
+                return True
+            if status.revision.status == openshell_pb2.POLICY_STATUS_FAILED or time.monotonic() >= deadline:
+                return False
+            time.sleep(_POLICY_POLL_SECONDS)
 
     def denial_messages(self, name: str, since: float) -> list[str]:
         """The sandbox's OCSF log messages since ``since`` (epoch seconds), where denials are reported."""
