@@ -79,6 +79,16 @@ class TestBashBoundary:
         out = sandbox.bash("pwd")
         assert str(sandbox.root) in out and "[exit 0]" in out
 
+    def test_gitdir_command_substitution_is_detected(self, sandbox):
+        poison = sandbox.repo_root / "sandbox-escape"
+        command = "cd \"$(sed -n 's/^gitdir: //p' .git)/../../..\" && touch sandbox-escape"
+        try:
+            with pytest.raises(RuntimeError, match="origin repository"):
+                sandbox.bash(command)
+            assert poison.exists()
+        finally:
+            poison.unlink(missing_ok=True)
+
 
 class TestScopeRestore:
     def test_out_of_whitelist_edits_reverted_whitelist_kept(self, sandbox):
