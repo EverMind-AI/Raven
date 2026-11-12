@@ -170,15 +170,16 @@ def inherit_web_vendors(
     an unselected credential is exposure with no reader.
 
     The search and fetch vendor choices follow the host only when all three
-    hold: the product names no choice of its own, it has no resolved key for a
-    vendor that serves that half, and the host's vendor resolves a key here
-    (its own slot or the borrowed LLM key). The first is what keeps a
-    ``--config`` file's explicit choice; the second keeps a product that paid
-    for Serper from being switched to the host's Tavily and having its key
-    stranded; the third keeps a host that names a vendor it cannot pay for
-    from withholding a tool that was configured before. A product that names
-    no choice and holds no key of its own follows the host, which is the case
-    this function exists for. Returns the vendors whose key was carried.
+    hold: the product names no choice of its own; the host's vendor is either
+    one this product pays for or one in a half where the product pays for no
+    vendor; and the host's vendor resolves a key here (its own slot or the
+    borrowed LLM key). The first is what keeps a ``--config`` file's explicit
+    choice; the second keeps a product that paid for Serper from being
+    switched to the host's Tavily and having its key stranded; the third
+    keeps a host that names a vendor it cannot pay for from withholding a
+    tool that was configured before. A product that names no choice and holds
+    no key of its own follows the host, which is the case this function
+    exists for. Returns the vendors whose key was carried.
     """
     from raven.config.schema import (
         WEB_VENDOR_ENV_VARS,
