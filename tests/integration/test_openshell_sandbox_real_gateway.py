@@ -40,6 +40,15 @@ for line in sys.stdin:
 
 
 IT_ROOT = Path(os.environ.get("RAVEN_OPENSHELL_IT_ROOT", Path.home() / ".cache" / "raven-openshell-it"))
+# The suite's autouse home fixture points HOME at a fresh directory per test,
+# and the SDK finds the registered gateway under the XDG config home, so the
+# real one is read here, at collection, before any fixture has moved HOME.
+REAL_CONFIG_HOME = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+
+
+@pytest.fixture(autouse=True)
+def _registered_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", REAL_CONFIG_HOME)
 
 
 @pytest.fixture
@@ -114,7 +123,10 @@ async def test_timeout_returns_minus_one_quickly(workspace):
         t0 = time.perf_counter()
         result = await ex.exec("sleep 60", timeout=2)
         elapsed = time.perf_counter() - t0
-        assert elapsed < 15
+        # The command's own budget, plus the short grace the gateway's report
+        # needs: a local backstop that waits much longer than that is the
+        # regression this bound is here for.
+        assert elapsed < 2 + 3
         assert result.exit_code != 0
         print(f"timeout result exit={result.exit_code} stderr={result.stderr!r} in {elapsed:.1f}s")
     finally:

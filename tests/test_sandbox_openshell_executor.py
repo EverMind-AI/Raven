@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +15,8 @@ import pytest
 from raven.sandbox import openshell_executor as ox
 from raven.sandbox.interfaces import SandboxInitError
 from raven.sandbox.openshell_executor import OpenShellExecutor, sandbox_policy
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the OpenShell backend needs a Linux host")
 
 
 class FakeStream:
@@ -120,6 +125,15 @@ class TestSandboxPolicy:
     def test_a_root_host_leaves_the_identity_to_the_driver(self):
         assert "process" not in sandbox_policy(allow_net=False, mounts=[], uid=0)
 
+    def test_a_host_without_a_uid_leaves_the_identity_to_the_driver(self):
+        assert "process" not in sandbox_policy(allow_net=False, mounts=[], uid=None)
+
+    def test_the_host_uid_is_none_where_the_platform_has_none(self, monkeypatch):
+        monkeypatch.delattr(ox.os, "getuid", raising=False)
+        monkeypatch.delattr(ox.os, "getgid", raising=False)
+        assert ox._host_uid() is None
+        assert ox._host_gid() is None
+
     def test_allow_net_true_opens_every_multi_label_host_on_every_port(self):
         rules = sandbox_policy(allow_net=True, mounts=[], uid=1000)["network_policies"]
         (rule,) = rules.values()
@@ -202,6 +216,16 @@ class TestStart:
         await ox.drain_pending_deletes()
         assert cp.deleted == [cp.created[0]["name"]]
 
+    async def test_a_root_host_says_why_the_sandbox_user_cannot_write(self, tmp_path, monkeypatch):
+        cp = FakeControlPlane()
+        cp.exec_script = lambda argv: FakeStream([("stdout", b"1000\nnot-writable\n"), ("exit", 0)])
+        monkeypatch.setattr(ox, "_host_uid", lambda: 0)
+        with pytest.raises(SandboxInitError) as info:
+            await _executor(tmp_path, cp).start()
+        assert "running as root" in str(info.value)
+        assert "OpenShell refuses a root workload" in str(info.value)
+        await ox.drain_pending_deletes()
+
     async def test_an_unreachable_gateway_explains_what_to_check(self, tmp_path):
         cp = FakeControlPlane()
         cp.create_error = ConnectionError("connection refused")
@@ -273,7 +297,7 @@ class TestReaper:
     async def test_sandboxes_of_dead_processes_on_this_host_are_deleted_once(self, tmp_path, monkeypatch):
         cp = FakeControlPlane()
         cp.listed = [("rvdead", {"raven.pid": "999999"}), ("rvlive", {"raven.pid": "1"}), ("rvnolabel", {})]
-        monkeypatch.setattr(ox, "_pid_alive", lambda pid: pid == 1)
+        monkeypatch.setattr(ox, "pid_alive", lambda pid: pid == 1)
         await _executor(tmp_path, cp).start()
         await _executor(tmp_path, cp).start()
         await ox.drain_pending_deletes()
@@ -291,22 +315,24 @@ class TestReaper:
         await _executor(tmp_path, cp).start()
         assert len(cp.created) == 1 and cp.deleted == []
 
-    def test_pid_alive_reads_a_permission_error_as_alive(self, monkeypatch):
-        import os
+    async def test_a_gateway_that_cannot_list_is_asked_again_next_time(self, tmp_path, monkeypatch):
+        """One blip must not switch the reaper off for the rest of the process."""
+        cp = FakeControlPlane()
+        calls: list[str] = []
+        monkeypatch.setattr(ox, "pid_alive", lambda pid: False)
 
-        assert ox._pid_alive(os.getpid()) is True
+        def refuse(selector):
+            calls.append(selector)
+            if len(calls) == 1:
+                raise RuntimeError("permission denied")
+            return [("rvdead", {"raven.pid": "999999"})]
 
-        def gone(pid, sig):
-            raise ProcessLookupError
-
-        monkeypatch.setattr(ox.os, "kill", gone)
-        assert ox._pid_alive(424242) is False
-
-        def foreign(pid, sig):
-            raise PermissionError
-
-        monkeypatch.setattr(ox.os, "kill", foreign)
-        assert ox._pid_alive(1) is True
+        cp.list_labeled = refuse
+        await _executor(tmp_path, cp).start()
+        await _executor(tmp_path, cp).start()
+        await ox.drain_pending_deletes()
+        assert len(calls) == 2
+        assert cp.deleted == ["rvdead"]
 
 
 class TestExec:
@@ -324,7 +350,7 @@ class TestExec:
         assert last["timeout"] == 9
 
     async def test_a_timeout_cancels_the_stream_and_reports_minus_one(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(ox, "_TIMEOUT_GRACE_SECONDS", 0.05)
+        monkeypatch.setattr(ox, "_KILL_GRACE_SECONDS", 0.05)
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp)
         await ex.start()
@@ -333,6 +359,52 @@ class TestExec:
         result = await ex.exec("sleep 100", timeout=0)
         assert result.exit_code == -1 and "timed out" in result.stderr
         assert blocking.cancelled.is_set()
+
+    async def test_a_timed_out_command_does_not_outlive_its_budget(self, tmp_path, monkeypatch):
+        """The local backstop is the command's own budget, not budget plus a
+        long grace: the gateway enforces the same budget itself."""
+        monkeypatch.setattr(ox, "_KILL_GRACE_SECONDS", 0.05)
+        cp = FakeControlPlane()
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        cp.exec_script = lambda argv: FakeStream(block=True)
+        started = time.monotonic()
+        result = await ex.exec("sleep 100", timeout=1)
+        elapsed = time.monotonic() - started
+        assert result.exit_code == -1
+        assert elapsed < 2, f"the command ran {elapsed:.1f}s past its 1s budget"
+
+    async def test_a_timed_out_command_leaves_no_task_reporting_an_error(self, tmp_path):
+        """A task that ends on an exception nobody reads is reported by asyncio,
+        so the abandoned drain has to end on a result."""
+        loop = asyncio.get_running_loop()
+        reported: list[dict] = []
+        loop.set_exception_handler(lambda _loop, context: reported.append(context))
+        cp = FakeControlPlane()
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        cp.exec_script = lambda argv: FakeStream(block=True)
+        result = await ex.exec("sleep 100", timeout=0)
+        assert result.exit_code == -1
+        gc.collect()
+        await asyncio.sleep(0.05)
+        assert [context for context in reported if "never retrieved" in context.get("message", "")] == []
+
+    async def test_a_broken_stream_reports_a_failed_command(self, tmp_path):
+        """A stream that breaks mid-command is a failed command, not an
+        exception thrown at the caller."""
+
+        class Broken(FakeStream):
+            def __iter__(self):
+                yield ("stdout", b"partial\n")
+                raise RuntimeError("stream reset")
+
+        cp = FakeControlPlane()
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        cp.exec_script = lambda argv: Broken()
+        result = await ex.exec("echo hi", timeout=5)
+        assert result.exit_code == -1
 
     async def test_a_server_side_timeout_reads_like_the_other_executors(self, tmp_path):
         import time as _time

@@ -25,12 +25,19 @@ from typing import Any, Protocol
 
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 from raven.sandbox.mounts import WORKSPACE_MOUNT, MountTable
+from raven.utils.pid import pid_alive
 
 logger = logging.getLogger(__name__)
 
 _READ_ONLY_BASELINE = ("/bin", "/usr", "/lib", "/proc", "/dev/urandom", "/etc", "/var/log")
 _READ_WRITE_BASELINE = ("/tmp", "/dev/null")
+# How long one exec call may take past the command's own budget before the
+# transport gives up on it.
 _TIMEOUT_GRACE_SECONDS = 10.0
+# How long a command that ran out of budget may keep reporting before the
+# call is killed. The gateway enforces the same budget and answers with its
+# own exit 124, so this only covers the report, not the command.
+_KILL_GRACE_SECONDS = 1.0
 _SERVER_TIMEOUT_EXIT = 124
 _OWNER_LABEL = "raven.owner"
 _PID_LABEL = "raven.pid"
@@ -147,7 +154,7 @@ class OpenShellControlPlane(Protocol):
 
 
 def sandbox_policy(
-    *, allow_net: bool | list[str], mounts: list[tuple[str, str, bool]], uid: int, gid: int | None = None
+    *, allow_net: bool | list[str], mounts: list[tuple[str, str, bool]], uid: int | None, gid: int | None = None
 ) -> dict:
     """The OpenShell policy for one sandbox, in the field names of its ``SandboxPolicy`` proto.
 
@@ -164,9 +171,10 @@ def sandbox_policy(
         "filesystem": {"include_workdir": True, "read_only": read_only, "read_write": read_write},
         "landlock": {"compatibility": "best_effort"},
     }
-    if uid > 0:
+    if uid is not None and uid > 0:
         # OpenShell refuses a root workload, so a root host keeps the image's
-        # user; a non-root host runs as itself so bind-mounted files stay writable.
+        # user; a non-root host runs as itself so bind-mounted files stay
+        # writable. A host without a uid leaves the identity to the driver.
         policy["process"] = {"run_as_user": str(uid), "run_as_group": str(gid if gid else uid)}
     if allow_net is True or (isinstance(allow_net, list) and _OPEN_ENTRY in allow_net):
         extra = [] if allow_net is True else [host for host in allow_net if host != _OPEN_ENTRY]
@@ -183,18 +191,20 @@ def sandbox_policy(
     return policy
 
 
+def _host_uid() -> int | None:
+    """The host user's uid, or None on a platform that has none."""
+    getter = getattr(os, "getuid", None)
+    return getter() if getter is not None else None
+
+
+def _host_gid() -> int | None:
+    """The host user's gid, or None on a platform that has none."""
+    getter = getattr(os, "getgid", None)
+    return getter() if getter is not None else None
+
+
 def _owner_digest() -> str:
-    return hashlib.sha256(f"{socket.gethostname()}:{os.getuid()}".encode()).hexdigest()[:14]
-
-
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    return hashlib.sha256(f"{socket.gethostname()}:{_host_uid()}".encode()).hexdigest()[:14]
 
 
 async def drain_pending_deletes() -> None:
@@ -234,6 +244,28 @@ def _drain(stream: ExecStream) -> ExecResult:
         stderr=stderr.decode("utf-8", errors="replace"),
         exit_code=exit_code,
     )
+
+
+async def _drain_to_result(stream: ExecStream) -> ExecResult:
+    """Drain a command's output, ending quietly on a stream that broke or was cancelled.
+
+    A command nobody waits for any more -- a timeout, a cancelled caller --
+    leaves the stream raising on its way out, and a task that ends on an
+    exception nobody reads is reported by asyncio as an unretrieved error.
+    """
+    try:
+        return await asyncio.to_thread(_drain, stream)
+    except Exception as exc:
+        logger.debug("OpenShell command stream ended with %s", exc)
+        return ExecResult(stdout="", stderr="", exit_code=-1)
+
+
+async def _collect(drain: asyncio.Task, grace: float) -> ExecResult | None:
+    """The result of a drain that is already running, or None if it does not land in time."""
+    try:
+        return await asyncio.wait_for(asyncio.shield(drain), grace)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        return None
 
 
 class OpenShellExecutor(SandboxExecutor):
@@ -295,7 +327,7 @@ class OpenShellExecutor(SandboxExecutor):
                 name=name,
                 image=self._image,
                 policy=sandbox_policy(
-                    allow_net=self._allow_net, mounts=self._mounts.mounts(), uid=os.getuid(), gid=os.getgid()
+                    allow_net=self._allow_net, mounts=self._mounts.mounts(), uid=_host_uid(), gid=_host_gid()
                 ),
                 driver_config=self._driver_config(),
                 resources={"limits": {"cpu": str(self._cpus), "memory": f"{self._memory_mib}Mi"}},
@@ -307,6 +339,8 @@ class OpenShellExecutor(SandboxExecutor):
             raise SandboxInitError(
                 f"Cannot create an OpenShell sandbox: {exc}\n"
                 "  - Check the gateway: openshell status\n"
+                "  - The gateway must run as a single replica; raven addresses the replica its "
+                "client is bound to\n"
                 "  - The host needs Linux 6.2+ (Landlock ABI 3) and Docker 28+, with the gateway "
                 "allowing bind mounts (enable_bind_mounts = true)"
             ) from exc
@@ -348,10 +382,19 @@ class OpenShellExecutor(SandboxExecutor):
             return
         if "not-writable" in lines:
             uid = lines[0] if lines else "?"
+            advice = [
+                "  - Run raven as a non-root user that owns the workspace, or",
+                f"  - make the workspace writable by uid {uid}",
+            ]
+            if _host_uid() == 0:
+                advice.insert(
+                    0,
+                    "  - raven is running as root, and OpenShell refuses a root workload, so the "
+                    f"sandbox runs as the image's user (uid {uid})",
+                )
             raise SandboxInitError(
                 f"The sandbox user (uid {uid}) cannot write the workspace {self._mounts.workspace}.\n"
-                "  - Run raven as a non-root user that owns the workspace, or\n"
-                f"  - make the workspace writable by uid {uid}"
+                + "\n".join(advice)
             )
         raise SandboxInitError(
             f"OpenShell sandbox {name} verification failed (exit_code={result.exit_code}, "
@@ -367,15 +410,15 @@ class OpenShellExecutor(SandboxExecutor):
         global _reaped
         if _reaped:
             return
-        _reaped = True
         try:
             found = await asyncio.to_thread(plane.list_labeled, f"{_OWNER_LABEL}={_owner_digest()}")
         except Exception as exc:
             logger.warning("Could not list OpenShell sandboxes for cleanup: %s", exc)
             return
+        _reaped = True
         for name, labels in found:
             pid = labels.get(_PID_LABEL, "")
-            if pid.isdigit() and int(pid) != os.getpid() and not _pid_alive(int(pid)):
+            if pid.isdigit() and int(pid) != os.getpid() and not pid_alive(int(pid)):
                 logger.info("Deleting OpenShell sandbox %s left by exited process %s", name, pid)
                 _spawn_delete(plane, name)
 
@@ -409,17 +452,30 @@ class OpenShellExecutor(SandboxExecutor):
             env=dict(env or {}),
             timeout_seconds=effective or None,
         )
-        drain = asyncio.ensure_future(asyncio.to_thread(_drain, stream))
+        drain = asyncio.ensure_future(_drain_to_result(stream))
         started = asyncio.get_running_loop().time()
         try:
             # timeout=0 times out at once, as it does for the direct executor.
-            deadline = effective + _TIMEOUT_GRACE_SECONDS if effective > 0 else 0
-            result = await asyncio.wait_for(asyncio.shield(drain), deadline)
+            result = await asyncio.wait_for(asyncio.shield(drain), effective)
         except asyncio.TimeoutError:
+            # The gateway enforces the same budget and reports it as exit 124,
+            # so the command is already over; give that report a moment to
+            # arrive before the call is killed.
+            receipt = await _collect(drain, _KILL_GRACE_SECONDS if effective > 0 else 0)
             stream.cancel()
-            return ExecResult(stdout="", stderr=f"Command timed out after {effective}s", exit_code=-1)
+            note = f"Command timed out after {effective}s"
+            if receipt is None:
+                return ExecResult(stdout="", stderr=note, exit_code=-1)
+            if receipt.exit_code == _SERVER_TIMEOUT_EXIT:
+                return ExecResult(
+                    stdout=receipt.stdout, stderr=f"{receipt.stderr}\n{note}" if receipt.stderr else note, exit_code=-1
+                )
+            if receipt.exit_code < 0:
+                return ExecResult(stdout=receipt.stdout, stderr=note, exit_code=-1)
+            return receipt
         except asyncio.CancelledError:
             stream.cancel()
+            drain.cancel()
             raise
         # The gateway enforces the timeout itself and reports it as exit 124;
         # only an exit at the deadline is that, a quick 124 is the command's own.
@@ -653,6 +709,9 @@ class SDKControlPlane:
         deadline = timeout_seconds + _TIMEOUT_GRACE_SECONDS if timeout_seconds else None
         # The SDK's own exec wrapper hides the call object; the raw stub keeps
         # ``cancel()``, which is what stops a timed-out or abandoned command.
+        # The wrapper also resolves the replica that owns the sandbox and
+        # retries an unrouted request there; the raw stub addresses the replica
+        # this client is bound to, so the gateway runs as a single replica.
         return _GrpcStream(self._client._stub.ExecSandbox(request, timeout=deadline))
 
     def interactive(self, name, argv, *, workdir, env) -> InteractiveStream:
@@ -666,6 +725,8 @@ class SDKControlPlane:
             while (data := inputs.get()) is not None:
                 yield openshell_pb2.ExecSandboxInput(stdin=data)
 
+        # The same single replica applies here: the SDK's wrapper would route
+        # the session to the replica that owns the sandbox.
         return _GrpcStream(self._client._stub.ExecSandboxInteractive(requests()), inputs)
 
     def delete(self, name: str) -> None:
