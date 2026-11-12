@@ -63,6 +63,177 @@ def test_secret_slots_fall_back_to_the_host_except_required():
     assert render.dig(config, ("tools", "extra")) == "mine", "an own value beats the host fallback"
 
 
+def test_inherit_web_vendors_carries_the_hosts_slots_and_choice():
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"serper": {"apiKey": "host-serper"}, "tavily": {"apiKey": "host-tavily"}},
+                "search": {"provider": "tavily"},
+                "fetch": {"provider": "tavily"},
+            }
+        }
+    }
+    config = {"tools": {"web": {"search": {"maxResults": 10}}}}
+
+    carried = render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert carried == ["serper", "tavily"]
+    assert config["tools"]["web"]["providers"]["serper"]["apiKey"] == "host-serper"
+    assert config["tools"]["web"]["providers"]["tavily"]["apiKey"] == "host-tavily"
+    assert config["tools"]["web"]["search"]["provider"] == "tavily"
+    assert config["tools"]["web"]["fetch"]["provider"] == "tavily"
+    assert config["tools"]["web"]["search"]["maxResults"] == 10, "the product's own knobs stay"
+
+
+def test_inherit_web_vendors_leaves_an_own_key_alone():
+    host = {"tools": {"web": {"providers": {"serper": {"apiKey": "host-serper"}}}}}
+    config: dict = {}
+    own = {"serper": "P_SERPER_API_KEY"}
+
+    carried = render.inherit_web_vendors(config, host, own_keys=own, lookup={"P_SERPER_API_KEY": "sk-own-serper"}.get)
+
+    assert "serper" not in config.get("tools", {}).get("web", {}).get("providers", {}), (
+        "the own leaf key must stay the one read"
+    )
+    assert carried == []
+
+
+def test_inherit_web_vendors_borrows_the_llm_key_only_for_a_selected_vendor():
+    host = {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}}
+
+    unselected: dict = {}
+    assert render.inherit_web_vendors(unselected, host, lookup=lambda name: None) == []
+    assert "tools" not in unselected, "an unselected borrowed key is exposure with no reader"
+
+    selected = {"tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}}}
+    carried = render.inherit_web_vendors(selected, host, lookup=lambda name: None)
+    assert carried == ["deepseek"]
+    assert selected["tools"]["web"]["providers"]["deepseek"]["apiKey"] == "sk-deepseek"
+
+
+def test_an_own_key_keeps_the_products_vendor_choice():
+    """The host's choice must not strand the key this product pays with.
+
+    Before the own-key guard, a host on Tavily switched this render to Tavily
+    while the product's Serper key sat in the pre-vendor leaf unread; when the
+    host's Tavily resolved no key, web_search went from configured to withheld.
+    """
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"tavily": {"apiKey": "host-tavily"}},
+                "search": {"provider": "tavily"},
+                "fetch": {"provider": "tavily"},
+            }
+        }
+    }
+    config: dict = {}
+
+    render.inherit_web_vendors(
+        config,
+        host,
+        own_keys={"serper": "P_SERPER_API_KEY", "jina": "P_JINA_API_KEY"},
+        lookup=lambda name: "sk-own",
+    )
+
+    assert render.dig(config, ("tools", "web", "search", "provider")) == "", "the product's Serper stays the selection"
+    assert render.dig(config, ("tools", "web", "fetch", "provider")) == "", "the product's Jina stays the selection"
+    assert render.dig(config, ("tools", "web", "providers", "tavily", "apiKey")) == "host-tavily", (
+        "the key table still travels; only the choice is held back"
+    )
+
+
+def test_an_own_key_for_the_hosts_vendor_still_takes_the_choice():
+    """The guard blocks a switch away from the product's vendor, not the same
+    vendor: a product paying for Tavily wants the host's Tavily selection too."""
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"tavily": {"apiKey": "host-tavily"}},
+                "search": {"provider": "tavily"},
+                "fetch": {"provider": "tavily"},
+            }
+        }
+    }
+    config = {"tools": {"web": {"providers": {"tavily": {"apiKey": "own-tavily"}}}}}
+
+    render.inherit_web_vendors(config, host, own_keys={"tavily": "P_TAVILY_API_KEY"}, lookup=lambda name: "own-key")
+
+    assert render.dig(config, ("tools", "web", "search", "provider")) == "tavily"
+    assert render.dig(config, ("tools", "web", "fetch", "provider")) == "tavily"
+    assert render.dig(config, ("tools", "web", "providers", "tavily", "apiKey")) == "own-tavily"
+
+
+def test_a_host_choice_whose_vendor_has_no_payable_key_is_not_carried():
+    """Carrying a vendor nobody can pay for is what withheld web_search before."""
+    host = {"tools": {"web": {"search": {"provider": "tavily"}, "fetch": {"provider": "tavily"}}}}
+    config: dict = {}
+
+    render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert render.dig(config, ("tools", "web", "search", "provider")) == ""
+    assert render.dig(config, ("tools", "web", "fetch", "provider")) == ""
+
+
+def test_a_host_deepseek_choice_carries_the_borrowed_key_with_it():
+    host = {
+        "providers": {"deepseek": {"apiKey": "sk-deepseek"}},
+        "tools": {"web": {"search": {"provider": "deepseek"}, "fetch": {"provider": "deepseek"}}},
+    }
+    config: dict = {}
+
+    carried = render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert carried == ["deepseek"]
+    assert render.dig(config, ("tools", "web", "providers", "deepseek", "apiKey")) == "sk-deepseek"
+    assert render.dig(config, ("tools", "web", "search", "provider")) == "deepseek"
+    assert render.dig(config, ("tools", "web", "fetch", "provider")) == "deepseek"
+
+
+def test_a_product_vendor_slot_is_not_replaced_by_the_hosts():
+    config = {"tools": {"web": {"providers": {"serper": {"apiKey": "own-serper"}}}}}
+    host = {"tools": {"web": {"providers": {"serper": {"apiKey": "host-serper"}}}}}
+
+    carried = render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert render.dig(config, ("tools", "web", "providers", "serper", "apiKey")) == "own-serper"
+    assert carried == []
+
+
+def test_a_products_own_vendor_choice_is_not_overwritten():
+    config = {
+        "tools": {
+            "web": {
+                "search": {"provider": "serper"},
+                "fetch": {"provider": "jina"},
+            }
+        }
+    }
+    host = {
+        "tools": {
+            "web": {
+                "providers": {"tavily": {"apiKey": "host-tavily"}},
+                "search": {"provider": "tavily"},
+                "fetch": {"provider": "tavily"},
+            }
+        }
+    }
+
+    render.inherit_web_vendors(config, host, lookup=lambda name: None)
+
+    assert render.dig(config, ("tools", "web", "search", "provider")) == "serper"
+    assert render.dig(config, ("tools", "web", "fetch", "provider")) == "jina"
+
+
+def test_put_names_a_malformed_section_instead_of_raising_bare():
+    path = ("tools", "web", "providers", "serper", "apiKey")
+
+    with pytest.raises(ValueError, match=r"tools\.web\.providers\.serper\.apiKey.*providers is list"):
+        render.put({"tools": {"web": {"providers": []}}}, path, "k")
+    with pytest.raises(ValueError, match=r"tools\.web\.providers is NoneType"):
+        render.put({"tools": {"web": {"providers": None}}}, path, "k")
+
+
 def test_inherit_llm_takes_the_hosts_brains_not_its_limits():
     host = {
         "providers": {"open": {"apiKey": "k"}},

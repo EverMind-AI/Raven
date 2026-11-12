@@ -25,6 +25,7 @@ so this launcher still seeds none of them.
 """
 
 import asyncio
+import copy
 import importlib.util
 import json
 import os
@@ -736,18 +737,154 @@ def test_a_borrowed_web_key_falls_back_to_the_hosts_llm_provider(grounded, tmp_p
     assert data["tools"]["web"]["fetch"]["provider"] == "deepseek"
 
 
-def test_the_launcher_borrows_nothing_under_a_raven_without_the_helper(grounded, monkeypatch):
-    """A stamped launcher can load on a raven that predates the web-key borrow;
-    the missing name must read as "borrow nothing" rather than ImportError."""
-    from raven.config import schema
+def test_the_shared_library_owns_the_vendor_policy(grounded, monkeypatch):
+    """The deck hands its own vocabulary to the one policy code and oncall use."""
+    seen = {}
 
-    monkeypatch.delattr(schema, "borrowed_web_key")
+    def inherit(config, host, *, own_keys=None, lookup):
+        seen.update(config=config, host=host, own_keys=own_keys, lookup=lookup)
+        return ["sentinel"]
+
+    monkeypatch.setattr(grounded.render, "inherit_web_vendors", inherit)
     config = {"tools": {"web": {}}}
+    host = {"tools": {"web": {"search": {"provider": "tavily"}}}}
 
-    carried = grounded.inherit_web_vendors(config, {"providers": {"deepseek": {"apiKey": "sk-deepseek"}}})
+    assert grounded.inherit_web_vendors(config, host) == ["sentinel"]
+    assert seen == {"config": config, "host": host, "own_keys": grounded.OWN_WEB_KEYS, "lookup": grounded.env_value}
 
-    assert carried == []
-    assert "providers" not in config["tools"]["web"]
+
+def test_the_launcher_carries_the_hosts_vendors_under_a_raven_without_the_helper(grounded, monkeypatch):
+    """A stamped launcher can load on a raven that predates the shared helper;
+    the frozen snapshot must carry the host's vendor table there, not nothing."""
+    monkeypatch.delattr(grounded.render, "inherit_web_vendors")
+    config = {"tools": {"web": {}}}
+    host = {"tools": {"web": {"search": {"provider": "serper"}, "providers": {"serper": {"apiKey": "sk-host-serper"}}}}}
+
+    carried = grounded.inherit_web_vendors(config, host)
+
+    assert carried == ["serper"]
+    assert config["tools"]["web"]["providers"]["serper"]["apiKey"] == "sk-host-serper"
+    assert config["tools"]["web"]["search"]["provider"] == "serper"
+
+
+def _vendor_config(*, slots=None, search=None, fetch=None, providers=None):
+    """A config carrying the web vendor slots, choices and LLM blocks named."""
+    web = {}
+    if slots:
+        web["providers"] = {name: {"apiKey": key} for name, key in slots.items()}
+    if search:
+        web["search"] = {"provider": search}
+    if fetch:
+        web["fetch"] = {"provider": fetch}
+    config = {"tools": {"web": web}} if web else {}
+    if providers:
+        config["providers"] = {name: {"apiKey": key} for name, key in providers.items()}
+    return config
+
+
+#: Inputs the frozen snapshot and the shared library must answer alike. Each
+#: row covers one rule: whose key wins, when a borrowed key is written, and the
+#: three guards on following the host's vendor choice.
+VENDOR_POLICY_CASES = [
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"serper": "sk-host-serper", "jina": "sk-host-jina"}, search="serper", fetch="jina"),
+        {},
+        id="bare-product-follows-the-host",
+    ),
+    pytest.param(
+        _vendor_config(slots={"serper": "sk-own-serper"}),
+        _vendor_config(slots={"serper": "sk-host-serper"}, search="serper"),
+        {},
+        id="product-slot-beats-the-host-slot",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"serper": "sk-host-serper"}, search="serper"),
+        {"PPT_SERPER_API_KEY": "sk-own-leaf"},
+        id="product-leaf-beats-the-host-slot",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"serper": "sk-host-serper"}),
+        {"PPT_SERPER_API_KEY": ""},
+        id="an-empty-leaf-is-not-a-key",
+    ),
+    pytest.param(
+        _vendor_config(search="exa"),
+        _vendor_config(slots={"serper": "sk-host-serper"}, search="serper"),
+        {},
+        id="product-names-its-own-choice",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"tavily": "sk-host-tavily"}, search="tavily"),
+        {"PPT_SERPER_API_KEY": "sk-own-leaf"},
+        id="host-choice-would-strand-a-paid-vendor",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"jina": "sk-host-jina"}, fetch="jina"),
+        {"PPT_SERPER_API_KEY": "sk-own-leaf"},
+        id="host-choice-in-the-other-half-still-follows",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(search="brave"),
+        {},
+        id="host-choice-with-no-key-is-refused",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(providers={"deepseek": "sk-deepseek"}, search="deepseek", fetch="deepseek"),
+        {},
+        id="borrowed-key-written-for-a-selected-vendor",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(providers={"deepseek": "sk-deepseek"}, search="serper"),
+        {},
+        id="borrowed-key-withheld-for-an-unselected-vendor",
+    ),
+    pytest.param(
+        _vendor_config(providers={"deepseek": "sk-own-deepseek"}),
+        _vendor_config(search="deepseek"),
+        {},
+        id="host-choice-paid-by-the-products-own-llm-block",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"tavily": "sk-host-tavily"}),
+        {},
+        id="host-slot-carried-without-a-choice",
+    ),
+    pytest.param(_vendor_config(), _vendor_config(), {}, id="nothing-to-carry"),
+]
+
+
+@pytest.mark.parametrize("config,host,env", VENDOR_POLICY_CASES)
+def test_the_frozen_vendor_snapshot_agrees_with_the_shared_policy(grounded, config, host, env):
+    """One policy, two homes: the snapshot may lag the library but never differ.
+
+    The fallback runs only on a raven without the helper. On a raven that has
+    it, both must answer the same ``carried`` list and write the same config,
+    or whose key pays for a search has quietly become two rules.
+    """
+
+    def lookup(name: str) -> str | None:
+        return env.get(name)
+
+    shared = copy.deepcopy(config)
+    frozen = copy.deepcopy(config)
+    carried_by_library = grounded.render.inherit_web_vendors(
+        shared, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, lookup=lookup
+    )
+    carried_by_frozen = grounded._inherit_web_vendors_frozen(
+        frozen, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, lookup=lookup
+    )
+
+    assert carried_by_frozen == carried_by_library
+    assert frozen == shared
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")

@@ -5,7 +5,9 @@ A product under ``agents/`` is a folder, not a fork: a published
 into a private copy and execs ``python -m raven acp``. What every such
 launcher repeats is here -- reading a setting from the process environment
 with a ``.env`` fallback, merging declared secret slots, inheriting the
-host's LLM block when the product has no key of its own, pinning a state
+host's LLM block when the product has no key of its own, carrying the
+host's web vendor table and, where the product pays for no vendor in a
+half, its search/fetch choice, pinning a state
 root under the host's home and an engine home OUTSIDE it (the home lives in
 the raven data directory, the work stays where the work is), regenerating a
 product-owned workspace file on every launch, assembling the
@@ -34,7 +36,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, get_args
 
 from raven.config.raven import MEMORY_BACKEND_DISTRIBUTIONS, SHIPPED_DEFAULT_BACKEND
 from raven.contracts.path_policy import CONFIG_FILENAME, WORKSPACE_DEFAULT_SENTINEL
@@ -90,10 +92,32 @@ def dig(data: dict, path: tuple) -> str:
 
 
 def put(data: dict, path: tuple, value: str) -> None:
-    """Write ``value`` at a dotted path, creating the dicts on the way."""
+    """Write ``value`` at a dotted path, creating the dicts on the way.
+
+    A section already holding something other than a table is named and
+    refused: the launcher writes this from a hand-edited ``--config``, and a
+    bare ``AttributeError`` from a list or a null names neither the path nor
+    the file the operator has to fix.
+    """
     node = data
-    for part in path[:-1]:
-        node = node.setdefault(part, {})
+    for depth, part in enumerate(path[:-1]):
+        if not isinstance(node, dict):
+            raise ValueError(
+                f"cannot write {'.'.join(path)}: {'.'.join(path[:depth]) or '<root>'} is "
+                f"{type(node).__name__}, not a table"
+            )
+        if part not in node:
+            node[part] = {}
+        elif not isinstance(node[part], dict):
+            raise ValueError(
+                f"cannot write {'.'.join(path)}: {'.'.join(path[: depth + 1])} is "
+                f"{type(node[part]).__name__}, not a table"
+            )
+        node = node[part]
+    if not isinstance(node, dict):
+        raise ValueError(
+            f"cannot write {'.'.join(path)}: {'.'.join(path[:-1]) or '<root>'} is {type(node).__name__}, not a table"
+        )
     node[path[-1]] = value
 
 
@@ -122,6 +146,89 @@ def apply_secret_slots(
             value = dig(host, path)
         if value:
             put(config, path, value)
+
+
+def inherit_web_vendors(
+    config: dict,
+    host: dict,
+    *,
+    own_keys: dict[str, str] | None = None,
+    lookup: Callable[[str], str | None],
+) -> list[str]:
+    """Carry the host's vendor-table web keys and vendor selection into ``config``.
+
+    A host set up on a current raven keeps each vendor's credential under
+    ``tools.web.providers``, which the pre-vendor secret slots do not read: a
+    product rendered from those leaves alone launched keyless on such a host,
+    ``web_search`` withheld while the host's own tools searched fine. A key
+    this product holds of its own wins -- in the vendor slot, or in the
+    pre-vendor leaf ``own_keys`` names, which trunk reads only after an empty
+    slot, so inheriting the host's slot beside it would have the host's key
+    silently answer for the product's own. A vendor with no slot of its own on
+    the host borrows the LLM provider key it shares an account with, and that
+    borrowed key is written only when the vendor is one this render selects:
+    an unselected credential is exposure with no reader.
+
+    The search and fetch vendor choices follow the host only when all three
+    hold: the product names no choice of its own; the host's vendor is either
+    one this product pays for or one in a half where the product pays for no
+    vendor; and the host's vendor resolves a key here (its own slot or the
+    borrowed LLM key). The first is what keeps a ``--config`` file's explicit
+    choice; the second keeps a product that paid for Serper from being
+    switched to the host's Tavily and having its key stranded; the third
+    keeps a host that names a vendor it cannot pay for from withholding a
+    tool that was configured before. A product that names no choice and holds
+    no key of its own follows the host, which is the case this function
+    exists for. Returns the vendors whose key was carried.
+    """
+    from raven.config.schema import (
+        WEB_VENDOR_ENV_VARS,
+        WebFetchProvider,
+        WebSearchProvider,
+        borrowed_web_key,
+    )
+
+    own_keys = own_keys or {}
+    own = {
+        vendor
+        for vendor in WEB_VENDOR_ENV_VARS
+        if dig(config, ("tools", "web", "providers", vendor, "apiKey"))
+        or ((name := own_keys.get(vendor)) and lookup(name))
+    }
+    for vendors, slot in (
+        (frozenset(get_args(WebSearchProvider)), ("tools", "web", "search", "provider")),
+        (frozenset(get_args(WebFetchProvider)), ("tools", "web", "fetch", "provider")),
+    ):
+        if dig(config, slot) or not (chosen := dig(host, slot)):
+            continue
+        payable = (
+            chosen in own
+            or bool(dig(host, ("tools", "web", "providers", chosen, "apiKey")))
+            or bool(borrowed_web_key(chosen, config.get("providers") or {}))
+            or bool(borrowed_web_key(chosen, host.get("providers") or {}))
+        )
+        if (any(vendor in vendors for vendor in own) and chosen not in own) or not payable:
+            continue
+        put(config, slot, chosen)
+
+    selected = {
+        dig(config, ("tools", "web", "search", "provider")),
+        dig(config, ("tools", "web", "fetch", "provider")),
+    }
+    carried: list[str] = []
+    for vendor in WEB_VENDOR_ENV_VARS:
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        if vendor in own:
+            continue
+        if host_key := dig(host, slot):
+            put(config, slot, host_key)
+            carried.append(vendor)
+            continue
+        borrowed = borrowed_web_key(vendor, host.get("providers") or {})
+        if borrowed and vendor in selected:
+            put(config, slot, borrowed)
+            carried.append(vendor)
+    return carried
 
 
 def _inherited_defaults(config: dict, host: dict) -> dict:
