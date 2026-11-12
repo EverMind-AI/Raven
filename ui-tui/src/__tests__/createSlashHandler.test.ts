@@ -933,7 +933,7 @@ describe('createSlashHandler', () => {
     expect(rpc).toHaveBeenCalledWith('session.save', { session_id: 'sid-abc' })
 
     await vi.waitFor(() => {
-      expect(ctx.transcript.sys).toHaveBeenCalledWith('conversation saved to: /tmp/raven_conversation_test.json')
+      expect(ctx.transcript.sys).toHaveBeenCalledWith('session saved to: /tmp/raven_conversation_test.json')
     })
   })
 

@@ -87,7 +87,7 @@ describe('/effort', () => {
     await flush()
 
     expect(rpc).toHaveBeenCalledWith('session.set_effort', { session_key: 's1', effort: 'high' }, { quiet: true })
-    expect(lines).toEqual(['reasoning effort: high (this conversation; default is low; words: minimal, low, medium, high)'])
+    expect(lines).toEqual(['reasoning effort: high (this session; default is low; words: minimal, low, medium, high)'])
     expect(getUiState().info?.reasoning_effort).toBe('high')
   })
 
@@ -112,7 +112,7 @@ describe('/effort', () => {
       const { lines, rpc } = run(arg)
 
       expect(lines).toEqual([
-        "/effort is the main conversation's and does not reach Raven-Code/refactor-auth -- Esc returns to Raven"
+        "/effort is the main session's and does not reach Raven-Code/refactor-auth -- Esc returns to Raven"
       ])
       expect(rpc).not.toHaveBeenCalled()
       expect(getUiState().info?.reasoning_effort).toBe('low')
