@@ -231,6 +231,29 @@ async def test_a_narrowed_permission_set_closes_a_host_on_the_running_sandbox(wo
         await ex.stop()
 
 
+async def test_a_closed_sandbox_approves_openshells_own_proposal_for_a_grant(workspace):
+    from raven.sandbox.network_policy import NetworkGrant
+
+    ex = OpenShellExecutor(image=IMAGE, workspace=workspace, network_source=lambda: {})
+    await ex.start()
+    try:
+        probe = f"curl -sS -m 10 -o /dev/null -w '%{{http_code}}' https://{HOST}/"
+        blocked = await ex.exec(probe)
+        (denial,) = [d for d in blocked.denials if d.host == HOST]
+        plane = ex._plane()
+        for _ in range(60):
+            proposals = await asyncio.to_thread(plane.draft_chunks, ex._name)
+            if any(chunk.binary == denial.binary and (HOST, 443) in chunk.targets for chunk in proposals):
+                break
+            await asyncio.sleep(0.5)
+        assert await ex.grant_network([NetworkGrant(denial.binary, HOST, 443)]) is True
+        # Approved through OpenShell's own proposal, not merged as a rule of Raven's.
+        assert ex._local_rules == {}
+        assert (await ex.exec(probe)).exit_code == 0
+    finally:
+        await ex.stop()
+
+
 async def test_egress_follows_allow_net(workspace):
     closed = _make(workspace)
     opened = _make(workspace, allow_net=[HOST])

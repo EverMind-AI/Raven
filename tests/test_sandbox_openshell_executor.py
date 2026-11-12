@@ -67,6 +67,10 @@ class FakeControlPlane:
         self.merge_error: Exception | None = None
         self.policy_loads = True
         self.waited: list[int] = []
+        self.chunks: list = []
+        self.draft_reads = 0
+        self.approved: list[tuple[str, str]] = []
+        self.approve_error: Exception | None = None
 
     def create(self, *, name, image, policy, driver_config, resources, labels):
         if self.create_error:
@@ -98,6 +102,16 @@ class FakeControlPlane:
     def wait_policy(self, name, version, timeout):
         self.waited.append(version)
         return self.policy_loads
+
+    def draft_chunks(self, name):
+        self.draft_reads += 1
+        return list(self.chunks)
+
+    def approve_chunk(self, name, chunk_id, review_token):
+        if self.approve_error:
+            raise self.approve_error
+        self.approved.append((chunk_id, review_token))
+        return 40 + len(self.approved)
 
     def ocsf_lines(self, name, since):
         self.denial_reads.append(since)
@@ -674,6 +688,53 @@ class TestLiveNetwork:
         await ex.exec("true")
         assert cp.merges[-1] == ({"raven_rule_a": {"name": "raven_rule_a"}}, [])
 
+    @staticmethod
+    def _proposal(binary="/usr/bin/curl", host="example.com", port=443):
+        from raven.sandbox.openshell_executor import DraftChunk
+
+        return DraftChunk(id="chunk-1", binary=binary, targets=((host, port),), review_token="token-1")
+
+    async def test_a_closed_sandbox_approves_openshells_own_proposal(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        cp.chunks = [self._proposal()]
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is True
+        assert cp.approved == [("chunk-1", "token-1")] and cp.waited == [41]
+        assert cp.merges == []
+
+    async def test_a_grant_with_no_proposal_yet_is_merged(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is True
+        assert cp.approved == [] and [list(added) for added, _ in cp.merges] != []
+
+    async def test_a_failed_approval_falls_back_to_a_merge(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        cp.chunks = [self._proposal()]
+        cp.approve_error = RuntimeError("prover unavailable")
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is True
+        assert len(cp.merges) == 1
+
+    async def test_a_proposal_for_another_program_is_not_approved(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        cp.chunks = [self._proposal(binary="/usr/bin/wget")]
+        await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)])
+        assert cp.approved == [] and len(cp.merges) == 1
+
+    async def test_an_open_sandbox_never_reads_proposals(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {"allow_open": {"name": "allow_open"}})
+        cp.chunks = [self._proposal()]
+        await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)])
+        assert cp.draft_reads == 0 and cp.approved == []
+
     async def test_granting_to_a_stopped_executor_is_a_no_op(self, tmp_path):
         from raven.sandbox.network_policy import NetworkGrant
 
@@ -852,6 +913,18 @@ class _FakeStub:
         response = openshell_pb2.GetSandboxPolicyStatusResponse(active_version=self.active_versions.pop(0))
         response.revision.status = self.revision_status
         return response
+
+    def GetDraftPolicy(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("GetDraftPolicy", request, timeout))
+        return openshell_pb2.GetDraftPolicyResponse(chunks=getattr(self, "draft", []))
+
+    def ApproveDraftChunk(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("ApproveDraftChunk", request, timeout))
+        return openshell_pb2.ApproveDraftChunkResponse(policy_version=9)
 
     def GetSandboxLogs(self, request, timeout):
         from openshell._proto import openshell_pb2
@@ -1060,6 +1133,37 @@ class TestSDKControlPlane:
         ]
         assert add.add_rule.rule.binaries[0].path == "/usr/bin/curl"
         assert remove.remove_rule.rule_name == "allow_open"
+
+    def test_draft_chunks_reads_the_pending_proposals(self, sdk):
+        from openshell._proto import openshell_pb2, sandbox_pb2
+
+        plane, client = sdk
+        chunk = openshell_pb2.PolicyChunk(id="c1", status="pending", binary="/usr/bin/curl", review_token="tok")
+        chunk.proposed_rule.CopyFrom(
+            sandbox_pb2.NetworkPolicyRule(
+                endpoints=[sandbox_pb2.NetworkEndpoint(host="example.com", port=443, ports=[443])]
+            )
+        )
+        client._stub.draft = [chunk]
+        (proposal,) = plane.draft_chunks("rvx")
+        assert (proposal.id, proposal.binary, proposal.targets, proposal.review_token) == (
+            "c1",
+            "/usr/bin/curl",
+            (("example.com", 443),),
+            "tok",
+        )
+        ((kind, request, _timeout),) = client._stub.calls
+        assert kind == "GetDraftPolicy" and request.sandbox == "rvx" and request.status_filter == "pending"
+
+    def test_approve_chunk_answers_with_the_new_policy_version(self, sdk):
+        plane, client = sdk
+        assert plane.approve_chunk("rvx", "c1", "tok") == 9
+        ((kind, request, _timeout),) = client._stub.calls
+        assert kind == "ApproveDraftChunk" and (request.chunk_id, request.review_token, request.sandbox) == (
+            "c1",
+            "tok",
+            "rvx",
+        )
 
     def test_wait_policy_polls_until_the_version_is_active(self, sdk, monkeypatch):
         monkeypatch.setattr(ox, "_POLICY_POLL_SECONDS", 0.01)
