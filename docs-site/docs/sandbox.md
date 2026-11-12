@@ -26,7 +26,7 @@ For an installed Raven, `raven onboard` prints the exact command for its own
 interpreter when the SDK is missing. It looks like this:
 
 ```bash
-uv pip install --python /path/to/raven/python 'openshell>=0.1.8,<0.2'
+uv pip install --python /path/to/raven/python 'openshell<0.2,>=0.1.8; (sys_platform != "win32")'
 ```
 
 The extra pins `openshell>=0.1.8,<0.2`. The SDK and the gateway are released
@@ -83,6 +83,10 @@ gateway through the container's loopback. If sandboxes stay in
 supervisor_network_mode = "bridge"
 grpc_endpoint = "https://host.docker.internal:17670"
 ```
+
+Run one gateway replica. Raven sends its exec calls straight to the gateway
+its client is bound to, instead of resolving the replica that owns the
+sandbox, so a replicated gateway cannot serve them.
 
 ## 2. Configuration
 
@@ -330,7 +334,7 @@ list.
 | `Cannot create an OpenShell sandbox` | No gateway answers | `openshell status`; restart the gateway |
 | `did not become ready: ... bind source path does not exist` | Mount source under `/tmp`, or bind mounts disabled | Move the workspace out of `/tmp`; check `gateway.toml` |
 | `ConfigurationInvalid` on start | The gateway rejected the policy | `openshell logs <name>` |
-| `cannot write the workspace` | Root host, and the sandbox user does not own the workspace | Run Raven as a non-root user, or give the workspace to that UID |
+| `cannot write the workspace` | Raven runs as root, so OpenShell's sandbox user does not own the workspace | Run Raven as a non-root user, or give the workspace to that UID |
 | `curl: (7) ... Couldn't connect` within milliseconds | The network policy denied the host | Add it to `allowNet` with `"*"` |
 
 ## 8. Platform Requirements
@@ -340,6 +344,19 @@ list.
 | Linux x86_64 / arm64 | Kernel 6.2 or newer with Landlock ABI 3 enabled, Docker 28 or newer |
 | macOS Apple Silicon | Docker Desktop, or colima with the settings in section 1.2 |
 | Windows | Not supported; the `sandbox` extra installs nothing there |
+
+The OpenShell SDK is published for Linux and macOS only. Upstream also lists
+Windows (WSL 2 + Docker Desktop) as experimental and keeps native Windows on
+its own branch, on a compute driver Raven does not drive, so Raven offers no
+sandbox backend on a Windows host. A Raven that runs *inside* WSL 2 is a Linux
+host and can use the backend, with the same kernel and Docker requirements as
+the table above.
+
+A root host cannot run the agent's sandbox: OpenShell refuses a root workload,
+so the sandbox runs as the user of the image and cannot write a root-owned
+workspace. Run Raven as a non-root user that owns the workspace. The design
+engine's isolated rendering is the exception, because the directory it mounts
+is a throwaway of its own.
 
 Check a Linux host with:
 
