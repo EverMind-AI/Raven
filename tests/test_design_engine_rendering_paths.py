@@ -228,13 +228,57 @@ async def test_cancelling_a_sandboxed_job_stops_the_sandbox_and_removes_staging(
             preview_limit=1,
         )
     )
-    await started.wait()
+    await asyncio.wait_for(started.wait(), 5)
     task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
         await task
     assert stopped.is_set()
     assert list(policy.runtime_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_start_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK's absence has to arrive as an answer, not as a wait that never ends."""
+    from raven.sandbox.interfaces import SandboxInitError
+
+    policy = _policy(tmp_path)
+    source = policy.workspace / "page.html"
+    source.write_text("<html/>", encoding="utf-8")
+
+    class Executor:
+        async def start(self):
+            raise SandboxInitError("The OpenShell SDK is not installed in this raven's environment.")
+
+        async def exec(self, *args, **kwargs):
+            raise AssertionError("the command must not run without a sandbox")
+
+        async def stop(self):
+            return None
+
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        policy,
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    monkeypatch.setattr(backend, "_executor", lambda job_root: Executor())
+
+    with pytest.raises(RenderError) as raised:
+        await backend.run(
+            RenderRequest(
+                path=source,
+                output_dir=policy.workspace / "output",
+                motion_mode="static",
+                capture_duration_seconds=0.25,
+            ),
+            preview_limit=1,
+        )
+
+    assert raised.value.code == "renderer_unavailable"
+    assert "OpenShell SDK is not installed" in raised.value.message
 
 
 def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
