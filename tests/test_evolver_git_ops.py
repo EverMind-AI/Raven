@@ -8,11 +8,13 @@ evolver commits stay reachable across git gc via plain refs.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from evolver.applier.path_guard import ImmutablePathError, UnsafePathError
 from evolver.tree import git_ops
 
 _ENV = {
@@ -122,3 +124,127 @@ class TestRefs:
         git_ops.delete_ref(repo_dir, "refs/evolver/n1")  # absent: no-op
         proc = subprocess.run(["git", "rev-parse", "refs/evolver/n1"], cwd=repo_dir, env=_ENV, capture_output=True)
         assert proc.returncode != 0
+
+
+def _commit_symlink(repo_dir: Path, link: str, target: str) -> str:
+    path = repo_dir / link
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, path)
+    _git(repo_dir, "add", "-A")
+    _git(repo_dir, "commit", "-qm", "add symlink")
+    return _git(repo_dir, "rev-parse", "HEAD").strip()
+
+
+class TestCommitFilesAsChildPathEscape:
+    @pytest.mark.parametrize("rel", ["/tmp/evolver-escape.txt", "../outside.txt"])
+    def test_refuses_unsafe_paths(self, repo, rel):
+        repo_dir, sha = repo
+        with pytest.raises(ValueError, match="unsafe path"):
+            git_ops.commit_files_as_child(repo_dir, sha, {rel: b"pwned"}, "bad path")
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_write_through_a_link_to_an_immutable_file(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "link_kernel", "raven/agent/loop/main.py")
+        with pytest.raises(Exception, match="immutable"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"link_kernel": b"PWNED"}, "bad link")
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_write_through_a_link_to_outside(self, repo, tmp_path):
+        repo_dir, _sha = repo
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_out", str(outside))
+        with pytest.raises(ValueError, match="refusing to write outside the worktree"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"link_out": b"PWNED"}, "bad link")
+        assert outside.read_text() == "keep"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_delete_a_link_to_an_immutable_file(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "link_kernel", "raven/agent/loop/main.py")
+        with pytest.raises(ImmutablePathError, match="immutable"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "bad link", deletions=("link_kernel",))
+        child, _ = git_ops.commit_files_as_child(repo_dir, sha, {"src/x.py": b"x = 2\n"}, "after refusal")
+        assert _git(repo_dir, "show", f"{child}:link_kernel") == "raven/agent/loop/main.py"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_delete_through_a_link_to_an_immutable_dir(self, repo):
+        repo_dir, _sha = repo
+        (repo_dir / "raven/agent/loop").mkdir(parents=True)
+        (repo_dir / "raven/agent/loop/main.py").write_text("KERNEL\n")
+        sha = _commit_symlink(repo_dir, "linkdir", "raven/agent/loop")
+        with pytest.raises(ImmutablePathError, match="immutable"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "bad link", deletions=("linkdir/main.py",))
+        child, _ = git_ops.commit_files_as_child(repo_dir, sha, {"src/x.py": b"x = 2\n"}, "after refusal")
+        assert _git(repo_dir, "show", f"{child}:raven/agent/loop/main.py") == "KERNEL\n"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_allows_deleting_through_a_link_to_a_mutable_dir(self, repo):
+        repo_dir, _sha = repo
+        (repo_dir / "mutable").mkdir()
+        (repo_dir / "mutable/file.txt").write_text("gone\n")
+        sha = _commit_symlink(repo_dir, "mutabledir", "mutable")
+        child, changed = git_ops.commit_files_as_child(
+            repo_dir, sha, {}, "delete through mutable dir link", deletions=("mutabledir/file.txt",)
+        )
+        assert changed == ["mutable/file.txt"]
+        assert "mutable/file.txt" not in _git(repo_dir, "ls-tree", "-r", "--name-only", child)
+        assert _git(repo_dir, "show", f"{child}:mutabledir") == "mutable"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_refuses_to_delete_through_a_link_to_outside(self, repo, tmp_path):
+        repo_dir, _sha = repo
+        outside = tmp_path / "outside_dir"
+        outside.mkdir()
+        (outside / "victim").write_text("keep")
+        sha = _commit_symlink(repo_dir, "linkdir", str(outside))
+        with pytest.raises(ValueError, match="refusing to delete outside the worktree"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "bad link", deletions=("linkdir/victim",))
+        assert (outside / "victim").read_text() == "keep"
+
+    def test_refuses_unsafe_deletions(self, repo):
+        repo_dir, sha = repo
+        with pytest.raises(UnsafePathError, match="unsafe path"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "bad path", deletions=("../outside.txt",))
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_deletes_the_link_not_its_mutable_target(self, repo):
+        repo_dir, _sha = repo
+        (repo_dir / "src/target.txt").write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_ok", "src/target.txt")
+        child, changed = git_ops.commit_files_as_child(repo_dir, sha, {}, "delete link", deletions=("link_ok",))
+        assert changed == ["link_ok"]
+        assert _git(repo_dir, "show", f"{child}:src/target.txt") == "keep"
+        assert "link_ok" not in _git(repo_dir, "ls-tree", "-r", "--name-only", child)
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_deletes_a_link_that_points_outside_the_worktree(self, repo, tmp_path):
+        repo_dir, _sha = repo
+        outside = tmp_path / "outside.txt"
+        outside.write_text("keep")
+        sha = _commit_symlink(repo_dir, "link_out", str(outside))
+        child, changed = git_ops.commit_files_as_child(repo_dir, sha, {}, "delete link", deletions=("link_out",))
+        assert changed == ["link_out"]
+        assert outside.read_text() == "keep"
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_reports_a_symlink_loop_cleanly(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "loop", "loop")
+        with pytest.raises(ValueError, match="symlink loop"):
+            git_ops.commit_files_as_child(repo_dir, sha, {"loop": b"x"}, "loop")
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_reports_a_symlink_loop_on_delete_cleanly(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "loop", "loop")
+        with pytest.raises(ValueError, match="symlink loop"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "loop", deletions=("loop",))
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_reports_a_symlink_loop_in_a_parent_component_cleanly(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "loop", "loop")
+        with pytest.raises(ValueError, match="symlink loop"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "loop", deletions=("loop/x",))
