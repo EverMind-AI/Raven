@@ -394,18 +394,19 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
 
     Three answers. ``""``: the product keeps the host ``image_search`` tool, so it
     follows the host's vendor rule. ``"host"``: the product has its own picture
-    tool, and that tool rides the host's selected vendor -- the deck engine's
-    declaration -- which also narrows it to the vendors whose hits carry
-    dimensions and a source page. A vendor name: the product's own plugin is
-    pinned to that vendor.
+    tool, and that tool rides the lane's rendered search selection -- the deck
+    engine's declaration -- which also narrows it to the vendors whose hits
+    carry dimensions and a source page. A vendor name: the product's own plugin
+    is pinned to that vendor.
 
     The declaration is ``imageSearch`` in any ``plugins.config`` slice, read the
     way the engine's config reads it: ``provider`` absent or ``"host"`` means
     the host rule, any other name is a pin. A folder with no ``imageSearch``
-    object at all is the engine default, ``"host"``: its own
-    ``tools.web.search.provider`` selects the page search, not this tool, and
-    reading it here answered for a tool the engine would not build (a Tavily
-    folder read as ready while the engine fell back to a keyless Serper).
+    object at all is the engine default, ``"host"``; its own
+    ``tools.web.search.provider`` is then the selection the engine follows, but
+    a selection is not this function's answer -- returning it here would report
+    a pin for a lane that follows the host. :func:`product_page_search_vendor`
+    reads that selection for the readiness probe.
 
     Here beside :func:`product_secret` for the same reason: a route asking
     whether a lane can search pictures has to read the lane's contract, not the
@@ -437,6 +438,32 @@ def product_picture_slice_key(row_name: str, root: Path | None = None) -> str:
     return key if isinstance(key, str) else ""
 
 
+def product_page_search_vendor(row_name: str, host_vendor: str, root: Path | None = None) -> str:
+    """The page-search vendor a product folder names, or the host's selection.
+
+    ``tools.web.search.provider`` in the folder's own ``config.json`` is the
+    selection its launcher preserves: inheritance moves the host's choice in
+    only where the product names none. The deck engine resolves its picture
+    vendor through that rendered selection, so the readiness probe has to read
+    the same field -- otherwise a lane the engine runs on its own vendor is
+    refused (or opened) on the outer host's.
+
+    Only the folder's own declaration is modelled here. Where the folder names
+    none this answers ``host_vendor``, while the launcher's inheritance may
+    still decline to carry the host's choice; that residue stays with the
+    launcher rather than growing a second copy here.
+    """
+    folder = product_folder(row_name, root)
+    if folder is None:
+        return host_vendor
+    declared = _product_config(folder)
+    tools = declared.get("tools") if isinstance(declared, dict) else None
+    web = tools.get("web") if isinstance(tools, dict) else None
+    search = web.get("search") if isinstance(web, dict) else None
+    provider = search.get("provider") if isinstance(search, dict) else None
+    return provider if isinstance(provider, str) and provider else host_vendor
+
+
 def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str], str]) -> tuple[str, bool, str]:
     """The picture vendor a routed lane would use, whether it has a key, and why.
 
@@ -446,6 +473,11 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     (Tavily included), a lane declaring ``"host"`` follows the deck rule, and a
     lane pinned to a vendor answers with that vendor while the lane's key
     resolves and with the host rule otherwise.
+
+    ``host_vendor`` is the outer host's ``tools.web.search.provider``, used
+    only where the lane's folder names none of its own: a folder carrying a
+    page-search vendor keeps it through the launcher's render, and that is the
+    selection the engine reads (:func:`product_page_search_vendor`).
 
     The reason explains a fallback the settings page has to word differently:
     ``ok`` when the vendor answering is the one the lane is configured to use,
@@ -461,6 +493,7 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     )
 
     slice_key = product_picture_slice_key(target)
+    effective = product_page_search_vendor(target, host_vendor)
 
     def key(vendor: str) -> str:
         if vendor == "serper" and slice_key:
@@ -471,7 +504,7 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
     pinned = False
     if declared == "host":
         surface = PPT_IMAGE_SEARCH_VENDORS
-        vendor = ppt_image_vendor(host_vendor, key)
+        vendor = ppt_image_vendor(effective, key)
     elif declared:
         surface = PPT_IMAGE_SEARCH_VENDORS
         keyed = bool(key(declared))
@@ -480,17 +513,17 @@ def picture_search_report(target: str, host_vendor: str, key_for: Callable[[str]
             # the whole slice declines, so no picture tool is registered.
             return "", False, "not_ready"
         pinned = keyed
-        vendor = declared if keyed else ppt_image_vendor(host_vendor, key)
+        vendor = declared if keyed else ppt_image_vendor(effective, key)
     else:
         surface = IMAGE_SEARCH_VENDORS
-        vendor = image_search_vendor(host_vendor, key)
+        vendor = image_search_vendor(effective, key)
 
     ready = bool(vendor and key(vendor))
     if not ready:
         return vendor, False, "not_ready"
-    if pinned or vendor == host_vendor:
+    if pinned or vendor == effective:
         return vendor, True, "ok"
-    if host_vendor not in surface:
+    if effective not in surface:
         return vendor, True, "no_surface"
     return vendor, True, "fallback_no_key"
 
