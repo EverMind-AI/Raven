@@ -14,9 +14,15 @@ import pytest
 
 from raven.sandbox import openshell_executor as ox
 from raven.sandbox.interfaces import SandboxInitError
+from raven.sandbox.network_policy import compile_network_policy, network_from_allow_net
 from raven.sandbox.openshell_executor import OpenShellExecutor, sandbox_policy
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="the OpenShell backend needs a Linux host")
+
+
+def _legacy_policy(*, allow_net, **kw):
+    """The policy an executor built with ``allow_net`` sends."""
+    return sandbox_policy(network_policies=compile_network_policy(network_from_allow_net(allow_net)), **kw)
 
 
 class FakeStream:
@@ -107,7 +113,7 @@ def _executor(tmp_path: Path, cp: FakeControlPlane, **kw) -> OpenShellExecutor:
 
 class TestSandboxPolicy:
     def test_no_network_rules_when_network_is_off(self, tmp_path):
-        policy = sandbox_policy(allow_net=False, mounts=[(str(tmp_path), "/workspace", False)], uid=1000)
+        policy = _legacy_policy(allow_net=False, mounts=[(str(tmp_path), "/workspace", False)], uid=1000)
         assert "network_policies" not in policy
         assert policy["filesystem"]["include_workdir"] is True
         assert "/workspace" in policy["filesystem"]["read_write"]
@@ -115,7 +121,7 @@ class TestSandboxPolicy:
         assert policy["landlock"] == {"compatibility": "best_effort"}
 
     def test_read_only_mounts_land_in_read_only(self, tmp_path):
-        policy = sandbox_policy(
+        policy = _legacy_policy(
             allow_net=False,
             mounts=[(str(tmp_path), "/workspace", False), ("/h", "/agent-home", True)],
             uid=1000,
@@ -124,7 +130,7 @@ class TestSandboxPolicy:
         assert "/agent-home" not in policy["filesystem"]["read_write"]
 
     def test_a_domain_list_becomes_one_l4_rule_per_domain(self):
-        policy = sandbox_policy(allow_net=["pypi.org", "files.pythonhosted.org"], mounts=[], uid=1000)
+        policy = _legacy_policy(allow_net=["pypi.org", "files.pythonhosted.org"], mounts=[], uid=1000)
         rules = policy["network_policies"]
         assert len(rules) == 2
         rule = next(r for r in rules.values() if r["endpoints"][0]["host"] == "pypi.org")
@@ -132,14 +138,14 @@ class TestSandboxPolicy:
         assert rule["binaries"] == [{"path": "/**"}]
 
     def test_the_host_uid_is_the_workload_identity_when_it_is_not_root(self):
-        policy = sandbox_policy(allow_net=False, mounts=[], uid=1234)
+        policy = _legacy_policy(allow_net=False, mounts=[], uid=1234)
         assert policy["process"] == {"run_as_user": "1234", "run_as_group": "1234"}
 
     def test_a_root_host_leaves_the_identity_to_the_driver(self):
-        assert "process" not in sandbox_policy(allow_net=False, mounts=[], uid=0)
+        assert "process" not in _legacy_policy(allow_net=False, mounts=[], uid=0)
 
     def test_a_host_without_a_uid_leaves_the_identity_to_the_driver(self):
-        assert "process" not in sandbox_policy(allow_net=False, mounts=[], uid=None)
+        assert "process" not in _legacy_policy(allow_net=False, mounts=[], uid=None)
 
     def test_the_host_uid_is_none_where_the_platform_has_none(self, monkeypatch):
         monkeypatch.delattr(ox.os, "getuid", raising=False)
@@ -148,14 +154,14 @@ class TestSandboxPolicy:
         assert ox._host_gid() is None
 
     def test_allow_net_true_opens_every_multi_label_host_on_every_port(self):
-        rules = sandbox_policy(allow_net=True, mounts=[], uid=1000)["network_policies"]
+        rules = _legacy_policy(allow_net=True, mounts=[], uid=1000)["network_policies"]
         (rule,) = rules.values()
         wildcard = rule["endpoints"][0]
         assert wildcard == {"host": "**.*.*", "ports": list(range(1, 65536)), "tls": "NETWORK_TLS_MODE_SKIP"}
         assert rule["binaries"] == [{"path": "/**"}]
 
     def test_allow_net_true_adds_the_common_apex_domains_on_common_ports(self):
-        (rule,) = sandbox_policy(allow_net=True, mounts=[], uid=1000)["network_policies"].values()
+        (rule,) = _legacy_policy(allow_net=True, mounts=[], uid=1000)["network_policies"].values()
         apex = {e["host"]: e for e in rule["endpoints"][1:]}
         assert {"pypi.org", "github.com", "npmjs.org", "crates.io", "docker.io"} <= set(apex)
         assert all(len(host.split(".")) == 2 and "*" not in host for host in apex)
@@ -163,12 +169,10 @@ class TestSandboxPolicy:
         assert all(e["tls"] == "NETWORK_TLS_MODE_SKIP" for e in apex.values())
 
     def test_a_star_entry_keeps_the_open_default_and_adds_the_rest(self):
-        (rule,) = sandbox_policy(allow_net=["*", "example.com", "pypi.org"], mounts=[], uid=1000)[
-            "network_policies"
-        ].values()
-        hosts = [e["host"] for e in rule["endpoints"]]
-        assert hosts[0] == "**.*.*"
-        assert hosts.count("example.com") == 1 and hosts.count("pypi.org") == 1
+        policies = _legacy_policy(allow_net=["*", "example.com", "pypi.org"], mounts=[], uid=1000)["network_policies"]
+        assert [e["host"] for e in policies["allow_open"]["endpoints"]][0] == "**.*.*"
+        extra = [rule["endpoints"][0]["host"] for name, rule in policies.items() if name != "allow_open"]
+        assert extra == ["example.com", "pypi.org"]
 
     def test_the_open_policy_parses_as_the_proto_and_fits_the_gateway_limit(self):
         pytest.importorskip("openshell")
@@ -176,7 +180,7 @@ class TestSandboxPolicy:
         from openshell._proto import sandbox_pb2
 
         extra = [f"apex{i}.example" for i in range(50)]
-        policy = sandbox_policy(allow_net=["*", *extra], mounts=[("/h", "/workspace", False)], uid=1000)
+        policy = _legacy_policy(allow_net=["*", *extra], mounts=[("/h", "/workspace", False)], uid=1000)
         message = ParseDict(policy, sandbox_pb2.SandboxPolicy())
         assert message.network_policies["allow_open"].endpoints[0].host == "**.*.*"
         assert message.ByteSize() < 262144
@@ -188,7 +192,7 @@ class TestSandboxPolicy:
 class TestSandboxSpec:
     def test_the_spec_carries_image_mounts_limits_and_policy(self):
         pytest.importorskip("openshell")
-        policy = sandbox_policy(allow_net=False, mounts=[("/h", "/workspace", False)], uid=1000)
+        policy = _legacy_policy(allow_net=False, mounts=[("/h", "/workspace", False)], uid=1000)
         spec = ox.build_sandbox_spec(
             image="img:1",
             policy=policy,
@@ -845,7 +849,7 @@ class TestSDKControlPlane:
         plane.create(
             name="rvx",
             image="ubuntu:24.04",
-            policy=sandbox_policy(allow_net=False, mounts=[], uid=0),
+            policy=_legacy_policy(allow_net=False, mounts=[], uid=0),
             driver_config={"docker": {"mounts": []}},
             resources={"limits": {"cpu": "1", "memory": "512Mi"}},
             labels={"raven.owner": "abc"},
