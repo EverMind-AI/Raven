@@ -1507,7 +1507,7 @@ class TestProbeOpenShell:
         assert onboard_commands._probe_openshell() == (False, "missing")
 
     def test_a_gateway_that_does_not_answer_is_unreachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import openshell
+        openshell = pytest.importorskip("openshell")
 
         def _refuse(**_kw):
             raise ConnectionError("connection refused")
@@ -1516,7 +1516,7 @@ class TestProbeOpenShell:
         assert onboard_commands._probe_openshell() == (False, "unreachable")
 
     def test_a_gateway_that_lists_sandboxes_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import openshell
+        openshell = pytest.importorskip("openshell")
 
         class _Client:
             def list_all(self, **_kw):
