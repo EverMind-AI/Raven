@@ -142,9 +142,13 @@ class DigestConfig(_Base):
     #: JSON series at 1.01, makes a chunk about 99k tokens, which still fits the
     #: 256k-context digest model the previous 200k cap already assumed.
     chunk_chars: int = 100_000
-    #: Chunks read per page. At the defaults this is ``sourceCapChars`` exactly; it
-    #: exists so lowering the chunk size does not silently multiply the calls.
-    max_chunks: int = 10
+    #: Chunks read per page: a cost guard, deliberately not the binding ceiling.
+    #: ``chunkChars`` x ``maxChunks`` overshoots ``sourceCapChars`` on purpose, because
+    #: the splitter breaks at the last paragraph or space inside the window and strips
+    #: the boundary, so a chunk carries less than ``chunkChars``: measured on a 1.28M
+    #: character page, ten 100k chunks covered 802,422 characters, 20% short of the
+    #: cap. Set so that the cap is what stops the read, not this.
+    max_chunks: int = 12
     #: The whole page's budget, across chunks. A page that runs out keeps the
     #: extraction the chunks it did read produced, with a note -- unlike a timeout at
     #: the tool, which drops the digest and truncates the page at ``fetchMaxChars``.

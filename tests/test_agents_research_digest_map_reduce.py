@@ -157,7 +157,13 @@ def test_the_page_head_still_rides_along_when_it_is_configured():
     assert out.endswith("\n\n[page head, verbatim]\n" + ("abc" * 100)[:20])
 
 
-def test_the_defaults_are_the_ported_ones():
+def test_the_defaults_let_the_character_cap_stop_the_read_not_the_chunk_count():
+    """The splitter strips its boundaries, so a chunk carries less than chunk_chars.
+
+    Measured on a 1.28M character page: ten 100k chunks covered 802,422 characters.
+    With max_chunks as the binding limit the read would stop a fifth short of the
+    documented ceiling, which is the failure sourceCapChars itself was raised to fix.
+    """
     cfg = DigestConfig()
-    assert (cfg.map_reduce, cfg.chunk_chars, cfg.max_chunks) == (True, 100_000, 10)
-    assert cfg.chunk_chars * cfg.max_chunks == cfg.source_cap_chars
+    assert (cfg.map_reduce, cfg.chunk_chars) == (True, 100_000)
+    assert cfg.chunk_chars * cfg.max_chunks > cfg.source_cap_chars
