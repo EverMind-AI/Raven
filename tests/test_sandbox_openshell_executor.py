@@ -1161,7 +1161,10 @@ class TestSDKControlPlane:
         chunk = openshell_pb2.PolicyChunk(id="c1", status="pending", binary="/usr/bin/curl", review_token="tok")
         chunk.proposed_rule.CopyFrom(
             sandbox_pb2.NetworkPolicyRule(
-                endpoints=[sandbox_pb2.NetworkEndpoint(host="example.com", port=443, ports=[443])],
+                name="allow_example_com_443",
+                endpoints=[
+                    sandbox_pb2.NetworkEndpoint(host="example.com", port=443, ports=[443], advisor_proposed=True)
+                ],
                 binaries=[sandbox_pb2.NetworkBinary(path="/usr/bin/curl")],
             )
         )
@@ -1171,8 +1174,20 @@ class TestSDKControlPlane:
                 endpoints=[sandbox_pb2.NetworkEndpoint(host="", ports=[443], allowed_ips=["10.0.0.0/8"])]
             )
         )
-        client._stub.draft = [chunk, wide]
-        proposal, widened = plane.draft_chunks("rvx")
+        credentialed = openshell_pb2.PolicyChunk(id="c3", status="pending", binary="/usr/bin/curl", review_token="t3")
+        credentialed.proposed_rule.CopyFrom(
+            sandbox_pb2.NetworkPolicyRule(
+                endpoints=[
+                    sandbox_pb2.NetworkEndpoint(
+                        host="example.com", port=443, ports=[443], allow_uninspected_credentials=True
+                    )
+                ],
+                binaries=[sandbox_pb2.NetworkBinary(path="/usr/bin/curl")],
+            )
+        )
+        client._stub.draft = [chunk, wide, credentialed]
+        proposal, widened, also_widened = plane.draft_chunks("rvx")
+        assert also_widened.widened is True
         assert (proposal.id, proposal.binary, proposal.binaries, proposal.targets, proposal.review_token) == (
             "c1",
             "/usr/bin/curl",
