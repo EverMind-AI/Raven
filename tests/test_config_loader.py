@@ -2224,6 +2224,49 @@ def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
     assert len(loader.drain_migration_notices()) == 1
 
 
+@pytest.mark.parametrize("retired", ["auto", "boxlite"])
+def test_a_boxlite_sandbox_block_is_rewritten_for_openshell_on_disk(tmp_path: Path, retired: str) -> None:
+    """The raw config has readers of its own (the raven_config tool, onboarding), so
+    the retired backend and its two keys leave the file, not only the loaded model;
+    the neighbours stay, the user is told once, and a second load changes nothing."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "tools": {
+                "sandbox": {"backend": retired, "debug": {"enabled": True}, "diskSizeGb": 20, "cpus": 4},
+                "restrictToWorkspace": True,
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.tools.sandbox.backend == "openshell"
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["tools"] == {"sandbox": {"backend": "openshell", "cpus": 4}, "restrictToWorkspace": True}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "tools.sandbox" in n]) == 3, notices
+
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_a_current_sandbox_block_is_left_byte_for_byte() -> None:
+    from raven.config import loader
+
+    for block in ({"tools": {"sandbox": {"backend": "openshell", "gateway": "dev"}}}, {"tools": {}}, {}):
+        before = json.dumps(block)
+        assert loader._migrate_retired_sandbox_backend(block, notify=True) is False
+        assert json.dumps(block) == before
+    assert loader.drain_migration_notices() == []
+
+
 def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

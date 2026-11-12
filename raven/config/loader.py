@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from raven.config import login_path
 from raven.config.schema import Config
 from raven.home import get_config_path, raven_home, set_config_path
+from raven.sandbox.config import RETIRED_BACKENDS, RETIRED_KEYS
 from raven.utils.atomic_io import atomic_replace, atomic_update
 
 # Generation counter for the run-once config migrations below. Bump it, and add
@@ -22,7 +23,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 15
+CURRENT_CONFIG_VERSION = 16
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -52,6 +53,7 @@ _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 _PLANTED_CRON_TIMEZONE_MIGRATION = 13
 _RETIRED_VERDICT_SWITCH_MIGRATION = 14
 _SHIM_PIN_REFRESH_MIGRATION = 15
+_RETIRED_SANDBOX_BACKEND_MIGRATION = 16
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -421,6 +423,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 retired = _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION]
                 changed = _migrate_retired_shim_pins(raw, retired) or changed
                 pins_waiting = _shim_pins_waiting(raw, retired)
+            if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
+                changed = _migrate_retired_sandbox_backend(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -666,6 +670,35 @@ def _migrate_retired_verdict_switch(data: dict[str, Any], *, notify: bool = Fals
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
     return changed
+
+
+def _migrate_retired_sandbox_backend(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Point a boxlite-era ``tools.sandbox`` block at OpenShell, the only sandbox now.
+
+    ``SandboxConfig`` maps the same values on every load, so a block that comes
+    back after this floor ran still loads; the floor is what makes the file
+    agree with the runtime for the readers of the raw config (the ``raven_config``
+    tool, onboarding).
+    """
+    tools = data.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict):
+        return False
+    notices: list[str] = []
+    backend = sandbox.get("backend")
+    if backend in RETIRED_BACKENDS:
+        sandbox["backend"] = "openshell"
+        notices.append(
+            f'Changed `tools.sandbox.backend` from "{backend}" to "openshell" in your config: the boxlite '
+            "backend is retired, and sandboxed commands run in OpenShell."
+        )
+    for key in RETIRED_KEYS:
+        if key in sandbox:
+            sandbox.pop(key)
+            notices.append(f"Removed `tools.sandbox.{key}` from your config: it applied to the retired boxlite backend.")
+    if notify:
+        _migration_notices.extend(n for n in notices if n not in _migration_notices)
+    return bool(notices)
 
 
 # A path token that reaches into the retired vendored tree, on either separator.
@@ -1546,6 +1579,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
     if from_version < _SHIM_PIN_REFRESH_MIGRATION:
         _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
+    if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
+        _migrate_retired_sandbox_backend(data, notify=True)
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts

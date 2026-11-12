@@ -121,11 +121,13 @@ execution happens only when the backend is `"none"`.
 
 ### Migrating from the boxlite backend
 
-The boxlite microVM backend is retired. Configs written for it still load:
+The boxlite microVM backend is retired. Configs written for it still load,
+and the first load rewrites them once, with a notice for each change:
 
-- `backend: "boxlite"` and `backend: "auto"` load as `"openshell"`, with a
-  warning. Update the file to say `"openshell"`.
-- `debug` and `diskSizeGb` are ignored, with a warning.
+- `backend: "boxlite"` and `backend: "auto"` become `"openshell"`. Both
+  meant boxlite before, so a machine without OpenShell refuses to start a
+  sandbox rather than falling back to the host.
+- `debug` and `diskSizeGb` are removed.
 - `raven sandbox list/exec/shell` is gone. Use the OpenShell CLI instead; see
   [Inspecting sandboxes](#35-inspecting-sandboxes).
 - The old boxlite state under Raven's data directory (`sandbox/boxlite`) is no
