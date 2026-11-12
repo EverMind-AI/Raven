@@ -99,3 +99,30 @@ def test_the_open_policy_with_200_grants_fits_the_gateway_limit():
     policy = sandbox_policy(network_policies=compile_network_policy(NetworkPermissions(), grants), mounts=[], uid=1000)
     spec = build_sandbox_spec(image="i", policy=policy, driver_config={}, resources={})
     assert spec.policy.ByteSize() < 262144
+
+
+def test_a_deny_rule_takes_an_apex_host_out_of_the_open_set():
+    network = NetworkPermissions(rules=[NetworkRule(host="pypi.org", tier="deny")])
+    hosts = [endpoint["host"] for endpoint in compile_network_policy(network)["allow_open"]["endpoints"]]
+    assert "pypi.org" not in hosts and "github.com" in hosts
+
+
+def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(caplog):
+    import logging
+
+    from raven.sandbox.network_policy import unenforced_denials
+
+    network = NetworkPermissions(
+        rules=[
+            NetworkRule(host="evil.example.com", tier="deny"),
+            NetworkRule(host="pypi.org", tier="deny"),
+            NetworkRule(host="example.org", tier="deny"),
+        ]
+    )
+    assert unenforced_denials(network) == ["evil.example.com"]
+    assert unenforced_denials(NetworkPermissions(default="closed", rules=network.rules)) == []
+    with caplog.at_level(logging.WARNING, logger="raven.sandbox.network_policy"):
+        compile_network_policy(network)
+        compile_network_policy(network)
+    warnings = [r.getMessage() for r in caplog.records if "evil.example.com" in r.getMessage()]
+    assert len(warnings) == 1
