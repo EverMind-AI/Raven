@@ -10,6 +10,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from raven.sandbox.denials import NetworkDenial
+
 
 class SandboxInitError(RuntimeError):
     """Raised when the sandbox backend cannot be started or probed.
@@ -27,6 +29,9 @@ class ExecResult:
     stdout: str
     stderr: str
     exit_code: int
+    # Connections the sandbox's network policy refused while the command ran;
+    # empty for an executor that enforces no network policy.
+    denials: tuple[NetworkDenial, ...] = ()
 
     def as_text(self, max_chars: int = 10_000) -> str:
         parts = []

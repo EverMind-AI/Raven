@@ -55,6 +55,8 @@ class FakeControlPlane:
         self.create_error: Exception | None = None
         self.exec_script = lambda argv: FakeStream([("stdout", b"ok\n"), ("exit", 0)])
         self.interactive_stream: FakeStream | None = None
+        self.denial_script: list = []
+        self.denial_reads: list[float] = []
 
     def create(self, *, name, image, policy, driver_config, resources, labels):
         if self.create_error:
@@ -76,6 +78,17 @@ class FakeControlPlane:
 
     def delete(self, name):
         self.deleted.append(name)
+
+    def denial_messages(self, name, since):
+        self.denial_reads.append(since)
+        if not self.denial_script:
+            return []
+        item = self.denial_script.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        if callable(item):
+            return item()
+        return item
 
     def list_labeled(self, selector):
         self.selector = selector
@@ -462,6 +475,69 @@ class TestExec:
         assert cp.execs == []
 
 
+TCP_DENIAL = "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]"
+
+
+class TestDenials:
+    async def _started(self, tmp_path, exit_code=7):
+        cp = FakeControlPlane()
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        cp.exec_script = lambda argv: FakeStream([("exit", exit_code)])
+        return cp, ex
+
+    async def test_a_command_carries_the_denials_logged_during_it(self, tmp_path):
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [[TCP_DENIAL]]
+        result = await ex.exec("curl https://example.com")
+        assert [(d.binary, d.host, d.port) for d in result.denials] == [("/usr/bin/curl", "example.com", 443)]
+
+    async def test_a_failing_command_rereads_once_after_the_settle_delay(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [[], [TCP_DENIAL]]
+        result = await ex.exec("curl https://example.com")
+        assert len(cp.denial_reads) == 2
+        assert [d.host for d in result.denials] == ["example.com"]
+
+    async def test_a_failing_log_read_returns_the_result_without_denials(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [RuntimeError("gateway gone"), RuntimeError("gateway gone")]
+        result = await ex.exec("curl https://example.com")
+        assert (result.exit_code, result.denials) == (7, ())
+
+    async def test_a_hung_log_read_is_abandoned_after_its_timeout(self, tmp_path, monkeypatch):
+        import time as _time
+
+        monkeypatch.setattr(ox, "_DENIAL_READ_TIMEOUT", 0.05)
+        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 0.01)
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [lambda: _time.sleep(1) or [TCP_DENIAL], lambda: _time.sleep(1) or [TCP_DENIAL]]
+        t0 = _time.monotonic()
+        result = await ex.exec("curl https://example.com")
+        assert _time.monotonic() - t0 < 0.8
+        assert result.denials == ()
+
+    async def test_denials_outside_the_command_window_are_ignored(self, tmp_path):
+        import time as _time
+
+        cp, ex = await self._started(tmp_path, exit_code=0)
+        before = _time.time()
+        await ex.exec("true")
+        assert abs(cp.denial_reads[0] - before) < 0.05
+
+    async def test_a_successful_command_reads_once_and_does_not_wait(self, tmp_path, monkeypatch):
+        import time as _time
+
+        monkeypatch.setattr(ox, "_DENIAL_SETTLE_SECONDS", 5.0)
+        cp, ex = await self._started(tmp_path, exit_code=0)
+        t0 = _time.monotonic()
+        result = await ex.exec("true")
+        assert len(cp.denial_reads) == 1 and result.denials == ()
+        assert _time.monotonic() - t0 < 1.0
+
+
 class TestStop:
     async def test_stop_deletes_in_the_background(self, tmp_path):
         cp = FakeControlPlane()
@@ -594,6 +670,7 @@ class _FakeStub:
         self.conditions: list[dict] = []
         self.get_error: Exception | None = None
         self.events: list = []
+        self.log_lines: list[tuple[str, str]] = []
 
     def GetSandbox(self, request, timeout):
         from openshell._proto import openshell_pb2
@@ -604,6 +681,15 @@ class _FakeStub:
         response = openshell_pb2.SandboxResponse()
         for condition in self.conditions:
             response.sandbox.status.conditions.add(**condition)
+        return response
+
+    def GetSandboxLogs(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("GetSandboxLogs", request, timeout))
+        response = openshell_pb2.GetSandboxLogsResponse()
+        for target, message in self.log_lines:
+            response.logs.add(target=target, message=message)
         return response
 
     def ExecSandbox(self, request, timeout):
@@ -772,6 +858,22 @@ class TestSDKControlPlane:
         client.refs = [SimpleNamespace(name="rv1", labels={"raven.pid": "3"})]
         assert plane.list_labeled("raven.owner=abc") == [("rv1", {"raven.pid": "3"})]
         assert client.calls[-1] == ("list_all", {"workspace": "team", "label_selector": "raven.owner=abc"})
+
+    def test_denial_messages_keeps_the_ocsf_lines_since_the_start(self, sdk):
+        plane, client = sdk
+        client._stub.log_lines = [
+            (
+                "ocsf",
+                "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]",
+            ),
+            ("openshell_sandbox", "supervisor started"),
+        ]
+        messages = plane.denial_messages("rvx", 1_700_000_000.25)
+        assert messages == [client._stub.log_lines[0][1]]
+        ((kind, request, _timeout),) = client._stub.calls
+        assert kind == "GetSandboxLogs"
+        assert request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
+        assert request.since_time.seconds == 1_700_000_000 and request.since_time.nanos == 250_000_000
 
     def test_a_missing_sdk_is_an_init_error_that_names_the_extra(self, monkeypatch):
         import sys

@@ -155,6 +155,28 @@ async def test_a_workspace_the_sandbox_user_cannot_write_is_refused(scratch):
         await _make(ws).start()
 
 
+async def test_a_denied_request_is_reported_on_the_result(workspace):
+    ex = _make(workspace, allow_net=True)
+    await ex.start()
+    try:
+        blocked = await ex.exec(f"curl -sS -m 10 -o /dev/null https://{UNLISTED_APEX}/")
+        assert blocked.exit_code != 0, blocked
+        (denial,) = [d for d in blocked.denials if d.host == UNLISTED_APEX]
+        assert denial.port == 443 and denial.binary.endswith("curl"), denial
+        plane, name = ex._plane(), ex._name
+        reads = []
+        for _ in range(5):
+            t0 = time.perf_counter()
+            await asyncio.to_thread(plane.denial_messages, name, time.time())
+            reads.append(time.perf_counter() - t0)
+            assert (await ex.exec("echo ok")).denials == ()
+        median = sorted(reads)[2]
+        print(f"denial read: median {median * 1000:.0f} ms over {len(reads)} reads")
+        assert median < 0.15
+    finally:
+        await ex.stop()
+
+
 async def test_egress_follows_allow_net(workspace):
     closed = _make(workspace)
     opened = _make(workspace, allow_net=[HOST])
