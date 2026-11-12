@@ -19,10 +19,13 @@ import queue
 import secrets
 import socket
 import threading
+import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from raven.sandbox.denials import NetworkDenial, parse_denials
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 from raven.sandbox.mounts import WORKSPACE_MOUNT, MountTable
 from raven.utils.pid import pid_alive
@@ -38,6 +41,11 @@ _TIMEOUT_GRACE_SECONDS = 10.0
 # call is killed. The gateway enforces the same budget and answers with its
 # own exit 124, so this only covers the report, not the command.
 _KILL_GRACE_SECONDS = 1.0
+# The gateway serves a denial about half a second after the connection was
+# refused, so a command that failed early is read again once after a short
+# wait; a read that does not answer in time is given up rather than waited on.
+_DENIAL_READ_TIMEOUT = 2.0
+_DENIAL_SETTLE_SECONDS = 0.6
 _SERVER_TIMEOUT_EXIT = 124
 _OWNER_LABEL = "raven.owner"
 _PID_LABEL = "raven.pid"
@@ -151,6 +159,8 @@ class OpenShellControlPlane(Protocol):
     def delete(self, name: str) -> None: ...
 
     def list_labeled(self, selector: str) -> list[tuple[str, dict[str, str]]]: ...
+
+    def denial_messages(self, name: str, since: float) -> list[str]: ...
 
 
 def sandbox_policy(
@@ -443,6 +453,39 @@ class OpenShellExecutor(SandboxExecutor):
         env: dict[str, str] | None = None,
     ) -> ExecResult:
         plane, name = await self._running()
+        since = time.time()
+        result = await self._run(plane, name, command, cwd, timeout, env)
+        denials = await self._denials(plane, name, since, settle=result.exit_code != 0)
+        return replace(result, denials=tuple(denials)) if denials else result
+
+    async def _denials(
+        self, plane: OpenShellControlPlane, name: str, since: float, *, settle: bool
+    ) -> list[NetworkDenial]:
+        """The network denials logged for this sandbox since ``since``; none when the log cannot be read."""
+        for attempt in range(2 if settle else 1):
+            if attempt:
+                await asyncio.sleep(_DENIAL_SETTLE_SECONDS)
+            try:
+                messages = await asyncio.wait_for(
+                    asyncio.to_thread(plane.denial_messages, name, since), _DENIAL_READ_TIMEOUT
+                )
+            except Exception as exc:  # noqa: BLE001 - a missing denial list must not cost the command's result
+                logger.debug("Could not read network denials for OpenShell sandbox %s: %s", name, exc)
+                continue
+            denials = parse_denials(messages)
+            if denials:
+                return denials
+        return []
+
+    async def _run(
+        self,
+        plane: OpenShellControlPlane,
+        name: str,
+        command: str,
+        cwd: str | None,
+        timeout: int | None,
+        env: dict[str, str] | None,
+    ) -> ExecResult:
         effective = self._default_timeout if timeout is None else timeout
         stream = await asyncio.to_thread(
             plane.exec,
@@ -735,3 +778,19 @@ class SDKControlPlane:
     def list_labeled(self, selector: str) -> list[tuple[str, dict[str, str]]]:
         refs = self._client.list_all(workspace=self._workspace, label_selector=selector)
         return [(ref.name, dict(ref.labels)) for ref in refs]
+
+    def denial_messages(self, name: str, since: float) -> list[str]:
+        """The sandbox's OCSF log messages since ``since`` (epoch seconds), where denials are reported."""
+        from google.protobuf.timestamp_pb2 import Timestamp
+        from openshell._proto import datamodel_pb2, openshell_pb2
+
+        response = self._client._stub.GetSandboxLogs(
+            openshell_pb2.GetSandboxLogsRequest(
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+                sandbox=name,
+                since_time=Timestamp(seconds=int(since), nanos=int((since - int(since)) * 1_000_000_000)),
+                lines=500,
+            ),
+            timeout=_DENIAL_READ_TIMEOUT,
+        )
+        return [line.message for line in response.logs if line.target == "ocsf"]
