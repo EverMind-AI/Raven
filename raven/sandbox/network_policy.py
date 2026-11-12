@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -75,10 +76,26 @@ def _endpoint(host: str, ports: list[int]) -> dict:
     return {"host": host, "ports": ports, "tls": "NETWORK_TLS_MODE_SKIP"}
 
 
-def _open_rule(extra_hosts: list[str]) -> dict:
-    hosts = list(dict.fromkeys([*_APEX_DOMAINS, *extra_hosts]))
+def _open_rule(extra_hosts: list[str], denied: frozenset[str] = frozenset()) -> dict:
+    hosts = [host for host in dict.fromkeys([*_APEX_DOMAINS, *extra_hosts]) if host not in denied]
     endpoints = [_endpoint(_OPEN_WILDCARD, _ALL_PORTS), *(_endpoint(host, COMMON_PORTS) for host in hosts)]
     return {"name": "allow_open", "endpoints": endpoints, "binaries": [{"path": "/**"}]}
+
+
+logger = logging.getLogger(__name__)
+_warned_unenforced: set[str] = set()
+
+
+def unenforced_denials(network: NetworkPermissions) -> list[str]:
+    """Denied hosts the open default's ``**.*.*`` wildcard still lets a sandbox reach.
+
+    A two-label host leaves the open set when denied; a host of three labels or
+    more is matched by the wildcard, which OpenShell cannot carve an exception
+    out of at this level.
+    """
+    if network.default != "open":
+        return []
+    return [rule.host for rule in network.rules if rule.tier == "deny" and len(rule.host.split(".")) >= 3]
 
 
 class NetworkGrant(NamedTuple):
@@ -100,7 +117,16 @@ def compile_network_policy(network: NetworkPermissions, grants: Iterable[Network
     """
     policies: dict[str, dict] = {}
     if network.default == "open":
-        policies["allow_open"] = _open_rule([])
+        denied = frozenset(rule.host for rule in network.rules if rule.tier == "deny")
+        policies["allow_open"] = _open_rule([], denied)
+        for host in unenforced_denials(network):
+            if host not in _warned_unenforced:
+                _warned_unenforced.add(host)
+                logger.warning(
+                    "permissions.network denies %s, but the open default's wildcard still lets sandboxed "
+                    "commands reach it; the rule only refuses approving it",
+                    host,
+                )
     for rule in network.rules:
         if rule.tier != "allow":
             continue
