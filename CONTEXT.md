@@ -934,9 +934,11 @@ The deck engine's picture-search state as the runtime would resolve it now, not
 a reading of the Search service picker: `vendor` is the vendor that would answer
 (`""` when none resolves), `ready` says a key resolves for it, and `reason`
 names why that vendor answers: `ok` when it is the vendor the deck is
-configured to use (the selected search vendor, or the deck's own pin),
-`fallback_no_key` when the selected vendor has a picture surface but no key,
-`no_surface` when the selected vendor has none, and `not_ready` when no vendor
+configured to use (the lane's rendered search selection -- its folder's own
+`tools.web.search.provider` where it names one, the inherited host choice
+otherwise -- or the deck's own pin),
+`fallback_no_key` when that selection has a picture surface but no key,
+`no_surface` when that selection has none, and `not_ready` when no vendor
 resolves. `fallback` is derived from it -- true for `fallback_no_key` and
 `no_surface` -- so the page can say deck generation will fall back; a deck
 pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
@@ -955,16 +957,20 @@ of deck pictures, not search availability.
 **Deck Picture Vendor** (`plugins-dist/ppt-engine/raven_ppt/plugin/config.py`, `imageSearch.provider`; `agent/subagent/vendored_agents.py`, `product_picture_vendor`):
 Which vendor the deck engine's pictures come from. `imageSearch.provider:
 "host"` (the shipped value in `agents/raven-ppt/config.json`) is a sentinel, not
-a vendor: the deck follows the host's `tools.web.search.provider` through
-`ppt_image_vendor`, so one of the five vendors with a usable picture surface
-answers on its own key, and a host on any other vendor, or on one of the five
-with no key, falls back to Serper. Any other accepted value pins that vendor,
-honoured only while its key resolves; without one the host rule answers instead,
-so a pin cannot leave the deck advertising a tool whose every call fails.
-`product_picture_vendor` reads the same declaration for routing and returns
-`"host"` -- the declaration, not the resolved vendor -- so
+a vendor: the deck follows its rendered `tools.web.search.provider` through
+`ppt_image_vendor` -- the lane's own selection where its folder names one, the
+host's inherited where it does not -- so one of the five vendors with a usable
+picture surface answers on its own key, and a selection on any other vendor, or
+on one of the five with no key, falls back to Serper. Any other accepted value
+pins that vendor, honoured only while its key resolves; without one the host
+rule answers instead, so a pin cannot leave the deck advertising a tool whose
+every call fails. `product_picture_vendor` reads the same declaration for
+routing and returns `"host"` -- the declaration, not the resolved vendor -- so
 `picture_search_status` applies the deck's five-vendor set rather than the
 host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
+`product_page_search_vendor` reads the lane's own page-search selection for the
+readiness probe, so a legacy folder that names one is measured on the vendor
+the engine would use, not on the outer host's.
 _Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
 and `ppt_image_vendor` is what turns it into a vendor.
 
