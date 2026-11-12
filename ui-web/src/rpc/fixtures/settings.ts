@@ -156,9 +156,15 @@ const pictureSearchOf = (config: Record<string, Json>): ResultOf<'settings.get'>
     if (typeof slot === 'string' && slot) return true
     return vendor === 'serper' && !!pick(config, 'tools.web.search.apiKey')
   }
-  if (PPT_VENDORS.includes(selected) && keyed(selected)) return { vendor: selected, ready: true, fallback: false }
-  if (keyed('serper')) return { vendor: 'serper', ready: true, fallback: selected !== 'serper' }
-  return { vendor: '', ready: false, fallback: false }
+  if (PPT_VENDORS.includes(selected) && keyed(selected)) {
+    return { vendor: selected, ready: true, fallback: false, reason: 'ok' }
+  }
+  if (keyed('serper')) {
+    const fallback = selected !== 'serper'
+    const reason = fallback ? (PPT_VENDORS.includes(selected) ? 'fallback_no_key' : 'no_surface') : 'ok'
+    return { vendor: 'serper', ready: true, fallback, reason }
+  }
+  return { vendor: '', ready: false, fallback: false, reason: 'not_ready' }
 }
 
 /* A ledger with nothing in it. The four `*_missing_calls` counts are part of
