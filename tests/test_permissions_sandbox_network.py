@@ -386,3 +386,35 @@ async def test_a_prompt_whose_turn_is_torn_down_releases_its_waiters(grants):
     notice = await asyncio.wait_for(two, 2)
     assert "expired with no answer" in notice.text and waiter.granted == []
     assert len(responder.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("host", "person"),
+    [
+        ("pypi.org", False),
+        ("files.pythonhosted.org", False),
+        ("PyPI.org.", False),
+        ("169.254.169.254", True),
+        ("2852039166", True),
+        ("0xa9fea9fe", True),
+        ("169.254.43518", True),
+        ("0251.0376.0251.0376", True),
+        ("[fd00::1]", True),
+        ("fd00::1", True),
+        ("localhost", True),
+        ("metadata", True),
+        ("metadata.google.internal", True),
+        ("printer.local", True),
+        ("api.localhost", True),
+        ("router.home.arpa", True),
+    ],
+)
+def test_only_a_public_looking_name_is_left_to_the_mode_or_the_reviewer(host, person):
+    assert sandbox_network._needs_person(host) is person
+
+
+async def test_a_numeric_spelling_of_an_address_is_asked_even_in_full_mode(grants):
+    decimal = NetworkDenial("/usr/bin/curl", "2852039166", 80, "transparent_tcp_policy_denied")
+    responder, sandbox = Responder(ApprovalChoice.DENY), FakeSandbox()
+    await _handle(responder, [decimal], sandbox, config=PermissionsConfig(mode="full"))
+    assert len(responder.calls) == 1 and sandbox.granted == []

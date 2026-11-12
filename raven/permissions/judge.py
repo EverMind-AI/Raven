@@ -153,13 +153,24 @@ async def review(
     )
 
 
+# The targets come first and whole: they are what is decided, and a command
+# long enough to push them past a cap would leave the reviewer judging blind.
+_MAX_TARGETS = 10
+_MAX_TARGET_LINE = 300
+_MAX_COMMAND = 2000
+
+
 def _network_text(targets: list[dict[str, Any]], command: str) -> str:
-    lines = [
-        f"- {target.get('binary', '')} -> {target.get('host', '')}:{target.get('port', '')} ({target.get('reason', '')})"
-        for target in targets
-    ]
-    text = f"command: {command}\nrefused connections:\n" + "\n".join(lines)
-    return text[:4000] + "..." if len(text) > 4000 else text
+    lines = []
+    for target in targets:
+        line = (
+            f"- {target.get('binary', '')} -> {target.get('host', '')}:{target.get('port', '')} "
+            f"({target.get('reason', '')})"
+        )
+        lines.append(line if len(line) <= _MAX_TARGET_LINE else line[: _MAX_TARGET_LINE - 3] + "...")
+    cut = len(command) - _MAX_COMMAND
+    shown = command if cut <= 0 else f"{command[:_MAX_COMMAND]}... ({cut} more characters cut)"
+    return "refused connections:\n" + "\n".join(lines) + f"\ncommand: {shown}"
 
 
 async def review_network(
@@ -171,6 +182,8 @@ async def review_network(
     timeout_s: float = 10.0,
 ) -> JudgeOutcome:
     """Connections a sandbox refused, reviewed against the command that made them; fails closed onto escalation."""
+    if len(targets) > _MAX_TARGETS:
+        return JudgeOutcome(allow=False, reason=f"more than {_MAX_TARGETS} targets to review at once")
     return await _judged(
         provider,
         _NETWORK_INSTRUCTION,
