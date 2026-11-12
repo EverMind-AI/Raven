@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import ipaddress
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -200,9 +200,9 @@ async def _prompt(
             # editor are the exec pattern's, so the broader grant offered is the session.
             suggested_pattern="",
             review=review,
-            # A deny rule names hosts, so an address given as an IP (a cloud
-            # metadata endpoint among them) is never opened without a person.
-            needs_person=any(_is_address(denial.host) for denial in denials),
+            # A deny rule names hosts, so an address or an internal name (a
+            # cloud metadata endpoint among them) is never opened without a person.
+            needs_person=any(_needs_person(denial.host) for denial in denials),
         )
         return answer
     finally:
@@ -279,12 +279,22 @@ async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], ch
             logger.warning("A sandbox did not load an approved network grant: {}", outcome)
 
 
-def _is_address(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host.strip("[]"))
-    except ValueError:
-        return False
-    return True
+# A public DNS name: dotted labels ending in a letters-only top-level label.
+# Every address spelling fails it -- dotted, IPv6, and the decimal, hex,
+# octal and short forms a resolver also reads as an address.
+_PUBLIC_NAME = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+_INTERNAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home.arpa", ".intranet", ".corp", ".private")
+
+
+def _needs_person(host: str) -> bool:
+    """Whether ``host`` may only be opened by a person, never by the mode or the reviewer.
+
+    Only what looks like a public DNS name is left to them: a deny rule names
+    hosts, and an address, an internal name or a cloud metadata endpoint is
+    exactly what one cannot be relied on to have named.
+    """
+    name = host.strip().lower().rstrip(".")
+    return not _PUBLIC_NAME.fullmatch(name) or name.endswith(_INTERNAL_SUFFIXES)
 
 
 def _blocked(denials: Sequence[NetworkDenial]) -> str:

@@ -156,3 +156,19 @@ async def test_a_network_review_is_shown_the_command_and_every_target_as_untrust
     assert "pip install requests" in user["content"]
     assert "/usr/bin/pip -> pypi.org:443" in user["content"]
     assert user["content"].index("pip install requests") > user["content"].index("BEGIN UNTRUSTED")
+
+
+@pytest.mark.asyncio
+async def test_a_long_command_cannot_push_a_target_out_of_the_reviewers_sight() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "escalate"})]))
+    await review_network(provider, targets=[_PIP], command="echo " + "x" * 20000)
+    user = provider.messages[1]["content"]
+    assert "/usr/bin/pip -> pypi.org:443" in user
+    assert "more characters cut" in user and len(user) < 6000
+
+
+@pytest.mark.asyncio
+async def test_more_targets_than_one_prompt_holds_are_escalated_unread() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "allow"})]))
+    outcome = await review_network(provider, targets=[_PIP] * 11, command="pip install a b c")
+    assert outcome.allow is False and provider.messages == []
