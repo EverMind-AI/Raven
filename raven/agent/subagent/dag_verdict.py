@@ -83,7 +83,7 @@ class Verdict:
 
     None when the node declares no routes, or did not accomplish its task and so has
     nothing to route. Empty is an answer of its own -- a ``select: many`` decision
-    that found no condition met -- and is not the same as None.
+    node that found no condition met -- and is not the same as None.
     """
 
     route_evidence: str | None = None
@@ -552,7 +552,7 @@ async def judge(
     With none, the request is exactly what it was before a node could be
     continued.
 
-    ``routes`` makes the node a decision: route name -> the condition under which its
+    ``routes`` makes the node a decision node: route name -> the condition under which its
     answer selects that route. The same call then also reports which one route the
     answer selects (``select="one"``) or which routes (``select="many"``, possibly
     none), and the returned `Verdict` carries them. ``None`` or empty is an ordinary

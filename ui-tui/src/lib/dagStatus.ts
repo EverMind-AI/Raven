@@ -46,7 +46,7 @@ const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`
 const REASON_WORDS: Record<DagNotExecutedReason, string> = {
   upstream_not_executed: 'upstream not executed',
   when_false: 'not selected',
-  when_unknown: 'decision missing'
+  when_unknown: 'selection missing'
 }
 
 // Empty for a reason this client has no words for, which reads as no reason. `hasOwn`
@@ -55,7 +55,7 @@ const REASON_WORDS: Record<DagNotExecutedReason, string> = {
 const reasonWords = (reason: DagNotExecutedReason | undefined): string =>
   (reason && Object.hasOwn(REASON_WORDS, reason) && REASON_WORDS[reason]) || ''
 
-// `[]` is a decision that chose nothing, and is said so.
+// `[]` is a selection that chose nothing, and is said so.
 const routesText = (routes: readonly string[]): string => (routes.length > 0 ? routes.join(', ') : '(none)')
 
 /**
@@ -65,8 +65,8 @@ const routesText = (routes: readonly string[]): string => (routes.length > 0 ? r
  * A not-executed node whose reason never reached the client says only that. A
  * run reloaded before it finished reads its reasons off registry rows, whose
  * writes are best-effort and can be dropped, and a cause is not something to
- * guess at. `selectedRoutes` is read by presence: `[]` is a decision that chose
- * nothing, `undefined` one not made.
+ * guess at. `selectedRoutes` is read by presence: `[]` is a selection that
+ * chose nothing, `undefined` one not made.
  */
 export const dagNodeOutcome = (
   node: Pick<DagRunNode, 'carriedInto' | 'reason' | 'selectedRoutes' | 'status'>

@@ -10891,7 +10891,7 @@ async def test_a_registry_row_keeps_an_empty_selection(tmp_path: Path, monkeypat
     await _settle_run(spec, _picking_judge({"r": ()}), session_key="web:s1")
 
     rows = {row["nodeId"]: row for row in reg.list_instances("web:s1")}
-    assert rows["r"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert rows["r"]["selectedRoutes"] == [], "a decision node that chose nothing has still decided"
     assert "routeEvidence" not in rows["r"]
     assert rows["ga"]["reason"] == "when_false"
 

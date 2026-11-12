@@ -38,7 +38,7 @@ export type DagSnapshotNodeStatus =
   | 'not_executed'
   | 'carried';
 /**
- * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+ * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
  */
 export type DagNotExecutedReason = 'when_false' | 'when_unknown' | 'upstream_not_executed';
 /**
@@ -1192,7 +1192,7 @@ export interface InstanceRow {
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.
    */
   selectedRoutes?: string[];
   /**
@@ -1727,11 +1727,11 @@ export interface DagSnapshotNode {
     [k: string]: JsonValue;
   };
   /**
-   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
    */
   selected_routes?: string[];
   /**
@@ -1743,7 +1743,7 @@ export interface DagSnapshotNode {
    */
   routes?: string[];
   /**
-   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
    */
   select?: 'one' | 'many';
   /**
@@ -1862,7 +1862,7 @@ export interface DagRunStartedEvent {
        */
       routes?: string[];
       /**
-       * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+       * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
        */
       select?: 'one' | 'many';
       /**
@@ -1897,11 +1897,11 @@ export interface DagNodeUpdatedEvent {
     started_at?: number;
     ended_at?: number;
     /**
-     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+     * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
      */
     reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
     /**
-     * The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
+     * The routes a decision node selected, on the frame that finishes it. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.
      */
     selected_routes?: string[];
     /**
@@ -1997,11 +1997,11 @@ export interface DagRunCompletedEvent {
       output_file?: string;
       error?: string;
       /**
-       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+       * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
        */
       reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
       /**
-       * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
+       * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.
        */
       selected_routes?: string[];
       /**
@@ -2391,13 +2391,13 @@ export interface PlaybookNode {
     [k: string]: JsonValue;
   };
   /**
-   * Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
+   * Makes this node a decision node: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions.
    */
   routes?: {
     [k: string]: string;
   };
   /**
-   * How many routes the decision selects, as the author wrote it. Absent means 'one'.
+   * How many routes the decision node selects, as the author wrote it. Absent means 'one'.
    */
   select?: 'one' | 'many';
   /**
@@ -2662,11 +2662,11 @@ export interface TaskNode {
    */
   mcps?: string[];
   /**
-   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.
+   * Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.
    */
   reason?: 'when_false' | 'when_unknown' | 'upstream_not_executed';
   /**
-   * The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
+   * The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.
    */
   selected_routes?: string[];
   /**
@@ -2678,7 +2678,7 @@ export interface TaskNode {
    */
   routes?: string[];
   /**
-   * How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
+   * How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.
    */
   select?: 'one' | 'many';
   /**

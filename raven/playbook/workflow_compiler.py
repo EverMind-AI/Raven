@@ -30,7 +30,7 @@ EMIT_WORKFLOW = "emit_reusable_workflow"
 SYSTEM_PROMPT = """\
 You compile one accepted execution DAG into a reusable Playbook Workflow.
 Preserve its nodes, dependencies, worker aliases, skills, MCP names, inputs,
-instance continuity, decision routes, select and guards (when). Replace only
+instance continuity, decision-node routes, select and guards (when). Replace only
 concrete values inside promptTemplate that are expected to change between runs
 with ${params.<name>} references and declare those inputs.
 Every declared input must carry the replaced concrete value as its default so
@@ -163,7 +163,7 @@ def _preservation_errors(accepted: "SubAgentDagSpec", artifact: UnifiedPlaybookS
             if getattr(compiled, field) != getattr(source, field):
                 errors.append(f"node {source.id!r}: {field} changed during compilation")
         # Restating what the field already means is not a change: an omitted `select`
-        # on a decision means "one", and an unguarded node's blank `when` is no guard.
+        # on a decision node means "one", and an unguarded node's blank `when` is no guard.
         if (compiled.select or "one") != (source.select or "one"):
             errors.append(f"node {source.id!r}: select changed during compilation")
         if (compiled.when or "").strip() != (source.when or "").strip():

@@ -146,8 +146,8 @@ def branch_fields(entry: dict, node: dict) -> dict:
     ``dag.get`` and ``tasks.list``; deriving it twice is how they would come to
     disagree. A node with nothing to say here gets no key rather than a null, and a
     run that never branches has only the keys of a plain node. An empty
-    ``selected_routes`` stays: a ``select: many`` decision that chose nothing has
-    still decided.
+    ``selected_routes`` stays: a ``select: many`` decision node that chose
+    nothing has still decided.
 
     A node branches when ``routes`` is a mapping with a route in it, which is how the
     runner reads it. Such a node gets ``routes``, the names in declaration order (the
@@ -182,11 +182,11 @@ def registry_outcome(row: dict) -> dict:
 
     The runner writes ``reason``, ``selectedRoutes`` and ``routeEvidence`` on the row
     of a node a branch decided, and until the manifest lands that row is the only
-    record of the decision. Public, beside ``branch_fields`` and for the same reason:
+    record of the selection. Public, beside ``branch_fields`` and for the same reason:
     ``dag.get`` and ``tasks.list`` both read an unfinalized run's outcome off the row,
     and deriving it twice is how they would come to disagree. Only the keys the row
-    carries; an empty ``selected_routes`` stays, since a decision that chose nothing
-    has still decided.
+    carries; an empty ``selected_routes`` stays, since a decision node that chose
+    nothing has still decided.
 
     Args:
         row (`dict`):

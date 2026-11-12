@@ -97,10 +97,10 @@ const blankNode = (id: string): TaskNode => ({
 })
 
 /* How a branch came out, as a frame or a row says it: `reason` for a node a
-   branch left out, `selected_routes` and `route_evidence` for a decision. Copied
+   branch left out, `selected_routes` and `route_evidence` for a decision node. Copied
    field by field and only the fields present -- a key the source never had is
    not written, so a node of a run that never branches keeps the keys it had.
-   Presence, not truthiness: an empty `selected_routes` is a decision that chose
+   Presence, not truthiness: an empty `selected_routes` is a selection that chose
    nothing, and dropping it would draw the node as one that has not decided. */
 const outcomeOf = (
   f: { reason?: TaskNode['reason']; selected_routes?: string[]; route_evidence?: string },

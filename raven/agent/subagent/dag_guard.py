@@ -227,7 +227,7 @@ def parse_guard(source: str) -> Guard:
     """Parse a guard, or raise :class:`GuardError` naming the position."""
     tokens = _tokenize(source)
     if sum(1 for token in tokens if token.kind == "atom") > _MAX_ATOMS:
-        raise GuardError(f"guard: more than {_MAX_ATOMS} atoms -- split the decision instead")
+        raise GuardError(f"guard: more than {_MAX_ATOMS} atoms -- split the guarded step instead")
     expr = _Parser(tokens, source).parse()
     atoms: list[Atom] = []
 

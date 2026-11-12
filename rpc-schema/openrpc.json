@@ -15260,7 +15260,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selectedRoutes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Present only on the row of a DAG node a branch decided: its dag-node row, or the ordinary row a stateful node is reported on.",
             "type": "array",
             "items": {
               "type": "string"
@@ -16492,7 +16492,7 @@
         ]
       },
       "DagNotExecutedReason": {
-        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision that was never made. 'upstream_not_executed': every dependency of it in the graph was not executed.",
+        "description": "Why a node a branch left out did not run. 'when_false': its guard was false, so the branch was not selected. 'when_unknown': its guard names a decision node that was never executed. 'upstream_not_executed': every dependency of it in the graph was not executed.",
         "type": "string",
         "enum": [
           "when_false",
@@ -16575,7 +16575,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selected_routes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
             "type": "array",
             "items": {
               "type": "string"
@@ -16593,7 +16593,7 @@
             }
           },
           "select": {
-            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
             "type": "string",
             "enum": [
               "one",
@@ -16825,7 +16825,7 @@
                       }
                     },
                     "select": {
-                      "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+                      "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
                       "type": "string",
                       "enum": [
                         "one",
@@ -16900,7 +16900,7 @@
                 "$ref": "#/components/schemas/DagNotExecutedReason"
               },
               "selected_routes": {
-                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
+                "description": "The routes a decision node selected, on the frame that finishes it. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on every other frame, and when the node failed to decide.",
                 "type": "array",
                 "items": {
                   "type": "string"
@@ -17123,7 +17123,7 @@
                       "$ref": "#/components/schemas/DagNotExecutedReason"
                     },
                     "selected_routes": {
-                      "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
+                      "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, and on one that failed to decide.",
                       "type": "array",
                       "items": {
                         "type": "string"
@@ -17893,7 +17893,7 @@
               "type": "string"
             },
             "type": "object",
-            "description": "Makes this node a decision: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
+            "description": "Makes this node a decision node: route name -> the condition, in plain words, under which its answer selects that route. Kept whole, because re-running the graph judges against the conditions."
           },
           "select": {
             "enum": [
@@ -17901,7 +17901,7 @@
               "many"
             ],
             "type": "string",
-            "description": "How many routes the decision selects, as the author wrote it. Absent means 'one'."
+            "description": "How many routes the decision node selects, as the author wrote it. Absent means 'one'."
           },
           "when": {
             "type": "string",
@@ -18451,7 +18451,7 @@
             "$ref": "#/components/schemas/DagNotExecutedReason"
           },
           "selected_routes": {
-            "description": "The routes a decision node selected. An empty list is a decision that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
+            "description": "The routes a decision node selected. An empty list is a selection that chose nothing, which a 'many' selection may. Absent on a node that decides nothing, on one that has not decided yet, and on one that failed to decide.",
             "type": "array",
             "items": {
               "type": "string"
@@ -18469,7 +18469,7 @@
             }
           },
           "select": {
-            "description": "How many routes the decision selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
+            "description": "How many routes the decision node selects: 'one' (exactly one) or 'many' (any number, none included). Always sent with routes, 'one' where the graph left it unset.",
             "type": "string",
             "enum": [
               "one",

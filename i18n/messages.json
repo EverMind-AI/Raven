@@ -9444,8 +9444,8 @@
       "zh": "分支未选中"
     },
     "gui.tasks.node_reason_when_unknown": {
-      "en": "Decision missing",
-      "zh": "缺少分支决策"
+      "en": "Selection missing",
+      "zh": "缺少分支选择"
     },
     "gui.tasks.node_reason_upstream": {
       "en": "Upstream not executed",

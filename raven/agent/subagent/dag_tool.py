@@ -649,7 +649,7 @@ _NODE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "additionalProperties": {"type": "string"},
             "description": (
-                'Makes this node a decision: route name -> the condition under which its answer selects that route. Raven\'s judge picks from its answer; nothing the node writes selects a route by itself. Names [A-Za-z0-9_-], not "done", and no two differing only in case; two or more for "one", one or more for "many".'
+                'Makes this node a decision node: route name -> the condition under which its answer selects that route. Raven\'s judge picks from its answer; nothing the node writes selects a route by itself. Names [A-Za-z0-9_-], not "done", and no two differing only in case; two or more for "one", one or more for "many".'
             ),
         },
         "select": {

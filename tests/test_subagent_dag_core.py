@@ -3882,7 +3882,7 @@ async def test_the_note_lists_only_the_nodes_the_template_actually_references() 
     assert "selects them: fix." in note
     assert "write" not in note
     assert note == (
-        "\n\nSome inputs above come from steps that run only when an earlier decision selects them: fix. "
+        "\n\nSome inputs above come from steps that run only when an earlier decision node selects them: fix. "
         f"A missing one reads exactly:\n{MISSING_OUTPUT_TEXT}\n"
         "Continue with the inputs you have, and do not guess what a missing one would have said."
     )
@@ -4900,7 +4900,7 @@ def test_the_tui_glossary_says_what_the_turned_in_line_carries() -> None:
     branch parts or the next change to it reads as free."""
     entry = _flat(_glossary_entry(_repo_text("ui-tui/CONTEXT.md"), "**DAG Panel**"))
 
-    assert "why it was not executed, or what a decision selected" in entry
+    assert "why it was not executed, or what a decision node selected" in entry
     assert "guard" in entry
     assert "route evidence" in entry
     assert "`/dag <node>`" in entry

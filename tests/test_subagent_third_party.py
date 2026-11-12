@@ -2067,7 +2067,7 @@ async def test_registry_dag_node_row_carries_a_branch_outcome_until_a_write_with
     rows = {r["nodeId"]: r for r in InstanceRegistry(path=path).list_instances("web:s1")}
     assert (rows["triage"]["selectedRoutes"], rows["triage"]["routeEvidence"]) == (["docs"], "asks how")
     assert "reason" not in rows["triage"]
-    assert rows["scan"]["selectedRoutes"] == [], "a decision that chose nothing has still decided"
+    assert rows["scan"]["selectedRoutes"] == [], "a decision node that chose nothing has still decided"
     assert "routeEvidence" not in rows["scan"]
     assert rows["fix"]["reason"] == "when_false"
     assert not {"selectedRoutes", "routeEvidence"} & set(rows["fix"])

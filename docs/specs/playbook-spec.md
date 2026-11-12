@@ -122,7 +122,7 @@ A playbook with no variable inputs (e.g. "pull an issue triage once a week") omi
 | `mcps` | list[string] | Optional | The mcps this step wants to attach. **Playbook-only, and not in effect today**: subagent has no mcp channel; dispatch explicitly reports them ignored and does not write them into the prompt (writing them in would be a fake instruction the agent has no tools to execute) |
 | `instance` | string | Optional | The session handle; nodes with the same handle share one agent session |
 | `inputs` | map | Optional | Each key is a literal string, `{file: path}` or `{node: id}` -- **only these three, no run qualifier** (to pin a specific run, use the file form `{{ ref:@runs/<run_id>/... }}`, see section 6). The value is **structure**, not a unique capability: a key referenced by `{{ inputs.k }}` must be declared first (default-deny; inline `{{ ref: }}` cannot be validated at this level), and reading the node definition tells you what it reads without going through the prompt |
-| `routes` | map | Optional | Route name -> the condition under which this node's answer selects it. **Makes this node a decision**: after it finishes, the judge picks the route from its answer, and the conditions are shown to the judge, never to the step. Route names use the `id` charset, `done` is reserved in any letter case, and a `select: one` decision needs at least two of them |
+| `routes` | map | Optional | Route name -> the condition under which this node's answer selects it. **Makes this node a decision node**: after it finishes, the judge picks the route from its answer, and the conditions are shown to the judge, never to the step. Route names use the `id` charset, `done` is reserved in any letter case, and a `select: one` decision node needs at least two of them |
 | `select` | enum | Optional | `one` (default where `routes` are given): exactly one route. `many`: any number, none included. Only on a node with `routes` |
 | `when` | string | Optional | Guard: run this step only if it holds once its dependencies settle. Atoms `<node>.<route>` and `<node>.done` -- a decision node of this graph that is in `dependsOn` -- joined by `not` / `and` / `or` and parentheses. Every decision node in `dependsOn` must appear in it. False, or unknown because a decision it names never ran, means the step does not run |
 
@@ -257,7 +257,7 @@ scan_market -+
 scan_tech ---+
 ```
 
-A graph can branch: a node with `routes` is a **decision**, its judge picks the route its answer
+A graph can branch: a node with `routes` is a **decision node**, its judge picks the route its answer
 selects, and the steps behind each route carry a `when` guard over that choice (section 5). That is
 the one run-time decision a playbook can express, and it is written into the file like any other field.
 
