@@ -611,12 +611,12 @@ describe('what a reload finds on the desk', () => {
       expect(desk.get().paletteOpen).toBe(false)
     })
 
-    /* `#newBtn` is unconditional, so pressing New task while already on the
-       new-task screen runs the reset and then `sessionSet(null)`, which is a
+    /* `#newBtn` is unconditional, so pressing New session while already on the
+       new-session screen runs the reset and then `sessionSet(null)`, which is a
        no-op -- nothing moves. An answer dropped by the reset would be gone with
        the reader still looking at the screen they gave it on, and the desk
        would open on their next message. */
-    it('keeps the answer when New task is pressed on the new-task screen', () => {
+    it('keeps the answer when New session is pressed on the new-session screen', () => {
       setCurrent(null)
       desk.sync()
       desk.toggleDesk()
@@ -1330,7 +1330,7 @@ describe('opening a change that has no patch to show', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   it('opens no file, and says the files are elsewhere', () => {
     const toasts = vi.spyOn(toastStore, 'show').mockImplementation(() => {})
     setCurrent('imported:' + 'a'.repeat(32))

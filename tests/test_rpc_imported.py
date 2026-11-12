@@ -141,7 +141,7 @@ async def test_upload_imports_a_package(tmp_path, dispatcher, build, kind):
     assert imported.parse_key(result["session_key"]) is not None
     assert result["title"]
     assert result["imported_at"].endswith("+00:00")
-    assert [c.key for c in imported.list_conversations()] == [result["session_key"]]
+    assert [c.key for c in imported.list_sessions()] == [result["session_key"]]
 
 
 async def test_the_same_package_again_is_a_duplicate_unless_forced(tmp_path, dispatcher):
@@ -154,10 +154,10 @@ async def test_the_same_package_again_is_a_duplicate_unless_forced(tmp_path, dis
         first["title"],
         first["source_name"],
     )
-    assert len(imported.list_conversations()) == 1
+    assert len(imported.list_sessions()) == 1
     forced = (await _call(dispatcher, "imported.upload", _upload(data, force=True)))["result"]
     assert forced["status"] == "imported" and forced["session_key"] != first["session_key"]
-    assert len(imported.list_conversations()) == 2
+    assert len(imported.list_sessions()) == 2
 
 
 @pytest.mark.parametrize(
@@ -179,7 +179,7 @@ async def test_a_refused_package_says_why(dispatcher):
     assert _code(response) == -32030
     assert response["error"]["data"]["reason"] == "not_importable"
     assert response["error"]["data"]["detail"]
-    assert imported.list_conversations() == []
+    assert imported.list_sessions() == []
     assert _staged() == []
 
 
@@ -222,7 +222,7 @@ async def test_a_caller_that_goes_away_does_not_free_the_slot(dispatcher, runner
 
     gate.release.set()
     await _until_idle(runner)
-    assert len(imported.list_conversations()) == 1
+    assert len(imported.list_sessions()) == 1
     third = (await _call(dispatcher, "imported.upload", _upload(data)))["result"]
     assert third["status"] == "duplicate"
     assert gate.peak == 1
@@ -246,7 +246,7 @@ async def test_requests_arriving_together_get_one_slot(dispatcher, runner, monke
     assert [_code(r) for r in others] == [-32031] * 4
     gate.release.set()
     assert (await first)["result"]["status"] == "imported"
-    assert len(imported.list_conversations()) == 1
+    assert len(imported.list_sessions()) == 1
     assert gate.peak == 1
 
 
@@ -283,7 +283,7 @@ async def test_closing_the_page_ends_a_running_upload(dispatcher, runner, monkey
     response = await upload
     assert _code(response) == -32031
     assert _staged() == []
-    assert imported.list_conversations() == []
+    assert imported.list_sessions() == []
     await page.cleanup()
 
 
@@ -372,6 +372,7 @@ async def test_the_writes_named_by_the_requirement_are_refused(dispatcher, metho
     response = await _call(dispatcher, method, params)
     assert _code(response) == -32029
     assert response["error"]["message"] == "imported_read_only"
+    assert response["error"]["data"]["detail"] == f"{method} does not apply to an imported session"
 
 
 async def test_set_mode_may_report_but_not_change(dispatcher):

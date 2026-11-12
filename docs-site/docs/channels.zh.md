@@ -10,7 +10,7 @@
 Platform message
   -> channel adapter: sender/group checks and media handling
   -> Intake: TurnRequest
-  -> Gateway / Spine: conversation scheduling
+  -> Gateway / Spine: session scheduling
   -> Agent Loop: tools, memory, delegation
   -> DeliveryHub / ChannelOutletAdapter
   -> originating channel and chat
@@ -108,7 +108,7 @@ account id、open id 或 JID。不要把显示名或 room id 当作 sender id。
 
 ## 会话与工作目录 { #sessions-and-working-directories }
 
-通常对话地址来自渠道和 chat id。适配器可以提供更细的键，例如 Slack 可按群聊 thread
+通常会话地址来自渠道和 chat id。适配器可以提供更细的键，例如 Slack 可按群聊 thread
 隔离会话。多人共享 room/thread 时，不应假定每位发送者都有私人记忆或会话。
 
 `channels.<name>.workspace` 选择渠道的用户工作目录。未设置时，默认位于

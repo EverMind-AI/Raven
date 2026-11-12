@@ -1034,7 +1034,7 @@ describe('the live session switch', () => {
   })
 })
 
-describe('an imported conversation', () => {
+describe('an imported session', () => {
   const KEY = 'imported:' + 'a'.repeat(32)
 
   it('lays the column out read-only before it is asked for, and back for any other', async () => {

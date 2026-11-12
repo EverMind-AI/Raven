@@ -5108,14 +5108,14 @@ def test_the_docs_site_names_the_fourth_decision(page: str) -> None:
 
 def test_the_english_docs_page_says_what_a_reassign_keeps_and_what_it_cannot_move() -> None:
     """The English page's own words for the rules the code-span check shares: the
-    node stays the same, the history is conversation rather than tools, and files
+    node stays the same, the history is the session rather than the tools, and files
     on a machine are not carried over."""
     section = _flat(
         _docs_section(_repo_text(_DOCS_EN), "Failure handling and replanning", "failure-handling-and-replanning")
     )
 
     assert "keeps the node's id, task and dependencies" in section
-    assert "visible conversation so far" in section
+    assert "visible session so far" in section
     assert "without the earlier agent's tool calls or tool output" in section
     assert "spends one continuation" in section
     assert "other unfinished nodes on that instance" in section

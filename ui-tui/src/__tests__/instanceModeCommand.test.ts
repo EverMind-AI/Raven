@@ -291,7 +291,7 @@ describe('/mode in the main conversation', () => {
     expect(rpc).toHaveBeenCalledWith('session.set_mode', { mode: 'max', session_key: 's1' }, { quiet: true })
     // Exact match, not a substring: 'sub-agents in this conversation is now on
     // max' would still contain 'is now on' and would still pass a loose check.
-    expect(h.main.join('\n').split('\n')[0]).toBe('this conversation is now on max')
+    expect(h.main.join('\n').split('\n')[0]).toBe('this session is now on max')
     expect(h.main.join('\n')).toContain('next message')
   })
 

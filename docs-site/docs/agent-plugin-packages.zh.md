@@ -66,7 +66,7 @@ raven agent-plugins remove my-package     # 删除导入的技能
 
 ## 包做不到什么 { #what-a-package-cannot-do }
 
-- **不能把自己注入每一轮对话。** 导入的副本会被去掉 `always` 标记。包的技能
+- **不能把自己注入每一轮会话。** 导入的副本会被去掉 `always` 标记。包的技能
   仍然可被检索，也就是在相关时由路由取用。
 - **不能绕过操作者的屏蔽名单。** 名字在 `skillForge.blocklist` 上的技能不会被
   导入；正文里指向别的产品家目录（`~/.openclaw` 之类）的技能会被拒绝。

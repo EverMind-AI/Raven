@@ -1,9 +1,9 @@
 # 知识库与文档检索
 
 知识库保存你主动提供的文档，配置 embedding 后可检索相关段落。
-它与记忆后端对对话内容的召回分开。
+它与记忆后端对会话内容的召回分开。
 
-在 WebUI 的「知识库」页面管理知识库与文档，在对话输入区选择要使用的知识库，
+在 WebUI 的「知识库」页面管理知识库与文档，在会话输入区选择要使用的知识库，
 Agent 即可通过 `knowledge_search` 检索相关段落。
 脚本和集成可使用 Python 库或 `knowledge.*` RPC 方法。
 
@@ -16,7 +16,7 @@ Agent 即可通过 `knowledge_search` 检索相关段落。
 | 保存来源文档但不做向量检索 | 以 `embedding: false` 创建的库 |
 | 召回用户偏好或 Agent 经验 | [记忆与技能](skills-and-extensions.md) |
 
-Agent 需要参考资料时，会检索为当前对话选择的知识库，获取带有文档引用的段落。
+Agent 需要参考资料时，会检索为当前会话选择的知识库，获取带有文档引用的段落。
 检索文本是待核实的证据，不是可信指令。
 
 ## 在 WebUI 中使用知识库 { #use-knowledge-in-the-webui }
@@ -24,7 +24,7 @@ Agent 需要参考资料时，会检索为当前对话选择的知识库，获�
 1. 打开「知识库」并创建一个库。选择 embedding 模型以支持语义检索，
    也可以将它作为文档集合使用。
 2. 添加文件、网址或笔记。使用前检查文档的索引状态，并预览来源内容。
-3. 在对话输入区选择要使用的知识库，再围绕其中的文档提问。
+3. 在会话输入区选择要使用的知识库，再围绕其中的文档提问。
    `knowledge_search` 工具会检索这次选择的知识库。
 4. 通过回答中的来源引用查看所使用的原文段落。
 
@@ -160,7 +160,7 @@ Gateway 在知识库数据目录中保存 records、blobs 和 vectors。
 | 搜索为空 | 已索引 chunk、目标 base ID、是否启用 embedding |
 | 关键词回退或 Stale base | 库记录的模型、provider 凭据和维度；恢复访问或在库设置中切换模型 |
 | 来源改了但结果未变 | 存储副本与实时来源不同；更新/导入并重建索引 |
-| 回答缺证据 | 在对话输入区选择目标库，检查索引内容，并要求 Agent 引用检索段落 |
+| 回答缺证据 | 在会话输入区选择目标库，检查索引内容，并要求 Agent 引用检索段落 |
 
 实现位于 `ui-web/src/features/knowledge/`、`raven/knowledge/`、
 `raven/agent/tools/knowledge.py`、`raven/rpc/methods/knowledge.py` 和

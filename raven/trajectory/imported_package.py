@@ -1,4 +1,4 @@
-"""Reading a package back in: the bounded unpack and the normalization behind an Imported Conversation.
+"""Reading a package back in: the bounded unpack and the normalization behind an Imported Session.
 
 Three packages are accepted, each told apart by what its single root directory
 holds:

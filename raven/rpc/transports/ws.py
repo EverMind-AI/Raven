@@ -814,13 +814,13 @@ def _mount_imported(app: web.Application) -> None:
         try:
             await asyncio.to_thread(imported.sweep)
         except Exception:  # noqa: BLE001 - see docstring
-            logger.opt(exception=True).warning("imported conversations: the stale staging sweep failed")
+            logger.opt(exception=True).warning("imported sessions: the stale staging sweep failed")
 
     async def release(_app: web.Application) -> None:
         # Not a closing of the runner: a gateway reload mounts the next page in
         # this same process, and that one takes imports through it again.
         if not await asyncio.to_thread(imported.RUNNER.stop, 30):
-            logger.warning("imported conversations: an import was still running at shutdown")
+            logger.warning("imported sessions: an import was still running at shutdown")
 
     app.on_startup.append(sweep)
     app.on_shutdown.append(release)

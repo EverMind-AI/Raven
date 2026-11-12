@@ -37,12 +37,11 @@
  * document, so a value it never changes is a value it never writes again.
  */
 
-import { FileImportIcon, KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
+import { KanbanIcon, LayoutAlignLeftIcon, PlusSignIcon, Search01Icon, Settings02Icon } from '@hugeicons/core-free-icons'
 import { useEffect, useSyncExternalStore } from 'react'
 
 import { AgentsGlyph, CubeGlyph, Icon } from '../components/Icon'
 import { RavenMark } from '../components/RavenMark'
-import * as imported from '../features/imported/store'
 import { open as openKnowledge } from '../features/knowledge/store'
 import { open as openSettings } from '../features/settings/store'
 import * as boards from '../features/tasks/boards'
@@ -51,6 +50,7 @@ import * as find from '../state/find'
 import * as hub from '../state/hub'
 import * as lang from '../state/lang'
 import * as rail from '../state/rail'
+import { MoreFly } from './MoreFly'
 
 import type { NavButton } from '../state/pages'
 import type { JSX } from 'react'
@@ -146,27 +146,7 @@ function BoardsBadge(): JSX.Element | null {
   )
 }
 
-/* Importing a conversation: not a page you go to, so not one of NAV_ROWS (each
-   of which is a page, and state/pages.ts holds that table to them). Its own
-   button under them, whose action is the imported domain's; while a package is
-   on its way the row names it and takes no second one. */
-function ImportButton(): JSX.Element {
-  const { busy } = useSyncExternalStore(imported.subscribe, imported.get)
-  return (
-    <button
-      className="navi"
-      id="importedBtn"
-      disabled={busy !== null}
-      aria-busy={busy !== null ? true : undefined}
-      onClick={() => imported.pick()}
-    >
-      <Icon icon={FileImportIcon} />
-      <span>{busy !== null ? t('gui.nav.importing', { name: busy }) : t('gui.nav.import')}</span>
-    </button>
-  )
-}
-
-/* The nav strip: the draft row, the module rows, and the import row. */
+/* The nav strip: the draft row, the module rows, and the More group. */
 function RailNav(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   return (
@@ -182,7 +162,7 @@ function RailNav(): JSX.Element {
           {row.badge}
         </button>
       ))}
-      <ImportButton />
+      <MoreFly />
     </nav>
   )
 }
@@ -269,10 +249,14 @@ function RailFoot(): JSX.Element {
    kinds under the fold. */
 const PICKS = '.navi, .sess, .me'
 const KEEPS = 'input, textarea, [contenteditable]'
+/* The More row and the popover it opens: the popover belongs to the rail, so
+   folding the rail under it would fold the popover away before it was read. */
+const STAYS = '#navMoreBtn, #chrome-navfly'
 
 function picked(e: Event): boolean {
   const target = e.target as Element | null
-  return !!target?.closest(PICKS) && !target.closest(KEEPS)
+  if (!target?.closest(PICKS) || target.closest(KEEPS)) return false
+  return !target.closest(STAYS)
 }
 
 function foldOnPick(aside: HTMLElement | null): void {

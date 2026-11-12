@@ -135,7 +135,7 @@ prompts: |
   Do not edit files or contact external services.
 ```
 
-In a conversation, `load_playbook` returns this filled guidance; the caller
+In a session, `load_playbook` returns this filled guidance; the caller
 composes and submits `run_subagent_dag`. The CLI instead uses its configured
 model to compose the graph, with a limited repair attempt. Both paths use the
 ordinary DAG contract. Prompt mode is assembly guidance, read once to compose

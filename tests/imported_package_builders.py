@@ -1,4 +1,4 @@
-"""Real packages of the three kinds an Imported Conversation is read from, built by their real writers.
+"""Real packages of the three kinds an Imported Session is read from, built by their real writers.
 
 Every package here comes out of the code that ships it -- ``write_export`` for a
 Trajectory Export, ``collect_bundle`` + ``redact_bundle`` + ``pack_report`` for a

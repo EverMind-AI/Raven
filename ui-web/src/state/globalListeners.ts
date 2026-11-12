@@ -38,6 +38,7 @@ import * as escapeOrder from './escapeOrder'
 import { toggle as toggleFind } from './find'
 import { close as closeAtMenu } from './mentions'
 import { onPointerDown as menuAway } from './menu'
+import { close as closeNavFly } from './navfly'
 import { close as closePermPopover } from './perm'
 import { close as closePlusMenu } from './plus'
 import { onClick as chipClick, onKey as chipKey } from './proseChips'
@@ -53,8 +54,10 @@ import { close as closeWorkdir } from './workdir'
    one is one way back out, and Escape is the other (state/escapeOrder.ts).
    Capture, because the row under the pointer may stop the event.
 
-   The More group is rail navigation rather than a popover, which is why it is
-   not here: it folds on its own toggle only, never on an outside click. */
+   The rail's More group is a popover standing over the content rather than a row
+   in the column, so it goes the way the popovers do: a pointer outside it
+   closes it, and the row that raised it is named, so pressing that row again
+   is the row's own doing and not this handler's. */
 function awayFromPopovers(event: PointerEvent): void {
   const target = event.target as Element
   if (!target.closest('#permPop') && !target.closest('#permChip')) closePermPopover()
@@ -64,6 +67,7 @@ function awayFromPopovers(event: PointerEvent): void {
      pointer outside this one: it raises the menu the row was picked from, so
      the menu the row opened goes. */
   if (!target.closest('#wdPop')) closeWorkdir()
+  if (!target.closest('#chrome-navfly') && !target.closest('#navMoreBtn')) closeNavFly()
 }
 
 /* Code blocks come and go with every answer, so the click is caught once here

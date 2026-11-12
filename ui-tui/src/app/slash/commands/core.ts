@@ -138,13 +138,13 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'permission mode [ask|smart|full], or `default [ask|smart|full]` for new conversations',
+    help: 'permission mode [ask|smart|full], or `default [ask|smart|full]` for new sessions',
     name: 'perm',
     run: (arg, ctx) => {
       const words = arg.trim().toLowerCase().split(/\s+/).filter(Boolean)
       const tiers = ['ask', 'smart', 'full']
       const usage = 'usage: /perm [ask|smart|full] | /perm default [ask|smart|full]'
-      // `/perm X` reaches this conversation only; `/perm default X` the mode
+      // `/perm X` reaches this session only; `/perm default X` the mode
       // every new one starts on. A session scope with no session yet is the
       // server's to refuse, and its refusal is the message the reader sees.
       const isDefault = words[0] === 'default'
@@ -156,7 +156,7 @@ export const coreCommands: SlashCommand[] = [
       if (!want) {
         // config.get takes `keys` (plural) and answers `{config: {...}}` --
         // the singular `key`/`value` shape belongs to config.set only. With a
-        // session_id it answers the mode this conversation runs in.
+        // session_id it answers the mode this session runs in.
         ctx.gateway
           .rpc<{ config?: Record<string, unknown> }>('config.get', {
             keys: ['permissions.mode'],
@@ -189,7 +189,7 @@ export const coreCommands: SlashCommand[] = [
             ctx.transcript.sys(
               isDefault
                 ? `default permission mode set to ${want}`
-                : `permission mode set to ${want} for this conversation`
+                : `permission mode set to ${want} for this session`
             )
           })
         )
@@ -246,7 +246,7 @@ export const coreCommands: SlashCommand[] = [
           cancelLabel: 'No, keep going',
           confirmLabel: 'Yes, start a new session',
           danger: true,
-          detail: 'This ends the current conversation and starts a fresh session.',
+          detail: 'This ends the current session and starts a fresh session.',
           onConfirm: commit,
           title: 'Start a new session?'
         }
@@ -307,7 +307,7 @@ export const coreCommands: SlashCommand[] = [
       if (target.toLowerCase() === 'main' || target.toLowerCase() === 'raven') {
         leaveDirect()
 
-        return ctx.transcript.sys('back on the main conversation')
+        return ctx.transcript.sys('back on the main session')
       }
 
       // Accept the index the listing prints as well as the full name -- the
@@ -325,7 +325,7 @@ export const coreCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or change the mode -- of this conversation, or of the subagent you are chatting with',
+    help: 'show or change the mode -- of this session, or of the subagent you are chatting with',
     name: 'mode',
     usage: '/mode [<id> | default]   -- default/reset/clear return to the default',
     run: (arg, ctx) => {
@@ -344,7 +344,7 @@ export const coreCommands: SlashCommand[] = [
       // words stay reserved, and `usage` names them.
       const clearing = RESET_WORDS.has(want.toLowerCase())
       // One command, two scopes: inside a direct chat it is that instance's
-      // mode, and on the main conversation it is the tier raven dispatches its
+      // mode, and on the main session it is the tier raven dispatches its
       // sub-agents at. Both read as "the effort of whoever I am talking to".
       const method = active ? 'subagents.instance.set_mode' : 'session.set_mode'
       const params: Record<string, unknown> = active
@@ -369,10 +369,10 @@ export const coreCommands: SlashCommand[] = [
             }
 
             const current = r.mode ?? null
-            // Only the instance reply carries this: a conversation's own tier has
+            // Only the instance reply carries this: a session's own tier has
             // nothing above it to inherit from.
             const inherited = 'inherited' in r ? (r.inherited ?? null) : null
-            const subject = active ? `${active.agent}/${active.handle}` : 'this conversation'
+            const subject = active ? `${active.agent}/${active.handle}` : 'this session'
             // The menu whichever call this was: after a change it confirms what
             // landed, and with no argument it is the listing.
             const lines = offered.map(m => {
@@ -387,7 +387,7 @@ export const coreCommands: SlashCommand[] = [
             // `no override` and `the agent's own default runs` stopped being the
             // same statement once a session tier could reach the dispatch: with one
             // in force, saying the default runs names a mode that will not.
-            const inheriting = `inheriting this conversation's ${inherited} tier`
+            const inheriting = `inheriting this session's ${inherited} tier`
             const first = changed
               ? current
                 ? `${subject} is now on ${current}`
@@ -804,7 +804,7 @@ export const coreCommands: SlashCommand[] = [
             const file = r?.file
 
             if (file) {
-              ctx.transcript.sys(`conversation saved to: ${file}`)
+              ctx.transcript.sys(`session saved to: ${file}`)
             } else {
               ctx.transcript.sys('failed to save')
             }

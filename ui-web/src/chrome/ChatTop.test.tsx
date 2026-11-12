@@ -176,7 +176,7 @@ describe('the chat column chrome', () => {
     expect(renames.n).toBe(2)
   })
 
-  it('does not rename an imported conversation from its name', () => {
+  it('does not rename an imported session from its name', () => {
     render()
     setCurrent('imported:' + 'a'.repeat(32))
     act(() => { el('title').click() })
@@ -344,7 +344,7 @@ describe('the chat column chrome and the trajectory view', () => {
     expect(menu.get().items).toEqual([])
   })
 
-  it('disables the menu on an imported conversation however much it holds', async () => {
+  it('disables the menu on an imported session however much it holds', async () => {
     render()
     const more = (): HTMLButtonElement => el('moreBtn') as HTMLButtonElement
     absorb(['trajectory-v1'])

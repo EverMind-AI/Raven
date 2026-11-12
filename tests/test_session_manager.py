@@ -881,9 +881,9 @@ def test_the_store_refuses_to_keep_an_imported_conversation(tmp_path: Path):
     mgr = SessionManager(tmp_path)
     session = mgr.get_or_create("imported:" + "a" * 32)
     session.add_message("user", "hi")
-    with pytest.raises(ValueError, match="imported conversation"):
+    with pytest.raises(ValueError, match="imported session"):
         mgr.save(session)
-    with pytest.raises(ValueError, match="imported conversation"):
+    with pytest.raises(ValueError, match="imported session"):
         mgr.fork("imported:" + "a" * 32)
     assert not mgr.sessions_dir.exists() or not any(mgr.sessions_dir.rglob("*.jsonl"))
     other = mgr.get_or_create("tui:imported")

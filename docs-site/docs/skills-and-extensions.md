@@ -13,12 +13,12 @@ capability. Choose the smallest extension that provides what the task lacks.
 | --- | --- | --- |
 | Skill | A discoverable procedure, possibly with scripts and reference files | A new runtime tool or unrestricted execution |
 | SkillForge | Retrieval from local skills, memory-backed experience, and Skill Hub | Autonomous source-code changes |
-| Memory Engine / EverOS | Persistence and recall across conversations | Every past message stays in the model context |
+| Memory Engine / EverOS | Persistence and recall across sessions | Every past message stays in the model context |
 | MCP server | Tools, resources, or prompts exposed by an external service | An independent agent session |
 | Plugin | Runtime contributions such as tools, hooks, services, or memory backends | Isolation from the host process |
 | Specialized agent | Its own identity, configuration, tools, and session behaviour | Automatic access to all host tools or credentials |
 | [Playbook](playbooks.md) | A named reusable procedure or graph | A skill indexed by SkillForge |
-| [Evolver](evolver.md) | Separate benchmark-driven evaluation of harness changes | A production agent rewriting itself during a conversation |
+| [Evolver](evolver.md) | Separate benchmark-driven evaluation of harness changes | A production agent rewriting itself during a session |
 
 See [Architecture](architecture.md) for assembly boundaries and
 [DAG orchestration](orchestration.md) for coordinating specialized agents.
@@ -41,7 +41,7 @@ proof that a bundle is installed or its required tools exist.
 Searching Skill Hub sends text off the machine. Both onboarding wizards write
 the shared catalog URL (`https://skillhub.evermind.ai`) to
 `skillForge.router.hub.endpoint` unless the config already names one, and
-while the source is on, Raven sends text from the conversation (the message,
+while the source is on, Raven sends text from the session (the message,
 or a query the model writes from it) to that address whenever it looks for a
 skill. Turn it off with the Skill Hub switch on the settings dialog's Skills
 page, or set `skillForge.router.hub.enabled` to `false`; the URL is kept, so
@@ -91,7 +91,7 @@ Keep three mechanisms separate:
 
 1. Context assembly decides what the current model call sees; long histories
    may be archived or compacted.
-2. Memory storage and recall retain selected knowledge beyond a conversation.
+2. Memory storage and recall retain selected knowledge beyond a session.
 3. Experience extraction is provided by the selected memory backend. Configure
    it through that backend's plugin settings. The host does not use
    `skillForge.extraction` to start a local extraction pipeline.
@@ -110,7 +110,7 @@ First decide what needs to survive:
 
 | Information | Appropriate home | How to check it |
 | --- | --- | --- |
-| User preference or personal context | Memory backend's user track | Inspect stored memory and test recall in a new conversation |
+| User preference or personal context | Memory backend's user track | Inspect stored memory and test recall in a new session |
 | Agent experience or reusable case | Memory backend's agent track, when supported | Inspect the case/skill actually returned by that backend |
 | Reviewed instructions | A local Skill | Read its body and verify required tools |
 | Repeatable multi-step execution | [Playbook](playbooks.md) | Validate and test the stored graph |
@@ -119,13 +119,13 @@ First decide what needs to survive:
 
 EverOS exposes user and agent recall separately: user memories supply personal
 context; agent cases/skills can supply SkillForge candidates. Keep the intended
-`userId` and `agentId` stable across the conversations you want to connect.
+`userId` and `agentId` stable across the sessions you want to connect.
 A different agent identity or memory backend is not automatically the same
 memory collection.
 
 Try a non-sensitive preference such as “I prefer a short checklist before
 instructions.” Complete the turn, inspect the memory view/backend if available,
-then open a new conversation under the same identity and ask a related
+then open a new session under the same identity and ask a related
 question. Verify the recorded memory and retrieved context, not only the
 model's claim that it remembers. Repeating the preference in the test prompt
 would not demonstrate recall.
@@ -173,13 +173,13 @@ explicit task brief or a source file that the agent can re-read.
 
 | Symptom | Check |
 | --- | --- |
-| New conversation lacks a preference | Memory backend health, indexing completion, identity, and recall relevance |
+| New session lacks a preference | Memory backend health, indexing completion, identity, and recall relevance |
 | A skill is listed but unused | Whether its body was fetched, required tools, blocklist, and selected agent |
 | No skill appeared after a task | Actual backend extraction support; `skillForge.extraction` alone does not activate a host pipeline |
 | Long task lost a detail | Archived versus in-window history, compaction, and a retrievable source |
 | Unexpected model cost | Backend extraction, embedding, Curator slow path, and skill rewrite/gating where enabled |
 
-Memory views may expose private conversations and inferred preferences.
+Memory views may expose private sessions and inferred preferences.
 Backend-specific deletion and retention controls must be checked separately;
 deleting a host session or blocking a skill is not proof that all backend
 records were deleted.

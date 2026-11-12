@@ -32,7 +32,7 @@ from raven.session.manager import SessionManager, new_chat_id
 console = Console()
 
 session_app = typer.Typer(
-    help="Manage conversation sessions.",
+    help="Manage sessions.",
     no_args_is_help=True,
 )
 

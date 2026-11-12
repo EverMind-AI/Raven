@@ -2,10 +2,10 @@
 
 A knowledge base stores documents you deliberately supply and, when configured
 with embeddings, retrieves matching passages. It is separate from the memory
-backend's recollection of conversations.
+backend's recollection of sessions.
 
 Manage bases and documents on the WebUI's Knowledge page. Attach bases to a
-conversation in the composer so the agent can retrieve passages with
+session in the composer so the agent can retrieve passages with
 `knowledge_search`. For scripts and integrations, use the Python library or
 `knowledge.*` RPC methods.
 
@@ -18,7 +18,7 @@ conversation in the composer so the agent can retrieve passages with
 | Keep a set of source documents without vector search | A base created with `embedding: false` |
 | Recall user preferences or agent experience | [Memory and skills](skills-and-extensions.md) |
 
-The agent searches the bases selected for the conversation when it needs
+The agent searches the bases selected for the session when it needs
 supporting material, and receives passages with document references. Retrieved
 text is evidence to evaluate, not trusted instructions.
 
@@ -28,7 +28,7 @@ text is evidence to evaluate, not trusted instructions.
    retrieval, or keep the base as a document collection.
 2. Add files, URLs, or notes. Check each document's indexing status and preview
    its content before using it as a source.
-3. Select the intended bases in the conversation composer, then ask a question
+3. Select the intended bases in the session composer, then ask a question
    about those documents. The `knowledge_search` tool searches that selection.
 4. Follow the returned source references to inspect the passages used in the
    answer.

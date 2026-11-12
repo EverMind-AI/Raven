@@ -170,7 +170,7 @@ untouched; a shell may also carry a raw message inline where its blob could not
 be written.
 
 For `llm.input`, `artifact_sha1` and `artifact_bytes` describe the shell, not
-the conversation it references; `llm.request_bytes` is the request-size signal,
+the session it references; `llm.request_bytes` is the request-size signal,
 measured from the messages themselves and so unaffected by the shell. The shell
 hashes over the references it lists, so tamper evidence localizes to one
 message rather than only proving the payload changed.

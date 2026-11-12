@@ -191,7 +191,7 @@ describe('how far down the desk reaches', () => {
   })
 
   it('reaches the window\'s own gutter when the composer is not drawn', () => {
-    /* An imported conversation has no dock (`.chat[data-readonly] .dock`), and
+    /* An imported session has no dock (`.chat[data-readonly] .dock`), and
        a card that is not drawn measures as a zero box -- taken as the limit, it
        would hold the palette at its minimum height. */
     launcher()

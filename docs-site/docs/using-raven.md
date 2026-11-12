@@ -1,6 +1,6 @@
 # Using Raven
 
-Choose how to talk to Raven, give the conversation the right working directory,
+Choose how to talk to Raven, give the session the right working directory,
 and add other agents or services only when needed. Installed commands below can
 be prefixed with `uv run` in a source checkout.
 
@@ -8,19 +8,19 @@ be prefixed with `uv run` in a source checkout.
 
 | Goal | Entry point | Next guide |
 | --- | --- | --- |
-| Terminal conversation | `raven tui` | [Command Reference](commands.md) |
-| Browser conversation | `raven web` | [Launch WebUI](webui.md) |
+| Terminal session | `raven tui` | [Command Reference](commands.md) |
+| Browser session | `raven web` | [Launch WebUI](webui.md) |
 | One task in a checkout | `raven agent -m "Summarize this project without editing files"` | [Permissions and security](permissions.md) |
 | Chat from a messaging platform | A configured channel and resident gateway | [Channels and Messaging](channels.md) |
 | Delegate to a specialist | A configured agent in the roster | [Agent Integrations](agent-integrations.md) |
 | Follow up with a specialist | Its stateful instance | [Working with sub-agents](agent-collaboration.md) |
 | Operate a shared browser | Browser tools and the WebUI panel | [Browser collaboration](browser-collaboration.md) |
-| Retrieve document passages | WebUI Knowledge page and the conversation's base selection; library/RPC for integrations | [Knowledge bases](knowledge.md) |
+| Retrieve document passages | WebUI Knowledge page and the session's base selection; library/RPC for integrations | [Knowledge bases](knowledge.md) |
 | Run and watch a long job | Raven-Oncall with a declared campaign | [Long-running work (Oncall)](oncall.md) |
 | Integrate an editor or remote peer | ACP or A2A | [Agent Protocols](agent-protocols.md) |
 
 `raven agent` requires a message; it is not an interactive REPL. Use the TUI or
-WebUI for a conversation. Start with [Quick Start](quick-start.md) if no model
+WebUI for a session. Start with [Quick Start](quick-start.md) if no model
 provider is configured.
 
 ## Work in the right directory
@@ -55,7 +55,7 @@ relative value stays relative to each process's own working directory, so two
 front ends can disagree about which directory it names; prefer an absolute
 value.
 
-## Continue a conversation
+## Continue a session
 
 Each one-shot CLI invocation starts a fresh session by default. Use one of
 `--continue`, `--resume <id-or-prefix>`, or `--session <full-key>` when continuity
@@ -66,14 +66,14 @@ raven sessions --help
 raven agent --continue -m "Expand the previous summary; do not modify files"
 ```
 
-Use the UI's conversation picker for interactive sessions. A sub-agent
-`instance` continues that child's conversation; it is not the host session id
+Use the UI's session picker for interactive sessions. A sub-agent
+`instance` continues that child's session; it is not the host session id
 or a DAG node id. See [DAG Orchestration](orchestration.md).
 
 ## Set the reasoning effort
 
 The reasoning effort is how much the model thinks before each answer. The words
-a conversation may pick are the ones its model declares: `minimal`, `low`,
+a session may pick are the ones its model declares: `minimal`, `low`,
 `medium` and `high` on most models, `xhigh` or `max` where the provider
 publishes them, and whatever narrower ladder an API actually takes (DeepSeek
 offers `low`, `high` and `max`, folding `minimal` onto `low` and `medium` onto
@@ -86,16 +86,16 @@ thinking to move ignores them. Left unset, the provider's own default applies.
 
 Two places set it:
 
-- **For every conversation**: in the WebUI, open Settings, then *Parameters* on
+- **For every session**: in the WebUI, open Settings, then *Parameters* on
   the *Chat* row, then *Reasoning effort*; or set
   `agents.defaults.reasoningEffort` in `~/.raven/config.json`. The first rung,
   *Provider default*, clears the key.
-- **For one conversation**: the *Reasoning effort* row of the model picker in
+- **For one session**: the *Reasoning effort* row of the model picker in
   the WebUI (open it from the model chip beside the composer), or `/effort
   <word>` in the TUI. `/effort` alone reports the effort in force, and
-  `/effort default` returns the conversation to the global setting. Inside a
+  `/effort default` returns the session to the global setting. Inside a
   direct chat with a sub-agent instance the command is refused: the pick is
-  the main conversation's, and an instance has none of its own.
+  the main session's, and an instance has none of its own.
 
 A model's words can also be declared in the provider's
 `model_overlay.reasoningEfforts` (Settings, then *Advanced* on the provider,
@@ -103,13 +103,13 @@ A model's words can also be declared in the provider's
 for that model, including a route the table marks as not reasoning; leave it
 blank to fall back to the table.
 
-A pick made for one conversation outranks the global setting and the
-conversation's mode. It is kept on the conversation's own record, so it survives
-a gateway restart and comes back when the conversation is resumed, and it lands
+A pick made for one session outranks the global setting and the
+session's mode. It is kept on the session's own record, so it survives
+a gateway restart and comes back when the session is resumed, and it lands
 on the next turn. A pick the current model does not declare runs at the
 highest word that model declares below it (`max` picked on one model, then a
 switch to a model that stops at `high`, runs at `high`); only when the model
-declares nothing at or below it does the conversation's mode word or the
+declares nothing at or below it does the session's mode word or the
 global setting run instead. The pick stays saved as named for a model that
 declares it. It moves Raven's own model calls only; sub-agents keep the
 configured default.

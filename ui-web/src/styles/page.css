@@ -313,6 +313,10 @@
      the width state/rail.ts folds on): over the pages, under the drawers, so
      a drawer opened from the strip of page it leaves visible is drawn over it. */
   --z-rail-fold: 25;
+  /* The rail's own flyout, the More group: over the pages and under the
+     drawers, on the folded rail's own step, because both are the column
+     reaching over what it covers. */
+  --z-rail-fly: 25;
   --z-detail: 26;
   --z-rail-handle: 30;
   /* The floating desk, and a desk pane blown up to fill the window. Both sit
@@ -1113,7 +1117,7 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
    below keep geometry only, never their own background. */
-.menu, .pop, .mpick, .csheet {
+.menu, .pop, .mpick, .csheet, .chrome-navfly {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
     color-mix(in oklab, var(--ink) 76%, transparent));
@@ -1125,39 +1129,36 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
     0 24px 56px -22px rgba(0, 0, 0, .3);
 }
 
-/* The More group opens in place: its three rows are rail rows, indented one
-   step under the button that revealed them, so the group reads as part of the
-   column it belongs to rather than as a floating panel beside it. */
-/* The group unfolds into the list rather than beside it: its rows are .navi
-   rows like the four above them -- same indent, same glyph slot, same lift when
-   current -- so opening it lengthens one list instead of revealing a second,
-   smaller one. Height is what animates; visibility is what keeps the folded
-   rows out of the tab order, and it holds `visible` for the length of the
-   close so the rows do not vanish before they have finished collapsing. */
-/* No extra air and no indent: the fold row keeps the exact rhythm and left
-   edge of the rows above it. One list, one grid -- being quieter is the only
-   thing that sets it apart. */
-.moresub {
-  overflow: hidden; max-height: 0; visibility: hidden;
-  transition: max-height .18s ease, visibility .18s;
+/* The More group: the row that opens it, and the popover it opens.
+   The popover opens beside the column rather than under the row: the group is
+   not part of the list the strip is, and a second list under one row reads as a
+   fold rather than as a group with a door. It hangs off the row's own wrapper,
+   so its top edge is that row's top edge and nothing has to measure it. */
+.chrome-navfly-anch { position: relative; }
+/* 15px past the row: the nav's own right padding, the rail's padding and its
+   border, and the space the grip straddles the seam in -- a popover that covers
+   the grip leaves the reader half a target. */
+.chrome-navfly {
+  position: absolute; left: calc(100% + 15px); top: 0; z-index: var(--z-rail-fly);
+  width: 232px; padding: 6px; border-radius: 12px; display: none;
 }
-.moresub[data-open="true"] { max-height: 120px; visibility: visible; }
-.moresub .navi svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; }
-.moresub .navi .nm { flex: 1; min-width: 0; }
-/* The fold itself: one step quieter than a destination -- between the rows'
-   grey and the timestamps' -- and no smaller. The chevron keeps the 15px box
-   the sibling glyphs sit in (its path is drawn lighter inside), because
-   shrinking the box shifts the label off the shared text edge; alignment is
-   the row's, quietness is the ink's. Hover restated: the compound selector
-   outweighs the shared .navi:hover rule. */
-.rail-nav .navi.more { color: color-mix(in oklab, var(--muted) 55%, var(--faint)); }
-.rail-nav .navi.more:hover { color: var(--text); }
-.navi.more .chev { transition: transform .14s ease; }
-.navi.more[aria-expanded="true"] .chev { transform: rotate(180deg); }
-.navi.more .l-less, .navi.more[aria-expanded="true"] .l-more { display: none; }
-.navi.more[aria-expanded="true"] .l-less { display: inline; }
-@media (prefers-reduced-motion: reduce) {
-  .moresub, .navi.more .chev { transition: none; }
+.chrome-navfly[data-open="true"] { display: block; animation: paneInL .16s ease both; }
+/* The rows in the popover are the strip's rows, a little taller and a little
+   further apart: a popover is read apart from the column that raised it, and
+   the glyph slot and the label are the same as every other row in the rail. */
+.chrome-navfly .navi { height: 40px; padding: 0 10px; gap: 10px; }
+.chrome-navfly .navi svg { width: 18px; height: 18px; }
+/* The row that opened the popover stays lit while it stands, the way a tab
+   does over the sheet it opened. */
+.rail-nav .navi.chrome-more[aria-expanded="true"] { background: var(--rail-hover); color: var(--rail-ink-on); }
+/* Under the fold the rail lies over the page and there is no room outside it
+   for a popover to open into, so the group opens in place instead: the popover
+   becomes a card under its own row, in the column's own width. */
+@media (max-width: 639px) {
+  .chrome-navfly {
+    position: static; width: auto; margin-top: 4px;
+    animation: up .16s ease both;
+  }
 }
 
 /* Collapsed rail: ONE track, not `0 1fr`. A display:none grid item leaves the
@@ -3077,6 +3078,10 @@ textarea:focus, textarea:focus-visible,
   opacity: 0; transition: opacity .12s;
 }
 .att.img:hover .rm, .att.img .rm:focus-visible { opacity: 1; }
+/* The action row hangs 5px outside its card. Every column that hosts it gives
+   that overhang a gutter -- .col's 36px sides, .satx's 16px, and the task
+   record's own 5px (features/tasks/styles.css) -- so a wider hang has to widen
+   the narrowest gutter first. */
 .ansfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; margin-left: -5px; flex-wrap: wrap; }
 .turn.ai > .ansfoot { margin-top: 0; }
 .ansfoot .acts { margin-top: 0; }
@@ -3368,9 +3373,9 @@ textarea:focus, textarea:focus-visible,
 .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; flex: 1; }
 /* New-task state: no header title, the composer holds the centre line. */
 .chat[data-fresh] #title, .chat[data-fresh] #wdTag { visibility: hidden; }
-/* An imported conversation (state/session/conversation.ts's readOnly): nothing
+/* An imported session (state/session/conversation.ts's readOnly): nothing
    to type into, no folder it runs in, a name changed only on its rail row, and
-   no conversation menu -- taken out of the capsule, which closes up around the
+   no session menu -- taken out of the capsule, which closes up around the
    chip, and the palette's notch follows it (the desk section). */
 .chat[data-readonly] .dock { display: none; }
 .chat[data-readonly] #wdTag { display: none; }
@@ -6378,7 +6383,7 @@ body:has(.app[data-page="on"]) #deskHost { display: none; }
    padding -- so the notch sits over the chip's last 14px, which is its glyph
    when it has nothing to say. Drawn in the palette's own ground with the
    frame's line on its two upper sides, over the frame's top border, so the two
-   read as one outline. An imported conversation has no menu, and its chip
+   read as one outline. An imported session has no menu, and its chip
    ends at the capsule's padding. */
 .desk-palette[data-anchored="true"]::before { content: ''; position: absolute; top: -6px; right: 48.5px;
   width: 11px; height: 11px; transform: rotate(45deg); background: var(--desk-glass);

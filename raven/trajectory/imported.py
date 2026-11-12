@@ -1,4 +1,4 @@
-"""Imported Conversations: packages read back in and kept as read-only conversations.
+"""Imported Sessions: packages read back in and kept as read-only sessions.
 
 A package a page uploads -- a Trajectory Export, a Bug Report Package or a
 Trajectory Report -- is unpacked and normalized (:mod:`raven.trajectory.imported_package`)
@@ -52,6 +52,14 @@ from raven.trajectory.imported_package import ImportCancelledError, ImportLimits
 from raven.trajectory.package_check import CODE_NOT_GZIP_TAR, CODE_TOO_LARGE, PackageError
 
 SCHEMA = "raven_imported_conversation"
+"""The id a package on disk carries.
+
+It keeps the name the schema had before the term was renamed: every imported
+package already on this machine names itself with it, and a reader that
+demanded the new spelling would find none of them. The name is the schema's,
+not the term's -- the term is **Imported Session** (CONTEXT.md), and this is
+what the bytes say.
+"""
 FORMAT_VERSION = 1
 CHANNEL = IMPORTED_CHANNEL
 KEY_PREFIX = f"{CHANNEL}:"
@@ -78,7 +86,7 @@ def imports_root() -> Path:
 
 
 def is_imported_key(value: Any) -> bool:
-    """Whether ``value`` claims to address an Imported Conversation, well-formed or not."""
+    """Whether ``value`` claims to address an Imported Session, well-formed or not."""
     return isinstance(value, str) and value.startswith(KEY_PREFIX)
 
 
@@ -87,8 +95,8 @@ def parse_key(key: Any) -> str | None:
     return match.group(1) if match else None
 
 
-def key_of(conversation_id: str) -> str:
-    return f"{KEY_PREFIX}{conversation_id}"
+def key_of(session_id: str) -> str:
+    return f"{KEY_PREFIX}{session_id}"
 
 
 def _root(root: Path | None) -> Path:
@@ -96,7 +104,7 @@ def _root(root: Path | None) -> Path:
 
 
 @dataclass(frozen=True)
-class ImportedConversation:
+class ImportedSession:
     id: str
     path: Path
     meta: dict[str, Any]
@@ -136,39 +144,39 @@ class ImportedConversation:
 @dataclass(frozen=True)
 class ImportOutcome:
     status: str
-    conversation: ImportedConversation
+    session: ImportedSession
 
 
-def _read_meta(path: Path, conversation_id: str) -> dict[str, Any] | None:
+def _read_meta(path: Path, session_id: str) -> dict[str, Any] | None:
     try:
         meta = json.loads((path / META_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as exc:
-        logger.warning("imported conversation {}: meta.json unreadable: {}", conversation_id, exc)
+        logger.warning("imported session {}: meta.json unreadable: {}", session_id, exc)
         return None
     if (
         not isinstance(meta, dict)
         or meta.get("schema") != SCHEMA
         or meta.get("format_version") != FORMAT_VERSION
-        or meta.get("id") != conversation_id
+        or meta.get("id") != session_id
     ):
-        logger.warning("imported conversation {}: meta.json is not a {} v{}", conversation_id, SCHEMA, FORMAT_VERSION)
+        logger.warning("imported session {}: meta.json is not a {} v{}", session_id, SCHEMA, FORMAT_VERSION)
         return None
     return meta
 
 
-def _load(path: Path) -> ImportedConversation | None:
+def _load(path: Path) -> ImportedSession | None:
     meta = _read_meta(path, path.name)
-    return ImportedConversation(path.name, path, meta) if meta is not None else None
+    return ImportedSession(path.name, path, meta) if meta is not None else None
 
 
-def list_conversations(root: Path | None = None) -> list[ImportedConversation]:
-    """Every intact Imported Conversation, newest import first."""
+def list_sessions(root: Path | None = None) -> list[ImportedSession]:
+    """Every intact Imported Session, newest import first."""
     base = _root(root)
     try:
         entries = list(os.scandir(base))
     except OSError:
         return []
-    out: list[ImportedConversation] = []
+    out: list[ImportedSession] = []
     for entry in entries:
         if not _ID.fullmatch(entry.name) or not entry.is_dir(follow_symlinks=False):
             continue
@@ -179,25 +187,25 @@ def list_conversations(root: Path | None = None) -> list[ImportedConversation]:
     return out
 
 
-def get(key: Any, root: Path | None = None) -> ImportedConversation | None:
-    conversation_id = parse_key(key)
-    if conversation_id is None:
+def get(key: Any, root: Path | None = None) -> ImportedSession | None:
+    session_id = parse_key(key)
+    if session_id is None:
         return None
-    path = _root(root) / conversation_id
+    path = _root(root) / session_id
     if not path.is_dir() or path.is_symlink():
         return None
     return _load(path)
 
 
-def find_by_sha256(sha256: str, root: Path | None = None) -> ImportedConversation | None:
-    return next((item for item in list_conversations(root) if item.meta.get("sha256") == sha256), None)
+def find_by_sha256(sha256: str, root: Path | None = None) -> ImportedSession | None:
+    return next((item for item in list_sessions(root) if item.meta.get("sha256") == sha256), None)
 
 
 def read_session(key: Any, root: Path | None = None) -> Session | None:
-    conversation = get(key, root)
-    if conversation is None:
+    session = get(key, root)
+    if session is None:
         return None
-    path = conversation.path / SESSION_FILE
+    path = session.path / SESSION_FILE
     try:
         size = path.stat().st_size
     except OSError:
@@ -205,17 +213,17 @@ def read_session(key: Any, root: Path | None = None) -> Session | None:
     # An import bounds the record before keeping it; one past that bound was
     # not written by an import, and is not loaded whole.
     if size > ipkg.ImportLimits().max_transcript_bytes:
-        logger.warning("imported conversation {}: the session record is {} bytes; not reading it", key, size)
+        logger.warning("imported session {}: the session record is {} bytes; not reading it", key, size)
         return None
-    return read_session_file(path, conversation.key)
+    return read_session_file(path, session.key)
 
 
 def trajectory_target(key: Any, root: Path | None = None) -> tuple[Path, str | None] | None:
-    """The trace store an Imported Conversation's trajectory is read from, and the key its spans carry."""
-    conversation = get(key, root)
-    if conversation is None:
+    """The trace store an Imported Session's trajectory is read from, and the key its spans carry."""
+    session = get(key, root)
+    if session is None:
         return None
-    return conversation.path / ipkg.STATE_DIR, conversation.original_session_key
+    return session.path / ipkg.STATE_DIR, session.original_session_key
 
 
 def _write_meta(path: Path, meta: dict[str, Any]) -> None:
@@ -227,27 +235,27 @@ def _write_meta(path: Path, meta: dict[str, Any]) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def rename(key: Any, title: str, root: Path | None = None) -> ImportedConversation:
-    """Give an Imported Conversation a title of the reader's; the default is never derived again."""
-    conversation = get(key, root)
-    if conversation is None:
-        raise LookupError(f"no imported conversation {key!r}")
+def rename(key: Any, title: str, root: Path | None = None) -> ImportedSession:
+    """Give an Imported Session a title of the reader's; the default is never derived again."""
+    session = get(key, root)
+    if session is None:
+        raise LookupError(f"no imported session {key!r}")
     cleaned = collapse_to_line(title if isinstance(title, str) else "")
     if not cleaned:
         raise ValueError("session title is empty")
     if len(cleaned) > TITLE_STORAGE_MAX:
         raise ValueError(f"session title is {len(cleaned)} characters; the maximum is {TITLE_STORAGE_MAX}")
-    meta = {**conversation.meta, "title": cleaned, "title_auto": False}
-    _write_meta(conversation.path, meta)
-    return ImportedConversation(conversation.id, conversation.path, meta)
+    meta = {**session.meta, "title": cleaned, "title_auto": False}
+    _write_meta(session.path, meta)
+    return ImportedSession(session.id, session.path, meta)
 
 
 def delete(key: Any, root: Path | None = None) -> bool:
-    conversation = get(key, root)
-    if conversation is None:
+    session = get(key, root)
+    if session is None:
         return False
-    trash = conversation.path.parent / f"{TRASH_PREFIX}{conversation.id}"
-    os.rename(conversation.path, trash)
+    trash = session.path.parent / f"{TRASH_PREFIX}{session.id}"
+    os.rename(session.path, trash)
     shutil.rmtree(trash, ignore_errors=True)
     return True
 
@@ -309,7 +317,7 @@ def _count(value: Any) -> int:
 
 
 def _build_meta(
-    conversation_id: str,
+    session_id: str,
     source_name: str,
     data_sha256: str,
     size: int,
@@ -368,7 +376,7 @@ def _build_meta(
     return {
         "schema": SCHEMA,
         "format_version": FORMAT_VERSION,
-        "id": conversation_id,
+        "id": session_id,
         "title": title or unpacked.root.name,
         "title_auto": True,
         "kind": unpacked.kind,
@@ -418,8 +426,8 @@ def import_bytes(
         existing = find_by_sha256(digest, base)
         if existing is not None:
             return ImportOutcome(STATUS_DUPLICATE, existing)
-    conversation_id = uuid.uuid4().hex
-    staging = base / STAGING_DIR / conversation_id
+    session_id = uuid.uuid4().hex
+    staging = base / STAGING_DIR / session_id
     try:
         staging.mkdir(parents=True)
         upload = staging / UPLOAD_FILE
@@ -428,22 +436,22 @@ def import_bytes(
         package_dir.mkdir()
         unpacked = ipkg.unpack(upload, package_dir, limits=limits, should_stop=should_stop)
         normalized = ipkg.normalize(unpacked, staging, limits=limits, should_stop=should_stop)
-        transcript = read_session_file(staging / SESSION_FILE, key_of(conversation_id))
+        transcript = read_session_file(staging / SESSION_FILE, key_of(session_id))
         meta = _build_meta(
-            conversation_id, clean_source_name(source_name), digest, len(data), unpacked, normalized, transcript
+            session_id, clean_source_name(source_name), digest, len(data), unpacked, normalized, transcript
         )
         _write_meta(staging, meta)
         upload.unlink()
         if should_stop():
             raise ImportCancelledError()
-        os.rename(staging, base / conversation_id)
+        os.rename(staging, base / session_id)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    conversation = get(key_of(conversation_id), base)
-    if conversation is None:
-        raise OSError(f"imported conversation {conversation_id} did not land")
-    return ImportOutcome(STATUS_IMPORTED, conversation)
+    session = get(key_of(session_id), base)
+    if session is None:
+        raise OSError(f"imported session {session_id} did not land")
+    return ImportOutcome(STATUS_IMPORTED, session)
 
 
 class ImportBusyError(Exception):
@@ -580,7 +588,7 @@ __all__ = [
     "ImportBusyError",
     "ImportOutcome",
     "ImportRunner",
-    "ImportedConversation",
+    "ImportedSession",
     "clean_source_name",
     "delete",
     "find_by_sha256",
@@ -589,7 +597,7 @@ __all__ = [
     "imports_root",
     "is_imported_key",
     "key_of",
-    "list_conversations",
+    "list_sessions",
     "parse_key",
     "read_session",
     "rename",

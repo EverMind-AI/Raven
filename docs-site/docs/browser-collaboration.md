@@ -48,7 +48,7 @@ profile; closing a tab is not the same as clearing its login cookies.
 
 ## Try a read-only task
 
-1. Open the Browser panel in the same host as your conversation.
+1. Open the Browser panel in the same host as your session.
 2. Ask: “Open the documentation URL I supplied and summarize the installation
    prerequisites. Do not submit forms, download files, or change settings.”
 3. Watch the selected tab and compare the answer with the actual page.
@@ -65,7 +65,7 @@ For login, CAPTCHA, payment, or an unexpected consent page:
 
 1. Have the agent stop and ask you before proceeding.
 2. Perform the sensitive step yourself in the shared browser. Do not paste
-   passwords, recovery codes, or tokens into the conversation.
+   passwords, recovery codes, or tokens into the session.
 3. Tell the agent it may continue, with the remaining allowed scope.
 4. Have it take another snapshot before its next action.
 
@@ -75,7 +75,7 @@ not an automatic exclusive lock or a guaranteed pause of every active agent.
 
 ## Tabs and multiple agents
 
-An owner is the active in-process sub-agent run, or otherwise the conversation.
+An owner is the active in-process sub-agent run, or otherwise the session.
 It takes the current unowned tab or gets a fresh one. Subsequent calls stay
 bound to that tab even if the panel displays another one.
 

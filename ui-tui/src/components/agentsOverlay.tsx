@@ -528,7 +528,7 @@ export function InstanceConversation({
       id="transcript"
       scope={scope}
       t={t}
-      title={working ? `Conversation · ${agent}/${handle} · live` : `Conversation · ${agent}/${handle}`}
+      title={working ? `Session · ${agent}/${handle} · live` : `Session · ${agent}/${handle}`}
     >
       {dropped > 0 ? <Text color={t.color.muted}>…{dropped} earlier</Text> : null}
 

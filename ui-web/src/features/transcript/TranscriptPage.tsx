@@ -356,7 +356,7 @@ function mediaResult(res: string): MediaResult | null {
    name rather than to a broken-image glyph. */
 function GeneratedShot({ path }: { path: string }): ReactElement {
   const [ready, setReady] = useState(false)
-  /* An imported conversation's files are on the machine that recorded it: its
+  /* An imported session's files are on the machine that recorded it: its
      name, without asking this gateway for a file it cannot have. */
   const [gone, setGone] = useState(readingImported)
   const src = fileURL(path)

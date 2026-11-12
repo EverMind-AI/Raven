@@ -74,7 +74,7 @@ describe('archiving from the rail', () => {
 })
 
 describe('deleting everything from the settings page', () => {
-  it('leaves the Imported Conversations alone and counts only what it was asked to delete', async () => {
+  it('leaves the Imported Sessions alone and counts only what it was asked to delete', async () => {
     const h = await harness({}, [
       { id: 'tui:1', title: 'a task' },
       { id: 'imported:1', title: 'a bug report', from: 'imported' },

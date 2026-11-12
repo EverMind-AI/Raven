@@ -108,7 +108,7 @@ read-only `StepView` inputs and optional verbs such as `intake`, `select_tools`,
 `advise`, `system_addendum`, `review`, `salvage`, `outbound`, and `archive`.
 The host owns timing and adapts supported participant factories through the
 hook contribution path. A participant is constructed per turn, so turn-local
-state does not leak into another concurrent conversation.
+state does not leak into another concurrent session.
 
 Read `raven/contracts/participant.py` and `raven/contracts/loop_hooks.py`
 before choosing. Preserve the contract's version/tier boundaries rather than
@@ -149,7 +149,7 @@ and keep runtime state and secrets outside the distributable package.
 3. Test tool arguments/results and any denial or rollback path without a live model.
 4. Verify the effective roster and one harmless real task through the hosting
    surface that will use the plugin.
-5. Test two concurrent conversations, service shutdown, and a missing dependency.
+5. Test two concurrent sessions, service shutdown, and a missing dependency.
 
 Maintainer regression checks:
 

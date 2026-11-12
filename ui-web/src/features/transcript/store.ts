@@ -1085,7 +1085,7 @@ function bindRun(call: CallData): void {
  * for a finished run and because a card is re-rendered on every node update. */
 function hydrateDag(lane: Lane, call: CallData): void {
   bindRun(call)
-  /* An imported conversation's runs are on another machine. With no record to
+  /* An imported session's runs are on another machine. With no record to
      read, the nodes the arguments named stay pending forever, so the graph is
      closed here: a run that ended long ago must not read as still going. */
   if (readingImported()) {

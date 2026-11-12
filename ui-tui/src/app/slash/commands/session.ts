@@ -33,7 +33,7 @@ import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 import { RESET_WORDS } from './core.js'
 
-// A model switch is per conversation; `--default` also changes what new ones start on. The picker passes `<model> --provider
+// A model switch is per session; `--default` also changes what new ones start on. The picker passes `<model> --provider
 // <slug>`; a bare `/model <name>` carries no provider. Parse both into the
 // structured config.set params {key:'model', value, provider?}.
 // A model id never names its own credential: `openrouter` serving
@@ -99,7 +99,7 @@ export const sessionCommands: SlashCommand[] = [
       // switch asked for mid-answer lands on the next turn instead of being
       // refused.
       // `--default` changes what new sessions start on; without it the switch
-      // is this conversation's alone. Stripped before parsing, in any
+      // is this session's alone. Stripped before parsing, in any
       // position and however many times, so it never lands in the model id.
       const raw = arg.trim()
       const asDefault = /(^|\s)--default(\s|$)/.test(raw)
@@ -148,7 +148,7 @@ export const sessionCommands: SlashCommand[] = [
             ctx.transcript.sys(asDefault ? `default model → ${r.value}` : `model → ${r.value}`)
             ctx.local.maybeWarn(r)
 
-            // Whether this conversation now runs the model is the server's
+            // Whether this session now runs the model is the server's
             // answer, not something the scope implies: a default-scoped switch
             // does move a session that never chose its own model, and that is
             // the common case for `--default`.
@@ -653,7 +653,7 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'show or set how much the model thinks for this conversation [word]',
+    help: 'show or set how much the model thinks for this session [word]',
     name: 'effort',
     usage: '/effort [word]   -- default/reset/clear follow the global setting again; the words are the ones the model declares',
     run: (arg, ctx) => {
@@ -662,21 +662,21 @@ export const sessionCommands: SlashCommand[] = [
       }
 
       // Refused inside a direct chat rather than redirected: the pick is the
-      // main conversation's, and the instance on screen has no reasoning
+      // main session's, and the instance on screen has no reasoning
       // effort of its own to set from here (`/mode` has one per instance;
-      // this does not). Sent anyway, it moved the main conversation's record
-      // while the reply, in the instance's pane, said "this conversation".
+      // this does not). Sent anyway, it moved the main session's record
+      // while the reply, in the instance's pane, said "this session".
       const { active } = getDirectChat()
 
       if (active) {
         return ctx.transcript.sys(
-          `/effort is the main conversation's and does not reach ${active.agent}/${active.handle} -- Esc returns to Raven`
+          `/effort is the main session's and does not reach ${active.agent}/${active.handle} -- Esc returns to Raven`
         )
       }
 
       // The session's own reasoning effort, kept on its record by the server:
       // a bare `/effort` reports, a word sets it from the next turn on, and
-      // the reset words (`/mode`'s) drop it so the conversation follows the
+      // the reset words (`/mode`'s) drop it so the session follows the
       // global setting (or its mode's) again. The words are the server's to
       // refuse, and its refusal names them, so none are spelt here.
       const want = arg.trim().toLowerCase()
@@ -701,7 +701,7 @@ export const sessionCommands: SlashCommand[] = [
               const words = options.join(', ')
               ctx.transcript.sys(
                 r.effort
-                  ? `reasoning effort: ${r.effort} (this conversation; default is ${fallbackLabel}; words: ${words})`
+                  ? `reasoning effort: ${r.effort} (this session; default is ${fallbackLabel}; words: ${words})`
                   : `reasoning effort: default (${fallbackLabel}; words: ${words})`
               )
             }

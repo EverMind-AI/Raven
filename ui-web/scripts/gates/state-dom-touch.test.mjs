@@ -45,17 +45,19 @@
  * The page frame -- src/chrome/, src/App.tsx and src/main.tsx -- is counted in
  * FRAME instead, and its reaches are not violations of the rule above: that
  * rule is about a second writer on a region a store already owns, and these are
- * the page's own imperative behaviours. App.tsx portals into the body, the two
- * popovers write into a list the page was served with, main.tsx mounts the
- * island roots in the boxes that root committed, and chrome/behaviour/ is two
- * modules that say in their own headers that they are behaviour rather than
- * rendering: a grip drag writing one CSS variable, and scrollbar thumbs parked
- * in a fixed layer over elements other layers drew. Counting them is what keeps
- * a third such module from appearing unnoticed -- the counts may only fall, and
- * a frame file that is not on the list may not reach for an element at all.
+ * the page's own imperative behaviours. App.tsx portals into the body,
+ * chrome/MoreFly.tsx reads the focused element to give focus back to the row
+ * that opened its panel, the two popovers write into a list the page was served
+ * with, main.tsx mounts the island roots in the boxes that root committed, and
+ * chrome/behaviour/ is two modules that say in their own headers that they are
+ * behaviour rather than rendering: a grip drag writing one CSS variable, and
+ * scrollbar thumbs parked in a fixed layer over elements other layers drew.
+ * Counting them is what keeps a third such module from appearing unnoticed --
+ * the counts may only fall, and a frame file that is not on the list may not
+ * reach for an element at all.
  *
  * What the counts read is text, and three limits come with that. Two of the
- * twenty-six matches FRAME holds are a sentence in a module header that names
+ * twenty-three matches FRAME holds are a sentence in a module header that names
  * document.body, and two more are React's own `createElement` in main.tsx,
  * which the regex cannot tell from the document's: a budget that counts a
  * little too much is the safe direction for a ratchet. `event.target.closest()`
@@ -131,6 +133,7 @@ const FRAME = {
   'main.tsx': 5,
   'chrome/FailureBar.tsx': 1,
   'chrome/Lightbox.tsx': 1,
+  'chrome/MoreFly.tsx': 1,
   'chrome/UpgradeShade.tsx': 1,
   'chrome/WsPane.tsx': 2,
   'chrome/behaviour/panes.ts': 6,

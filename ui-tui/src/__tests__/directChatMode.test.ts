@@ -487,7 +487,7 @@ describe('rowsOf', () => {
   it('answers for an instance that is not on screen', () => {
     expect(getDirectChat().active).toBeNull()
     expect(rowsOf(getDirectChat(), target).map(m => m.text)).toEqual([
-      'reading this instance\u2019s conversation\u2026'
+      'reading this instance\u2019s session\u2026'
     ])
 
     setDirectTranscript(directKey('A', 'one'), [])

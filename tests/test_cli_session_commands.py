@@ -72,7 +72,7 @@ def test_group_registered_as_sessions_not_session() -> None:
     session`` name is gone (hard rename, no deprecated alias)."""
     ok = runner.invoke(app, ["sessions", "--help"])
     assert ok.exit_code == 0
-    assert "Manage conversation sessions" in ok.stdout
+    assert "Manage sessions." in ok.stdout
 
     gone = runner.invoke(app, ["session", "--help"])
     assert gone.exit_code != 0

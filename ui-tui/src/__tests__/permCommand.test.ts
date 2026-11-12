@@ -82,7 +82,7 @@ describe('/perm', () => {
       scope: 'session',
       session_id: 's1'
     })
-    expect(h.main[0]).toContain('permission mode set to full for this conversation')
+    expect(h.main[0]).toContain('permission mode set to full for this session')
   })
 
   it('writes the default when asked to, with no session scope', async () => {

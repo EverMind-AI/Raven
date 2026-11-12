@@ -31,10 +31,10 @@ from raven.utils.paths import ensure_dir, safe_filename, safe_path_segment
 # front of every human-facing picker.
 SUBAGENT_CHANNEL = "sub"
 
-# Key prefix of an Imported Conversation (raven/trajectory/imported.py). Those
+# Key prefix of an Imported Session (raven/trajectory/imported.py). Those
 # live under the raven home, never in this store: a save under this channel is
 # refused, so nothing that resolves a key to a file here can give an imported
-# conversation a writable twin that pickers, sweeps and delivery targets see.
+# session a writable twin that pickers, sweeps and delivery targets see.
 IMPORTED_CHANNEL = "imported"
 
 # Metadata keys the loop stamps on a session with the message index a cut turn
@@ -58,7 +58,7 @@ FORK_CARRIES: tuple[str, ...] = ("model", "provider", "reasoning_effort")
 
 def _refuse_imported(key: str) -> None:
     if key.partition(":")[0] == IMPORTED_CHANNEL:
-        raise ValueError(f"{key!r} is an imported conversation; the session store does not keep it")
+        raise ValueError(f"{key!r} is an imported session; the session store does not keep it")
 
 
 # How many sessions a manager keeps loaded once nothing else holds them. Soft:
@@ -550,7 +550,7 @@ def read_session_file(path: Path, key: str) -> Session | None:
     """The session stored in the transcript at ``path``, read as ``key``.
 
     None when the file is absent or cannot be read. Public because a transcript
-    kept outside the session store -- an Imported Conversation's -- is read by
+    kept outside the session store -- an Imported Session's -- is read by
     the same rules: metadata records are appended per save and the last one
     wins.
     """

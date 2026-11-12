@@ -4,7 +4,7 @@ Run a sub-agent on another computer -- a GPU box, a lab workstation, a
 server in the office -- from the Raven on your own. You register the machine
 once, put Raven's node on it, and name that machine in an agent entry. From
 then on the agent is dispatched there, works in its own directory there, and
-its files stay there; your conversation reads them by address and fetches one
+its files stay there; your session reads them by address and fetches one
 when you ask. If the connection drops, or you stop Raven, the agent keeps
 working and the result is picked up when you are back.
 
@@ -338,7 +338,7 @@ A built-in agent is Raven's own loop in this process, where its model keys and
 tools are. It has no process to start elsewhere: a `machine` on a built-in row
 is dropped with a warning at load, and the row runs here.
 
-## 4. Or add one from a conversation
+## 4. Or add one from a session
 
 Ask Raven in a chat, for example *"add the Codex preset on machine gpu1"*. The
 main agent lists the usable registered machines and calls `subagents.add`
@@ -426,14 +426,14 @@ through its node, and only the answer travels: a read of 50 lines moves those
   machine, and the absolute `paths` listed on its registry row. A read
   elsewhere asks, as a read outside the workspace does here.
 - **Writes always ask**, as they do here, and a grant is for the one file.
-  A whole-file write checks that the file is still what this conversation last
+  A whole-file write checks that the file is still what this session last
   read; a file changed in between is left alone, with *changed after it was
   read; nothing was written. Read it again before writing.*
 - The node confines every call to the directory the check allowed, resolving
   the machine's own symlinks.
 
 `deliver_files` fetches one file by its address, so you can download it from
-the page. The file lands under the conversation's workspace at
+the page. The file lands under the session's workspace at
 `pulled/<machine>/<key>/<name>`, the key being a digest of its path there, so
 two paths never land on each other. Only a file under the directories the
 agents work in is fetched, and only one of 20 MiB or less; a bigger file, or
@@ -461,7 +461,7 @@ to the daemon; what Raven keeps is a record under
 each run from where it was, reads what it wrote on stderr during that turn
 too (a command's whole stderr: the reason it failed, or the session id a CLI
 names only there), and announces the
-result into the conversation that asked, as a finished turn. Keep the
+result into the session that asked, as a finished turn. Keep the
 machine's registration and the agent entry in place for that. `/restart` and a
 Raven that was killed are covered the same way.
 
@@ -551,7 +551,7 @@ to an owner-only log under the Raven home (`logs/ssh/`).
 | *already runs 8 agents; wait for one to finish* | The machine is at its limit | Wait, or use another machine |
 | *did not answer a heartbeat within 15s* | The link dropped | Nothing; Raven reconnects. The agent keeps running |
 | *no longer runs 'agent' (task …)* | The daemon lost the task (reboot, killed) | Dispatch again |
-| *changed after it was read; nothing was written* | Someone changed the file since this conversation read it | Read it again, then write |
+| *changed after it was read; nothing was written* | Someone changed the file since this session read it | Read it again, then write |
 | *is over the 20.0 MB limit for a file brought back* | Too large for `deliver_files` | Read it on the machine, or copy it with `scp` |
 | *an endpoint reached through the machine has to be http* | `baseUrl` is `https` | Use the `http` address the machine reaches it at |
 | *this command reaches … over raw ssh* | A typed `ssh` to a registered address in `exec` | Use `exec(machine=…)`, or the file tools |
@@ -567,7 +567,7 @@ to an owner-only log under the Raven home (`logs/ssh/`).
   directory, owned by the registered user, and only that user's ssh session
   reaches it. Each task's record there is readable by that user alone.
 - The node runs file calls with Raven's own tools, fenced to the directory the
-  permission check allowed. It holds no conversation and calls no model;
+  permission check allowed. It holds no session and calls no model;
   nothing of your model keys goes to the machine.
 - An agent on a machine is that machine's install, signed in there. Raven
   lends it no key of its own: `lendKeys` on an entry that names a machine

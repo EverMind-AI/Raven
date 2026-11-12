@@ -160,7 +160,7 @@ async function resumeDag(key: string, runIds?: readonly string[]): Promise<void>
  * has been cleaned and a file that has since been deleted are both ordinary
  * outcomes, and neither is a reason for the rest of the layout to stay away. */
 export async function resume(key: string, dagRunIds?: readonly string[]): Promise<void> {
-  /* An imported conversation's panes and runs were on the machine that recorded
+  /* An imported session's panes and runs were on the machine that recorded
      it; there is nothing here to put back. */
   if (isImportedKey(key)) return
   await Promise.allSettled([resumeDesk(key), resumeDag(key, dagRunIds)])
