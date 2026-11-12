@@ -89,9 +89,16 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
   - `imageSearch.provider == "host"` (the shipped value) or absent: read the
     live `tools.web.search.provider` through the existing `web_config` reader
     and call `ppt_image_vendor`.
-- `image_search_key(vendor)`: the slice's `imageSearch.apiKey` only when the
-  vendor is `serper` (the legacy override); every other vendor's key comes from
-  `web.vendor_key(vendor)`, live.
+- `image_search_key(vendor)` resolves four sources in order, live:
+  1. the slice's `imageSearch.apiKey`, only when the vendor is `serper` (the
+     legacy override);
+  2. the host's vendor slot `tools.web.providers.<vendor>.apiKey`, through
+     `web.vendor_key(vendor)`;
+  3. Serper's pre-vendor `tools.web.search.apiKey` (inside `vendor_key`, and
+     read directly when the host object has no `vendor_key`);
+  4. the vendor's bare environment variable from `WEB_VENDOR_ENV_VARS` (for
+     example `SERPER_API_KEY`), for every vendor.
+  A key resolved for one vendor is never sent to another's endpoint.
 - `image_search()` returns `None` when no vendor or no key resolves, so the
   tool is absent rather than failing per call.
 
@@ -137,24 +144,35 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
 
 `raven/rpc/methods/subagents.py`:
 
-- Each row gains `routes`: the route declarations with the readiness the loop
-  would apply, `[{to, ready, needs}]`. Computed with the same
-  `product_picture_vendor` / `ppt_image_vendor` / `image_search_vendor` helpers,
-  from the current config and the product folder's own secrets.
-- `rpc-schema/openrpc.json` gains the property on `SubagentRow`;
-  `ui-web/src/rpc/generated.ts` is regenerated.
+- Each row gains `routes`: the route declarations with the picture-search
+  readiness the router would apply, `[{to, image_search_ready}]`.
+  `image_search_ready` is `true` or `false` from `picture_search_ready`, and
+  `null` on a route that does not declare `image_search`. Computed from the
+  current config and the product folder's own secrets, with the same
+  `product_picture_vendor` / `ppt_image_vendor` / `image_search_vendor` helpers
+  the router uses.
+- `routes` is optional on the schema (`SubagentRow.routes?`) and defaults to an
+  empty list; `_rows` writes a list on every row. `rpc-schema/openrpc.json`
+  gains the property; `ui-web/src/rpc/generated.ts` is regenerated.
 
 `ui-web`:
 
-- `features/settings/source.ts`: `PPT_IMAGE_VENDORS` and `pptImageVendor(raw)`
-  mirror the Python list and rule. A test holds the TS set equal to the Python
-  tuple.
+- `features/settings/source.ts` takes the deck's picture state from
+  `settings.get`'s `picture_search`; it holds no copy of the vendor rule. The
+  rule has only one home, the backend's `settings.get`
+  (`raven/rpc/methods/console.py`, through `picture_search_status`), and
+  `ui-web/src/rpc/fixtures/settings.ts` is its explicit offline mirror:
+  `PPT_VENDORS` and `pictureSearchOf` stand in for the live answer.
+  `tests/test_agent_tools_web_providers.py::test_the_offline_fixture_ppt_picture_set_matches_the_deck_tool`
+  parses `PPT_VENDORS` out of that fixture and holds it equal to
+  `PPT_IMAGE_SEARCH_VENDORS`.
 - `features/settings/pages/Tools.tsx`: under the Search service vendor picker:
   - selected vendor is a PPT vendor with a key: no note.
-  - selected vendor is not a PPT vendor, Serper key present: info note, "This
-    search API has no image search. Deck generation will use Serper."
-  - no usable vendor: warning note, "This search API has no image search and no
-    Serper key is configured. Deck generation cannot run."
+  - selected vendor is not a PPT vendor, Serper key present: info note, "Deck
+    generation cannot use this search API's pictures. It will use {name}
+    instead."
+  - no usable vendor: warning note, "Deck generation cannot use this search
+    API's pictures and no Serper key is configured, so it cannot run."
 - `features/extAgents/ExtAgentsPage.tsx`: the agent sheet shows the route
   warning for a row whose `routes` holds a not-ready `image_search` route.
 - `i18n/messages.json`: the new strings, en and zh.
@@ -187,7 +205,9 @@ a key; otherwise it uses Serper's key; otherwise it has no picture tool.
 - `tests/test_subagent_routed_lane_readiness.py`: route open for an adapted
   vendor, Serper fallback, and closed with neither; the row payload carries the
   readiness.
-- `ui-web` tests: Tools note states, agent sheet note, vendor list pin.
+- `ui-web` tests: Tools note states and agent sheet note. The offline fixture's
+  vendor list is pinned on the Python side, in
+  `test_the_offline_fixture_ppt_picture_set_matches_the_deck_tool`.
 
 ## Open items
 

@@ -929,6 +929,38 @@ credential (`cli/_log_file.py`), since httpx logs each request at INFO on the su
 _Avoid_: a per-vendor tool name — the model is always offered `web_search` and
 `web_fetch`, whichever vendor answers.
 
+**Picture Search** (`rpc/models.py`, `PictureSearchStatus`; `settings.get`):
+The deck engine's picture-search state as the runtime would resolve it now, not
+a reading of the Search service picker: `vendor` is the vendor that would answer
+(`""` when none resolves), `ready` says a key resolves for it, and `fallback`
+says a keyed vendor other than the selected search vendor answered instead, so
+the page can say deck generation will fall back. `settings.get` computes it
+through `picture_search_status` over the same rule the router applies, from the
+config, the product folder's own credentials and the vendors' environment
+variables -- credentials the raw config cannot show. The offline settings
+fixture (`ui-web/src/rpc/fixtures/settings.ts`, `PPT_VENDORS` /
+`pictureSearchOf`) is its explicit mirror; the vendor list is pinned to
+`PPT_IMAGE_SEARCH_VENDORS` by `tests/test_agent_tools_web_providers.py`.
+_Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
+answers the host's `image_search` but is not a deck vendor, so this state speaks
+of deck pictures, not search availability.
+
+**Deck Picture Vendor** (`plugins-dist/ppt-engine/raven_ppt/plugin/config.py`, `imageSearch.provider`; `agent/subagent/vendored_agents.py`, `product_picture_vendor`):
+Which vendor the deck engine's pictures come from. `imageSearch.provider:
+"host"` (the shipped value in `agents/raven-ppt/config.json`) is a sentinel, not
+a vendor: the deck follows the host's `tools.web.search.provider` through
+`ppt_image_vendor`, so one of the five vendors with a usable picture surface
+answers on its own key, and a host on any other vendor, or on one of the five
+with no key, falls back to Serper. Any other accepted value pins that vendor,
+honoured only while its key resolves; without one the host rule answers instead,
+so a pin cannot leave the deck advertising a tool whose every call fails.
+`product_picture_vendor` reads the same declaration for routing and returns
+`"host"` -- the declaration, not the resolved vendor -- so
+`picture_search_status` applies the deck's five-vendor set rather than the
+host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
+_Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
+and `ppt_image_vendor` is what turns it into a vendor.
+
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.
