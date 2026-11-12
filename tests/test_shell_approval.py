@@ -197,6 +197,25 @@ def _gated_exec(executor, responder, tmp_path, *, mode: str = "ask", families=()
     return registry
 
 
+class _DeniedExecutor(_RecordingExecutor):
+    async def exec(self, command: str, **kwargs) -> ExecResult:
+        from raven.sandbox.denials import NetworkDenial
+
+        self.commands.append(command)
+        denial = NetworkDenial("/usr/bin/curl", "example.com", 443, "transparent_tcp_policy_denied")
+        return ExecResult(stdout="", stderr="curl: (7) Couldn't connect", exit_code=7, denials=(denial,))
+
+
+async def test_a_sandbox_network_denial_is_named_in_the_exec_output(tmp_path) -> None:
+    executor = _DeniedExecutor(sandboxed=True)
+    registry = _gated_exec(executor, _ApprovalResponder([]), tmp_path, mode="full")
+
+    result = await registry.execute("exec", {"command": "curl https://example.com"})
+
+    assert "Exit code: 7" in result
+    assert "[sandbox] The sandbox network policy blocked: /usr/bin/curl -> example.com:443." in result
+
+
 async def test_direct_delete_executes_once_after_approval(tmp_path) -> None:
     executor = _RecordingExecutor(sandboxed=False)
     responder = _ApprovalResponder([True])

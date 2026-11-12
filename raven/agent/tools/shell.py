@@ -403,6 +403,10 @@ class ExecTool(Tool):
             # A working_dir that is not on this disk fails here, before the command runs.
             return f"Error executing command: {str(e)}" + missing_here_note([cwd], command=command)
         text = result.as_text(self._MAX_OUTPUT)
+        if result.denials:
+            from raven.permissions.sandbox_network import handle_denials
+
+            text += await handle_denials(self._executor, result.denials, command=command)
         # `ls x || echo none` exits 0 with the miss only in its text.
         if (result.exit_code != 0 or "No such file or directory" in text) and not self._executor.is_sandboxed:
             from raven.agent.tools.machine_exec import missing_here_note
