@@ -1838,6 +1838,14 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     _step_header(2, t("Choose where Raven runs code / commands"))
 
     if skip or non_interactive:
+        if sys.platform == "win32" and _current_sandbox_backend() != "none":
+            console.print(
+                t(
+                    "  [dim]Sandbox isolation (OpenShell) needs Linux or macOS; commands on this host run directly.[/dim]"
+                )
+            )
+            _warn_host_risk()
+            return None
         run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (OpenShell)")
         console.print(t("  [dim]Keeping run location: {location}.[/dim]", location=run_loc))
         if _current_sandbox_backend() == "none":
