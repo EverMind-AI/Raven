@@ -12,9 +12,9 @@ All notable changes to Raven are documented here.
   declaration; Tavily's image hits carry no size or source page, so a host on
   Tavily falls back to Serper, and when no deck vendor's key resolves the tool
   is withheld instead of failing per call. *Settings → Tools → Search service*
-  says which of the three applies, and a Raven-Design card closes the route to
-  Raven-PPT when no picture tool resolves. The deck's own Serper key remains an
-  override and is never sent to another vendor's endpoint.
+  says which of the three applies, and a Raven-Design card says when the route
+  to Raven-PPT is closed because no picture tool resolves. The deck's own
+  Serper key remains an override and is never sent to another vendor's endpoint.
 
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.
