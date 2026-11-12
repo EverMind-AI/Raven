@@ -9,8 +9,8 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-_RETIRED_BACKENDS = ("auto", "boxlite")
-_RETIRED_KEYS = ("debug", "diskSizeGb", "disk_size_gb")
+RETIRED_BACKENDS = ("auto", "boxlite")
+RETIRED_KEYS = ("debug", "diskSizeGb", "disk_size_gb")
 _warned: set[str] = set()
 
 
@@ -54,14 +54,14 @@ class SandboxConfig(BaseModel):
         if not isinstance(data, dict):
             return data
         data = dict(data)
-        if data.get("backend") in _RETIRED_BACKENDS:
+        if data.get("backend") in RETIRED_BACKENDS:
             _warn_once(
                 "backend",
                 f"tools.sandbox.backend={data['backend']!r} is retired; using 'openshell'. "
                 "Update the config to backend 'openshell'.",
             )
             data["backend"] = "openshell"
-        for key in _RETIRED_KEYS:
+        for key in RETIRED_KEYS:
             if key in data:
                 data.pop(key)
                 _warn_once(key, f"tools.sandbox.{key} applied to the retired boxlite backend and is ignored.")

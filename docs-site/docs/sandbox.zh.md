@@ -110,11 +110,11 @@ Raven 不会自行退回宿主机执行；只有 backend 为 `"none"` 时才在�
 
 ### 从 boxlite 后端迁移 { #migrating-from-the-boxlite-backend }
 
-boxlite 微虚拟机后端已经退役。为它写的配置仍然能加载：
+boxlite 微虚拟机后端已经退役。为它写的配置仍然能加载，第一次加载时会自动改写一次，每处改动都有提示：
 
-- `backend: "boxlite"` 和 `backend: "auto"` 会按 `"openshell"` 加载，并给出警告。请把文件里的值改成
-  `"openshell"`。
-- `debug` 和 `diskSizeGb` 会被忽略，并给出警告。
+- `backend: "boxlite"` 和 `backend: "auto"` 改成 `"openshell"`。这两个值以前都指 boxlite，所以没装
+  OpenShell 的机器会拒绝启动沙箱，不会退回到宿主机上执行。
+- `debug` 和 `diskSizeGb` 会被删掉。
 - `raven sandbox list/exec/shell` 已移除，请改用 OpenShell CLI，见[查看沙箱](#35-inspecting-sandboxes)。
 - Raven 数据目录下旧的 boxlite 状态目录（`sandbox/boxlite`）不再使用，可以删除。
 

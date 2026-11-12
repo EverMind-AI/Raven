@@ -22,8 +22,9 @@ All notable changes to Raven are documented here.
 
 - Sandboxed commands run in NVIDIA OpenShell, on its Docker driver, instead of
   boxlite micro-VMs. `tools.sandbox.backend` takes `"openshell"` or `"none"`;
-  a config that still says `"auto"` or `"boxlite"` is read as `"openshell"`,
-  and the retired `debug` and `diskSizeGb` keys are dropped with a warning.
+  the first load rewrites a config that still says `"auto"` or `"boxlite"` to
+  `"openshell"` and removes the retired `debug` and `diskSizeGb` keys, with a
+  notice for each change.
   Each executor gets its own sandbox on a local OpenShell gateway, with the
   workspace and extra volumes mounted and the same CPU and memory limits.
   Network egress stays open by default: any host name with three or more
