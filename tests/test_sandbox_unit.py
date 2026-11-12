@@ -221,10 +221,11 @@ class TestBuildExecutor:
         cfg = SandboxConfig.model_validate({"backend": "boxlite"})
         assert isinstance(build_executor(cfg, tmp_path), OpenShellExecutor)
 
-    def test_backend_openshell_without_the_sdk_raises_with_install_advice(self, tmp_path):
+    def test_backend_openshell_without_the_sdk_raises_with_install_advice(self, tmp_path, monkeypatch):
         """The advice must not send the user to a package index for ``raven``:
         that name there belongs to another project, and the SDK has to land in
         this interpreter's environment."""
+        monkeypatch.setattr(sys, "platform", "linux")
         with patch.dict("sys.modules", {"openshell": None}):
             with pytest.raises(SandboxInitError, match="No sandbox backend available") as exc_info:
                 build_executor(SandboxConfig(backend="openshell"), tmp_path)
@@ -248,7 +249,8 @@ class TestSandboxInstallHint:
     SDK spec: the ``raven`` distribution name does not resolve to this project
     on a package index, so the extra cannot be named in the command."""
 
-    def test_targets_the_running_interpreter_with_the_pinned_spec(self):
+    def test_targets_the_running_interpreter_with_the_pinned_spec(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
         from raven.sandbox import sandbox_install_hint
 
         hint = sandbox_install_hint()
@@ -259,6 +261,7 @@ class TestSandboxInstallHint:
         assert "'openshell" in hint
 
     def test_falls_back_to_the_bare_name_without_installed_metadata(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
         import importlib.metadata as metadata_mod
 
         from raven.sandbox import sandbox_install_hint
@@ -272,6 +275,7 @@ class TestSandboxInstallHint:
     def test_the_requirement_keeps_the_platform_marker(self, monkeypatch):
         """The requirement and its marker are one thing: naming half of it
         asks for a package the project does not depend on."""
+        monkeypatch.setattr(sys, "platform", "linux")
         import importlib.metadata as metadata_mod
 
         from raven.sandbox import sandbox_install_hint

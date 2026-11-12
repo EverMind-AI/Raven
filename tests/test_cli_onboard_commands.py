@@ -1324,6 +1324,21 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
+def test_non_interactive_onboarding_on_windows_does_not_claim_a_sandbox(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A config that names OpenShell cannot run one on Windows, so keeping the
+    run location must not report a sandbox the host will never start."""
+    from raven.config.update import set_sandbox_backend
+
+    set_sandbox_backend("openshell")
+    monkeypatch.setattr(sys, "platform", "win32")
+    onboard_commands._step2_sandbox(skip=False, non_interactive=True)
+    out = " ".join(capsys.readouterr().out.split())
+    assert "Sandbox isolation (OpenShell) needs Linux or macOS" in out
+    assert "Keeping run location: Sandbox (OpenShell)" not in out
+
+
 def test_windows_is_offered_no_sandbox_choice(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The OpenShell SDK ships for Linux and macOS, so a Windows host must not
     be offered a backend whose SDK it cannot install."""
@@ -1380,6 +1395,7 @@ def test_sandbox_missing_sdk_advises_the_running_environment(
 ) -> None:
     """The missing-SDK screen prints a copy-pasteable uv command that targets
     this raven's interpreter, not a global install of an index-resolvable name."""
+    monkeypatch.setattr(sys, "platform", "linux")
     import questionary
 
     answers = iter(["openshell"])
@@ -1466,6 +1482,7 @@ def test_sandbox_host_decline_reasks_submenu_without_reprobe(tmp_env: Path, monk
 
 def test_sandbox_keep_current_first_option(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An already-configured sandbox offers a 'keep current' first choice."""
+    monkeypatch.setattr(sys, "platform", "linux")
     from raven.config.update import set_sandbox_backend
 
     set_sandbox_backend("openshell")
