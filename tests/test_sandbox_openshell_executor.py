@@ -51,6 +51,11 @@ class FakeStream:
         self.input_closed = True
 
 
+TCP_DENIAL = "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]"
+DNS_REFUSAL = "NET:REFUSE [MED] DENIED example.com [reason:policy_dns_ineligible]"
+RELAY_CLOSED = "EVENT [INFO] ssh relay closed (channel_id=c1, target=unix:/run/openshell/ssh.sock)"
+
+
 class FakeControlPlane:
     def __init__(self):
         self.created: list[dict] = []
@@ -116,7 +121,8 @@ class FakeControlPlane:
     def ocsf_lines(self, name, since):
         self.denial_reads.append(since)
         if not self.denial_script:
-            return []
+            # The gateway logs a relay's close after every command; a failed one waits for it.
+            return [(time.time(), RELAY_CLOSED)]
         item = self.denial_script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -506,11 +512,6 @@ class TestExec:
         with pytest.raises(SandboxInitError, match="stopped before the command could run"):
             await ex.exec("true")
         assert cp.execs == []
-
-
-TCP_DENIAL = "NET:OPEN [MED] DENIED /usr/bin/curl(0) -> example.com:443 [reason:transparent_tcp_policy_denied]"
-DNS_REFUSAL = "NET:REFUSE [MED] DENIED example.com [reason:policy_dns_ineligible]"
-RELAY_CLOSED = "EVENT [INFO] ssh relay closed (channel_id=c1, target=unix:/run/openshell/ssh.sock)"
 
 
 class TestDenials:
