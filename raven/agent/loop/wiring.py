@@ -2118,23 +2118,27 @@ class WiringMixin:
     def _build_skill_hub_client(
         workspace: Path,
         skill_forge_router_config: "SkillForgeRouterConfig | None",
-    ) -> "SkillHubClient":
+    ) -> "SkillHubClient | None":
         """Construct the shared Skill Hub client.
 
         Built for every loop, whatever the switch says: the tools and the
         router's Hub source ask the live config before each Hub call, so
         switching the source on or off never needs a rebuild. The URL is the
         shared marketplace unless the config (or ``RAVEN_SKILLHUB_URL``) names
-        one; the API key is carried only when the config names its own URL,
-        never to the fallback. Downloads land under ``<workspace>/skills/hub``
-        so a use_skill'd bundle is registry-discoverable by the on-disk skill
-        registry.
+        one; a refused override returns ``None`` -- the source is off for this
+        process rather than pointed at the marketplace -- and the API key is
+        carried only when the config names its own URL, never to the fallback.
+        Downloads land under ``<workspace>/skills/hub`` so a use_skill'd bundle
+        is registry-discoverable by the on-disk skill registry.
         """
         from raven.skill_hub import SkillHubClient, hub_api_key, resolve_hub_endpoint
 
         hub_cfg = getattr(skill_forge_router_config, "hub", None)
+        endpoint = resolve_hub_endpoint(getattr(hub_cfg, "endpoint", None))
+        if endpoint is None:
+            return None
         return SkillHubClient(
-            resolve_hub_endpoint(getattr(hub_cfg, "endpoint", None)),
+            endpoint,
             api_key=hub_api_key(hub_cfg),
             timeout_s=float(getattr(hub_cfg, "timeout_s", 2.0)),
             source=str(getattr(hub_cfg, "source", "raven")),

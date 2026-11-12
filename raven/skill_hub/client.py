@@ -34,13 +34,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_TIMEOUT_S = 2.0
 
 
-def resolve_hub_endpoint(configured: str | None) -> str:
+def resolve_hub_endpoint(configured: str | None) -> str | None:
     """The base URL for a Hub client: env override, else the configured URL,
-    else the shared marketplace.
+    else the shared marketplace; ``None`` when the override is refused.
 
-    A malformed override is ignored with a warning rather than taking the
-    source down with it -- the page path refuses it outright, but a loop that
-    cannot start is a worse answer than one that names why it fell back.
+    Falling back after a refused override would send the turn's text to the
+    marketplace the operator was pointing away from, so a bad value disables
+    the conversational client for this process instead. The page path refuses
+    it outright; here the loop still starts.
     """
     from raven.config.raven import SKILL_HUB_ENDPOINT
     from raven.security.urls import HubTrustError, hub_endpoint
@@ -49,8 +50,8 @@ def resolve_hub_endpoint(configured: str | None) -> str:
     try:
         return hub_endpoint(os.environ.get("RAVEN_SKILLHUB_URL"), fallback, what="RAVEN_SKILLHUB_URL")
     except HubTrustError as exc:
-        logger.warning("ignoring RAVEN_SKILLHUB_URL: %s", exc)
-        return fallback
+        logger.warning("refusing RAVEN_SKILLHUB_URL; Skill Hub retrieval is off for this process: %s", exc)
+        return None
 
 
 def hub_api_key(config: Any) -> str | None:

@@ -271,6 +271,30 @@ class TestSkillForgeRouterAssembly:
         hub = next(source for source in sources if isinstance(source, HubSkillSource))
         assert (hub._client._base, hub._client._api_key) == ("https://hub.internal.test", "k")
 
+    def test_a_refused_env_override_mounts_no_hub_source(self, tmp_path: Path, monkeypatch) -> None:
+        """A warning-and-continue fallback would point the source at the
+        marketplace the operator was overriding; the router must not carry it."""
+        monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://hub.test")
+
+        types, _ = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="https://hub.internal.test")
+        )
+
+        assert HubSkillSource not in types
+
+    def test_a_valid_env_override_wins_over_a_configured_endpoint(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test")
+
+        _, sources = _router_sources(
+            _build_engine(
+                tmp_path,
+                backend=_FakeBackend(),
+                hub_config=HubSourceConfig(endpoint="https://hub.internal.test"),
+            )
+        )
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._client._base == "https://staging.hub.test"
+
     def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)
         skills = next(b for b in engine._builders if isinstance(b, SkillsSegmentBuilder))

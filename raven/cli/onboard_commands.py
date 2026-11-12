@@ -357,17 +357,26 @@ def _bootstrap_empty_config() -> None:
     enable_skill_hub_if_unset(config_path=path)
     if skill_hub_on(read_raw_or_raise(path)):
         # Through the client's own resolver: RAVEN_SKILLHUB_URL moves where the
-        # loop sends this text, and an override the client refuses falls back
-        # there too, so the disclosure has to name that address.
+        # loop sends this text, and a refused override turns the client off
+        # rather than pointing it at the marketplace, so the disclosure has to
+        # say which of the two happened.
         endpoint = resolve_hub_endpoint(load_raven_config(path).skill_forge.router.hub.endpoint)
-        console.print(
-            t(
-                "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
-                "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
-                "skillForge.router.hub.enabled to false.[/dim]",
-                endpoint=endpoint,
+        if endpoint is None:
+            console.print(
+                t(
+                    "  [dim]Skill Hub search is off: RAVEN_SKILLHUB_URL was refused, and Raven does not fall back "
+                    "to the shared catalog. Fix or unset the variable to turn it on.[/dim]"
+                )
             )
-        )
+        else:
+            console.print(
+                t(
+                    "  [dim]Skill Hub search is on: when Raven looks for a skill, it sends text from your "
+                    "conversation to {endpoint}. Turn it off under Settings > Skills on the web page, or set "
+                    "skillForge.router.hub.enabled to false.[/dim]",
+                    endpoint=endpoint,
+                )
+            )
     workspace = get_workspace_path()
     workspace.mkdir(parents=True, exist_ok=True)
     sync_workspace_templates(workspace, notify=lambda m: console.print(f"  [dim]{m}[/dim]"))

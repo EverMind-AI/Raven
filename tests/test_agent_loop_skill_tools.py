@@ -81,14 +81,28 @@ def test_the_hub_client_follows_the_env_override(tmp_path: Path, monkeypatch) ->
     asyncio.run(client.aclose())
 
 
-def test_an_invalid_env_override_falls_back_to_the_configured_endpoint(tmp_path: Path, monkeypatch) -> None:
+def test_an_invalid_env_override_disables_the_client(tmp_path: Path, monkeypatch) -> None:
+    """The operator named a destination and pointed away from the marketplace;
+    the only safe answer to a refused override is no client at all."""
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://staging.hub.test")
+
+    assert (
+        WiringMixin._build_skill_hub_client(
+            tmp_path, SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="https://hub.internal.test"))
+        )
+        is None
+    )
+    assert WiringMixin._build_skill_hub_client(tmp_path, SkillForgeRouterConfig()) is None
+
+
+def test_a_valid_env_override_wins_over_a_configured_endpoint(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test")
 
     client = WiringMixin._build_skill_hub_client(
         tmp_path, SkillForgeRouterConfig(hub=HubSourceConfig(endpoint="https://hub.internal.test"))
     )
     assert client is not None
-    assert client._base == "https://hub.internal.test"
+    assert client._base == "https://staging.hub.test"
     asyncio.run(client.aclose())
 
 

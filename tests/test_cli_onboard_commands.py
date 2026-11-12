@@ -3596,17 +3596,18 @@ def test_bootstrap_disclosure_uses_the_resolved_endpoint(
     assert "sends text from your conversation to https://staging.hub.test" in out
 
 
-def test_bootstrap_disclosure_falls_back_on_an_invalid_override(
+def test_bootstrap_disclosure_says_the_source_is_off_when_the_override_is_refused(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """An override the client refuses is ignored there too, so the disclosure
-    names the URL the client actually falls back to."""
+    """The client refuses the override and does not fall back to the
+    marketplace, so the disclosure must not name any destination."""
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://staging.hub.test")
 
     onboard_commands._bootstrap_empty_config()
 
     out = " ".join(capsys.readouterr().out.split())
-    assert "sends text from your conversation to https://skillhub.evermind.ai" in out
+    assert "sends text from your conversation" not in out
+    assert "RAVEN_SKILLHUB_URL was refused" in out
 
 
 def _onboard_once() -> Any:
