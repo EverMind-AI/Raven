@@ -373,7 +373,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # backgrounded DAG submission -- including default deploys, where an
         # unset attribute would raise instead of answering "no route".
         self.tool_search_controller = None
-        from raven.config.live import permissions_config
+        from raven.config.live import network_permissions, permissions_config
         from raven.permissions import BuiltinRulings, PermissionGate
 
         # Config is read through a late-bound callable so a mode flipped on a
@@ -626,7 +626,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 (*home_volume, *data_volume),
                 # Shared by every conversation this loop serves, so it runs
                 # under no single conversation's scope (``None``).
-                network_source=network_source_for(lambda: permissions_config(self._live_config), None),
+                network_source=network_source_for(lambda: network_permissions(self._live_config), None),
             )
         )
         self._executor_stack: AsyncExitStack | None = None

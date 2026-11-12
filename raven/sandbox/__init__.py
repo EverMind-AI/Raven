@@ -153,14 +153,24 @@ def _configured_network() -> Callable[[], dict[str, dict]]:
 
     A caller that can read the live permission set passes ``network_source``;
     this snapshot keeps every other sandbox under the same rules instead of the
-    executor's open default. A config that cannot be read closes the network.
+    executor's open default. The file is read here rather than through
+    ``load_config``, which runs on defaults when the file is not valid JSON: a
+    config that cannot be read closes the network, and only a missing one
+    answers the open default.
     """
-    from raven.config.loader import load_config
+    import json
+
+    from raven.config.live import network_permissions_of
+    from raven.config.loader import get_config_path
     from raven.config.schema import NetworkPermissions
     from raven.sandbox.network_policy import compile_network_policy
 
+    path = get_config_path()
     try:
-        network = load_config().permissions.network
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(raw, dict):
+            raise ValueError("the config is not a JSON object")
+        network = network_permissions_of(raw)
     except Exception as exc:  # noqa: BLE001 - no readable permission set means no network
         logger.warning("Could not read permissions.network for a sandbox ({}); it gets no network", exc)
         network = NetworkPermissions(default="closed")

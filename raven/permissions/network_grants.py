@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 from raven.sandbox.network_policy import NetworkGrant, compile_network_policy
 
 if TYPE_CHECKING:
-    from raven.config.schema import PermissionsConfig
+    from raven.config.schema import NetworkPermissions
 
 
 class GrantRegistry:
@@ -57,12 +57,12 @@ GRANTS = GrantRegistry()
 
 
 def network_source_for(
-    permissions: Callable[[], PermissionsConfig], scope: str | None, *, registry: GrantRegistry | None = None
+    network: Callable[[], NetworkPermissions], scope: str | None, *, registry: GrantRegistry | None = None
 ) -> Callable[[], dict[str, dict]]:
-    """The network policy source of a sandbox in ``scope``: the live permission set plus the scope's grants."""
+    """The network policy source of a sandbox in ``scope``: the live ``permissions.network`` plus the scope's grants."""
     grants = registry if registry is not None else GRANTS
 
     def source() -> dict[str, dict]:
-        return compile_network_policy(permissions().network, grants.grants_for(scope))
+        return compile_network_policy(network(), grants.grants_for(scope))
 
     return source

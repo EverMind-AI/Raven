@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from raven.config.schema import NetworkPermissions, PermissionsConfig
+from raven.config.schema import NetworkPermissions
 from raven.permissions.network_grants import GrantRegistry, network_source_for
 from raven.sandbox.network_policy import NetworkGrant
 
@@ -44,12 +44,12 @@ def test_an_unregistered_sandbox_is_no_longer_reached():
 
 def test_the_network_source_reads_the_live_permissions_and_the_scopes_grants():
     registry = GrantRegistry()
-    current = {"config": PermissionsConfig(network=NetworkPermissions(default="closed"))}
-    source = network_source_for(lambda: current["config"], "conv-a", registry=registry)
+    current = {"network": NetworkPermissions(default="closed")}
+    source = network_source_for(lambda: current["network"], "conv-a", registry=registry)
     assert source() == {}
     registry.grant("conv-a", CURL)
     assert [name.startswith("raven_grant_") for name in source()] == [True]
-    current["config"] = PermissionsConfig()
+    current["network"] = NetworkPermissions()
     assert "allow_open" in source()
 
 
