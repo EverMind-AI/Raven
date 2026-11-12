@@ -475,8 +475,10 @@ def register(app: typer.Typer) -> None:
                     on_refusals=refusals.extend,
                     on_unanswered=unanswered.extend,
                 )
-                # A one-shot spawn rarely finishes before the hard-exit below,
-                # but wire submit for parity with the TUI.
+                # Wire submit so a sub-agent's completion can schedule its
+                # follow-up turn. There is no hard exit here: the one-shot
+                # awaits the turn, the wait below drains the sub-agent work
+                # (and the turns it submits), and only then does teardown run.
                 agent_loop.subagents.set_submit(scheduler.submit)
                 with _thinking_ctx():
                     handle = scheduler.submit(
