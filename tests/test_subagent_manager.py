@@ -124,11 +124,11 @@ def test_a_graph_nodes_executor_comes_from_the_spawn_paths_own_builder(monkeypat
 
     config = SandboxConfig(backend="none")
     mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=config)
-    sentinel = object()
+    sentinel = _Built()
     captured: dict[str, Any] = {}
 
-    def fake_build(cfg, workspace, extra_volumes):
-        captured.update(cfg=cfg, workspace=workspace, extra_volumes=extra_volumes)
+    def fake_build(cfg, workspace, extra_volumes, **kwargs):
+        captured.update(cfg=cfg, workspace=workspace, extra_volumes=extra_volumes, **kwargs)
         return sentinel
 
     monkeypatch.setattr(manager_module, "build_executor", fake_build)
@@ -136,6 +136,80 @@ def test_a_graph_nodes_executor_comes_from_the_spawn_paths_own_builder(monkeypat
     assert captured["cfg"] is config
     assert captured["workspace"] == tmp_path
     assert captured["extra_volumes"] == mgr._home_volume(tmp_path)
+
+
+class _Built:
+    """What a stubbed build_executor returns: a sandbox the grant registry can hold."""
+
+
+def _scoped_build(monkeypatch, tmp_path):
+    from raven.agent.subagent import manager as manager_module
+    from raven.permissions import network_grants
+    from raven.sandbox.config import SandboxConfig
+
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes, *, network_source=None):
+        sources.append(network_source)
+        return _Built()
+
+    monkeypatch.setattr(manager_module, "build_executor", fake_build)
+    mgr = SubagentManager(provider=_StubProvider(), workspace=tmp_path, sandbox_config=SandboxConfig(backend="none"))
+    return mgr, registry, sources
+
+
+def _granted(policies: dict) -> list[str]:
+    return sorted(name for name in policies if name.startswith("raven_grant_"))
+
+
+def test_a_spawn_sandbox_is_built_in_the_parent_conversations_scope(tmp_path, monkeypatch) -> None:
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="conv-parent", turn_id="t")
+    executor = mgr.sandbox_executor_for(tmp_path)
+    mine, theirs = NetworkGrant("/usr/bin/pip", "pypi.org", 443), NetworkGrant("/usr/bin/git", "github.com", 22)
+    registry.grant("conv-parent", mine)
+    registry.grant("conv-other", theirs)
+    (source,) = sources
+    assert _granted(source()) == list(grant_rules([mine]))
+    assert registry.executors_for("conv-parent") == [executor]
+    assert registry.executors_for("conv-other") == []
+
+
+@pytest.mark.asyncio
+async def test_a_graph_node_sandbox_is_built_in_the_dispatching_conversations_scope(tmp_path, monkeypatch) -> None:
+    """A graph's nodes run in tasks the dispatching turn started, and build their sandboxes there."""
+    import asyncio
+
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="conv-graph", turn_id="t")
+
+    async def node() -> object:
+        return mgr.sandbox_executor_for(tmp_path)
+
+    executor = await asyncio.create_task(node())
+    grant = NetworkGrant("/usr/bin/curl", "example.com", 443)
+    registry.grant("conv-graph", grant)
+    assert _granted(sources[0]()) == list(grant_rules([grant]))
+    assert registry.executors_for("conv-graph") == [executor]
+
+
+def test_a_run_outside_any_conversation_gets_no_grants(tmp_path, monkeypatch) -> None:
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant
+
+    mgr, registry, sources = _scoped_build(monkeypatch, tmp_path)
+    start_permission_turn(None, conversation_id="", turn_id="t")
+    mgr.sandbox_executor_for(tmp_path)
+    registry.grant("conv-a", NetworkGrant("/usr/bin/curl", "example.com", 443))
+    assert _granted(sources[0]()) == []
 
 
 class _MissingMcpSource:

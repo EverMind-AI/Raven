@@ -10,6 +10,10 @@ CURL = NetworkGrant("/usr/bin/curl", "example.com", 443)
 GIT = NetworkGrant("/usr/bin/git", "gitlab.example.org", 22)
 
 
+class Sandbox:
+    """A stand-in a registry can hold a weak reference to, as it holds a real executor."""
+
+
 def test_a_grant_stays_in_its_conversations_scope():
     registry = GrantRegistry()
     registry.grant("conv-a", CURL)
@@ -26,7 +30,7 @@ def test_the_shared_sandbox_sees_every_scopes_grants():
 
 def test_a_scope_reaches_its_own_sandboxes_and_the_shared_one():
     registry = GrantRegistry()
-    shared, own, other = object(), object(), object()
+    shared, own, other = Sandbox(), Sandbox(), Sandbox()
     registry.register(shared, None)
     registry.register(own, "conv-a")
     registry.register(other, "conv-b")
@@ -35,7 +39,7 @@ def test_a_scope_reaches_its_own_sandboxes_and_the_shared_one():
 
 def test_an_unregistered_sandbox_is_no_longer_reached():
     registry = GrantRegistry()
-    own = object()
+    own = Sandbox()
     registry.register(own, "conv-a")
     registry.unregister(own)
     registry.unregister(own)
@@ -61,7 +65,18 @@ def test_a_grant_without_a_scope_is_ignored():
 
 def test_a_sandbox_registered_without_a_scope_is_the_shared_one():
     registry = GrantRegistry()
-    shared, own, stranger = object(), object(), object()
+    shared, own, stranger = Sandbox(), Sandbox(), Sandbox()
     registry.register(shared, None)
     registry.register(own, "conv-a")
     assert (registry.is_shared(shared), registry.is_shared(own), registry.is_shared(stranger)) == (True, False, False)
+
+
+def test_a_sandbox_whose_run_is_over_leaves_the_registry():
+    import gc
+
+    registry = GrantRegistry()
+    finished = Sandbox()
+    registry.register(finished, "conv-a")
+    del finished
+    gc.collect()
+    assert registry.executors_for("conv-a") == []
