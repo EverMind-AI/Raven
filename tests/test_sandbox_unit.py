@@ -1439,7 +1439,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, extra_volumes=()):
+        def _patched_build(cfg, workspace, extra_volumes=(), **_kw):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
