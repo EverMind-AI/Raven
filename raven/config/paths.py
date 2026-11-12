@@ -78,16 +78,6 @@ def get_package_data_root() -> Path:
     return ensure_dir(package_data_root_path())
 
 
-def get_sandbox_dir(backend: str) -> Path:
-    """Return the sandbox runtime home directory for the given backend.
-
-    e.g. backend='example' → <data_dir>/sandbox/example, so a backend that
-    keeps local state keeps it under raven's data dir rather than in a
-    dotdir of its own.
-    """
-    return ensure_dir(get_runtime_subdir("sandbox") / backend)
-
-
 def get_logs_dir() -> Path:
     """Return the logs directory."""
     return get_runtime_subdir("logs")

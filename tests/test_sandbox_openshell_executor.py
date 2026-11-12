@@ -178,8 +178,7 @@ class TestSandboxSpec:
 class TestStart:
     async def test_creates_waits_and_verifies(self, tmp_path):
         cp = FakeControlPlane()
-        owned: set[str] = set()
-        ex = _executor(tmp_path, cp, owned_ids=owned, cpus=2, memory_mib=2048, create_timeout=77)
+        ex = _executor(tmp_path, cp, cpus=2, memory_mib=2048, create_timeout=77)
         await ex.start()
         (created,) = cp.created
         assert created["name"].startswith("rv") and len(created["name"]) <= 19
@@ -193,18 +192,15 @@ class TestStart:
         assert set(created["labels"]) == {"raven.owner", "raven.pid"}
         assert cp.ready_timeout == 77
         assert cp.execs[0]["argv"][0:2] == ["sh", "-c"]
-        assert owned == {created["name"]}
 
     async def test_an_unwritable_workspace_fails_start_and_removes_the_sandbox(self, tmp_path):
         cp = FakeControlPlane()
         cp.exec_script = lambda argv: FakeStream([("stdout", b"1000\nnot-writable\n"), ("exit", 0)])
-        owned: set[str] = set()
-        ex = _executor(tmp_path, cp, owned_ids=owned)
+        ex = _executor(tmp_path, cp)
         with pytest.raises(SandboxInitError, match=r"uid 1000\) cannot write"):
             await ex.start()
         await ox.drain_pending_deletes()
         assert cp.deleted == [cp.created[0]["name"]]
-        assert owned == set()
 
     async def test_an_unreachable_gateway_explains_what_to_check(self, tmp_path):
         cp = FakeControlPlane()
@@ -219,12 +215,11 @@ class TestStart:
             raise RuntimeError("sandbox entered error phase: bind source path does not exist: /tmp/ws")
 
         cp.wait_ready = not_ready
-        owned: set[str] = set()
         with pytest.raises(SandboxInitError, match="bind source path does not exist") as info:
-            await _executor(Path("/tmp/ws"), cp, owned_ids=owned).start()
+            await _executor(Path("/tmp/ws"), cp).start()
         assert "PrivateTmp" in str(info.value)
         await ox.drain_pending_deletes()
-        assert cp.deleted == [cp.created[0]["name"]] and owned == set()
+        assert cp.deleted == [cp.created[0]["name"]]
 
     async def test_start_is_idempotent(self, tmp_path):
         cp = FakeControlPlane()
@@ -396,16 +391,14 @@ class TestExec:
 
 
 class TestStop:
-    async def test_stop_deletes_in_the_background_and_releases_ownership(self, tmp_path):
+    async def test_stop_deletes_in_the_background(self, tmp_path):
         cp = FakeControlPlane()
-        owned: set[str] = set()
-        ex = _executor(tmp_path, cp, owned_ids=owned)
+        ex = _executor(tmp_path, cp)
         await ex.start()
         name = cp.created[0]["name"]
         await ex.stop()
         await ox.drain_pending_deletes()
         assert cp.deleted == [name]
-        assert owned == set()
 
     async def test_stop_without_start_and_a_second_stop_are_no_ops(self, tmp_path):
         cp = FakeControlPlane()

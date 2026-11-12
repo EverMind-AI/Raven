@@ -84,12 +84,12 @@ def _make(workspace: Path, **kw) -> OpenShellExecutor:
 
 
 async def test_lifecycle_exec_and_cleanup(workspace):
-    owned: set[str] = set()
-    ex = _make(workspace, owned_ids=owned)
+    ex = _make(workspace)
     t0 = time.perf_counter()
     await ex.start()
     started = time.perf_counter() - t0
-    (name,) = owned
+    name = ex._name
+    assert name
     result = await ex.exec("echo hi > from_sandbox.txt; cat from_sandbox.txt; pwd")
     assert result.exit_code == 0, result
     assert result.stdout.split() == ["hi", "/workspace"]
@@ -102,7 +102,6 @@ async def test_lifecycle_exec_and_cleanup(workspace):
     await ex.stop()
     stop_returned = time.perf_counter() - t1
     await ox.drain_pending_deletes()
-    assert owned == set()
     assert await _gone(name)
     assert stop_returned < 1.0
     print(f"start {started:.2f}s, stop returned in {stop_returned * 1000:.0f} ms")

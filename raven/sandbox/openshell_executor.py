@@ -208,15 +208,12 @@ async def drain_pending_deletes() -> None:
         await asyncio.gather(*mine, return_exceptions=True)
 
 
-def _spawn_delete(control_plane: OpenShellControlPlane, name: str, owned_ids: set[str] | None) -> None:
+def _spawn_delete(control_plane: OpenShellControlPlane, name: str) -> None:
     async def run() -> None:
         try:
             await asyncio.to_thread(control_plane.delete, name)
         except Exception as exc:
             logger.warning("Could not delete OpenShell sandbox %s: %s", name, exc)
-        finally:
-            if owned_ids is not None:
-                owned_ids.discard(name)
 
     task = asyncio.get_running_loop().create_task(run())
     _pending_deletes.add(task)
@@ -253,7 +250,6 @@ class OpenShellExecutor(SandboxExecutor):
         default_timeout: int = 120,
         verify_timeout: int = 30,
         create_timeout: int = 300,
-        owned_ids: set[str] | None = None,
         *,
         control_plane: OpenShellControlPlane | None = None,
         gateway: str | None = None,
@@ -267,7 +263,6 @@ class OpenShellExecutor(SandboxExecutor):
         self._default_timeout = default_timeout
         self._verify_timeout = verify_timeout
         self._create_timeout = create_timeout
-        self._owned_ids = owned_ids
         self._control_plane = control_plane
         self._gateway = gateway
         self._gateway_workspace = gateway_workspace
@@ -315,8 +310,6 @@ class OpenShellExecutor(SandboxExecutor):
                 "  - The host needs Linux 6.2+ (Landlock ABI 3) and Docker 28+, with the gateway "
                 "allowing bind mounts (enable_bind_mounts = true)"
             ) from exc
-        if self._owned_ids is not None:
-            self._owned_ids.add(name)
         try:
             try:
                 await asyncio.to_thread(plane.wait_ready, name, self._create_timeout)
@@ -324,7 +317,7 @@ class OpenShellExecutor(SandboxExecutor):
                 raise SandboxInitError(self._not_ready_advice(name, exc)) from exc
             await self._verify(plane, name)
         except BaseException:
-            _spawn_delete(plane, name, self._owned_ids)
+            _spawn_delete(plane, name)
             raise
         self._name = name
         logger.info("OpenShell sandbox %s started (image=%s)", name, self._image)
@@ -384,7 +377,7 @@ class OpenShellExecutor(SandboxExecutor):
             pid = labels.get(_PID_LABEL, "")
             if pid.isdigit() and int(pid) != os.getpid() and not _pid_alive(int(pid)):
                 logger.info("Deleting OpenShell sandbox %s left by exited process %s", name, pid)
-                _spawn_delete(plane, name, None)
+                _spawn_delete(plane, name)
 
     def _driver_config(self) -> dict:
         mounts = [
@@ -549,7 +542,7 @@ class OpenShellExecutor(SandboxExecutor):
         self._tasks.clear()
         name, self._name = self._name, None
         if name is not None:
-            _spawn_delete(self._plane(), name, self._owned_ids)
+            _spawn_delete(self._plane(), name)
             logger.info("OpenShell sandbox %s stopping", name)
 
 

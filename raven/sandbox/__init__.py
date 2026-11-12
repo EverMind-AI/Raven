@@ -17,7 +17,6 @@ import importlib.metadata
 import re
 import shlex
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 from loguru import logger
@@ -65,10 +64,7 @@ def sandbox_install_hint() -> str:
 def build_executor(
     sandbox_cfg: SandboxConfig | None,
     workspace: Path,
-    owned_ids: set[str] | None = None,
     extra_volumes: tuple[tuple[str, str, str], ...] = (),
-    *,
-    sandbox_dir: Callable[[str], Path],
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
@@ -76,17 +72,9 @@ def build_executor(
     inside executor.start() / __aenter__(), which raises SandboxInitError if
     the backend cannot be started.
 
-    owned_ids: optional shared set the executor adds its sandbox name to on
-    start and removes it from once the sandbox is deleted.
-
     extra_volumes: additional (host_path, guest_path, mode) mounts appended to
     ``sandbox_cfg.extra_volumes``, e.g. keeping agent home reachable inside
     the sandbox when the mounted workspace does not already cover it.
-
-    sandbox_dir: backend name -> the directory a backend keeps local state in,
-    normally ``raven.config.paths.get_sandbox_dir``. Passed as the resolver
-    rather than an already-resolved path because resolving one creates it;
-    neither current backend keeps local state, so neither resolves it.
     """
     backend = sandbox_cfg.backend if sandbox_cfg else "none"
 
@@ -122,7 +110,6 @@ def build_executor(
             default_timeout=sandbox_cfg.default_timeout,
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
-            owned_ids=owned_ids,
             gateway=sandbox_cfg.gateway,
         )
 

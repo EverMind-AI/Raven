@@ -9,7 +9,6 @@ import asyncio
 import os
 import subprocess
 import sys
-import tempfile
 import textwrap
 import time
 from pathlib import Path
@@ -20,7 +19,7 @@ from pydantic import ValidationError
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-from raven.config.paths import get_data_dir, get_sandbox_dir
+from raven.config.paths import get_data_dir
 from raven.sandbox import (
     DirectExecutor,
     ExecResult,
@@ -30,15 +29,6 @@ from raven.sandbox import (
     build_executor,
 )
 from raven.sandbox.openshell_executor import OpenShellExecutor
-
-# No backend keeps local state any more, so this path is inert data: it names
-# where one would, and is never touched.
-_TEST_SANDBOX_HOME = Path(tempfile.gettempdir()) / "raven-test-sandbox-home"
-
-
-def _test_sandbox_dir(backend: str) -> Path:
-    return _TEST_SANDBOX_HOME / backend
-
 
 # ---------------------------------------------------------------------------
 # Helpers: mock executors
@@ -195,16 +185,15 @@ class TestSandboxConfigValidators:
 
 class TestBuildExecutor:
     def test_none_config_returns_direct(self, tmp_path):
-        e = build_executor(None, tmp_path, sandbox_dir=_test_sandbox_dir)
+        e = build_executor(None, tmp_path)
         assert isinstance(e, DirectExecutor)
 
     def test_backend_none_returns_direct(self, tmp_path):
-        e = build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_test_sandbox_dir)
+        e = build_executor(SandboxConfig(backend="none"), tmp_path)
         assert isinstance(e, DirectExecutor)
 
     def test_backend_openshell_builds_an_openshell_executor_from_the_config(self, tmp_path):
         pytest.importorskip("openshell")
-        owned: set[str] = set()
         cfg = SandboxConfig(
             backend="openshell",
             gateway="lab",
@@ -217,11 +206,11 @@ class TestBuildExecutor:
             verify_timeout=12,
             create_timeout=13,
         )
-        e = build_executor(cfg, tmp_path, owned, (("/home/u", "/agent-home", "rw"),), sandbox_dir=_test_sandbox_dir)
+        e = build_executor(cfg, tmp_path, (("/home/u", "/agent-home", "rw"),))
         assert isinstance(e, OpenShellExecutor)
         assert (e._image, e._cpus, e._memory_mib, e._allow_net) == ("img:1", 4, 4096, ["pypi.org"])
         assert (e._default_timeout, e._verify_timeout, e._create_timeout) == (11, 12, 13)
-        assert e._gateway == "lab" and e._owned_ids is owned
+        assert e._gateway == "lab"
         assert e._mounts.mounts() == [
             (str(tmp_path), "/workspace", False),
             ("/data", "/data", True),
@@ -231,7 +220,7 @@ class TestBuildExecutor:
     def test_a_retired_backend_name_still_builds_the_openshell_executor(self, tmp_path):
         pytest.importorskip("openshell")
         cfg = SandboxConfig.model_validate({"backend": "boxlite"})
-        assert isinstance(build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir), OpenShellExecutor)
+        assert isinstance(build_executor(cfg, tmp_path), OpenShellExecutor)
 
     def test_backend_openshell_without_the_sdk_raises_with_install_advice(self, tmp_path):
         """The advice must not send the user to a package index for ``raven``:
@@ -239,7 +228,7 @@ class TestBuildExecutor:
         this interpreter's environment."""
         with patch.dict("sys.modules", {"openshell": None}):
             with pytest.raises(SandboxInitError, match="No sandbox backend available") as exc_info:
-                build_executor(SandboxConfig(backend="openshell"), tmp_path, sandbox_dir=_test_sandbox_dir)
+                build_executor(SandboxConfig(backend="openshell"), tmp_path)
         message = str(exc_info.value)
         assert "uv pip install --python" in message
         assert "raven[sandbox]" not in message
@@ -247,22 +236,7 @@ class TestBuildExecutor:
     def test_unknown_backend_raises(self, tmp_path):
         cfg = SandboxConfig.model_construct(backend="unknown")  # bypass validator
         with pytest.raises(SandboxInitError, match="Unknown sandbox backend"):
-            build_executor(cfg, tmp_path, sandbox_dir=_test_sandbox_dir)
-
-    @pytest.mark.parametrize("backend", ["none", "openshell"])
-    def test_no_backend_resolves_a_local_state_dir(self, tmp_path, backend):
-        """Resolving one creates it, and neither backend keeps local state."""
-        if backend == "openshell":
-            pytest.importorskip("openshell")
-        asked: list[str] = []
-
-        def _resolver(name: str) -> Path:
-            asked.append(name)
-            return tmp_path / name
-
-        build_executor(SandboxConfig(backend=backend), tmp_path, sandbox_dir=_resolver)
-
-        assert asked == []
+            build_executor(cfg, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -1391,7 +1365,7 @@ class TestSubagentSandboxLifecycle:
 
         original = subagent_mod.build_executor
 
-        def _patched_build(cfg, workspace, owned_ids=None, extra_volumes=(), *, sandbox_dir=None):
+        def _patched_build(cfg, workspace, extra_volumes=()):
             return TrackingExecutor()
 
         subagent_mod.build_executor = _patched_build
@@ -1501,20 +1475,10 @@ def test_build_executor_warns_when_backend_none(monkeypatch, tmp_path):
     msgs: list[str] = []
     sink = logger.add(lambda m: msgs.append(str(m)), level="WARNING")
     try:
-        build_executor(SandboxConfig(backend="none"), tmp_path, sandbox_dir=_test_sandbox_dir)
+        build_executor(SandboxConfig(backend="none"), tmp_path)
     finally:
         logger.remove(sink)
     assert any("no isolation" in m for m in msgs)
-
-
-def test_a_backend_gets_its_own_home_under_the_data_dir() -> None:
-    """A backend that keeps local state gets it under raven's data dir, and the
-    directory has to exist by the time the backend is handed the path."""
-    home = get_sandbox_dir("example")
-
-    assert home == get_data_dir() / "sandbox" / "example"
-    assert home.is_dir()
-    assert get_sandbox_dir("other") == home.parent / "other"
 
 
 def test_instance_identity_survives_into_the_child(monkeypatch):
