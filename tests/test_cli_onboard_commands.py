@@ -1324,6 +1324,34 @@ def test_sandbox_backend_persisted_via_ops(tmp_env: Path, monkeypatch: pytest.Mo
     assert data["tools"]["sandbox"]["backend"] == "none"
 
 
+def test_windows_is_offered_no_sandbox_choice(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The OpenShell SDK ships for Linux and macOS, so a Windows host must not
+    be offered a backend whose SDK it cannot install."""
+    import questionary
+
+    offered: list[list] = []
+
+    class _FQ:
+        def __init__(self, a):
+            self._a = a
+
+        def ask(self):
+            return self._a
+
+    def _select(*args, **kw):
+        offered.append(list(kw.get("choices") or []))
+        return _FQ("none")
+
+    monkeypatch.setattr(questionary, "select", _select)
+    monkeypatch.setattr(questionary, "confirm", lambda *a, **kw: _FQ(True))
+    monkeypatch.setattr("sys.platform", "win32")
+
+    onboard_commands._step2_sandbox(skip=False, non_interactive=False)
+
+    assert offered
+    assert "openshell" not in [choice.value for choice in offered[0]]
+
+
 def test_sandbox_probe_failure_falls_back(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An OpenShell probe failure → submenu → fall back to host."""
     import questionary

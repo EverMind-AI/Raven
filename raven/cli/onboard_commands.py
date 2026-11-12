@@ -33,6 +33,7 @@ already written.
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import typer
@@ -1846,25 +1847,29 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
     questionary = _require_questionary()
     from raven.cli._styles import RAVEN_STYLE
 
+    # The OpenShell SDK ships for Linux and macOS only, so a Windows host has
+    # no sandbox backend to choose: offering one would end in an install
+    # command that cannot work.
+    sandbox_available = sys.platform != "win32"
     current = _current_sandbox_backend()
     choices: list[Any] = []
-    if current != "none":
+    if current != "none" and sandbox_available:
         choices.append(questionary.Choice(t("Keep current: sandbox (OpenShell)"), value="keep"))
-    choices.extend(
-        [
-            questionary.Choice(
-                t("Host (direct) — simplest, runs right on your machine"),
-                value="none",
-            ),
+    choices.append(questionary.Choice(t("Host (direct) — simplest, runs right on your machine"), value="none"))
+    if sandbox_available:
+        choices.append(
             questionary.Choice(
                 t(
                     "Sandbox isolation (OpenShell) — kernel-enforced isolation, safer (needs Docker and an OpenShell gateway)"
                 ),
                 value="openshell",
-            ),
-            questionary.Choice(t("Back"), value=_BACK),
-        ]
-    )
+            )
+        )
+    choices.append(questionary.Choice(t("Back"), value=_BACK))
+    if not sandbox_available:
+        console.print(
+            t("  [dim]Sandbox isolation (OpenShell) needs Linux or macOS; commands on this host run directly.[/dim]")
+        )
 
     while True:
         picked = questionary.select(t("Run location:"), choices=choices, style=RAVEN_STYLE, qmark=_QMARK).ask()
