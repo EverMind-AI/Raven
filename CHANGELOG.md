@@ -6,6 +6,16 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- The deck engine's `ppt_image_search` follows the host's selected search
+  vendor. `serper`, `serpapi`, `brave`, `firecrawl` and `serply` answer on that
+  vendor's own key, `imageSearch.provider: "host"` being the shipped
+  declaration; Tavily's image hits carry no size or source page, so a host on
+  Tavily falls back to Serper, and when no deck vendor's key resolves the tool
+  is withheld instead of failing per call. *Settings → Tools → Search service*
+  says which of the three applies, and a Raven-Design card closes the route to
+  Raven-PPT when no picture tool resolves. The deck's own Serper key remains an
+  override and is never sent to another vendor's endpoint.
+
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.
 

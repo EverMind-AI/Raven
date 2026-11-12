@@ -9160,12 +9160,12 @@
       "zh": "搜索服务"
     },
     "gui.settings.tools.ppt_image_missing": {
-      "en": "This search API has no image search and no Serper key is configured. Deck generation cannot run.",
-      "zh": "当前搜索 API 无搜图工具，无法启用 PPT 制作引擎。"
+      "en": "Deck generation cannot use this search API's pictures and no Serper key is configured, so it cannot run.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，且未配置 Serper Key，无法启用 PPT 制作引擎。"
     },
     "gui.settings.tools.ppt_image_fallback": {
-      "en": "This search API has no image search. Deck generation will use {name}.",
-      "zh": "当前搜索 API 无搜图工具，PPT 制作将回退使用 {name}。"
+      "en": "Deck generation cannot use this search API's pictures. It will use {name} instead.",
+      "zh": "当前搜索 API 的图片结果无法用于 PPT 制作，将改用 {name}。"
     },
     "gui.settings.tools.fetch_vendor": {
       "en": "Fetch service",

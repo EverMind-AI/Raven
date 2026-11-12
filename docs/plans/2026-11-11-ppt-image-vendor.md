@@ -294,7 +294,7 @@ In the same test, set a host Serper key and assert `imageSearch.apiKey` is still
 - Test: `tests/test_rpc_subagents.py`, `tests/test_rpc_contract_shapes.py`
 
 **Interfaces:**
-- Produces: every row carries `routes: [{"to": str, "image_search_ready": bool | None}]`; `None` when the route does not declare `image_search`, `True`/`False` from `picture_search_ready` otherwise. Always present (`[]` for rows with no routes) and added to the schema's `required`.
+- Produces: every row carries `routes: [{"to": str, "image_search_ready": bool | None}]`; `None` when the route does not declare `image_search`, `True`/`False` from `picture_search_ready` otherwise. Optional in the schema (`SubagentRow.routes?`) and defaulting to `[]`; `_rows` still writes `[]` for a row with no routes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -313,20 +313,22 @@ Build a product row whose folder declares the Design→PPT route and `imageSearc
 **Files:**
 - Modify: `ui-web/src/features/settings/source.ts`
 - Modify: `ui-web/src/features/settings/pages/Tools.tsx`
+- Modify: `ui-web/src/rpc/fixtures/settings.ts` (offline `settings.get` mirror)
 - Modify: `i18n/messages.json`
-- Test: `ui-web/src/features/settings/pages/Tools.test.tsx`, `tests/test_agent_tools_web_providers.py` (the existing vendor-table pin parses `source.ts` from Python; extend it for `PPT_IMAGE_VENDORS`)
+- Test: `ui-web/src/features/settings/pages/Tools.test.tsx`, `tests/test_agent_tools_web_providers.py` (the existing fixture pin parses `PPT_VENDORS` out of `ui-web/src/rpc/fixtures/settings.ts`)
 
 **Interfaces:**
-- Produces: `PPT_IMAGE_VENDORS: Set<string>` and `pptImageVendor(raw): string` (`""` when no vendor or Serper key resolves); a note under the Search service picker.
+- Consumes: `settings.get`'s `picture_search` (`vendor`, `ready`, `fallback`).
+- Produces: a note under the Search service picker, and the fixture's `pictureSearchOf` mirroring the backend's answer.
 
 - [ ] **Step 1: Write the failing tests**
 
-- `tests/test_agent_tools_web_providers.py`: parse `PPT_IMAGE_VENDORS` out of `ui-web/src/features/settings/source.ts` and hold it equal to the Python tuple.
+- `tests/test_agent_tools_web_providers.py`: parse `PPT_VENDORS` out of `ui-web/src/rpc/fixtures/settings.ts` and hold it equal to `PPT_IMAGE_SEARCH_VENDORS`.
 - `Tools.test.tsx`: Tavily selected + Serper key → the info string is rendered; Tavily selected + no Serper key → the warning string is rendered; SerpApi selected + key → neither.
 
 - [ ] **Step 2: Run — FAIL.**
 
-- [ ] **Step 3: Implement** the helpers and the note in the `web_search` panel. Add the `en`/`zh` strings to `i18n/messages.json` under `gui.settings.tools.*`.
+- [ ] **Step 3: Implement** the note in the `web_search` panel from `picture_search`, and the fixture's `pictureSearchOf` mirror. Add the `en`/`zh` strings to `i18n/messages.json` under `gui.settings.tools.*`.
 
 - [ ] **Step 4: Run** `npm test --prefix ui-web -- src/features/settings`. Expected: PASS.
 
