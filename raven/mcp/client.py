@@ -81,13 +81,19 @@ class MCPToolWrapper(Tool):
         if self._executor is None:
             return outcome
         ok = outcome.ok if isinstance(outcome, ToolResult) else True
-        denials = await self._executor.denials_since(started, wait=not ok)
+        # Only what was refused while the call ran. The sandbox is shared with
+        # whatever else runs in it, so a refusal in the window may not be the
+        # server's, and the prompt says so rather than pinning it on the tool.
+        denials = await self._executor.denials_since(started, until=time.time(), wait=not ok)
         if not denials:
             return outcome
         from raven.permissions.sandbox_network import handle_denials
 
         notice = await handle_denials(
-            self._executor, denials, command=f"{self._server_name} {self._original_name}", tool_name=self._name
+            self._executor,
+            denials,
+            command=f"a process in the sandbox while the MCP tool {self._server_name}.{self._original_name} ran",
+            tool_name=self._name,
         )
         if isinstance(outcome, ToolResult):
             return replace(

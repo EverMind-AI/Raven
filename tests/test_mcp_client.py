@@ -279,10 +279,12 @@ class _Sandbox:
     def __init__(self, denials: list) -> None:
         self.denials = denials
         self.reads: list[bool] = []
+        self.windows: list[tuple] = []
         self.granted: list = []
 
-    async def denials_since(self, since: float, *, wait: bool = False) -> list:
+    async def denials_since(self, since: float, *, until: float | None = None, wait: bool = False) -> list:
         self.reads.append(wait)
+        self.windows.append((since, until))
         return list(self.denials)
 
     async def grant_network(self, grants) -> bool:
@@ -373,3 +375,28 @@ async def test_only_a_server_the_sandbox_started_has_its_refusals_read(monkeypat
             connected = await connect_mcp_server("srv", cfg, reg, stack, executor=sandbox)
         (name,) = connected.names
         assert reg.get(name)._executor is reads_from
+
+
+async def test_a_refusal_is_read_only_while_the_call_ran_and_not_pinned_on_the_tool() -> None:
+    from raven.config.schema import PermissionsConfig
+    from raven.contracts.permissions import ApprovalChoice, ApprovalOutcome
+    from raven.permissions.builtin import BuiltinRulings
+    from raven.permissions.gate import PermissionGate
+    from raven.permissions.runtime import tool_body
+    from raven.permissions.turn import start_permission_turn
+
+    asked: list[dict] = []
+
+    class Deny:
+        async def await_approval(self, **kwargs):
+            asked.append(kwargs)
+            return ApprovalOutcome(ApprovalChoice.DENY)
+
+    start_permission_turn(Deny(), conversation_id="c-window", turn_id="t")
+    gate = PermissionGate(config_source=lambda: PermissionsConfig(), builtin=BuiltinRulings())
+    sandbox = _Sandbox([_node_denial()])
+    with tool_body(gate):
+        await _sandboxed(_Session(_result(is_error=True, text="fetch failed")), sandbox).execute()
+    ((since, until),) = sandbox.windows
+    assert until is not None and since <= until
+    assert asked[0]["evidence"]["command"] == "a process in the sandbox while the MCP tool server-x.fetch ran"

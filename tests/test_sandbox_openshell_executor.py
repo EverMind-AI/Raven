@@ -587,6 +587,14 @@ class TestDenials:
         assert [(d.binary, d.port) for d in denials] == [("/usr/bin/curl", 443)]
         assert len(cp.denial_reads) == 2
 
+    async def test_denials_since_leaves_out_what_was_refused_after_the_window(self, tmp_path):
+        cp, ex = await self._started(tmp_path)
+        start = time.time()
+        late = TCP_DENIAL.replace("example.com", "late.example.com")
+        cp.denial_script = [[(start + 1, TCP_DENIAL), (start + 9, late)]]
+        denials = await ex.denials_since(start, until=start + 5)
+        assert [d.host for d in denials] == ["example.com"]
+
     async def test_a_sandbox_that_is_not_running_has_no_denials(self, tmp_path):
         ex = _executor(tmp_path, FakeControlPlane())
         assert await ex.denials_since(time.time()) == []

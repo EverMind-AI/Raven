@@ -96,8 +96,10 @@ class SandboxExecutor(ABC):
         """Bring a running executor's network policy up to date; False where there is none."""
         return False
 
-    async def denials_since(self, since: float, *, wait: bool = False) -> list[NetworkDenial]:
-        """Connections the sandbox refused since ``since`` (epoch seconds), whoever made them.
+    async def denials_since(
+        self, since: float, *, until: float | None = None, wait: bool = False
+    ) -> list[NetworkDenial]:
+        """Connections the sandbox refused between ``since`` and ``until`` (epoch seconds), whoever made them.
 
         For a process that outlives any one command (a stdio MCP server), whose
         refusals no ``exec`` result carries. ``wait`` gives a refusal a moment
