@@ -1768,3 +1768,270 @@ def test_package_manager_queries_read_only_and_their_installs_still_ask():
         "docker -H ps run evil",
     ):
         assert not exec_reads_only(command), command
+
+
+def _runtime(**overrides: Any) -> dict[str, Any]:
+    ask: dict[str, Any] = dict(
+        tool_name="exec",
+        kind="sandbox.network",
+        action="/usr/bin/curl -> example.com:443",
+        description="Allow this program to reach this address",
+        digest="net:/usr/bin/curl@example.com:443",
+        session_keys=("net:/usr/bin/curl@example.com:443",),
+        evidence={"targets": [{"binary": "/usr/bin/curl", "host": "example.com", "port": 443}]},
+        suggested_pattern="example.com:443",
+        review=None,
+    )
+    ask.update(overrides)
+    return ask
+
+
+def _fresh_turn(responder: Any):
+    from uuid import uuid4
+
+    return start_permission_turn(responder, conversation_id=f"conv-runtime-{uuid4().hex}", turn_id="turn-1")
+
+
+class _Raising:
+    def __init__(self):
+        self.calls = 0
+
+    async def await_approval(self, **kwargs: Any) -> ApprovalOutcome:
+        self.calls += 1
+        raise ConnectionError("socket closed")
+
+
+class TestRuntimeApproval:
+    """An action a tool finds while it runs, asked through the gate's own mode, grants and responder."""
+
+    @pytest.mark.asyncio
+    async def test_a_target_refused_earlier_this_turn_is_not_asked_again(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        turn = _fresh_turn(responder)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.DENY
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.DENY
+        assert len(responder.calls) == 1
+        assert [r.source for r in turn.refusals] == ["approval_denied", "denied_earlier"]
+
+    @pytest.mark.asyncio
+    async def test_a_request_nobody_answered_is_lapsed_and_not_asked_again(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY, answered=False))
+        turn = _fresh_turn(responder)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.LAPSED
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.LAPSED
+        assert len(responder.calls) == 1
+        assert [r.source for r in turn.refusals] == ["approval_lapsed", "lapsed_earlier"]
+
+    @pytest.mark.asyncio
+    async def test_a_session_grant_answers_without_a_prompt(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW_SESSION))
+        _fresh_turn(responder)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.SESSION
+        assert (await gate.authorize_runtime(**_runtime(digest="another-command"))).choice is RuntimeChoice.SESSION
+        assert len(responder.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_full_mode_grants_for_the_session_without_asking(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        _fresh_turn(responder)
+        answer = await gate_for(PermissionsConfig(mode="full")).authorize_runtime(**_runtime())
+        assert answer.choice is RuntimeChoice.SESSION
+        answer = await gate_for(PermissionsConfig(mode="ask")).authorize_runtime(**_runtime())
+        assert answer.choice is RuntimeChoice.SESSION
+        assert responder.calls == []
+
+    @pytest.mark.asyncio
+    async def test_smart_mode_lets_the_reviewer_allow_once(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        _fresh_turn(responder)
+
+        async def approve() -> bool:
+            return True
+
+        gate = gate_for(PermissionsConfig(mode="smart"))
+        assert (await gate.authorize_runtime(**_runtime(review=approve))).choice is RuntimeChoice.ONCE
+        assert responder.calls == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("verdict", ["escalate", "error"])
+    async def test_smart_mode_asks_the_person_when_the_reviewer_does_not_allow(self, verdict):
+        from raven.permissions.runtime import RuntimeChoice
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+        _fresh_turn(responder)
+
+        async def review() -> bool:
+            if verdict == "error":
+                raise RuntimeError("reviewer down")
+            return False
+
+        gate = gate_for(PermissionsConfig(mode="smart"))
+        assert (await gate.authorize_runtime(**_runtime(review=review))).choice is RuntimeChoice.ONCE
+        assert len(responder.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_an_unattended_turn_is_refused_without_asking(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        turn = _fresh_turn(None)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.UNATTENDED
+        assert [r.source for r in turn.refusals] == ["unattended"]
+
+    @pytest.mark.asyncio
+    async def test_a_gate_that_may_not_ask_is_unattended_even_with_a_responder(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+        _fresh_turn(responder)
+        gate = gate_for(PermissionsConfig(), allow_ask=False)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.UNATTENDED
+        assert responder.calls == []
+
+    @pytest.mark.asyncio
+    async def test_the_person_is_asked_with_the_runtime_kind_and_evidence(self):
+        gate = gate_for(PermissionsConfig())
+        responder = Responder(ApprovalOutcome(ApprovalChoice.ALLOW))
+        turn = _fresh_turn(responder)
+        await gate.authorize_runtime(**_runtime())
+        (call,) = responder.calls
+        assert call["kind"] == "sandbox.network"
+        assert call["command"] == "/usr/bin/curl -> example.com:443"
+        assert call["description"] == "Allow this program to reach this address"
+        assert call["suggested_pattern"] == "example.com:443"
+        assert call["evidence"]["targets"][0]["host"] == "example.com"
+        assert call["conversation_id"] == turn.conversation_id
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("choice", "expected"),
+        [
+            (ApprovalChoice.ALLOW, "once"),
+            (ApprovalChoice.ALLOW_SESSION, "session"),
+            (ApprovalChoice.ALLOW_ALWAYS, "always"),
+            (ApprovalChoice.DENY, "deny"),
+            (ApprovalChoice.DENY_STOP, "deny_stop"),
+        ],
+    )
+    async def test_each_answer_maps_to_its_runtime_choice(self, choice, expected):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        _fresh_turn(Responder(ApprovalOutcome(choice)))
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice(expected)
+
+    @pytest.mark.asyncio
+    async def test_what_the_person_said_with_a_refusal_comes_back(self):
+        gate = gate_for(PermissionsConfig())
+        _fresh_turn(Responder(ApprovalOutcome(ApprovalChoice.DENY, feedback="use the internal mirror")))
+        answer = await gate.authorize_runtime(**_runtime())
+        assert (answer.choice.value, answer.feedback) == ("deny", "use the internal mirror")
+
+    @pytest.mark.asyncio
+    async def test_only_allow_for_the_session_is_remembered(self):
+        from raven.permissions.session import session_allows
+
+        gate = gate_for(PermissionsConfig())
+        once = _fresh_turn(Responder(ApprovalOutcome(ApprovalChoice.ALLOW)))
+        await gate.authorize_runtime(**_runtime())
+        assert not session_allows(once.session_key, _runtime()["session_keys"])
+        session = _fresh_turn(Responder(ApprovalOutcome(ApprovalChoice.ALLOW_SESSION)))
+        await gate.authorize_runtime(**_runtime())
+        assert session_allows(session.session_key, _runtime()["session_keys"])
+
+    @pytest.mark.asyncio
+    async def test_a_broken_transport_lapses_and_may_be_asked_again(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        gate = gate_for(PermissionsConfig())
+        responder = _Raising()
+        turn = _fresh_turn(responder)
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.LAPSED
+        assert (await gate.authorize_runtime(**_runtime())).choice is RuntimeChoice.LAPSED
+        assert responder.calls == 2
+        assert [r.source for r in turn.refusals] == ["approval_transport_error"] * 2
+
+
+class TestRuntimeApprovalInTheRegistry:
+    """The registry hands the gate to the tool body, and a person deciding stops the tool's clock."""
+
+    @staticmethod
+    def _registry(gate, execute, *, timeout_seconds=None):
+        from raven.agent.tools.registry import ToolRegistry
+
+        tool = _probe_tool("probe_runtime", execute=execute)
+        if timeout_seconds is not None:
+            tool.timeout_seconds = timeout_seconds
+        registry = ToolRegistry(permission_gate=gate)
+        registry.register(tool)
+        return registry
+
+    @pytest.mark.asyncio
+    async def test_the_registry_binds_the_gate_for_the_tool_body_only(self):
+        from raven.permissions.runtime import current_gate
+
+        gate = gate_for(PermissionsConfig(mode="full"))
+        seen = []
+
+        async def body(**kwargs):
+            seen.append(current_gate())
+            return "ok"
+
+        _fresh_turn(None)
+        assert current_gate() is None
+        await self._registry(gate, body).execute("probe_runtime", {})
+        assert seen == [gate]
+        assert current_gate() is None
+
+    @pytest.mark.asyncio
+    async def test_a_person_deciding_inside_the_tool_body_stops_its_ceiling(self):
+        from raven.permissions.runtime import current_gate
+
+        class Slow(Responder):
+            async def await_approval(self, **kwargs):
+                await asyncio.sleep(0.6)
+                return await super().await_approval(**kwargs)
+
+        gate = gate_for(PermissionsConfig())
+
+        async def body(**kwargs):
+            answer = await current_gate().authorize_runtime(**_runtime(tool_name="probe_runtime"))
+            return f"done {answer.choice.value}"
+
+        _fresh_turn(Slow(ApprovalOutcome(ApprovalChoice.ALLOW)))
+        result = await self._registry(gate, body, timeout_seconds=0.3).execute("probe_runtime", {})
+        assert str(result) == "done once"
+
+    @pytest.mark.asyncio
+    async def test_the_ceiling_resumes_with_what_was_left(self):
+        from raven.permissions.runtime import current_gate
+
+        class Slow(Responder):
+            async def await_approval(self, **kwargs):
+                await asyncio.sleep(0.4)
+                return await super().await_approval(**kwargs)
+
+        gate = gate_for(PermissionsConfig())
+
+        async def body(**kwargs):
+            await asyncio.sleep(0.25)
+            await current_gate().authorize_runtime(**_runtime(tool_name="probe_runtime"))
+            await asyncio.sleep(0.25)
+            return "finished"
+
+        _fresh_turn(Slow(ApprovalOutcome(ApprovalChoice.ALLOW)))
+        result = await self._registry(gate, body, timeout_seconds=0.4).execute("probe_runtime", {})
+        assert "timed out" in str(result)

@@ -16,6 +16,7 @@ from raven.agent.tools.params import cast_params, render_param_errors, validate_
 from raven.contracts.llm_provider import RunMeta, TruncationInfo
 from raven.contracts.tool import RAW_ARGUMENTS_KEY, Continuation, Tool, ToolOutput, ToolResult
 from raven.observability import semconv
+from raven.permissions.runtime import tool_body
 from raven.tracing import trace
 
 if TYPE_CHECKING:
@@ -1032,16 +1033,22 @@ class ToolRegistry:
                     return verdict
 
             ceiling = (spec or tool).timeout_seconds or self.DEFAULT_TOOL_TIMEOUT_S
+            # The body sees the gate that admitted it, so an action it finds
+            # while it runs is asked about the same way (raven.permissions.runtime).
             if tool.blocking_for(params):
                 # Intentionally waits on a human — must not be timer-killed.
-                result = await tool.execute(**params)
+                with tool_body(self._permission_gate):
+                    result = await tool.execute(**params)
             else:
                 # The heartbeat is a bystander: it neither holds the result nor
                 # touches the deadline, so a change here cannot alter what the
                 # tool returns or when it is killed.
                 beat = asyncio.ensure_future(_heartbeat(name, ceiling))
                 try:
-                    result = await asyncio.wait_for(tool.execute(**params), timeout=ceiling)
+                    # A deadline the gate can stop while a person decides.
+                    async with asyncio.timeout(ceiling) as deadline:
+                        with tool_body(self._permission_gate, deadline):
+                            result = await tool.execute(**params)
                 finally:
                     beat.cancel()
 
