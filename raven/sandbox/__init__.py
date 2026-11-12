@@ -137,13 +137,32 @@ def build_executor(
             workspace=workspace,
             cpus=sandbox_cfg.cpus,
             memory_mib=sandbox_cfg.memory_mib,
-            allow_net=sandbox_cfg.allow_net,
             extra_volumes=[*sandbox_cfg.extra_volumes, *[list(v) for v in extra_volumes]],
             default_timeout=sandbox_cfg.default_timeout,
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
             gateway=sandbox_cfg.gateway,
-            network_source=network_source,
+            network_source=network_source or _configured_network(),
         )
 
     raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'openshell'.")
+
+
+def _configured_network() -> Callable[[], dict[str, dict]]:
+    """The policy of the user's ``permissions.network`` as it stands now, for a caller that passes no source.
+
+    A caller that can read the live permission set passes ``network_source``;
+    this snapshot keeps every other sandbox under the same rules instead of the
+    executor's open default. A config that cannot be read closes the network.
+    """
+    from raven.config.loader import load_config
+    from raven.config.schema import NetworkPermissions
+    from raven.sandbox.network_policy import compile_network_policy
+
+    try:
+        network = load_config().permissions.network
+    except Exception as exc:  # noqa: BLE001 - no readable permission set means no network
+        logger.warning("Could not read permissions.network for a sandbox ({}); it gets no network", exc)
+        network = NetworkPermissions(default="closed")
+    policies = compile_network_policy(network)
+    return lambda: policies

@@ -574,7 +574,7 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
                 "playbooks": {"dir": str(library["user"])},
                 "tools": {
                     "restrict_to_workspace": True,
-                    "sandbox": {"backend": "none", "allow_net": False},
+                    "sandbox": {"backend": "none", "cpus": 3},
                 },
             }
         ),
@@ -612,7 +612,7 @@ def test_run_wires_subagent_manager_sandbox_and_workspace_restriction(library, m
     assert manager.restrict_to_workspace is True
     assert manager._sandbox_config is not None
     assert manager._sandbox_config.backend == "none"
-    assert manager._sandbox_config.allow_net is False
+    assert manager._sandbox_config.cpus == 3
     assert manager.provider_pool is not None
     assert tool_captured["tool"]._sandbox_for == manager.sandbox_executor_for
 
@@ -627,7 +627,7 @@ def test_stint_driver_wires_subagent_manager_sandbox_and_workspace_restriction(t
     config = Config()
     config.tools = ToolsConfig(
         restrict_to_workspace=True,
-        sandbox=SandboxConfig(backend="none", allow_net=False),
+        sandbox=SandboxConfig(backend="none", cpus=3),
     )
 
     monkeypatch.setattr("raven.providers.factory.make_provider", lambda cfg: _FakeProvider())

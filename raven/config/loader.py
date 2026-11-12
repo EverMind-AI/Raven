@@ -23,7 +23,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 16
+CURRENT_CONFIG_VERSION = 17
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -54,6 +54,7 @@ _PLANTED_CRON_TIMEZONE_MIGRATION = 13
 _RETIRED_VERDICT_SWITCH_MIGRATION = 14
 _SHIM_PIN_REFRESH_MIGRATION = 15
 _RETIRED_SANDBOX_BACKEND_MIGRATION = 16
+_SANDBOX_NETWORK_MIGRATION = 17
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -425,6 +426,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 pins_waiting = _shim_pins_waiting(raw, retired)
             if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
                 changed = _migrate_retired_sandbox_backend(raw) or changed
+            if from_version < _SANDBOX_NETWORK_MIGRATION:
+                changed = _migrate_sandbox_network(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -701,6 +704,43 @@ def _migrate_retired_sandbox_backend(data: dict[str, Any], *, notify: bool = Fal
     if notify:
         _migration_notices.extend(n for n in notices if n not in _migration_notices)
     return bool(notices)
+
+
+def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Move ``tools.sandbox.allowNet`` into ``permissions.network``.
+
+    Network reach is part of the one permission set every agent and sandbox
+    reads, so it no longer lives with the sandbox's runtime settings. An existing
+    ``permissions.network`` wins; the old key leaves the file either way.
+    """
+    tools = data.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict):
+        return False
+    keys = [key for key in ("allowNet", "allow_net") if key in sandbox]
+    if not keys:
+        return False
+    value = sandbox[keys[0]]
+    for key in keys:
+        sandbox.pop(key)
+    permissions = data.setdefault("permissions", {})
+    if isinstance(permissions, dict) and "network" not in permissions:
+        from raven.sandbox.network_policy import network_from_allow_net
+
+        allow_net = value if isinstance(value, bool | list) else True
+        permissions["network"] = network_from_allow_net(allow_net).model_dump(mode="json", by_alias=True)
+        notice = (
+            f"Moved `tools.sandbox.{keys[0]}` to `permissions.network`: what sandboxes may reach is now part of "
+            "the permission set every agent and sandbox shares."
+        )
+    else:
+        notice = (
+            f"Removed `tools.sandbox.{keys[0]}` from your config: `permissions.network` already sets what "
+            "sandboxes may reach."
+        )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
 
 
 # A path token that reaches into the retired vendored tree, on either separator.
@@ -1583,6 +1623,13 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
     if from_version < _RETIRED_SANDBOX_BACKEND_MIGRATION:
         _migrate_retired_sandbox_backend(data, notify=True)
+    if from_version < _SANDBOX_NETWORK_MIGRATION:
+        _migrate_sandbox_network(data, notify=True)
+    elif _migrate_sandbox_network(data):
+        # The key can come back after the floor ran: an older build reads the
+        # stamp as current and writes allowNet again. The loaded config must
+        # still run under it, so it is read into permissions on every load.
+        _log.info("Migrated: read a returning tools.sandbox.allowNet into permissions.network")
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
