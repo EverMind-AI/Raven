@@ -103,7 +103,7 @@ async def handle_denials(
 # The targets being asked about right now, per conversation. Another agent of
 # the conversation meeting one of them waits for that answer instead of asking
 # the person a second time; everything here runs on the gateway's one loop.
-_ASKING: dict[tuple[str, str, str, int | None], asyncio.Future[RuntimeAnswer]] = {}
+_ASKING: dict[tuple[str, str, str, int | None], tuple[asyncio.Future[RuntimeAnswer], int]] = {}
 
 
 async def _ask(
@@ -117,13 +117,13 @@ async def _ask(
     shown = denials[:_MAX_LISTED]
     scope = current_turn().session_key
     fresh: list[NetworkDenial] = []
-    waiting: list[tuple[NetworkDenial, asyncio.Future[RuntimeAnswer]]] = []
+    waiting: list[tuple[NetworkDenial, asyncio.Future[RuntimeAnswer], int]] = []
     for denial in shown:
         pending = _ASKING.get(_key(scope, denial)) if scope else None
         if pending is None:
             fresh.append(denial)
         else:
-            waiting.append((denial, pending))
+            waiting.append((denial, *pending))
     outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]] = []
     stop = False
     if fresh:
@@ -134,12 +134,22 @@ async def _ask(
         # Waiting on a person as surely as the one who asked, so the tool's
         # deadline stops here too.
         with deadline_stopped():
-            answers = await asyncio.gather(*(asyncio.shield(future) for _, future in waiting))
-        for (denial, _), answer in zip(waiting, answers, strict=True):
+            answers = await asyncio.gather(*(asyncio.shield(future) for _, future, _ in waiting))
+        again: list[NetworkDenial] = []
+        for (denial, _, asker), answer in zip(waiting, answers, strict=True):
+            if answer.choice is RuntimeChoice.ONCE and asker != id(executor):
+                # "Once" was said about the sandbox that card described, and this
+                # one may be another, the one every conversation shares among them.
+                again.append(denial)
+                continue
             if answer.choice is RuntimeChoice.DENY_STOP:
                 # The person stopped the turn they were looking at, not this one.
                 answer = RuntimeAnswer(RuntimeChoice.DENY, answer.feedback)
             outcomes.append(([denial], answer))
+        if again:
+            answer = await _prompt(gate, executor, again, scope, command=command, tool_name=tool_name)
+            outcomes.append((again, answer))
+            stop = stop or answer.choice is RuntimeChoice.DENY_STOP
     for group, answer in outcomes:
         if answer.choice.approved:
             await _open(executor, _grants(group), answer.choice)
@@ -178,7 +188,7 @@ async def _prompt(
 
     loop = asyncio.get_running_loop()
     futures = {_key(scope, denial): loop.create_future() for denial in denials} if scope else {}
-    _ASKING.update(futures)
+    _ASKING.update({key: (future, id(executor)) for key, future in futures.items()})
     # What a waiter hears if this prompt is torn down before it is answered.
     answer = RuntimeAnswer(RuntimeChoice.LAPSED)
     try:
@@ -207,7 +217,7 @@ async def _prompt(
         return answer
     finally:
         for key, future in futures.items():
-            if _ASKING.get(key) is future:
+            if _ASKING.get(key, (None, 0))[0] is future:
                 del _ASKING[key]
             if not future.done():
                 future.set_result(answer)

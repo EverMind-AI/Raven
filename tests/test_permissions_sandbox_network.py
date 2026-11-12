@@ -344,13 +344,30 @@ async def test_concurrent_requests_for_one_target_share_one_prompt(grants):
 
 async def test_a_new_target_beside_a_pending_one_gets_its_own_prompt(grants):
     conversation = f"conv-{uuid4().hex}"
-    responder, a, b = HeldResponder(ApprovalChoice.ALLOW), FakeSandbox(), FakeSandbox()
+    responder, a, b = HeldResponder(ApprovalChoice.ALLOW_SESSION), FakeSandbox(), FakeSandbox()
     await _concurrently(responder, (a, [CURL]), (b, [CURL, ORG]), conversation=conversation)
     assert [[t["host"] for t in call["evidence"]["targets"]] for call in responder.calls] == [
         ["example.com"],
         ["example.org"],
     ]
     assert sorted(b.granted) == [[CURL_GRANT], [ORG_GRANT]]
+
+
+async def test_allow_once_for_another_sandbox_is_asked_again_for_this_one(grants):
+    # "Once" was said about the sandbox the card described; another agent's
+    # sandbox may be the one every conversation shares.
+    conversation = f"conv-{uuid4().hex}"
+    responder, a, b = HeldResponder(ApprovalChoice.ALLOW), FakeSandbox(), FakeSandbox()
+    await _concurrently(responder, (a, [CURL]), (b, [CURL]), conversation=conversation)
+    assert len(responder.calls) == 2
+    assert a.granted == [[CURL_GRANT]] and b.granted == [[CURL_GRANT]]
+
+
+async def test_allow_once_is_shared_by_commands_of_the_same_sandbox(grants):
+    conversation = f"conv-{uuid4().hex}"
+    responder, sandbox = HeldResponder(ApprovalChoice.ALLOW), FakeSandbox()
+    await _concurrently(responder, (sandbox, [CURL]), (sandbox, [CURL]), conversation=conversation)
+    assert len(responder.calls) == 1
 
 
 async def test_a_stop_ends_only_the_turn_that_asked(grants):
