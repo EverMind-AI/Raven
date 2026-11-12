@@ -7,10 +7,14 @@ or direct_executor.py directly, so callers remain decoupled from concrete backen
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from raven.sandbox.denials import NetworkDenial
+
+if TYPE_CHECKING:
+    from raven.sandbox.network_policy import NetworkGrant
 
 
 class SandboxInitError(RuntimeError):
@@ -77,6 +81,19 @@ class SandboxExecutor(ABC):
         using isinstance() -- keeps caller code decoupled from concrete executor types.
         DirectExecutor and the base class default to False.
         """
+        return False
+
+    @property
+    def supports_network_grants(self) -> bool:
+        """True if a running executor can open a blocked host (``grant_network``)."""
+        return False
+
+    async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
+        """Open ``grants`` in this executor only; False where there is no network policy to change."""
+        return False
+
+    async def sync_network(self) -> bool:
+        """Bring a running executor's network policy up to date; False where there is none."""
         return False
 
     @abstractmethod

@@ -63,6 +63,10 @@ class FakeControlPlane:
         self.interactive_stream: FakeStream | None = None
         self.denial_script: list = []
         self.denial_reads: list[float] = []
+        self.merges: list[tuple[dict, list]] = []
+        self.merge_error: Exception | None = None
+        self.policy_loads = True
+        self.waited: list[int] = []
 
     def create(self, *, name, image, policy, driver_config, resources, labels):
         if self.create_error:
@@ -84,6 +88,16 @@ class FakeControlPlane:
 
     def delete(self, name):
         self.deleted.append(name)
+
+    def merge_rules(self, name, add, remove):
+        if self.merge_error:
+            raise self.merge_error
+        self.merges.append((dict(add), list(remove)))
+        return len(self.merges) + 1
+
+    def wait_policy(self, name, version, timeout):
+        self.waited.append(version)
+        return self.policy_loads
 
     def denial_messages(self, name, since):
         self.denial_reads.append(since)
@@ -542,6 +556,74 @@ class TestDenials:
         assert _time.monotonic() - t0 < 1.0
 
 
+class TestLiveNetwork:
+    async def _started(self, tmp_path, policies):
+        cp = FakeControlPlane()
+        state = {"policies": policies}
+        ex = OpenShellExecutor(
+            image="i", workspace=tmp_path, control_plane=cp, network_source=lambda: state["policies"]
+        )
+        await ex.start()
+        return cp, ex, state
+
+    async def test_a_changed_source_is_merged_before_the_next_command(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"allow_open": {"name": "allow_open"}})
+        state["policies"] = {"allow_open": {"name": "allow_open"}, "raven_rule_a": {"name": "raven_rule_a"}}
+        await ex.exec("true")
+        assert cp.merges == [({"raven_rule_a": {"name": "raven_rule_a"}}, [])]
+        assert cp.waited == [2]
+
+    async def test_an_unchanged_source_sends_nothing(self, tmp_path):
+        cp, ex, _ = await self._started(tmp_path, {"allow_open": {"name": "allow_open"}})
+        await ex.exec("true")
+        await ex.exec("true")
+        assert cp.merges == []
+
+    async def test_a_rule_the_source_dropped_is_removed(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {"allow_open": {"name": "allow_open"}})
+        state["policies"] = {}
+        assert await ex.sync_network() is True
+        assert cp.merges == [({}, ["allow_open"])]
+
+    async def test_a_failed_merge_is_retried_on_the_next_command(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {})
+        state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}}
+        cp.merge_error = RuntimeError("gateway gone")
+        await ex.exec("true")
+        cp.merge_error = None
+        await ex.exec("true")
+        assert cp.merges == [({"raven_rule_a": {"name": "raven_rule_a"}}, [])]
+
+    async def test_a_once_grant_applies_to_this_sandbox_and_survives_the_next_sync(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, state = await self._started(tmp_path, {})
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is True
+        ((added, removed),) = cp.merges
+        ((name, rule),) = added.items()
+        assert name.startswith("raven_grant_") and rule["binaries"] == [{"path": "/usr/bin/curl"}]
+        state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}}
+        await ex.exec("true")
+        assert cp.merges[-1] == ({"raven_rule_a": {"name": "raven_rule_a"}}, [])
+
+    async def test_granting_to_a_stopped_executor_is_a_no_op(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        await ex.stop()
+        await ox.drain_pending_deletes()
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is False
+        assert await ex.sync_network() is False
+        assert cp.merges == []
+
+    async def test_a_policy_that_never_loads_reports_false_after_the_wait(self, tmp_path):
+        from raven.sandbox.network_policy import NetworkGrant
+
+        cp, ex, _ = await self._started(tmp_path, {})
+        cp.policy_loads = False
+        assert await ex.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is False
+
+
 class TestStop:
     async def test_stop_deletes_in_the_background(self, tmp_path):
         cp = FakeControlPlane()
@@ -675,6 +757,8 @@ class _FakeStub:
         self.get_error: Exception | None = None
         self.events: list = []
         self.log_lines: list[tuple[str, str]] = []
+        self.active_versions: list[int] = []
+        self.revision_status = 0
 
     def GetSandbox(self, request, timeout):
         from openshell._proto import openshell_pb2
@@ -685,6 +769,20 @@ class _FakeStub:
         response = openshell_pb2.SandboxResponse()
         for condition in self.conditions:
             response.sandbox.status.conditions.add(**condition)
+        return response
+
+    def UpdateConfig(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("UpdateConfig", request, timeout))
+        return openshell_pb2.UpdateConfigResponse(version=7)
+
+    def GetSandboxPolicyStatus(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("GetSandboxPolicyStatus", request, timeout))
+        response = openshell_pb2.GetSandboxPolicyStatusResponse(active_version=self.active_versions.pop(0))
+        response.revision.status = self.revision_status
         return response
 
     def GetSandboxLogs(self, request, timeout):
@@ -878,6 +976,41 @@ class TestSDKControlPlane:
         assert kind == "GetSandboxLogs"
         assert request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
         assert request.since_time.seconds == 1_700_000_000 and request.since_time.nanos == 250_000_000
+
+    def test_merge_rules_adds_and_removes_named_rules_in_one_update(self, sdk):
+        plane, client = sdk
+        rule = {
+            "name": "raven_grant_x",
+            "endpoints": [{"host": "example.com", "ports": [443], "tls": "NETWORK_TLS_MODE_SKIP"}],
+            "binaries": [{"path": "/usr/bin/curl"}],
+        }
+        assert plane.merge_rules("rvx", {"raven_grant_x": rule}, ["allow_open"]) == 7
+        ((kind, request, _timeout),) = client._stub.calls
+        assert kind == "UpdateConfig" and request.sandbox == "rvx" and request.workspace_scope.workspace == "team"
+        add, remove = request.merge_operations
+        assert add.add_rule.rule_name == "raven_grant_x"
+        assert add.add_rule.rule.endpoints[0].host == "example.com" and list(add.add_rule.rule.endpoints[0].ports) == [
+            443
+        ]
+        assert add.add_rule.rule.binaries[0].path == "/usr/bin/curl"
+        assert remove.remove_rule.rule_name == "allow_open"
+
+    def test_wait_policy_polls_until_the_version_is_active(self, sdk, monkeypatch):
+        monkeypatch.setattr(ox, "_POLICY_POLL_SECONDS", 0.01)
+        plane, client = sdk
+        client._stub.active_versions = [5, 6, 7]
+        assert plane.wait_policy("rvx", 7, timeout=2) is True
+        assert len(client._stub.calls) == 3
+
+    def test_wait_policy_gives_up_on_a_failed_revision(self, sdk, monkeypatch):
+        from openshell._proto import openshell_pb2
+
+        monkeypatch.setattr(ox, "_POLICY_POLL_SECONDS", 0.01)
+        plane, client = sdk
+        client._stub.active_versions = [5] * 10
+        client._stub.revision_status = openshell_pb2.POLICY_STATUS_FAILED
+        assert plane.wait_policy("rvx", 7, timeout=2) is False
+        assert len(client._stub.calls) == 1
 
     def test_a_missing_sdk_is_an_init_error_that_names_the_extra(self, monkeypatch):
         import sys

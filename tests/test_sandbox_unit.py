@@ -1549,3 +1549,11 @@ def test_instance_identity_survives_into_the_child(monkeypatch):
     assert env["RAVEN_HOME"] == "/tmp/some-instance"
     assert env["RAVEN_CONNECTIONS"] == "/tmp/some-instance/connections.json"
     assert "ONCALL_API_KEY" not in env, "the allowlist stays a list of paths, never keys"
+
+
+async def test_a_direct_executor_has_no_network_to_grant():
+    from raven.sandbox.network_policy import NetworkGrant
+
+    executor = DirectExecutor()
+    assert await executor.grant_network([NetworkGrant("/usr/bin/curl", "example.com", 443)]) is False
+    assert await executor.sync_network() is False

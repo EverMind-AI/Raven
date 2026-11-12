@@ -136,14 +136,21 @@ def compile_network_policy(network: NetworkPermissions, grants: Iterable[Network
             "endpoints": [_endpoint(rule.host, list(rule.ports) or COMMON_PORTS)],
             "binaries": [{"path": rule.binary or "/**"}],
         }
+    policies.update(grant_rules(grants))
+    return policies
+
+
+def grant_rules(grants: Iterable[NetworkGrant]) -> dict[str, dict]:
+    """One named rule per grant, for exactly its program, host and port."""
+    rules: dict[str, dict] = {}
     for grant in grants:
         name = f"raven_grant_{_digest(grant.binary, grant.host, grant.port)}"
-        policies[name] = {
+        rules[name] = {
             "name": name,
             "endpoints": [_endpoint(grant.host, [grant.port])],
             "binaries": [{"path": grant.binary or "/**"}],
         }
-    return policies
+    return rules
 
 
 def policy_digest(policies: dict[str, dict]) -> str:
