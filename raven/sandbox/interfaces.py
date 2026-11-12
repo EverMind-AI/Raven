@@ -96,6 +96,15 @@ class SandboxExecutor(ABC):
         """Bring a running executor's network policy up to date; False where there is none."""
         return False
 
+    async def denials_since(self, since: float, *, wait: bool = False) -> list[NetworkDenial]:
+        """Connections the sandbox refused since ``since`` (epoch seconds), whoever made them.
+
+        For a process that outlives any one command (a stdio MCP server), whose
+        refusals no ``exec`` result carries. ``wait`` gives a refusal a moment
+        to arrive. None for an executor that enforces no network policy.
+        """
+        return []
+
     @abstractmethod
     async def exec(
         self,

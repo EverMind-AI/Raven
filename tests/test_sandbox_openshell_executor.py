@@ -573,6 +573,24 @@ class TestDenials:
         assert time.monotonic() - t0 < 0.8
         assert result.denials == ()
 
+    async def test_denials_since_reads_the_sandbox_log_from_the_time_given(self, tmp_path):
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [[TCP_DENIAL]]
+        since = time.time() - 5
+        assert [(d.host, d.port) for d in await ex.denials_since(since)] == [("example.com", 443)]
+        assert cp.denial_reads == [since]
+
+    async def test_denials_since_waits_for_a_connections_program_and_port_when_asked(self, tmp_path):
+        cp, ex = await self._started(tmp_path)
+        cp.denial_script = [[DNS_REFUSAL], [DNS_REFUSAL, TCP_DENIAL]]
+        denials = await ex.denials_since(time.time(), wait=True)
+        assert [(d.binary, d.port) for d in denials] == [("/usr/bin/curl", 443)]
+        assert len(cp.denial_reads) == 2
+
+    async def test_a_sandbox_that_is_not_running_has_no_denials(self, tmp_path):
+        ex = _executor(tmp_path, FakeControlPlane())
+        assert await ex.denials_since(time.time()) == []
+
     async def test_denials_outside_the_command_window_are_ignored(self, tmp_path):
         cp, ex = await self._started(tmp_path, exit_code=0)
         before = time.time()
