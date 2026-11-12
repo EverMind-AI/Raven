@@ -363,6 +363,14 @@ def apply_patch_as_commit(
             env=env,
             input_text=unified_diff,
         )
+        # Step 2.5: the diff decides which paths change, not just the
+        # component list the caller declared. Re-check the index before it is
+        # written as a commit, so an extra hunk for an immutable path cannot
+        # hide behind a clean components list.
+        from evolver.applier.path_guard import assert_patch_allowed
+
+        changed = _run(repo_root, "diff", "--cached", "--name-only", parent_sha, env=env)
+        assert_patch_allowed([path for path in changed.splitlines() if path.strip()])
         # Step 3: write a tree object from the temp index
         tree_sha = _run(repo_root, "write-tree", env=env).strip()
 
