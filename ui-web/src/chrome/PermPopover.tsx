@@ -1,9 +1,10 @@
 /* The permission popover: the three tiers, as a radio group off the chip.
  *
- * Each row is a glyph, the tier's name and the sentence that explains it, with
- * the chosen one carrying a warm band and the tick. The heading names the list
- * and the note says when a pick takes effect; the chip already says which tier
- * is in force, so neither repeats it.
+ * Each row is a tile with a ground of its own: the tier's glyph in a plate, the
+ * tier's name, and the sentence that explains it, with the chosen tile lifting
+ * to a warm wash and carrying the tick. The heading names the list and the note
+ * says when a pick takes effect; the chip already says which tier is in force,
+ * so neither repeats it.
  *
  * WHERE this renders is the one thing it does not decide. It is a child of the
  * chip's anchor (`.chrome-anch`, src/chrome/Dock.tsx), hung off the chip's top edge by
@@ -16,6 +17,10 @@
  * tick on the tier that was in force when they were built. Both are reproduced
  * by rendering the list the open took. The heading and the note read the live
  * catalogue, because they name the control rather than one of its rows.
+ *
+ * The row names its two parts to a screen reader: the name is the label, and
+ * the sentence below it is the description. Without the label the sentence is
+ * part of the name, so it is read twice.
  */
 
 import { useSyncExternalStore } from 'react'
@@ -50,12 +55,15 @@ export function PermPopover(): JSX.Element {
                 className={`prow${row.risk ? ' risk' : ''}`}
                 role="radio"
                 aria-checked={row.ticked ? 'true' : 'false'}
+                aria-labelledby={`perm-nm-${row.id}`}
                 aria-describedby={`perm-sub-${row.id}`}
                 onClick={() => perm.pick(row.id)}
               >
-                <PermGlyph id={row.id} size={18} stroke={1.5} className="pico" />
+                <span className="chrome-perm-badge">
+                  <PermGlyph id={row.id} size={18} stroke={1.5} className="pico" />
+                </span>
                 <span className="chrome-perm-text">
-                  <span className="nm">{row.name}</span>
+                  <span className="nm" id={`perm-nm-${row.id}`}>{row.name}</span>
                   <span className="sub" id={`perm-sub-${row.id}`}>{row.sub}</span>
                 </span>
                 {row.ticked ? (

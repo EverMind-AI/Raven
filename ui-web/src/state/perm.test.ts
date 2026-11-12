@@ -129,6 +129,20 @@ describe('the permission popover', () => {
     expect(rows().map((r) => r.getAttribute('title'))).toEqual([null, null, null])
     const glyphs = rows().map((r) => r.querySelector('svg.pico')!.outerHTML)
     expect(new Set(glyphs).size).toBe(rows().length)
+    /* Each row's glyph sits in a plate of its own, so the icon reads as the
+       mode's mark rather than as a mark loose in the margin. */
+    expect(rows().every((r) => r.querySelector('.chrome-perm-badge > svg.pico'))).toBe(true)
+    /* The row names its name and describes itself with the sentence. Without
+       the label the sentence is part of the name and is read twice. */
+    expect(rows().map((r) => r.getAttribute('aria-labelledby'))).toEqual([
+      'perm-nm-ask',
+      'perm-nm-smart',
+      'perm-nm-full',
+    ])
+    expect(rows().every((r) => {
+      const label = document.getElementById(r.getAttribute('aria-labelledby')!)
+      return label?.classList.contains('nm') && label.textContent !== r.querySelector('.sub')!.textContent
+    })).toBe(true)
     expect(pop().querySelector('.hd .lab')!.textContent).toBe('gui.perm.title')
     expect(pop().querySelector('.chrome-perm-note')!.textContent).toBe('gui.perm.note')
   })
