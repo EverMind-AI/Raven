@@ -31,7 +31,7 @@ from raven.config.update import allow_network_rule
 from raven.contracts.permissions import DecisionSource
 from raven.permissions.judge import JudgeOutcome, review_network
 from raven.permissions.network_grants import GRANTS
-from raven.permissions.runtime import RuntimeChoice, current_gate
+from raven.permissions.runtime import RuntimeAnswer, RuntimeChoice, current_gate, deadline_stopped
 from raven.permissions.turn import current_turn, note_refusal
 from raven.sandbox.denials import NetworkDenial, denial_line
 from raven.sandbox.network_policy import NetworkGrant, refusing_rule
@@ -92,12 +92,18 @@ async def handle_denials(
             )
         sentences.append(f"Your network rules refuse {_listed(refused)}; do not try another route to them.")
     if askable:
-        sentence, stop = await _ask(gate, executor, askable, command=command, tool_name=tool_name)
-        sentences.append(sentence)
+        asked, stop = await _ask(gate, executor, askable, command=command, tool_name=tool_name)
+        sentences.extend(asked)
     if unaskable:
         _record_blocked(unaskable, tool_name)
         sentences.append(_blocked(unaskable))
     return DenialNotice(_said(sentences), stop)
+
+
+# The targets being asked about right now, per conversation. Another agent of
+# the conversation meeting one of them waits for that answer instead of asking
+# the person a second time; everything here runs on the gateway's one loop.
+_ASKING: dict[tuple[str, str, str, int | None], asyncio.Future[RuntimeAnswer]] = {}
 
 
 async def _ask(
@@ -107,16 +113,58 @@ async def _ask(
     *,
     command: str,
     tool_name: str,
-) -> tuple[str, bool]:
+) -> tuple[list[str], bool]:
     shown = denials[:_MAX_LISTED]
-    lines = _lines(shown)
-    asked = ", ".join(lines)
+    scope = current_turn().session_key
+    fresh: list[NetworkDenial] = []
+    waiting: list[tuple[NetworkDenial, asyncio.Future[RuntimeAnswer]]] = []
+    for denial in shown:
+        pending = _ASKING.get(_key(scope, denial)) if scope else None
+        if pending is None:
+            fresh.append(denial)
+        else:
+            waiting.append((denial, pending))
+    outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]] = []
+    stop = False
+    if fresh:
+        answer = await _prompt(gate, executor, fresh, scope, command=command, tool_name=tool_name)
+        outcomes.append((fresh, answer))
+        stop = answer.choice is RuntimeChoice.DENY_STOP
+    if waiting:
+        # Waiting on a person as surely as the one who asked, so the tool's
+        # deadline stops here too.
+        with deadline_stopped():
+            answers = await asyncio.gather(*(asyncio.shield(future) for _, future in waiting))
+        for (denial, _), answer in zip(waiting, answers, strict=True):
+            if answer.choice is RuntimeChoice.DENY_STOP:
+                # The person stopped the turn they were looking at, not this one.
+                answer = RuntimeAnswer(RuntimeChoice.DENY, answer.feedback)
+            outcomes.append(([denial], answer))
+    for group, answer in outcomes:
+        if answer.choice.approved:
+            await _open(executor, _grants(group), answer.choice)
+    sentences = _answered(outcomes)
     rest = len(denials) - len(shown)
-    unasked = f" {rest} more blocked targets were not asked about." if rest else ""
-    grants = [NetworkGrant(denial.binary, denial.host, denial.port) for denial in shown]
-    keys = tuple(f"net:{grant.binary}@{grant.host}:{grant.port}" for grant in grants)
+    if rest:
+        sentences.append(f"{rest} more blocked targets were not asked about.")
+    return sentences, stop
+
+
+async def _prompt(
+    gate: PermissionGate,
+    executor: SandboxExecutor | None,
+    denials: list[NetworkDenial],
+    scope: str,
+    *,
+    command: str,
+    tool_name: str,
+) -> RuntimeAnswer:
+    """One prompt about ``denials``; another agent asking about one of them meanwhile gets this answer."""
+    lines = _lines(denials)
+    keys = tuple(f"net:{grant.binary}@{grant.host}:{grant.port}" for grant in _grants(denials))
     targets = [
-        {"binary": denial.binary, "host": denial.host, "port": denial.port, "reason": denial.reason} for denial in shown
+        {"binary": denial.binary, "host": denial.host, "port": denial.port, "reason": denial.reason}
+        for denial in denials
     ]
 
     async def review(provider: Any, config: PermissionsConfig) -> JudgeOutcome:
@@ -128,43 +176,78 @@ async def _ask(
             timeout_s=config.judge_timeout_seconds,
         )
 
-    answer = await gate.authorize_runtime(
-        tool_name=tool_name,
-        kind=KIND,
-        action="; ".join(lines),
-        description="The sandbox blocked these connections. Allow them?",
-        digest=f"{KIND}:" + hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()[:16],
-        session_keys=keys,
-        evidence={
-            "targets": targets,
-            "command": command,
-            # The main sandbox is every conversation's: what is opened in it
-            # stays open for all of them until Raven restarts, and the card says so.
-            "shared": executor is not None and GRANTS.is_shared(executor),
-        },
-        # No rule is offered to save: a card's saved rule, its undo and its
-        # editor are the exec pattern's, so the broader grant offered is the session.
-        suggested_pattern="",
-        review=review,
-        # A deny rule names hosts, so an address given as an IP (a cloud
-        # metadata endpoint among them) is never opened without a person.
-        needs_person=any(_is_address(denial.host) for denial in shown),
-    )
-    choice = answer.choice
-    if choice.approved:
-        await _open(executor, grants, choice)
-        return f"Network access for {asked} was approved; run the command again.{unasked}", False
-    said = f' The user said: "{answer.feedback}"' if answer.feedback else ""
-    if choice is RuntimeChoice.DENY_STOP:
-        return f"The user declined network access to {asked} and asked to stop here.{said}", True
-    if choice is RuntimeChoice.DENY:
-        return f"The user declined network access to {asked}; do not try another route to them.{said}{unasked}", False
-    if choice is RuntimeChoice.LAPSED:
-        return (
-            f"The request to allow network access to {asked} expired with no answer. Nobody refused it. "
-            f"Tell the user the approval lapsed; do not try another route to them in this turn.{unasked}"
-        ), False
-    return _blocked(denials), False
+    loop = asyncio.get_running_loop()
+    futures = {_key(scope, denial): loop.create_future() for denial in denials} if scope else {}
+    _ASKING.update(futures)
+    # What a waiter hears if this prompt is torn down before it is answered.
+    answer = RuntimeAnswer(RuntimeChoice.LAPSED)
+    try:
+        answer = await gate.authorize_runtime(
+            tool_name=tool_name,
+            kind=KIND,
+            action="; ".join(lines),
+            description="The sandbox blocked these connections. Allow them?",
+            digest=f"{KIND}:" + hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()[:16],
+            session_keys=keys,
+            evidence={
+                "targets": targets,
+                "command": command,
+                # The main sandbox is every conversation's: what is opened in it
+                # stays open for all of them until Raven restarts, and the card says so.
+                "shared": executor is not None and GRANTS.is_shared(executor),
+            },
+            # No rule is offered to save: a card's saved rule, its undo and its
+            # editor are the exec pattern's, so the broader grant offered is the session.
+            suggested_pattern="",
+            review=review,
+            # A deny rule names hosts, so an address given as an IP (a cloud
+            # metadata endpoint among them) is never opened without a person.
+            needs_person=any(_is_address(denial.host) for denial in denials),
+        )
+        return answer
+    finally:
+        for key, future in futures.items():
+            if _ASKING.get(key) is future:
+                del _ASKING[key]
+            if not future.done():
+                future.set_result(answer)
+
+
+def _answered(outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]]) -> list[str]:
+    """One sentence per kind of answer, naming the connections it covered."""
+    by_choice: dict[RuntimeChoice, list[NetworkDenial]] = {}
+    feedback: dict[RuntimeChoice, str] = {}
+    for group, answer in outcomes:
+        choice = RuntimeChoice.ONCE if answer.choice.approved else answer.choice
+        by_choice.setdefault(choice, []).extend(group)
+        if answer.feedback and choice not in feedback:
+            feedback[choice] = answer.feedback
+    sentences: list[str] = []
+    for choice, group in by_choice.items():
+        asked = ", ".join(_lines(group))
+        said = f' The user said: "{feedback[choice]}"' if choice in feedback else ""
+        if choice is RuntimeChoice.ONCE:
+            sentences.append(f"Network access for {asked} was approved; run the command again.")
+        elif choice is RuntimeChoice.DENY_STOP:
+            sentences.append(f"The user declined network access to {asked} and asked to stop here.{said}")
+        elif choice is RuntimeChoice.DENY:
+            sentences.append(f"The user declined network access to {asked}; do not try another route to them.{said}")
+        elif choice is RuntimeChoice.LAPSED:
+            sentences.append(
+                f"The request to allow network access to {asked} expired with no answer. Nobody refused it. "
+                "Tell the user the approval lapsed; do not try another route to them in this turn."
+            )
+        else:
+            sentences.append(_blocked(group))
+    return sentences
+
+
+def _key(scope: str, denial: NetworkDenial) -> tuple[str, str, str, int | None]:
+    return (scope, denial.binary, denial.host, denial.port)
+
+
+def _grants(denials: Sequence[NetworkDenial]) -> list[NetworkGrant]:
+    return [NetworkGrant(denial.binary, denial.host, denial.port) for denial in denials]
 
 
 async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], choice: RuntimeChoice) -> None:
