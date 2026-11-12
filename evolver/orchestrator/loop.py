@@ -79,6 +79,7 @@ from evolver.orchestrator.sealed.runner import assert_no_test_leak
 from evolver.orchestrator.termination import TerminationTracker
 from evolver.scheduler.anchor_selection import AnchorSelection
 from evolver.tree.node import AppliedPatch, HarnessNode, NodeStatus
+from raven.utils.atomic_io import atomic_replace
 
 
 class DiagnoseFn(Protocol):
@@ -617,11 +618,18 @@ class EvolutionOrchestrator:
         return round_result
 
     def _persist_failure_map(self) -> None:
-        """Write the accumulated failure map for audit/resume (best-effort)."""
+        """Write the accumulated failure map for audit/resume (best-effort).
+
+        Written through a temp file + rename: a crash or a full disk during
+        the write must not leave a truncated file behind. The reload path
+        treats an unreadable failure map as absent, so a half-written file
+        silently drops the cross-round diagnosis history this map exists to
+        accumulate.
+        """
         try:
             path = self._cfg.failure_map_path
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._failure_map, indent=2))
+            atomic_replace(path, json.dumps(self._failure_map, indent=2))
         except OSError:
             pass
 
@@ -670,7 +678,10 @@ class EvolutionOrchestrator:
                     rec["paired"] = dataclasses.asdict(o.paired)
                 if o.stats:
                     rec["stats"] = o.stats
-                (ndir / f"{o.node_id}.json").write_text(json.dumps(rec, indent=2, default=str))
+                # Temp file + rename, like the rest of the persistence layer: a
+                # truncated node file is skipped by the loader, so the node
+                # disappears from the audit tree.
+                atomic_replace(ndir / f"{o.node_id}.json", json.dumps(rec, indent=2, default=str))
         except OSError:
             pass
 
