@@ -108,16 +108,25 @@ class TestSandboxConfigValidators:
     def test_defaults(self):
         c = SandboxConfig()
         assert c.backend == "none"
-        assert c.allow_net is True
+        assert not hasattr(c, "allow_net")
         assert c.extra_volumes == []
 
-    def test_allow_net_empty_list_raises(self):
-        with pytest.raises(ValueError, match="ambiguous"):
-            SandboxConfig(allow_net=[])
+    @pytest.mark.parametrize("key", ["allowNet", "allow_net"])
+    def test_allow_net_left_the_sandbox_settings(self, key, monkeypatch):
+        from loguru import logger
 
-    def test_allow_net_non_empty_list_ok(self):
-        c = SandboxConfig(allow_net=["pypi.org"])
-        assert c.allow_net == ["pypi.org"]
+        import raven.sandbox.config as sandbox_config
+
+        monkeypatch.setattr(sandbox_config, "_warned", set())
+
+        seen: list[str] = []
+        sink = logger.add(lambda message: seen.append(str(message)), level="WARNING")
+        try:
+            config = SandboxConfig.model_validate({"backend": "openshell", key: False})
+        finally:
+            logger.remove(sink)
+        assert not hasattr(config, "allow_net")
+        assert any("permissions.network" in line for line in seen)
 
     def test_extra_volumes_bad_mode_raises(self):
         with pytest.raises(ValueError, match="ro.*rw"):
@@ -147,10 +156,10 @@ class TestSandboxConfigValidators:
         """populate_by_name=True + alias_generator=to_camel must let users
         pass either ``memory_mib`` or ``memoryMib`` (and the same for the rest
         of the snake_case fields)."""
-        snake = SandboxConfig.model_validate({"backend": "openshell", "memory_mib": 4096, "allow_net": False})
-        camel = SandboxConfig.model_validate({"backend": "openshell", "memoryMib": 4096, "allowNet": False})
+        snake = SandboxConfig.model_validate({"backend": "openshell", "memory_mib": 4096, "default_timeout": 9})
+        camel = SandboxConfig.model_validate({"backend": "openshell", "memoryMib": 4096, "defaultTimeout": 9})
         assert snake.memory_mib == camel.memory_mib == 4096
-        assert snake.allow_net is camel.allow_net is False
+        assert snake.default_timeout == camel.default_timeout == 9
 
     @pytest.mark.parametrize("retired", ["auto", "boxlite"])
     def test_a_retired_backend_loads_as_openshell(self, retired):
@@ -168,9 +177,6 @@ class TestSandboxConfigValidators:
 
         with pytest.raises(ValidationError):
             SandboxConfig.model_validate(["openshell"])
-
-    def test_a_star_entry_is_a_valid_allowlist(self):
-        assert SandboxConfig(allow_net=["*", "example.com"]).allow_net == ["*", "example.com"]
 
     def test_the_gateway_defaults_to_the_active_one(self):
         assert SandboxConfig().gateway is None
@@ -199,11 +205,19 @@ class TestBuildExecutor:
             image="img:1",
             cpus=4,
             memory_mib=4096,
-            allow_net=["pypi.org"],
             extra_volumes=[["/data", "/data", "ro"]],
             default_timeout=11,
             verify_timeout=12,
             create_timeout=13,
+        )
+        import json
+
+        from raven.home import get_config_path
+
+        get_config_path().write_text(
+            json.dumps(
+                {"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org", "ports": [80, 443]}]}}}
+            )
         )
         e = build_executor(cfg, tmp_path, (("/home/u", "/agent-home", "rw"),))
         assert isinstance(e, OpenShellExecutor)

@@ -598,6 +598,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # started raven, and launching from ``~`` puts agent home inside it. A
         # second mount of a directory already covered is what this avoids.
         from raven.config.paths import PACKAGE_DATA_MOUNT, get_package_data_root
+        from raven.permissions.network_grants import network_source_for
 
         mount_root = self._workdir_resolver.mount_root() if self._workdir_resolver else workspace
         home_volume = () if workdir.is_within(workspace, mount_root) else ((str(workspace), "/agent-home", "rw"),)
@@ -623,6 +624,9 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
                 sandbox_config,
                 mount_root,
                 (*home_volume, *data_volume),
+                # Shared by every conversation this loop serves, so it runs
+                # under no single conversation's scope (``None``).
+                network_source=network_source_for(lambda: permissions_config(self._live_config), None),
             )
         )
         self._executor_stack: AsyncExitStack | None = None

@@ -34,10 +34,6 @@ class SandboxConfig(BaseModel):
     image: str = "ubuntu:22.04"
     cpus: int = 2
     memory_mib: int = 2048
-    # True: every host of three or more labels plus common two-label domains;
-    # False: no network; a list: those domains only, or the open set plus them
-    # when the list contains "*".
-    allow_net: bool | list[str] = True
     # Extra volume mounts: each entry is [host_path, sandbox_path, "ro"|"rw"]
     extra_volumes: list[list[str]] = Field(default_factory=list)
     # Default timeout (seconds) for a single exec call inside the sandbox
@@ -65,17 +61,13 @@ class SandboxConfig(BaseModel):
             if key in data:
                 data.pop(key)
                 _warn_once(key, f"tools.sandbox.{key} applied to the retired boxlite backend and is ignored.")
+        for key in ("allowNet", "allow_net"):
+            if key in data:
+                # The config loader moves it into permissions.network before this
+                # model sees a file; only a block built by hand still carries it.
+                data.pop(key)
+                _warn_once(key, f"tools.sandbox.{key} moved to permissions.network and is ignored here.")
         return data
-
-    @field_validator("allow_net")
-    @classmethod
-    def _validate_allow_net(cls, v: bool | list[str]) -> bool | list[str]:
-        if isinstance(v, list) and len(v) == 0:
-            raise ValueError(
-                "allow_net: [] is ambiguous: an empty allowlist may read as 'allow all' or "
-                "'allow none'. Use allow_net: false to disable networking entirely."
-            )
-        return v
 
     @field_validator("extra_volumes")
     @classmethod
