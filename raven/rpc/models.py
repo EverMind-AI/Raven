@@ -5471,9 +5471,7 @@ class ApprovalRevokeResult(_Strict):
 class ApprovalPendingParams(_Strict):
     """The approval requests still waiting for an answer, for a page that lost its sheets."""
 
-    session_id: str | None = Field(
-        default=None, description="One session's requests; every session's when absent."
-    )
+    session_id: str | None = Field(default=None, description="One session's requests; every session's when absent.")
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
 
 
@@ -5512,9 +5510,7 @@ class CredentialSkipResult(_Strict):
 class CredentialPendingParams(_Strict):
     """The credential cards still open, for a page that lost them."""
 
-    session_id: str | None = Field(
-        default=None, description="One session's requests; every session's when absent."
-    )
+    session_id: str | None = Field(default=None, description="One session's requests; every session's when absent.")
     conversation_id: str | None = Field(default=None, description="Compatibility spelling of session_id.")
 
 
@@ -6825,9 +6821,7 @@ class PlaybooksValidateResult(_Strict):
 class PlaybooksDraftParams(_Strict):
     session_key: str = Field(
         ...,
-        description=(
-            "The session whose generated Persona this is. A draft belongs to the session that asked for it."
-        ),
+        description=("The session whose generated Persona this is. A draft belongs to the session that asked for it."),
     )
 
 
