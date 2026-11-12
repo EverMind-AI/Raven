@@ -352,9 +352,9 @@ every MCP apply; the data directory is
 `<RAVEN_HOME>/plugin-data/<package>/`, created before a server starts;
 `raven agent-plugins list` and `inspect` report the servers and the
 problems without starting anything. `SandboxExecutor.start_process` gained
-an optional `cwd`, and the boxlite executor translates the command, every
+an optional `cwd`, and the sandboxed executor translates the command, every
 argument, every environment value and the working directory to their guest
-mounts before passing them to `Box.exec`; a package's data root is mounted
+mounts before running them in the sandbox; a package's data root is mounted
 at `/plugin-data` when a package stdio server is configured, so
 `PLUGIN_DATA` translates with the rest. A working directory outside every
 mounted volume raises rather than falling back to `/workspace`, because a
