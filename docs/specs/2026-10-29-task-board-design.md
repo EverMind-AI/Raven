@@ -492,7 +492,10 @@ about this matter. It puts a bar at the top of the composer card (`MoveOnBar`) -
 title with its id, then its summary, one line each, and a cross that puts it away -- and the
 reader in the composer. The bar is the page's alone until the message goes: the message
 carries it (`turn.send`'s `move_on`, below), and the bar goes with it, so neither reaches the
-server without the other. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
+server without the other. The message also names the group in its own words: it opens with the
+heading Answer's draft opens with (`On "<title>":`), unless it already carries that heading. The
+note below reaches only the turn the message opens; the words stay in the conversation, so later
+turns, and the reader's own bubble, still say which matter it was about. The server keeps a note beside the board, as it keeps a set-aside, and the turn the message
 opens reads, in its runtime context, which group it moves on, by id, title and where it
 stands; the turn's own board update reads the same line, and is kept to that group (3,
 What a turn may write). A message sent while a turn runs waits for a turn of its own rather

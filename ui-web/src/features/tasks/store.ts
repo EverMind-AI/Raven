@@ -215,12 +215,16 @@ export function clearMoveOn(): void {
 /* Lent to the send (src/app/install.ts): the message about the group is going
    -- out at once, or into the queue behind a running turn -- and carries it, so
    the bar is put away. The server notes it as the turn the message opens is
-   submitted; one that cannot costs the note, never the message. */
-export function takeMoveOn(sessionKey: string | null): string | null {
+   submitted; one that cannot costs the note, never the message. That note
+   reaches only the turn the message opens, so the message also names the group
+   in its own words, under the heading Answer's draft opens with -- once: a
+   draft that already carries it is left as it was written. */
+export function takeMoveOn(sessionKey: string | null, text: string): { text: string; moveOn: string } | null {
   const held = moveOnFor(sessionKey)
   if (!held) return null
   clearMoveOn()
-  return held.groupId
+  const head = t('gui.tasks.board.answer_head', { title: held.title })
+  return { text: text.includes(head) ? text : `${head}\n${text}`, moveOn: held.groupId }
 }
 
 const newestFirst = (a: TaskGroup, b: TaskGroup): number => b.created_at - a.created_at
