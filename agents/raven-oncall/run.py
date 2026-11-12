@@ -238,7 +238,7 @@ def apply_approval_policy(config: dict, flow_slice: dict, host: dict, workspace:
     gate has no one to ask and refuses -- which once refused the call that
     schedules the next wake. So the trunk gate is rendered at ``full``, where
     only builtin denials and the host's deny rules refuse (the host's rules
-    arrive with ``inherit_host_permissions``, which keeps this mode), and
+    arrive with ``inherit_host_permissions``, told to keep this mode), and
     ``oncall_flow.approval`` applies the
     mode per call. The mode is the first one set of: this slice's own
     ``approval.mode``, this product config's ``permissions.mode``, the host's
@@ -367,7 +367,9 @@ def render_config(source: Path) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     seed_guide(workspace)
     render.sweep_stale_renders(root)
-    return render.write_rendered(config, root, own_plugins=(FLOW_PLUGIN_ID,))
+    # The trunk gate stays at the mode apply_approval_policy chose; the owner's
+    # mode is applied by the oncall_approval gate.
+    return render.write_rendered(config, root, own_plugins=(FLOW_PLUGIN_ID,), keep_own_mode=True)
 
 
 def main() -> int:
