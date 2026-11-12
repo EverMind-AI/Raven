@@ -233,6 +233,46 @@ class TestStart:
         await ex.start()
         assert len(cp.created) == 1
 
+    async def test_a_verify_probe_that_never_answers_is_cancelled_and_fails_start(self, tmp_path):
+        cp = FakeControlPlane()
+        silent = FakeStream(block=True)
+        cp.exec_script = lambda argv: silent
+        with pytest.raises(SandboxInitError, match="did not answer within 1s"):
+            await _executor(tmp_path, cp, verify_timeout=1).start()
+        assert silent.cancelled.is_set()
+        await ox.drain_pending_deletes()
+        assert cp.deleted == [cp.created[0]["name"]]
+
+    async def test_an_unexpected_verify_answer_is_quoted(self, tmp_path):
+        cp = FakeControlPlane()
+        cp.exec_script = lambda argv: FakeStream([("stderr", b"sh: not found\n"), ("exit", 127)])
+        with pytest.raises(SandboxInitError, match=r"verification failed \(exit_code=127.*sh: not found"):
+            await _executor(tmp_path, cp).start()
+
+    async def test_a_sandbox_init_error_from_the_plane_keeps_its_own_advice(self, tmp_path):
+        cp = FakeControlPlane()
+        cp.create_error = SandboxInitError("The OpenShell SDK is not installed")
+        with pytest.raises(SandboxInitError) as info:
+            await _executor(tmp_path, cp).start()
+        assert str(info.value) == "The OpenShell SDK is not installed"
+
+    async def test_without_a_control_plane_the_sdk_plane_is_built_for_the_gateway(self, tmp_path, monkeypatch):
+        built: list[dict] = []
+        cp = FakeControlPlane()
+
+        def fake_plane(*, gateway, workspace):
+            built.append({"gateway": gateway, "workspace": workspace})
+            return cp
+
+        monkeypatch.setattr(ox, "SDKControlPlane", fake_plane)
+        ex = OpenShellExecutor(
+            image="ubuntu:24.04", workspace=tmp_path, allow_net=False, gateway="dev", gateway_workspace="team"
+        )
+        await ex.start()
+        await ex.exec("true")
+        assert built == [{"gateway": "dev", "workspace": "team"}]
+        assert len(cp.created) == 1
+
 
 class TestReaper:
     async def test_sandboxes_of_dead_processes_on_this_host_are_deleted_once(self, tmp_path, monkeypatch):
@@ -245,6 +285,33 @@ class TestReaper:
         assert cp.selector.startswith("raven.owner=")
         assert cp.deleted.count("rvdead") == 1
         assert "rvlive" not in cp.deleted and "rvnolabel" not in cp.deleted
+
+    async def test_a_gateway_that_cannot_list_does_not_block_the_start(self, tmp_path):
+        cp = FakeControlPlane()
+
+        def refuse(selector):
+            raise RuntimeError("permission denied")
+
+        cp.list_labeled = refuse
+        await _executor(tmp_path, cp).start()
+        assert len(cp.created) == 1 and cp.deleted == []
+
+    def test_pid_alive_reads_a_permission_error_as_alive(self, monkeypatch):
+        import os
+
+        assert ox._pid_alive(os.getpid()) is True
+
+        def gone(pid, sig):
+            raise ProcessLookupError
+
+        monkeypatch.setattr(ox.os, "kill", gone)
+        assert ox._pid_alive(424242) is False
+
+        def foreign(pid, sig):
+            raise PermissionError
+
+        monkeypatch.setattr(ox.os, "kill", foreign)
+        assert ox._pid_alive(1) is True
 
 
 class TestExec:
@@ -314,6 +381,18 @@ class TestExec:
         ex = _executor(tmp_path, cp)
         await ex.exec("true")
         assert len(cp.created) == 1
+
+    async def test_a_sandbox_stopped_while_the_caller_waited_is_an_init_error(self, tmp_path, monkeypatch):
+        cp = FakeControlPlane()
+        ex = _executor(tmp_path, cp)
+
+        async def stopped_meanwhile():
+            return None
+
+        monkeypatch.setattr(ex, "start", stopped_meanwhile)
+        with pytest.raises(SandboxInitError, match="stopped before the command could run"):
+            await ex.exec("true")
+        assert cp.execs == []
 
 
 class TestStop:
@@ -388,6 +467,27 @@ class TestStartProcess:
         assert cp.interactive_stream.input_closed
         await ex.stop()
 
+    async def test_a_broken_stream_still_delivers_the_unterminated_last_message(self, tmp_path, caplog):
+        from mcp.shared.message import SessionMessage
+
+        reply = {"jsonrpc": "2.0", "id": 2, "result": {}}
+
+        class Broken(FakeStream):
+            def __iter__(self):
+                yield ("stdout", b"\n   \n" + json.dumps(reply).encode())
+                raise ConnectionResetError("stream reset")
+
+        cp = FakeControlPlane()
+        cp.interactive_stream = Broken()
+        ex = _executor(tmp_path, cp)
+        await ex.start()
+        read, write = await ex.start_process("srv", [])
+        msg = await asyncio.wait_for(read.receive(), 2)
+        assert isinstance(msg, SessionMessage) and msg.message.id == 2
+        assert any("stream reset" in r.getMessage() for r in caplog.records)
+        await write.aclose()
+        await ex.stop()
+
     async def test_a_cwd_outside_every_mount_is_refused(self, tmp_path):
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp)
@@ -398,3 +498,210 @@ class TestStartProcess:
     def test_flags(self, tmp_path):
         ex = _executor(tmp_path, FakeControlPlane())
         assert ex.is_sandboxed and ex.supports_process_spawning
+
+
+class _FakeCall:
+    def __init__(self, events):
+        self.events = list(events)
+        self.cancelled = False
+
+    def __iter__(self):
+        return iter(self.events)
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class _FakeStub:
+    """The raw gRPC stub surface SDKControlPlane reaches past the SDK wrappers."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+        self.conditions: list[dict] = []
+        self.get_error: Exception | None = None
+        self.events: list = []
+
+    def GetSandbox(self, request, timeout):
+        from openshell._proto import openshell_pb2
+
+        self.calls.append(("GetSandbox", request, timeout))
+        if self.get_error:
+            raise self.get_error
+        response = openshell_pb2.SandboxResponse()
+        for condition in self.conditions:
+            response.sandbox.status.conditions.add(**condition)
+        return response
+
+    def ExecSandbox(self, request, timeout):
+        self.calls.append(("ExecSandbox", request, timeout))
+        self.call = _FakeCall(self.events)
+        return self.call
+
+    def ExecSandboxInteractive(self, requests):
+        self.requests = requests
+        self.call = _FakeCall(self.events)
+        return self.call
+
+
+class _FakeSDKClient:
+    def __init__(self):
+        self._stub = _FakeStub()
+        self.calls: list[tuple] = []
+        self.ready_error: Exception | None = None
+        self.refs: list = []
+
+    def create(self, **kw):
+        self.calls.append(("create", kw))
+
+    def wait_ready(self, name, **kw):
+        self.calls.append(("wait_ready", name, kw))
+        if self.ready_error:
+            raise self.ready_error
+
+    def delete(self, name, **kw):
+        self.calls.append(("delete", name, kw))
+
+    def list_all(self, **kw):
+        self.calls.append(("list_all", kw))
+        return self.refs
+
+
+def _event(kind: str, value):
+    from openshell._proto import openshell_pb2
+
+    if kind == "exit":
+        return openshell_pb2.ExecSandboxEvent(exit=openshell_pb2.ExecSandboxExit(exit_code=value))
+    body = {"stdout": openshell_pb2.ExecSandboxStdout, "stderr": openshell_pb2.ExecSandboxStderr}[kind]
+    return openshell_pb2.ExecSandboxEvent(**{kind: body(data=value)})
+
+
+def _next_within(requests, seconds: float = 2.0):
+    """``next()`` on the request iterator, failing instead of hanging when it blocks."""
+    box: dict = {}
+
+    def run():
+        try:
+            box["value"] = next(requests)
+        except BaseException as exc:
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert not worker.is_alive(), "the request iterator blocked"
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+@pytest.fixture
+def sdk(monkeypatch):
+    openshell = pytest.importorskip("openshell")
+    client = _FakeSDKClient()
+    clusters: list = []
+
+    def from_active_cluster(*, cluster=None, **_kw):
+        clusters.append(cluster)
+        return client
+
+    monkeypatch.setattr(openshell.SandboxClient, "from_active_cluster", staticmethod(from_active_cluster))
+    plane = ox.SDKControlPlane(gateway="dev", workspace="team")
+    assert clusters == ["dev"]
+    return plane, client
+
+
+class TestSDKControlPlane:
+    def test_exec_sends_one_request_and_decodes_the_events(self, sdk):
+        plane, client = sdk
+        client._stub.events = [_event("stdout", b"hi"), _event("stderr", b"warn"), _event("exit", 3)]
+        stream = plane.exec("rvx", ["sh", "-c", "echo hi"], workdir="/workspace", env={"A": "1"}, timeout_seconds=9)
+        assert list(stream) == [("stdout", b"hi"), ("stderr", b"warn"), ("exit", 3)]
+        ((kind, request, deadline),) = client._stub.calls
+        assert kind == "ExecSandbox"
+        assert request.workspace_scope.workspace == "team" and request.sandbox == "rvx"
+        assert list(request.command) == ["sh", "-c", "echo hi"] and request.workdir == "/workspace"
+        assert dict(request.environment) == {"A": "1"} and request.no_login_shell
+        assert request.execution_timeout.seconds == 9
+        assert deadline == 9 + ox._TIMEOUT_GRACE_SECONDS
+        stream.cancel()
+        assert client._stub.call.cancelled
+
+    def test_exec_without_a_timeout_sets_no_deadline(self, sdk):
+        plane, client = sdk
+        plane.exec("rvx", ["true"], workdir="/", env={}, timeout_seconds=None)
+        ((_kind, request, deadline),) = client._stub.calls
+        assert not request.HasField("execution_timeout") and deadline is None
+
+    def test_interactive_sends_the_start_request_then_stdin_until_closed(self, sdk):
+        plane, client = sdk
+        stream = plane.interactive("rvx", ["/workspace/srv"], workdir="/workspace", env={"K": "v"})
+        requests = client._stub.requests
+        first = _next_within(requests)
+        assert first.WhichOneof("payload") == "start"
+        assert first.start.sandbox == "rvx" and list(first.start.command) == ["/workspace/srv"]
+        assert not first.start.HasField("execution_timeout")
+        stream.write(b'{"id":1}\n')
+        assert _next_within(requests).stdin == b'{"id":1}\n'
+        stream.close_input()
+        with pytest.raises(StopIteration):
+            _next_within(requests)
+
+    def test_cancelling_an_interactive_stream_ends_its_input(self, sdk):
+        plane, client = sdk
+        stream = plane.interactive("rvx", ["srv"], workdir="/", env={})
+        requests = client._stub.requests
+        _next_within(requests)
+        stream.cancel()
+        assert client._stub.call.cancelled
+        with pytest.raises(StopIteration):
+            _next_within(requests)
+
+    def test_a_sandbox_that_is_not_ready_names_the_gateway_conditions(self, sdk):
+        plane, client = sdk
+        client.ready_error = TimeoutError("timed out waiting for rvx")
+        client._stub.conditions = [
+            {"type": "Ready", "status": "False", "reason": "DependenciesNotReady", "message": "bind source missing"},
+            {"type": "Scheduled", "status": "True", "reason": "Ok", "message": "placed"},
+            {"type": "Policy", "status": "False", "reason": "Pending", "message": ""},
+        ]
+        with pytest.raises(RuntimeError) as info:
+            plane.wait_ready("rvx", 30)
+        assert str(info.value) == "timed out waiting for rvx: DependenciesNotReady: bind source missing"
+        assert client.calls == [("wait_ready", "rvx", {"workspace": "team", "timeout_seconds": 30})]
+        ((_kind, request, _timeout),) = client._stub.calls
+        assert request.name == "rvx" and request.workspace_scope.workspace == "team"
+
+    def test_a_failed_condition_lookup_keeps_the_sdk_message(self, sdk):
+        plane, client = sdk
+        client.ready_error = TimeoutError("timed out waiting for rvx")
+        client._stub.get_error = ConnectionError("unavailable")
+        with pytest.raises(RuntimeError, match=r"^timed out waiting for rvx$"):
+            plane.wait_ready("rvx", 30)
+
+    def test_create_delete_and_list_stay_in_the_workspace(self, sdk):
+        from types import SimpleNamespace
+
+        plane, client = sdk
+        plane.create(
+            name="rvx",
+            image="ubuntu:24.04",
+            policy=sandbox_policy(allow_net=False, mounts=[], uid=0),
+            driver_config={"docker": {"mounts": []}},
+            resources={"limits": {"cpu": "1", "memory": "512Mi"}},
+            labels={"raven.owner": "abc"},
+        )
+        ((kind, created),) = client.calls
+        assert kind == "create" and created["workspace"] == "team" and created["name"] == "rvx"
+        assert created["labels"] == {"raven.owner": "abc"} and created["spec"].template.image == "ubuntu:24.04"
+        plane.delete("rvx")
+        assert client.calls[-1] == ("delete", "rvx", {"workspace": "team", "allow_missing": True})
+        client.refs = [SimpleNamespace(name="rv1", labels={"raven.pid": "3"})]
+        assert plane.list_labeled("raven.owner=abc") == [("rv1", {"raven.pid": "3"})]
+        assert client.calls[-1] == ("list_all", {"workspace": "team", "label_selector": "raven.owner=abc"})
+
+    def test_a_missing_sdk_is_an_init_error_that_names_the_extra(self, monkeypatch):
+        import sys
+
+        monkeypatch.setitem(sys.modules, "openshell", None)
+        with pytest.raises(SandboxInitError, match="sandbox extra"):
+            ox.SDKControlPlane(gateway=None, workspace="default")
