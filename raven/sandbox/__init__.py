@@ -142,37 +142,12 @@ def build_executor(
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
             gateway=sandbox_cfg.gateway,
-            network_source=network_source or _configured_network(),
+            # A caller that names no source gets no network rather than a guess.
+            network_source=network_source if network_source is not None else _no_network,
         )
 
     raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'openshell'.")
 
 
-def _configured_network() -> Callable[[], dict[str, dict]]:
-    """The policy of the user's ``permissions.network`` as it stands now, for a caller that passes no source.
-
-    A caller that can read the live permission set passes ``network_source``;
-    this snapshot keeps every other sandbox under the same rules instead of the
-    executor's open default. The file is read here rather than through
-    ``load_config``, which runs on defaults when the file is not valid JSON: a
-    config that cannot be read closes the network, and only a missing one
-    answers the open default.
-    """
-    import json
-
-    from raven.config.live import network_permissions_of
-    from raven.config.loader import get_config_path
-    from raven.config.schema import NetworkPermissions
-    from raven.sandbox.network_policy import compile_network_policy
-
-    path = get_config_path()
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        if not isinstance(raw, dict):
-            raise ValueError("the config is not a JSON object")
-        network = network_permissions_of(raw)
-    except Exception as exc:  # noqa: BLE001 - no readable permission set means no network
-        logger.warning("Could not read permissions.network for a sandbox ({}); it gets no network", exc)
-        network = NetworkPermissions(default="closed")
-    policies = compile_network_policy(network)
-    return lambda: policies
+def _no_network() -> dict[str, dict]:
+    return {}

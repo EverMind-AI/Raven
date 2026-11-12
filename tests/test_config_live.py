@@ -851,6 +851,27 @@ def test_network_permissions_keep_the_last_valid_set_and_close_when_none_ever_va
     assert (fresh.default, fresh.rules) == ("closed", [])
 
 
+@pytest.mark.parametrize(
+    ("body", "default"),
+    [
+        ('{"permissions": ', "closed"),
+        ('{"tools": {"sandbox": {"allowNet": false}}}', "closed"),
+        ('{"permissions": {"network": {"default": "ajar"}}}', "closed"),
+        (None, "open"),
+    ],
+)
+def test_the_network_on_disk_closes_when_the_file_cannot_be_read(body, default):
+    from raven.config.live import network_on_disk
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    if body is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(body)
+    assert network_on_disk().default == default
+
+
 def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
     """The key used to lift a recursive-delete refusal that no longer exists.
     An old config still carrying it must load, must not change any ruling, and

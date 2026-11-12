@@ -735,7 +735,11 @@ def _migrate_sandbox_network(data: dict[str, Any], *, notify: bool = False) -> b
             allow_net = TypeAdapter(bool | list[str]).validate_python(value)
         except ValidationError:
             allow_net = False
-        permissions["network"] = network_from_allow_net(allow_net).model_dump(mode="json", by_alias=True)
+        network = network_from_allow_net(allow_net)
+        permissions["network"] = {
+            "default": network.default,
+            "rules": [{"host": rule.host, "ports": list(rule.ports)} for rule in network.rules],
+        }
         notice = (
             f"Moved `tools.sandbox.{keys[0]}` to `permissions.network`: what sandboxes may reach is now part of "
             "the permission set every agent and sandbox shares."

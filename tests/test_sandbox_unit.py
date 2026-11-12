@@ -210,20 +210,9 @@ class TestBuildExecutor:
             verify_timeout=12,
             create_timeout=13,
         )
-        import json
-
-        from raven.home import get_config_path
-
-        get_config_path().write_text(
-            json.dumps(
-                {"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org", "ports": [80, 443]}]}}}
-            )
-        )
         e = build_executor(cfg, tmp_path, (("/home/u", "/agent-home", "rw"),))
         assert isinstance(e, OpenShellExecutor)
         assert (e._image, e._cpus, e._memory_mib) == ("img:1", 4, 4096)
-        ((rule_name, rule),) = e._network_source().items()
-        assert rule["endpoints"] == [{"host": "pypi.org", "ports": [80, 443], "tls": "NETWORK_TLS_MODE_SKIP"}]
         assert (e._default_timeout, e._verify_timeout, e._create_timeout) == (11, 12, 13)
         assert e._gateway == "lab"
         assert e._mounts.mounts() == [
@@ -232,26 +221,13 @@ class TestBuildExecutor:
             ("/home/u", "/agent-home", False),
         ]
 
-    @pytest.mark.parametrize(
-        ("body", "opens"),
-        [
-            ('{"permissions": ', False),
-            ('{"tools": {"sandbox": {"allowNet": false}}}', False),
-            ('{"permissions": {"network": {"default": "ajar"}}}', False),
-            (None, True),
-        ],
-    )
-    def test_an_executor_with_no_source_runs_under_the_permission_set_on_disk(self, tmp_path, body, opens):
+    def test_an_executor_built_with_no_network_source_has_no_network(self, tmp_path):
+        """The sandbox package reads no config: a caller names the policy, or there is none."""
         pytest.importorskip("openshell")
         from raven.home import get_config_path
 
-        path = get_config_path()
-        if body is None:
-            path.unlink(missing_ok=True)
-        else:
-            path.write_text(body)
-        e = build_executor(SandboxConfig(backend="openshell"), tmp_path)
-        assert ("allow_open" in e._network_source()) is opens
+        get_config_path().write_text('{"permissions": {"network": {"default": "open"}}}')
+        assert build_executor(SandboxConfig(backend="openshell"), tmp_path)._network_source() == {}
 
     def test_a_network_source_reaches_the_executor(self, tmp_path):
         pytest.importorskip("openshell")

@@ -140,7 +140,9 @@ def _digest(*parts: Any) -> str:
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:8]
 
 
-def compile_network_policy(network: NetworkPermissions, grants: Iterable[NetworkGrant] = ()) -> dict[str, dict]:
+def compile_network_policy(
+    network: NetworkPermissions | AllowNetNetwork, grants: Iterable[NetworkGrant] = ()
+) -> dict[str, dict]:
     """The ``network_policies`` of a sandbox under ``network`` with ``grants`` added.
 
     Deny rules open nothing here; they refuse at approval time.
@@ -188,21 +190,38 @@ def policy_digest(policies: dict[str, dict]) -> str:
     return hashlib.sha256(json.dumps(policies, sort_keys=True).encode()).hexdigest()
 
 
-def network_from_allow_net(allow_net: bool | list[str]) -> NetworkPermissions:
+class AllowNetRule(NamedTuple):
+    """One rule an old ``allowNet`` list meant, shaped like a ``permissions.network`` rule."""
+
+    host: str
+    ports: list[int]
+    binary: str = ""
+    tier: str = "allow"
+
+
+class AllowNetNetwork(NamedTuple):
+    """What an old ``allowNet`` value meant, shaped like ``permissions.network``.
+
+    Kept apart from the config model so the sandbox package reads no config:
+    the config package imports this one, and the loader turns it into the
+    ``permissions.network`` it writes.
+    """
+
+    default: str
+    rules: list[AllowNetRule]
+
+
+def network_from_allow_net(allow_net: bool | list[str]) -> AllowNetNetwork:
     """The ``permissions.network`` an old ``tools.sandbox.allowNet`` value meant.
 
     ``true`` is the open default and ``false`` no network. A host list opened
     those hosts on ports 80 and 443 only; with ``"*"`` in it, the open default
     plus the other hosts on the common ports.
     """
-    from raven.config.schema import NetworkPermissions, NetworkRule
-
     if allow_net is True:
-        return NetworkPermissions(default="open")
+        return AllowNetNetwork("open", [])
     if not allow_net:
-        return NetworkPermissions(default="closed")
+        return AllowNetNetwork("closed", [])
     if OPEN_ENTRY in allow_net:
-        return NetworkPermissions(
-            default="open", rules=[NetworkRule(host=host) for host in allow_net if host != OPEN_ENTRY]
-        )
-    return NetworkPermissions(default="closed", rules=[NetworkRule(host=host, ports=[80, 443]) for host in allow_net])
+        return AllowNetNetwork("open", [AllowNetRule(host, []) for host in allow_net if host != OPEN_ENTRY])
+    return AllowNetNetwork("closed", [AllowNetRule(host, [80, 443]) for host in allow_net])
