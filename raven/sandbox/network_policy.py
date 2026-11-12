@@ -120,7 +120,8 @@ def refusing_rule(network: NetworkPermissions, binary: str, host: str, port: int
     refuses every program: what it names is a host the user does not want
     reached, and the open set already drops a denied host on every port.
     """
-    host = host.lower()
+    # The fully qualified spelling (a trailing dot) names the same host.
+    host = host.lower().rstrip(".")
     for rule in network.rules:
         if rule.tier != "deny":
             continue

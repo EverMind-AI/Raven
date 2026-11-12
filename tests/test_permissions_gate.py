@@ -1852,6 +1852,22 @@ class TestRuntimeApproval:
         assert responder.calls == []
 
     @pytest.mark.asyncio
+    async def test_an_action_that_needs_a_person_is_not_granted_by_the_mode(self):
+        from raven.permissions.runtime import RuntimeChoice
+
+        async def approve() -> bool:
+            return True
+
+        responder = Responder(ApprovalOutcome(ApprovalChoice.DENY))
+        _fresh_turn(responder)
+        full = await gate_for(PermissionsConfig(mode="full")).authorize_runtime(**_runtime(), needs_person=True)
+        smart = await gate_for(PermissionsConfig(mode="smart")).authorize_runtime(
+            **_runtime(review=approve, digest="other"), needs_person=True
+        )
+        assert (full.choice, smart.choice) == (RuntimeChoice.DENY, RuntimeChoice.DENY)
+        assert len(responder.calls) == 2
+
+    @pytest.mark.asyncio
     async def test_smart_mode_lets_the_reviewer_allow_once(self):
         from raven.permissions.runtime import RuntimeChoice
 
