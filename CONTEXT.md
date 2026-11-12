@@ -932,12 +932,19 @@ _Avoid_: a per-vendor tool name — the model is always offered `web_search` and
 **Picture Search** (`rpc/models.py`, `PictureSearchStatus`; `settings.get`):
 The deck engine's picture-search state as the runtime would resolve it now, not
 a reading of the Search service picker: `vendor` is the vendor that would answer
-(`""` when none resolves), `ready` says a key resolves for it, and `fallback`
-says a keyed vendor other than the selected search vendor answered instead, so
-the page can say deck generation will fall back. `settings.get` computes it
-through `picture_search_status` over the same rule the router applies, from the
-config, the product folder's own credentials and the vendors' environment
-variables -- credentials the raw config cannot show. The offline settings
+(`""` when none resolves), `ready` says a key resolves for it, and `reason`
+names why that vendor answers: `ok` when it is the vendor the deck is
+configured to use (the selected search vendor, or the deck's own pin),
+`fallback_no_key` when the selected vendor has a picture surface but no key,
+`no_surface` when the selected vendor has none, and `not_ready` when no vendor
+resolves. `fallback` is derived from it -- true for `fallback_no_key` and
+`no_surface` -- so the page can say deck generation will fall back; a deck
+pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
+on the wire and defaults to `not_ready`, so an answer from a gateway older than
+the field still reads. `settings.get` computes the state through
+`picture_search_report` over the same rule the router applies, from the config,
+the product folder's own credentials and the vendors' environment variables --
+credentials the raw config cannot show. The offline settings
 fixture (`ui-web/src/rpc/fixtures/settings.ts`, `PPT_VENDORS` /
 `pictureSearchOf`) is its explicit mirror; the vendor list is pinned to
 `PPT_IMAGE_SEARCH_VENDORS` by `tests/test_agent_tools_web_providers.py`.
