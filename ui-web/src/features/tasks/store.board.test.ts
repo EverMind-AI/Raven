@@ -290,11 +290,29 @@ describe('moving a group on', () => {
   it('is taken once, by the message about it, and is spent', () => {
     store.moveOn('s1', fix)
 
-    expect(store.takeMoveOn('s2')).toBeNull()
+    expect(store.takeMoveOn('s2', 'next')).toBeNull()
     expect(store.moveOnFor('s1')?.groupId).toBe('g_1')
-    expect(store.takeMoveOn('s1')).toBe('g_1')
-    expect(store.takeMoveOn('s1')).toBeNull()
+    expect(store.takeMoveOn('s1', 'next')?.moveOn).toBe('g_1')
+    expect(store.takeMoveOn('s1', 'next')).toBeNull()
 
     expect(store.moveOnFor('s1')).toBeNull()
+  })
+
+  /* The server's note reaches only the turn the message opens; the words stay in
+     the conversation after it, so the message names its group itself, with the
+     heading Answer's draft opens with. */
+  it('names the group at the head of the message it goes with', () => {
+    store.moveOn('s1', fix)
+
+    expect(store.takeMoveOn('s1', 'Patch it the way we said')).toEqual({
+      text: 'On "Fix bug A":\nPatch it the way we said', moveOn: 'g_1',
+    })
+  })
+
+  it('leaves a message that already names the group as it was written', () => {
+    const answered = 'one more thing\n\nOn "Fix bug A":\n1. Which fix?\nAnswer: the second'
+    store.moveOn('s1', fix)
+
+    expect(store.takeMoveOn('s1', answered)).toEqual({ text: answered, moveOn: 'g_1' })
   })
 })
