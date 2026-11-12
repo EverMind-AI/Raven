@@ -241,3 +241,10 @@ class TestCommitFilesAsChildPathEscape:
         sha = _commit_symlink(repo_dir, "loop", "loop")
         with pytest.raises(ValueError, match="symlink loop"):
             git_ops.commit_files_as_child(repo_dir, sha, {}, "loop", deletions=("loop",))
+
+    @pytest.mark.skipif(os.name == "nt", reason="creating symlinks may need privileges")
+    def test_reports_a_symlink_loop_in_a_parent_component_cleanly(self, repo):
+        repo_dir, _sha = repo
+        sha = _commit_symlink(repo_dir, "loop", "loop")
+        with pytest.raises(ValueError, match="symlink loop"):
+            git_ops.commit_files_as_child(repo_dir, sha, {}, "loop", deletions=("loop/x",))

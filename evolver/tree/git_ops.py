@@ -326,7 +326,10 @@ def commit_files_as_child(
             for rel in deletions:
                 assert_patch_allowed([rel])
                 link = wt / rel
-                parent = link.parent.resolve()
+                try:
+                    parent = link.parent.resolve()
+                except RuntimeError as exc:
+                    raise ValueError(f"symlink loop in {rel!r}") from exc
                 if not parent.is_relative_to(wt_resolved):
                     raise ValueError(f"refusing to delete outside the worktree: {rel!r}")
                 # Resolve unconditionally: a symlinked parent directory can
