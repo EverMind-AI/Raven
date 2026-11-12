@@ -68,6 +68,8 @@ _APEX_DOMAINS = (
     "deepseek.com",
 )
 OPEN_ENTRY = "*"
+# The name of the rule that holds the open set.
+OPEN_RULE = "allow_open"
 
 
 def _endpoint(host: str, ports: list[int]) -> dict:
@@ -80,7 +82,7 @@ def _endpoint(host: str, ports: list[int]) -> dict:
 def _open_rule(extra_hosts: list[str], denied: frozenset[str] = frozenset()) -> dict:
     hosts = [host for host in dict.fromkeys([*_APEX_DOMAINS, *extra_hosts]) if host not in denied]
     endpoints = [_endpoint(_OPEN_WILDCARD, _ALL_PORTS), *(_endpoint(host, COMMON_PORTS) for host in hosts)]
-    return {"name": "allow_open", "endpoints": endpoints, "binaries": [{"path": "/**"}]}
+    return {"name": OPEN_RULE, "endpoints": endpoints, "binaries": [{"path": "/**"}]}
 
 
 logger = logging.getLogger(__name__)
@@ -146,7 +148,7 @@ def compile_network_policy(network: NetworkPermissions, grants: Iterable[Network
     policies: dict[str, dict] = {}
     if network.default == "open":
         denied = frozenset(rule.host for rule in network.rules if rule.tier == "deny")
-        policies["allow_open"] = _open_rule([], denied)
+        policies[OPEN_RULE] = _open_rule([], denied)
         for host in unenforced_denials(network):
             if host not in _warned_unenforced:
                 _warned_unenforced.add(host)

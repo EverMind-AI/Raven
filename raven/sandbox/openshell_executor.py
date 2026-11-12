@@ -21,7 +21,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -29,6 +29,7 @@ from raven.sandbox.denials import NetworkDenial, parse_denials
 from raven.sandbox.interfaces import ExecResult, SandboxExecutor, SandboxInitError
 from raven.sandbox.mounts import WORKSPACE_MOUNT, MountTable
 from raven.sandbox.network_policy import (
+    OPEN_RULE,
     NetworkGrant,
     compile_network_policy,
     grant_rules,
@@ -87,6 +88,16 @@ class InteractiveStream(ExecStream, Protocol):
     def close_input(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class DraftChunk:
+    """One rule OpenShell proposed after a denial: the program, and the hosts and ports it would open."""
+
+    id: str
+    binary: str
+    targets: tuple[tuple[str, int], ...]
+    review_token: str
+
+
 class OpenShellControlPlane(Protocol):
     """The gateway operations the executor needs. Implementations are synchronous."""
 
@@ -118,6 +129,10 @@ class OpenShellControlPlane(Protocol):
     def merge_rules(self, name: str, add: dict[str, dict], remove: list[str]) -> int: ...
 
     def wait_policy(self, name: str, version: int, timeout: float) -> bool: ...
+
+    def draft_chunks(self, name: str) -> list[DraftChunk]: ...
+
+    def approve_chunk(self, name: str, chunk_id: str, review_token: str) -> int: ...
 
 
 def sandbox_policy(
@@ -432,12 +447,57 @@ class OpenShellExecutor(SandboxExecutor):
         return await self._sync_network(self._plane(), self._name)
 
     async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
-        """Open ``grants`` in this sandbox only, until it stops; False when it is not running or did not load."""
+        """Open ``grants`` in this sandbox only, until it stops; False when it is not running or did not load.
+
+        In a closed sandbox OpenShell's own proposal for a grant is approved
+        where there is one, so the approval lands in OpenShell's history beside
+        its prover's review; anything without a proposal yet, or whose approval
+        fails, is merged as a rule of Raven's. The open sandbox has no
+        proposals worth reading: the prover cannot review its policy.
+        """
         if self._name is None:
             return False
-        self._local_rules.update(grant_rules(grants))
+        plane, name = self._plane(), self._name
+        left = list(grants)
+        if OPEN_RULE not in self._applied_policies:
+            left = await self._approve_proposals(plane, name, left)
+        if not left:
+            return True
+        self._local_rules.update(grant_rules(left))
         self._last_source = None
-        return await self._sync_network(self._plane(), self._name)
+        return await self._sync_network(plane, name)
+
+    async def _approve_proposals(
+        self, plane: OpenShellControlPlane, name: str, grants: list[NetworkGrant]
+    ) -> list[NetworkGrant]:
+        """Approve OpenShell's proposal for each grant that has one; the grants left to merge."""
+        try:
+            proposals = await asyncio.to_thread(plane.draft_chunks, name)
+        except Exception as exc:  # noqa: BLE001 - the merge is always there to fall back on
+            logger.debug("Could not read OpenShell's proposals for sandbox %s: %s", name, exc)
+            return grants
+        left = []
+        for grant in grants:
+            proposal = next(
+                (
+                    chunk
+                    for chunk in proposals
+                    if chunk.binary == grant.binary and (grant.host, grant.port) in chunk.targets
+                ),
+                None,
+            )
+            if proposal is None:
+                left.append(grant)
+                continue
+            try:
+                version = await asyncio.to_thread(plane.approve_chunk, name, proposal.id, proposal.review_token)
+                loaded = await asyncio.to_thread(plane.wait_policy, name, version, _POLICY_WAIT_SECONDS)
+            except Exception as exc:  # noqa: BLE001 - the merge is always there to fall back on
+                logger.warning("Could not approve OpenShell's proposal for %s in sandbox %s: %s", grant, name, exc)
+                loaded = False
+            if not loaded:
+                left.append(grant)
+        return left
 
     async def _sync_network(self, plane: OpenShellControlPlane, name: str) -> bool:
         try:
@@ -868,6 +928,47 @@ class SDKControlPlane:
             if status.revision.status == openshell_pb2.POLICY_STATUS_FAILED or time.monotonic() >= deadline:
                 return False
             time.sleep(_POLICY_POLL_SECONDS)
+
+    def draft_chunks(self, name: str) -> list[DraftChunk]:
+        """The rules OpenShell has proposed for this sandbox and nobody has decided yet."""
+        from openshell._proto import datamodel_pb2, openshell_pb2
+
+        response = self._client._stub.GetDraftPolicy(
+            openshell_pb2.GetDraftPolicyRequest(
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+                sandbox=name,
+                status_filter="pending",
+            ),
+            timeout=_DENIAL_READ_TIMEOUT,
+        )
+        return [
+            DraftChunk(
+                id=chunk.id,
+                binary=chunk.binary,
+                targets=tuple(
+                    (endpoint.host, port)
+                    for endpoint in chunk.proposed_rule.endpoints
+                    for port in (list(endpoint.ports) or [endpoint.port])
+                ),
+                review_token=chunk.review_token,
+            )
+            for chunk in response.chunks
+        ]
+
+    def approve_chunk(self, name: str, chunk_id: str, review_token: str) -> int:
+        """Approve one of OpenShell's proposals; returns the policy version it produced."""
+        from openshell._proto import datamodel_pb2, openshell_pb2
+
+        response = self._client._stub.ApproveDraftChunk(
+            openshell_pb2.ApproveDraftChunkRequest(
+                workspace_scope=datamodel_pb2.WorkspaceSelector(workspace=self._workspace),
+                sandbox=name,
+                chunk_id=chunk_id,
+                review_token=review_token,
+            ),
+            timeout=30,
+        )
+        return response.policy_version
 
     def ocsf_lines(self, name: str, since: float) -> list[tuple[float, str]]:
         """The sandbox's OCSF log lines since ``since`` (epoch seconds), as event time and message."""
