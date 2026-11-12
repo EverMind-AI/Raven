@@ -946,10 +946,12 @@ on the wire and defaults to `not_ready`, so an answer from a gateway older than
 the field still reads. `settings.get` computes the state through
 `picture_search_report` over the same rule the router applies, from the config,
 the product folder's own credentials and the vendors' environment variables --
-credentials the raw config cannot show. The offline settings
-fixture (`ui-web/src/rpc/fixtures/settings.ts`, `PPT_VENDORS` /
-`pictureSearchOf`) is its explicit mirror; the vendor list is pinned to
-`PPT_IMAGE_SEARCH_VENDORS` by `tests/test_agent_tools_web_providers.py`.
+credentials the raw config cannot show. The lane's rendered selection is the
+launcher's own inheritance over those inputs, not the raw config's declaration
+alone. The offline settings fixture (`ui-web/src/rpc/fixtures/settings.ts`,
+`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror; the vendor list is
+pinned to `PPT_IMAGE_SEARCH_VENDORS` by
+`tests/test_agent_tools_web_providers.py`.
 _Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
 answers the host's `image_search` but is not a deck vendor, so this state speaks
 of deck pictures, not search availability.
@@ -968,9 +970,13 @@ every call fails. `product_picture_vendor` reads the same declaration for
 routing and returns `"host"` -- the declaration, not the resolved vendor -- so
 `picture_search_status` applies the deck's five-vendor set rather than the
 host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
-`product_page_search_vendor` reads the lane's own page-search selection for the
-readiness probe, so a legacy folder that names one is measured on the vendor
-the engine would use, not on the outer host's.
+`product_page_search_vendor` derives that rendered selection for the readiness
+probe by running the launcher's own `inherit_web_vendors` over the folder's
+config, the host's config and the lane's keys -- the folder's declaration
+where it names one, the host's choice where the launch would carry it, and the
+schema default otherwise -- so a route cannot open on a vendor the rendered
+lane does not search with (an env-only host key is not payable there, and a
+deck key for another vendor blocks the host's choice).
 _Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
 and `ppt_image_vendor` is what turns it into a vendor.
 

@@ -398,10 +398,11 @@ class WiringMixin:
     def _lane_searches_images(self, target: str) -> bool:
         """Whether ``target`` can search for pictures: its vendor's key, its own or the host's.
 
-        The vendor is the target's own where the target chooses one, the host's
-        selected vendor where the target declares that its own picture tool
-        follows the host (:func:`picture_search_ready`), and the one
-        ``image_search`` itself speaks to otherwise -- the selected search vendor
+        The vendor is the one the lane's launcher would render -- its own where
+        it names a choice, the host's where its picture tool follows the host
+        and the launch would carry the host's choice -- derived by the same
+        inheritance function the launcher runs (:func:`picture_search_ready`),
+        or the one ``image_search`` itself speaks to otherwise: the selection
         where that vendor has an image surface, Serper otherwise. The key is
         resolved the way the lane resolves it: the product folder's own
         ``<PRODUCT>_<VENDOR>_API_KEY`` first, then the host's slot for that vendor
@@ -425,7 +426,7 @@ class WiringMixin:
             )
 
         try:
-            return picture_search_ready(target, self.web_search_provider, key_for)
+            return picture_search_ready(target, self.web_search_provider, key_for, host=self._live_config.raw())
         except Exception:  # noqa: BLE001 - a probe that cannot answer must refuse, not raise
             logger.warning("Could not answer the picture-search readiness of {!r}; closing the route", target)
             return False

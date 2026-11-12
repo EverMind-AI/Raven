@@ -749,8 +749,8 @@ def test_the_shared_library_owns_the_vendor_policy(grounded, monkeypatch):
     """The deck hands its own vocabulary to the one policy code and oncall use."""
     seen = {}
 
-    def inherit(config, host, *, own_keys=None, lookup):
-        seen.update(config=config, host=host, own_keys=own_keys, lookup=lookup)
+    def inherit(config, host, *, own_keys=None, deck_keys=None, lookup):
+        seen.update(config=config, host=host, own_keys=own_keys, deck_keys=deck_keys, lookup=lookup)
         return ["sentinel"]
 
     monkeypatch.setattr(grounded.render, "inherit_web_vendors", inherit)
@@ -758,7 +758,47 @@ def test_the_shared_library_owns_the_vendor_policy(grounded, monkeypatch):
     host = {"tools": {"web": {"search": {"provider": "tavily"}}}}
 
     assert grounded.inherit_web_vendors(config, host) == ["sentinel"]
-    assert seen == {"config": config, "host": host, "own_keys": grounded.OWN_WEB_KEYS, "lookup": grounded.env_value}
+    assert seen == {
+        "config": config,
+        "host": host,
+        "own_keys": grounded.OWN_WEB_KEYS,
+        "deck_keys": grounded.DECK_VENDOR_KEYS,
+        "lookup": grounded.env_value,
+    }
+
+
+def test_a_raven_whose_helper_predates_the_deck_keys_still_writes_them(grounded, monkeypatch):
+    """A stamped launcher can load on a raven whose helper takes no deck keys;
+    the frozen snapshot must still put the lane's own key in its slot."""
+    def inherit(config, host, *, own_keys=None, lookup):
+        return []
+
+    monkeypatch.setattr(grounded.render, "inherit_web_vendors", inherit)
+    monkeypatch.setenv("PPT_SERPAPI_API_KEY", "sk-lane-serpapi")
+    config = {"tools": {"web": {}}}
+    host = {"tools": {"web": {"search": {"provider": "brave"}}}}
+
+    carried = grounded.inherit_web_vendors(config, host)
+
+    assert carried == []
+    assert config["tools"]["web"]["providers"]["serpapi"]["apiKey"] == "sk-lane-serpapi"
+    assert grounded.render.dig(config, ("tools", "web", "search", "provider")) == "", (
+        "the lane key blocks the host's choice"
+    )
+
+
+def test_the_probe_reads_the_launchers_own_web_key_tables(launcher):
+    """One vocabulary source: the readiness probe's vendor tables are the
+    launcher's ``OWN_WEB_KEYS`` / ``DECK_VENDOR_KEYS``, spelled from the same
+    env-name convention. A table edited on one side alone fails here."""
+    from raven.agent.subagent import vendored_agents as va
+    from raven.config.schema import WEB_VENDOR_ENV_VARS
+
+    def table(vendors):
+        return {vendor: f"PPT_{WEB_VENDOR_ENV_VARS[vendor]}" for vendor in vendors}
+
+    assert table(va._OWN_WEB_VENDORS) == launcher.OWN_WEB_KEYS
+    assert table(va._DECK_PICTURE_VENDORS) == launcher.DECK_VENDOR_KEYS
 
 
 def test_the_launcher_carries_the_hosts_vendors_under_a_raven_without_the_helper(grounded, monkeypatch):
@@ -866,7 +906,24 @@ VENDOR_POLICY_CASES = [
         {},
         id="host-slot-carried-without-a-choice",
     ),
-    pytest.param(_vendor_config(), _vendor_config(), {}, id="nothing-to-carry"),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(),
+        {},
+        id="nothing-to-carry",
+    ),
+    pytest.param(
+        _vendor_config(),
+        _vendor_config(slots={"brave": "sk-host-brave"}, search="brave"),
+        {"PPT_SERPAPI_API_KEY": "sk-own-serpapi"},
+        id="lane-deck-key-blocks-the-host-choice",
+    ),
+    pytest.param(
+        _vendor_config(slots={"serpapi": "sk-config-serpapi"}),
+        _vendor_config(slots={"brave": "sk-host-brave"}, search="brave"),
+        {"PPT_SERPAPI_API_KEY": "sk-env-serpapi"},
+        id="lane-slot-beats-the-deck-key",
+    ),
 ]
 
 
@@ -885,14 +942,133 @@ def test_the_frozen_vendor_snapshot_agrees_with_the_shared_policy(grounded, conf
     shared = copy.deepcopy(config)
     frozen = copy.deepcopy(config)
     carried_by_library = grounded.render.inherit_web_vendors(
-        shared, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, lookup=lookup
+        shared, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, deck_keys=grounded.DECK_VENDOR_KEYS, lookup=lookup
     )
     carried_by_frozen = grounded._inherit_web_vendors_frozen(
-        frozen, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, lookup=lookup
+        frozen, copy.deepcopy(host), own_keys=grounded.OWN_WEB_KEYS, deck_keys=grounded.DECK_VENDOR_KEYS, lookup=lookup
     )
 
     assert carried_by_frozen == carried_by_library
     assert frozen == shared
+
+
+PICTURE_TOOL_CASES = [
+    pytest.param(
+        {"tools": {"web": {"search": {"provider": "brave"}}}},
+        {},
+        {"BRAVE_API_KEY": "sk-brave-env"},
+        False,
+        "serper",
+        id="host-brave-key-only-in-the-environment",
+    ),
+    pytest.param(
+        {
+            "tools": {
+                "web": {
+                    "search": {"provider": "brave"},
+                    "providers": {"brave": {"apiKey": "sk-host-brave"}},
+                }
+            }
+        },
+        {"SERPAPI_API_KEY": "sk-lane-serpapi"},
+        {},
+        False,
+        "serper",
+        id="host-brave-slot-and-a-lane-serpapi-key",
+    ),
+    pytest.param(
+        {
+            "tools": {
+                "web": {
+                    "search": {"provider": "brave"},
+                    "providers": {"brave": {"apiKey": "sk-host-brave"}},
+                }
+            }
+        },
+        {},
+        {},
+        True,
+        "brave",
+        id="host-brave-slot-control",
+    ),
+    pytest.param(
+        {
+            "tools": {
+                "web": {
+                    "search": {"provider": "serper"},
+                    "providers": {"serper": {"apiKey": "sk-host-serper"}},
+                }
+            }
+        },
+        {},
+        {},
+        True,
+        "serper",
+        id="host-serper-slot-control",
+    ),
+]
+"""The four configurations the reviewer measured, for the strongest check: the
+lane is rendered through the launcher and the route answer is compared with
+the tool the engine actually builds. The first two are the fail-open -- a
+route opening where the render leaves no picture tool."""
+
+
+@pytest.mark.parametrize(("host", "lane", "ambient", "expected_ready", "expected_vendor"), PICTURE_TOOL_CASES)
+def test_the_route_answer_matches_the_picture_tool_the_launcher_renders(
+    grounded, tmp_path, monkeypatch, host, lane, ambient, expected_ready, expected_vendor
+):
+    """One source: the probe's answer equals ``_Shared.image_search() is not None``.
+
+    The lane is the shipped ``agents/raven-ppt`` folder rendered by its own
+    launcher from ``RAVEN_HOME/config.json``, and the route answer is asked
+    through the same function the router calls. A one-sided edit -- the probe
+    restating the vendor rule, or the launcher changing its inheritance -- reds
+    one of these cells.
+    """
+    from raven.agent.subagent import vendored_agents as va
+    from raven.agent.tools.web import SEARCH_PROVIDERS
+    from raven.config.schema import WEB_VENDOR_ENV_VARS, Config, WebToolsConfig
+
+    plugin_module = pytest.importorskip("raven_ppt.plugin")
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    for name in (*WEB_VENDOR_ENV_VARS.values(), *(f"PPT_{name}" for name in WEB_VENDOR_ENV_VARS.values())):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {**ambient, **{f"PPT_{suffix}": value for suffix, value in lane.items()}}.items():
+        monkeypatch.setenv(name, value)
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    (home / "config.json").write_text(json.dumps(host), encoding="utf-8")
+    rendered = json.loads(grounded.render_config(RUN_PY.parent / "config.json").read_text(encoding="utf-8"))
+
+    web = WebToolsConfig.model_validate(rendered["tools"]["web"])
+    slice_ = ((rendered.get("plugins") or {}).get("config") or {}).get("ppt-engine") or {}
+    shared = plugin_module._Shared(
+        PluginContext(
+            config=dict(slice_),
+            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
+        )
+    )
+    tool = shared.image_search()
+
+    monkeypatch.setattr(va, "agents_root", lambda: REPO / "agents")
+    host_config = Config.model_validate(host)
+    selected = host_config.tools.web.search.provider
+
+    def key_for(vendor: str) -> str:
+        spec = SEARCH_PROVIDERS.get(vendor)
+        return (
+            va.product_secret("Raven-PPT", f"{vendor.upper()}_API_KEY")
+            or host_config.effective_web_vendor_key(vendor)
+            or (os.environ.get(spec.env_var, "") if spec else "")
+        )
+
+    vendor, ready, _reason = va.picture_search_report("Raven-PPT", selected, key_for, host=host)
+
+    assert (vendor, ready) == (expected_vendor, expected_ready)
+    assert (tool is not None) is expected_ready
+    assert ready == (tool is not None), "the route must open exactly where the engine has a picture tool"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX file modes are not available on Windows")
