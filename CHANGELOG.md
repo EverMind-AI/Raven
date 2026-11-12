@@ -6,6 +6,21 @@ All notable changes to Raven are documented here.
 
 ### Added
 
+- A connection a sandbox blocks while a command runs is now settled like a
+  tool call. A target your `permissions.network` deny rules name is refused;
+  otherwise `ask` mode asks you on a card of its own (the program, the
+  address, the command), `smart` mode lets the reviewer open what the command
+  plainly needs, `full` mode opens it for the session, and with nobody to ask
+  it stays blocked and `raven agent -m` exits with status 3. "Allow once"
+  opens it in that sandbox and "allow for this session" in every sandbox of
+  the conversation, applied to running sandboxes without restarting them; the
+  agent is told to run the command again. An address given as an IP or an
+  internal name is never opened without you. The same goes for the
+  connections a sandboxed MCP server is refused, and agents of one
+  conversation that hit the same address share one prompt. In a sandbox whose
+  network is closed, OpenShell's own reviewed proposal is approved when it
+  opens exactly the same thing.
+
 - Delivered files carry a download link in the tile, the desk's deliverables
   shelf, and the viewer header; a missing delivery draws no control.
 
@@ -30,12 +45,26 @@ All notable changes to Raven are documented here.
   Network egress stays open by default: any host name with three or more
   labels on any port, plus common package, code-hosting and model-provider
   domains on common ports, since OpenShell cannot yet match every host name;
-  an `allowNet` host list still limits it to those hosts. The `raven sandbox`
+  rules under `permissions.network` narrow or widen it. The `raven sandbox`
   command group and the sandbox debug server are gone, and
   `openshell sandbox list`, `exec` and `connect` do those jobs. The `sandbox`
   extra installs the OpenShell SDK instead of boxlite, `raven onboard` checks
   that the SDK imports and the gateway answers, and the design engine's
   sandboxed renderer runs on OpenShell too.
+
+- What a sandbox may reach moved from `tools.sandbox.allowNet` into the
+  permission set, `permissions.network` (a default of `open` or `closed`, and
+  allow or deny rules by host, port and program), which every sandbox reads:
+  the main agent's, sub-agents', DAG nodes' and sandboxed MCP servers'. The
+  first load moves an `allowNet` there with a notice, and a change reaches a
+  running sandbox before its next command.
+
+- Raven's own agents (Raven-Code and the rest) run under the host's whole
+  permission set, the mode and the ask, allow and network rules as well as its
+  refusals, and in the host's OpenShell sandbox where the platform supports it.
+
+- The design engine's renderer always runs offline; `render.allowNetwork` and
+  `render.networkAllowlist` are retired and ignored with a notice.
 
 - When an agent's report comes back, Raven's reply explains it in full in its
   own words instead of a one-to-two-sentence summary: the user has not read

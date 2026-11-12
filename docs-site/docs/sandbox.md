@@ -117,11 +117,13 @@ execution happens only when the backend is `"none"`.
 | `image` | string | `"ubuntu:22.04"` | Container image each sandbox starts from. |
 | `cpus` | int | `2` | CPU limit per sandbox. |
 | `memoryMib` | int | `2048` | Memory limit per sandbox, in MiB. |
-| `allowNet` | bool \| list | `true` | Network egress; see [Network policy](#41-network-policy). |
 | `extraVolumes` | list | `[]` | Extra bind mounts, each `[host_path, sandbox_path, "ro"\|"rw"]`. |
 | `defaultTimeout` | int | `120` | Seconds per command when no explicit timeout is given. |
 | `verifyTimeout` | int | `30` | Seconds for the startup probe. |
 | `createTimeout` | int | `300` | Seconds for image pull and sandbox creation. |
+
+What a sandbox may reach is not set here: it is part of the permission set,
+under `permissions.network`. See [Network policy](#41-network-policy).
 
 ### Migrating from the boxlite backend
 
@@ -223,35 +225,21 @@ openshell logs rv1a2b3c4d5e6f              # supervisor log, including denied co
 ### 4.1 Network policy
 
 OpenShell denies all egress that no rule allows, and checks each connection
-against the hostname it was made to.
+against the hostname it was made to. The rules come from `permissions.network`,
+the permission set every agent follows; see
+[Permissions: Network](permissions.md#network) for the rules, and for how a
+blocked connection is approved while a command runs.
 
-```json
-{ "allowNet": true }
-```
-
-The default opens every hostname of three or more labels (`api.github.com`,
-`files.pythonhosted.org`, `www.example.com`) on every port, plus a list of
-common two-label names on ports 22, 80, 443, 8080, 8443 and 9418: package
-registries (`pypi.org`, `npmjs.org`, `crates.io`, `rubygems.org`, ...), code
-hosts (`github.com`, `gitlab.com`, ...), container registries (`docker.io`,
-`ghcr.io`, ...) and model APIs. Any other two-label name, such as
-`example.com`, is denied.
-
+The default, `open`, opens every hostname of three or more labels
+(`api.github.com`, `files.pythonhosted.org`, `www.example.com`) on every port,
+plus a list of common two-label names on ports 22, 80, 443, 8080, 8443 and
+9418: package registries (`pypi.org`, `npmjs.org`, `crates.io`,
+`rubygems.org`, ...), code hosts (`github.com`, `gitlab.com`, ...), container
+registries (`docker.io`, `ghcr.io`, ...) and model APIs. Any other two-label
+name, such as `example.com`, is blocked until a rule or an approval opens it.
 OpenShell has no rule that allows every hostname (NVIDIA/OpenShell#3856), so
-this is the closest open setting it supports. Add the names you need on top of
-it with `"*"`:
-
-```json
-{ "allowNet": ["*", "example.com", "example.org"] }
-```
-
-Without `"*"`, a list allows only those names, on ports 80 and 443:
-
-```json
-{ "allowNet": ["pypi.org", "files.pythonhosted.org"] }
-```
-
-`false` allows no egress at all. An empty list is rejected as ambiguous.
+this is the closest open setting it supports. `closed` opens only what a rule
+allows.
 
 These rules relay TLS without terminating it, so egress runs at full speed.
 Whatever the policy, OpenShell always blocks loopback, link-local addresses
@@ -260,6 +248,20 @@ and the cloud metadata address `169.254.169.254`.
 Raven's own web tools run on the host and are not affected by this policy. It
 applies to commands in the sandbox (`pip`, `npm`, `git`, `curl`) and to stdio
 MCP servers.
+
+A rule or an approval reaches a running sandbox before its next command. The
+gateway delivers a policy change by polling, which takes about 10 seconds. Push
+delivery makes it about a second: add this line to
+`~/.config/openshell/gateway.env` and restart the gateway.
+
+```
+OPENSHELL_CONFIG_DELIVERY_MODE=push
+```
+
+`tools.sandbox.allowNet` is retired. The first load moves it into
+`permissions.network`: `true` is the open default, `false` is closed, a host
+list allows those hosts on ports 80 and 443 with the default closed, and a
+list with `"*"` keeps the open default and adds the other hosts.
 
 ### 4.2 Extra volume mounts
 
@@ -335,7 +337,7 @@ list.
 | `did not become ready: ... bind source path does not exist` | Mount source under `/tmp`, or bind mounts disabled | Move the workspace out of `/tmp`; check `gateway.toml` |
 | `ConfigurationInvalid` on start | The gateway rejected the policy | `openshell logs <name>` |
 | `cannot write the workspace` | Raven runs as root, so OpenShell's sandbox user does not own the workspace | Run Raven as a non-root user, or give the workspace to that UID |
-| `curl: (7) ... Couldn't connect` within milliseconds | The network policy denied the host | Add it to `allowNet` with `"*"` |
+| `curl: (7) ... Couldn't connect` within milliseconds | The network policy blocked the host | Approve it when Raven asks, or add a rule under `permissions.network` |
 
 ## 8. Platform Requirements
 

@@ -102,11 +102,13 @@ Raven 不会自行退回宿主机执行；只有 backend 为 `"none"` 时才在�
 | `image` | 字符串 | `"ubuntu:22.04"` | 每个沙箱启动所用的容器镜像。 |
 | `cpus` | 整数 | `2` | 每个沙箱的 CPU 上限。 |
 | `memoryMib` | 整数 | `2048` | 每个沙箱的内存上限，单位 MiB。 |
-| `allowNet` | 布尔 \| 列表 | `true` | 出网策略，见[网络策略](#41-network-policy)。 |
 | `extraVolumes` | 列表 | `[]` | 额外的 bind mount，每项为 `[宿主路径, 沙箱路径, "ro"\|"rw"]`。 |
 | `defaultTimeout` | 整数 | `120` | 未指定超时时每条命令的秒数。 |
 | `verifyTimeout` | 整数 | `30` | 启动探测的秒数。 |
 | `createTimeout` | 整数 | `300` | 拉取镜像并创建沙箱的秒数。 |
+
+沙箱能访问哪些地址不在这里设置，它属于权限的一部分，写在 `permissions.network` 下，见
+[网络策略](#41-network-policy)。
 
 ### 从 boxlite 后端迁移 { #migrating-from-the-boxlite-backend }
 
@@ -187,37 +189,33 @@ openshell logs rv1a2b3c4d5e6f              # supervisor 日志，包括被拒绝
 
 ### 4.1 网络策略 { #41-network-policy }
 
-OpenShell 拒绝所有没有规则放行的出网，并按每个连接所访问的域名来判断。
+OpenShell 拒绝所有没有规则放行的出网，并按每个连接所访问的域名来判断。规则来自
+`permissions.network`，也就是所有智能体共用的那套权限；规则怎么写、命令运行中被拦下的连接
+怎么放行，见[权限：网络](permissions.md#network)。
 
-```json
-{ "allowNet": true }
-```
-
-默认值放行所有三段及以上的域名（如 `api.github.com`、`files.pythonhosted.org`、`www.example.com`）
-的全部端口，另外在 22、80、443、8080、8443、9418 端口放行一份常用的两段域名：包仓库
-（`pypi.org`、`npmjs.org`、`crates.io`、`rubygems.org` 等）、代码托管（`github.com`、`gitlab.com` 等）、
-容器镜像仓库（`docker.io`、`ghcr.io` 等）和模型 API。其他两段域名（例如 `example.com`）会被拒绝。
-
-OpenShell 没有放行任意域名的规则（NVIDIA/OpenShell#3856），这是它目前支持的最接近"全部放行"的设置。
-需要更多域名时，用 `"*"` 在默认值基础上追加：
-
-```json
-{ "allowNet": ["*", "example.com", "example.org"] }
-```
-
-不带 `"*"` 时，列表只放行列出的域名，端口为 80 和 443：
-
-```json
-{ "allowNet": ["pypi.org", "files.pythonhosted.org"] }
-```
-
-`false` 表示不允许任何出网。空列表有歧义，会被拒绝。
+默认值 `open` 放行所有三段及以上的域名（如 `api.github.com`、`files.pythonhosted.org`、
+`www.example.com`）的全部端口，另外在 22、80、443、8080、8443、9418 端口放行一份常用的两段
+域名：包仓库（`pypi.org`、`npmjs.org`、`crates.io`、`rubygems.org` 等）、代码托管（`github.com`、
+`gitlab.com` 等）、容器镜像仓库（`docker.io`、`ghcr.io` 等）和模型 API。其他两段域名（例如
+`example.com`）会被拦下，直到有规则或授权放行它。OpenShell 没有放行任意域名的规则
+（NVIDIA/OpenShell#3856），这是它目前支持的最接近“全部放行”的设置。`closed` 只放行规则允许的。
 
 这些规则转发 TLS 时不解密，所以出网速度不受影响。无论策略如何，OpenShell 始终禁止访问回环地址、
 链路本地地址和云元数据地址 `169.254.169.254`。
 
 Raven 自己的网页工具在宿主机上运行，不受此策略影响。策略作用于沙箱里的命令（`pip`、`npm`、
 `git`、`curl`）和 stdio MCP 服务。
+
+规则或授权会在运行中的沙箱执行下一条命令之前生效。网关默认用轮询下发策略改动，大约要 10 秒；
+改用推送大约 1 秒：在 `~/.config/openshell/gateway.env` 里加上这一行，然后重启网关。
+
+```
+OPENSHELL_CONFIG_DELIVERY_MODE=push
+```
+
+`tools.sandbox.allowNet` 已停用。首次加载时会自动搬到 `permissions.network`：`true` 对应开放
+默认，`false` 对应关闭，主机列表表示默认关闭、只在 80 和 443 端口放行这些主机，带 `"*"` 的列表
+表示保持开放默认，再加上其余主机。
 
 ### 4.2 额外挂载 { #42-extra-volume-mounts }
 
@@ -288,7 +286,7 @@ uv run --frozen --all-extras pytest tests/integration/test_openshell_sandbox_rea
 | `did not become ready: ... bind source path does not exist` | 挂载源在 `/tmp` 下，或 bind mount 未开启 | 把工作区移出 `/tmp`；检查 `gateway.toml` |
 | 启动时报 `ConfigurationInvalid` | gateway 拒绝了策略 | `openshell logs <名称>` |
 | `cannot write the workspace` | root 宿主，且沙箱用户不拥有工作区 | 以非 root 用户运行 Raven，或把工作区交给该 UID |
-| 几毫秒内就报 `curl: (7) ... Couldn't connect` | 网络策略拒绝了该主机 | 用 `"*"` 把它加进 `allowNet` |
+| 几毫秒内就报 `curl: (7) ... Couldn't connect` | 网络策略拦下了该主机 | Raven 询问时放行，或在 `permissions.network` 里加一条规则 |
 
 ## 8. 平台要求 { #8-platform-requirements }
 
