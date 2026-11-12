@@ -230,18 +230,27 @@ def _normalise(path: str) -> str:
 
 
 def _match(path: str, pattern: str) -> bool:
-    """Match a normalised path against one pattern.
+    """Match a normalised path against one pattern, ignoring case.
 
     Two pattern shapes:
 
     - Trailing slash → directory subtree match (the directory itself
       and any descendant).
     - Otherwise → exact-string match.
+
+    Case is folded on both sides: a case-insensitive filesystem (Windows,
+    macOS by default) hands ``EVOLVER/x.py`` and ``evolver/x.py`` to the
+    same file, so a diff path spelled in another case must not slip past
+    the guard. On a case-sensitive filesystem this can refuse a path that
+    only differs by case; that is the conservative direction, and the
+    guard already prefers refusing over guessing.
     """
-    if pattern.endswith("/"):
-        prefix = pattern.rstrip("/")
-        return path == prefix or path.startswith(pattern)
-    return path == pattern
+    folded_path = path.casefold()
+    folded_pattern = pattern.casefold()
+    if folded_pattern.endswith("/"):
+        prefix = folded_pattern.rstrip("/")
+        return folded_path == prefix or folded_path.startswith(folded_pattern)
+    return folded_path == folded_pattern
 
 
 # ---------------------------------------------------------------------------
