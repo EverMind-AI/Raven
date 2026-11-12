@@ -81,8 +81,6 @@ class RenderService:
         }
         config = RenderConfig.discover(
             **binary_overrides,
-            allow_network=tool_config.allow_network,
-            network_allowlist=tuple(tool_config.network_allowlist),
             office_backend_order=tuple(tool_config.office_backend_order),
             allow_cloud_office=tool_config.allow_cloud_office,
             raster_dpi=tool_config.raster_dpi,
