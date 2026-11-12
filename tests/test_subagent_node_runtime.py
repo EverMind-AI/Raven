@@ -5,7 +5,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from raven.agent.subagent.node_runtime import NodeTooOld, _declared_floor, _short, _upgrade_command, node_too_old
+from raven.agent.subagent.node_runtime import (
+    NodeTooOld,
+    _declared_floor,
+    _entry_script,
+    _short,
+    _upgrade_command,
+    node_too_old,
+)
 
 
 def _installed(
@@ -141,6 +148,72 @@ def test_the_floor_is_the_nearest_manifest_s_and_only_one_that_reads(tmp_path: P
     assert _declared_floor(str(broken / "cli.js")) is None
 
     assert _declared_floor(str(tmp_path / "a" / "b" / "c" / "d" / "e" / "cli.js")) is None, "no manifest near it"
+
+
+def _windows_installed(tmp_path: Path, *, spelling: str = "%dp0%", engines: object = ">=24.9.0") -> tuple[Path, Path]:
+    """An `npm i -g` layout as npm writes it on Windows: a batch shim runs the entry.
+
+    npm cannot put a symlink on PATH there, so `<prefix>/dsh.cmd` names the
+    package's entry (`<prefix>/node_modules/...`) through the shim's own
+    directory. Neither a shebang nor a package.json sits beside the shim.
+    """
+    package = tmp_path / "node_modules" / "@deepseek-ai" / "dsh"
+    (package / "lib").mkdir(parents=True)
+    manifest: dict[str, object] = {"name": "@deepseek-ai/dsh"}
+    if engines is not None:
+        manifest["engines"] = {"node": engines}
+    (package / "package.json").write_text(json.dumps(manifest), encoding="utf-8")
+    entry = package / "lib" / "bin.js"
+    entry.write_text("#!/usr/bin/env node\nconsole.log('hi')\n", encoding="utf-8")
+    shim = tmp_path / "dsh.cmd"
+    shim.write_text(
+        "@ECHO off\nSETLOCAL\n"
+        'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  '
+        f'"{spelling}/node_modules/@deepseek-ai/dsh/lib/bin.js" %*\n',
+        encoding="utf-8",
+    )
+    return shim, entry
+
+
+def test_a_windows_batch_shim_is_followed_to_its_package_entry(tmp_path: Path) -> None:
+    """npm cannot link the entry onto PATH on Windows; it writes a `.cmd` shim.
+
+    The shim's own directory carries neither the shebang nor the package.json,
+    so reading the shim's path found no interpreter and no floor: the Node.js
+    check said nothing on the one platform that needs the shim.
+    """
+    shim, entry = _windows_installed(tmp_path)
+
+    assert _entry_script(str(shim)) == str(entry)
+    assert _declared_floor(str(entry)) == (24, 9, 0)
+
+
+def test_the_older_shim_spelling_names_the_entry_too(tmp_path: Path) -> None:
+    """npm spelled the shim's directory `%~dp0` before it spelled it `%dp0%`."""
+    shim, entry = _windows_installed(tmp_path, spelling="%~dp0")
+
+    assert _entry_script(str(shim)) == str(entry)
+
+
+def test_a_batch_shim_that_runs_no_node_script_names_nothing(tmp_path: Path) -> None:
+    shim = tmp_path / "tool.cmd"
+    shim.write_text('@ECHO off\n"%~dp0\\tool.exe" %*\n', encoding="utf-8")
+
+    assert _entry_script(str(shim)) is None
+
+
+def test_an_old_node_behind_a_windows_shim_is_named(tmp_path: Path, monkeypatch) -> None:
+    """The version and the floor are read through the shim, not from beside it."""
+    from raven.agent.subagent import node_runtime as node_mod
+
+    shim, _entry = _windows_installed(tmp_path)
+    node = str(tmp_path / "node.exe")
+    monkeypatch.setattr(node_mod.shutil, "which", lambda exe, path=None: shim if exe == "dsh" else node)
+    monkeypatch.setattr(node_mod, "_version_of", lambda _node: (22, 11, 0))
+
+    stale = node_mod.node_too_old("dsh", "unused")
+
+    assert stale == NodeTooOld(needs="24.9", found="22.11.0", node=node, upgrade=None)
 
 
 def test_a_launch_command_that_does_not_parse_names_nothing() -> None:
