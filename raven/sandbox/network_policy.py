@@ -185,11 +185,6 @@ def grant_rules(grants: Iterable[NetworkGrant]) -> dict[str, dict]:
     return rules
 
 
-def policy_digest(policies: dict[str, dict]) -> str:
-    """A stable fingerprint of compiled policies, to tell whether a running sandbox is behind."""
-    return hashlib.sha256(json.dumps(policies, sort_keys=True).encode()).hexdigest()
-
-
 class AllowNetRule(NamedTuple):
     """One rule an old ``allowNet`` list meant, shaped like a ``permissions.network`` rule."""
 
