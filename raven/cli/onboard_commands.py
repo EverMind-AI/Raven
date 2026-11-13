@@ -1839,12 +1839,14 @@ def _step2_sandbox(*, skip: bool, non_interactive: bool) -> object:
 
     if skip or non_interactive:
         if sys.platform == "win32" and _current_sandbox_backend() != "none":
+            # A kept sandbox backend refuses to start here, and switching to the
+            # host takes the confirmation the interactive choice asks for.
             console.print(
                 t(
-                    "  [dim]Sandbox isolation (OpenShell) needs Linux or macOS; commands on this host run directly.[/dim]"
+                    "  [yellow]⚠ The OpenShell sandbox needs Linux or macOS, so commands can't run on this host yet. "
+                    "Run `raven onboard` and choose Host (direct), or set `tools.sandbox.backend` to `none`.[/yellow]"
                 )
             )
-            _warn_host_risk()
             return None
         run_loc = t("Host (direct)") if _current_sandbox_backend() == "none" else t("Sandbox (OpenShell)")
         console.print(t("  [dim]Keeping run location: {location}.[/dim]", location=run_loc))
