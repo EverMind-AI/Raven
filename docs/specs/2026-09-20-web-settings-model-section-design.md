@@ -33,9 +33,10 @@ they are cited as "prior C14", "prior A12" and not restated.
 - **offer**: what one opening of the picker lists -- a kind, optionally a
   subset of providers, optionally what a pick does. The composer opens with the
   default offer; a role slot opens with its own.
-- **slot** / **role**: one of the eleven model roles of the roles card (chat,
-  curator, session naming, skill gate, EverOS llm / embedding / rerank /
-  multimodal, image, speech, video).
+- **slot** / **role**: one of the ten model roles of the roles card (chat,
+  curator, session naming, EverOS llm / embedding / rerank / multimodal, image,
+  speech, video; the skill gate role was removed 2026-11-13 with push skill
+  discovery).
 - **provider catalogue** (shortened to **catalogue** below): every provider
   `model.options` returns, connected or not. Not the Session Mode catalogue of
   the Runtime's `CONTEXT.md`.
