@@ -1134,6 +1134,43 @@ class TestBoxliteTranslateProcessPath:
 
         assert translated == f"--data=/workspace/d --sep={backslash}t"
 
+    def test_a_sibling_sharing_the_roots_prefix_is_not_translated(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PurePosixPath("/srv/work"), "/workspace")],
+        )
+
+        translated = executor._translate_process_path("node /srv/work/server.js /srv/workshop/other.js")
+
+        assert translated == "node /workspace/server.js /srv/workshop/other.js"
+
+    def test_the_root_alone_and_a_dashed_sibling_stay_distinct(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PurePosixPath("/srv/work"), "/workspace")],
+        )
+
+        assert executor._translate_process_path("/srv/workshop/bin") == "/srv/workshop/bin"
+        assert executor._translate_process_path("/srv/work-old/x") == "/srv/work-old/x"
+        assert executor._translate_process_path("/srv/work") == "/workspace"
+        assert executor._translate_process_path("/srv/work/d") == "/workspace/d"
+
+    def test_a_windows_sibling_sharing_the_roots_prefix_is_not_translated(self, tmp_path, monkeypatch):
+        executor = BoxliteExecutor(image="ubuntu:22.04", workspace=tmp_path, sandbox_home=_TEST_SANDBOX_HOME)
+        monkeypatch.setattr(
+            executor,
+            "_mount_roots",
+            lambda: [(PureWindowsPath("C:/workspace"), "/workspace")],
+        )
+
+        translated = executor._translate_process_path(r"C:\workspace\pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs")
+
+        assert translated == r"/workspace/pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs"
+
 
 # ---------------------------------------------------------------------------
 # BoxliteExecutor._collect
