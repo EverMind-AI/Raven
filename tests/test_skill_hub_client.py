@@ -128,6 +128,35 @@ async def test_an_injected_transport_is_never_replaced() -> None:
     assert client._http() is injected
 
 
+# ── install with metadata already in hand ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_install_with_prefetched_metadata_does_not_fetch_the_detail_again(tmp_path: Path) -> None:
+    """``use_skill`` fetches the detail metadata to run the safety policy on it,
+    then hands that same metadata to ``install``. A second detail request would
+    install against metadata the policy never saw; only the bundle is fetched."""
+    paths: list[str] = []
+    bundle = _zip({"SKILL.md": "---\nname: foo\n---\nbody\n"})
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/download"):
+            return httpx.Response(200, content=bundle)
+        return httpx.Response(200, json={"error": "ok", "status": 0, "result": {"slug": "other", "version": "v9"}})
+
+    client = SkillHubClient(
+        "https://hub.example",
+        cache_dir=tmp_path,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    info = await client.install("foo", prefetched_meta={"slug": "foo", "version": "v1", "skill_md": "body"})
+
+    assert paths == ["/openapi/v1/skills/foo/download"]
+    assert (info["slug"], info["version"]) == ("foo", "v1")
+
+
 # ── resolve_hub_endpoint ────────────────────────────────────────────
 
 
