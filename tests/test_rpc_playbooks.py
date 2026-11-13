@@ -1268,11 +1268,17 @@ async def test_the_contexts_are_gone_once_the_call_is_over(library: PlaybookStor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("session_state", ["persisted", "cached", "ownerless", "missing"])
+@pytest.mark.parametrize("session_state", ["persisted", "cached", "ownerless"])
 @pytest.mark.parametrize("ambient", [False, True])
 async def test_background_run_usage_belongs_to_the_requested_session(
     library: PlaybookStore, tmp_path: Path, session_state: str, ambient: bool
 ) -> None:
+    """The dispatch binds the requested key, with the session's owner when it has one.
+
+    ``session_workdir`` is stubbed here, so these are the states the real gateway
+    can present at the dispatch point; the unknown-key case is pinned one level
+    down by ``test_the_usage_helper_does_not_create_a_session``.
+    """
     import asyncio
     from contextlib import nullcontext
 
@@ -1287,13 +1293,12 @@ async def test_background_run_usage_belongs_to_the_requested_session(
     telemetry = tmp_path / "telemetry"
     owner = {"root_session_key": "tui:delegating-parent", "telemetry_dir": str(tmp_path / "owner-telemetry")}
     owned = session_state in {"persisted", "cached"}
-    if session_state != "missing":
-        session = sessions.get_or_create(key)
-        if owned:
-            session.metadata["usage_owner"] = owner
-        if session_state == "persisted":
-            sessions.save(session)
-            sessions = SessionManager(tmp_path / "agent-home")
+    session = sessions.get_or_create(key)
+    if owned:
+        session.metadata["usage_owner"] = owner
+    if session_state == "persisted":
+        sessions.save(session)
+        sessions = SessionManager(tmp_path / "agent-home")
 
     tracker = UsageTracker(telemetry_dir=telemetry, flush_every=1)
     release = asyncio.Event()
@@ -1334,9 +1339,37 @@ async def test_background_run_usage_belongs_to_the_requested_session(
     assert rows[0]["session_key"] == key
     assert rows[0]["root_session_key"] == (owner["root_session_key"] if owned else key)
     assert not (tmp_path / "unrelated-telemetry").exists()
-    if session_state == "missing":
-        assert sessions.peek(key) is None
     assert sessions.exists(key) == (session_state == "persisted")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ambient", [False, True])
+async def test_the_usage_helper_does_not_create_a_session(tmp_path: Path, ambient: bool) -> None:
+    """Pin the lookup's own no-create contract, not the whole RPC path.
+
+    ``playbooks_run`` resolves the working directory before it binds usage, and
+    the real resolver's read-only path reaches ``get_or_create``, so a key
+    arriving at that point is already in memory. Here the helper is called on
+    its own: an unknown key must come back through ``peek`` without being
+    materialized, bind the requested key, and carry no delegation owner.
+    """
+    from contextlib import nullcontext
+
+    from raven.session.manager import SessionManager
+    from raven.token_wise import usage_context
+
+    sessions = SessionManager(tmp_path / "agent-home")
+    loop = _loop_with(_Runtime(), sessions=sessions)()
+    key = "tui:never-seen"
+    ambient_owner = {"root_session_key": "tui:unrelated-root"}
+    scope = usage_context.bind("tui:unrelated", ambient_owner) if ambient else nullcontext()
+    with scope:
+        with mod._session_usage(loop, key):
+            assert usage_context.session_key() == key
+            assert usage_context.root_session_key() == key
+            assert usage_context.telemetry_dir() is None
+    assert sessions.peek(key) is None
+    assert not sessions.exists(key)
 
 
 @pytest.mark.asyncio
