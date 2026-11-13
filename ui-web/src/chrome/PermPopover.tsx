@@ -1,10 +1,13 @@
 /* The permission popover: the three tiers, as a radio group off the chip.
  *
- * Each row is a tile with a ground of its own: the tier's glyph in a plate, the
- * tier's name, and the sentence that explains it, with the chosen tile lifting
- * to a warm wash and carrying the tick. The heading names the list and the note
- * says when a pick takes effect; the chip already says which tier is in force,
- * so neither repeats it.
+ * Each row is a mark, the tier's name and the sentence that explains it, in
+ * the context card's own language: one paper card, flat rows, a glyph in a
+ * small plate, and a rule with a gold line under them. The glyph wears the
+ * tier's colour -- grey for the one that asks, gold for the balanced one, clay
+ * for the one with no brakes -- so the three read as a ramp, and the row
+ * carries its tier's id so the stylesheet can tell them apart. The heading
+ * names the list and the note says when a pick takes effect; the chip already
+ * says which tier is in force, so neither repeats it.
  *
  * WHERE this renders is the one thing it does not decide. It is a child of the
  * chip's anchor (`.chrome-anch`, src/chrome/Dock.tsx), hung off the chip's top edge by
@@ -52,12 +55,13 @@ export function PermPopover(): JSX.Element {
       {s.open && s.listed
         ? (
           <>
-            <div className="hd"><span className="lab" id="perm-pop-title">{t('gui.perm.title')}</span></div>
+            <div className="hd"><span className="chrome-perm-title" id="perm-pop-title">{t('gui.perm.title')}</span></div>
             <div role="radiogroup" aria-labelledby="perm-pop-title">
               {s.listed.map((row) => (
                 <button
                   key={row.id}
                   className={`prow${row.risk ? ' risk' : ''}`}
+                  data-tier={row.id}
                   role="radio"
                   aria-checked={row.ticked ? 'true' : 'false'}
                   aria-labelledby={`perm-nm-${row.id}`}
