@@ -718,6 +718,10 @@ body {
      two-track grid would put the main pane in the second track beside an
      empty first one, which is the squeeze this block is for. */
   :root .app { grid-template-columns: 1fr; }
+  /* The main pane keeps the whole window here, standing or collapsed: the rail
+     is an overlay out of the grid's flow either way, so there is no track for
+     it to give back. */
+  :root .app[data-rail="off"] .main { width: 100%; margin-left: 0; }
   .app .rail {
     position: fixed; top: 0; bottom: 0; left: 0; width: min(var(--rail), 86vw);
     z-index: var(--z-rail-fold); box-shadow: var(--shadow);
@@ -791,6 +795,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   border-right: 1px solid var(--rail-edge);
   padding: 0 4px;
   display: flex; flex-direction: column; min-height: 0; position: relative;
+  /* The column keeps the width the drag gave it while the content takes its
+     place back, so the collapse is a slide and not a squash: the box keeps
+     its width and leaves by the window's edge. */
+  width: var(--rail);
+  transition: transform .24s ease, visibility .24s;
 }
 
 /* Resize grip: a 6px target straddling the seam, invisible until the pointer is
@@ -840,7 +849,18 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    Skills / Plugins / Memory painted over the way out and left no way to reach
    another module at all. It keeps the exact spot its twin in the rail occupies,
    so the icon never moves under the pointer that just clicked it. */
-#railShow { position: fixed; left: var(--edge); top: 26px; transform: translateY(-50%); z-index: var(--z-rail-handle); }
+#railShow { position: fixed; left: var(--edge); top: 26px; transform: translateY(-50%); z-index: var(--z-rail-handle);
+  /* The twin arrives with the column instead of popping into the corner the
+     column has already left, and leaves the same way. `hidden` is
+     state/rail.ts's; what the stylesheet does with it is the motion, so the
+     button stays on the page while it fades -- which is what `display` in the
+     transition list and `allow-discrete` are for. */
+  transition: opacity .24s ease, display .24s;
+  transition-behavior: allow-discrete; }
+#railShow[hidden] { opacity: 0; pointer-events: none; }
+/* The fade the twin comes in on: a button that was never rendered has no
+   "before" to fade from, so the style it starts from is named here. */
+@starting-style { #railShow { opacity: 0; } }
 :root[data-shell="1"] #railShow { left: var(--tl-pad, 78px); top: calc(var(--tl-row, 38px) / 2); }
 :root[data-shell="1"][data-rail="off"] .top { padding-left: calc(var(--tl-pad, 78px) + 35px); }
 /* Desktop shell hides the OS title bar, so this row shares the traffic-light
@@ -1166,11 +1186,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
   }
 }
 
-/* Collapsed rail: ONE track, not `0 1fr`. A display:none grid item leaves the
-   grid entirely, so with two tracks the main pane fell into the 0px one and
-   the whole right side rendered zero-wide. */
-.app[data-rail="off"] { grid-template-columns: 1fr; }
-.app[data-rail="off"] .rail { display: none; }
+/* Collapsed rail: the column slides out of the window and the content takes
+   its place back. The grid keeps its two tracks -- a rail that left the grid
+   (display:none) would drop the main pane into the empty track and the whole
+   right side would render zero-wide -- so the main pane grows out of the
+   rail's track as the column leaves it, and the two move at one rate: the
+   column's edge rides the content's edge. `visibility` takes the column out
+   of the tab order on the way, since a rail that is only off screen is still
+   a rail the keyboard can walk into. */
+.app[data-rail="off"] .main { width: calc(100% + var(--rail)); margin-left: calc(-1 * var(--rail)); }
+.app[data-rail="off"] .rail { visibility: hidden; transform: translateX(-100%); }
 /* One row shape for the whole rail -- the new-task action, the module links and
    every session line -- so the column reads as one list instead of three. */
 .navi, .sess {
@@ -1232,7 +1257,11 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    shares it too; this pane is transparent over it. A module page, on flat
    --page, covers this pane whole rather than meeting it at a seam. */
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0;
-  transition: padding-right .24s ease; }
+  /* The main pane's width is stated rather than stretched, so the collapse
+     can grow it out of the rail's track; 100% of the track is what the
+     stretch gave it anyway. */
+  width: 100%;
+  transition: padding-right .24s ease, width .24s ease, margin-left .24s ease; }
 .main[data-shift="true"] { padding-right: 340px; }
 
 /* Nothing under the header -- no rule, and no fade either. It used to hang a
@@ -1297,6 +1326,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
      transparent title bar cannot swallow them; :hover and the pressed toggle
      override it at their own specificity. */
   --ghost-bg: var(--topbar-plate);
+  /* The header keeps room for the collapsed rail's twin, and that room moves
+     with the collapse instead of jumping: the title slides right as the
+     column slides left. */
+  transition: padding-left .24s ease;
 }
 .chat > .top::before {
   content: ''; position: absolute; inset: 0 0 auto 0; height: var(--topbar-h);
@@ -4032,8 +4065,16 @@ details[open] summary { margin-bottom: 8px; }
 .page {
   position: fixed; inset: 0 0 0 var(--rail); z-index: var(--z-page); background: var(--page);
   display: none; flex-direction: column;
+  /* A module page stands clear of the rail, and takes the whole window when
+     the rail goes: the inset moves with the collapse, or the page would
+     jump out from under the column that is sliding away. */
+  transition: left .24s ease;
 }
 :root[data-rail="off"] .page { left: 0; }
+/* A drag is a measurement, not a state change: the grip writes the rail's
+   width as the pointer moves, and the page's inset would trail the pointer
+   instead of following it. */
+:root:has(#railGrip[data-drag="true"]) .page { transition: none; }
 /* Fade only — no translate: sliding a viewport-sized fixed layer repaints the
    whole page and reads as a lurch, not an entrance. Small popovers keep `up`;
    a full page just appears in place. */
