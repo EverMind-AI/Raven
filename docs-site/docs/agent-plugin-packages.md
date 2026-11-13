@@ -95,7 +95,8 @@ deleted. That includes:
   reach it, even though the home (and so the ledger file) is shared.
 - **A skill directory you replaced inside an installed package.** It is
   kept as it is; the import reports it as skipped or released, and
-  `remove` reports it as kept.
+  `remove` reports it as kept. The package directory and its ledger record
+  stay, so move the kept entries away and run `remove` again.
 - **A symlink or junction** standing at the install path. Raven does not
   follow it, whatever sits behind it.
 
