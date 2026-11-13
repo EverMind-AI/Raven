@@ -1223,11 +1223,14 @@ async def _take_up(params: dict, agent_loop_factory: "AgentLoopFactory | None", 
     store, record = _require_stint(params)
     loop, driver = _driver_in_this_process(agent_loop_factory)
     session_key = str(record.origin.get("session_key") or "") or None
-    # The same two contexts ``playbooks.run`` enters, for the same reason: the
+    # The same contexts ``playbooks.run`` enters, for the same reason: the
     # round's nodes resolve their model through the active binding, and the
     # stint was started in this conversation, not in the RPC handler's absence
-    # of one. A conversation whose directory cannot be resolved still gets its
-    # round -- the stint carries its own workdir -- just on the default binding.
+    # of one. Usage attribution is bound unconditionally, so a round whose
+    # workdir or binding does not resolve still reports to the session the
+    # stint names (or to none, when it names none). A conversation whose
+    # directory cannot be resolved still gets its round -- the stint carries
+    # its own workdir -- just on the default binding.
     try:
         session_workdir = loop.session_workdir(session_key) if session_key else None
     except Exception:  # noqa: BLE001 - a bad override is not this verb's to fix
