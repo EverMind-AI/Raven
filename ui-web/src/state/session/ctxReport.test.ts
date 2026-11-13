@@ -53,6 +53,7 @@ describe('a usage report on the context ring', () => {
         system: 4_200,
         tools: 12_800,
         conversation: 108_600,
+        files: 1_500,
         memory: 2_100,
         skills: 3_300,
       },
@@ -61,7 +62,7 @@ describe('a usage report on the context ring', () => {
       system: 4_200,
       tools: 12_800,
       conversation: 108_600,
-      files: 0,
+      files: 1_500,
       memory: 2_100,
       skills: 3_300,
     })
