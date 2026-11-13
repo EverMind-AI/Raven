@@ -7,8 +7,10 @@
  *
  * The three writes stay, because none of the elements they land on belongs to
  * the rail's own markup: `.app` and `<html>` are the grid and the root that the
- * stylesheet reads the state off (`.app[data-rail="off"] .rail{display:none}`,
- * src/styles/page.css), and button#railShow is a top-level region of its own.
+ * stylesheet reads the state off (`.app[data-rail="off"] .rail{visibility:hidden}`,
+ * src/styles/page.css, where the column slides out of the window and the
+ * content takes its place back), and button#railShow is a top-level region of
+ * its own.
  * All three are rendered by src/App.tsx with the value the page is served with
  * and never written by it again -- React diffs against the props it rendered
  * last rather than against the document -- so one value keeps one writer, and
