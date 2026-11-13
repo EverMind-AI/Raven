@@ -186,7 +186,10 @@ async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(gran
     grants.register(sandbox, None)
     await _handle(responder, [CURL], sandbox)
     (call,) = responder.calls
-    assert call["description"] == f"The sandbox blocked these connections. Allow them? {SHARED_NOTE}"
+    assert (
+        call["description"]
+        == f"The sandbox blocked these connections while a command was running. Allow them? {SHARED_NOTE}"
+    )
     assert call["evidence"]["shared"] is True
 
 
@@ -195,7 +198,7 @@ async def test_a_prompt_about_a_conversation_sandbox_leaves_the_note_out(grants)
     grants.register(sandbox, "conv")
     await _handle(responder, [CURL], sandbox)
     (call,) = responder.calls
-    assert call["description"] == "The sandbox blocked these connections. Allow them?"
+    assert call["description"] == "The sandbox blocked these connections while a command was running. Allow them?"
 
 
 async def test_a_deny_rule_is_never_asked(grants):

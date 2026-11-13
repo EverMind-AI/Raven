@@ -2486,10 +2486,11 @@ _Avoid_: "re-check" or "second gate" -- it is the one gate, asked later.
 
 **Network denial** (`sandbox/denials.py`):
 One connection an OpenShell sandbox's network policy refused, read from the
-gateway's OCSF log after the command (or, for a long-lived MCP server, the call)
-that made it: the program, the host, the port and the reason
-(`NetworkDenial`). A DNS refusal names only the host. Carried on
-`ExecResult.denials` and settled by `permissions/sandbox_network.py`.
+gateway's OCSF log over the time a command (or, for a long-lived MCP server, a
+call) ran: the program, the host, the port and the reason (`NetworkDenial`). The
+log names the sandbox, not the command, so a denial in that window may be
+another process's in the same sandbox. A DNS refusal names only the host.
+Carried on `ExecResult.denials` and settled by `permissions/sandbox_network.py`.
 _Avoid_: "network error" -- a denial is the policy's decision, and the command
 sees only a failed connect.
 

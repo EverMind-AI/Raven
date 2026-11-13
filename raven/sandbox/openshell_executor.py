@@ -479,7 +479,10 @@ class OpenShellExecutor(SandboxExecutor):
         await self._sync_network(plane, name)
         since = time.time()
         result = await self._run(plane, name, command, cwd, timeout, env)
-        denials = await self._denials(plane, name, since, wait=result.exit_code > 0)
+        # The log is the sandbox's, not the command's: a refusal logged after the
+        # command ended was some other process's, so the window closes there.
+        ended = time.time() + _RELAY_CLOSE_SLACK
+        denials = await self._denials(plane, name, since, wait=result.exit_code > 0, until=ended)
         return replace(result, denials=tuple(denials)) if denials else result
 
     async def sync_network(self) -> bool:
@@ -604,9 +607,9 @@ class OpenShellExecutor(SandboxExecutor):
             await asyncio.sleep(_DENIAL_POLL_SECONDS)
 
     async def _denials(
-        self, plane: OpenShellControlPlane, name: str, since: float, *, wait: bool
+        self, plane: OpenShellControlPlane, name: str, since: float, *, wait: bool, until: float | None = None
     ) -> list[NetworkDenial]:
-        """The network denials logged for this sandbox since ``since``; none when the log cannot be read.
+        """The network denials logged for this sandbox from ``since`` to ``until``; none when the log cannot be read.
 
         With ``wait``, the log is read until the close of the command's relay has
         arrived, or until the wait runs out.
@@ -620,7 +623,7 @@ class OpenShellExecutor(SandboxExecutor):
             except Exception as exc:  # noqa: BLE001 - a missing denial list must not cost the command's result
                 logger.debug("Could not read network denials for OpenShell sandbox %s: %s", name, exc)
                 return denials
-            denials = parse_denials(message for _, message in lines)
+            denials = parse_denials(message for at, message in lines if until is None or at <= until)
             closed = any(at >= closed_after and _RELAY_CLOSED in message for at, message in lines)
             if closed or time.monotonic() >= deadline:
                 return denials

@@ -191,6 +191,12 @@ A sandboxed MCP server is handled the same way, for the connections refused
 while one of its tools ran. The card names "a process in the sandbox", since
 the gateway does not say which process made a connection.
 
+The gateway logs a refusal for the sandbox, not for the command that made it.
+A connection another process in the same sandbox made while a command ran,
+such as a sandboxed MCP server or a job left running in the background, is
+asked about with that command. The card names the program that made each
+connection.
+
 ### Limits
 
 - Under the `open` default a deny rule takes a two-label host such as

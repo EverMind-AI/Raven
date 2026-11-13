@@ -193,7 +193,9 @@ async def _prompt(
     # The main sandbox is every conversation's: what is opened in it stays open
     # for all of them until Raven restarts, and every prompt says so.
     shared = executor is not None and GRANTS.is_shared(executor)
-    description = "The sandbox blocked these connections. Allow them?" + (f" {_SHARED_NOTE}" if shared else "")
+    description = "The sandbox blocked these connections while a command was running. Allow them?" + (
+        f" {_SHARED_NOTE}" if shared else ""
+    )
     loop = asyncio.get_running_loop()
     futures = {_key(scope, denial): loop.create_future() for denial in denials} if scope else {}
     _ASKING.update({key: (future, id(executor)) for key, future in futures.items()})
