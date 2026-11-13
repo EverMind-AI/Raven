@@ -146,6 +146,36 @@ async def test_an_approved_target_tells_the_model_to_run_the_command_again(grant
     assert notice.stop is False
 
 
+class UnloadingSandbox(FakeSandbox):
+    async def grant_network(self, grants):
+        self.granted.append(list(grants))
+        return False
+
+
+class UnsyncedSandbox(FakeSandbox):
+    async def sync_network(self):
+        self.synced += 1
+        return False
+
+
+async def test_an_approval_the_refused_sandbox_did_not_load_is_not_told_as_open(grants):
+    notice, _ = await _handle(Responder(ApprovalChoice.ALLOW), [CURL], UnloadingSandbox())
+    assert notice.text == (
+        "\n\n[sandbox] Network access for /usr/bin/curl -> example.com:443 was approved, but the sandbox has not "
+        "loaded it yet, so it may still be blocked. If the command fails the same way again, tell the user "
+        "instead of running it again."
+    )
+
+
+async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_open(grants):
+    conversation = f"conv-{uuid4().hex}"
+    behind = UnsyncedSandbox()
+    grants.register(behind, conversation)
+    notice, _ = await _handle(Responder(ApprovalChoice.ALLOW_SESSION), [CURL], FakeSandbox(), conversation=conversation)
+    assert behind.synced == 1
+    assert notice.text.endswith("was approved; run the command again.")
+
+
 async def test_a_deny_rule_is_never_asked(grants):
     config = PermissionsConfig(network=NetworkPermissions(rules=[NetworkRule(host="example.com", tier="deny")]))
     responder = Responder(ApprovalChoice.ALLOW)
