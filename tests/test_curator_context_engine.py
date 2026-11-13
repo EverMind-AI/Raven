@@ -250,6 +250,22 @@ def test_history_from_messages_preserves_reasoning_fields():
     assert history[1]["thinking_blocks"] == [{"thinking": "block"}]
 
 
+def test_history_from_messages_replays_the_runtime_context_a_user_message_was_sent_with():
+    """The fast path replays the way the slow path does: the request carries the
+    block the message was sent with, and what the gate sums is what goes out."""
+    from raven.context_engine.runtime_context import RUNTIME_CONTEXT_FIELD, with_runtime_context
+    from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+    from raven.utils.tokens import estimate_message_tokens
+
+    lines = f"{RUNTIME_CONTEXT_TAG}\nCurrent Time: 2026-11-12 09:00 (Thursday) (UTC)\nChat ID: x"
+    filed = {"role": "user", "content": "hi", RUNTIME_CONTEXT_FIELD: lines}
+
+    [replayed] = CuratorSegmentBuilder._history_from_messages([filed])
+
+    assert replayed == {"role": "user", "content": with_runtime_context(lines, "hi")}
+    assert abs(estimate_message_tokens(filed) - estimate_message_tokens(replayed)) <= 2
+
+
 # --- pinned skill bodies -------------------------------------------------
 
 _GUIDE_MARKER = "PINNED-GUIDE-BODY-MARKER"
