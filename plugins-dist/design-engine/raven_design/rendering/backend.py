@@ -14,7 +14,14 @@ from typing import Any, Protocol
 
 from raven.sandbox.interfaces import SandboxInitError
 from raven_design.rendering.bundle import validate_published_bundle
-from raven_design.rendering.models import Detection, RenderConfig, RenderError, RenderOutcome, RenderRequest
+from raven_design.rendering.models import (
+    _VM_BROWSER_ROOT,
+    Detection,
+    RenderConfig,
+    RenderError,
+    RenderOutcome,
+    RenderRequest,
+)
 from raven_design.rendering.paths import RenderPathPolicy
 
 _MAX_WORKER_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -237,6 +244,8 @@ class SandboxRenderBackend:
             network_source=lambda: {},
             default_timeout=self.config.timeout_seconds,
             create_timeout=self.create_timeout_seconds,
+            # The worker finds Chromium there inside the sandbox (worker.py).
+            read_only_paths=(str(_VM_BROWSER_ROOT),),
         )
 
     @staticmethod

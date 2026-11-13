@@ -303,6 +303,20 @@ def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: 
     assert executor._network_source() == {}
 
 
+def test_the_renderer_sandbox_can_read_the_worker_images_browsers(tmp_path: Path) -> None:
+    """The worker re-discovers Chromium inside the sandbox, first under the image's
+    /ms-playwright; OpenShell keeps every path it is not given unreadable."""
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        _policy(tmp_path),
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    assert backend._executor(tmp_path / "job")._read_only_paths == ("/ms-playwright",)
+
+
 def test_the_renderer_sandbox_has_no_network(tmp_path: Path) -> None:
     """Decision D11: a render job runs no agent command, so it stays offline and has no switch of its own."""
     import dataclasses

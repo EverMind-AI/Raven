@@ -161,7 +161,12 @@ class OpenShellControlPlane(Protocol):
 
 
 def sandbox_policy(
-    *, network_policies: dict[str, dict], mounts: list[tuple[str, str, bool]], uid: int | None, gid: int | None = None
+    *,
+    network_policies: dict[str, dict],
+    mounts: list[tuple[str, str, bool]],
+    uid: int | None,
+    gid: int | None = None,
+    read_only_paths: Sequence[str] = (),
 ) -> dict:
     """The OpenShell policy for one sandbox, in the field names of its ``SandboxPolicy`` proto.
 
@@ -169,7 +174,7 @@ def sandbox_policy(
     than merging with it, so the default's read-only system paths are
     restated here.
     """
-    read_only = list(_READ_ONLY_BASELINE)
+    read_only = [*_READ_ONLY_BASELINE, *read_only_paths]
     read_write = list(_READ_WRITE_BASELINE)
     for _host, guest, is_read_only in mounts:
         (read_only if is_read_only else read_write).append(guest)
@@ -284,8 +289,12 @@ class OpenShellExecutor(SandboxExecutor):
         gateway: str | None = None,
         gateway_workspace: str = "default",
         network_source: Callable[[], dict[str, dict]] | None = None,
+        read_only_paths: Sequence[str] = (),
     ) -> None:
         self._image = image
+        # Image paths a caller's own program needs read, beyond the system ones:
+        # OpenShell keeps every path a policy does not name unreadable.
+        self._read_only_paths = tuple(read_only_paths)
         self._mounts = MountTable(Path(workspace), extra_volumes or [])
         self._cpus = cpus
         self._memory_mib = memory_mib
@@ -339,7 +348,11 @@ class OpenShellExecutor(SandboxExecutor):
                 name=name,
                 image=self._image,
                 policy=sandbox_policy(
-                    network_policies=network_policies, mounts=self._mounts.mounts(), uid=_host_uid(), gid=_host_gid()
+                    network_policies=network_policies,
+                    mounts=self._mounts.mounts(),
+                    uid=_host_uid(),
+                    gid=_host_gid(),
+                    read_only_paths=self._read_only_paths,
                 ),
                 driver_config=self._driver_config(),
                 resources={"limits": {"cpu": str(self._cpus), "memory": f"{self._memory_mib}Mi"}},

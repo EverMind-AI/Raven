@@ -242,6 +242,14 @@ class TestSandboxSpec:
 
 
 class TestStart:
+    async def test_extra_read_only_paths_join_the_policy_beside_the_system_paths(self, tmp_path):
+        cp = FakeControlPlane()
+        await _executor(tmp_path, cp, read_only_paths=["/ms-playwright"]).start()
+        (created,) = cp.created
+        read_only = created["policy"]["filesystem"]["read_only"]
+        assert read_only[-1] == "/ms-playwright" and "/usr" in read_only
+        assert "/ms-playwright" not in created["policy"]["filesystem"]["read_write"]
+
     async def test_creates_waits_and_verifies(self, tmp_path):
         cp = FakeControlPlane()
         ex = _executor(tmp_path, cp, cpus=2, memory_mib=2048, create_timeout=77)
