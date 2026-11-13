@@ -255,10 +255,25 @@ async def open_mcp_transport(
             # cwd; the source marker on the config tells them apart. The launch
             # is not changed here: a package server still starts in its root,
             # where npm reads that root's .npmrc.
+            #
+            # A server that is not the host's own reads no project file at
+            # all: with no directory of its own to read, the probe would ask
+            # npm about the directory this process runs in, and the registry
+            # would then depend on where Raven was started.
+            #
+            # A host server's own directory is the operator's content, and the
+            # vetting is what keeps a third party out of one: a catalogue
+            # entry may not choose a working directory at all (see
+            # market/vetting.py).
             sandboxed = executor is not None and executor.supports_process_spawning
-            probe_cwd = _configured_cwd(cfg) if _host_sourced(cfg) else None
+            host_sourced = _host_sourced(cfg)
+            probe_cwd = _configured_cwd(cfg) if host_sourced else None
             command, *args = await mirrors.package_launch_async(
-                [cfg.command, *cfg.args], {**os.environ, **(cfg.env or {})}, probe_cwd, local=not sandboxed
+                [cfg.command, *cfg.args],
+                {**os.environ, **(cfg.env or {})},
+                probe_cwd,
+                local=not sandboxed,
+                project=host_sourced,
             )
             cwd = _configured_cwd(cfg)
             if executor is not None and executor.supports_process_spawning:

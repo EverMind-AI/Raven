@@ -495,6 +495,7 @@ async def test_cli_backend_starts_the_way_the_mirror_fallback_says(
         local: bool = True,
         deadline: float | None = None,
         cache_root: Path | None = None,
+        project: bool = True,
     ) -> list[str]:
         asked.append((list(argv), dict(env), cwd))
         return [*argv, "--as-the-answer-says"]
