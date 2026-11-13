@@ -112,6 +112,7 @@ def _build_engine(
     *,
     backend=None,
     hub_endpoint: str | None = None,
+    hub_config: HubSourceConfig | None = None,
     memory_config: MemoryConfig | None = None,
     model: str = "stub",
     skill_forge_config: SkillForgeConfig | None = None,
@@ -131,7 +132,7 @@ def _build_engine(
         backend=backend,
         memory_config=memory_config or MemoryConfig(),
         skill_forge_router_config=SkillForgeRouterConfig(
-            hub=HubSourceConfig(endpoint=hub_endpoint),
+            hub=hub_config or HubSourceConfig(endpoint=hub_endpoint),
             **({} if rrf_k is None else {"rrf_k": rrf_k}),
         ),
         # Most assertions in this file exercise the push pipeline's wiring;
@@ -218,9 +219,14 @@ class TestSkillForgeRouterAssembly:
         types, _ = _router_sources(_build_engine(tmp_path, backend=None))
         assert BackendSkillSource not in types
 
-    def test_hub_source_omitted_when_endpoint_unset(self, tmp_path: Path) -> None:
-        types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint=None))
-        assert HubSkillSource not in types
+    def test_hub_source_mounted_whatever_the_config_names(self, tmp_path: Path) -> None:
+        """The source is part of the router from the start; the per-search
+        reader decides whether it may run, and the URL falls back to the
+        shared marketplace."""
+        types, sources = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint=None))
+        assert HubSkillSource in types
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._client._base == "https://skillhub.evermind.ai"
 
     def test_hub_source_present_when_endpoint_set(self, tmp_path: Path) -> None:
         types, _ = _router_sources(_build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="http://hub.test"))
@@ -243,6 +249,51 @@ class TestSkillForgeRouterAssembly:
         hub = next(source for source in sources if isinstance(source, HubSkillSource))
         assert hub._enabled_reader is not None
         assert hub._enabled_reader() is False
+
+    def test_a_key_without_a_configured_endpoint_is_not_attached(self, tmp_path: Path) -> None:
+        """The endpoint has a schema default; a key written without one belongs
+        to another Hub and must not ride the marketplace fallback."""
+        _, sources = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_config=HubSourceConfig(api_key="legacy-secret"))
+        )
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._client._base == "https://skillhub.evermind.ai"
+        assert hub._client._api_key is None
+
+    def test_a_key_follows_an_explicitly_configured_endpoint(self, tmp_path: Path) -> None:
+        _, sources = _router_sources(
+            _build_engine(
+                tmp_path,
+                backend=_FakeBackend(),
+                hub_config=HubSourceConfig(endpoint="https://hub.internal.test", api_key="k"),
+            )
+        )
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert (hub._client._base, hub._client._api_key) == ("https://hub.internal.test", "k")
+
+    def test_a_refused_env_override_mounts_no_hub_source(self, tmp_path: Path, monkeypatch) -> None:
+        """A warning-and-continue fallback would point the source at the
+        marketplace the operator was overriding; the router must not carry it."""
+        monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://hub.test")
+
+        types, _ = _router_sources(
+            _build_engine(tmp_path, backend=_FakeBackend(), hub_endpoint="https://hub.internal.test")
+        )
+
+        assert HubSkillSource not in types
+
+    def test_a_valid_env_override_wins_over_a_configured_endpoint(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test")
+
+        _, sources = _router_sources(
+            _build_engine(
+                tmp_path,
+                backend=_FakeBackend(),
+                hub_config=HubSourceConfig(endpoint="https://hub.internal.test"),
+            )
+        )
+        hub = next(source for source in sources if isinstance(source, HubSkillSource))
+        assert hub._client._base == "https://staging.hub.test"
 
     def test_rrf_k_forwarded_from_config(self, tmp_path: Path) -> None:
         engine = _build_engine(tmp_path, backend=_FakeBackend(), rrf_k=25)

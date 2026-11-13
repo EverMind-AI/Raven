@@ -7,6 +7,6 @@ single place that talks to it; it is shared by :class:`HubSkillSource`
 (discovery) and the ``read_skill`` / ``use_skill`` tools (body / bundle).
 """
 
-from raven.skill_hub.client import SkillHubClient
+from raven.skill_hub.client import SkillHubClient, hub_api_key, resolve_hub_endpoint
 
-__all__ = ["SkillHubClient"]
+__all__ = ["SkillHubClient", "hub_api_key", "resolve_hub_endpoint"]

@@ -23,8 +23,8 @@ The SkillForgeRouter is assembled from up to three sources:
 - :class:`BackendSkillSource` — only when a ``backend`` is wired. Bridges
   ``backend.recall(agent_id=...)`` into the router under the configured
   ``memory.backend`` name.
-- :class:`HubSkillSource` — only when ``skillForge.router.hub.endpoint``
-  is set: the remote Skill Hub marketplace.
+- :class:`HubSkillSource` — always mounted: the shared Skill Hub marketplace
+  (or the URL the config names), gated per search on the live switch.
 
 With no ``backend`` the engine still constructs: the recall lane yields
 ``[]`` and the router runs Local-only, so the agent boots even when no
@@ -300,30 +300,36 @@ def _build_router(
             backend_source.weight = float(weights[backend_name])
         sources.append(backend_source)
 
-    # ── Source 3: Hub (conditional on remote endpoint) ──────────────
-    # Added while the switch is off too: the source is asked per search and
-    # gates itself on the live config, so turning the switch back on does not
-    # need the loop rebuilt. The endpoint is what cannot be added live.
+    # ── Source 3: Hub (mounted when a client exists) ────────────────
+    # The source is asked per search and gates itself on the live config, so
+    # the switch needs no rebuild in either direction. Its client outlives the
+    # switch for the same reason; only the URL is fixed at construction. A
+    # refused override leaves no client, and then no source either: mounting
+    # one would still point it at a URL this process refused. The host-built
+    # client is reused when provided, so discovery and retrieval share one
+    # connection pool.
     hub_cfg = skill_forge_router_config.hub
-    if hub_cfg.endpoint:
-        from raven.skill_hub import SkillHubClient
+    from raven.skill_hub import SkillHubClient, hub_api_key, resolve_hub_endpoint
 
-        # Reuse the host-built client (shared with the read_skill / use_skill
-        # tools) when provided, so discovery and retrieval share one
-        # connection pool + identical config; build one here otherwise.
-        client = skill_hub_client or SkillHubClient(
-            hub_cfg.endpoint,
-            api_key=hub_cfg.api_key,
-            timeout_s=hub_cfg.timeout_s,
-            source=hub_cfg.source,
+    client = skill_hub_client
+    if client is None:
+        endpoint = resolve_hub_endpoint(hub_cfg.endpoint)
+        if endpoint is not None:
+            client = SkillHubClient(
+                endpoint,
+                api_key=hub_api_key(hub_cfg),
+                timeout_s=hub_cfg.timeout_s,
+                source=hub_cfg.source,
+            )
+    if client is not None:
+        sources.append(
+            HubSkillSource(
+                client,
+                weight=float(weights.get("hub", 0.85)),
+                min_safety=hub_cfg.min_safety,
+                enabled_reader=hub_enabled_reader,
+            )
         )
-        hub_source = HubSkillSource(
-            client,
-            weight=float(weights.get("hub", 0.85)),
-            min_safety=hub_cfg.min_safety,
-            enabled_reader=hub_enabled_reader,
-        )
-        sources.append(hub_source)
 
     return SkillForgeRouter(
         sources=sources,

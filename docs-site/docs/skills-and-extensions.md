@@ -38,16 +38,18 @@ configured memory backend, and remote Skill Hub candidates. Availability
 depends on configuration and service connectivity; a catalog result is not
 proof that a bundle is installed or its required tools exist.
 
-Searching Skill Hub sends text off the machine. Both onboarding wizards write
-the shared catalog URL (`https://skillhub.evermind.ai`) to
-`skillForge.router.hub.endpoint` unless the config already names one, and
-while the source is on, Raven sends text from the session (the message,
-or a query the model writes from it) to that address whenever it looks for a
-skill. Turn it off with the Skill Hub switch on the settings dialog's Skills
-page, or set `skillForge.router.hub.enabled` to `false`; the URL is kept, so
-turning it back on returns to the same catalog. A config with no endpoint never
-searches the Hub. Switching it off applies to the next search; switching it on
-in a gateway that started without an endpoint waits for a reload.
+Searching Skill Hub sends text off the machine. The source is on by default and
+uses the shared catalog (`https://skillhub.evermind.ai`); a config may name
+another URL at `skillForge.router.hub.endpoint`, and `RAVEN_SKILLHUB_URL`
+overrides it for both this retrieval and the SkillHub page (a value Raven
+refuses turns conversational retrieval off for that process rather than
+falling back). While the source is on, Raven sends text from the session (the
+message, or a query the model writes from it) to that address whenever it looks
+for a skill. Turn it off with the Skill Hub switch on the settings dialog's
+Skills page, or set `skillForge.router.hub.enabled` to `false`; the URL is
+kept, so turning it back on returns to the same catalog. A legacy explicit
+`null` endpoint keeps the source off. Switching applies to the next search
+either way, with no reload.
 
 `skillForge.discovery` defaults to `pull`: the model receives a small
 name/description menu on eligible turns and uses `find_skill` to search and

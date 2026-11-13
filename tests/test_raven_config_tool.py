@@ -98,12 +98,13 @@ async def test_get_reports_values_defaults_and_hides_secrets(config_file):
 
 @pytest.mark.asyncio
 async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
-    """``enabled`` defaults to true, but the source runs only with an endpoint:
-    the flag alone tells the model the Hub is searched when it is not."""
+    """``enabled`` is the switch and the URL has a default: a config that says
+    nothing about the Hub reads as on, while a legacy null endpoint keeps the
+    source off."""
     tool = RavenConfigTool()
     path = "skillForge.router.hub.enabled"
 
-    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": False}}
+    assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": True}}
 
     config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None, "enabled": True}}}}))
     assert json.loads(await _run(tool, action="get", path=path)) == {path: {"value": True, "in_effect": False}}
@@ -112,15 +113,13 @@ async def test_the_skill_hub_switch_reads_with_what_is_in_effect(config_file):
     assert json.loads(await _run(tool, action="get", path=path)) == {path: {"default": True, "in_effect": True}}
     assert f"  {path} = true (default), in effect: true [bool," in await _run(tool, action="describe")
     config_file.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": True}}}}))
-    assert f"  {path} = true, in effect: false [bool," in await _run(tool, action="describe")
+    assert f"  {path} = true, in effect: true [bool," in await _run(tool, action="describe")
 
 
 @pytest.mark.asyncio
 async def test_the_skill_hub_switch_is_not_reported_as_waiting_for_a_reload(config_file):
-    """Switching the source off stops the next search and switching it on is
-    live too while the endpoint is present, so the write does not owe a reload;
-    only a first enable that had to add the endpoint can wait, and the settings
-    service says so in that write's own answer."""
+    """Switching the source is live in both directions: the loop always holds
+    the client, so the write owes no reload."""
     calls = Calls({"settings.set": {"applied": True, "previous": True}})
     tool = RavenConfigTool()
     tool.set_rpc_caller(calls)
@@ -133,16 +132,16 @@ async def test_the_skill_hub_switch_is_not_reported_as_waiting_for_a_reload(conf
 
 
 @pytest.mark.asyncio
-async def test_a_settings_write_that_waits_for_a_reload_reaches_the_model(config_file):
-    """The switch-on that had to seed the endpoint cannot be searched with
-    until a reload. That cost arrives as the settings service's ``warning``; a
-    tool that drops it tells the model a change is already serving."""
-    warning = "Saved. Skill Hub search starts after Raven reloads."
+async def test_a_settings_write_that_waits_for_a_turn_reaches_the_model(config_file):
+    """A switch asked for mid-turn cannot apply at once. That cost arrives as
+    the settings service's ``warning``; a tool that drops it tells the model a
+    change is already serving."""
+    warning = "Saved. A turn is running; the memory backend switches when that turn finishes."
     calls = Calls({"settings.set": {"applied": True, "previous": False, "warning": warning}})
     tool = RavenConfigTool()
     tool.set_rpc_caller(calls)
 
-    reply = await _run(tool, action="set", path="skillForge.router.hub.enabled", value="true")
+    reply = await _run(tool, action="set", path="memory.backend", value="everos")
 
     assert warning in reply
 

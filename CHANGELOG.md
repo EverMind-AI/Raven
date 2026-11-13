@@ -51,6 +51,13 @@ All notable changes to Raven are documented here.
   a handle that never replaces its `subagent`, and both tools, their error
   messages and the Raven-General roster row spell "subagent".
 
+- The conversational Skill Hub source is on by default and its URL defaults to
+  the shared marketplace, so an install that never named an endpoint now sends
+  turn text there; `skillForge.router.hub.enabled: false` turns it off, and a
+  legacy explicit `endpoint: null` keeps it off. `RAVEN_SKILLHUB_URL` overrides
+  the URL, and a value the client refuses disables conversational retrieval for
+  that process instead of falling back to the marketplace.
+
 - LiteLLM moves to 1.108.0 and the MCP client to 2.3.0; `TIKTOKEN_CACHE_DIR`
   now defaults to the tokenizer files bundled in the LiteLLM wheel, so a cold
   offline estimator counts with cl100k without a download.

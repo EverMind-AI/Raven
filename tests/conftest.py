@@ -688,7 +688,13 @@ def _no_real_raven_home(tmp_path, monkeypatch):
     # on the next tool call).
     raven_home = home / ".raven"
     raven_home.mkdir()
-    (raven_home / "config.json").write_text('{"permissions": {"mode": "full"}}')
+    # The Skill Hub source defaults on and its URL defaults to the shared
+    # marketplace, so a default config would make every turn assembly call out
+    # to it. The suite opts out here; a test about the Hub constructs its own
+    # client with a stub transport, as ``test_skill_hub_source.py`` does.
+    (raven_home / "config.json").write_text(
+        '{"permissions": {"mode": "full"}, "skillForge": {"router": {"hub": {"enabled": false}}}}'
+    )
     # Unset rather than set: ``RAVEN_HOME`` outranks everything above, so a
     # developer who exports it hands their own directory to every test that
     # isolates the home some other way. Deleting it is the one move that closes

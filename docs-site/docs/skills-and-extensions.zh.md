@@ -34,13 +34,14 @@ SkillForge 有三个来源：本地文件、通过配置的记忆后端召回的
 Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命中不证明 bundle 已安装，
 也不证明所需工具存在。
 
-搜索 Skill Hub 会把文字发出本机。两个初始化向导都会把共享目录地址
-（`https://skillhub.evermind.ai`）写入 `skillForge.router.hub.endpoint`，配置里已有地址时
-保留原值；开启期间，Raven 每次查找技能都会把会话中的文字（消息本身，或模型据此写出的查询）
-发送到这个地址。可以用设置弹窗「技能」页上的 Skill Hub 开关关闭，或把
-`skillForge.router.hub.enabled` 设为 `false`；地址会保留，重新打开时回到同一个目录。没有
-配置地址时不会搜索 Hub。关闭对下一次搜索即生效；网关启动时没有地址的话，打开后要等重新
-加载才开始搜索。
+搜索 Skill Hub 会把文字发出本机。该来源默认开启，使用共享目录
+（`https://skillhub.evermind.ai`）；配置可以在 `skillForge.router.hub.endpoint`
+指定其他地址，`RAVEN_SKILLHUB_URL` 会同时覆盖对话检索和 SkillHub 页面的地址（被拒绝的
+值会让该进程的对话检索直接关闭，而不是回落到共享目录）。开启期间，Raven 每次查找技能都会
+把会话中的文字（消息本身，或模型据此写出的查询）发送到这个地址。可以用设置弹窗「技能」页
+上的 Skill Hub 开关关闭，或把 `skillForge.router.hub.enabled` 设为 `false`；地址会保留，
+重新打开时回到同一个目录。旧配置里显式的 `null` endpoint 表示保持关闭。两个方向都在下一次
+搜索时生效，不需要重新加载。
 
 `skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
 模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，

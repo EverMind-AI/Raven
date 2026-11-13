@@ -610,10 +610,7 @@ SECTIONS: tuple[Section, ...] = (
                 _E.IMMEDIATE,
                 writer="settings",
                 sensitive=("turning it back on resumes sending the turn's message text to the Skill Hub"),
-                note=(
-                    "on only while skillForge.router.hub.endpoint is set, which a read shows as in_effect; "
-                    "switching it off applies at once; turning it on may wait for a reload, and the write says so"
-                ),
+                note=("on by default; switching it applies at once, and a read shows the effective state"),
                 in_effect=_skill_hub_in_effect,
             ),
             Setting(

@@ -531,10 +531,12 @@ async def test_search_surfaces_hub_error_code(workspace, monkeypatch):
 
 
 def test_base_url_env_override(monkeypatch):
+    from raven.config.raven import SKILL_HUB_ENDPOINT
+
     monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://127.0.0.1:8000/")
     assert hub._base_url() == "http://127.0.0.1:8000"
     monkeypatch.delenv("RAVEN_SKILLHUB_URL")
-    assert hub._base_url() == hub.DEFAULT_BASE_URL
+    assert hub._base_url() == SKILL_HUB_ENDPOINT
 
 
 def test_strip_root_only_when_single_wrapper():

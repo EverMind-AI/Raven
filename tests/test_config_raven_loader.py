@@ -129,6 +129,57 @@ def test_invalid_json_falls_through(stub_config_path: Path) -> None:
     assert cfg.skill_forge.enabled is True
 
 
+class TestTheLegacyHubEndpointMarker:
+    """An explicit null endpoint was how a pre-default config kept the Hub off.
+
+    The URL is fixed now, so ``enabled`` carries that intent on its own; the
+    loader converts the old marker instead of reading a null URL as one.
+    """
+
+    @pytest.mark.parametrize("off", [None, ""])
+    def test_a_null_endpoint_reads_as_the_switch_being_off(self, stub_config_path: Path, off) -> None:
+        from raven.config.live import skill_hub_on
+
+        _write_config(stub_config_path, {"skillForge": {"router": {"hub": {"endpoint": off}}}})
+
+        cfg = ec_module.load_raven_config()
+
+        assert cfg.skill_forge.router.hub.enabled is False
+        assert cfg.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
+        assert skill_hub_on(json.loads(stub_config_path.read_text())) is False
+
+    def test_an_explicit_switch_off_is_kept(self, stub_config_path: Path) -> None:
+        from raven.config.live import skill_hub_on
+
+        _write_config(stub_config_path, {"skillForge": {"router": {"hub": {"enabled": False}}}})
+
+        cfg = ec_module.load_raven_config()
+
+        assert cfg.skill_forge.router.hub.enabled is False
+        assert skill_hub_on(json.loads(stub_config_path.read_text())) is False
+
+    def test_no_hub_block_leaves_the_source_on(self, stub_config_path: Path) -> None:
+        from raven.config.live import skill_hub_on
+
+        _write_config(stub_config_path, {})
+
+        cfg = ec_module.load_raven_config()
+
+        assert cfg.skill_forge.router.hub.enabled is True
+        assert cfg.skill_forge.router.hub.endpoint == "https://skillhub.evermind.ai"
+        assert skill_hub_on({}) is True
+
+    def test_a_custom_endpoint_is_still_honoured(self, stub_config_path: Path) -> None:
+        _write_config(
+            stub_config_path,
+            {"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}},
+        )
+
+        cfg = ec_module.load_raven_config()
+
+        assert cfg.skill_forge.router.hub.endpoint == "https://hub.internal.test"
+
+
 def test_everos_under_skill_forge(stub_config_path: Path) -> None:
     """The everos block now lives under skill_forge."""
     _write_config(

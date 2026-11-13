@@ -953,7 +953,7 @@ def _migrate_legacy_leaves(data: dict[str, Any], *, notify: bool = False) -> boo
                 changed = True
                 notices.append(
                     f"Removed `{key}.{old}` from your config: the mass pool is retired. The remote skill "
-                    "library is the Hub source, configured at `skillForge.router.hub.endpoint`."
+                    "library is the Hub source, configured at `skillForge.router.hub`."
                 )
     context = data.get("context")
     if isinstance(context, dict) and "engine" in context:
@@ -1633,6 +1633,13 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
             # about to render), so the knob no longer has a reader.
             hub = sf["router"].get("hub")
             if isinstance(hub, dict):
+                # An explicit falsy endpoint was how a config written before
+                # the URL had a default kept the Hub off; the switch carries
+                # that intent now.
+                if "endpoint" in hub and not hub["endpoint"]:
+                    hub.pop("endpoint")
+                    hub["enabled"] = False
+                    _log.info("Migrated: an explicit null skillForge.router.hub.endpoint became enabled: false")
                 for legacy_key in ("prefetch_bodies", "prefetchBodies"):
                     if hub.pop(legacy_key, None) is not None:
                         _log.info(

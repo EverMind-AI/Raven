@@ -14,12 +14,15 @@ vi.mock('../../rpc/gateway', () => ({
   }),
 }))
 
-it('seeds the Skill Hub endpoint and returns the reload notice the server sends', async () => {
+const NOTICE =
+  'Skill Hub search is on: when Raven looks for a skill, it sends text from your conversation to EverMind Skill Hub. You can turn it off in Settings > Skills.'
+
+it('records the Skill Hub opt-in and returns the notice the server sends', async () => {
   await onboardSource.seedSkillHub()
 
   expect(calls).toEqual([['settings.set', { key: 'skillForge.router.hub.init', value: true }]])
   expect(await onboardSource.seedSkillHub()).toBeNull()
 
-  warning = 'Saved. Skill Hub search starts after Raven reloads.'
-  expect(await onboardSource.seedSkillHub()).toBe(warning)
+  warning = NOTICE
+  expect(await onboardSource.seedSkillHub()).toBe(NOTICE)
 })

@@ -1656,6 +1656,12 @@ class EmbeddingConfig(_Base):
     than an unknown one."""
 
 
+#: The shared Skill Hub marketplace: the one URL every surface uses. A config
+#: may still name an internal one, and ``RAVEN_SKILLHUB_URL`` overrides both at
+#: runtime for the page and for conversational retrieval.
+SKILL_HUB_ENDPOINT = "https://skillhub.evermind.ai"
+
+
 class HubSourceConfig(_Base):
     """Skill Hub remote-source settings (the OpenAPI skill marketplace).
 
@@ -1664,19 +1670,17 @@ class HubSourceConfig(_Base):
     ``use_skill`` tools, which reuse this same config."""
 
     enabled: bool = True
-    """Whether the conversational Hub source is consulted. ``endpoint`` must
-    also be set -- ``None`` keeps the source off whatever this says, so a
-    config written before this field existed keeps its meaning. Turning this
-    off keeps the endpoint, so a custom URL survives the switch. While on, a
-    qualifying turn's message text is sent to the endpoint as the catalog
-    query."""
+    """Whether the conversational Hub source is consulted -- the only switch.
+    Turning it off keeps the endpoint, so a custom URL survives the switch.
+    While on, a qualifying turn's message text is sent to the endpoint as the
+    catalog query."""
 
-    endpoint: str | None = None
-    """Skill Hub base URL, e.g. ``"https://mss.evermind.ai"``. ``None``
-    disables the Hub source — SkillForgeRouter then runs on Local, plus the
-    memory backend when one is wired. Onboarding seeds this to the shared
-    catalog URL; ``apiKey`` is never seeded, because it is the user's own
-    Bearer token."""
+    endpoint: str | None = SKILL_HUB_ENDPOINT
+    """Skill Hub base URL, e.g. ``"https://mss.evermind.ai"``. Defaults to the
+    shared marketplace, so the source needs no setup. An explicit ``null`` in
+    a legacy config means "keep it off": the loader migrates it to
+    ``enabled: false``. ``apiKey`` is never defaulted, because it is the
+    user's own Bearer token."""
 
     api_key: str | None = None
     """Bearer token sent as ``Authorization: Bearer <api_key>``."""

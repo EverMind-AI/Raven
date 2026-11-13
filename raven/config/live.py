@@ -721,13 +721,15 @@ def hub_source_on(hub: Any) -> bool:
     """Whether a raw ``hub`` block leaves the conversational source on.
 
     Validated through the schema, so a hand-written ``0`` / ``"false"`` reads
-    the way the loader reads it instead of by Python truthiness, and an
-    endpoint is required -- ``enabled`` alone cannot turn the source on. A
-    block the loader would refuse answers off, which is the safe direction for
-    a switch that stops text leaving the machine.
+    the way the loader reads it instead of by Python truthiness. A block the
+    loader would refuse answers off, which is the safe direction for a switch
+    that stops text leaving the machine. A missing block is not a refusal: it
+    reads as the schema default, which is the shared marketplace on.
     """
     from raven.config.raven import HubSourceConfig
 
+    if hub is None:
+        return HubSourceConfig().enabled
     if not isinstance(hub, dict):
         return False
     try:
@@ -764,7 +766,7 @@ def skill_hub_on(raw: Any) -> bool:
         return False
     block = camel if camel is not None else snake
     if not isinstance(block, dict):
-        return False
+        return hub_source_on(None)
     router = block.get("router")
     hub = router.get("hub") if isinstance(router, dict) else None
     return hub_source_on(hub)

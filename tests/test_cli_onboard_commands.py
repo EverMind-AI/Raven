@@ -3464,15 +3464,15 @@ def test_fresh_bootstrap_defaults_memory_backend_everos(
     assert load_raven_config().memory.backend == "everos"
 
 
-def test_fresh_bootstrap_seeds_only_the_skill_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fresh_bootstrap_records_the_skill_hub_opt_in(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Bootstrap records nothing the user did not set, with one exception: the
-    Skill Hub endpoint has no schema default (programmatic loads stay
-    Hub-off), so onboarding is where a fresh install opts in."""
+    Skill Hub opt-in. The URL itself is a schema default, so the file carries
+    the switch and nothing else."""
     onboard_commands._bootstrap_empty_config()
     data = json.loads(tmp_env.read_text())
     assert "memory" not in data
     assert "plugins" not in data
-    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
+    assert data["skillForge"] == {"router": {"hub": {"enabled": True}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
@@ -3483,9 +3483,8 @@ def test_fresh_bootstrap_seeds_only_the_skill_hub_endpoint(tmp_env: Path, monkey
 def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A config that predates the extension blocks is not backfilled: what the
     user set stays byte-for-byte, and the keys they never set answer from the
-    declarations instead of being materialized. The Skill Hub endpoint is the
-    one documented exception -- onboarding is the opt-in for a schema default
-    that has to stay ``None``."""
+    declarations instead of being materialized. The Skill Hub opt-in is the one
+    documented exception -- onboarding is where a fresh install records it."""
     tmp_env.write_text(
         json.dumps(
             {
@@ -3504,7 +3503,7 @@ def test_bootstrap_leaves_a_preexisting_config_alone(tmp_env: Path, monkeypatch:
     assert data["memory"]["memoryTopK"] == 20
     assert "userId" not in data["memory"]  # not backfilled
     assert "plugins" not in data
-    assert data["skillForge"] == {"router": {"hub": {"endpoint": "https://skillhub.evermind.ai"}}}
+    assert data["skillForge"] == {"router": {"hub": {"enabled": True}}}
     from raven.config.raven import load_raven_config
 
     rc = load_raven_config()
@@ -3519,28 +3518,27 @@ def test_bootstrap_keeps_a_configured_hub_endpoint(tmp_env: Path, monkeypatch: p
     onboard_commands._bootstrap_empty_config()
 
     hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
-    assert hub == {"endpoint": "https://hub.internal.test", "apiKey": "k"}
+    assert hub == {"endpoint": "https://hub.internal.test", "apiKey": "k", "enabled": True}
 
 
 def test_bootstrap_honours_an_explicit_null_hub_endpoint(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A null endpoint is the way a user keeps the Hub off across a repeat
-    onboard; seeding must not read it as "unset" and turn it back on."""
+    onboard; the opt-in must not read it as "unset" and turn it back on."""
     tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": None}}}}))
 
     onboard_commands._bootstrap_empty_config()
 
-    assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]["endpoint"] is None
+    assert json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"] == {"endpoint": None}
 
 
 def test_bootstrap_does_not_re_enable_a_switched_off_hub(tmp_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The seed is an endpoint write, not consent: a config that switched the
-    source off stays off after a repeat onboard."""
+    """A config that switched the source off stays off after a repeat onboard."""
     tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"enabled": False}}}}))
 
     onboard_commands._bootstrap_empty_config()
 
     hub = json.loads(tmp_env.read_text())["skillForge"]["router"]["hub"]
-    assert hub == {"enabled": False, "endpoint": "https://skillhub.evermind.ai"}
+    assert hub == {"enabled": False}
     from raven.config.raven import load_raven_config
 
     assert load_raven_config().skill_forge.router.hub.enabled is False
@@ -3561,10 +3559,10 @@ def test_bootstrap_says_what_turning_skill_hub_search_on_sends(
 
 @pytest.mark.parametrize(
     "hub",
-    [{"enabled": False}, {"endpoint": None}, {"endpoint": "https://hub.internal.test"}],
-    ids=["switched off", "explicit null", "already configured"],
+    [{"enabled": False}, {"endpoint": None}],
+    ids=["switched off", "explicit null"],
 )
-def test_bootstrap_says_nothing_about_skill_hub_when_it_turned_nothing_on(
+def test_bootstrap_says_nothing_about_skill_hub_when_it_is_off(
     tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], hub: dict
 ) -> None:
     tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": hub}}}))
@@ -3572,6 +3570,44 @@ def test_bootstrap_says_nothing_about_skill_hub_when_it_turned_nothing_on(
     onboard_commands._bootstrap_empty_config()
 
     assert "Skill Hub" not in capsys.readouterr().out
+
+
+def test_bootstrap_names_a_configured_endpoint_in_the_notice(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tmp_env.write_text(json.dumps({"skillForge": {"router": {"hub": {"endpoint": "https://hub.internal.test"}}}}))
+
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "sends text from your conversation to https://hub.internal.test" in out
+
+
+def test_bootstrap_disclosure_uses_the_resolved_endpoint(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``RAVEN_SKILLHUB_URL`` moves where the loop sends the text, so the opt-in
+    disclosure has to name that address rather than the config's."""
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "https://staging.hub.test")
+
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "sends text from your conversation to https://staging.hub.test" in out
+
+
+def test_bootstrap_disclosure_says_the_source_is_off_when_the_override_is_refused(
+    tmp_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The client refuses the override and does not fall back to the
+    marketplace, so the disclosure must not name any destination."""
+    monkeypatch.setenv("RAVEN_SKILLHUB_URL", "http://staging.hub.test")
+
+    onboard_commands._bootstrap_empty_config()
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "sends text from your conversation" not in out
+    assert "RAVEN_SKILLHUB_URL was refused" in out
 
 
 def _onboard_once() -> Any:
