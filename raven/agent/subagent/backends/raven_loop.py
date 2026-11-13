@@ -159,7 +159,8 @@ def build_subagent_prompt(
     ``None`` keeps the current full-catalog behaviour, ``[]`` hides the menu
     entirely, and a list shows only the named skills. It stacks with the tool
     filter rather than replacing it, so a whitelisted skill whose required
-    tools this sub-agent lacks is still withheld.
+    tools this sub-agent lacks is still withheld. The run's ``read_skill``
+    takes the same list, so the tool and the menu name the same skills.
 
     The menu names ``read_skill`` as the way in whenever the registry holds it:
     a builtin skill's SKILL.md sits inside the installed package, which a run
@@ -449,7 +450,9 @@ class RavenLoopBackend:
             tools.register(ListDirTool(workspace=workspace, allowed_dirs=allowed_dirs, follow_binding=False))
         # The skills agent home holds, read the way the main agent reads them:
         # out of the registry, so a builtin skill's body reaches a run whose
-        # file tools are fenced to its own directories.
+        # file tools are fenced to its own directories. The tool takes the
+        # same effective skill list the menu does, so it reads nothing the
+        # row or the node left out.
         from raven.memory_engine import LocalSkillCatalog
 
         skill_catalog = LocalSkillCatalog(
@@ -462,6 +465,7 @@ class RavenLoopBackend:
                 ReadSkillTool(
                     registry=skill_catalog.registry,
                     blocklist_reader=lambda: skill_blocklist(_LIVE_CONFIG),
+                    allow=self.skills_allow,
                 )
             )
         if allowed("exec"):
