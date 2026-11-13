@@ -82,6 +82,26 @@ class TestTranslateProcessPath:
     def test_empty_text_is_returned_unchanged(self, tmp_path):
         assert _table(tmp_path).translate_process_path("") == ""
 
+    def test_a_sibling_sharing_the_roots_prefix_is_not_translated(self, tmp_path, monkeypatch):
+        table = _table(tmp_path)
+        monkeypatch.setattr(table, "roots", lambda: [(PurePosixPath("/srv/work"), "/workspace")])
+        translated = table.translate_process_path("node /srv/work/server.js /srv/workshop/other.js")
+        assert translated == "node /workspace/server.js /srv/workshop/other.js"
+
+    def test_the_root_alone_and_a_dashed_sibling_stay_distinct(self, tmp_path, monkeypatch):
+        table = _table(tmp_path)
+        monkeypatch.setattr(table, "roots", lambda: [(PurePosixPath("/srv/work"), "/workspace")])
+        assert table.translate_process_path("/srv/workshop/bin") == "/srv/workshop/bin"
+        assert table.translate_process_path("/srv/work-old/x") == "/srv/work-old/x"
+        assert table.translate_process_path("/srv/work") == "/workspace"
+        assert table.translate_process_path("/srv/work/d") == "/workspace/d"
+
+    def test_a_windows_sibling_sharing_the_roots_prefix_is_not_translated(self, tmp_path, monkeypatch):
+        table = _table(tmp_path)
+        monkeypatch.setattr(table, "roots", lambda: [(PureWindowsPath("C:/workspace"), "/workspace")])
+        translated = table.translate_process_path(r"C:\workspace\pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs")
+        assert translated == r"/workspace/pkgs;C:\workspace-old\pkgs;C:\workshop\pkgs"
+
 
 class TestMountList:
     def test_mounts_list_the_workspace_first_then_extras_with_modes(self, tmp_path):
