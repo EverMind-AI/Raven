@@ -133,14 +133,21 @@ def parse(payload: Any) -> Charter | None:
     """
     if not isinstance(payload, dict):
         return None
-    legacy_prompt = payload.get("prompt")
-    raw_brief = payload.get("brief") if "brief" in payload else legacy_prompt
-    prompt = str(raw_brief or "")[:MAX_PROMPT_CHARS]
     instruction_addendum = (
         str(payload.get("instructionAddendum") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "systemPrompt")
         else ""
     )
+    if "brief" in payload:
+        prompt = str(payload.get("brief") or "")[:MAX_PROMPT_CHARS]
+    else:
+        prompt = str(payload.get("prompt") or "")[:MAX_PROMPT_CHARS]
+        # A host that knows the addendum field writes it into the legacy prompt
+        # as well when there is no brief beside it, so a host that knows only
+        # the prompt still receives it. Read as the brief too, that same text
+        # would be injected a second time on top of the addendum.
+        if prompt == instruction_addendum:
+            prompt = ""
     stop_when = (
         str(payload.get("stopWhen") or payload.get("stop_when") or "")[:MAX_PROMPT_CHARS]
         if _parameter_enabled("memory", "stopWhen")
