@@ -1335,7 +1335,7 @@ def test_non_interactive_onboarding_on_windows_does_not_claim_a_sandbox(
     monkeypatch.setattr(sys, "platform", "win32")
     onboard_commands._step2_sandbox(skip=False, non_interactive=True)
     out = " ".join(capsys.readouterr().out.split())
-    assert "Sandbox isolation (OpenShell) needs Linux or macOS" in out
+    assert "The OpenShell sandbox needs Linux or macOS" in out
     assert "Keeping run location: Sandbox (OpenShell)" not in out
 
 
@@ -7134,12 +7134,34 @@ def test_step2_skip_path_reports_the_backend_it_actually_keeps(monkeypatch: pyte
     unconditionally while writing nothing -- re-running over a sandboxed config
     kept the sandbox and told the user it kept host. The message must render the
     backend it actually keeps."""
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(onboard_commands.console, "_width", 200)
     monkeypatch.setattr(onboard_commands, "_current_sandbox_backend", lambda: "openshell")
     onboard_commands._step2_sandbox(skip=True, non_interactive=False)
     out = capsys.readouterr().out
     assert "Sandbox (OpenShell)" in out
     assert "Host (direct)" not in out
+
+
+@pytest.mark.parametrize(("skip", "non_interactive"), [(True, False), (False, True)])
+def test_step2_on_windows_keeps_a_sandbox_backend_and_says_commands_cannot_run_yet(
+    monkeypatch: pytest.MonkeyPatch, capsys, skip: bool, non_interactive: bool
+) -> None:
+    """With no OpenShell on Windows, a kept sandbox backend refuses to start, so
+    commands do not run directly. Switching to the host takes the confirmation
+    the interactive choice asks for, so this branch keeps the backend, writes
+    nothing, and says how to switch."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(onboard_commands.console, "_width", 300)
+    monkeypatch.setattr(onboard_commands, "_current_sandbox_backend", lambda: "openshell")
+    persisted: list[str] = []
+    monkeypatch.setattr(onboard_commands, "_persist_sandbox_backend", persisted.append)
+    onboard_commands._step2_sandbox(skip=skip, non_interactive=non_interactive)
+    out = capsys.readouterr().out
+    assert "commands can't run on this host yet" in out
+    assert "choose Host (direct)" in out and "`tools.sandbox.backend` to `none`" in out
+    assert "run directly" not in out and "full host privileges" not in out
+    assert persisted == []
 
 
 def test_everos_role_optionality_matches_design():
