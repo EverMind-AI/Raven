@@ -56,6 +56,12 @@ _KILL_GRACE_SECONDS = 1.0
 # is given up rather than waited on.
 _DENIAL_READ_TIMEOUT = 2.0
 _DENIAL_WAIT_SECONDS = 3.0
+# A long-lived process (a sandboxed MCP server) has no relay close to wait for,
+# and no line of the sandbox's log can be told to be a given call's, so a failed
+# call waits a fixed while. Measured on a gateway, a refusal was readable 0.04 to
+# 0.51 s after the failed call, also with other commands running; a batch held
+# back by heavy sandbox churn (up to 1.85 s) is missed.
+_PROCESS_DENIAL_WAIT_SECONDS = 1.0
 _DENIAL_POLL_SECONDS = 0.15
 _RELAY_CLOSED = "ssh relay closed"
 # How much earlier than the caller sees a command end the sandbox may log its close.
@@ -584,7 +590,7 @@ class OpenShellExecutor(SandboxExecutor):
         if self._name is None:
             return []
         plane, name = self._plane(), self._name
-        deadline = time.monotonic() + (_DENIAL_WAIT_SECONDS if wait else 0.0)
+        deadline = time.monotonic() + (_PROCESS_DENIAL_WAIT_SECONDS if wait else 0.0)
         denials: list[NetworkDenial] = []
         while True:
             try:

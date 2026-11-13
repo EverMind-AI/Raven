@@ -610,6 +610,14 @@ class TestDenials:
         assert [(d.binary, d.port) for d in denials] == [("/usr/bin/curl", 443)]
         assert len(cp.denial_reads) == 2
 
+    async def test_a_failed_call_with_no_refusal_waits_about_a_second_for_one(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(ox, "_DENIAL_POLL_SECONDS", 0.05)
+        cp, ex = await self._started(tmp_path)
+        t0 = time.monotonic()
+        assert await ex.denials_since(time.time(), wait=True) == []
+        assert 0.8 < time.monotonic() - t0 < 2.5
+        assert len(cp.denial_reads) > 1
+
     async def test_denials_since_leaves_out_what_was_refused_after_the_window(self, tmp_path):
         cp, ex = await self._started(tmp_path)
         start = time.time()
