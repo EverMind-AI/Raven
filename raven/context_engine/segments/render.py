@@ -949,9 +949,13 @@ CONVERSATION_HEADING = "# This Conversation"
 def build_conversation_context(channel: str | None, surface: str | None) -> str:
     """Where this conversation is held, for the end of the system prompt; ``""`` when nothing is known.
 
-    Both hold for the whole conversation, so they ride the system prompt rather
-    than every user message. That prompt is shared by every conversation on the
-    same channel and surface, which is why the chat id stays in the runtime block.
+    Both usually hold for the whole conversation, so they ride the system prompt
+    rather than every user message. Some conversations move: the heartbeat session
+    picks its channel per run, a linked chat runs as its own channel inside a page
+    session, and two surfaces can share one session; the prompt changes with them,
+    and an earlier chat id in the history no longer says which channel it was on.
+    That prompt is shared by every conversation on the same channel and surface,
+    which is why the chat id stays in the runtime block.
 
     ``surface`` names the front end the connection declared at handshake. It is
     reported alongside the channel rather than instead of it: the channel is
