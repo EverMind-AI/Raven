@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -433,6 +435,16 @@ def test_the_workspace_key_folds_the_spellings_of_one_directory(
     assert workspace_key(workspace) != workspace_key(tmp_path / "ws-b")
 
 
+def test_the_workspace_key_folds_a_linked_workspace(tmp_path: Path) -> None:
+    """A workspace reached through a directory link is the same workspace."""
+    real = tmp_path / "real-ws"
+    real.mkdir()
+    link = tmp_path / "linked-ws"
+    _link_directory(real, link)
+
+    assert workspace_key(link) == workspace_key(real)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="case folding is a Windows path rule")
 def test_the_workspace_key_folds_case_the_way_windows_does(tmp_path: Path) -> None:
     workspace = tmp_path / "MixedCase"
@@ -628,6 +640,53 @@ def test_a_link_pointing_at_another_claimed_directory_is_not_followed(tmp_path: 
     assert not claim.owned
     assert "symlink or junction" in claim.reason
     assert beta.is_dir()
+
+
+def test_a_junction_reported_as_a_directory_is_refused_by_its_reparse_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Windows junction's lstat is S_IFDIR; st_reparse_tag is the only guard.
+
+    On POSIX a link is refused by S_ISLNK and then by the S_ISDIR check that
+    follows; on Windows a junction's lstat reports a directory, so the reparse
+    tag is the only thing standing between the ledger and the junction's
+    target. This fakes the lstat a junction returns there.
+    """
+    workspace = tmp_path / "workspace"
+    ledger = PackageLedger(tmp_path / "ledger.json")
+    _record_install(ledger, workspace)
+    root = workspace / "skills" / PACKAGE_NAME
+    real_lstat = Path.lstat
+
+    def _junction_lstat(self: Path):
+        if Path(self) == root:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_reparse_tag=0xA0000003)
+        return real_lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", _junction_lstat)
+
+    claim = ledger.claim(root, workspace=workspace)
+
+    assert not claim.owned
+    assert "symlink or junction" in claim.reason
+
+
+def test_a_directory_without_a_reparse_tag_is_still_owned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control for the faked Windows lstat: tag zero is a real directory."""
+    workspace = tmp_path / "workspace"
+    ledger = PackageLedger(tmp_path / "ledger.json")
+    _record_install(ledger, workspace)
+    root = workspace / "skills" / PACKAGE_NAME
+    real_lstat = Path.lstat
+
+    def _plain_lstat(self: Path):
+        if Path(self) == root:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_reparse_tag=0)
+        return real_lstat(self)
+
+    monkeypatch.setattr(Path, "lstat", _plain_lstat)
+
+    assert ledger.claim(root, workspace=workspace).owned
 
 
 def test_a_skill_without_a_recorded_token_is_not_owned(tmp_path: Path) -> None:
