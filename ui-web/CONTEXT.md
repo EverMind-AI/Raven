@@ -149,8 +149,9 @@ the lane's `winFrom` and `winTo` name, every segment in the store still kept
 segment that opens one -- a question that is not `midTurn`, or a delivered
 result -- because `stageRows` gathers what lies between two openings into one
 card. Opening a stored conversation mounts its last 20 turns -- and more at
-once when those turns are shorter than a screen, since the top edge is already
-within its margin and widens again. An end that stops short of the
+once when they are no taller than the scroller's height plus the top edge's
+1200px margin, since the edge is then already inside that margin and widens
+again. An end that stops short of the
 conversation's carries an edge, and once that edge comes within 1200px of the
 scroller the window widens by 20 turns that way; the top edge holds the row the
 reader had where it was. The turn nav and the task board mount the turn they go
