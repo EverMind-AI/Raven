@@ -562,6 +562,15 @@ class TestDenials:
         assert len(cp.denial_reads) == 2
         assert [d.port for d in result.denials] == [443]
 
+    async def test_a_refusal_logged_after_the_command_ended_is_left_to_whatever_made_it(self, tmp_path):
+        cp, ex = await self._started(tmp_path)
+        late = TCP_DENIAL.replace("example.com", "late.example.com")
+        cp.denial_script = [
+            lambda since: [(since + 0.01, TCP_DENIAL), (time.time() + 5, late), (time.time(), RELAY_CLOSED)]
+        ]
+        result = await ex.exec("curl https://example.com")
+        assert [d.host for d in result.denials] == ["example.com"]
+
     async def test_the_wait_for_the_relay_ends_at_its_deadline(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ox, "_DENIAL_WAIT_SECONDS", 0.2)
         monkeypatch.setattr(ox, "_DENIAL_POLL_SECONDS", 0.01)
