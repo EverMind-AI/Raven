@@ -224,6 +224,11 @@ OAuth token 位于 `<credentials>/playbooks/brief-review/mcp/`，与宿主服务
 CLI `run` 同步等待；会话中的 DAG 加载通常后台调度。缺少普通参数或必需字段
 会阻止调度并返回命名缺口。Prompt 模式加载只返回指导，本身不调度。
 
+通过页面的 `playbooks.run` RPC 属性启动的运行，会把模型用量归到请求的会话，
+包括该会话已有的 delegation owner。继续或延长多轮 stint 会保留原会话的归属。
+这次用量归属查询不会创建会话：没有既有会话的 key 会被记录，但不带
+delegation owner。
+
 Playbook 的 `confirm` 默认 true，executor 调度时会将它传给图。
 **没有 ask channel 时，当前 DAG 实现记录提示后以未确认状态运行；
 显式 CLI 路径没有接入 ask channel。**有 ask channel 时，拒绝或投递失败会
