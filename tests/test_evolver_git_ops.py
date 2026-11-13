@@ -430,6 +430,19 @@ index 0000000..2222222
         with pytest.raises(ImmutablePathError, match="evolver"):
             git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
 
+    def test_guards_a_non_ascii_immutable_path(self, repo):
+        repo_dir, sha = repo
+        diff = """diff --git a/evolver/\u4e2d\u6587.py b/evolver/\u4e2d\u6587.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/evolver/\u4e2d\u6587.py
+@@ -0,0 +1 @@
++KERNEL = 0
+""".encode().decode("unicode_escape")
+        with pytest.raises(ImmutablePathError, match="evolver"):
+            git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
+
     def test_applies_a_mutable_diff(self, repo):
         repo_dir, sha = repo
         diff = """diff --git a/src/x.py b/src/x.py

@@ -369,8 +369,21 @@ def apply_patch_as_commit(
         # hide behind a clean components list.
         from evolver.applier.path_guard import assert_patch_allowed
 
-        changed = _run(repo_root, "diff", "--cached", "--name-only", parent_sha, env=env)
-        assert_patch_allowed([path for path in changed.splitlines() if path.strip()])
+        # -z disables C-quoting of names with non-ASCII bytes (git's default
+        # core.quotePath=true renders them quoted, e.g. "\344\270..."), so
+        # the guard sees the real path; NUL separates, never newline.
+        changed = _run(
+            repo_root,
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            parent_sha,
+            env=env,
+        )
+        assert_patch_allowed([path for path in changed.split("\0") if path])
         # Step 3: write a tree object from the temp index
         tree_sha = _run(repo_root, "write-tree", env=env).strip()
 
