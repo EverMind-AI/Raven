@@ -245,6 +245,43 @@ def test_the_slice_key_is_spent_on_serper_only(tmp_path: Path, monkeypatch) -> N
     assert shared.image_search_key("serper") == "slice-serper"
 
 
+def test_the_deck_picture_tool_asks_for_reported_dimensions() -> None:
+    """A deck cannot judge a picture whose size nobody reported, so the deck
+    tool passes ``require_dimensions`` and the host tool drops such a hit
+    instead of offering it. Deleting the kwarg leaves every other deck test
+    green, which is why this one holds it."""
+    from raven.agent.tools.web import ImageHit
+    from raven_ppt.plugin.image_search import PptImageSearchTool
+
+    tool = PptImageSearchTool(api_key="k", provider="serper")
+    unsized = ImageHit(title="", image_url="https://x/1.png", width=None, height=None, source="", page="")
+    sized = ImageHit(title="", image_url="https://x/2.png", width=1280, height=720, source="", page="")
+
+    assert tool.require_dimensions is True
+    assert tool._holds_up(unsized, 640) is False
+    assert tool._holds_up(sized, 640) is True
+
+
+@pytest.mark.parametrize("provider", ["", None, "bogus"], ids=["empty-string", "null", "unknown-vendor"])
+def test_the_engine_refuses_a_picture_provider_that_is_not_a_route(provider) -> None:
+    """The provider rule is one parser (``ppt_image_search_provider``): these
+    values make ``EngineConfig.from_slice`` raise, so the plugin casts its
+    fail-closed sentinel and registers no deck tool at all."""
+    from raven_ppt.plugin.config import EngineConfig
+
+    with pytest.raises(ValueError):
+        EngineConfig.from_slice({"imageSearch": {"provider": provider}})
+
+
+def test_an_absent_picture_provider_is_the_host_route() -> None:
+    """Absent and explicit ``"host"`` are the host route; null and ``""`` are
+    refusals, so the parser must tell absence from a present bad value."""
+    from raven_ppt.plugin.config import EngineConfig
+
+    assert EngineConfig.from_slice({"imageSearch": {}}).image_search_provider == "host"
+    assert EngineConfig.from_slice({"imageSearch": {"provider": "host"}}).image_search_provider == "host"
+
+
 def test_a_malformed_slice_casts_the_fail_closed_sentinel(tmp_path: Path) -> None:
     """The host's stack builder logs-and-skips a raising factory, so a parse
     error that escaped would boot this deck product with no deck face at all

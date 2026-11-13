@@ -400,9 +400,12 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
     carry dimensions and a source page. A vendor name: the product's own plugin
     is pinned to that vendor.
 
-    The declaration is ``imageSearch`` in any ``plugins.config`` slice, read the
-    way the engine's config reads it: ``provider`` absent or ``"host"`` means
-    the host rule, any other name is a pin. A folder with no ``imageSearch``
+    The declaration is ``imageSearch`` in any ``plugins.config`` slice, read
+    through :func:`raven.agent.tools.web.ppt_image_search_provider` -- the same
+    parser the engine's config uses: ``provider`` absent or ``"host"`` means
+    the host rule, any other name is a pin, and a value the engine refuses
+    (a non-string, an unknown name, an explicit ``""``) raises ``ValueError``
+    here rather than reading as the host rule. A folder with no ``imageSearch``
     object at all is the engine default, ``"host"``; its own
     ``tools.web.search.provider`` is then the selection the engine follows, but
     a selection is not this function's answer -- returning it here would report
@@ -422,8 +425,9 @@ def product_picture_vendor(row_name: str, root: Path | None = None) -> str:
         return ""
     image_search = _declared_image_search(declared)
     if image_search is not None:
-        provider = image_search.get("provider")
-        return "host" if provider in (None, "", "host") else str(provider)
+        from raven.agent.tools.web import ppt_image_search_provider
+
+        return ppt_image_search_provider(image_search)
     tools = declared.get("tools")
     tools = tools if isinstance(tools, dict) else {}
     disabled = tools.get("disabledTools")
@@ -543,7 +547,12 @@ def picture_search_report(
             return slice_key
         return key_for(vendor) or ""
 
-    declared = product_picture_vendor(target)
+    try:
+        declared = product_picture_vendor(target)
+    except ValueError:
+        # The engine refuses this slice outright, so it registers no deck tools
+        # at all: the route must not open on a declaration the launch rejects.
+        return "", False, "not_ready"
     pinned = False
     if declared == "host":
         surface = PPT_IMAGE_SEARCH_VENDORS
@@ -551,10 +560,6 @@ def picture_search_report(
     elif declared:
         surface = PPT_IMAGE_SEARCH_VENDORS
         keyed = bool(key(declared))
-        if declared not in PPT_IMAGE_SEARCH_VENDORS:
-            # A pin the engine's config refuses casts its fail-closed sentinel:
-            # the whole slice declines, so no picture tool is registered.
-            return "", False, "not_ready"
         pinned = keyed
         vendor = declared if keyed else ppt_image_vendor(effective, key)
     else:

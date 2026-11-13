@@ -12,7 +12,7 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -701,6 +701,29 @@ dimensions and without the page they came from. The deck engine drops both, so a
 Tavily hit can never become a usable deck picture; the deck set is the host set
 minus that one vendor.
 """
+
+
+def ppt_image_search_provider(image_search: Mapping[str, Any]) -> str:
+    """The deck's picture route from its ``imageSearch`` declaration.
+
+    The one parser for ``imageSearch.provider``: the deck engine validates its
+    slice with it and the readiness probe derives its answer from it, so a
+    declaration the engine refuses cannot read as ready. An absent key is the
+    engine's default, ``"host"``; a present value must be the string ``"host"``
+    or one of :data:`PPT_IMAGE_SEARCH_VENDORS`. Raises ``ValueError`` naming the
+    value otherwise, and a present ``null`` is not the same as an absent key.
+    """
+    if "provider" not in image_search:
+        return "host"
+    provider = image_search["provider"]
+    if not isinstance(provider, str):
+        raise ValueError(f"imageSearch.provider must be a string, got {provider!r}")
+    if provider != "host" and provider not in PPT_IMAGE_SEARCH_VENDORS:
+        raise ValueError(
+            f"unknown ppt image search provider {provider!r}; "
+            f"known routes are 'host' and {', '.join(PPT_IMAGE_SEARCH_VENDORS)}"
+        )
+    return provider
 
 
 def ppt_image_vendor(selected: str, key_for: "Callable[[str], str | None] | None" = None) -> str:
