@@ -177,6 +177,12 @@ hit the same address at once, you are asked once.
 | Allow for this session | Every sandbox of the conversation, until Raven restarts |
 | A rule in `permissions.network` | Every sandbox, from then on |
 
+A deny rule wins over an allow rule for the same target, and over a session
+grant in the conversation's other sandboxes; one you add later takes effect
+before each sandbox's next command. What was opened directly in the sandbox
+that was refused, once or for the session, stays open there until that sandbox
+stops, which for the main agent's sandbox is until Raven restarts.
+
 The main agent's sandbox is shared by every conversation the gateway serves,
 so what is allowed in it reaches all of them until Raven restarts. The
 approval card says so when it applies.
@@ -192,6 +198,10 @@ the gateway does not say which process made a connection.
   labels: OpenShell cannot carve an exception out of the rule that opens them.
   Such a rule still stops Raven from opening the host, and Raven warns when it
   loads one. Use `default: closed` when a host must be unreachable.
+- An allow rule that covers a denied target only in part, through a wildcard
+  host or by allowing any program where the deny rule names one, cannot have
+  that target carved out for the same reason. Raven keeps the allow rule and
+  warns when it loads it.
 - The design engine's renderer runs Raven's own rendering job, not a command
   an agent wrote, and stays offline. It has no network setting of its own.
 - An approved address takes about 10 seconds to reach a running sandbox with

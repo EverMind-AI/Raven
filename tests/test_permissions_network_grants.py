@@ -57,6 +57,18 @@ def test_the_network_source_reads_the_live_permissions_and_the_scopes_grants():
     assert "allow_open" in source()
 
 
+def test_a_deny_rule_added_after_a_session_grant_closes_it_for_the_next_sync():
+    from raven.config.schema import NetworkRule
+
+    registry = GrantRegistry()
+    current = {"network": NetworkPermissions(default="closed")}
+    source = network_source_for(lambda: current["network"], "conv-a", registry=registry)
+    registry.grant("conv-a", CURL)
+    assert len(source()) == 1
+    current["network"] = NetworkPermissions(default="closed", rules=[NetworkRule(host="example.com", tier="deny")])
+    assert source() == {}
+
+
 def test_a_grant_without_a_scope_is_ignored():
     registry = GrantRegistry()
     registry.grant("", CURL)

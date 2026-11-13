@@ -2499,7 +2499,10 @@ rule (`raven_grant_<hash>`) of the sandboxes it reaches: "once" in the refused
 sandbox until it stops, "this session" in every sandbox of the conversation
 until Raven restarts (the `GrantRegistry`, keyed by the conversation's
 `session_key`; the main agent's shared sandbox runs under every conversation's),
-"always" as a `permissions.network` rule. Distinct from a session grant in
+"always" as a `permissions.network` rule. A deny rule naming the same target
+leaves a session grant out of the policy the conversation's sandboxes compile;
+what the refused sandbox was granted directly, once or for the session, stays
+there until it stops. Distinct from a session grant in
 `permissions/session.py`, which remembers the action's keys so the gate does not
 ask again; a network grant is what makes the sandbox let the connection through.
 

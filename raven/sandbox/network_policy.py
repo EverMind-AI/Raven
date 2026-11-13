@@ -87,6 +87,7 @@ def _open_rule(extra_hosts: list[str], denied: frozenset[str] = frozenset()) -> 
 
 logger = logging.getLogger(__name__)
 _warned_unenforced: set[str] = set()
+_warned_partial: set[tuple[str, str, str]] = set()
 
 
 def unenforced_denials(network: NetworkPermissions) -> list[str]:
@@ -145,9 +146,13 @@ def compile_network_policy(
 ) -> dict[str, dict]:
     """The ``network_policies`` of a sandbox under ``network`` with ``grants`` added.
 
-    Deny rules open nothing here; they refuse at approval time.
+    A deny rule wins over what would open the same target: a grant it refuses
+    is left out, and an allow rule loses the ports a deny rule takes from all of
+    its hosts and programs. An allow rule a deny rule covers only in part stays
+    whole, with a warning: OpenShell cannot carve an exception out of a rule.
     """
     policies: dict[str, dict] = {}
+    denies = [rule for rule in network.rules if rule.tier == "deny"]
     if network.default == "open":
         denied = frozenset(rule.host for rule in network.rules if rule.tier == "deny")
         policies[OPEN_RULE] = _open_rule([], denied)
@@ -162,14 +167,54 @@ def compile_network_policy(
     for rule in network.rules:
         if rule.tier != "allow":
             continue
+        ports = _ports_left(rule, denies)
+        if not ports:
+            continue
         name = f"raven_rule_{_digest(rule.host, rule.ports, rule.binary)}"
         policies[name] = {
             "name": name,
-            "endpoints": [_endpoint(rule.host, list(rule.ports) or COMMON_PORTS)],
+            "endpoints": [_endpoint(rule.host, ports)],
             "binaries": [{"path": rule.binary or "/**"}],
         }
-    policies.update(grant_rules(grants))
+    policies.update(
+        grant_rules(grant for grant in grants if refusing_rule(network, grant.binary, grant.host, grant.port) is None)
+    )
     return policies
+
+
+def _ports_left(allow: Any, denies: list[Any]) -> list[int]:
+    """The ports of ``allow`` no deny rule takes from it whole; warns once about a deny rule it cannot honour."""
+    ports = list(allow.ports) or COMMON_PORTS
+    for deny in denies:
+        if deny.ports and not set(deny.ports) & set(ports):
+            continue
+        taken = _deny_covers(deny, allow)
+        if taken is True:
+            ports = [port for port in ports if deny.ports and port not in deny.ports]
+        elif taken is None and (deny.host, allow.host, deny.binary) not in _warned_partial:
+            _warned_partial.add((deny.host, allow.host, deny.binary))
+            logger.warning(
+                "permissions.network denies %s, but the allow rule for %s still lets sandboxed commands reach it; "
+                "the deny rule only refuses approving it",
+                f"{deny.binary} -> {deny.host}" if deny.binary else deny.host,
+                allow.host,
+            )
+    return ports
+
+
+def _deny_covers(deny: Any, allow: Any) -> bool | None:
+    """True when ``deny`` names every host and program ``allow`` opens, None when only some, False when none."""
+    if deny.binary and allow.binary and deny.binary != allow.binary:
+        return False
+    deny_pattern = _host_pattern(deny.host)
+    # A "**" label is one label or more, so a deny rule covers it only when it
+    # covers both of those spellings.
+    spellings = {allow.host.replace("**", "*"), allow.host.replace("**", "*.*")}
+    every_host = all(deny_pattern.fullmatch(spelling) for spelling in spellings)
+    if every_host and (not deny.binary or deny.binary == allow.binary):
+        return True
+    some_host = every_host or _host_pattern(allow.host).fullmatch(re.sub(r"\*+", "x", deny.host)) is not None
+    return None if some_host else False
 
 
 def grant_rules(grants: Iterable[NetworkGrant]) -> dict[str, dict]:

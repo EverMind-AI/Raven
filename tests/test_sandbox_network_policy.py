@@ -127,6 +127,99 @@ def test_a_deny_rule_the_wildcard_covers_is_reported_as_unenforced(caplog):
     assert len(warnings) == 1
 
 
+@pytest.fixture
+def fresh_warnings(monkeypatch):
+    from raven.sandbox import network_policy
+
+    monkeypatch.setattr(network_policy, "_warned_unenforced", set())
+    monkeypatch.setattr(network_policy, "_warned_partial", set())
+
+
+def _closed(*rules: NetworkRule) -> NetworkPermissions:
+    return NetworkPermissions(default="closed", rules=list(rules))
+
+
+def test_a_deny_rule_takes_the_host_out_of_an_allow_rule_for_it(fresh_warnings):
+    network = _closed(NetworkRule(host="example.com", ports=[443]), NetworkRule(host="example.com", tier="deny"))
+    assert compile_network_policy(network) == {}
+
+
+def test_a_deny_rule_takes_only_its_own_ports_out_of_an_allow_rule(fresh_warnings):
+    network = _closed(
+        NetworkRule(host="example.com", ports=[80, 443]), NetworkRule(host="example.com", ports=[443], tier="deny")
+    )
+    (rule,) = compile_network_policy(network).values()
+    assert [endpoint["ports"] for endpoint in rule["endpoints"]] == [[80]]
+
+
+def test_a_deny_rule_for_a_wildcard_covers_an_allow_rule_inside_it(fresh_warnings):
+    network = _closed(NetworkRule(host="*.example.com"), NetworkRule(host="**.example.com", tier="deny"))
+    assert compile_network_policy(network) == {}
+
+
+def test_a_deny_rule_for_the_program_of_an_allow_rule_takes_it_out(fresh_warnings):
+    network = _closed(
+        NetworkRule(host="example.com", binary="/usr/bin/curl"),
+        NetworkRule(host="example.com", binary="/usr/bin/curl", tier="deny"),
+    )
+    assert compile_network_policy(network) == {}
+
+
+def test_a_deny_rule_for_another_program_leaves_an_allow_rule_alone(fresh_warnings, caplog):
+    import logging
+
+    network = _closed(
+        NetworkRule(host="example.com", binary="/usr/bin/git"),
+        NetworkRule(host="example.com", binary="/usr/bin/curl", tier="deny"),
+    )
+    with caplog.at_level(logging.WARNING, logger="raven.sandbox.network_policy"):
+        assert len(compile_network_policy(network)) == 1
+    assert caplog.records == []
+
+
+def test_a_deny_rule_on_other_ports_leaves_a_wildcard_allow_rule_unwarned(fresh_warnings, caplog):
+    import logging
+
+    network = _closed(
+        NetworkRule(host="*.example.com", ports=[443]), NetworkRule(host="bad.example.com", ports=[22], tier="deny")
+    )
+    with caplog.at_level(logging.WARNING, logger="raven.sandbox.network_policy"):
+        (rule,) = compile_network_policy(network).values()
+    assert rule["endpoints"][0]["ports"] == [443]
+    assert caplog.records == []
+
+
+@pytest.mark.parametrize(
+    "allow, deny",
+    [
+        (NetworkRule(host="*.example.com"), NetworkRule(host="bad.example.com", tier="deny")),
+        (NetworkRule(host="**.example.com"), NetworkRule(host="*.example.com", tier="deny")),
+        (NetworkRule(host="example.com"), NetworkRule(host="example.com", binary="/usr/bin/curl", tier="deny")),
+    ],
+    ids=["host-inside-a-wildcard", "one-label-of-many", "one-program-of-any"],
+)
+def test_an_allow_rule_a_deny_rule_covers_only_in_part_stays_and_is_warned_about_once(
+    fresh_warnings, caplog, allow, deny
+):
+    import logging
+
+    network = _closed(allow, deny)
+    with caplog.at_level(logging.WARNING, logger="raven.sandbox.network_policy"):
+        first = compile_network_policy(network)
+        compile_network_policy(network)
+    (rule,) = first.values()
+    assert rule["endpoints"][0]["host"] == allow.host
+    warnings = [r.getMessage() for r in caplog.records]
+    assert len(warnings) == 1 and deny.host in warnings[0] and allow.host in warnings[0]
+
+
+def test_a_grant_a_deny_rule_refuses_is_left_out(fresh_warnings):
+    network = _closed(NetworkRule(host="example.com", tier="deny"))
+    grants = [NetworkGrant("/usr/bin/curl", "example.com", 443), NetworkGrant("/usr/bin/curl", "example.org", 443)]
+    (rule,) = compile_network_policy(network, grants).values()
+    assert rule["endpoints"][0]["host"] == "example.org"
+
+
 @pytest.mark.parametrize(
     ("rule", "target", "refuses"),
     [
