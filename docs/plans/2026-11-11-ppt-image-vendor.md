@@ -17,7 +17,7 @@
 - A key resolved for one vendor is never sent to another vendor's endpoint.
 - No new dependency; tests never call a vendor network endpoint (monkeypatched clients only).
 - Source, comments, log lines and test fixtures are English. New UI copy goes in `i18n/messages.json` with `en` and `zh`; CJK only there.
-- pytest command in this worktree: `PYTHONPATH=$PWD /Evermind/sh_evermind/xuedizhan/Raven/.venv/bin/python -m pytest <paths> -q`.
+- pytest command in this worktree: `uv run pytest <paths> -q`.
 - UI command: `npm test --prefix ui-web -- <paths>`; generation: `npm run gen --prefix ui-web`.
 - No commit steps in this plan: `AGENTS.md` 3.4 forbids committing without the owner's explicit word. Leave the tree staged-free and report.
 
@@ -68,7 +68,7 @@ def test_serply_image_results_are_read_from_the_original_image() -> None:
 
 - [ ] **Step 2: Run it and watch it fail**
 
-Run: `PYTHONPATH=$PWD /Evermind/sh_evermind/xuedizhan/Raven/.venv/bin/python -m pytest tests/test_agent_loop_web_tools.py::test_serply_image_results_are_read_from_the_original_image -q`
+Run: `uv run pytest tests/test_agent_loop_web_tools.py::test_serply_image_results_are_read_from_the_original_image -q`
 Expected: FAIL, `ValueError` naming an unknown image provider.
 
 - [ ] **Step 3: Implement**
@@ -362,7 +362,7 @@ Mount the page with a row whose `routes` is `[{"to": "Raven-PPT", "image_search_
 - [ ] Python: run every touched suite
 
 ```
-PYTHONPATH=$PWD /Evermind/sh_evermind/xuedizhan/Raven/.venv/bin/python -m pytest \
+uv run pytest \
   tests/test_agent_loop_web_tools.py tests/test_agent_tools_web_providers.py \
   tests/test_ppt_engine_image_search.py tests/test_ppt_engine_plugin.py \
   tests/test_agents_ppt_launcher.py tests/test_subagent_routed_lane_readiness.py \
