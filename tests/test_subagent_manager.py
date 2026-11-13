@@ -1451,20 +1451,52 @@ def test_generated_participant_notes_preserve_each_supported_message_shape() -> 
     from raven.agent.subagent.backends.raven_loop import _append_participant_note
 
     absent: list[dict] = []
-    _append_participant_note(absent, "note")
+    _append_participant_note(absent, "note", set())
     assert absent == []
 
     text = [{"content": "base"}]
-    _append_participant_note(text, "note")
+    _append_participant_note(text, "note", set())
     assert text[-1]["content"] == "base\n\nnote"
 
     blocks = [{"content": [{"type": "text", "text": "base"}]}]
-    _append_participant_note(blocks, "note")
+    _append_participant_note(blocks, "note", set())
     assert blocks[-1]["content"][-1] == {"type": "text", "text": "note"}
 
     empty = [{"content": None}]
-    _append_participant_note(empty, "note")
+    _append_participant_note(empty, "note", set())
     assert empty[-1]["content"] == "note"
+
+
+def test_generated_participant_guidance_is_kept_out_of_a_tool_result() -> None:
+    """A tool result is fenced as untrusted input, so advice appended into one
+    reaches the model as something a tool told it. After a tool round the note
+    is a message of its own."""
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    messages = [
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]},
+        {"role": "tool", "tool_call_id": "c1", "name": "read_file", "content": "<untrusted>file text</untrusted>"},
+    ]
+    _append_participant_note(messages, "check the second table", set())
+
+    assert messages[1]["content"] == "<untrusted>file text</untrusted>"
+    assert messages[-1] == {"role": "user", "content": "check the second table"}
+
+
+def test_generated_participant_guidance_is_single_use() -> None:
+    """The advice is asked for every round while a generated function is
+    stateless, so the same words are delivered once rather than once per
+    round."""
+    from raven.agent.subagent.backends.raven_loop import _append_participant_note
+
+    delivered: set[str] = set()
+    messages: list[dict] = [{"role": "user", "content": "the task"}]
+    for _ in range(3):
+        _append_participant_note(messages, "hold the line", delivered)
+
+    assert messages[-1]["content"] == "the task\n\nhold the line"
+    _append_participant_note(messages, "a second thought", delivered)
+    assert messages[-1]["content"] == "the task\n\nhold the line\n\na second thought"
 
 
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
