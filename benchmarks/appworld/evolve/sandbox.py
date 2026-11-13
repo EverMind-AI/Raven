@@ -118,7 +118,12 @@ class Sandbox:
         blocked = [str(self.repo_root.resolve())]
         if origin_gitdir is not None:
             blocked.append(str(origin_gitdir))
-        if any(path in command for path in blocked):
+        # Compare case-insensitively with forward slashes so a differently
+        # spelled origin path (different case, mixed separators, \\?\ prefix on
+        # Windows) still trips the refusal; the state comparison below stays
+        # as the backstop for writes spelled any other way.
+        normalised = command.casefold().replace("\\", "/")
+        if any(path.casefold().replace("\\", "/") in normalised for path in blocked):
             return (
                 f"[refused: command references the origin repo "
                 f"({self.repo_root}). Work ONLY inside your cwd (this worktree "
