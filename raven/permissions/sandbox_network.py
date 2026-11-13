@@ -150,10 +150,11 @@ async def _ask(
             answer = await _prompt(gate, executor, again, scope, command=command, tool_name=tool_name)
             outcomes.append((again, answer))
             stop = stop or answer.choice is RuntimeChoice.DENY_STOP
+    unloaded: list[NetworkDenial] = []
     for group, answer in outcomes:
-        if answer.choice.approved:
-            await _open(executor, _grants(group), answer.choice)
-    sentences = _answered(outcomes)
+        if answer.choice.approved and not await _open(executor, _grants(group), answer.choice):
+            unloaded.extend(group)
+    sentences = _answered(outcomes, unloaded)
     rest = len(denials) - len(shown)
     if rest:
         sentences.append(f"{rest} more blocked targets were not asked about.")
@@ -223,12 +224,23 @@ async def _prompt(
                 future.set_result(answer)
 
 
-def _answered(outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]]) -> list[str]:
-    """One sentence per kind of answer, naming the connections it covered."""
+def _answered(
+    outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]], unloaded: Sequence[NetworkDenial] = ()
+) -> list[str]:
+    """One sentence per kind of answer, naming the connections it covered.
+
+    An approval the refused sandbox did not load is told apart: the model would
+    otherwise run the command again into the same block, and be told it was
+    approved again.
+    """
     by_choice: dict[RuntimeChoice, list[NetworkDenial]] = {}
     feedback: dict[RuntimeChoice, str] = {}
     for group, answer in outcomes:
         choice = RuntimeChoice.ONCE if answer.choice.approved else answer.choice
+        if choice is RuntimeChoice.ONCE:
+            group = [denial for denial in group if denial not in unloaded]
+            if not group:
+                continue
         by_choice.setdefault(choice, []).extend(group)
         if answer.feedback and choice not in feedback:
             feedback[choice] = answer.feedback
@@ -249,6 +261,12 @@ def _answered(outcomes: list[tuple[list[NetworkDenial], RuntimeAnswer]]) -> list
             )
         else:
             sentences.append(_blocked(group))
+    if unloaded:
+        sentences.append(
+            f"Network access for {', '.join(_lines(unloaded))} was approved, but the sandbox has not loaded it yet, "
+            "so it may still be blocked. If the command fails the same way again, tell the user instead of "
+            "running it again."
+        )
     return sentences
 
 
@@ -260,13 +278,14 @@ def _grants(denials: Sequence[NetworkDenial]) -> list[NetworkGrant]:
     return [NetworkGrant(denial.binary, denial.host, denial.port) for denial in denials]
 
 
-async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], choice: RuntimeChoice) -> None:
-    """Open ``grants`` where ``choice`` reaches, and wait until the sandboxes have loaded them.
+async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], choice: RuntimeChoice) -> bool:
+    """Open ``grants`` where ``choice`` reaches; whether the refused sandbox loaded them.
 
     The sandbox that was refused is granted directly whatever the scope, since
-    its next command is the one the model is told to run; the conversation's
-    other sandboxes read a session grant or a new rule from their network
-    source, and are synced here so they do not wait for it on their next command.
+    its next command is the one the model is told to run, and its load is the
+    one reported; the conversation's other sandboxes read a session grant or a
+    new rule from their network source, and are synced here so they do not wait
+    for it on their next command, which syncs again anyway.
     """
     scope = current_turn().session_key
     if choice is RuntimeChoice.ALWAYS:
@@ -284,9 +303,11 @@ async def _open(executor: SandboxExecutor | None, grants: list[NetworkGrant], ch
     loads = [executor.grant_network(grants)] if executor is not None else []
     if choice is not RuntimeChoice.ONCE:
         loads += [other.sync_network() for other in GRANTS.executors_for(scope) if other is not executor]
-    for outcome in await asyncio.gather(*loads, return_exceptions=True):
+    outcomes = await asyncio.gather(*loads, return_exceptions=True)
+    for outcome in outcomes:
         if outcome is not True:
             logger.warning("A sandbox did not load an approved network grant: {}", outcome)
+    return executor is None or outcomes[0] is True
 
 
 # A public DNS name: dotted labels ending in a letters-only top-level label.
