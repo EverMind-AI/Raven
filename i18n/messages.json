@@ -3846,24 +3846,24 @@
       "zh": "逐项审批"
     },
     "gui.perm.ask_h": {
-      "en": "Reads run on their own; everything else asks you first.",
-      "zh": "只读操作直接执行，其余每一步先问你"
+      "en": "Reads run on their own, and everything else asks you first.",
+      "zh": "只读操作直接执行，其余步骤会先问你"
     },
     "gui.perm.full": {
       "en": "Full access",
       "zh": "完全访问"
     },
     "gui.perm.full_h": {
-      "en": "Never asks and may run dangerous operations; deny rules still hold.",
-      "zh": "全程不问，可能执行危险操作；禁止规则仍然生效"
+      "en": "Never asks and can run dangerous operations. Deny rules still apply.",
+      "zh": "全程不询问，可能执行危险操作。禁止规则仍然生效"
     },
     "gui.perm.smart": {
       "en": "Smart mode",
       "zh": "智能模式"
     },
     "gui.perm.smart_h": {
-      "en": "Routine actions run on their own; risky ones ask you first.",
-      "zh": "常规操作直接执行，有风险的操作才问你"
+      "en": "Routine actions run on their own, and risky ones ask you first.",
+      "zh": "常规操作直接执行，有风险的操作会先问你"
     },
     "gui.perm.title": {
       "en": "Permission",

@@ -174,7 +174,6 @@ div.app[data-rail=on]
                 button#permChip.chip
                   svg.pico
                     path
-                    path
                   span#permName
                 div#permPop.pop[data-open=false]
               span#envChip.chip

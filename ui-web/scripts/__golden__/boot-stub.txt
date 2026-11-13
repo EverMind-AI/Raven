@@ -177,6 +177,7 @@ div.app[data-rail=on]
                     path
                     path
                     path
+                    path
                   span#permName
                 div#permPop.pop[data-open=false]
               span#envChip.chip

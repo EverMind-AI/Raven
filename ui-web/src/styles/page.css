@@ -1121,7 +1121,9 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    inset ridge catches light along the top edge, and the three stacked
    shadows give it a near, mid and far penumbra. A flat grey slab with one
    blob shadow is exactly the look this replaces -- panel-specific blocks
-   below keep geometry only, never their own background. */
+   below keep geometry only, never their own background. The two cards that
+   are read rather than glanced at are the exception: the context table and
+   the permission list mount solid paper of their own (#ctxPop, #permPop). */
 .menu, .pop, .mpick, .csheet, .chrome-navfly {
   background: linear-gradient(
     color-mix(in oklab, var(--ink) 86%, transparent),
@@ -1459,9 +1461,10 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    cell belongs to.
 
    Solid, where the other popovers are translucent: this one is a table of
-   numbers to be read, and a table read over a blurred conversation is a table
-   nobody can read. The blur goes with it -- there is nothing left to blur
-   behind a card that is not there. */
+   numbers to be read, and the permission list below joins it for the same
+   reason. A table read over a blurred conversation is a table nobody can
+   read. The blur goes with it -- there is nothing left to blur behind a card
+   that is not there. */
 #ctxPop {
   right: 0; left: auto; width: 288px; padding: 14px 16px 12px; border-radius: 14px;
   background: var(--paper);
@@ -1523,25 +1526,96 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
    off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
-   above the chip's top edge, left edges lined up. Names only, no heading: the
-   chip already says what is being chosen, and the sentence behind a name is on
-   the row's title. The tick is the whole of the "this is the one" signal -- no
-   filled band behind the row, which on a translucent panel reads as a second
-   material. */
+   above the chip's top edge, left edges lined up.
+
+   The three menus stay names-only: the chip already says what is being chosen,
+   and the sentence behind a name is on the row's title. The permission list is
+   the exception -- choosing what the agent may do without asking earns a
+   heading, a sentence per row and a filled band behind the chosen one, so the
+   three modes can be compared without hovering any of them. */
 .chrome-anch { position: relative; display: inline-flex; align-items: center; }
 #plusPop, #atPop, #wdPop, #permPop { left: 0; right: auto; bottom: calc(100% + 6px); padding: 4px; }
 #plusPop { width: 220px; }
 #atPop { width: 240px; }
 #wdPop { width: 200px; }
 #wdPop[data-view="browse"], #wdPop[data-view="drives"] { width: 300px; }
-#permPop { width: 200px; }
+/* Solid paper, the way the context card is: this list is read sentence by
+   sentence, and its warm wash should not take its colour from whatever the
+   conversation happens to be showing behind it. */
+#permPop {
+  width: 296px; padding: 10px; border-radius: 18px;
+  background: var(--paper);
+  border-color: var(--line);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
 .pop .chrome-hr { height: 1px; background: var(--line-soft); margin: 4px 6px; }
 #plusPop .prow, #atPop .prow, #wdPop .prow, #permPop .prow { align-items: center; gap: 9px; padding: 7px 9px; border-radius: 8px; }
 #plusPop .prow .nm, #atPop .prow .nm, #wdPop .prow .nm, #permPop .prow .nm { font-weight: 500; font-size: 13px; }
 #wdPop .prow[aria-checked="true"] .nm, #permPop .prow[aria-checked="true"] .nm { font-weight: 600; }
 #wdPop .prow .tick, #permPop .prow .tick { flex: none; width: 14px; height: 14px; stroke-width: 2; color: var(--warm); }
-/* The tier with no brakes says so in its row too, in the chip's colour. */
-#permPop .prow.risk .nm { color: var(--clay); }
+/* The permission list. Each mode is a tile with a ground of its own, so the
+   three read as three things to pick rather than as three lines of one list;
+   the chosen tile lifts to a warm wash, and the tile beside the tick holds
+   the mode's glyph in a paper plate so the icon is a mark and not a stray
+   mark in the margin. */
+#permPop .hd { padding: 2px 4px 8px; }
+#permPop .hd .lab { color: var(--muted); }
+#permPop .prow {
+  align-items: center; gap: 11px; padding: 11px 12px; border-radius: 13px;
+  background: color-mix(in oklab, var(--text) 3.5%, transparent);
+  box-shadow: inset 0 0 0 1px var(--line-soft);
+}
+#permPop .prow + .prow { margin-top: 7px; }
+#permPop .prow:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
+#permPop .prow .chrome-perm-badge {
+  flex: none; width: 34px; height: 34px; border-radius: 11px;
+  display: grid; place-items: center;
+  background: var(--paper); color: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+#permPop .prow .pico { width: 18px; height: 18px; }
+#permPop .prow .chrome-perm-text { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
+#permPop .prow .nm {
+  flex: none; overflow: visible; white-space: normal; text-overflow: clip;
+  line-height: 1.3; color: var(--text);
+}
+#permPop .prow .sub { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+#permPop .prow[aria-checked="true"] {
+  background: color-mix(in oklab, var(--warm) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warm) 40%, transparent);
+}
+#permPop .prow[aria-checked="true"]:hover { background: color-mix(in oklab, var(--warm) 12%, transparent); }
+#permPop .prow[aria-checked="true"] .chrome-perm-badge {
+  color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--warm) 45%, transparent),
+    0 2px 6px -3px rgba(0, 0, 0, .18);
+}
+#permPop .prow .tick { flex: none; width: 15px; height: 15px; stroke-width: 2; color: var(--gold); }
+#permPop .prow .chrome-tick-slot { flex: none; width: 15px; }
+/* The tier with no brakes says so in its glyph and its tick, not in its name:
+   a red title read as the card reporting an error rather than naming a mode. */
+#permPop .prow.risk .chrome-perm-badge { color: var(--clay); }
+#permPop .prow.risk[aria-checked="true"] {
+  background: color-mix(in oklab, var(--clay) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 32%, transparent);
+}
+#permPop .prow.risk[aria-checked="true"]:hover { background: color-mix(in oklab, var(--clay) 11%, transparent); }
+#permPop .prow.risk[aria-checked="true"] .chrome-perm-badge {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--clay) 36%, transparent),
+    0 2px 6px -3px rgba(0, 0, 0, .18);
+}
+#permPop .prow.risk .tick { color: var(--clay); }
+#permPop .chrome-perm-note {
+  margin: 9px 4px 1px; font-size: 11px; line-height: 1.4; color: var(--muted);
+}
+/* On a phone the chip sits too far right to hang the list off its left edge.
+   Taking the anchor out of the positioned chain hangs the list off the
+   composer card instead, whose width it can share. */
+@media (max-width: 480px) {
+  .chrome-anch:has(> #permPop) { position: static; }
+  #permPop { width: min(296px, calc(100vw - 72px)); }
+}
 #plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
    button carries the count, because the scope of a question is worth seeing
@@ -3157,6 +3231,9 @@ textarea:focus, textarea:focus-visible,
 .under .chip:hover, .under .chip[aria-expanded="true"] {
   color: var(--rail-ink); background: var(--composer-hover); border-radius: 100px;
 }
+/* The one chip with a warning to carry keeps its colour through the resting and
+   hover inks above: the shape alone does not say "no brakes". */
+.under .chip.risk, .under .chip.risk:hover, .under .chip.risk[aria-expanded="true"] { color: var(--clay); }
 .under .chip .pico { width: 12px; height: 12px; }
 .under .chip.model { color: var(--composer-ink); font-weight: 400; }
 .under .chip.model:hover, .under .chip.model[aria-expanded="true"] { color: var(--composer-ink); }
