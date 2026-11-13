@@ -17,7 +17,9 @@ All notable changes to Raven are documented here.
   agent is told to run the command again. An address given as an IP or an
   internal name is never opened without you. The same goes for the
   connections a sandboxed MCP server is refused, and agents of one
-  conversation that hit the same address share one prompt. In a sandbox whose
+  conversation that hit the same address share one prompt. A deny rule wins
+  over an allow rule for the same target, also one added while a sandbox
+  runs. In a sandbox whose
   network is closed, OpenShell's own reviewed proposal is approved when it
   opens exactly the same thing.
 
