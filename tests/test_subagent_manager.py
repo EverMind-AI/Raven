@@ -1499,6 +1499,54 @@ def test_generated_participant_guidance_is_single_use() -> None:
     assert messages[-1]["content"] == "the task\n\nhold the line\n\na second thought"
 
 
+@pytest.mark.asyncio
+async def test_generated_advice_reaches_a_delegated_run_once_and_outside_the_tool_result(tmp_path) -> None:
+    """Both rules watched on a run that really makes a tool call: the note rides
+    a message of its own after the tool result rather than the fenced text
+    inside it, and a stateless generated function is told once, not once per
+    round."""
+    from raven.agent.subagent.backends.raven_loop import RavenLoopBackend
+    from raven.agent.subagent.delegate import dispatch_charter
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("the second table", encoding="utf-8")
+
+    class _ReadsThenAnswers(LLMProvider):
+        def __init__(self) -> None:
+            super().__init__(api_key="test")
+            self.seen: list[list[dict]] = []
+
+        def get_default_model(self) -> str:
+            return "stub"
+
+        async def chat(self, messages, tools=None, model=None, **_):  # noqa: ANN001, ANN003
+            self.seen.append([dict(m) for m in messages])
+            if not any(m.get("role") == "tool" for m in messages):
+                return LLMResponse(
+                    content="",
+                    finish_reason="tool_calls",
+                    tool_calls=[ToolCallRequest(id="c1", name="read_file", arguments={"path": "notes.txt"})],
+                )
+            return LLMResponse(content="done", finish_reason="stop")
+
+    provider = _ReadsThenAnswers()
+    backend = RavenLoopBackend(provider=provider, model="stub", agent_home=tmp_path / "home")
+    source = "def advise(step):\n    return 'note-' + str(step.get('phase'))"
+    with dispatch_charter({"functions": {"advise": source}}):
+        await backend.run("read the notes", task_id="t1", workspace=workspace, executor=None)
+
+    sent = provider.seen[-1]
+    results = [m for m in sent if m.get("role") == "tool"]
+    assert results, "the sub-agent never ran the read"
+    assert "note-after_iteration" not in str(results[0]["content"])
+
+    after = [m for m in sent if m == {"role": "user", "content": "note-after_iteration"}]
+    assert len(after) == 1, "the note after a tool round is a message of its own"
+    assert sent.index(after[0]) > sent.index(results[0])
+    assert str(sent).count("note-iteration") == 1, "the same words were delivered once per round"
+
+
 def test_build_subagent_prompt_hides_orchestration_skills(tmp_path):
     """The catalog handed to a sub-agent must not advertise a skill whose
     procedure needs a tool this backend never registers — the DAG skill tells
