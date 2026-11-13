@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 ModuleName = Literal["memory", "planning", "capability", "action"]
 FunctionKind = Literal["self", "participant"]
@@ -36,18 +36,37 @@ def _entry_enabled(entry: Any, path: str) -> bool:
     return entry["enabled"]
 
 
+def _object(section: Any, kind: str, path: str) -> Mapping[str, Any]:
+    """One catalogue section, which has to be an object.
+
+    A section that is not one is a broken capability file: read on its own it
+    would raise an ``AttributeError`` from inside the walk, where the loader's
+    contract is the ``RuntimeError`` that names the file.
+    """
+    if not isinstance(section, dict):
+        raise RuntimeError(f"invalid harness generation capability file: {path}.{kind} must be an object")
+    return section
+
+
+def _items(section: Any, kind: str, path: str) -> Mapping[str, Any]:
+    """The ``items`` map of one catalogue section."""
+    items = _object(section, kind, path).get("items", {})
+    if not isinstance(items, dict):
+        raise RuntimeError(f"invalid harness generation capability file: {path}.{kind}.items must be an object")
+    return items
+
+
 def _validate_connected(root: dict[str, Any]) -> None:
     for module, body in root.items():
         if module == "note" or not isinstance(body, dict):
             continue
-        parameters = body.get("parameters", {}).get("items", {})
-        for name, entry in parameters.items():
+        for name, entry in _items(body.get("parameters", {}), "parameters", module).items():
             path = f"{module}.parameters.{name}"
             if _entry_enabled(entry, path) and (module, name) not in _CONNECTED_PARAMETERS:
                 raise RuntimeError(f"harness generation capability is enabled but not wired: {path}")
-        functions = body.get("functions", {})
+        sections = _object(body.get("functions", {}), "functions", module)
         for kind in ("self", "participant"):
-            for name, entry in functions.get(kind, {}).get("items", {}).items():
+            for name, entry in _items(sections.get(kind, {}), kind, f"{module}.functions").items():
                 path = f"{module}.functions.{kind}.{name}"
                 if _entry_enabled(entry, path) and (module, kind, name) not in _CONNECTED_FUNCTIONS:
                     raise RuntimeError(f"harness generation capability is enabled but not wired: {path}")
