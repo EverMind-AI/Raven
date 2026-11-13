@@ -141,11 +141,16 @@ class ReadSkillTool(Tool):
         blocklist: "Iterable[str] | None" = None,
         blocklist_reader: "Callable[[], frozenset[str]] | None" = None,
         enabled_reader: "Callable[[], bool] | None" = None,
+        allow: "Iterable[str] | None" = None,
     ) -> None:
         self._client = client
         self._registry = registry
         self._enabled_reader = enabled_reader
         self._policy = SkillPolicy.create(min_safety=min_safety, blocklist=blocklist, blocklist_reader=blocklist_reader)
+        # A sub-agent's effective skill list: None reads every skill, an empty
+        # list none, a list only the names on it -- the same narrowing its menu
+        # applies, so the tool cannot read what the menu withholds.
+        self._allow = None if allow is None else frozenset(allow)
 
     @property
     def name(self) -> str:
@@ -190,6 +195,8 @@ class ReadSkillTool(Tool):
             return "Error: 'skill_id' is required — a skill's qualified id like 'local/<name>' or 'hub/<slug>'."
         source, native = split_qualified_id(skill_id)
 
+        if self._allow is not None and native not in self._allow:
+            return f"Error: skill {native!r} is not in this agent's skill allow-list and cannot be read."
         if source == "hub" and self._enabled_reader is not None and not self._enabled_reader():
             return "Error: Skill Hub retrieval is turned off in Settings."
         if is_blocked(self._policy.blocked_now(), native):

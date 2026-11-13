@@ -437,6 +437,31 @@ def test_a_subagent_neither_offers_nor_reads_a_blocklisted_skill(tmp_path: Path,
     assert refused.startswith("Error") and "blocklist" in refused
 
 
+def test_an_empty_skill_allow_list_leaves_read_skill_nothing_to_read(tmp_path: Path, monkeypatch) -> None:
+    """``skills_allow=[]`` is a charter: this agent gets no skills. The menu
+    already says so; ``read_skill`` has to agree rather than read any skill
+    whose id the agent happens to know."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch, skills_allow=[])
+
+    assert "## Skills" not in prompt
+    refused = asyncio.run(tools["read_skill"].execute(skill_id="local/invoice-audit"))
+    assert refused.startswith("Error") and "allow-list" in refused
+
+
+def test_a_named_skill_allow_list_reads_its_own_skills_only(tmp_path: Path, monkeypatch) -> None:
+    """A row or a node that names its skills narrows the tool as it narrows the
+    menu: the named one reads, a builtin outside the list does not."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch, skills_allow=["invoice-audit"])
+
+    assert "invoice-audit" in prompt
+    allowed = asyncio.run(tools["read_skill"].execute(skill_id="local/invoice-audit"))
+    assert "### Skill: invoice-audit" in allowed
+    refused = asyncio.run(tools["read_skill"].execute(skill_id="local/weather"))
+    assert refused.startswith("Error") and "allow-list" in refused
+
+
 def test_subagent_sandbox_mounts_agent_home_when_the_session_dir_does_not_cover_it(tmp_path: Path) -> None:
     """The common shape: a project directory somewhere else on disk."""
     home = tmp_path / "home"
