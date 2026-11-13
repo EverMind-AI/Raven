@@ -13,7 +13,9 @@ Two artifacts with one writer each per install:
 - ``.install-meta.json`` (:func:`write_install_meta`) — a single stamp
   inside the skill directory itself, the O(1) provenance source for
   ``raven skill list`` (no log scan needed). First install wins; later
-  observations of the same bundle never rewrite it.
+  observations of the same bundle never rewrite it. ``installed_at`` is
+  read off the directory mtime, so a bundle cached before stamping
+  existed keeps its install date instead of the date it was first seen.
 """
 
 from __future__ import annotations
@@ -60,6 +62,22 @@ def record_install(
         logger.warning("failed to append skill install audit record to %s", path, exc_info=True)
 
 
+def _installed_at(skill_dir: Path) -> str:
+    """When the bundle landed on disk, to the second.
+
+    The stamp is written the first time a bundle is observed, and a bundle
+    cached before stamping existed is first observed long after it was
+    installed. The directory's mtime is the last time its entries changed,
+    which is the closest known approximation of the install date; the
+    observation time is the fallback for a directory that cannot be read.
+    """
+    try:
+        mtime = skill_dir.stat().st_mtime
+    except OSError:
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(mtime, timezone.utc).isoformat(timespec="seconds")
+
+
 def write_install_meta(
     skill_dir: Path | str | None,
     *,
@@ -75,11 +93,15 @@ def write_install_meta(
     ``installed_at`` keeps pointing at the original install even though
     both call sites re-observe cached bundles on later turns. The target
     directory is not created: no bundle directory means nothing was
-    installed there, so there is nothing to stamp.
+    installed there, so there is nothing to stamp. ``installed_at`` comes
+    from the directory mtime rather than the clock, so a bundle cached
+    before stamping existed is dated to its install, not to the moment
+    it was first observed.
     """
     if not skill_dir:
         return
-    path = Path(skill_dir) / INSTALL_META
+    root = Path(skill_dir)
+    path = root / INSTALL_META
     if path.exists():
         return
     record = {
@@ -88,7 +110,7 @@ def write_install_meta(
         "source": source,
         "trigger": trigger,
         "score_safety": score_safety,
-        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "installed_at": _installed_at(root),
     }
     try:
         path.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
