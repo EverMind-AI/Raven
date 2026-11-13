@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -283,6 +285,27 @@ class TestWriteInstallMeta:
     def test_missing_dir_is_best_effort_noop(self, tmp_path: Path) -> None:
         write_install_meta(tmp_path / "ghost", slug="foo", version="v1", trigger="use_skill")
         assert not (tmp_path / "ghost").exists()
+
+    def test_a_backfilled_stamp_dates_the_install_not_the_observation(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path / "bundle"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("body", encoding="utf-8")
+        installed = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+        os.utime(skill_dir, (installed.timestamp(), installed.timestamp()))
+
+        write_install_meta(skill_dir, slug="foo", version="v1", trigger="auto_inject")
+
+        record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["installed_at"] == "2026-03-04T05:06:07+00:00"
+
+    def test_a_fresh_install_dates_the_stamp_now(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path / "bundle"
+        skill_dir.mkdir()
+
+        write_install_meta(skill_dir, slug="foo", version="v1", trigger="auto_inject")
+
+        record = json.loads((skill_dir / ".install-meta.json").read_text(encoding="utf-8"))
+        assert record["installed_at"][:10] == datetime.now(timezone.utc).date().isoformat()
 
 
 class TestRecordInstall:
