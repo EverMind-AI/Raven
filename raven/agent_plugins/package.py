@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -69,6 +70,24 @@ def is_symlink_loop(error: OSError) -> bool:
     return error.errno == errno.ELOOP or getattr(error, "winerror", 0) == _WINERROR_CANT_RESOLVE_FILENAME
 
 
+def _resolved(path: Path) -> Path | None:
+    """*path* fully resolved, or ``None`` when a symlink loop leaves it unresolvable.
+
+    ``realpath(strict=True)`` is what makes the loop a signal on every
+    supported interpreter: ``Path.resolve()`` raises ``RuntimeError`` for ELOOP
+    on 3.12 and returns the loop path on 3.13, so leaving the resolution to it
+    would judge the same package differently by interpreter version. A path
+    that is merely missing is not a loop, so it keeps the non-strict
+    resolution that names where it would be.
+    """
+    try:
+        return Path(os.path.realpath(path, strict=True))
+    except OSError as exc:
+        if is_symlink_loop(exc):
+            return None
+        return Path(os.path.realpath(path))
+
+
 def is_contained(root: Path, candidate: Path) -> bool:
     """True when *candidate* resolves inside *root*.
 
@@ -76,11 +95,13 @@ def is_contained(root: Path, candidate: Path) -> bool:
     points out of the package is caught here rather than by a path
     comparison on the unresolved name (spec §4.1).
     """
+    resolved_root = _resolved(root)
+    resolved = _resolved(candidate)
+    if resolved_root is None or resolved is None:
+        return False
     try:
-        candidate.resolve().relative_to(Path(root).resolve())
-    # Python 3.12 turns ELOOP into RuntimeError, not OSError; a self-referential
-    # link is a containment failure, never a crash for the whole process.
-    except (ValueError, OSError, RuntimeError):
+        resolved.relative_to(resolved_root)
+    except ValueError:
         return False
     return True
 

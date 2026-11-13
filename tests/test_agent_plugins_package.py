@@ -254,6 +254,42 @@ def test_a_symlink_that_stays_inside_the_root_is_contained(tmp_path: Path) -> No
     assert is_contained(root, link)
 
 
+def test_a_symlink_loop_is_not_contained(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    loop = root / "loop"
+    try:
+        _link_to(loop, loop)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"this host cannot create a link: {exc}")
+    assert not is_contained(root, loop)
+    # A path that is merely missing is not a loop, so it stays contained: the
+    # skills directory of a package that has none yet is inside the package.
+    assert is_contained(root, root / "gone")
+
+
+def test_a_symlink_loop_is_not_contained_when_resolve_does_not_raise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """3.13's ``resolve()`` hands back the loop path instead of raising.
+
+    Leaving the resolution to it judges the same package differently by
+    interpreter version: under that behaviour the loop passes the comparison
+    as contained, which is the failure this pins.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    loop = root / "loop"
+    try:
+        _link_to(loop, loop)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"this host cannot create a link: {exc}")
+
+    monkeypatch.setattr(Path, "resolve", lambda self, *args, **kwargs: self)
+    assert not is_contained(root, loop)
+    assert is_contained(root, root / "child")
+
+
 def test_is_symlink_loop_recognises_the_windows_error() -> None:
     """Pin the Windows branch, which a POSIX run cannot reach.
 
