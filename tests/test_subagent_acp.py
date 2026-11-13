@@ -9964,7 +9964,10 @@ def _installed(path: Path, body: str = "#!/bin/sh\n") -> Path:
 def test_the_launch_digest_follows_an_in_place_upgrade(tmp_path: Path) -> None:
     """An agent upgraded where it stands keeps its command line, so the command
     alone cannot tell that what it offers may have moved with the build."""
-    exe = _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # carries the extension there and the command names that same file.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    exe = _installed(tmp_path / launcher)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command=str(exe))
     before = snapshot_fingerprint(cfg)
 
@@ -10201,14 +10204,17 @@ def test_a_relative_launcher_without_a_configured_cwd_resolves_from_the_process_
     fallback has to be that same directory."""
     from raven.acp_client.capabilities import _executable_identity
 
-    _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # names the file the spawn would start here.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    _installed(tmp_path / launcher)
     monkeypatch.chdir(tmp_path)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
 
     identity = _executable_identity(cfg)
 
     assert identity is not None
-    assert identity[0] == os.path.join(os.getcwd(), "agent-acp")
+    assert identity[0] == os.path.join(os.getcwd(), launcher)
 
 
 def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
