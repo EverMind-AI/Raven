@@ -229,6 +229,25 @@ figcaption {color:var(--faint); font-size:13px; margin-top:14px; text-align:cent
 .settings-utab td {padding:8px 12px; border-bottom:1px solid var(--line-soft); text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 .settings-utab td:first-child {text-align:left; font-family:var(--mono); font-size:12px; white-space:normal}
 .settings-utab tr:last-child td {border-bottom:none}
+/* The model table divides the card once instead of growing to its widest
+   row: model ids are long and unbreakable, and letting them size the table
+   pushed it past the card and added a sideways scroller. The first column
+   takes a share and the rest divide what is left, however many columns the
+   range shows. The box is the measuring stick rather than the viewport,
+   because the card is narrower than the window it sits in. */
+.settings-utab-fit {container-type:inline-size; container-name:usage-table; overflow-x:auto}
+.settings-utab-models {table-layout:fixed}
+.settings-utab-models th {white-space:normal; vertical-align:bottom; overflow-wrap:break-word; letter-spacing:.04em}
+.settings-utab-models th:first-child {width:28%}
+.settings-utab-models th,.settings-utab-models td {padding-left:5px; padding-right:5px}
+.settings-utab-models td:first-child {overflow-wrap:anywhere}
+.settings-utab-models .settings-thw {display:block}
+/* Stacked words stop fitting somewhere below this; past that point the card
+   scrolls again rather than breaking a heading into letter groups. */
+@container usage-table (max-width: 620px) {
+.settings-utab-models {table-layout:auto; width:max-content; min-width:100%}
+.settings-utab-models th {white-space:nowrap}
+}
 .settings-share {display:block; height:3px; border-radius:2px; background:var(--warm); margin-top:4px}
 .settings-gap {display:flex; gap:9px; padding:11px 15px; border-bottom:1px solid var(--line-soft); font-size:13px; color:var(--muted); align-items:flex-start}
 .settings-gap:last-child {border-bottom:none}

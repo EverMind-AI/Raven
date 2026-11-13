@@ -77,6 +77,19 @@ function Bars({ u }: { u: UsageStats }): JSX.Element {
   )
 }
 
+/* One word per line: a two-word header held its column wide enough to push
+   the whole table past the card. */
+function Th({ label }: { label: string }): JSX.Element {
+  const words = label.split(/\s+/).filter(Boolean)
+  return (
+    <th>
+      {words.map((word, i) => (
+        <span key={`${word}-${i}`} className="settings-thw">{word}{i < words.length - 1 ? ' ' : ''}</span>
+      ))}
+    </th>
+  )
+}
+
 function Models({ u }: { u: UsageStats }): JSX.Element {
   const rows = u.llm.models
   const priced = anyPriced(u)
@@ -87,15 +100,15 @@ function Models({ u }: { u: UsageStats }): JSX.Element {
       {/* A table of headers over one "nothing" row said the range was empty
           in eight columns; the empty card says it once. */}
       {!rows.length ? <Empty icon={GLYPH.chart}>{t('gui.settings.usage.none')}</Empty> : (
-      <div style={{ overflowX: 'auto' }}>
-        <table className="settings-utab">
+      <div className="settings-utab-fit">
+        <table className="settings-utab settings-utab-models">
           <thead>
             <tr>
-              <th>{t('gui.settings.usage.model')}</th><th>{t('gui.settings.usage.calls')}</th>
-              <th>{t('gui.settings.usage.input_fresh')}</th><th>{t('gui.settings.usage.input_cached')}</th>
-              {anyWrite && <th>{t('gui.settings.usage.cache_write')}</th>}
-              <th>{t('gui.settings.usage.output')}</th><th>{t('gui.settings.usage.hit')}</th>
-              {priced && <th>{t('gui.settings.usage.cost')}</th>}
+              <Th label={t('gui.settings.usage.model')} /><Th label={t('gui.settings.usage.calls')} />
+              <Th label={t('gui.settings.usage.input_fresh')} /><Th label={t('gui.settings.usage.input_cached')} />
+              {anyWrite && <Th label={t('gui.settings.usage.cache_write')} />}
+              <Th label={t('gui.settings.usage.output')} /><Th label={t('gui.settings.usage.hit')} />
+              {priced && <Th label={t('gui.settings.usage.cost')} />}
             </tr>
           </thead>
           <tbody>
