@@ -16,8 +16,7 @@ from raven.stint.ownership import (
     Roster,
     RosterError,
     describe,
-    merged_globs,
-    reading_list,
+    expand,
     writable,
 )
 
@@ -97,7 +96,7 @@ def test_what_a_role_may_write_names_this_rounds_number() -> None:
     )
 
     assert writable(role, round_index=7) == ("reports/verify_07.md", ".stint/FIXLOG.md")
-    assert reading_list(role, round_index=7) == ("reports/dev_06.md",)
+    assert tuple(expand(pattern, 7) for pattern in role.reads) == ("reports/dev_06.md",)
 
 
 def test_the_table_a_person_reads_names_the_roles_outside_the_round_too() -> None:
@@ -111,18 +110,6 @@ def test_the_table_a_person_reads_names_the_roles_outside_the_round_too() -> Non
     assert lines[1].split()[1] == "1"
     assert lines[4].split()[1] == "--"
     assert lines[4].split()[-1] == "(nothing)"
-
-
-def test_the_rosters_globs_can_be_collected_by_grade_for_the_round_being_run() -> None:
-    roster = _roster()
-
-    assert list(merged_globs(roster, OWNS, round_index=3)) == [
-        "reports/brief_03.md",
-        "project/**",
-        "tools/**",
-        "reports/verify_03.md",
-    ]
-    assert sorted(set(merged_globs(roster, APPENDS))) == [".stint/FIXLOG.md"]
 
 
 def test_an_appender_does_not_take_a_tree_away_from_the_role_that_owns_it() -> None:

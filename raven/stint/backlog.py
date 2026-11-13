@@ -443,18 +443,6 @@ def _note(task: Task, round_index: int, state: str, role: str, reason: str, **ex
     task.history.append(entry)
 
 
-def held_by(tasks: Sequence[Task], instance: str) -> list[Task]:
-    """The assigned tasks one Builder instance is to do.
-
-    A task with no owner belongs to whoever asks: a round with one Builder
-    makes no split, and a Planner that assigned without naming an instance has
-    said nothing about who does it -- showing it to all of them is the reading
-    that loses no work. A task owned by another instance is that instance's
-    alone, and is the whole point of the field.
-    """
-    return [task for task in tasks if not task.owner or task.owner == instance]
-
-
 def sweep_unverified(backlog: Backlog, round_index: int) -> list[Task]:
     """Round's end: a task Verifier never judged goes back to open.
 

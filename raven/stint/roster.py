@@ -48,8 +48,6 @@ from raven.stint.ownership import (
     RosterError,
     describe,
     matches_any,
-    merged_globs,
-    reading_list,
     writable,
 )
 
@@ -71,10 +69,8 @@ __all__ = [
     "describe",
     "load",
     "matches_any",
-    "merged_globs",
     "parse",
     "preflight",
-    "reading_list",
     "role_path",
     "roster_dir",
     "writable",

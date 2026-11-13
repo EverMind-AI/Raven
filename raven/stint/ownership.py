@@ -27,7 +27,7 @@ import fnmatch
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 OWNS = "owns"
 APPENDS = "appends"
@@ -250,10 +250,6 @@ def writable(role: Role, *, round_index: int = 0) -> tuple[str, ...]:
     return tuple(_expand(pattern, round_index) for pattern in (*role.owns, *role.appends))
 
 
-def reading_list(role: Role, *, round_index: int = 0) -> tuple[str, ...]:
-    return tuple(_expand(pattern, round_index) for pattern in role.reads)
-
-
 def describe(roster: Roster) -> str:
     lines = [f"{'role':<12} {'order':>5}  {'session':<9} {'read':<5} {'write':<5} owns"]
     for role in roster.roles:
@@ -263,9 +259,3 @@ def describe(roster: Roster) -> str:
             f"{role.enforce_write:<5} {', '.join(role.owns) or '(nothing)'}"
         )
     return "\n".join(lines)
-
-
-def merged_globs(roster: Roster, grade: str, *, round_index: int = 0) -> Iterable[str]:
-    for role in roster.roles:
-        for pattern in role.owns if grade == OWNS else role.appends:
-            yield _expand(pattern, round_index)

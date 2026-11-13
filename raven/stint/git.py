@@ -220,45 +220,6 @@ class ProjectGit:
         if Path(path).exists():
             shutil.rmtree(path, ignore_errors=True)
 
-    def merge_branch(self, branch: str, message: str) -> tuple[bool, tuple[str, ...]]:
-        """Merge one instance's branch back. Returns whether it took, and what clashed.
-
-        A conflict aborts rather than leaving the tree half-merged: the round
-        can report which files two instances both claimed, and the branch is
-        still there to merge by hand. Resolving code conflicts unattended is
-        how a tree ends up committed and broken.
-        """
-        # The run's identity, for the same reason `commit` names one: a merge
-        # writes a commit, and a machine with no ambient `user.email` -- a
-        # container, a CI runner, a fresh box -- refuses one it cannot
-        # attribute. Without this the round reports that refusal as a merge
-        # that would not take, naming no clashing file, which is not what
-        # happened.
-        merged = self._run(
-            "-c",
-            f"user.name={self.author_name}",
-            "-c",
-            f"user.email={self.author_email}",
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            "-m",
-            message,
-            branch,
-            check=False,
-        )
-        if merged.returncode == 0:
-            return True, ()
-        clashing = self._run("diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-        self._run("merge", "--abort", check=False)
-        if clashing:
-            return False, tuple(clashing)
-        # No unmerged paths, so the refusal was not a content conflict -- a dirty
-        # tree, an unrelated history, a hook. Carrying git's own words out is the
-        # difference between a report someone can act on and "conflicting history".
-        said = " ".join((merged.stderr or merged.stdout or "").split())[:300]
-        return False, (said or "git refused the merge and said nothing",)
-
     def head(self) -> str:
         completed = self._run("rev-parse", "HEAD", check=False)
         return completed.stdout.strip() if completed.returncode == 0 else ""
@@ -343,12 +304,6 @@ class ProjectGit:
         if completed.returncode != 0 and "nothing to commit" not in (completed.stdout + completed.stderr):
             raise HistoryError(f"git commit: {completed.stderr.strip() or completed.stdout.strip()}")
         return self.head()
-
-    def log_since(self, sha: str, limit: int = 20) -> tuple[str, ...]:
-        if not sha:
-            return ()
-        completed = self._run("log", "--oneline", f"{sha}..HEAD", f"-{limit}", check=False)
-        return tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
 
     def diff_names(self, base: str) -> tuple[str, ...]:
         """Paths that differ between ``base`` and HEAD, which is a stage's footprint."""

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from raven.stint import roster as roster_mod
+from raven.stint.ownership import expand
 from raven.stint.roster import APPENDS, CONTINUE, NEVER, OWNS, RosterError
 
 GUARD = """---
@@ -123,7 +124,7 @@ def test_a_reading_list_can_name_the_round_before(tmp_path: Path) -> None:
         path.read_text(encoding="utf-8").replace("  - .stint/SPEC.md", "  - reports/verify_{NN-1}.md"), encoding="utf-8"
     )
     role = roster_mod.load(project).get("planner")
-    assert roster_mod.reading_list(role, round_index=4) == ("reports/verify_03.md",)
+    assert tuple(expand(pattern, 4) for pattern in role.reads) == ("reports/verify_03.md",)
 
 
 @pytest.mark.parametrize(

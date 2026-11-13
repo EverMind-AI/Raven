@@ -52,21 +52,6 @@ def journal_tail(journal: str, rounds: int = JOURNAL_ROUNDS_IN_PROMPT) -> str:
     return journal[marks[-rounds].start() :].strip()
 
 
-def round_entry(journal: str, index: int, subsection: str = "### Build") -> str:
-    """One role's entry for one round, which is what the next role in it reads."""
-    heading = round_heading(index)
-    if heading not in journal:
-        return ""
-    body = journal.split(heading, 1)[1]
-    body = _ROUND_HEADING.split(body)[0]
-    if subsection not in body:
-        return ""
-    entry = body.split(subsection, 1)[1]
-    for stop in ("\n### ", "\n## "):
-        entry = entry.split(stop)[0]
-    return entry.strip()
-
-
 #: How much of a role's account travels into the file. The window that reaches a
 #: prompt is clipped again by :data:`MAX_JOURNAL_CHARS`; this one bounds the file
 #: itself, which is read by people and committed forty times.
@@ -92,14 +77,3 @@ def append_entry(path: Path, index: int, section: str, text: str, limit: int = M
         existing = (existing.rstrip() + "\n\n" if existing.strip() else "") + heading + "\n\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(existing.rstrip() + f"\n\n### {section.strip()}\n\n{body}\n", encoding="utf-8")
-
-
-def begin_round(workspace: Path, index: int) -> None:
-    """The round's own section in the journal, so both roles append under it."""
-    path = workspace / JOURNAL
-    heading = round_heading(index)
-    text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    if heading in text:
-        return
-    body = text.rstrip() + "\n\n" if text.strip() else ""
-    path.write_text(body + heading + "\n\n", encoding="utf-8")

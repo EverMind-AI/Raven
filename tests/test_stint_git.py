@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -70,8 +69,7 @@ def test_a_commit_records_the_tree_and_an_empty_one_is_not_an_error(project: Pat
     head = git.commit("feat(round-01): the arena")
 
     assert head != base
-    entries = git.log_since(base)
-    assert len(entries) == 1 and entries[0].endswith("feat(round-01): the arena")
+    assert git.diff_names(base) == ("project/arena.gd",)
     assert git.commit("chore: nothing changed") == head
 
 
@@ -288,80 +286,6 @@ def test_a_role_that_commits_by_itself_still_commits_as_the_run(project: Path, i
     assert who == f"{AUTHOR_NAME} <{AUTHOR_EMAIL}>"
 
 
-def test_an_instances_branch_merges_back_when_nothing_clashes(project: Path, instances: Path) -> None:
-    git = ProjectGit(project)
-    git.ensure_repo()
-    tree = git.worktree_add(instances / "dev-a", "rounds/dev-a", git.head())
-    (tree / "project" / "arena.gd").write_text("# the arena\n", encoding="utf-8")
-    _commit_by_hand(tree, "feat: the arena")
-
-    took, clashing = git.merge_branch("rounds/dev-a", "merge dev-a")
-
-    assert took is True
-    assert clashing == ()
-    assert (project / "project" / "arena.gd").read_text(encoding="utf-8") == "# the arena\n"
-
-
-def test_a_merge_takes_on_a_machine_with_no_git_identity_of_its_own(
-    project: Path, instances: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A merge writes a commit, and an unattended box has nobody to attribute it to.
-
-    A container, a CI runner and a fresh devbox all run git with no configured
-    `user.email`, which git refuses a commit for. The round read that refusal
-    as a merge that would not take, named no clashing file, and left the
-    instance's work on its branch.
-    """
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
-    git = ProjectGit(project)
-    git.ensure_repo()
-    tree = git.worktree_add(instances / "dev-a", "rounds/dev-a", git.head())
-    (tree / "project" / "arena.gd").write_text("# the arena\n", encoding="utf-8")
-    _commit_by_hand(tree, "feat: the arena")
-
-    took, clashing = git.merge_branch("rounds/dev-a", "merge dev-a")
-
-    assert (took, clashing) == (True, ())
-    assert (project / "project" / "arena.gd").is_file()
-
-
-def test_two_instances_that_wrote_the_same_file_leave_it_to_be_merged_by_hand(project: Path, instances: Path) -> None:
-    """Resolving code conflicts unattended is how a tree ends up committed and broken."""
-    git = ProjectGit(project)
-    git.ensure_repo()
-    tree = git.worktree_add(instances / "dev-a", "rounds/dev-a", git.head())
-    (tree / "project" / "main.gd").write_text("# what the second instance wrote\n", encoding="utf-8")
-    _commit_by_hand(tree, "feat: the instance's version")
-    (project / "project" / "main.gd").write_text("# what the first instance wrote\n", encoding="utf-8")
-    git.commit("feat: the other version")
-
-    took, clashing = git.merge_branch("rounds/dev-a", "merge dev-a")
-
-    assert took is False
-    assert clashing == ("project/main.gd",)
-    assert not git.dirty(), "the merge was aborted rather than left half-done"
-    assert git.worktrees_on("rounds/dev-a"), "the branch is still there to merge by hand"
-
-
-def test_a_merge_refused_for_anything_else_reports_what_git_said(project: Path, instances: Path) -> None:
-    """No unmerged paths means it was not a content conflict -- a dirty tree, an
-    unrelated history, a hook -- and "conflicting history" would name none of them."""
-    git = ProjectGit(project)
-    git.ensure_repo()
-    tree = git.worktree_add(instances / "dev-a", "rounds/dev-a", git.head())
-    (tree / "project" / "arena.gd").write_text("# the arena\n", encoding="utf-8")
-    _commit_by_hand(tree, "feat: the arena")
-    (project / "project" / "arena.gd").write_text("# uncommitted, in the way\n", encoding="utf-8")
-
-    took, said = git.merge_branch("rounds/dev-a", "merge dev-a")
-
-    assert took is False
-    assert len(said) == 1
-    assert "project/arena.gd" in said[0]
-    assert (project / "project" / "arena.gd").read_text(encoding="utf-8") == "# uncommitted, in the way\n"
-
-
 def test_a_commit_is_named_by_the_first_nine_characters_of_its_sha(project: Path) -> None:
     git = ProjectGit(project)
     git.ensure_repo()
@@ -417,7 +341,6 @@ def test_asking_what_happened_since_nowhere_answers_nothing(project: Path) -> No
     git.ensure_repo()
     (project / "project" / "main.gd").write_text("# edited\n", encoding="utf-8")
 
-    assert git.log_since("") == ()
     assert git.diff_names("") == ()
     assert git.touched_since("") == ("project/main.gd",)
 

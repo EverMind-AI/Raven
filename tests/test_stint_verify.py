@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from raven.stint.bootstrap import detect_checks
 from raven.stint.checks import checks_path, remember_check, resolve_checks
@@ -14,35 +11,13 @@ from raven.stint.verify import (
     CheckSpec,
     CheckSummary,
     Display,
-    build_status,
     curated_env,
-    parse_check_spec,
     render_checks,
     resolve_display,
     run_check,
     run_checks,
-    save_results,
     start_display,
 )
-
-
-def test_a_check_is_a_name_and_a_command() -> None:
-    spec = parse_check_spec("import=godot --headless --import")
-    assert spec.name == "import"
-    assert spec.command == "godot --headless --import"
-    assert spec.needs_display is False
-
-
-def test_a_check_that_needs_a_display_says_so_in_its_name() -> None:
-    spec = parse_check_spec("clean_boot!display=godot -- --clean-boot-test")
-    assert spec.name == "clean_boot"
-    assert spec.needs_display is True
-
-
-@pytest.mark.parametrize("value", ["no-equals-sign", "=command", "name="])
-def test_a_malformed_check_is_an_error(value: str) -> None:
-    with pytest.raises(ValueError):
-        parse_check_spec(value)
 
 
 def test_a_godot_tree_affords_an_import_and_a_boot(tmp_path) -> None:
@@ -88,9 +63,6 @@ def test_a_check_that_runs_records_its_status_and_its_output(tmp_path) -> None:
     bad = run_check(CheckSpec(name="bad", command="exit 3"), cwd=tmp_path, log_dir=tmp_path / "logs")
     assert ok.status == "ok" and "hello" in ok.stdout_tail
     assert bad.status == "failed" and bad.returncode == 3
-    assert build_status([ok, bad]) == "failing"
-    assert build_status([ok]) == "passing"
-    assert build_status([]) == "none"
 
 
 def test_a_check_that_never_returns_is_a_timeout(tmp_path) -> None:
@@ -134,13 +106,8 @@ def test_a_check_given_no_environment_still_runs_under_the_hosts(tmp_path, monke
     assert result.stdout_tail.strip() == "present"
 
 
-def test_results_are_saved_with_the_display_they_ran_under(tmp_path) -> None:
+def test_the_checks_that_ran_are_rendered_as_a_table(tmp_path) -> None:
     results = run_checks([CheckSpec(name="ok", command="true")], cwd=tmp_path, log_dir=tmp_path / "logs")
-    path = tmp_path / "checks.json"
-    save_results(results, path, display=Display(name=":99", provider="xvfb"))
-    saved = json.loads(path.read_text())
-    assert saved["status"] == "passing"
-    assert saved["display"]["name"] == ":99"
     assert "| check | status | detail |" in render_checks(results)
 
 
@@ -178,7 +145,7 @@ def test_a_checks_summary_survives_the_trip_through_a_run_record() -> None:
 
 
 def test_a_check_spec_is_recorded_with_everything_needed_to_run_it_again() -> None:
-    spec = parse_check_spec("clean_boot!display=godot -- --clean-boot-test", timeout_sec=30.0)
+    spec = CheckSpec(name="clean_boot", command="godot -- --clean-boot-test", timeout_sec=30.0, needs_display=True)
 
     assert spec.to_dict() == {
         "name": "clean_boot",
@@ -219,12 +186,6 @@ def test_a_stored_status_is_worked_out_again_rather_than_believed() -> None:
 def test_a_display_travels_to_a_check_as_the_variable_an_engine_reads() -> None:
     assert Display(name=":99", provider="xvfb").env() == {"DISPLAY": ":99"}
     assert Display(provider="none").env() == {}
-    assert Display(provider="none").to_dict() == {
-        "name": "",
-        "provider": "none",
-        "started": False,
-        "available": False,
-    }
 
 
 def test_a_display_the_environment_already_has_is_the_one_a_check_draws_on(monkeypatch) -> None:
@@ -334,16 +295,6 @@ def test_a_check_still_times_out_where_there_are_no_process_groups(tmp_path, mon
 
 def test_a_tree_with_no_checks_says_so_rather_than_showing_an_empty_table() -> None:
     assert render_checks([]) == "(no runtime checks were configured for this tree)"
-
-
-def test_a_pass_where_every_check_was_skipped_is_not_a_pass() -> None:
-    """Reading "not measured" as "passing" is how a gate nobody measured gets
-    signed off."""
-    skipped = CheckResult(name="boot", command="godot", returncode=None, duration_sec=0.0, skipped_reason="no display")
-    ok = CheckResult(name="import", command="godot --import", returncode=0, duration_sec=1.0)
-
-    assert build_status([skipped]) == "skipped"
-    assert build_status([skipped, ok]) == "passing"
 
 
 class TestWhatThisProjectRuns:

@@ -17,7 +17,6 @@ section. What is here is how one is run and how a set of results reads.
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import shutil
@@ -68,9 +67,6 @@ class Display:
 
     def env(self) -> dict[str, str]:
         return {"DISPLAY": self.name} if self.name else {}
-
-    def to_dict(self) -> dict[str, object]:
-        return {"name": self.name, "provider": self.provider, "started": self.started, "available": self.available}
 
 
 @dataclass(frozen=True)
@@ -149,18 +145,6 @@ class CheckResult:
         """
         fields = {name: data[name] for name in cls.__dataclass_fields__ if name in data}
         return cls(**fields)  # type: ignore[arg-type]
-
-
-def parse_check_spec(text: str, timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> CheckSpec:
-    """``name=command`` from the command line; a trailing ``!display`` needs one."""
-    name, separator, command = text.partition("=")
-    if not separator or not name.strip() or not command.strip():
-        raise ValueError(f"a check is name=command, not {text!r}")
-    name = name.strip()
-    needs_display = False
-    if name.endswith("!display"):
-        name, needs_display = name[: -len("!display")].rstrip(), True
-    return CheckSpec(name=name, command=command.strip(), timeout_sec=timeout_sec, needs_display=needs_display)
 
 
 def resolve_display(requested: str | None, *, start_xvfb: bool = False) -> Display:
@@ -359,25 +343,3 @@ def render_checks(results: Sequence[CheckResult]) -> str:
         summary = result.summary()
         lines.append(f"| {summary.name} | {summary.status} | {summary.detail} |")
     return "\n".join(lines)
-
-
-def build_status(results: Sequence[CheckResult]) -> str:
-    """One word for the whole check pass, for the run record."""
-    if not results:
-        return "none"
-    if all(result.status == "skipped" for result in results):
-        return "skipped"
-    if any(result.status in {"failed", "timeout"} for result in results):
-        return "failing"
-    return "passing"
-
-
-def save_results(results: Sequence[CheckResult], path: Path, *, display: Display | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload: dict[str, object] = {
-        "status": build_status(results),
-        "checks": [result.to_dict() for result in results],
-    }
-    if display is not None:
-        payload["display"] = display.to_dict()
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
