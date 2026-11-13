@@ -89,8 +89,10 @@ def _on_windows() -> bool:
     return sys.platform == "win32"
 
 
-def resolve_program(argv: list[str], env: Mapping[str, str], *, batch_files: bool = False) -> list[str]:
-    r"""``argv`` with a bare program name looked up on the PATH of the env the child gets.
+def resolve_program(
+    argv: list[str], env: Mapping[str, str], *, batch_files: bool = False, cwd: str | None = None
+) -> list[str]:
+    r"""``argv`` with the program name resolved the way the child's platform starts it.
 
     POSIX needs nothing here: its exec resolves the name on that PATH itself.
     CreateProcess searches the gateway's own PATH instead and never the block it is
@@ -108,9 +110,27 @@ def resolve_program(argv: list[str], env: Mapping[str, str], *, batch_files: boo
     The PATH directories are searched in order and ``.exe`` first within each, the
     order a terminal finds the name in, so the program that starts is the one the
     user runs there.
+
+    A program that names a directory (``./agent-acp``, ``bin/agent``) is on no PATH,
+    and CreateProcess resolves it in the *caller's* directory rather than the child's
+    -- so on Windows a row that sets a ``cwd`` would have its launcher looked for in
+    the gateway's own directory and not start. ``cwd`` names the directory the child
+    starts in; the program is made absolute against it there, with ``.exe`` added for
+    a name that has no extension, exactly as the lookup below does, and whether or
+    not the file exists -- a missing launcher then fails naming the path that was
+    searched rather than a bare name CreateProcess looked for somewhere else.
+    Without a ``cwd`` the child starts in this process's own directory, which is
+    where CreateProcess looks anyway, and ``argv`` is left as it is.
     """
-    if not _on_windows() or not argv or ntpath.dirname(argv[0]):
+    if not _on_windows() or not argv:
         return argv
+    if ntpath.dirname(argv[0]):
+        if not cwd:
+            return argv
+        program = os.path.abspath(os.path.join(cwd, argv[0]))
+        if not os.path.splitext(program)[1]:
+            program += ".exe"
+        return [program, *argv[1:]]
     batch = _BATCH_SUFFIXES if batch_files else ()
     suffix = ntpath.splitext(argv[0])[1].lower()
     if suffix:
