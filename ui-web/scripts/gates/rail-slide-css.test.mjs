@@ -63,7 +63,10 @@ describe('the rail collapse', () => {
 
   it('sends the column out as a panel, with the pane taking its place back', () => {
     expect(decls('.rail')?.get('width')).toBe('var(--rail)')
-    expect(decls('.app[data-rail="off"] .rail')?.get('transform')).toBe('translateX(-100%)')
+    /* A layout move and not a transform: the content's width changes on the
+       same main-thread pass, and a transform would run ahead of it on the
+       compositor, leaving the column's edge off the content's. */
+    expect(decls('.app[data-rail="off"] .rail')?.get('margin-left')).toBe('calc(-1 * var(--rail))')
     expect(decls('.app[data-rail="off"] .main')?.get('width')).toBe('calc(100% + var(--rail))')
     expect(decls('.app[data-rail="off"] .main')?.get('margin-left')).toBe('calc(-1 * var(--rail))')
   })
