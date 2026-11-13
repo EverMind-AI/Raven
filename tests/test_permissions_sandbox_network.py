@@ -176,6 +176,28 @@ async def test_another_sandbox_that_did_not_sync_leaves_the_approval_told_as_ope
     assert notice.text.endswith("was approved; run the command again.")
 
 
+SHARED_NOTE = (
+    "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
+)
+
+
+async def test_a_prompt_about_the_shared_sandbox_says_so_in_its_description(grants):
+    responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
+    grants.register(sandbox, None)
+    await _handle(responder, [CURL], sandbox)
+    (call,) = responder.calls
+    assert call["description"] == f"The sandbox blocked these connections. Allow them? {SHARED_NOTE}"
+    assert call["evidence"]["shared"] is True
+
+
+async def test_a_prompt_about_a_conversation_sandbox_leaves_the_note_out(grants):
+    responder, sandbox = Responder(ApprovalChoice.ALLOW), FakeSandbox()
+    grants.register(sandbox, "conv")
+    await _handle(responder, [CURL], sandbox)
+    (call,) = responder.calls
+    assert call["description"] == "The sandbox blocked these connections. Allow them?"
+
+
 async def test_a_deny_rule_is_never_asked(grants):
     config = PermissionsConfig(network=NetworkPermissions(rules=[NetworkRule(host="example.com", tier="deny")]))
     responder = Responder(ApprovalChoice.ALLOW)

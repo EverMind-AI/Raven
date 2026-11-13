@@ -48,6 +48,9 @@ KIND = "sandbox.network"
 # and one prompt asks about no more targets than it names.
 _MAX_LISTED = 10
 _MAX_LINE = 160
+_SHARED_NOTE = (
+    "Every conversation shares this sandbox, so what you allow here stays allowed for all of them until Raven restarts."
+)
 
 
 @dataclass(frozen=True)
@@ -187,6 +190,10 @@ async def _prompt(
             timeout_s=config.judge_timeout_seconds,
         )
 
+    # The main sandbox is every conversation's: what is opened in it stays open
+    # for all of them until Raven restarts, and every prompt says so.
+    shared = executor is not None and GRANTS.is_shared(executor)
+    description = "The sandbox blocked these connections. Allow them?" + (f" {_SHARED_NOTE}" if shared else "")
     loop = asyncio.get_running_loop()
     futures = {_key(scope, denial): loop.create_future() for denial in denials} if scope else {}
     _ASKING.update({key: (future, id(executor)) for key, future in futures.items()})
@@ -197,15 +204,13 @@ async def _prompt(
             tool_name=tool_name,
             kind=KIND,
             action="; ".join(lines),
-            description="The sandbox blocked these connections. Allow them?",
+            description=description,
             digest=f"{KIND}:" + hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()[:16],
             session_keys=keys,
             evidence={
                 "targets": targets,
                 "command": command,
-                # The main sandbox is every conversation's: what is opened in it
-                # stays open for all of them until Raven restarts, and the card says so.
-                "shared": executor is not None and GRANTS.is_shared(executor),
+                "shared": shared,
             },
             # No rule is offered to save: a card's saved rule, its undo and its
             # editor are the exec pattern's, so the broader grant offered is the session.
