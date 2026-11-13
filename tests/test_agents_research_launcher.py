@@ -140,7 +140,7 @@ def test_every_mode_ships_one_iteration_budget_the_loop_and_the_flow_share(groun
     assert {name: entry["maxToolIterations"] for name, entry in modes.items()} == {
         "medium": 20,
         "high": 60,
-        "max": 150,
+        "max": 300,
     }
     for name, entry in modes.items():
         assert "maxToolIterations" not in entry["overlay"], (
@@ -762,7 +762,7 @@ def test_the_budget_the_launcher_ships_is_the_one_both_observers_divide_by(groun
         context_window_tokens=cfg.context_window_tokens or 0,
     )
 
-    for name, expected in (("medium", 20), ("high", 60), ("max", 150)):
+    for name, expected in (("medium", 20), ("high", 60), ("max", 300)):
         entry = data["acp"]["modes"][name]
         slot = hook._resolve(
             AgentHookContext(
