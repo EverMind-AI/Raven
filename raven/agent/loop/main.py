@@ -329,11 +329,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``None`` means "use the ``_collect_injected_skill_ids`` path" — see
         # that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
-        # ``qualified_id -> registry source`` for the ids above. The id's own
-        # prefix is the addressing namespace (``local`` for anything on disk),
-        # so origin reporting needs this side map — see
-        # ``SkillsSegmentBuilder.build``.
-        self._last_injected_skill_sources: dict[str, str] = {}
         # The memory and skill text that answers for a part of the window --
         # the recalled memory, the routed or resident skills, the pull menu --
         # surfaced by the same metadata as the ids above. A reader measures
@@ -580,10 +575,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # agent table resolved (the table also holds the package built-in rows).
         self._agent_configs = agents or []
         self._dag_progress_sink = None
-        # Late-bound sink that pushes per-turn SkillForge-injected skill ids to
-        # the page's skill panel (the host wires it to the page's emitter,
-        # parallel to _dag_progress_sink). None in non-web contexts (CLI/IM).
-        self._skills_sink = None
 
         # Executor: synchronous construction only; VM starts in _start_executor()
         # A sandboxed VM mounts one host root at /workspace, not one per

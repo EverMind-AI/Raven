@@ -2108,20 +2108,13 @@ class TurnPathMixin:
                             },
                         )
                     # The result belongs to the tool that produced it: through
-                    # tool_call the model names a target, and both the window
-                    # and the skill panel read this name to tell a skill's bytes
-                    # from the talk that read them.
+                    # tool_call the model names a target, and the window reads
+                    # this name to tell a skill's bytes from the talk that read
+                    # them.
                     arguments = tool_call.arguments if isinstance(tool_call.arguments, dict) else {}
                     producing = self.tools.get(tool_call.name)
                     owner = producing.metadata_owner(arguments) if producing is not None else None
                     result_name = owner.name if owner is not None else tool_call.name
-                    forward = getattr(producing, "forwarded_params", None)
-                    forwarded_args = forward(arguments) if forward is not None else arguments
-                    # A skill the model loaded itself never passes through
-                    # SkillForge injection, so report it here or the skill panel
-                    # misses the whole class (builtin guides in particular).
-                    if result_name in ("read_skill", "use_skill") and not model_text.startswith("Error"):
-                        await self._report_skill_read(session_key or "", result_name, forwarded_args)
                     result_blocks = _scrubbed_blocks(
                         tool_call.arguments, getattr(result, "blocks", None), agent_output=agent_output
                     )
@@ -3292,9 +3285,6 @@ class TurnPathMixin:
             PlanningRequest(task=content, session_key=key, messages=initial_messages)
         )
         initial_messages = planning.messages
-        # Surface the skills SkillForge injected this turn to the web UI's skill
-        # panel (populated into _last_injected_skill_ids by the assemble above).
-        await self._emit_injected_skills(key)
         degraded = getattr(self, "_last_degraded_segments", [])
         if degraded and on_notice is not None:
             # The answer was produced without an optional organ; saying so is
