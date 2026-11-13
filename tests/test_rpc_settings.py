@@ -1369,9 +1369,9 @@ async def test_no_settings_write_asks_for_a_reload_any_more(cfg, key, value):
     """Every one of these is read where it is used, so the write is the whole
     change.
 
-    The first five were reload-only because the value was copied onto the
-    objects the loop was built with: the curator's and the gate's pins are
-    resolved per call now, the cap and the window are read per turn. Telling
+    The first four were reload-only because the value was copied onto the
+    objects the loop was built with: the curator's pin is resolved per call
+    now, the cap and the window are read per turn. Telling
     the operator to restart would be telling them to do nothing, so the whole
     reload-only set is gone -- ``warning`` now belongs to the one writer that
     still has something to say (an embedding model change).
