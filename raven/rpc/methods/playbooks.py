@@ -663,6 +663,15 @@ async def playbooks_delete(params: dict) -> dict:
 _CALLER_NAMED_IT = True
 
 
+def _session_usage(loop: Any, session_key: str | None):
+    """Carry an existing session's usage owner without creating a session."""
+    from raven.token_wise import usage_context
+
+    session = loop.sessions.peek(session_key) if session_key else None
+    owner = (session.metadata.get("usage_owner") or {}) if session is not None else {}
+    return usage_context.bind(session_key, owner)
+
+
 async def playbooks_run(
     params: dict,
     *,
@@ -728,18 +737,23 @@ async def playbooks_run(
             f"session {session_key!r} has no usable working directory; clear its override to recover"
         ) from exc
 
-    # Two contexts, entered around the dispatch rather than left to their
-    # defaults. The turn path establishes both and a graph reads both: the tool
+    # Contexts entered around the dispatch rather than left to their
+    # defaults. The turn path establishes them and a graph reads them: the tool
     # takes its nodes' cwd from ``workdir.current() or self._workspace``, and
     # resolves a raven-backed node's pair through the active binding. Outside
     # them a run aimed at one session would work in the loop-wide workspace and
     # on the default model while reporting to that session -- the wrong project
-    # and the wrong model, under the right conversation's name.
+    # and the wrong model, under the right conversation's name. Usage must also
+    # follow the addressed session, including its delegation owner when present.
     #
     # Around ``load``, not merely before it: the dispatch backgrounds itself with
     # ``create_task``, which copies the context it is created in, and a binding
     # that has already been reset by then is one the detached run never sees.
-    with workdir.bind(session_workdir), use_binding(loop.binding_for_session(session_key)):
+    with (
+        workdir.bind(session_workdir),
+        use_binding(loop.binding_for_session(session_key)),
+        _session_usage(loop, session_key),
+    ):
         plan = await runtime.load(
             name,
             params.get("params") or {},
@@ -1209,11 +1223,14 @@ async def _take_up(params: dict, agent_loop_factory: "AgentLoopFactory | None", 
     store, record = _require_stint(params)
     loop, driver = _driver_in_this_process(agent_loop_factory)
     session_key = str(record.origin.get("session_key") or "") or None
-    # The same two contexts ``playbooks.run`` enters, for the same reason: the
+    # The same contexts ``playbooks.run`` enters, for the same reason: the
     # round's nodes resolve their model through the active binding, and the
     # stint was started in this conversation, not in the RPC handler's absence
-    # of one. A conversation whose directory cannot be resolved still gets its
-    # round -- the stint carries its own workdir -- just on the default binding.
+    # of one. Usage attribution is bound unconditionally, so a round whose
+    # workdir or binding does not resolve still reports to the session the
+    # stint names (or to none, when it names none). A conversation whose
+    # directory cannot be resolved still gets its round -- the stint carries
+    # its own workdir -- just on the default binding.
     try:
         session_workdir = loop.session_workdir(session_key) if session_key else None
     except Exception:  # noqa: BLE001 - a bad override is not this verb's to fix
@@ -1225,11 +1242,12 @@ async def _take_up(params: dict, agent_loop_factory: "AgentLoopFactory | None", 
             return await driver.extend(record.stint_id, int(params.get("rounds") or 0), session_key)
         return await driver.resume(record.stint_id, session_key)
 
-    if session_workdir is not None and binding is not None:
-        with workdir.bind(session_workdir), use_binding(binding):
+    with _session_usage(loop, session_key):
+        if session_workdir is not None and binding is not None:
+            with workdir.bind(session_workdir), use_binding(binding):
+                reply = await go()
+        else:
             reply = await go()
-    else:
-        reply = await go()
     after = store.read(record.stint_id) or record
     return {**_stint_detail(after), "reply": str(reply or "")}
 
