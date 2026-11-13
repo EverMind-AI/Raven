@@ -761,6 +761,78 @@ def test_a_failed_removal_restores_the_marker_so_the_retry_finishes(env: _Env, m
     assert _ledger_record(env) is None
 
 
+def test_a_failed_removal_reports_a_marker_that_could_not_be_restored(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed restore is reported with the failure, and the record stays."""
+
+    def _fail_once(path):
+        target = Path(path)
+        (target / INSTALL_MARKER_FILENAME).unlink()
+        raise OSError("the directory is busy")
+
+    def _refuse(directory, token):
+        raise OSError("the marker cannot be written")
+
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _fail_once)
+    monkeypatch.setattr("raven.agent_plugins.ledger.restore_install_marker", _refuse)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert "the directory is busy" in payload["failed"][0]["reason"]
+    assert "could not be restored" in payload["failed"][0]["reason"]
+    assert _ledger_record(env) is not None
+    assert not (env.installed / INSTALL_MARKER_FILENAME).exists()
+
+
+def test_a_remove_that_cannot_unlink_the_root_marker_keeps_the_record(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root marker that cannot be removed leaves the package record claimed."""
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    marker = env.workspace / "skills" / PACKAGE_NAME / INSTALL_MARKER_FILENAME
+    real_unlink = Path.unlink
+
+    def _refuse_unlink(self, *args, **kwargs):
+        if Path(self) == marker:
+            raise OSError("the marker is read-only")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _refuse_unlink)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert payload["failed"][0]["skill"] == PACKAGE_NAME
+    assert _ledger_record(env) is not None
+    assert marker.is_file()
+
+
+def test_a_remove_that_cannot_save_the_ledger_reports_it_and_keeps_the_record(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed save is reported; the file on disk still carries the record."""
+    from raven.agent_plugins.ledger import PackageLedger
+
+    assert _run(env, "import", str(env.package)).exit_code == 0
+
+    def _refuse(self: PackageLedger) -> None:
+        raise OSError("the disk is full")
+
+    with monkeypatch.context() as context:
+        context.setattr(PackageLedger, "save", _refuse)
+        result = _run(env, "remove", PACKAGE_NAME)
+
+    assert result.exit_code == 1, result.stdout
+    assert "could not be saved" in _flowed(result)
+    assert not (env.workspace / "skills" / PACKAGE_NAME).exists()
+    assert _ledger_record(env) is not None
+
+
 def test_remove_keeps_a_retryable_record_when_the_package_directory_cannot_be_removed(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
