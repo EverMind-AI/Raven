@@ -63,19 +63,24 @@ def replayed_content(message: dict[str, Any]) -> Any:
 MCP_NOTICE_HEADER = "MCP plugin changes since the last note (an earlier note stands until one here replaces it):"
 """Opens a turn's MCP lines, so a plugin no line names reads as unchanged rather than resolved."""
 
-_MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>.+?)': ")
+_MCP_SUBJECT = re.compile(r"MCP plugin '(?P<name>(?:[^'\\]|\\.)*)': ")
 _CLEARED = "the earlier note about it no longer applies; this turn's tool definitions show what it offers."
 
 
 def mcp_notice(name: str, text: str) -> str:
-    """One MCP plugin's line; the name in it is what later turns compare the plugin by."""
-    return f"MCP plugin '{name}': {text}"
+    """One MCP plugin's line; the name in it is what later turns compare the plugin by.
+
+    The name's own quotes and backslashes are escaped, so :func:`notice_subject`
+    reads back exactly this name whatever it contains.
+    """
+    quoted = name.replace("\\", "\\\\").replace("'", "\\'")
+    return f"MCP plugin '{quoted}': {text}"
 
 
 def notice_subject(line: str) -> str | None:
     """The plugin ``line`` speaks of, or ``None`` for a line that names none."""
     match = _MCP_SUBJECT.match(line)
-    return match["name"] if match else None
+    return re.sub(r"\\(.)", r"\1", match["name"]) if match else None
 
 
 def told_notices(messages: list[dict[str, Any]]) -> dict[str, str]:

@@ -631,3 +631,30 @@ class TestNotesAReclaimTookAwayAreToldAgain:
         after = [older, question]
 
         assert retell_notices([older, question], after) is after
+
+
+class TestAPluginNameKeysItsOwnLine:
+    """A line is keyed by the plugin name it carries, so the name has to read back
+    exactly, whatever it contains."""
+
+    def test_any_name_reads_back_from_its_line(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_subject
+
+        for name in ("github", "a': b", "it's", "back\\slash'", "x': y': z"):
+            assert notice_subject(mcp_notice(name, "connected, offering 1 tool(s).")) == name
+
+    def test_two_plugins_whose_names_share_a_prefix_keep_their_own_lines(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes
+
+        lines = [mcp_notice("a", "connected, offering 1 tool(s)."), mcp_notice("a': b", "still connecting.")]
+
+        assert notice_changes(lines, {}) == [_HEADER, *lines]
+
+    def test_a_cleared_name_with_a_quote_is_read_as_cleared(self) -> None:
+        from raven.context_engine.runtime_context import mcp_notice, notice_changes, told_notices
+
+        told = {"a': b": mcp_notice("a': b", "still connecting.")}
+        [_, cleared] = notice_changes([], told)
+        replay = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{cleared}", "q")}
+
+        assert told_notices([replay]) == {}
