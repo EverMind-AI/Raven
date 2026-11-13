@@ -129,3 +129,9 @@ def test_transcribe_audio_empty_key_becomes_none(monkeypatch):
     assert seen["key"] is None
     asyncio.run(transcribe_audio("/a.ogg", api_key="k"))
     assert seen["key"] == "k"
+
+
+def test_transcribe_audio_reports_the_missing_key_diagnosis(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    text = asyncio.run(transcribe_audio("/a.ogg", api_key=""))
+    assert "raven provider set groq --api-key" in text

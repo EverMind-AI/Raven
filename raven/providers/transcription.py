@@ -6,6 +6,8 @@ from pathlib import Path
 import httpx
 from loguru import logger
 
+_NO_KEY_DIAGNOSIS = "Groq API key not configured for transcription. Run: raven provider set groq --api-key <KEY>"
+
 
 def transcription_api_key(config) -> str:
     """The key channels transcribe voice with: the configured groq provider's."""
@@ -32,11 +34,12 @@ class GroqTranscriptionProvider:
             file_path: Path to the audio file.
 
         Returns:
-            Transcribed text.
+            Transcribed text, or a one-line diagnosis naming the fix when no
+            API key is configured.
         """
         if not self.api_key:
-            logger.warning("Groq API key not configured for transcription")
-            return ""
+            logger.warning(_NO_KEY_DIAGNOSIS)
+            return _NO_KEY_DIAGNOSIS
 
         path = Path(file_path)
         if not path.exists():
