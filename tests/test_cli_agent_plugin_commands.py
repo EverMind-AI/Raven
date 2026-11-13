@@ -10,6 +10,7 @@ commands write lands in the home of whoever runs the suite.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -643,6 +644,26 @@ def test_two_workspaces_sharing_one_home_keep_their_imports_apart(env: _Env, tmp
     assert "USER CONTENT B." in (mine / "SKILL.md").read_text(encoding="utf-8")
 
 
+def test_a_linked_workspace_spelling_is_the_same_workspace(env: _Env, tmp_path: Path) -> None:
+    """Import through a link, remove through the real path: one ledger key."""
+    link = tmp_path / "linked-workspace"
+    try:
+        os.symlink(env.workspace, link, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform cannot create a directory link")
+    config_link = _workspace_config(env, link)
+
+    assert _run_config(config_link, "import", str(env.package)).exit_code == 0
+    assert env.installed.is_dir()
+    assert _ledger_record(env) is not None
+
+    result = _run(env, "remove", PACKAGE_NAME)
+
+    assert result.exit_code == 0, result.stdout
+    assert not (env.workspace / "skills" / PACKAGE_NAME).exists()
+    assert _ledger_record(env) is None
+
+
 def test_remove_and_import_refuse_a_replacement_at_the_install_path(env: _Env, tmp_path: Path) -> None:
     """The install moved away; the operator's directory stands there now."""
     assert _run(env, "import", str(env.package)).exit_code == 0
@@ -679,11 +700,65 @@ def test_remove_keeps_a_replaced_skill_directory(env: _Env) -> None:
 
     assert result.exit_code == 0, result.stdout
     payload = _json_payload(result)
-    assert [item["skill"] for item in payload["kept"]] == [SKILL_NAME]
-    assert "install marker" in payload["kept"][0]["reason"]
+    assert payload["kept"] == [SKILL_NAME]
+    assert [item["skill"] for item in payload["kept_details"]] == [SKILL_NAME]
+    assert set(payload["kept_details"][0]) == {"skill", "reason"}
+    assert "install marker" in payload["kept_details"][0]["reason"]
     assert "USER SKILL." in (env.installed / "SKILL.md").read_text(encoding="utf-8")
+    # The directory that remains is not provably ours, so the package root
+    # and its record stay claimed: a later remove can finish once it is moved.
+    assert _ledger_record(env) is not None
+    assert (env.workspace / "skills" / PACKAGE_NAME / ".raven-install.json").is_file()
+
+    result = _run(env, "remove", PACKAGE_NAME)
+    assert result.exit_code == 0, result.stdout
+    assert "unverified" in _flowed(result)
+    assert "run remove again" in _flowed(result)
+    assert f"removed '{PACKAGE_NAME}'" not in _flowed(result)
+
+    shutil.rmtree(env.installed)
+    assert _run(env, "remove", PACKAGE_NAME).exit_code == 0
+    assert not (env.workspace / "skills" / PACKAGE_NAME).exists()
     assert _ledger_record(env) is None
-    assert not (env.workspace / "skills" / PACKAGE_NAME / ".raven-install.json").exists()
+
+
+def test_a_failed_removal_restores_the_marker_so_the_retry_finishes(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A partial rmtree can consume the marker before it fails.
+
+    The marker lives inside the tree being deleted, so the retry has no proof
+    unless the token the ledger still records is written back. Without the
+    restore the retry keeps the directory and then drops the record.
+    """
+    from raven.agent_plugins.skills import remove_tree as real_remove_tree
+
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    recorded_token = _ledger_record(env)["skill_tokens"][SKILL_NAME]
+    state = {"failed": False}
+
+    def _fail_once(path):
+        target = Path(path)
+        if target == env.installed and not state["failed"]:
+            state["failed"] = True
+            (target / INSTALL_MARKER_FILENAME).unlink()
+            raise OSError("the directory is busy")
+        return real_remove_tree(target)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _fail_once)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert payload["failed"] == [{"skill": SKILL_NAME, "reason": "the directory is busy"}]
+    assert _ledger_record(env) is not None
+    assert read_install_marker(env.installed) == recorded_token
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", real_remove_tree)
+    result = _run(env, "remove", PACKAGE_NAME)
+
+    assert result.exit_code == 0, result.stdout
+    assert not env.installed.exists()
+    assert _ledger_record(env) is None
 
 
 def test_remove_keeps_a_retryable_record_when_the_package_directory_cannot_be_removed(

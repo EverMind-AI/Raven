@@ -21,6 +21,7 @@ installed is ever touched, in this workspace or any other sharing the home.
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -388,8 +389,13 @@ def remove_package(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
-    """Delete a package's imported skills and forget it."""
-    from raven.agent_plugins.ledger import INSTALL_MARKER_FILENAME, LedgerError, restore_install_marker
+    """Delete a package's imported skills and, when none remain, forget it."""
+    from raven.agent_plugins.ledger import (
+        INSTALL_MARKER_FILENAME,
+        LedgerError,
+        read_install_marker,
+        restore_install_marker,
+    )
     from raven.agent_plugins.skills import remove_tree
 
     _load_config(config_path)
@@ -447,18 +453,42 @@ def remove_package(
                 try:
                     remove_tree(child)
                 except OSError as exc:
-                    failed.append((child.name, str(exc)))
+                    failure = str(exc)
+                    # The marker lives inside the tree being deleted, so a
+                    # partial removal can consume it before failing. The
+                    # ledger still records its token; put the marker back
+                    # while the directory survives, or the retry this
+                    # failure asks for cannot prove the directory is ours.
+                    try:
+                        info = child.lstat()
+                    except OSError:
+                        info = None
+                    if info is not None and stat.S_ISDIR(info.st_mode) and not getattr(info, "st_reparse_tag", 0):
+                        token = entry.skill_tokens.get(child.name, "")
+                        if token and read_install_marker(child) != token:
+                            try:
+                                restore_install_marker(child, token)
+                            except OSError as marker_exc:
+                                failure += f"; the install marker could not be restored: {marker_exc}"
+                    failed.append((child.name, failure))
                 else:
                     removed.append(child.name)
             else:
                 kept.append({"skill": child.name, "reason": child_claim.reason})
-        if not failed:
+        if not failed and not kept:
             leftovers = [child for child in target.iterdir() if child.name != INSTALL_MARKER_FILENAME]
-            try:
-                (target / INSTALL_MARKER_FILENAME).unlink()
-            except OSError:
-                pass
-            if not leftovers:
+            if leftovers:
+                # A directory appeared after the sweep: it was never claimed,
+                # so keep the record and the marker that prove the rest.
+                kept.extend(
+                    {"skill": child.name, "reason": "appeared while the package was being removed"}
+                    for child in leftovers
+                )
+            else:
+                try:
+                    (target / INSTALL_MARKER_FILENAME).unlink()
+                except OSError:
+                    pass
                 try:
                     target.rmdir()
                 except OSError as exc:
@@ -472,7 +502,7 @@ def remove_package(
                         except OSError as marker_exc:
                             failed.append((name, f"the install marker could not be restored: {marker_exc}"))
 
-    if not failed:
+    if not failed and not kept:
         ledger.forget(name, workspace=workspace)
     try:
         ledger.save()
@@ -489,7 +519,8 @@ def remove_package(
                 {
                     "package": name,
                     "removed": removed,
-                    "kept": kept,
+                    "kept": [item["skill"] for item in kept],
+                    "kept_details": kept,
                     "failed": [{"skill": skill, "reason": reason} for skill, reason in failed],
                 }
             )
@@ -501,7 +532,16 @@ def remove_package(
         console.print(f"  [red]failed[/red] {escape(skill)}: {escape(reason)}", highlight=False)
     if failed:
         raise typer.Exit(1)
-    console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
+    if kept:
+        console.print(
+            f"removed {len(removed)} imported skill(s) from '{escape(name)}'; "
+            f"{len(kept)} unverified entr{'y remains' if len(kept) == 1 else 'ies remain'} in "
+            f"{escape(str(target))}, so the package directory and its ledger record were kept. "
+            "Move them away, then run remove again",
+            highlight=False,
+        )
+    else:
+        console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
     for item in kept:
         console.print(
             f"  [yellow]kept[/yellow] {escape(item['skill'])}: {escape(item['reason'])}",
