@@ -329,11 +329,6 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         # ``None`` means "use the ``_collect_injected_skill_ids`` path" — see
         # that method for the branch.
         self._last_injected_skill_ids: list[str] | None = None
-        # ``qualified_id -> registry source`` for the ids above. The id's own
-        # prefix is the addressing namespace (``local`` for anything on disk),
-        # so origin reporting needs this side map — see
-        # ``SkillsSegmentBuilder.build``.
-        self._last_injected_skill_sources: dict[str, str] = {}
         # The memory and skill text that answers for a part of the window --
         # the recalled memory, the routed or resident skills, the pull menu --
         # surfaced by the same metadata as the ids above. A reader measures
@@ -502,7 +497,7 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
             provider=lambda: self.provider,
             model=lambda: self.model,
             context_window_tokens=lambda: self.context_window_tokens,
-            system_prompt=lambda skills: self.context.build_system_prompt(skills),
+            system_prompt=lambda _skills: self.context.build_system_prompt(),
             # Callables like the rest, but for one reason rather than two: the
             # ceiling follows the model a request goes out under, which moves
             # under a live ``/model`` switch. The compaction settings are fixed
@@ -756,8 +751,8 @@ class AgentLoop(TurnPathMixin, WiringMixin, McpGlueMixin, OrganGlueMixin):
         #   policy. Owns the ``MemoryStore`` it built; reach it via
         #   ``self.memory_consolidator.store`` when needed.
         # - ``self.context.skills`` — :class:`LocalSkillCatalog` for the
-        #   always-skills + ``# Skills`` render path. The SkillForgeRouter stack
-        #   (assembled in ``context_engine.factory``) owns retrieval.
+        #   always-skills render path. The SkillForgeRouter stack (assembled in
+        #   ``context_engine.factory``) owns retrieval.
 
         # AgentHook lifecycle chain: the host hands finished hooks (adapter-
         # wrapped callbacks included -- raven/agent/hook/adapters is where a

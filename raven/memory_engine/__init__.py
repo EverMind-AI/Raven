@@ -55,14 +55,11 @@ if TYPE_CHECKING:
     from raven.memory_engine.skill_forge import (
         BackendSkillSource,
         HubSkillSource,
-        LLMGateFilter,
         LocalSkillCatalog,
         LocalSkillSource,
-        QueryRewriter,
         SkillForgeRouter,
     )
     from raven.memory_engine.skill_forge.catalog import render_skill_body
-    from raven.memory_engine.skill_forge.refs import resolve_refs
     from raven.memory_engine.skill_forge.types import RouterHit
     from raven.memory_engine.skill_local.registry import (
         SkillRegistry,
@@ -78,12 +75,10 @@ __all__ = [
     "BehaviorsOffsets",
     "BackendSkillSource",
     "HubSkillSource",
-    "LLMGateFilter",
     "LocalSkillCatalog",
     "LocalSkillSource",
     "MemoryConsolidator",
     "MemoryStore",
-    "QueryRewriter",
     "RouterHit",
     "SkillForgeRouter",
     "SkillMeta",
@@ -96,7 +91,6 @@ __all__ = [
     "parse_user_md_sections",
     "render_folded_block",
     "render_skill_body",
-    "resolve_refs",
     "slice_after_day",
     "upsert_section",
     "LifecycleContractTests",
@@ -108,12 +102,10 @@ _FACE: dict[str, str] = {
     "BehaviorsOffsets": "raven.memory_engine.consolidate.behaviors_extractor",
     "BackendSkillSource": "raven.memory_engine.skill_forge",
     "HubSkillSource": "raven.memory_engine.skill_forge",
-    "LLMGateFilter": "raven.memory_engine.skill_forge",
     "LocalSkillCatalog": "raven.memory_engine.skill_forge",
     "LocalSkillSource": "raven.memory_engine.skill_forge",
     "MemoryConsolidator": "raven.memory_engine.consolidate.consolidator",
     "MemoryStore": "raven.memory_engine.consolidate.consolidator",
-    "QueryRewriter": "raven.memory_engine.skill_forge",
     "RouterHit": "raven.memory_engine.skill_forge.types",
     "SkillForgeRouter": "raven.memory_engine.skill_forge",
     "SkillMeta": "raven.memory_engine.skill_local.types",
@@ -128,7 +120,6 @@ _FACE: dict[str, str] = {
     "parse_user_md_sections": "raven.memory_engine.consolidate.consolidator",
     "render_folded_block": "raven.memory_engine.consolidate.behaviors",
     "render_skill_body": "raven.memory_engine.skill_forge.catalog",
-    "resolve_refs": "raven.memory_engine.skill_forge.refs",
     "slice_after_day": "raven.memory_engine.consolidate.behaviors",
     "upsert_section": "raven.memory_engine.consolidate.attention",
     "LifecycleContractTests": "raven.memory_engine.contract_test",

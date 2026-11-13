@@ -44,8 +44,9 @@ in its content, so a later turn counts what the request actually carried.
 
 # The segment names the assembler records, by the part they answer for. A
 # skill is skill bytes wherever it rides: the always-on digest sits in the
-# system prompt, a routed segment in the turn scratch, and the pull-mode menu
-# in the user envelope. Each is cut out of its default bucket and counted here.
+# system prompt and the scent menu in the user envelope. ``skills`` is the
+# routed segment older builds rode in the turn scratch; a message recorded then
+# still carries it. Each is cut out of its default bucket and counted here.
 SEGMENTS = {
     MEMORY: ("memory",),
     SKILLS: ("active_skills", "scent", "skills"),

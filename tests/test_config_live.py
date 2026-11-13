@@ -32,7 +32,6 @@ from raven.config.live import (
     hold_for_this_turn,
     max_tool_iterations,
     reasoning_effort,
-    skill_gate_pin,
     skill_hub_enabled,
 )
 
@@ -839,7 +838,7 @@ def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
 
 
 class TestSubsystemPinsAndTheCap:
-    """The three values that used to be settled when the loop was built.
+    """The two values that used to be settled when the loop was built.
 
     A pin and an iteration cap are sentences about the next call, not work to
     redo, so they belong on this side of the line the module docstring draws.
@@ -854,17 +853,6 @@ class TestSubsystemPinsAndTheCap:
 
         _write(path, {"context": {"curator_model": "m2", "curator_provider": "gemini"}})
         assert curator_pin(LiveConfig(path)) == ("m2", "gemini")
-
-    def test_the_gate_pin_is_read_from_either_spelling_of_the_block_too(self, tmp_path: Path) -> None:
-        """``skillForge`` is the block ``settings.set`` writes; ``skill_forge``
-        is what the loader's schema calls it, and a hand-written config may
-        hold either."""
-        path = tmp_path / "config.json"
-        _write(path, {"skillForge": {"llmGateModel": "g", "llmGateProvider": "deepseek"}})
-        assert skill_gate_pin(LiveConfig(path)) == ("g", "deepseek")
-
-        _write(path, {"skill_forge": {"llm_gate_model": "g2", "llm_gate_provider": "gemini"}})
-        assert skill_gate_pin(LiveConfig(path)) == ("g2", "gemini")
 
     def test_an_unset_pin_is_two_nones(self, tmp_path: Path) -> None:
         """Unset and empty both mean "follow the conversation's model", which

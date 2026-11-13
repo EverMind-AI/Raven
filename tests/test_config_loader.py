@@ -2267,3 +2267,131 @@ def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path
 
     assert cfg.subagent_dag.verdict_model == "cheap/tier"
     assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []
+
+
+_PUSH_ERA_SKILL_FORGE = {
+    "discovery": "push",
+    "rewriteEnabled": False,
+    "rewriteMaxTokens": 4096,
+    "injectionMode": "summary",
+    "injectMax": 3,
+    "llmGateEnabled": True,
+    "llmGateMaxSelect": 1,
+    "llmGatePoolSize": 12,
+    "llmGateModel": "cheap/tier",
+    "llmGateProvider": "acme",
+    "llmGateTemperature": 0.2,
+    "llmGateMaxTokens": 2048,
+    "blocklist": ["noisy"],
+    "router": {"topK": 4, "rrfK": 20},
+}
+
+
+def test_the_push_discovery_settings_go_and_a_push_config_is_told(tmp_path: Path) -> None:
+    """Skills reach the model one way now, so the settings of the other way are
+    gone from the strict model. A config still carrying them would not load at
+    all; the floor drops every one of them, tells the user once, and leaves the
+    rest of the block alone."""
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    load_config(p)
+
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["skillForge"] == {"blocklist": ["noisy"], "router": {"rrfK": 20}}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = [n for n in drain_migration_notices() if "skillForge" in n]
+    assert len(notices) == 1, notices
+    assert "`skillForge.discovery`" in notices[0]
+    assert "read_skill" in notices[0], "a config that chose push hears how skills arrive now"
+
+    load_config(p)
+    assert drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_go_under_their_snake_spelling_too() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    snake = {
+        "skill_forge": {
+            "discovery": "pull",
+            "rewrite_enabled": True,
+            "rewrite_max_tokens": 100,
+            "injection_mode": "full_body",
+            "inject_max": 2,
+            "llm_gate_enabled": False,
+            "llm_gate_max_select": 1,
+            "llm_gate_pool_size": 12,
+            "llm_gate_model": "cheap/tier",
+            "llm_gate_provider": "acme",
+            "llm_gate_temperature": 0.2,
+            "llm_gate_max_tokens": 10,
+            "always_max": 4,
+            "router": {"top_k": 3, "rrf_k": 20},
+        }
+    }
+    assert loader._migrate_retired_push_discovery(snake, notify=True) is True
+    assert snake == {"skill_forge": {"always_max": 4, "router": {"rrf_k": 20}}}
+    notices = loader.drain_migration_notices()
+    assert len(notices) == 1, notices
+    assert "`skill_forge.llm_gate_model`" in notices[0]
+    assert "read_skill" not in notices[0], "a pull config changes nothing the user chose"
+
+
+def test_a_config_without_push_settings_is_left_alone() -> None:
+    from raven.config import loader
+
+    loader._migration_notices.clear()
+    untouched = {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    mangled = {"skillForge": ["not", "a", "table"], "skill_forge": {"router": "nor this"}}
+    assert loader._migrate_retired_push_discovery(untouched, notify=True) is False
+    assert loader._migrate_retired_push_discovery(mangled, notify=True) is False
+    assert untouched == {"skillForge": {"blocklist": [], "router": {"rrfK": 20}}}
+    assert loader.drain_migration_notices() == []
+
+
+def test_the_push_discovery_settings_are_dropped_from_the_extension_block_in_memory_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`load_raven_config` reads the file again for the extension blocks. Its pass
+    has to drop the retired settings itself: the file may still carry them, and
+    `SkillForgeConfig` forbids unknown keys, so a pass that only persisted would
+    raise instead of loading."""
+    from raven.config import loader
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": dict(_PUSH_ERA_SKILL_FORGE, router={"topK": 4, "rrfK": 20})})
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+    monkeypatch.setattr(loader, "_persist_migrations", lambda *args, **kwargs: None)
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert cfg.skill_forge.router.rrf_k == 20
+    assert json.loads(p.read_text(encoding="utf-8"))["skillForge"]["discovery"] == "push", (
+        "the disk rewrite was switched off, so a load that succeeded proves the in-memory strip"
+    )
+    assert len([n for n in drain_migration_notices() if "skillForge" in n]) == 1
+
+
+def test_push_discovery_set_again_after_its_floor_still_loads(tmp_path: Path) -> None:
+    """A build from before this floor reads the stamp as current, keeps the keys
+    and accepts them, so a rollback or a second install sharing the home can
+    write them back. The strict model would then refuse the whole config, so
+    the strip holds on every load, without a second notice."""
+    from raven.config.raven import load_raven_config
+
+    p = tmp_path / "config.json"
+    _write(p, {"skillForge": {"discovery": "push", "llmGateModel": "cheap/tier", "blocklist": ["noisy"]}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    drain_migration_notices()
+
+    cfg = load_raven_config(p)
+
+    assert cfg.skill_forge.blocklist == ["noisy"]
+    assert [n for n in drain_migration_notices() if "skillForge" in n] == []

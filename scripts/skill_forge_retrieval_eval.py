@@ -5,9 +5,6 @@ For each query in the fixture set:
   1. Build a temp workspace with SKILL.md files that should match.
   2. Run :class:`SkillForgeRouter` (Local-only — Hub unreachable from
      this container) and capture the top-K ranking.
-  3. Optionally run :class:`SkillsSegmentBuilder` end-to-end (rewriter
-     disabled, gate disabled — no LLM provider configured) to verify
-     that body + ref hydrate produce a valid prompt segment.
 
 Outputs:
   - per-query top-K with names + scores
@@ -21,14 +18,10 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import textwrap
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from raven.context_engine.segments.skills import SkillsSegmentBuilder
-from raven.contracts.assembled import TokenBudget
-from raven.contracts.context import AssemblyContext
 from raven.memory_engine.skill_forge import (
     LocalSkillSource,
     SkillForgeRouter,
@@ -147,39 +140,6 @@ async def _retrieval_test(router: SkillForgeRouter, queries: list[dict], top_k: 
     return {"top1": top1, "top3": top3, "total": total}
 
 
-async def _segment_test(
-    workspace: Path,
-    router: SkillForgeRouter,
-    queries: list[dict],
-    top_k: int,
-) -> None:
-    """Full SkillsSegmentBuilder pipeline (no rewriter / no gate)."""
-    print("\n=== Stage 2: SkillsSegmentBuilder full pipeline ===\n")
-    builder = SkillsSegmentBuilder(router, skill_top_k=top_k)
-    for q in queries[:3]:
-        ctx = AssemblyContext(
-            session_key=f"eval-{q['id']}",
-            current_message=q["query"],
-            media=None,
-            channel=None,
-            chat_id=None,
-            session_messages=[],
-            budget=TokenBudget(
-                context_length=200_000,
-                reserved_output=8000,
-                reserved_tools=4000,
-                reserved_system=4000,
-                available_history=184_000,
-            ),
-        )
-        seg = await builder.build(ctx)
-        ids = seg.meta.get("injected_skill_ids", [])
-        print(f"  [{q['id']}] injected={ids}")
-        head_lines = "\n".join(seg.text.splitlines()[:6])
-        print(textwrap.indent(head_lines, "    "))
-        print()
-
-
 async def main() -> int:
     queries_path = Path(__file__).resolve().parents[1] / "benchmarks" / "skill_evals" / "queries.jsonl"
     queries = [json.loads(line) for line in queries_path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -194,7 +154,6 @@ async def main() -> int:
         router, _ = _build_router(workspace)
 
         stats = await _retrieval_test(router, subset, top_k=5)
-        await _segment_test(workspace, router, subset, top_k=3)
 
     print("\n=== Retrieval rates ===")
     n = stats["total"]

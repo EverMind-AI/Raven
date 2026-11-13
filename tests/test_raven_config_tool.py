@@ -695,15 +695,14 @@ async def test_the_gateway_restart_waits_for_idle():
 @pytest.mark.asyncio
 async def test_a_pin_read_shows_the_pin_and_never_the_block_around_it(config_file):
     data = json.loads(config_file.read_text())
-    data["skillForge"] = {
-        "llmGateModel": "m",
-        "llmGateProvider": "p",
-        "router": {"hub": {"apiKey": "hub-secret"}},
-    }
+    data["context"] = {"curatorModel": "m", "curatorProvider": "p", "history": {"strategy": "curator"}}
+    data["skillForge"] = {"router": {"hub": {"apiKey": "hub-secret"}}}
     config_file.write_text(json.dumps(data))
     tool = RavenConfigTool()
-    got = await _run(tool, action="get", path="skillForge")
-    assert json.loads(got) == {"skillForge": {"llmGateModel": "m", "llmGateProvider": "p"}}
+    # ``context`` is also the section's name, so the read lists the section;
+    # the pin's own entry carries the pair and nothing else of the block.
+    got = json.loads(await _run(tool, action="get", path="context"))
+    assert got["context"] == {"curatorModel": "m", "curatorProvider": "p"}
     assert "hub-secret" not in await _run(tool, action="get", path="skills")
 
 

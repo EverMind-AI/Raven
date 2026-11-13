@@ -23,7 +23,6 @@ from raven.context_engine.segments import (
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
@@ -177,7 +176,6 @@ class TestTheShippedSegmentsDeclareThemselves:
             (BootstrapSegmentBuilder, True, "the bootstrap files as they are on disk"),
             (MemorySegmentBuilder, False, "host memory is picked per message; recall queries it"),
             (ActiveSkillsSegmentBuilder, True, "the always-on set, chosen without the message"),
-            (SkillsSegmentBuilder, False, "the router's hits for this message"),
             (CuratorSegmentBuilder, False, "working state recomputed for this turn"),
         ],
     )

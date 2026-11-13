@@ -8,7 +8,8 @@ otherwise exercises — but here without an LLM, so it runs in normal CI.
 One channel turn must, in order:
   1. recall on BOTH lanes during context assembly
      (``user_id`` for the # Memory segment, ``agent_id`` for BackendSkillSource);
-  2. inject the recalled user memory + everos skill into the prompt the LLM sees;
+  2. put the recalled user memory, and the everos skill's menu line, into the
+     prompt the LLM sees;
   3. after the turn, ``backend.store(session_key, turn_slice)``;
   4. after the turn, ``backend.feedback`` with the injected everos native ids only.
 
@@ -117,14 +118,12 @@ def _make_agent(workspace: Path, *, backend=None, memory_config=None) -> AgentLo
         provider=_StubProvider(),
         workspace=workspace,
         model="stub",
-        # These tests assert the push pipeline's end-to-end effects (the
-        # everos skill body landing in the prompt); pull renders a menu only.
         policy=TurnPolicy(max_iterations=2),
         tools=ToolWiring(restrict_to_workspace=True),
         engine=EngineWiring(
             backend=backend,
             memory_config=memory_config,
-            skill_forge_config=SkillForgeConfig(discovery="push"),
+            skill_forge_config=SkillForgeConfig(),
         ),
     )
 
@@ -154,10 +153,11 @@ async def test_full_turn_recalls_injects_stores_and_feeds_back(tmp_path: Path) -
     assert any(c["agent_id"] is not None and c["user_id"] is None for c in backend.recall_calls), backend.recall_calls
     assert all("back up" in c["query"] for c in backend.recall_calls)
 
-    # 2) recalled user memory + everos skill landed in the prompt the LLM saw.
+    # 2) recalled user memory landed in the prompt the LLM saw, and the everos
+    # skill was offered in the scent menu (its short body is its menu line).
     prompt = agent.provider.prompt_text()
     assert _USER_MEMO in prompt
-    assert _AGENT_SKILL_BODY in prompt
+    assert f": {_AGENT_SKILL_BODY}" in prompt
 
     # 3) the turn slice was forwarded to the backend exactly once.
     # Dispatch only enqueues; the worker drains it off the turn path.

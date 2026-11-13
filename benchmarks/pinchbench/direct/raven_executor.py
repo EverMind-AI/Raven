@@ -418,10 +418,10 @@ async def execute_task(
     session_mgr = SessionManager(task_workspace)
     session_key = f"bench:{task.task_id}"
 
-    # Load skill_forge config so injection_mode / inject_max / mass_library_db
-    # etc. are honored under benchmark runs. Without this AgentLoop receives
-    # ``skill_forge_config=None`` → SkillService falls back to dataclass
-    # defaults (e.g. injection_mode="summary"), regardless of user config.
+    # Load skill_forge config so local_dirs / blocklist / always_max etc. are
+    # honored under benchmark runs. Without this AgentLoop receives
+    # ``skill_forge_config=None`` and falls back to the model defaults,
+    # regardless of user config.
     from raven.config.raven import load_raven_config
 
     _ec_cfg = load_raven_config()

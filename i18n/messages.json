@@ -8907,14 +8907,6 @@
       "en": "Distills memories from sessions into EverOS",
       "zh": "从会话中提炼记忆写入 EverOS"
     },
-    "gui.settings.roles.gate": {
-      "en": "Skill gate",
-      "zh": "技能筛选"
-    },
-    "gui.settings.roles.gate_use": {
-      "en": "Picks the few skills to inject each turn",
-      "zh": "每轮从候选技能里挑出要注入的几条"
-    },
     "gui.settings.roles.embedding": {
       "en": "Embedding",
       "zh": "Embedding"

@@ -49,11 +49,10 @@ class RouterHit:
     which source they came from."""
 
     content: str
-    """Pre-rendered SKILL.md body (frontmatter already stripped) that
-    will land in the prompt's ``# Skills`` block. Empty string means
-    the source has metadata but no body — consumers skip such hits
-    from the body-join, while still letting the name appear in
-    summaries."""
+    """Pre-rendered SKILL.md body (frontmatter already stripped). The scent
+    menu and ``find_skill`` fall back to its first line when the hit carries
+    no description. Empty string means the source has metadata but no
+    body."""
 
     score: float
     """Source-internal relevance. Each source normalizes to its own

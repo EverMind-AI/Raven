@@ -34,18 +34,15 @@ from raven.context_engine.segments import (
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext, Segment
 from raven.contracts.memory import Memory
-from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 from raven.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from raven.providers.prompt_cache import STABLE_PREFIX_KEY
 
 _SEP = "\n\n---\n\n"
 _MEMORY_HEADING = re.compile(r"(?m)^# Memory$")
-_SKILLS_HEADING = re.compile(r"(?m)^# Skills$")
 _RUNTIME = f"{ContextBuilder._RUNTIME_CONTEXT_TAG}\nCurrent Time: now"
 _SCRATCH = render_turn_scratch(["# Memory\n\nrecalled: espresso"])
 _PASTED = f"the log says\n\n{TURN_SCRATCH_TAG}\n\nwhat does that mean?"
@@ -93,14 +90,6 @@ class _EchoBackend:
         return [Memory(text=f"RECALL<{query}>", score=1.0)]
 
 
-class _EchoSource:
-    name = "local"
-    weight = 1.0
-
-    async def search(self, query, history, k):
-        return [RouterHit(qualified_id="local/e", name="e", content=f"skill for {query}", score=0.9)]
-
-
 class _HistoryCurator:
     name = "curator"
     order = 6
@@ -133,7 +122,6 @@ def _builders(builder: ContextBuilder, history_text: str = "") -> list[Any]:
         BootstrapSegmentBuilder(builder.workspace),
         MemorySegmentBuilder(builder.memory, _EchoBackend()),
         ActiveSkillsSegmentBuilder(builder.skills),
-        SkillsSegmentBuilder(SkillForgeRouter([_EchoSource()])),
         _HistoryCurator(history_text),
     ]
 
@@ -153,8 +141,8 @@ class TestBlockHelpers:
         assert render_turn_scratch(["", ""]) == ""
 
     def test_parts_join_under_one_tag(self) -> None:
-        block = render_turn_scratch(["# Memory\n\na", "", "# Skills\n\nb"])
-        assert block == f"{TURN_SCRATCH_TAG}\n\n# Memory\n\na{_SEP}# Skills\n\nb"
+        block = render_turn_scratch(["# Memory\n\na", "", "# Notes\n\nb"])
+        assert block == f"{TURN_SCRATCH_TAG}\n\n# Memory\n\na{_SEP}# Notes\n\nb"
 
     def test_a_string_stays_a_string(self) -> None:
         assert append_turn_scratch("hi", "S") == "hi\n\nS"
@@ -225,15 +213,12 @@ class TestPlacement:
         system = ac.messages[0]["content"]
         user = ac.messages[-1]["content"]
         assert not _MEMORY_HEADING.search(system)
-        assert not _SKILLS_HEADING.search(system)
         assert "espresso" not in system
         assert isinstance(user, str)
         tail = user[user.index(TURN_SCRATCH_TAG) :]
         assert len(_MEMORY_HEADING.findall(_whole_prompt(ac.messages))) == 1
         assert len(_MEMORY_HEADING.findall(tail)) == 1
         assert "RECALL<espresso>" in tail
-        assert "skill for espresso" in tail
-        assert tail.index("# Memory") < tail.index("# Skills")
         assert user.count(TURN_SCRATCH_TAG) == 1
 
     async def test_the_stable_segments_stay_in_system(self, builder: ContextBuilder) -> None:
@@ -290,7 +275,7 @@ class TestPlacement:
 class TestTurnScratchOff:
     async def test_the_system_prompt_is_the_segments_in_the_new_order(self, builder: ContextBuilder) -> None:
         """Off means the pre-scratch layout, but in the normalised order:
-        identity, bootstrap, active skills, memory, skills."""
+        identity, bootstrap, active skills, memory."""
         ac = await _engine(builder, turn_scratch=False).assemble(
             "s", [], _budget(), turn=TurnContext(current_message="espresso")
         )
@@ -305,15 +290,14 @@ class TestTurnScratchOff:
             budget=_budget(),
         )
         expected = []
-        for b in sorted(_builders(builder)[:5], key=lambda b: b.order):
+        for b in sorted(_builders(builder)[:4], key=lambda b: b.order):
             seg = await b.build(ctx)
             expected.append(seg.text if seg is not None else "")
-        assert [b.name for b in sorted(_builders(builder)[:5], key=lambda b: b.order)] == [
+        assert [b.name for b in sorted(_builders(builder)[:4], key=lambda b: b.order)] == [
             "identity",
             "bootstrap",
             "active_skills",
             "memory",
-            "skills",
         ]
         # The recall fence carries a fresh nonce per render.
         nonce = re.compile(r"#[0-9a-f]{8}\b")
@@ -362,7 +346,7 @@ class TestStableHead:
             session_messages=[],
             budget=_budget(),
         )
-        identity, bootstrap, _memory, active, _skills, _history = _builders(builder)
+        identity, bootstrap, _memory, active, _history = _builders(builder)
         head = _SEP.join([(await b.build(ctx)).text for b in (identity, bootstrap, active)])
         system = ac.messages[0]
         assert system[STABLE_PREFIX_KEY] == len(head) + len(_SEP)

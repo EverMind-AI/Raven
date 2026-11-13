@@ -179,10 +179,10 @@ class OrganGlueMixin:
         """Whether the active engine owns skill selection via SkillForgeRouter.
 
         Always ``True`` now — there is a single
-        :class:`ContextAssembler` whose SkillsSegmentBuilder handles
-        selection and populates ``injected_skill_ids`` in the assembled
-        metadata. Kept as a method (rather than inlined) because several
-        callsites still gate on it; it no longer branches on engine name.
+        :class:`ContextAssembler` whose scent menu offers skills and
+        populates ``injected_skill_ids`` in the assembled metadata. Kept as a
+        method (rather than inlined) because several callsites still gate on
+        it; it no longer branches on engine name.
         """
         return True
 
@@ -193,8 +193,8 @@ class OrganGlueMixin:
     ) -> list[Any] | None:
         """No host-side pre-selection — the engine's SkillForgeRouter owns it.
 
-        The unified engine selects + renders skills internally and
-        surfaces ``injected_skill_ids`` via ``AssembledContext.metadata``,
+        The engine's scent menu offers skills and surfaces their
+        ``injected_skill_ids`` via ``AssembledContext.metadata``,
         which AgentLoop reads out of ``_last_injected_skill_ids`` after
         assemble. No SkillMeta list flows through this path.
         """
@@ -227,7 +227,6 @@ class OrganGlueMixin:
         # the ``_collect_injected_skill_ids`` path rather than accidentally consuming a previous turn's
         # injected ids. Only successful assemble repopulates the stash.
         self._last_injected_skill_ids = None
-        self._last_injected_skill_sources = {}
         self._last_window_parts = {}
         self._last_degraded_segments: list[str] = []
         session_messages = self._context_messages_for_session(session)
@@ -254,8 +253,6 @@ class OrganGlueMixin:
         # to the SkillMeta-based path.
         meta_ids = assembled.metadata.get("injected_skill_ids") if assembled.metadata else None
         self._last_injected_skill_ids = list(meta_ids) if meta_ids else None
-        meta_sources = assembled.metadata.get("injected_skill_sources") if assembled.metadata else None
-        self._last_injected_skill_sources = dict(meta_sources) if meta_sources else {}
         meta_degraded = assembled.metadata.get("degraded_segments") if assembled.metadata else None
         self._last_degraded_segments = list(meta_degraded) if meta_degraded else []
         # The parts of the window that are not the talk, for the same reason
@@ -476,11 +473,9 @@ class OrganGlueMixin:
         """Push this turn's SkillForge-injected skills to the web UI's skill
         panel as a ``skills_injected`` custom event.
 
-        The id's prefix is the *addressing* namespace, which is ``local`` for
-        every on-disk skill, so origin comes from
-        ``_last_injected_skill_sources`` (the registry source the engine
-        reported) and falls back to the prefix only when that is absent. No-op
-        when there is no sink (CLI/IM) or nothing was injected this turn."""
+        The source shown is the id's prefix, the addressing namespace
+        (``local`` for every on-disk skill). No-op when there is no sink
+        (CLI/IM) or nothing was offered this turn."""
         if self._skills_sink is None:
             return
         ids = self._last_injected_skill_ids or []
@@ -492,7 +487,7 @@ class OrganGlueMixin:
             skills.append(
                 {
                     "id": str(qid),
-                    "source": self._last_injected_skill_sources.get(str(qid)) or prefix,
+                    "source": prefix,
                     "name": name or str(qid),
                     "kind": "injected",
                 }

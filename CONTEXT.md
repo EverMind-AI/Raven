@@ -37,8 +37,8 @@ A model id together with the provider whose credential serves it, as one value
 not say which key reaches it, and updating one half is how one vendor's key ends
 up on another vendor's endpoint. A turn resolves its binding once at `run_turn`
 entry and holds it in a context var for the whole turn tree, so everything under
-that turn -- the loop, the context engine's LLM-backed segments, the skill gate
-and rewriter, the consolidator, and any task the turn detaches -- reads the same
+that turn -- the loop, the context engine's LLM-backed segments, the
+consolidator, and any task the turn detaches -- reads the same
 pair. _Avoid_: "the current model" / "the active provider" for this; both name
 one half.
 
@@ -64,7 +64,7 @@ happens only here.
 **Subsystem pin**:
 A model configured for one subsystem rather than for the conversation, as a
 model and the provider serving it (`context.curator_model` +
-`curator_provider`, `skill_forge.llm_gate_model` + `llm_gate_provider`). Both
+`curator_provider`). Both
 halves because an id alone is ambiguous the moment a gateway is configured:
 `openrouter` + `anthropic/claude-haiku-4-5` and `anthropic` +
 `claude-haiku-4-5` are both valid and name different credentials. With the
@@ -674,11 +674,6 @@ negative, because "no tag" and "the roster does not say" are indistinguishable o
 row of any kind that names a **Machine** renders a fourth tag after them, `on machine <id>`:
 the one conditional tag, since a local row has nothing to say in that position, and the id
 only, never the address.
-Also spliced into the skill gate's prompt under push discovery, where it is the account of
-what can be delegated and so decides which candidate skills are dropped as already covered;
-that copy omits the generic `builtin` row, which claims no capability bias and would read as
-covering everything. Pull discovery builds no skills segment, so it has no gate and drops
-nothing on these grounds.
 A row marked `hidden` (an acp manifest field) is enabled and on the table yet off the roster and
 the `enum`: the model cannot name it, but a task *routed* to it runs there. `routes` on a row
 makes its backend a **Routing entry** (`agent/subagent/backends/routing.py:RoutingBackend`): the
@@ -1631,7 +1626,7 @@ misses instead of naming a different message.
 **Turn Scratch** (`context_engine/scratch.py`):
 The tagged block appended to the end of the turn's user message carrying the
 phase-A segments whose builder declares `stable = False`, which today is
-`# Memory` and `# Skills`. It reaches the model but never `session.messages`:
+`# Memory`. It reaches the model but never `session.messages`:
 the assembler records on the envelope exactly what it appended (`_turn_scratch`),
 and the loop's `_save_turn`, the hooks' turn question, the watched-work judge and
 replay remove that recorded text, never whatever merely contains the tag. It
@@ -1648,10 +1643,10 @@ whatever the builders declared too volatile for the system prompt.
 **Prompt Segments**:
 The ordered blocks `ContextAssembler` renders into the system prompt, one per
 SegmentBuilder: `# Raven` (identity), the Bootstrap Files block, `# Active Skills`
-(always-on), `# Memory` (host `user.md` ⊕ EverOS recall) and `# Skills`
-(SkillForge-routed candidates — see SkillForge), and `# Curator Working State`
-(Segment 6). Under Turn Scratch, `# Memory` and `# Skills` ride in the user
-message instead. `context.dropSegments` names, by builder name, the host segments an agent does
+(always-on), `# Memory` (host `user.md` ⊕ EverOS recall), and `# Curator Working State`
+(Segment 6). Under Turn Scratch, `# Memory` rides in the user message instead.
+Retrieved skills have no segment: they reach the model as the Scent Menu (see
+Skill Discovery). `context.dropSegments` names, by builder name, the host segments an agent does
 without — an agent whose bootstrap files carry its own identity drops `identity`.
 _Avoid_: treating the system prompt as one opaque blob — each segment has an owner and order.
 
@@ -1661,7 +1656,8 @@ How an `always` skill occupies `# Active Skills`, declared per skill as
 (a digest entry: name, description, and the absolute SKILL.md path to read on
 demand). Description mode keeps a skill permanently discoverable at a few dozen
 tokens; it is the only way to surface an `always` skill cheaply, since being
-`always` also excludes it from BM25 routing into `# Skills`.
+`always` also excludes it from BM25 routing, so the scent menu and `find_skill`
+never name it.
 _Avoid_: calling a description-mode entry an "injected skill" — its body never enters the prompt.
 
 **Skill Requirements**:
@@ -1700,8 +1696,8 @@ a provider's count: the provider reports a prompt as one number and does not
 split it. The memory is the recalled segment, wherever it rides: the turn's
 scratch, or the system prompt when `context.cache.turn_scratch` is off. The
 skills are every byte the skill subsystem put in the prompt: the always-on
-digest in the system prompt, the routed segment beside the memory, the
-pull-mode scent menu in the user envelope, and the results of the skill tools
+digest in the system prompt, the scent menu in the user envelope, and the
+results of the skill tools
 (`find_skill`, `read_skill`, `use_skill`) — including one the model reached by
 forwarding through `tool_call`, whose message is named for the tool that
 produced it. A `SKILL.md` read through `read_file` or `exec` is not counted:
@@ -1836,17 +1832,18 @@ endpoint.
 **Memory Engine face** (`memory_engine/__init__.py`):
 The one address the rest of the tree reaches memory machinery by: `MemoryStore`,
 `MemoryConsolidator`, the attention and behaviors parsers, the skill catalog,
-sources, router, gate and rewriter, the store pipeline. Names resolve lazily, so
+sources and router, the store pipeline. Names resolve lazily, so
 importing the face costs nothing until one is used, and `tests/test_memory_engine_face.py`
 keeps every consumer on it -- the modules underneath are the engine's to rearrange.
 _Avoid_: importing `memory_engine.consolidate.consolidator` (or any other submodule)
 from outside the engine.
 
 **SkillForge** (`memory_engine/skill_forge/`):
-A skill retrieval and injection subsystem — it fuses candidates from three sources
+A skill retrieval subsystem — it fuses candidates from three sources
 (local BM25-indexed files, self-evolved skills recalled from the pluggable `MemoryBackend`
 — typically the EverOS plugin — and remote skills from the Skill Hub) via weighted RRF,
-with optional LLM gating and query rewriting before injecting them into the agent prompt.
+and offers them to the agent through the Scent Menu and the skill tools (see Skill
+Discovery).
 Skill distillation/evolution is handled by the local extraction pipeline
 (`skillForge.extraction`), not by SkillForge itself — that pipeline distils skills out of
 finished turns into the workspace cache, calls no service and needs no memory plugin;
@@ -1855,20 +1852,23 @@ versioning, and the retirement knobs (`retire_confidence`, `retirement_idle_days
 unwired config placeholders, not active behavior. The name is retained; it is now a live
 module under the Memory Engine, not the old top-level husk.
 
-**Skill Discovery** (`skillForge.discovery`, default `"pull"`):
-How retrieved skills reach the model. Under **pull**, a per-turn **Scent Menu**
-(`context_engine/scent.py`) rides the user envelope: on a *fat* turn (rule-judged —
-length, function-word residue, character-bigram novelty against the recent user
-window), one `SkillForgeRouter.select` renders a few `qualified_id: description`
-lines, and the model fetches bodies itself through `find_skill` (intent-bearing
-search over the same router) and `read_skill`; the system prefix carries no
-retrieved-skill bytes and no per-turn rewriter/gate LLM calls run. Under **push**,
-the pre-existing pipeline (rewriter, router, gate, selected bodies rendered into
-the system prefix) is restored unchanged.
-_Avoid_: conflating the Scent Menu with the `# Skills` segment — the menu is
-advisory tail-of-sequence data (wrapped untrusted), never a system segment; and
-conflating `find_skill` (search, returns ids + descriptions) with `read_skill`
-(body fetch by id).
+**Skill Discovery** (`context_engine/scent.py`, `agent/tools/skill_hub.py`):
+How retrieved skills reach the model, and there is one way. A per-turn **Scent Menu**
+rides the user envelope: on a *fat* turn (rule-judged — length, function-word
+residue, character-bigram novelty against the recent user window), one
+`SkillForgeRouter.select` renders a few `qualified_id: description` lines, and the
+model fetches bodies itself through `find_skill` (intent-bearing search over the
+same router) and `read_skill`. The system prefix carries only the `always` skills
+(`# Active Skills`), and no model call is spent choosing skills. The push pipeline
+(an LLM query rewriter and gate, selected bodies in the prompt) and its
+`skillForge.discovery` / `llmGate*` / `rewrite*` / `injectionMode` settings were
+retired 2026-11-13; the config loader drops those keys from older files. A built-in
+(raven-loop) sub-agent is shown agent home's skills as a directory instead and reads one
+with its own `read_skill`, the same registry route, so a run fenced by
+`restrictToWorkspace` still reaches a builtin skill whose file sits inside the package.
+_Avoid_: calling the Scent Menu a segment — it is advisory tail-of-sequence data
+(wrapped untrusted), never part of the system prompt; and conflating `find_skill`
+(search, returns ids + descriptions) with `read_skill` (body fetch by id).
 
 **Skill Hub** (`skill_hub/`):
 A remote OpenAPI skill marketplace, configured via `skillForge.router.hub` (`endpoint` /
@@ -3173,7 +3173,7 @@ are diagnostics, not the span clock.
 The caller's own name for why a model call is made — `main` for the agent
 loop's action call and for its wrap-up when the iterations run out (the turn's
 own conversation plus one instruction), `watch_work`, `title`,
-`permission_judge`, `memory_extract`, `skill_gate`, `dag_verdict`, `playbook` —
+`permission_judge`, `memory_extract`, `dag_verdict`, `playbook` —
 set with `with purpose(name):` around a provider call that records an
 `llm.call` span (`chat_with_retry` or the loop's streaming call; a bare
 `chat()` records none, so a label there would never land) and read by that

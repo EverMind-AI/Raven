@@ -900,7 +900,6 @@ _MERGED_KEYS = frozenset(
         "tools.media.video",
         "sessionTitle",
         "context",
-        "skillForge",
         "translate",
         "knowledge",
     }
@@ -1210,12 +1209,9 @@ _SETTINGS_SIMPLE_KEYS: dict[str, Any] = {
     "agents.defaults.contextWindowTokens": _chk_int_or_null("agents.defaults.contextWindowTokens", 1024, 100_000_000),
     "context.curatorModel": _chk_pin_model("context.curatorModel"),
     "context.curatorProvider": _chk_pin_provider("context.curatorProvider"),
-    "skillForge.llmGateModel": _chk_pin_model("skillForge.llmGateModel"),
-    "skillForge.llmGateProvider": _chk_pin_provider("skillForge.llmGateProvider"),
-    # The two pins as one write each, the way sessionTitle already is: a pair
-    # written a key at a time can be left half-changed by a dropped connection.
+    # The pin as one write, the way sessionTitle already is: a pair written a
+    # key at a time can be left half-changed by a dropped connection.
     "context": _chk_pin_pair("context", "curatorModel", "curatorProvider"),
-    "skillForge": _chk_pin_pair("skillForge", "llmGateModel", "llmGateProvider"),
     # The three media tools share one config shape; speech's has no provider,
     # because only the image and video tools run elsewhere.
     "tools.media.speech": _chk_media_selection,

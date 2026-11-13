@@ -1,13 +1,12 @@
 """Safety policy shared by every Hub skill path, at two strengths.
 
 The install strength (:meth:`SkillPolicy.refusal_for_detail`) gates the
-two paths that put a body to work — the ``SkillsSegmentBuilder``
-post-gate hydrate (auto-inject) and the ``use_skill`` tool - before any
+``use_skill`` tool, the one path that puts a bundle to work, before any
 ``SkillHubClient.install``:
 
 - the ``score_safety`` bar. Catalog search payloads omit the score, so
   the authoritative check runs on the *detail* metadata (already fetched
-  by both paths); a missing score passes to keep score-less deployments
+  by the tool); a missing score passes to keep score-less deployments
   working.
 - the operator blocklist (``skillForge.blocklist``), matched
   case-insensitively against any known identifier of the skill
@@ -167,10 +166,10 @@ class SkillPolicy:
         from :meth:`refusal_for_detail`: this is operator consent for the
         download itself, not a safety verdict on the skill.
 
-        Async on purpose: both install paths run on the agent's shared
-        event loop, so the blocking stdin read happens on a worker thread
-        (``asyncio.to_thread``); the per-policy lock keeps concurrently
-        gathered hydrates from interleaving two prompts on one stdin.
+        Async on purpose: ``use_skill`` runs on the agent's shared event
+        loop, so the blocking stdin read happens on a worker thread
+        (``asyncio.to_thread``); the per-policy lock keeps two concurrent
+        tool calls from interleaving their prompts on one stdin.
         """
         if self.auto_install == "off":
             return f"skill {name!r}: skillForge.autoInstall is 'off'"

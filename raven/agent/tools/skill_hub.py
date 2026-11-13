@@ -1,9 +1,9 @@
 """``read_skill`` / ``use_skill`` — Skill Hub retrieval tools.
 
 Two tools that complete the Skill Hub integration's progressive disclosure
-(catalog -> body -> scripts). The discovery half (``HubSkillSource`` injecting
-the ``# Skills`` catalog) already lands the candidate list each turn; these
-tools are the on-demand fetch the LLM drives after seeing it.
+(catalog -> body -> scripts). The discovery half (the scent menu, and
+``find_skill`` below) names the candidates; these tools are the on-demand
+fetch the LLM drives after seeing them.
 
 ``read_skill`` is the **body** route, for every source. A Hub candidate's
 catalog entry is metadata-only; a local skill declaring ``inject: description``
@@ -39,7 +39,7 @@ from raven.contracts.tool import Tool
 from raven.skill_hub.audit import record_install, write_install_meta
 from raven.skill_hub.policy import SkillPolicy, is_blocked, lint_external_paths, refuses_low_safety
 
-__all__ = ["FindSkillTool", "ReadSkillTool", "UseSkillTool"]
+__all__ = ["FindSkillTool", "ReadSkillTool", "UseSkillTool", "registry_source"]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -78,6 +78,19 @@ def lookup_on_disk(registry: "SkillRegistry | None", source: str, native: str):
     return registry.get(native, source=source)
 
 
+def registry_source(registry: "SkillRegistry | None", skill_id: str) -> str | None:
+    """The layer an addressed skill lives in (``builtin``, ``workspace``, ``hub``, ...).
+
+    ``local`` is an addressing namespace spanning every on-disk layer, so the id
+    alone cannot say whether a skill shipped with Raven or the user wrote it.
+    ``None`` when the registry holds no such skill.
+    """
+    source, native = split_qualified_id(skill_id)
+    meta = lookup_on_disk(registry, source, native)
+    found = getattr(meta, "source", None) if meta is not None else None
+    return str(found) if found else None
+
+
 _CLOSEST_IDS = 3
 # difflib scores a name in about 3 microseconds, and the search runs on the
 # event loop; past this many names a miss skips it rather than stall the loop.
@@ -87,7 +100,7 @@ _NEAR_ID_SEARCH_LIMIT = 1000
 def _local_miss_hint(registry: "SkillRegistry | None", native: str, blocked: frozenset[str]) -> str:
     """What follows a ``local/<native>`` miss.
 
-    ``# Skills`` and ``# Active Skills`` render from this same registry, so a
+    The scent menu and ``# Active Skills`` read this same registry, so a
     local id it lacks has no body in context to point at. What helps is a near
     id, for a typo, and the directories local ids come from, for a skill file
     the model saw outside them. A near id is never one the calling tool's
@@ -113,8 +126,8 @@ class ReadSkillTool(Tool):
 
     Policy runs here too: for an instruction-only skill the body *is* the
     payload, so a blocklisted or low-safety skill must be refused at the
-    read, not just at install time (``use_skill``). Under pull discovery
-    this tool is the first place a Hub skill's detail metadata — the only
+    read, not just at install time (``use_skill``). This tool is the first
+    place a Hub skill's detail metadata — the only
     payload carrying ``score_safety`` — is fetched, which makes it the
     authoritative enforcement point for the remote sources.
     """
@@ -138,12 +151,16 @@ class ReadSkillTool(Tool):
     def name(self) -> str:
         return "read_skill"
 
+    def source_of(self, skill_id: str) -> str | None:
+        """Where an addressed skill lives, for the trace of a read."""
+        return registry_source(self._registry, skill_id)
+
     @property
     def description(self) -> str:
         return (
             "Read a skill's full SKILL.md body — its actual instructions. Pass "
             "the qualified id exactly as shown in the skill menu, a find_skill "
-            "result, or the '# Skills' / '# Active Skills' context (e.g. "
+            "result, or the '# Active Skills' context (e.g. "
             "'local/my-skill', 'hub/my-skill'). This does "
             "NOT download or run anything. Call it for any skill listed by "
             "description alone, whether to judge if it fits or because you have "
@@ -184,10 +201,7 @@ class ReadSkillTool(Tool):
                 if source == "local":
                     hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
                     return f"Error: no local skill {native!r} found. {hint}"
-                return (
-                    f"Error: no {source} skill {native!r} found. Its body may "
-                    f"already be present in the '# Skills' context."
-                )
+                return f"Error: no {source} skill {native!r} found. find_skill lists the ids that resolve."
             if is_blocked(self._policy.blocked_now(), meta.name):
                 return f"Error: skill {meta.name!r} is on the operator blocklist (skillForge.blocklist) and cannot be read."
             # The renderer context injection uses, so a body fetched here names its
@@ -266,12 +280,16 @@ class UseSkillTool(Tool):
     def name(self) -> str:
         return "use_skill"
 
+    def source_of(self, skill_id: str) -> str | None:
+        """Where an addressed skill lives, for the trace of a read."""
+        return registry_source(self._registry, skill_id)
+
     @property
     def description(self) -> str:
         return (
             "Make a skill's bundled scripts/assets available on local disk so "
             "you can run them via the exec tool. Pass the skill's qualified id "
-            "from the '# Skills' catalog (e.g. 'local/x', '<memory-backend>/x', "
+            "from the skill menu or a find_skill result (e.g. 'local/x', '<memory-backend>/x', "
             "'hub/x'). Returns the SKILL.md body plus a 'scripts_dir' path when "
             "the skill ships runnable files. Pure-instruction skills need no "
             "scripts — just follow the body; you only need this for skills "
@@ -286,8 +304,8 @@ class UseSkillTool(Tool):
                 "skill_id": {
                     "type": "string",
                     "description": (
-                        "The skill's qualified id, exactly as shown in the "
-                        "'# Skills' catalog brackets (e.g. 'hub/my-skill')."
+                        "The skill's qualified id, exactly as the skill menu "
+                        "or find_skill shows it (e.g. 'hub/my-skill')."
                     ),
                 },
             },
@@ -315,10 +333,7 @@ class UseSkillTool(Tool):
             if source == "local":
                 hint = _local_miss_hint(self._registry, native, self._policy.blocked_now())
                 return f"Error: no local skill {native!r} found on disk. {hint}"
-            return (
-                f"Error: no {source} skill {native!r} found on disk. If it is a "
-                f"pure-instruction skill its body is already in your context."
-            )
+            return f"Error: no {source} skill {native!r} found on disk. find_skill lists the ids that resolve."
         scripts = meta.path.parent / "scripts"
         if scripts.is_dir():
             return f"## {meta.name}\nscripts_dir: {scripts}\ncached: true\n\n{meta.content}"

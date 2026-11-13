@@ -1512,8 +1512,8 @@ class WiringMixin:
                     enabled_reader=lambda: skill_hub_enabled(self._live_config),
                 ),
             )
-            # Pull-mode discovery: search on the model's own terms through the
-            # same router the context engine retrieves with.
+            # Discovery on the model's own terms, through the same router the
+            # scent menu reads.
             self.tools.register(
                 FindSkillTool(
                     lambda: getattr(self.context_engine, "skills_router", None),

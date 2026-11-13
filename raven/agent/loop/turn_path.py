@@ -3235,10 +3235,8 @@ class TurnPathMixin:
                 pb_tool.set_turn_message(content)
 
         context_messages = self._context_messages_for_session(session)
-        # SkillForge: Selector picks top-K. See note in the system-message
-        # branch above — empty return falls back to the full directory.
-        # Routed via ``_select_skills_for_turn`` so the engine can
-        # short-circuit selection here.
+        # No host-side selection: the engine's scent menu offers skills, so
+        # ``_select_skills_for_turn`` answers None (see its docstring).
         selected_skills = await self._select_skills_for_turn(
             content,
             context_messages,

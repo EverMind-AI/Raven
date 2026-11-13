@@ -103,34 +103,17 @@ def test_invocation_source_derives_from_enclosing_purpose(trace_dir):
 
     # A model call nested under a purpose span self-labels with that purpose;
     # a model span never becomes its own source (model-under-model inherits).
-    with trace.span("skill.gate", kind="skill"):
+    with trace.span("context.curate", kind="memory"):
         with trace.span("llm.call") as s:
-            assert s.invocation_source == "skill.gate"
+            assert s.invocation_source == "context.curate"
             semconv.llm_call(s, {"self": None, "messages": [], "tools": None, "model": "openrouter/m"}, None, None)
     sp = next(x for x in _spans_written(trace_dir) if x["name"] == "llm.call")
-    assert sp["attributes"]["llm.invocation_source"] == "skill.gate"
+    assert sp["attributes"]["llm.invocation_source"] == "context.curate"
 
 
 def test_invocation_source_is_none_at_root(trace_dir):
     with trace.span("session.turn") as root:
         assert root.invocation_source is None
-
-
-def test_purpose_spans_record_input_and_output(trace_dir):
-    from raven.observability import semconv
-
-    class _R:
-        need_retrieval = True
-        rewritten_query = "frontend design skills"
-
-    with trace.span("skill.rewrite", kind="skill") as s:
-        semconv.skill_rewrite(s, {"query": "help me install a frontend skill"}, _R(), None)
-    sp = _spans_written(trace_dir)[0]
-    a = sp["attributes"]
-    assert a["skill.rewrite.need_retrieval"] is True
-    # Wrapper node self-reports input/output as artifacts, like llm/tool/memory nodes.
-    assert "skill.rewrite.input.artifact_path" in a
-    assert "skill.rewrite.output.artifact_path" in a
 
 
 def test_personalize_extractor_records_step_io(trace_dir):
@@ -286,6 +269,49 @@ def test_tool_call_retypes_to_skill(trace_dir):
     assert "skill.scripts_dir" not in sp["attributes"]  # body-only read => no bundle
 
 
+def _skill_tools(tmp_path):
+    """The real ``read_skill`` / ``use_skill`` over a workspace holding one skill
+    of its own beside the builtin ones, in a real registry."""
+    from raven.agent.tools.registry import ToolRegistry
+    from raven.agent.tools.skill_hub import ReadSkillTool, UseSkillTool
+    from raven.memory_engine import SkillRegistry
+
+    workspace = tmp_path / "ws"
+    skill = workspace / "skills" / "invoice-audit"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: invoice-audit\ndescription: Audit an invoice.\n---\n\nCheck every line.\n", encoding="utf-8"
+    )
+    skills = SkillRegistry(workspace)
+    tools = ToolRegistry()
+    tools.register(ReadSkillTool(registry=skills))
+    tools.register(UseSkillTool(registry=skills))
+    return tools
+
+
+@pytest.mark.parametrize(
+    ("tool", "skill_id", "source"),
+    [
+        ("read_skill", "local/weather", "builtin"),
+        ("read_skill", "local/invoice-audit", "workspace"),
+        ("use_skill", "local/weather", "builtin"),
+        ("read_skill", "local/no-such-skill", "local"),
+    ],
+)
+def test_a_skill_read_records_where_the_skill_lives(trace_dir, tmp_path, tool, skill_id, source):
+    """Every on-disk skill is addressed as ``local/<name>``, so the id's prefix
+    cannot say whether it shipped with Raven or the user wrote it; the trace
+    names the layer the registry found it in. An id the registry does not hold
+    keeps the namespace it was addressed under, since the call still happened."""
+    tools = _skill_tools(tmp_path)
+
+    asyncio.run(tools.execute(tool, {"skill_id": skill_id}))
+
+    sp = next(x for x in _spans_written(trace_dir) if x["name"] == "skill.read")
+    assert sp["attributes"]["skill.id"] == skill_id
+    assert sp["attributes"]["skill.source"] == source
+
+
 def test_skill_read_reports_materialized_bundle(trace_dir):
     from raven.observability import semconv
 
@@ -334,28 +360,6 @@ def test_memory_consolidate_extractor(trace_dir):
     a = _spans_written(trace_dir)[0]["attributes"]
     assert a["memory.session_key"] == "cli:abc"
     assert a["memory.message_count"] == 3
-
-
-def test_skill_gate_extractor_records_the_subagent_roster(trace_dir):
-    """The roster is a gate input like the tool list: a trace that omits it
-    cannot say whether a candidate was dropped for overlapping a sub-agent."""
-    from raven.observability import semconv
-
-    with trace.span("skill.gate") as s:
-        semconv.skill_gate(
-            s,
-            {
-                "task": "t",
-                "candidates": [],
-                "available_tools": ["exec"],
-                "available_subagents": "Scribe [stateless] (writes decks)",
-            },
-            [],
-            None,
-        )
-    a = _spans_written(trace_dir)[0]["attributes"]
-    payload = json.loads(_stored_text(a["skill.gate.input.artifact_path"]))
-    assert payload["available_subagents"] == "Scribe [stateless] (writes decks)"
 
 
 def test_subagent_children_nest(trace_dir):

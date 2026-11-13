@@ -157,13 +157,11 @@ def _reporter(
     sink: _Sink | None,
     *,
     ids: list[str] | None = None,
-    sources: dict[str, str] | None = None,
     registry: _Registry | None = None,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         _skills_sink=sink,
         _last_injected_skill_ids=ids,
-        _last_injected_skill_sources=sources or {},
         context=SimpleNamespace(skills=SimpleNamespace(registry=registry)),
         _emit_skills=None,
     )
@@ -176,32 +174,11 @@ async def _emit_injected(fake_self: SimpleNamespace) -> None:
     await AgentLoop._emit_injected_skills(fake_self, "web:s1")
 
 
-async def test_injected_reports_registry_source_not_the_id_prefix() -> None:
-    """Every on-disk skill is addressed as ``local/``, so the prefix cannot
-    say where it came from. The panel must show the registry source."""
-    sink = _Sink()
-    fake_self = _reporter(
-        sink,
-        ids=["local/subagent-dag-orchestration"],
-        sources={"local/subagent-dag-orchestration": "builtin"},
-    )
-    await _emit_injected(fake_self)
-    assert sink.calls[0][1] == "skills_injected"
-    assert sink.calls[0][2]["skills"] == [
-        {
-            "id": "local/subagent-dag-orchestration",
-            "source": "builtin",
-            "name": "subagent-dag-orchestration",
-            "kind": "injected",
-        }
-    ]
-
-
-async def test_injected_falls_back_to_the_prefix_without_a_source_map() -> None:
+async def test_injected_reports_the_id_prefix_as_its_source() -> None:
     sink = _Sink()
     fake_self = _reporter(sink, ids=["hub/echo"])
     await _emit_injected(fake_self)
-    assert sink.calls[0][2]["skills"][0]["source"] == "hub"
+    assert sink.calls[0][2]["skills"] == [{"id": "hub/echo", "source": "hub", "name": "echo", "kind": "injected"}]
 
 
 async def test_injected_is_a_noop_without_a_sink_or_ids() -> None:
