@@ -2,7 +2,7 @@
  *
  * The store keeps every segment of a conversation; the stage draws only the
  * stretch between the segments named by the lane's `winFrom` and `winTo`, so a
- * long conversation costs the page what a screenful of turns costs. The stretch
+ * long conversation costs the stage what a screenful of turns costs. The stretch
  * is counted in turns and always cut at a segment that opens one, because
  * `stageRows` gathers what lies between two openings into one card and a cut
  * anywhere else would split it. Both ends are ids rather than indexes, so turns
