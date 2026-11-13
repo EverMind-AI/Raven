@@ -877,60 +877,6 @@ def render_recalled_memory(memories: "list[Memory] | None") -> str:
     return wrap_untrusted("\n".join(lines), source="recalled memory")
 
 
-# One host-owned line appended to the ``# Skills`` block when this turn's tool
-# surface includes ``deliver_files``. It is not a second copy of the tool's own
-# rule (that lives in ``deliver.py``'s description): it names the convention
-# competing with it. A hub skill body is written for another product, where
-# saving a file and printing its path IS the delivery, and an injected body of
-# that shape outweighs one sentence in a tool description. So the note appears
-# only on a turn that injected a skill body, and it addresses the competing
-# convention rather than restating the rule.
-SKILL_DELIVERY_NOTE = (
-    "Note: a skill body above may come from another product, where saving a file and "
-    "printing its path is how it reaches the user. That is not true on this channel -- "
-    "a path in the reply is not a delivery. Whatever a skill's own final step says, hand "
-    "a finished file over with `deliver_files`."
-)
-
-
-def render_router_skills(hits: list[Any]) -> str:
-    """Render SkillForgeRouter hits into the ``# Skills`` body (segment 5).
-
-    The ``# Skills`` heading is added by the builder; this returns only
-    the body. The header format matches
-    ``LocalSkillCatalog.load_skills_for_context``, which renders the sibling
-    ``# Active Skills`` block, so the agent sees one uniform skill layout --
-    including the ``Relative refs ... use the absolute form for read_file /
-    exec`` hint sentence that tells the agent how to consume bundled files.
-    The inline ``[qualified_id]`` after the name is this block's own: it lets
-    the after-turn feedback dispatcher correlate shown vs used skills. Empty
-    hits → ``""``.
-    """
-    if not hits:
-        return ""
-    parts: list[str] = []
-    for h in hits:
-        meta = getattr(h, "meta", {}) or {}
-        name = h.name
-        qid = h.qualified_id
-        skill_dir = meta.get("skill_dir")
-        if skill_dir:
-            header = (
-                f"### Skill: {name}  [{qid}]\n"
-                f"**Skill directory**: `{skill_dir}`\n"
-                "Relative refs (e.g. `references/x.md`, `./scripts/y.sh`) "
-                "resolve under this directory — use the absolute form for "
-                "read_file / exec.\n"
-            )
-        else:
-            header = f"### Skill: {name}  [{qid}]\n"
-        parts.append(header)
-        content = (getattr(h, "content", "") or "").strip()
-        if content:
-            parts.append(content)
-    return "\n\n".join(parts)
-
-
 # What a declared surface means for the person reading the reply. Glossed rather
 # than reported as a bare word because the name alone does not tell the model
 # what it may suggest: a served page and a terminal share the ``tui`` channel, so

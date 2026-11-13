@@ -611,10 +611,8 @@ def test_the_render_loads_through_trunks_own_loader(grounded):
         "projectFiles": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"],
     }
     # No skillForge block in the product config (fleet parity): the trunk
-    # defaults land. Both knobs act only under push discovery, and this
-    # product runs pull, so neither buys a per-turn LLM call here.
-    assert extensions.skill_forge.rewrite_enabled is True
-    assert extensions.skill_forge.llm_gate_enabled is True
+    # defaults land whole.
+    assert extensions.skill_forge.model_dump() == type(extensions.skill_forge)().model_dump()
 
 
 def test_no_llm_key_anywhere_refuses_before_serving(grounded, monkeypatch):

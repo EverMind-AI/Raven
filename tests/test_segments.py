@@ -16,13 +16,11 @@ from raven.context_engine.segments import (
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
     render,
 )
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.context import AssemblyContext
 from raven.contracts.memory import Memory
-from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 
 
 def _ctx(tmp_path: Path, msg: str = "hi", session=None, **over) -> AssemblyContext:
@@ -58,17 +56,6 @@ class _Backend:
 def _tool_defs(*names: str):
     """A ``get_tool_definitions`` callable in OpenAI function-call shape."""
     return lambda: [{"type": "function", "function": {"name": n, "parameters": {}}} for n in names]
-
-
-class _Source:
-    name = "local"
-    weight = 1.0
-
-    def __init__(self, hits):
-        self._hits = hits
-
-    async def search(self, query, history, k):
-        return list(self._hits)
 
 
 # ---------------------------------------------------------------------------
@@ -502,28 +489,10 @@ class TestRecallHasATurnBudget:
         assert everos_backend._RECALL_TIMEOUT_S < memory_segment._RECALL_BUDGET_S
 
 
-class TestSkills:
-    async def test_router_hits_render_into_skills(self, tmp_path: Path) -> None:
-        hits = [RouterHit(qualified_id="local/g", name="g", content="how to git", score=0.9)]
-        b = SkillsSegmentBuilder(SkillForgeRouter([_Source(hits)]), skill_top_k=5)
-        seg = await b.build(_ctx(tmp_path))
-        assert seg.text.startswith("# Skills")
-        assert "### Skill: g  [local/g]" in seg.text
-        assert "how to git" in seg.text
-        assert seg.meta["injected_skill_ids"] == ["local/g"]
-
-    async def test_empty_hits_empty_text(self, tmp_path: Path) -> None:
-        b = SkillsSegmentBuilder(SkillForgeRouter([]), skill_top_k=5)
-        seg = await b.build(_ctx(tmp_path))
-        assert seg.text == ""
-        assert seg.meta["injected_skill_ids"] == []
-
-
 class TestCollectToolNames:
-    """Shared by segments 4 and 5, with opposite consequences for a wrong
-    answer: segment 5 loses a gate hint, segment 4 loses content. Both read
-    ``None`` as 'do not gate', so the empty-vs-unknown distinction is load
-    bearing and pinned here."""
+    """Read by the always-on skills segment, where a wrong answer loses
+    content. ``None`` reads as 'do not gate', so the empty-vs-unknown
+    distinction is load bearing and pinned here."""
 
     def test_reads_openai_and_flat_shapes(self) -> None:
         got = render.collect_tool_names(lambda: [{"function": {"name": "a"}}, {"name": "b"}])

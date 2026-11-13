@@ -179,10 +179,10 @@ class OrganGlueMixin:
         """Whether the active engine owns skill selection via SkillForgeRouter.
 
         Always ``True`` now — there is a single
-        :class:`ContextAssembler` whose SkillsSegmentBuilder handles
-        selection and populates ``injected_skill_ids`` in the assembled
-        metadata. Kept as a method (rather than inlined) because several
-        callsites still gate on it; it no longer branches on engine name.
+        :class:`ContextAssembler` whose scent menu offers skills and
+        populates ``injected_skill_ids`` in the assembled metadata. Kept as a
+        method (rather than inlined) because several callsites still gate on
+        it; it no longer branches on engine name.
         """
         return True
 
@@ -193,8 +193,8 @@ class OrganGlueMixin:
     ) -> list[Any] | None:
         """No host-side pre-selection — the engine's SkillForgeRouter owns it.
 
-        The unified engine selects + renders skills internally and
-        surfaces ``injected_skill_ids`` via ``AssembledContext.metadata``,
+        The engine's scent menu offers skills and surfaces their
+        ``injected_skill_ids`` via ``AssembledContext.metadata``,
         which AgentLoop reads out of ``_last_injected_skill_ids`` after
         assemble. No SkillMeta list flows through this path.
         """

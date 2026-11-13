@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from raven.config.held_secrets import scrub_held_secrets, scrub_tool_blocks
-from raven.memory_engine import LocalSkillCatalog, MemoryStore, SkillMeta
+from raven.memory_engine import LocalSkillCatalog, MemoryStore
 from raven.security.trust import wrap_untrusted, wrap_untrusted_blocks
 from raven.utils.messages import build_assistant_message
 
@@ -52,11 +52,7 @@ class ContextBuilder:
         # (sees real wall 12:25 while sim fake_now is 22:05).
         self._now_fn = now_fn or datetime.now
 
-    def build_system_prompt(
-        self,
-        selected_skills: list[SkillMeta] | None = None,
-        current_message: str | None = None,
-    ) -> str:
+    def build_system_prompt(self, current_message: str | None = None) -> str:
         """Render a representative system prompt for token estimation.
 
         Since the unified :class:`ContextAssembler` took over per-turn
@@ -65,9 +61,10 @@ class ContextBuilder:
         renderer that :class:`MemoryConsolidator` and
         ``AgentLoop._make_token_budget`` use to *estimate* prompt size —
         it renders identity / bootstrap / host ``# Memory`` / always-
-        skills / a skills summary, with no EverOS recall, router hits,
-        or Curator working state (those are owned by the assembler's
-        segment builders now).
+        skills, with no EverOS recall or Curator working state (those are
+        owned by the assembler's segment builders now). Like the request
+        path, it carries no skill directory: the rest of the pool reaches
+        the model through the scent menu and the skill tools.
 
         When ``current_message`` is supplied, MemoryStore picks the H2
         sections of user.md most relevant to it rather than dumping the
@@ -93,84 +90,6 @@ class ContextBuilder:
             )
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
-
-        # ``# Skills`` summary (estimation only — the real per-turn
-        # ``# Skills`` segment is rendered by SkillsSegmentBuilder from
-        # the SkillForgeRouter's hits).
-        # If a selector has chosen top-K, render only those; otherwise the
-        # full directory (legacy behavior). Empty list is treated as "no
-        # selection", so a selector that returns nothing does not
-        # accidentally hide all skills.
-        only = selected_skills if selected_skills else None
-
-        # Two injection modes (config: skill_forge.injection_mode):
-        # - "summary"   (default): XML directory + read-tool instruction.
-        #                Cheap on tokens, but eval shows agents often skip
-        #                the read step.
-        # - "full_body" (OpenSpace style): inline up to inject_max skills'
-        #                full body. Higher token cost; guarantees the model
-        #                sees the procedures.
-        cfg = getattr(self.skills, "_config", None)
-        mode = getattr(cfg, "injection_mode", "summary") if cfg else "summary"
-        if mode == "full_body" and only:
-            inject_max = getattr(cfg, "inject_max", 2) if cfg else 2
-            # Telemetry: log which skills were injected to
-            # <workspace>/skill_injections.jsonl for offline analysis
-            # (used by claweval / PinchBench A/B to attribute scores to
-            # specific skills the agent saw inline).
-            try:
-                import json as _json
-                import time as _time
-
-                injected_meta = []
-                for _m in only[:inject_max] if inject_max else only:
-                    injected_meta.append(
-                        {
-                            "name": getattr(_m, "name", None),
-                            "id": str(getattr(_m, "id", "")),
-                            "source": getattr(_m, "source", None),
-                            "body_len": len(getattr(_m, "content", "") or ""),
-                        }
-                    )
-                _path = self.workspace / "skill_injections.jsonl"
-                with open(_path, "a") as _f:
-                    _f.write(
-                        _json.dumps(
-                            {
-                                "ts": _time.time(),
-                                "mode": "full_body",
-                                "inject_max": inject_max,
-                                "skills": injected_meta,
-                            }
-                        )
-                        + "\n"
-                    )
-            except Exception:
-                pass  # never break agent on telemetry failure
-            ctx = self.skills.load_skills_for_context(
-                only,
-                max_inject=inject_max,
-            )
-            if ctx:
-                parts.append(f"""# Skills
-
-The following skills provide **domain knowledge and tested procedures** relevant to this task.
-
-**How to use skills:**
-- If a skill contains **step-by-step procedures or commands**, follow them — they are verified workflows.
-- If a skill provides **reference information, best practices, or tool guides**, use it as context to inform your decisions.
-- Each skill may include bundled resources (scripts, references, assets) in its skill directory.
-
-{ctx}""")
-        else:
-            skills_summary = self.skills.build_skills_summary(only=only)
-            if skills_summary:
-                parts.append(f"""# Skills
-
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
-{skills_summary}""")
 
         # Knowing no channel, the estimate counts the conversation block the way
         # the served page shows it, as it does the board in the identity.
@@ -224,7 +143,6 @@ Skills with available="false" need dependencies installed first - you can try in
         self,
         history: list[dict[str, Any]],
         current_message: str,
-        selected_skills: list[SkillMeta] | None = None,
         media: list[str] | None = None,
         channel: str | None = None,
         chat_id: str | None = None,
@@ -244,10 +162,7 @@ Skills with available="false" need dependencies installed first - you can try in
         return [
             {
                 "role": "system",
-                "content": self.build_system_prompt(
-                    selected_skills,
-                    current_message=current_message,
-                ),
+                "content": self.build_system_prompt(current_message=current_message),
             },
             *history,
             {"role": "user", "content": merged},

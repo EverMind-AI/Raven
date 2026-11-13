@@ -199,7 +199,7 @@ class TestReadSkill:
 class TestLocalMiss:
     """What a ``local/`` miss tells the model, from either tool.
 
-    ``# Skills`` and ``# Active Skills`` render from the registry these tools
+    The scent menu and ``# Active Skills`` read the registry these tools
     read, so a local id it lacks has no body in context to fall back on. When
     another tool's skill folder was listed beside Raven's, the model tried each
     name there as ``local/<name>``, and every read failed until it opened the
@@ -288,15 +288,17 @@ class TestLocalMiss:
 
 
 @pytest.mark.parametrize(
-    ("tool_cls", "hint"),
-    [(ReadSkillTool, "'# Skills' context"), (UseSkillTool, "already in your context")],
+    "tool_cls",
+    [ReadSkillTool, UseSkillTool],
 )
-async def test_a_memory_backend_miss_still_points_at_the_injected_body(tool_cls, hint: str, tmp_path: Path) -> None:
-    """The router injects a memory-backend hit with its body, and that skill
-    need not be on disk, so for that source the context hint holds."""
+async def test_a_memory_backend_miss_points_at_the_search(tool_cls, tmp_path: Path) -> None:
+    """A memory-backend skill reaches the model as a menu line, never as a body
+    in context, and need not be on disk, so a miss names the search that lists
+    the ids that do resolve rather than a context the model was never shown."""
     out = await tool_cls(registry=_registry_with(tmp_path)).execute(skill_id="everos/abc123")
     assert out.startswith("Error: no everos skill 'abc123' found")
-    assert hint in out
+    assert "find_skill" in out
+    assert "context" not in out
 
 
 class TestUseSkill:
@@ -343,8 +345,8 @@ class TestUseSkill:
         No fake can catch this one: the bug was handing ``source="local"``
         straight to ``SkillRegistry.get``, whose compound key only ever holds
         physical layers (workspace / builtin / external), so every ``local/*``
-        id — the exact form the router prints in the ``# Skills`` brackets and
-        both tool descriptions tell the agent to copy — resolved to None.
+        id — the exact form the scent menu prints and both tool descriptions
+        tell the agent to copy — resolved to None.
         """
         from raven.memory_engine.skill_local import SkillRegistry
 

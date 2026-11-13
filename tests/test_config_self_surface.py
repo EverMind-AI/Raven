@@ -32,7 +32,6 @@ _NEXT_TURN_READERS: dict[str, tuple[str, str]] = {
     "tools.mcpServers.*.enabled": ("raven.config.live", "mcp_server_configs"),
     "memory.memoryTopK": ("raven.config.live", "memory_top_k"),
     "skillForge.blocklist": ("raven.config.live", "skill_blocklist"),
-    "skillForge": ("raven.config.live", "skill_gate_pin"),
     "context": ("raven.config.live", "curator_pin"),
     "playbooks.disabled": ("raven.config.live", "disabled_playbook_names"),
     "tracing.enabled": ("raven.tracing.config", "def enabled"),

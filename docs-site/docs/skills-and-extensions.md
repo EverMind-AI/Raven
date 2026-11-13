@@ -51,19 +51,17 @@ kept, so turning it back on returns to the same catalog. A legacy explicit
 `null` endpoint keeps the source off. Switching applies to the next search
 either way, with no reload.
 
-`skillForge.discovery` defaults to `pull`: the model receives a small
-name/description menu on eligible turns and uses `find_skill` to search and
-`read_skill` to fetch a body. `push` instead runs the selection/injection
-pipeline and places selected bodies in context. Pull avoids the push path's
-per-turn rewriting and gating model calls; it does not mean all retrieval is
-free or every turn receives the same menu.
+Retrieved skills reach the model as a small name/description menu on eligible
+turns; the model uses `find_skill` to search and `read_skill` to fetch a body.
+Only skills marked `always` sit in the system prompt. Choosing skills costs a
+turn no extra model calls, though a lookup can still reach the Skill Hub, and
+not every turn receives a menu.
 
 Bundle downloads have a separate consent setting:
 
 ```json
 {
   "skillForge": {
-    "discovery": "pull",
     "autoInstall": "prompt"
   }
 }
@@ -98,7 +96,7 @@ Keep three mechanisms separate:
    it through that backend's plugin settings. The host does not use
    `skillForge.extraction` to start a local extraction pipeline.
 
-SkillForge retrieves and injects skills and manages downloaded bundles.
+SkillForge retrieves and offers skills and manages downloaded bundles.
 Feedback-driven skill versioning and retirement are not implemented by the host.
 Inspect the memory backend's stored cases, skills, and health to check what
 experience it has retained. The separate Evolver tool evaluates harness changes

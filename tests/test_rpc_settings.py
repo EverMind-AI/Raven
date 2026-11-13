@@ -1177,8 +1177,6 @@ async def test_writing_without_the_plugin_is_a_typed_error(everos_toml):
         ("context.curatorProvider", "deepseek", 7, ("context", "curatorProvider")),
         ("sessionTitle.model", "deepseek-chat", 7, ("sessionTitle", "model")),
         ("sessionTitle.provider", "deepseek", 7, ("sessionTitle", "provider")),
-        ("skillForge.llmGateModel", "deepseek-chat", 7, ("skillForge", "llmGateModel")),
-        ("skillForge.llmGateProvider", "deepseek", 7, ("skillForge", "llmGateProvider")),
         ("sessions.autoArchiveAfterDays", 30, 0, ("sessions", "autoArchiveAfterDays")),
     ],
 )
@@ -1362,8 +1360,6 @@ async def test_settings_set_memory_backend_refuses_a_non_name(cfg, value):
     [
         ("context.curatorModel", "m"),
         ("context", {"curatorModel": "m", "curatorProvider": "deepseek"}),
-        ("skillForge.llmGateModel", "m"),
-        ("skillForge", {"llmGateModel": "m", "llmGateProvider": "deepseek"}),
         ("agents.defaults.maxToolIterations", 40),
         ("agents.defaults.contextWindowTokens", 4096),
         ("sessionTitle.model", "m"),
@@ -1588,7 +1584,6 @@ async def test_settings_set_hub_switch_refuses_a_broken_block(cfg):
     [
         ("skillForge", "skill_forge", "blocklist", ["a"], ["zed"]),
         ("sessionTitle", "session_title", "model", "old/model", "openai/new"),
-        ("skillForge", "skill_forge", "llmGateModel", "old/model", "openai/new"),
     ],
 )
 async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active, camel, snake, field, previous, value):
@@ -1610,7 +1605,6 @@ async def test_settings_leaf_write_follows_the_non_null_alias(cfg, snake_active,
     "camel,snake,model_field,provider_field,keep",
     [
         ("sessionTitle", "session_title", "model", "provider", {"enabled": False}),
-        ("skillForge", "skill_forge", "llmGateModel", "llmGateProvider", {"llmGateEnabled": True}),
     ],
 )
 async def test_settings_pin_merge_follows_the_non_null_alias(
@@ -1709,7 +1703,7 @@ async def test_settings_set_media_speech_selection_merges(cfg):
 
 @pytest.mark.parametrize(
     "parent,model_field,provider_field",
-    [("context", "curatorModel", "curatorProvider"), ("skillForge", "llmGateModel", "llmGateProvider")],
+    [("context", "curatorModel", "curatorProvider")],
 )
 async def test_settings_set_pin_pairs_write_as_one_merged_object(cfg, parent, model_field, provider_field):
     cfg.write_text(json.dumps({parent: {"keep": True}}), encoding="utf-8")

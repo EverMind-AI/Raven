@@ -101,24 +101,16 @@ describe('model roles', () => {
 
   it('reads a keyed role from whichever spelling the config file carries', async () => {
     const camel = snap()
-    ;(camel.raw.skillForge as Record<string, unknown>).llmGateModel = 'claude-haiku-4-5'
-    ;(camel.raw.skillForge as Record<string, unknown>).llmGateProvider = 'anthropic'
-    expect(roleValue(role('gate'), camel)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
+    camel.raw.sessionTitle = { model: 'claude-haiku-4-5', provider: 'anthropic' }
+    expect(roleValue(role('title'), camel)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
 
-    /* settings.get returns the file as written, so the harness's camel block
-       has to go or it answers for the snake one. */
     const snake = snap()
-    delete snake.raw.skillForge
-    snake.raw.skill_forge = { llmGateModel: 'claude-haiku-4-5', llmGateProvider: 'anthropic' }
-    expect(roleValue(role('gate'), snake)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
-
-    const titled = snap()
-    titled.raw.session_title = { model: 'claude-sonnet-4-5', provider: 'anthropic' }
-    expect(roleValue(role('title'), titled)).toEqual({ model: 'claude-sonnet-4-5', provider: 'anthropic' })
+    snake.raw.session_title = { model: 'claude-haiku-4-5', provider: 'anthropic' }
+    expect(roleValue(role('title'), snake)).toEqual({ model: 'claude-haiku-4-5', provider: 'anthropic' })
 
     install(snake)
     await mount('model')
-    expect(pill('gui.settings.roles.gate').textContent).toContain('claude-haiku-4-5')
+    expect(pill('gui.settings.roles.title').textContent).toContain('claude-haiku-4-5')
   })
 
   it('the chat role writes through pickModel and reloads', async () => {
@@ -333,13 +325,13 @@ describe('model roles', () => {
     }
     expect(everosLocked(role('rerank'), exported)).toBe('env')
     expect(everosLocked(role('memllm'), exported)).toBe(null)
-    expect(everosLocked(role('gate'), foreign)).toBe(null)
+    expect(everosLocked(role('title'), foreign)).toBe(null)
   })
 
   it('a typed id is added to the provider before the role names it', async () => {
     const { calls } = install()
     await mount('model')
-    await act(async () => { fireEvent.click(pill('gui.settings.roles.gate')) })
+    await act(async () => { fireEvent.click(pill('gui.settings.roles.title')) })
     const box = screen.getByPlaceholderText('gui.picker.search_or_type_ph') as HTMLInputElement
     await act(async () => { fireEvent.change(box, { target: { value: 'claude-haiku-4-5' } }) })
     await act(async () => { fireEvent.click(screen.getByText('gui.model.pick_use {"id":"claude-haiku-4-5"}')) })
@@ -348,8 +340,8 @@ describe('model roles', () => {
         op: 'add_model', slug: 'anthropic', model: 'claude-haiku-4-5',
         output_modalities: ['text'],
       }],
-      ['set', { key: 'skillForge.llmGateModel', value: 'claude-haiku-4-5' }],
-      ['set', { key: 'skillForge.llmGateProvider', value: 'anthropic' }],
+      ['set', { key: 'sessionTitle.model', value: 'claude-haiku-4-5' }],
+      ['set', { key: 'sessionTitle.provider', value: 'anthropic' }],
     ])
   })
 
@@ -452,7 +444,7 @@ describe('model roles', () => {
 
   it('rolesUsing counts a role following the chat model through the chat provider', () => {
     const data = snap()
-    expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toEqual(['chat', 'title', 'gate'])
+    expect(rolesUsing(data, 'anthropic').map((r) => r.id)).toEqual(['chat', 'title'])
     expect(rolesUsing(data, 'openrouter').map((r) => r.id)).toEqual(['curator', 'memllm'])
     expect(rolesUsing(data, 'anthropic', 'claude-sonnet-4-5')).toEqual([])
     expect(rolesUsing(data, 'openrouter', 'openai/gpt-4o').map((r) => r.id)).toEqual(['memllm'])

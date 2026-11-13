@@ -43,17 +43,15 @@ Skill Hub 候选。可用性取决于配置和服务连通性；目录搜索命�
 重新打开时回到同一个目录。旧配置里显式的 `null` endpoint 表示保持关闭。两个方向都在下一次
 搜索时生效，不需要重新加载。
 
-`skillForge.discovery` 默认 `pull`：在符合条件的轮次中提供简短的名称/描述菜单，
-模型用 `find_skill` 搜索、用 `read_skill` 读取正文。`push` 则运行选择/注入管线，
-把选中正文放入上下文。Pull 避免 push 路径逐轮的重写与门控模型调用，但不意味着所有
-检索都无成本，也不意味着每轮获得相同菜单。
+检索到的技能以简短的名称/描述菜单出现在符合条件的轮次中，模型用 `find_skill` 搜索、
+用 `read_skill` 读取正文。只有标记为 `always` 的技能常驻系统提示词。挑选技能不会让一轮
+多出模型调用，不过查找时仍可能访问 Skill Hub，也不是每轮都会出现菜单。
 
 Bundle 下载有独立的同意设置：
 
 ```json
 {
   "skillForge": {
-    "discovery": "pull",
     "autoInstall": "prompt"
   }
 }
@@ -80,7 +78,7 @@ EverOS 是默认记忆后端插件，与 Raven core 独立发行，通过 Memory
 3. 经验提炼由选用的记忆后端提供，通过该后端的插件设置配置。
    宿主不使用 `skillForge.extraction` 启动本地提炼管线。
 
-SkillForge 负责技能检索、注入和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
+SkillForge 负责技能检索、提供和下载包管理。宿主未实现反馈驱动的技能版本管理与退役。
 可通过记忆后端存储的 case、skill 和健康状态检查保留了哪些经验。Harness
 自进化由独立 Evolver 工具执行，并经过基准评估，先读
 [Evolver：使用与实验](evolver.md)，实现细节见[设计与实现](self-evolution-map.md)。
