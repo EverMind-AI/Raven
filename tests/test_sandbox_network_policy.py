@@ -10,7 +10,6 @@ from raven.sandbox.network_policy import (
     NetworkGrant,
     compile_network_policy,
     network_from_allow_net,
-    policy_digest,
 )
 
 SKIP = "NETWORK_TLS_MODE_SKIP"
@@ -68,8 +67,8 @@ def test_rule_names_are_stable_across_calls():
     grants = [NetworkGrant("/usr/bin/curl", "example.org", 443)]
     first, second = compile_network_policy(network, grants), compile_network_policy(network, grants)
     assert list(first) == list(second)
-    assert policy_digest(first) == policy_digest(second)
-    assert policy_digest(first) != policy_digest(compile_network_policy(network))
+    assert first == second
+    assert first != compile_network_policy(network)
 
 
 @pytest.mark.parametrize(

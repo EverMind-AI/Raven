@@ -34,7 +34,6 @@ from raven.sandbox.network_policy import (
     compile_network_policy,
     grant_rules,
     network_from_allow_net,
-    policy_digest,
 )
 from raven.utils.pid import pid_alive
 
@@ -296,7 +295,6 @@ class OpenShellExecutor(SandboxExecutor):
             fixed = compile_network_policy(network_from_allow_net(allow_net))
             network_source = lambda: fixed  # noqa: E731
         self._network_source = network_source
-        self._applied_digest: str | None = None
         self._applied_policies: dict[str, dict] = {}
         self._last_source: dict[str, dict] | None = None
         # Rules granted for this sandbox only ("allow once"), kept across syncs.
@@ -369,7 +367,6 @@ class OpenShellExecutor(SandboxExecutor):
             raise
         self._name = name
         self._applied_policies = dict(network_policies)
-        self._applied_digest = policy_digest(network_policies)
         self._last_source = network_policies
         logger.info("OpenShell sandbox %s started (image=%s)", name, self._image)
 
@@ -538,8 +535,10 @@ class OpenShellExecutor(SandboxExecutor):
         if source is self._last_source:
             return True
         desired = {**source, **self._local_rules}
-        digest = policy_digest(desired)
-        if digest == self._applied_digest:
+        # Compared as dicts, not by a digest: the open rule's port list is one
+        # shared object, so an unchanged policy compares without walking its
+        # 65,535 ports, which serializing it on every command would.
+        if desired == self._applied_policies:
             self._last_source = source
             return True
         add = {rule: body for rule, body in desired.items() if self._applied_policies.get(rule) != body}
@@ -557,7 +556,6 @@ class OpenShellExecutor(SandboxExecutor):
             logger.warning("OpenShell sandbox %s did not load network policy version %s in time", name, version)
             return False
         self._applied_policies = desired
-        self._applied_digest = digest
         self._last_source = source
         return True
 

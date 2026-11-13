@@ -652,6 +652,22 @@ class TestLiveNetwork:
         await ex.exec("true")
         assert cp.merges == []
 
+    async def test_an_unchanged_open_policy_compiled_afresh_is_compared_without_walking_its_ports(self, tmp_path):
+        from raven.config.schema import NetworkPermissions
+
+        network = NetworkPermissions()
+        cp = FakeControlPlane()
+        ex = OpenShellExecutor(
+            image="i", workspace=tmp_path, control_plane=cp, network_source=lambda: compile_network_policy(network)
+        )
+        await ex.start()
+        cpu = time.process_time()
+        for _ in range(200):
+            assert await ex.sync_network() is True
+        # Serializing the open rule's 65,535 ports costs about 3 ms of CPU a sync.
+        assert time.process_time() - cpu < 0.15
+        assert cp.merges == []
+
     async def test_a_rule_the_source_dropped_is_removed(self, tmp_path):
         cp, ex, state = await self._started(tmp_path, {"allow_open": {"name": "allow_open"}})
         state["policies"] = {}
