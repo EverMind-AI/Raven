@@ -31,6 +31,11 @@ sys.path.insert(0, str(PLUGIN_DIR))
 
 from research_flow.gates.verify import DraftReviewerGate  # noqa: E402
 from research_flow.support import ledger as ledger_mod  # noqa: E402
+from research_flow.support.harness_text import (  # noqa: E402
+    VERIFY_REJECT_PREFIX,
+    harness_ask_kind,
+    strip_tool_response,
+)
 
 from raven.contracts.loop_hooks import AgentHookContext  # noqa: E402
 
@@ -168,6 +173,28 @@ async def test_a_plain_reject_is_recorded_as_reject(tmp_path):
     assert [r["outcome"] for r in rows] == ["reject"]
     assert rows[0]["elided_in_context"] == 0
     assert rows[0]["revisions"] == 1
+
+
+@pytest.mark.asyncio
+async def test_the_bounce_arrives_as_tool_output_not_as_a_new_user_query(tmp_path):
+    """Qwen3.5/3.6's template keeps a turn's earlier thinks only while no new user
+    query follows them, and its backward scan skips a user message that is wholly
+    tool-response blocks. A verdict the gate produced is tool output, so the bounce
+    is wrapped: unwrapped, every assistant turn before it renders without its
+    <think>, and a bounced turn loses the reasoning of the prefix it must build on."""
+    _open_ledger(tmp_path)
+    gate = DraftReviewerGate(_Rejecter(), fail_open_on_elided_evidence=False)
+
+    decision = await gate.after_iteration(_ctx(elided=False))
+
+    injected = decision.rollback_inject
+    assert [m["role"] for m in injected] == ["assistant", "user"]
+    body = injected[1]["content"].strip()
+    assert body.startswith("<tool_response>") and body.endswith("</tool_response>")
+    # The ask itself is unchanged inside the wrapper, so the measurement channel
+    # still names it and a reworded nudge stays the only thing that can move it.
+    assert harness_ask_kind(body) == "verify_reject"
+    assert strip_tool_response(body).startswith(VERIFY_REJECT_PREFIX)
 
 
 @pytest.mark.asyncio

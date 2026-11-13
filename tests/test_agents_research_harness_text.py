@@ -25,6 +25,7 @@ from research_flow.support.harness_text import (  # noqa: E402
     SEARCH_CLOSED_PREFIX,
     TOOL_OUTPUT_ELIDED,
     VERIFY_REJECT_PREFIX,
+    as_tool_response,
     harness_ask_kind,
     harness_body_kind,
     is_elided_tool_output,
@@ -32,6 +33,7 @@ from research_flow.support.harness_text import (  # noqa: E402
     is_harness_echo,
     plain_first_notice,
     search_closed_notice,
+    strip_tool_response,
 )
 
 # --- the emitter and the recognisers share one string -----------------------
@@ -239,3 +241,20 @@ def test_the_sidecar_header_is_strict_only():
 
 def test_an_answer_discussing_the_sidecar_is_not_an_echo():
     assert is_harness_echo(f"The page listed extra names under {ORPHAN_ENTITIES_HEADER}.") is False
+
+
+def test_an_ask_delivered_as_tool_output_is_the_same_ask():
+    """The verify bounce ships wrapped so the chat template does not read it as a new
+    user query; the label this channel measures must not move with the delivery."""
+    body = as_tool_response("A reviewer rejected the draft above. Fix the listed issues.")
+    assert body.startswith("<tool_response>") and body.endswith("</tool_response>")
+    assert harness_ask_kind(body) == "verify_reject"
+    assert strip_tool_response(body) == "A reviewer rejected the draft above. Fix the listed issues."
+
+
+def test_model_text_that_merely_mentions_a_tool_response_is_not_unwrapped():
+    """Only a body that is wholly one wrapper is unwrapped - the same bar the chat
+    template's own scan applies - so model prose quoting the tag keeps its text."""
+    prose = "I will read the <tool_response> block above before answering."
+    assert strip_tool_response(prose) == prose
+    assert harness_ask_kind(prose) is None

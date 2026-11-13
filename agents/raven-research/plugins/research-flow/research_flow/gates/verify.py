@@ -26,7 +26,7 @@ from research_flow.support._verdict import coerce_bool, parse_bool_verdict
 from research_flow.support.answer_text import closing_tag_bar, visible_answer
 from research_flow.support.evidence_round import EvidenceRound
 from research_flow.support.evidence_select import choose_by_coverage, task_terms
-from research_flow.support.harness_text import harness_body_kind, is_elided_tool_output
+from research_flow.support.harness_text import as_tool_response, harness_body_kind, is_elided_tool_output
 from research_flow.support.ledger import ledger_append
 from research_flow.support.turn_task import task_for
 
@@ -485,7 +485,14 @@ class DraftReviewerGate(Gate):
             rollback=True,
             rollback_inject=[
                 {"role": "assistant", "content": draft},
-                {"role": "user", "content": prompt.format(feedback=feedback)},
+                # Wrapped as tool output, which is what a verdict the gate produced is. Sent
+                # as a bare user turn it reads to Qwen3.5/3.6's chat template as a new query,
+                # and every assistant turn before it then renders without its <think> - so a
+                # bounced turn loses the reasoning of the whole research prefix it is being
+                # asked to build on, and the training rows built from these runs lose it too.
+                # See ``as_tool_response``; a plain user turn changes nothing for a provider
+                # that has no such rule.
+                {"role": "user", "content": as_tool_response(prompt.format(feedback=feedback))},
             ],
             notes=[f"verify_gate: rejected, revision {state['revisions']}/{self._max_revisions}"],
         )

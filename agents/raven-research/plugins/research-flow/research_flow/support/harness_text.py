@@ -228,6 +228,33 @@ CHECKPOINT_ASK_PREFIX = "[research checkpoint]"
 VERIFY_REJECT_PREFIX = "A reviewer rejected the draft above."
 """Opening of both verify-gate rejections (``gates/verify.py``)."""
 
+_TOOL_RESPONSE_OPEN = "<tool_response>"
+_TOOL_RESPONSE_CLOSE = "</tool_response>"
+
+
+def as_tool_response(body: str) -> str:
+    """A harness ask wrapped as the tool output it is.
+
+    Qwen3.5/3.6's chat template scans backwards for the last user message to decide
+    which assistant turns keep their ``<think>``, and it skips a user message whose
+    whole content is ``<tool_response>`` blocks. A verdict the harness produced is
+    exactly that - tool output, not the user speaking - so wrapping it leaves every
+    earlier think in context instead of stripping the whole prefix of a bounced turn.
+    Measured on the model's own template: wrapped renders identically with and
+    without ``preserve_thinking`` (593 chars either way), unwrapped renders 489
+    against 560.
+    """
+    return f"{_TOOL_RESPONSE_OPEN}\n{body}\n{_TOOL_RESPONSE_CLOSE}"
+
+
+def strip_tool_response(content: object) -> str:
+    """``content`` with one surrounding tool-response wrapper removed, if present."""
+    s = str(content or "").strip()
+    if s.startswith(_TOOL_RESPONSE_OPEN) and s.endswith(_TOOL_RESPONSE_CLOSE):
+        return s[len(_TOOL_RESPONSE_OPEN) : -len(_TOOL_RESPONSE_CLOSE)].strip()
+    return s
+
+
 _HARNESS_ASKS = (
     ("finalize", FINALIZE_ASK_PREFIX),
     ("checkpoint", CHECKPOINT_ASK_PREFIX),
@@ -251,7 +278,10 @@ def harness_ask_kind(content: object) -> str | None:
     "the harness asked and the model never answered" cannot drift when someone
     rewords a nudge, and only the sub-label depends on wording.
     """
-    s = str(content or "").strip()
+    # The wrapper is stripped first: an ask delivered as tool output is the same ask,
+    # and this channel measures how a run ended - a label that moved when the delivery
+    # changed would read as the failure mode disappearing.
+    s = strip_tool_response(content)
     for name, prefix in _HARNESS_ASKS:
         if s.startswith(prefix):
             return name
