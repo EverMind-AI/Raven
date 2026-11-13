@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { setTranslator } from '../../../i18n/t'
 import { resetSources, setSources } from '../../../state/sources'
 import { install, modelSource, mount, source as settingsSource } from '../../../test/settingsHarness'
 import * as store from '../store'
@@ -141,6 +142,27 @@ describe('usage page', () => {
     install(undefined, { usage: async () => stats(['2026-09-10'], true) })
     await mount('usage')
     expect(screen.getByText('gui.settings.usage.cache_write')).toBeTruthy()
+  })
+
+  /* Long model ids and two-word headers once widened the table past the card,
+     which put a sideways scroller under a report the reader was already
+     reading. It shares one width now, and a two-word header stacks so a
+     narrow column still says both words. */
+  it('shares the card width across the model table and stacks two-word headers', async () => {
+    install(undefined, { usage: async () => stats(['2026-09-10']) })
+    setTranslator((key, vars) => {
+      if (key === 'gui.settings.usage.input_fresh') return 'Uncached input'
+      return vars ? `${key} ${JSON.stringify(vars)}` : key
+    })
+    await mount('usage')
+    const table = document.querySelector('table.settings-utab-models')
+    expect(table).not.toBeNull()
+    expect(table!.parentElement!.className).toBe('settings-utab-fit')
+    expect(table!.parentElement!.parentElement!.className).toBe('settings-card')
+    const word = screen.getByText('Uncached')
+    expect(word.className).toBe('settings-thw')
+    expect(word.parentElement!.children).toHaveLength(2)
+    expect(word.parentElement!.textContent).toBe('Uncached input')
   })
 
   it('a custom range is refused before any call when from is after to or outside the 90 days', async () => {
