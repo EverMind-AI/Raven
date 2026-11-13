@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from evolver.applier.path_guard import (
+    ImmutablePathError,
     UnsafePathError,
     assert_patch_allowed,
     assert_safe_relative_paths,
@@ -83,6 +84,10 @@ def test_a_case_varied_immutable_path_is_still_immutable(path: str):
     differently by the filesystem underneath it.
     """
     assert is_immutable(path)
+    # The predicate is not the contract the evolver calls: a patch naming the
+    # path in another case must be refused at the door, not only flagged.
+    with pytest.raises(ImmutablePathError):
+        assert_patch_allowed([path])
 
 
 @pytest.mark.parametrize(
