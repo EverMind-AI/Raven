@@ -74,3 +74,9 @@
 @media (prefers-reduced-motion: reduce) {
   .transcript-nav, .transcript-navmark > i { transition: none; }
 }
+
+/* An end of a Lane Window (TranscriptPage.tsx's WindowEdge): something for an
+   observer to watch, taking no room at either end of the column -- the
+   negative margin cancels its own height and the column's 12px gap, so nothing
+   moves when the window reaches that end of the conversation and the edge goes. */
+.transcript-edge { height: 1px; margin-bottom: -13px; }

@@ -627,3 +627,132 @@ describe('revealTurnAt', () => {
     expect(moved).toEqual([600 - 16])
   })
 })
+
+describe('the turn nav over a lane window', () => {
+  /* Fifty turns a minute apart, of which the stage mounts the last twenty. */
+  const T0 = Date.parse('2026-10-29T10:00:00Z')
+  const fifty = (): Array<{ role: string; text: string; timestamp: string }> =>
+    Array.from({ length: 50 }, (_, i) => [
+      { role: 'user', text: `question ${i + 1}`, timestamp: new Date(T0 + i * 60_000).toISOString() },
+      { role: 'assistant', text: `reply ${i + 1}`, timestamp: new Date(T0 + i * 60_000 + 1000).toISOString() },
+    ]).flat()
+  const mounted = (): HTMLElement[] => [...stage().querySelectorAll<HTMLElement>('[data-ask]')]
+
+  beforeEach(() => {
+    vi.stubGlobal('IntersectionObserver', class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+      takeRecords(): [] { return [] }
+    })
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('draws a mark for every turn, mounted or not', async () => {
+    await settle(() => { mount.history(fifty()) })
+    expect(mounted()).toHaveLength(20)
+    expect(marks()).toHaveLength(50)
+  })
+
+  it('mounts a turn above the window before taking the reader to it', async () => {
+    await settle(() => { mount.history(fifty()) })
+    const scroll = $('#scroll') as HTMLElement
+    const to = vi.spyOn(scroll, 'scrollTo').mockImplementation(() => {})
+
+    act(() => { fireEvent.click(marks()[0]!) })
+
+    expect(mounted()[0]!.querySelector('.msg.me')?.textContent).toBe('question 1')
+    /* Only the turns from the one landed on: a jump to the first turn does not
+       mount the whole conversation. */
+    expect(mounted()).toHaveLength(20)
+    expect(to).toHaveBeenCalledTimes(1)
+    /* Instant: a glide that starts at the tail is still "at the end" on its
+       first frame, which reads as the reader following the tail again. */
+    expect((to.mock.calls[0]![0] as ScrollToOptions).behavior).toBe('instant')
+  })
+
+  it('lands a turn it just mounted where the row comes to rest', async () => {
+    await settle(() => { mount.history(fifty()) })
+    const scroll = $('#scroll') as HTMLElement
+    const to = vi.spyOn(scroll, 'scrollTo').mockImplementation(() => {})
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: this.dataset.ask ? 503 : 0 } as DOMRect
+    })
+    /* The entrance animation (page.css's `.in`) still holds the fresh row 3px
+       below where it lands, and its box carries that until the animation ends. */
+    const real = window.getComputedStyle.bind(window)
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => (
+      (el as HTMLElement).dataset?.ask ? ({ transform: 'matrix(1, 0, 0, 1, 0, 3)' } as CSSStyleDeclaration) : real(el, pseudo)))
+
+    act(() => { fireEvent.click(marks()[0]!) })
+
+    expect((to.mock.calls[0]![0] as ScrollToOptions).top).toBe(500 - 16)
+  })
+
+  it('glides to a turn the window already holds, as it always has', async () => {
+    await settle(() => { mount.history(fifty()) })
+    const scroll = $('#scroll') as HTMLElement
+    const to = vi.spyOn(scroll, 'scrollTo').mockImplementation(() => {})
+
+    act(() => { fireEvent.click(marks()[45]!) })
+
+    expect(to).toHaveBeenCalledTimes(1)
+    expect((to.mock.calls[0]![0] as ScrollToOptions).behavior).toBeUndefined()
+  })
+
+  it('reads a turn above the window as passed, not ahead', async () => {
+    await settle(() => { mount.history(fifty()) })
+    const scroll = $('#scroll') as HTMLElement
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 1000 } as DOMRect)
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 9000 })
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 1000 })
+    /* Every mounted question below the reading line: the reader is in the last
+       turn the window keeps hidden. */
+    mounted().forEach((el, i) => {
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({ top: 2000 + i * 500 } as DOMRect)
+    })
+
+    await settle(() => { scroll.dispatchEvent(new Event('scroll')) })
+    await settle()
+    expect(marks()[29]!.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('does not read the end of a window short of the tail as the last turn', async () => {
+    await settle(() => { mount.history(fifty()) })
+    vi.spyOn(($('#scroll') as HTMLElement), 'scrollTo').mockImplementation(() => {})
+    act(() => { fireEvent.click(marks()[0]!) })
+    const scroll = $('#scroll') as HTMLElement
+    vi.spyOn(scroll, 'getBoundingClientRect').mockReturnValue({ top: 0, height: 1000 } as DOMRect)
+    Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 9000 })
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 1000 })
+    scroll.scrollTop = 8000
+    /* At the bottom of the twenty turns the jump mounted, every one of them
+       scrolled past the line. */
+    mounted().forEach((el, i) => {
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({ top: -3000 + i * 100 } as DOMRect)
+    })
+
+    await settle(() => { scroll.dispatchEvent(new Event('scroll')) })
+    await settle()
+    expect(marks()[19]!.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('mounts the turn a task board step names before scrolling to its reply', async () => {
+    await settle(() => { mount.history(fifty()) })
+    const scroll = $('#scroll') as HTMLElement
+    const moved: number[] = []
+    const how: Array<ScrollBehavior | undefined> = []
+    scroll.scrollTo = ((opts: ScrollToOptions) => { moved.push(Number(opts.top)); how.push(opts.behavior) }) as typeof scroll.scrollTo
+    /* Pinned on the prototype, since the rows only exist once the turn mounts:
+       a reply sits at 600 and a question at 100, so where the scroll lands
+       says which one it found. */
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: this.id === 'scroll' ? 0 : this.dataset.answer ? 600 : 100 } as DOMRect
+    })
+
+    expect(revealTurnAt(new Date(T0 + 2 * 60_000 + 30_000).toISOString())).toBe(true)
+    expect(moved).toEqual([600 - 16])
+    expect(how).toEqual(['instant'])
+    expect(mounted()[0]!.querySelector('.msg.me')?.textContent).toBe('question 3')
+  })
+})

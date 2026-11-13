@@ -5823,3 +5823,218 @@ describe('transcript island, an imported session', () => {
     expect($('.turn.me .achip .nm')?.textContent).toBe('shot.png')
   })
 })
+
+describe('transcript island, the lane window', () => {
+  /* `n` question-and-answer turns a minute apart; from turn `gapAt` on, three
+     hours later, so the date line before that question is the case's to read. */
+  const turns = (n: number, gapAt = 0): HistoryMessage[] => {
+    const t0 = Date.parse('2026-11-13T08:00:00Z')
+    const out: HistoryMessage[] = []
+    for (let i = 1; i <= n; i += 1) {
+      const at = t0 + i * 60_000 + (gapAt && i >= gapAt ? 3 * 3600_000 : 0)
+      out.push({ role: 'user', text: `question ${i}`, timestamp: iso(at) })
+      out.push({ role: 'assistant', text: `answer ${i}`, timestamp: iso(at + 1000) })
+    }
+    return out
+  }
+  const asks = (): Element[] => $$('#stage [data-ask]')
+  const firstAsk = (): string => (asks()[0]?.querySelector('.msg.me')?.textContent || '').trim()
+  const edge = (): HTMLElement | null => $('#stage [data-edge="top"]')
+  const bottomEdge = (): HTMLElement | null => $('#stage [data-edge="bottom"]')
+  const lastAsk = (): string => (asks().at(-1)?.querySelector('.msg.me')?.textContent || '').trim()
+  const idOf = (n: number): number =>
+    mount.shownLane()!.segs.find((s) => s.kind === 'ask' && s.body === `question ${n}`)!.id
+  const scroller = (): HTMLElement => $('#scroll') as HTMLElement
+
+  /* happy-dom never intersects anything: the edge's observer is caught here and
+     fired by hand. */
+  class FakeObserver {
+    static made: FakeObserver[] = []
+    targets: Element[] = []
+    gone = false
+    constructor(readonly cb: IntersectionObserverCallback, readonly opts?: IntersectionObserverInit) {
+      FakeObserver.made.push(this)
+    }
+    observe(el: Element): void { this.targets.push(el) }
+    unobserve(): void {}
+    disconnect(): void { this.gone = true }
+    takeRecords(): IntersectionObserverEntry[] { return [] }
+  }
+  const reach = (side: 'top' | 'bottom' = 'top'): void => {
+    const io = FakeObserver.made
+      .filter((o) => !o.gone && o.targets.some((t) => (t as HTMLElement).dataset.edge === side)).at(-1)
+    if (!io) throw new Error(`no ${side} edge is being watched`)
+    act(() => {
+      io.cb(io.targets.map((target) => ({ target, isIntersecting: true }) as unknown as IntersectionObserverEntry), io as never)
+    })
+  }
+  /* The scroller's size, which happy-dom does not lay out. */
+  const size = (height: number, client: number, top: number): void => {
+    const sc = scroller()
+    Object.defineProperty(sc, 'scrollHeight', { configurable: true, value: height })
+    Object.defineProperty(sc, 'clientHeight', { configurable: true, value: client })
+    sc.scrollTop = top
+  }
+
+  beforeEach(() => {
+    FakeObserver.made = []
+    vi.stubGlobal('IntersectionObserver', FakeObserver)
+  })
+
+  it('mounts only the last turns of a long conversation, under an edge', () => {
+    act(() => { mount.history(turns(50)) })
+    expect(asks()).toHaveLength(20)
+    expect(firstAsk()).toBe('question 31')
+    expect(edge()).not.toBeNull()
+  })
+
+  it('mounts a conversation no longer than the window whole, with no edge', () => {
+    act(() => { mount.history(turns(15)) })
+    expect(asks()).toHaveLength(15)
+    expect(edge()).toBeNull()
+  })
+
+  it('still dates the first mounted question against the hidden one before it', () => {
+    act(() => { mount.history(turns(25, 6)) })
+    expect(firstAsk()).toBe('question 6')
+    const lines = $$('.transcript-date')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.nextElementSibling?.textContent).toContain('question 6')
+  })
+
+  it('mounts earlier turns as the reader nears the edge, until there are none', () => {
+    act(() => { mount.history(turns(50)) })
+    expect(FakeObserver.made.at(-1)?.opts?.root).toBe(scroller())
+    reach()
+    expect(asks()).toHaveLength(40)
+    expect(firstAsk()).toBe('question 11')
+    reach()
+    expect(asks()).toHaveLength(50)
+    expect(edge()).toBeNull()
+  })
+
+  it('keeps what the reader is looking at where it was when turns mount above it', () => {
+    act(() => { mount.history(turns(50)) })
+    size(5000, 500, 300)
+    const row = edge()!.nextElementSibling as HTMLElement
+    let reads = 0
+    row.getBoundingClientRect = () => ({ top: reads++ ? 2100 : 100 }) as DOMRect
+    const to = vi.spyOn(scroller(), 'scrollTo')
+    reach()
+    /* Instant: the scroller is smooth by default, and a correction that glides
+       is a slide the reader watches. */
+    expect(to).toHaveBeenCalledWith({ top: 300 + 2000, behavior: 'instant' })
+  })
+
+  it('gives a wide window back to the tail once the reader is at the end', () => {
+    act(() => { mount.history(turns(50)) })
+    reach()
+    reach()
+    expect(asks()).toHaveLength(50)
+    size(9000, 500, 3000)
+    act(() => { scroller().dispatchEvent(new Event('scroll')) })
+    expect(asks()).toHaveLength(50)
+    size(9000, 500, 8500)
+    act(() => { scroller().dispatchEvent(new Event('scroll')) })
+    expect(asks()).toHaveLength(20)
+    expect(firstAsk()).toBe('question 31')
+  })
+
+  it('leaves a window one widening wide alone at the end', () => {
+    act(() => { mount.history(turns(50)) })
+    reach()
+    size(9000, 500, 8500)
+    act(() => { scroller().dispatchEvent(new Event('scroll')) })
+    expect(asks()).toHaveLength(40)
+  })
+
+  it('keeps a live conversation the reader follows to its last turns', () => {
+    for (let i = 1; i <= 45; i += 1) {
+      act(() => {
+        mount.ask(`question ${i}`)
+        mount.answer(`answer ${i}`)
+      })
+    }
+    /* Back to the last 20 at the 41st turn (22 to 41), then four more. */
+    expect(asks()).toHaveLength(24)
+    expect(firstAsk()).toBe('question 22')
+  })
+
+  it('mounts the turns a jump lands on, between two edges', () => {
+    act(() => { mount.history(turns(50)) })
+    expect(mount.reveal(idOf(5))).toBe(true)
+    expect(asks()).toHaveLength(20)
+    expect(firstAsk()).toBe('question 5')
+    expect(lastAsk()).toBe('question 24')
+    expect(edge()).not.toBeNull()
+    expect(bottomEdge()).not.toBeNull()
+  })
+
+  it('says it mounted a turn when the window only grew down to it', () => {
+    act(() => { mount.history(turns(50)) })
+    mount.reveal(idOf(5))
+    /* Turn 25 is the first one past the window's end, so the window grows to
+       it and its start stays where it was. */
+    expect(mount.reveal(idOf(25))).toBe(true)
+    expect(firstAsk()).toBe('question 5')
+    expect(lastAsk()).toBe('question 44')
+    expect(mount.reveal(idOf(25))).toBe(false)
+  })
+
+  it('mounts later turns as the reader nears the bottom edge, until the tail', () => {
+    act(() => { mount.history(turns(50)) })
+    mount.reveal(idOf(5))
+    expect(FakeObserver.made.find((o) => !o.gone && (o.targets[0] as HTMLElement).dataset.edge === 'bottom')?.opts?.root)
+      .toBe(scroller())
+    reach('bottom')
+    expect(asks()).toHaveLength(40)
+    expect(lastAsk()).toBe('question 44')
+    reach('bottom')
+    expect(asks()).toHaveLength(46)
+    expect(lastAsk()).toBe('question 50')
+    expect(bottomEdge()).toBeNull()
+  })
+
+  it('takes a reader going down from a jump to the newest turns', () => {
+    act(() => { mount.history(turns(50)) })
+    mount.reveal(idOf(5))
+    tail.setStuck(true)
+    const to = vi.spyOn(scroller(), 'scrollTo')
+    act(() => { tail.down() })
+    /* Once at the window's old height, and again once the newest turns are
+       drawn, which is where the tail actually is. */
+    expect(to).toHaveBeenCalledTimes(2)
+    expect(asks()).toHaveLength(20)
+    expect(firstAsk()).toBe('question 31')
+    expect(bottomEdge()).toBeNull()
+  })
+
+  it('shows a question sent while the window is away from the tail', () => {
+    act(() => { mount.history(turns(50)) })
+    mount.reveal(idOf(5))
+    tail.setStuck(true)
+    act(() => { mount.ask('a new question') })
+    expect(lastAsk()).toBe('a new question')
+    expect(bottomEdge()).toBeNull()
+  })
+
+  it('gives nothing back while the window stops short of the tail', () => {
+    act(() => { mount.history(turns(50)) })
+    mount.reveal(idOf(5))
+    reach('bottom')
+    size(9000, 500, 8500)
+    act(() => { scroller().dispatchEvent(new Event('scroll')) })
+    expect(asks()).toHaveLength(40)
+  })
+
+  it('takes nothing away from a reader who scrolled up during a live conversation', () => {
+    tail.setStuck(false)
+    for (let i = 1; i <= 45; i += 1) {
+      act(() => {
+        mount.ask(`question ${i}`)
+        mount.answer(`answer ${i}`)
+      })
+    }
+    expect(asks()).toHaveLength(45)
+  })
+})

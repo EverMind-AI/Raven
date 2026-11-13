@@ -326,6 +326,10 @@ export interface Lane {
   /* bumps on every append that asks the view to scroll down */
   scrollReq: number
   segs: Seg[]
+  /* The Lane Window (laneWindow.ts): the opening segment the stage draws from
+     (0: the start of the lane), and the one it stops before (0: the tail). */
+  winFrom: number
+  winTo: number
   listeners: Set<() => void>
   /* streaming say buffer for the open step, flushed once per frame */
   pend: string

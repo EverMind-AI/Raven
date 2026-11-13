@@ -19,8 +19,9 @@ import { ds } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { openDeskTab, openDeskTask } from '../desk/store'
 import { draw as sessionDraw } from '../rail/store'
-import { agentStage, history as drawHistory, shownLane } from './mount'
-import { bringUp, goTo as goToTurn } from './TurnNav'
+import { opens } from './laneWindow'
+import { agentStage, history as drawHistory, reveal, shownLane } from './mount'
+import { bringUp } from './TurnNav'
 
 import type { SessRow } from '../rail/types'
 import type { AnswerData, AskData, DeliveredData, HistoryMessage, Seg, StageCtx, StageOpts } from './types'
@@ -167,11 +168,7 @@ export function branch(): void {
    when the browser and the server share a time zone. */
 const TURN_NEAR_MS = 5 * 60 * 1000
 
-/* Where a turn begins: a question someone asked, or a delegated result
-   re-entering, which opens one with no question typed. A message merged into
-   the running turn opens nothing. */
 type Opening = AskData | DeliveredData
-const opens = (seg: Seg): seg is Opening => (seg.kind === 'ask' && !seg.midTurn) || seg.kind === 'sdlv'
 
 /* The answer a turn ended on: the last one between its opening and the next. */
 function replyOf(segs: readonly Seg[], opening: Opening): AnswerData | null {
@@ -209,9 +206,9 @@ export function revealTurnAt(turnAt: string, turnId?: string | null): boolean {
   const best = (turnId ? lane.segs.find((seg): seg is Opening => opens(seg) && seg.turnId === turnId) : undefined)
     ?? nearest(lane.segs, turnAt, turnId)
   if (!best) return false
+  const mounted = reveal(best.id)
   const reply = replyOf(lane.segs, best)
-  const row = reply ? rowOf('answer', reply.id) : best.kind === 'sdlv' ? rowOf('delivered', best.id) : null
-  if (row) bringUp(row)
-  else if (best.kind === 'ask') goToTurn(best)
+  const row = reply ? rowOf('answer', reply.id) : rowOf(best.kind === 'sdlv' ? 'delivered' : 'ask', best.id)
+  if (row) bringUp(row, mounted)
   return true
 }
