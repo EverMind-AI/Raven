@@ -10,6 +10,7 @@ import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
+import { mountedTurns, opens, revealWin, TAIL_TURNS, tailFrom, TRIM_SLACK, WIDEN_TURNS, widenFrom, widenTo } from './laneWindow'
 
 import type { SubagentRow } from '../../rpc/generated'
 import type { DeliveryRow } from '../workspace/types'
@@ -265,7 +266,7 @@ const lanes = new Set<Lane>()
 
 export function newLane(key: string, main: boolean): Lane {
   const lane: Lane = {
-    key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], listeners: new Set(),
+    key, main, epoch: 0, listV: 0, scrollReq: 0, segs: [], winFrom: 0, winTo: 0, listeners: new Set(),
     pend: '', pendStep: null, flush: null,
     agentKey: null, agentDrawn: 0, agentHold: null, agentTurn: 0, agentShut: false, agentStart: 0, liveFold: 0, running: false, empty: '',
   }
@@ -354,6 +355,45 @@ export function stopFlush(lane: Lane): void {
 /* Re-emit whatever is buffered; the restore path pokes this. */
 export function nudge(lane: Lane): void {
   bumpList(lane)
+}
+
+/* Which stretch the stage draws (laneWindow.ts). */
+export function setWindow(lane: Lane, from: number, to: number): void {
+  if (lane.winFrom === from && lane.winTo === to) return
+  lane.winFrom = from
+  lane.winTo = to
+  bumpList(lane)
+}
+
+export function widenWindow(lane: Lane): void {
+  setWindow(lane, widenFrom(lane.segs, lane.winFrom, WIDEN_TURNS), lane.winTo)
+}
+
+export function widenWindowDown(lane: Lane): void {
+  setWindow(lane, lane.winFrom, widenTo(lane.segs, lane.winTo, WIDEN_TURNS))
+}
+
+/* Only for a reader at the tail: what goes is above anything they are reading.
+   A window short of the tail has no tail to be at. */
+export function trimWindow(lane: Lane): void {
+  if (lane.winTo) return
+  if (mountedTurns(lane.segs, { from: lane.winFrom, to: 0 }) > TAIL_TURNS + TRIM_SLACK) {
+    setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
+  }
+}
+
+export function revealWindow(lane: Lane, id: number): void {
+  const win = revealWin(lane.segs, { from: lane.winFrom, to: lane.winTo }, id, TAIL_TURNS)
+  setWindow(lane, win.from, win.to)
+}
+
+/* A window short of the tail, for a reader going to it: the newest turns are
+   mounted in its place, and the view is asked to follow them down again once
+   they are drawn, since the height it would scroll to now is the old window's. */
+export function windowToTail(lane: Lane): void {
+  if (!lane.winTo) return
+  poke(lane)
+  setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
 }
 
 /* ── segment ops ───────────────────────────────────────────────────────── */
@@ -2004,6 +2044,7 @@ export function history(lane: Lane, messages: HistoryMessage[], after: HistoryMe
   closeProducts()
   /* Where the next slice of this stream picks the count up. */
   if (!lane.main) lane.agentTurn = turnNo
+  else setWindow(lane, tailFrom(lane.segs, TAIL_TURNS), 0)
 }
 
 /* The composer bakes an "[attachments]" note plus "- path" bullets into the
@@ -2063,15 +2104,14 @@ function lastTurnFold(lane: Lane): FoldData | null {
    one; a mid-turn injection joins the turn under way, which is the boundary
    `collapse` draws too. */
 function turnCount(lane: Lane): number {
-  return lane.segs.filter((s) => s.kind === 'sdlv' || (s.kind === 'ask' && !s.midTurn)).length
+  return lane.segs.filter(opens).length
 }
 
 /* When the lane's last turn opened, from its own opening row's stamp. */
 function lastTurnOpening(lane: Lane): number {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
-    if (s.kind === 'sdlv') return s.at || 0
-    if (s.kind === 'ask' && !s.midTurn) return s.at || 0
+    if (opens(s)) return s.at || 0
   }
   return 0
 }

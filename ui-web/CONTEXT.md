@@ -142,6 +142,30 @@ is why the transcript's store keeps a listener set per lane -- a token appended
 to the open step re-renders that leaf and nothing else -- and why a resident
 conversation keeps the detached host its lane is mounted in.
 
+**Lane Window**:
+The stretch of the conversation's lane the stage mounts: between the segments
+the lane's `winFrom` and `winTo` name, every segment in the store still kept
+(`features/transcript/laneWindow.ts`). Counted in turns and always cut at a
+segment that opens one -- a question that is not `midTurn`, or a delivered
+result -- because `stageRows` gathers what lies between two openings into one
+card. Opening a stored conversation mounts its last 20 turns -- and more at
+once when they are no taller than the scroller's height plus the top edge's
+1200px margin, since the edge is then already inside that margin and widens
+again. An end that stops short of the
+conversation's carries an edge, and once that edge comes within 1200px of the
+scroller the window widens by 20 turns that way; the top edge holds the row the
+reader had where it was. The turn nav and the task board mount the turn they go
+to before scrolling there (`mount.tsx`'s `reveal`): 20 turns from it, joined to
+the window when the two meet. Going down to the tail (`tail.ts`'s `down`, which
+the down pill and a question sent both reach) mounts the last 20 turns in place
+of a window short of it, and a reader at the tail gives a window wider than 40
+turns back to the last 20. The scroller's own length is the window's, not the
+conversation's: its scrollbar reaches only mounted turns, while the turn nav
+reaches every turn. Only the conversation's own lane is windowed; an agent
+stage pane mounts its whole record.
+_Avoid_: "window" alone for this -- the Trajectory View's window is a time
+range, and the browser's window is the page.
+
 **Turn Nav**:
 The strip of marks at the chat column's right edge, one per turn of the
 conversation on the stage, drawn by `features/transcript/TurnNav.tsx` under the

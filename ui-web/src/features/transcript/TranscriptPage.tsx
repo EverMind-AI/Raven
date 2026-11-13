@@ -26,6 +26,7 @@ import {
   fileKind, fileURL, openDelivery as wsOpenDelivery, openPath as wsOpenPath, thumbURL, versioned,
 } from '../workspace/store'
 import * as citations from './citations'
+import { endIndex, startIndex } from './laneWindow'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -1856,11 +1857,15 @@ function dateLine(at: number, now = new Date()): string {
   return `${d.getFullYear() === now.getFullYear() ? md : `${d.getFullYear()}-${md}`} ${hm}`
 }
 
-function stageRows(lane: Lane): ReactElement[] {
+function stageRows(lane: Lane, from = 0, to = lane.segs.length): ReactElement[] {
   const rows: ReactElement[] = []
   let lastAt = 0
-  let i = 0
-  while (i < lane.segs.length) {
+  for (let j = from - 1; j >= 0 && !lastAt; j -= 1) {
+    const prev = lane.segs[j] as Seg
+    if (prev.kind === 'ask' && prev.at) lastAt = prev.at
+  }
+  let i = from
+  while (i < to) {
     const seg = lane.segs[i] as Seg
     if (!CARDED.has(seg.kind)) {
       if (seg.kind === 'ask' && seg.at) {
@@ -1874,7 +1879,7 @@ function stageRows(lane: Lane): ReactElement[] {
       continue
     }
     let end = i
-    while (end < lane.segs.length && CARDED.has(lane.segs[end]!.kind)) end += 1
+    while (end < to && CARDED.has(lane.segs[end]!.kind)) end += 1
     /* A step that draws nothing yet takes the card down with it: the card is
        the frame around what a turn produced, and a frame around nothing is
        what the first seconds of every turn looked like. */
@@ -1936,16 +1941,86 @@ function stageRows(lane: Lane): ReactElement[] {
   return rows
 }
 
+/* How far beyond the scroller's top or bottom an edge starts mounting more
+   turns: a screen or two, so they are in place before the reader gets there. */
+const EDGE_MARGIN = 1200
+
+interface Anchor { row: Element; top: number }
+
+/* An end of a Lane Window that stops short of the conversation's. Watched
+   rather than scrolled to: once it comes within the margin the window widens
+   that way. Turns mounted above the reader would push what they read down, so
+   the top edge holds the row they had at the top where it was; turns mounted
+   below move nothing. A fresh observer per window, because an observer reports
+   only changes and an edge still within the margin after a widening would
+   otherwise never report again. */
+function WindowEdge({ lane, side, at, anchor }: {
+  lane: Lane; side: 'top' | 'bottom'; at: number; anchor: { current: Anchor | null }
+}): ReactElement {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const edge = ref.current
+    const scroll = document.getElementById('scroll')
+    if (!edge || !scroll || typeof IntersectionObserver === 'undefined') return
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      io.disconnect()
+      if (side === 'bottom') {
+        store.widenWindowDown(lane)
+        return
+      }
+      const row = edge.nextElementSibling
+      anchor.current = row ? { row, top: row.getBoundingClientRect().top } : null
+      store.widenWindow(lane)
+    }, { root: scroll, rootMargin: side === 'top' ? `${EDGE_MARGIN}px 0px 0px 0px` : `0px 0px ${EDGE_MARGIN}px 0px` })
+    io.observe(edge)
+    return () => io.disconnect()
+  }, [lane, side, at, anchor])
+  return <div ref={ref} className="transcript-edge" data-edge={side} aria-hidden="true" />
+}
+
 export function StageView({ lane }: { lane: Lane }): ReactElement {
   useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.listV)
   const req = useSyncExternalStore((cb) => store.subscribe(lane, cb), () => lane.scrollReq)
-  /* Tail-follow after the commit, so the new height is the one measured. */
+  const from = lane.winFrom
+  const anchor = useRef<Anchor | null>(null)
+  /* Tail-follow after the commit, so the new height is the one measured. A
+     reader following the tail reads nothing above it, so a window grown that
+     far goes back to the tail's here. */
   useEffect(() => {
-    if (lane.main) tail.down()
+    if (!lane.main) return
+    tail.down()
+    if (tail.isStuck()) store.trimWindow(lane)
   }, [lane, req])
+  /* Before paint, so the turns mounted above the reader never show them a jump.
+     Measured off the row rather than the scroll height: a browser that anchors
+     the scroll itself has already moved it, and then the shift reads zero.
+     Instant, because the scroller's own behaviour is smooth (page.css) and a
+     correction that glides is a jump the reader watches. */
+  useLayoutEffect(() => {
+    const held = anchor.current
+    anchor.current = null
+    const scroll = document.getElementById('scroll')
+    if (!held || !scroll || !held.row.isConnected) return
+    const shift = held.row.getBoundingClientRect().top - held.top
+    if (shift) scroll.scrollTo({ top: scroll.scrollTop + shift, behavior: 'instant' })
+  }, [lane, from])
+  useEffect(() => {
+    const scroll = document.getElementById('scroll')
+    if (!lane.main || !scroll) return
+    const atEnd = (): void => {
+      if (scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 4) store.trimWindow(lane)
+    }
+    scroll.addEventListener('scroll', atEnd, { passive: true })
+    return () => scroll.removeEventListener('scroll', atEnd)
+  }, [lane])
+  const start = startIndex(lane.segs, from)
+  const end = endIndex(lane.segs, lane.winTo)
   return (
     <>
-      {stageRows(lane)}
+      {start > 0 ? <WindowEdge lane={lane} side="top" at={from} anchor={anchor} /> : null}
+      {stageRows(lane, start, end)}
+      {end < lane.segs.length ? <WindowEdge lane={lane} side="bottom" at={lane.winTo} anchor={anchor} /> : null}
     </>
   )
 }

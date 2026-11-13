@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import { holdsHost } from '../../state/session/hosts'
 import * as citations from './citations'
 import * as store from './store'
+import * as tail from './tail'
 import { AgentStageView, StageView } from './TranscriptPage'
 
 import type { AgentCtxLike } from './store'
@@ -109,6 +110,22 @@ export function shownLane(): Lane | null {
   const host = document.getElementById('stage')?.querySelector<HTMLElement>(':scope > [data-tsl]')
   return host ? HOSTS.get(host)?.lane ?? null : null
 }
+
+/* Mounts the turn that holds segment `id` on the stage's lane, if the Lane
+   Window had left it out, and says whether it had. Synchronous, because every
+   caller's next line looks for that turn's row in the drawn DOM. */
+export function reveal(id: number): boolean {
+  const lane = shownLane()
+  if (!lane) return false
+  const was = [lane.winFrom, lane.winTo]
+  flushSync(() => store.revealWindow(lane, id))
+  return lane.winFrom !== was[0] || lane.winTo !== was[1]
+}
+
+tail.onDown(() => {
+  const lane = shownLane()
+  if (lane) store.windowToTail(lane)
+})
 
 /* ── the public face the page's own machinery calls ───────────────────── */
 

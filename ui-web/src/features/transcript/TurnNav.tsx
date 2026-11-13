@@ -21,7 +21,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { t } from '../../i18n/t'
 import { ago } from '../../lib/ago'
 import { HEADER_LEAD, headerBand } from '../../lib/dom'
-import { shownLane } from './mount'
+import { endIndex, startIndex } from './laneWindow'
+import { reveal, shownLane } from './mount'
 import * as store from './store'
 import * as tail from './tail'
 
@@ -68,22 +69,33 @@ const questionOf = (seg: AskData): HTMLElement | null =>
 
 /* The reader chose a place, so the transcript stops following its tail before
    it moves; the scroller's own listener turns tail-follow back on if the move
-   ends at the tail. */
-export function bringUp(row: HTMLElement): void {
+   ends at the tail. `instant` for a row the Lane Window has just mounted above
+   a reader at the tail: the mount leaves them at the end, so a glide's first
+   frame would still read as following the tail and haul them back. */
+/* How far a row's own animation has it from where it rests: a row the Lane
+   Window has just mounted is still rising into place (page.css's `.in`), and its
+   box carries that offset until the animation ends. */
+function rising(row: HTMLElement): number {
+  const transform = getComputedStyle(row).transform
+  return transform && transform !== 'none' ? new DOMMatrixReadOnly(transform).m42 : 0
+}
+
+export function bringUp(row: HTMLElement, instant = false): void {
   const scroll = document.getElementById('scroll')
   if (!scroll) return
   tail.setStuck(false)
   /* The header floats over the scroller, so the row is put under the title
      bar's lower edge rather than at the scroller's own top (lib/dom.ts,
      headerBand), with the same lead the up pill leaves. */
-  const top = scroll.scrollTop + row.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+  const top = scroll.scrollTop + row.getBoundingClientRect().top - rising(row) - scroll.getBoundingClientRect().top
     - headerBand(scroll) - HEADER_LEAD
-  scroll.scrollTo({ top: Math.max(0, top) })
+  scroll.scrollTo(instant ? { top: Math.max(0, top), behavior: 'instant' } : { top: Math.max(0, top) })
 }
 
 export function goTo(seg: AskData): void {
+  const mounted = reveal(seg.id)
   const question = questionOf(seg)
-  if (question) bringUp(question)
+  if (question) bringUp(question, mounted)
 }
 
 export function TurnNav(): JSX.Element | null {
@@ -112,14 +124,23 @@ export function TurnNav(): JSX.Element | null {
   useEffect(() => {
     const scroll = document.getElementById('scroll')
     if (!scroll || !lane) return
-    const asks = turnsOf(lane.segs)
+    const asks: Array<{ seg: AskData; at: number }> = []
+    lane.segs.forEach((seg, at) => { if (seg.kind === 'ask' && !seg.midTurn) asks.push({ seg, at }) })
+    const start = startIndex(lane.segs, lane.winFrom)
+    const end = endIndex(lane.segs, lane.winTo)
     let frame = 0
     const measure = (): void => {
       frame = 0
       const box = scroll.getBoundingClientRect()
       const band = headerBand(scroll)
-      const tops = asks.map((seg) => questionOf(seg)?.getBoundingClientRect().top ?? Infinity)
-      const atEnd = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 4
+      const drawn = new Map<string, HTMLElement>()
+      document.querySelectorAll<HTMLElement>('#stage [data-ask]').forEach((el) => drawn.set(el.dataset.ask || '', el))
+      /* A question the Lane Window has not mounted is above the line when it is
+         above the window, and below it when below. */
+      const tops = asks.map(({ seg, at }) => (at < start ? -Infinity : at >= end ? Infinity
+        : drawn.get(String(seg.id))?.getBoundingClientRect().top ?? -Infinity))
+      /* The end of a window short of the tail is not the end of the conversation. */
+      const atEnd = tail.atConversationEnd(scroll, lane.winTo)
       setReading(readingTurn(tops, box.top + band + (box.height - band) * READ_LINE, atEnd))
     }
     const soon = (): void => {
