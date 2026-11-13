@@ -121,16 +121,9 @@ class EngineConfig:
         key = image_search.get("apiKey", "")
         if not isinstance(key, str):
             raise ValueError(f"imageSearch.apiKey must be a string, got {key!r}")
-        provider = image_search.get("provider", "host")
-        if not isinstance(provider, str):
-            raise ValueError(f"imageSearch.provider must be a string, got {provider!r}")
-        from raven.agent.tools.web import PPT_IMAGE_SEARCH_VENDORS
+        from raven.agent.tools.web import ppt_image_search_provider
 
-        if provider != "host" and provider not in PPT_IMAGE_SEARCH_VENDORS:
-            raise ValueError(
-                f"unknown ppt image search provider {provider!r}; "
-                f"known routes are 'host' and {', '.join(PPT_IMAGE_SEARCH_VENDORS)}"
-            )
+        provider = ppt_image_search_provider(image_search)
         image_raw = raw.get("image")
         if image_raw is not None and not isinstance(image_raw, dict):
             raise ValueError(f"image must be an object, got {image_raw!r}")

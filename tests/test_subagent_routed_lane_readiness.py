@@ -268,6 +268,70 @@ def test_a_lane_pinned_to_a_picture_vendor_is_read_on_that_pin(lane, tmp_path: P
     assert host._routed_target_ready(LANE, ("image_search",)) is True
 
 
+def _declares_picture_provider(folder: Path, provider) -> None:
+    """Declare the product's own picture tool, with the provider value given."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("provider", ["", None, "bogus"], ids=["empty-string", "null", "unknown-vendor"])
+def test_a_picture_provider_the_engine_refuses_closes_the_route(lane, tmp_path: Path, provider) -> None:
+    """``EngineConfig.from_slice`` raises on an empty, null or unknown provider,
+    so the plugin builds no deck tool at all. The probe reads the same parser,
+    and a Serper key on both sides is not enough to open the route."""
+    lane(SERPER_API_KEY="sk-lane-serper", IMAGE_API_KEY="sk-lane-image")
+    _declares_picture_provider(tmp_path / "agents" / FOLDER, provider)
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serper": "sk-host-serper"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+    assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+        "",
+        False,
+        "not_ready",
+    )
+
+
+def test_an_absent_picture_provider_follows_the_host(lane, tmp_path: Path) -> None:
+    """An absent key is the engine's ``"host"`` default, not a provider it
+    refuses; the lane follows the host's selection and stays ready."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serper": "sk-host-serper"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+    assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+        "serper",
+        True,
+        "ok",
+    )
+
+
 def test_a_lane_with_no_picture_declaration_reads_its_own_page_search_vendor(lane, tmp_path: Path) -> None:
     """A folder copied before ``imageSearch`` existed carries no declaration,
     and the engine defaults it to ``host``: the deck follows the lane's own
