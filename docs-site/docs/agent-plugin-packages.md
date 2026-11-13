@@ -66,7 +66,7 @@ either shadowing the other.
 The copy is recorded in the package ledger (`<home>/agent-plugins.json`),
 one record per workspace: two workspaces sharing a home keep separate
 imports of the same package, and removing from one never touches the
-other. Each directory the copy creates carries a `.raven-install.json`
+other. The package root and every skill root carry a `.raven-install.json`
 marker whose random token is recorded with it, and that record is what
 makes `remove` safe: only a directory whose marker still matches the
 recorded token is ever deleted. `check` compares the ledger's fingerprint
@@ -107,7 +107,8 @@ Ledger files written before the ledger recorded install identities
 unverified, but they can no longer match anything on disk: `remove` on
 such a record deletes nothing and says so. Importing the package again
 installs a fresh, verified copy once the directory is out of the way, and
-supersedes the old record.
+supersedes the old record. A version 1 record carries no workspace, so a
+fresh import of the same name in any workspace sharing the home replaces it.
 
 If the ledger file itself cannot be read -- a version this Raven does not
 know, or data that is not valid -- `import` and `remove` refuse to run
@@ -115,8 +116,14 @@ rather than risk overwriting it, and the file is left exactly as it was.
 An import whose ledger could not be saved leaves its directories on disk
 unrecorded; a re-import will refuse to touch them until you move them
 away. A `remove` that fails halfway keeps both the ledger record and the
-install marker that proves it, so once the underlying failure clears,
+install markers that prove it, so once the underlying failure clears,
 running the same command again simply finishes the job.
+
+Do not open the same home with an older Raven once a version 2 ledger has
+been written. An older build cannot read the new file: it sees no records,
+and its next import writes a version 1 file over it, dropping every
+workspace's records. To roll back, restore the ledger and the installed
+directories together.
 
 ## What a package cannot do
 

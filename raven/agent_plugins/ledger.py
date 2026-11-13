@@ -319,8 +319,9 @@ class PackageLedger:
     def record(self, entry: LedgerEntry) -> None:
         """Record *entry* under its workspace.
 
-        A verified record supersedes a legacy record of the same name: the
-        fresh install is the one that can be proven.
+        A verified record supersedes a legacy record of the same name in any
+        workspace: a version 1 record carries no workspace, and the fresh
+        install is the one that can be proven.
         """
         if not entry.workspace:
             raise ValueError("a ledger entry must carry the workspace it belongs to")
