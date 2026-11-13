@@ -5902,6 +5902,16 @@ describe('transcript island, the lane window', () => {
     expect(lines[0]!.nextElementSibling?.textContent).toContain('question 6')
   })
 
+  it('dates the first mounted question against the nearest question before it', () => {
+    /* Turn 5 opens three hours after turn 4 and turn 6 follows a minute later,
+       so the window mounts from turn 6 with a one-minute predecessor behind it
+       and no date line belongs above it. A scan that took the lane's first
+       question would see the three hours and draw one. */
+    act(() => { mount.history(turns(25, 5)) })
+    expect(firstAsk()).toBe('question 6')
+    expect($$('.transcript-date')).toHaveLength(0)
+  })
+
   it('watches each edge 1200px beyond the scroller, on that edge only', () => {
     act(() => { mount.history(turns(50)) })
     const top = FakeObserver.made.find((o) => (o.targets[0] as HTMLElement).dataset.edge === 'top')

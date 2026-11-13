@@ -32,6 +32,8 @@ const wire = (): void => {
   }
   setSources({ transcript: source })
   document.body.innerHTML = '<div id="scroll"><div class="col" id="stage"></div></div>'
+    + '<button class="backpill chrome-toppill" id="toppill" hidden></button>'
+    + '<button class="backpill" id="backpill" hidden></button>'
 }
 
 /* Fifty question-and-answer turns a minute apart. */
@@ -63,6 +65,7 @@ const size = (height: number, client: number, top: number): void => {
 beforeEach(() => {
   store._resetForTests()
   tail._resetForTests()
+  composer._resetForTests()
   wire()
 })
 
@@ -82,6 +85,29 @@ describe('the composer at the end of a Lane Window', () => {
     act(() => { mount.answer('a late reply') })
     expect(firstAsk()).toBe('question 5')
     expect(asks()).toHaveLength(20)
+  })
+
+  it('still offers the way down to the tail at the bottom of a window short of it', () => {
+    act(() => { mount.history(turns(50)) })
+    act(() => { mount.reveal(idOf(5)) })
+    tail.setStuck(false)
+    size(5000, 500, 4500)
+    /* The scroll that reaches the window's bottom also paints the pills. */
+    act(() => { composer.scrolled() })
+    expect((document.getElementById('backpill') as HTMLElement).hidden).toBe(false)
+  })
+
+  it('takes the reader back to the tail when the down pill is clicked', () => {
+    act(() => { mount.history(turns(50)) })
+    act(() => { mount.reveal(idOf(5)) })
+    tail.setStuck(false)
+    size(5000, 500, 4500)
+    act(() => { composer.scrolled() })
+    const to = vi.spyOn(scroller(), 'scrollTo').mockImplementation(() => {})
+    act(() => { composer.pillClick() })
+    expect(tail.isStuck()).toBe(true)
+    expect(firstAsk()).toBe('question 31')
+    expect(to).toHaveBeenCalled()
   })
 
   it('still turns tail-follow on at the bottom of the conversation', () => {
