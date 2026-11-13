@@ -1454,9 +1454,11 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.instance_say': 'Send',
     'gui.ws.instance_say_hint': 'Carry on with {name}',
     'gui.ws.instance_handoff_hint':
-      "What you say here stays out of the main agent's context and reaches it as a summary on your next message to it.",
-    'gui.ws.instance_handoff_count':
-      '{n} direct-chat entries will be reported to the main agent with your next message; this chat stays out of its context until then.',
+      "What you say here stays out of the main agent's context. With your next message, the main agent is told which direct chats have happened in this session and where they are recorded, so it can read them if it needs to.",
+    'gui.ws.instance_handoff_count_one':
+      'With your next message, the main agent is told about 1 direct-chat entry from this session and where it is recorded; the text itself never enters its context.',
+    'gui.ws.instance_handoff_count_n':
+      'With your next message, the main agent is told about {n} direct-chat entries from this session and where they are recorded; the text itself never enters its context.',
     'gui.ws.instance_resumable': 'Can continue',
     'gui.ws.instance_of_graph': 'From a graph',
     'gui.ws.instance_live': 'Working',
@@ -5045,9 +5047,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.instance_new_fail': '无法新建：{why}',
     'gui.ws.instance_say': '发送',
     'gui.ws.instance_say_hint': '继续和 {name} 对话',
-    'gui.ws.instance_handoff_hint': '你在这里说的不会进入主代理的上下文，只会在你下次发给主代理的消息中以摘要转达。',
-    'gui.ws.instance_handoff_count':
-      '{n} 条直接对话记录将在你下次发给主代理的消息中转达；在那之前，你在这里说的不会进入主代理的上下文。',
+    'gui.ws.instance_handoff_hint':
+      '你在这里说的不会进入主代理的上下文。你下次给主代理发消息时，它会得知本会话里发生过哪些直接对话、记录在哪里，需要时它可以自己去读。',
+    'gui.ws.instance_handoff_count_one':
+      '你下次给主代理发消息时，它会得知本会话有 1 条直接对话记录，以及这条记录的位置；对话正文不会进入它的上下文。',
+    'gui.ws.instance_handoff_count_n':
+      '你下次给主代理发消息时，它会得知本会话有 {n} 条直接对话记录，以及这些记录的位置；对话正文不会进入它的上下文。',
     'gui.ws.instance_resumable': '可继续',
     'gui.ws.instance_of_graph': '来自编排',
     'gui.ws.instance_live': '进行中',

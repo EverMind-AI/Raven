@@ -1296,8 +1296,8 @@ describe('subagents island, an instance detail', () => {
 
   it('says what a direct chat is, where the reader types it', async () => {
     /* The main agent's silence after a direct turn is the design, not a miss:
-       the exchange is kept out of its context on purpose and reaches it as a
-       summary on the reader's next message. Nothing on screen said so, so the
+       the exchange is kept out of its context on purpose, and the next message
+       to it only names where the records are. Nothing on screen said so, so the
        silence read as the message having gone nowhere. */
     await openInstance(
       inst({ handle: 'chatty', status: 'completed', resumable: true }),
@@ -1321,7 +1321,23 @@ describe('subagents island, an instance detail', () => {
         }),
       },
     )
-    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_count {"n":3}')
+    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_count_n {"n":3}')
+  })
+
+  it('uses the singular line for one pending entry', async () => {
+    /* One direct turn is the common case, and the plural line would say
+       "1 direct-chat entries". */
+    await openInstance(
+      inst({ handle: 'chatty', status: 'completed', resumable: true }),
+      {
+        instanceSend: async () => {},
+        instances: async () => ({
+          rows: [inst({ handle: 'chatty', status: 'completed', resumable: true })],
+          pendingHandoff: 1,
+        }),
+      },
+    )
+    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_count_one')
   })
 
   /* A direct turn's events arrive on the session's one subscription, tagged with

@@ -536,9 +536,11 @@ function InstanceComposer(
      height is what the transcript's reserves are cut to, so this row has to
      measure the same at every pane width. */
   const handoff = store.pendingHandoff()
-  const note = handoff > 0
-    ? t('gui.ws.instance_handoff_count', { n: handoff })
-    : t('gui.ws.instance_handoff_hint')
+  const note = handoff === 0
+    ? t('gui.ws.instance_handoff_hint')
+    : handoff === 1
+      ? t('gui.ws.instance_handoff_count_one')
+      : t('gui.ws.instance_handoff_count_n', { n: handoff })
   return (
     <div className="dock instance-dock sasend">
       <div className="dock-in">
