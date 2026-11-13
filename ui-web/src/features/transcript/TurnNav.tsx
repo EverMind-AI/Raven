@@ -140,7 +140,7 @@ export function TurnNav(): JSX.Element | null {
       const tops = asks.map(({ seg, at }) => (at < start ? -Infinity : at >= end ? Infinity
         : drawn.get(String(seg.id))?.getBoundingClientRect().top ?? -Infinity))
       /* The end of a window short of the tail is not the end of the conversation. */
-      const atEnd = !lane.winTo && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 4
+      const atEnd = tail.atConversationEnd(scroll, lane.winTo)
       setReading(readingTurn(tops, box.top + band + (box.height - band) * READ_LINE, atEnd))
     }
     const soon = (): void => {

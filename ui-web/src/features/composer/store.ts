@@ -11,7 +11,7 @@ import { draw as plusDraw } from '../../state/plus'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
 import { show as toast } from '../../state/toast'
-import { note as transcriptNote } from '../transcript/mount'
+import { note as transcriptNote, shownLane } from '../transcript/mount'
 import * as tail from '../transcript/tail'
 import * as history from './history'
 import * as turn from './turn'
@@ -450,7 +450,9 @@ export function pillPaint(): void {
   const room = sc.scrollHeight - sc.clientHeight
   const scrollable = room > 4
   const atTop = sc.scrollTop <= 2
-  const atEnd = room - sc.scrollTop < 4
+  /* The box's end is the conversation's only when the Lane Window reaches the
+     tail; a window short of it ends at a turn. */
+  const atEnd = tail.atConversationEnd(sc, shownLane()?.winTo ?? 0)
   /* The first paint is the baseline the first scroll is measured from. */
   if (jumpDir === null) jumpTop = sc.scrollTop
   const upWanted = !!up && scrollable && (atEnd || (jumpDir === 'up' && !atTop))
@@ -499,7 +501,7 @@ export function topClick(): void {
 export function scrolled(): void {
   const sc = scroller()
   if (!sc) return
-  const atEnd = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 4
+  const atEnd = tail.atConversationEnd(sc, shownLane()?.winTo ?? 0)
   if (atEnd) tail.setStuck(true)
   const delta = sc.scrollTop - jumpTop
   if (Math.abs(delta) >= 1) {

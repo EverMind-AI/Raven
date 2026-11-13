@@ -10,7 +10,7 @@ import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
 import * as dagNodes from '../dag/nodes'
 import * as deliveries from '../workspace/deliveries'
-import { mountedTurns, revealWin, TAIL_TURNS, tailFrom, TRIM_SLACK, WIDEN_TURNS, widenFrom, widenTo } from './laneWindow'
+import { mountedTurns, opens, revealWin, TAIL_TURNS, tailFrom, TRIM_SLACK, WIDEN_TURNS, widenFrom, widenTo } from './laneWindow'
 
 import type { SubagentRow } from '../../rpc/generated'
 import type { DeliveryRow } from '../workspace/types'
@@ -2104,15 +2104,14 @@ function lastTurnFold(lane: Lane): FoldData | null {
    one; a mid-turn injection joins the turn under way, which is the boundary
    `collapse` draws too. */
 function turnCount(lane: Lane): number {
-  return lane.segs.filter((s) => s.kind === 'sdlv' || (s.kind === 'ask' && !s.midTurn)).length
+  return lane.segs.filter(opens).length
 }
 
 /* When the lane's last turn opened, from its own opening row's stamp. */
 function lastTurnOpening(lane: Lane): number {
   for (let i = lane.segs.length - 1; i >= 0; i -= 1) {
     const s = lane.segs[i] as Seg
-    if (s.kind === 'sdlv') return s.at || 0
-    if (s.kind === 'ask' && !s.midTurn) return s.at || 0
+    if (opens(s)) return s.at || 0
   }
   return 0
 }

@@ -5902,6 +5902,17 @@ describe('transcript island, the lane window', () => {
     expect(lines[0]!.nextElementSibling?.textContent).toContain('question 6')
   })
 
+  it('watches each edge 1200px beyond the scroller, on that edge only', () => {
+    act(() => { mount.history(turns(50)) })
+    const top = FakeObserver.made.find((o) => (o.targets[0] as HTMLElement).dataset.edge === 'top')
+    expect(top?.opts?.root).toBe(scroller())
+    expect(top?.opts?.rootMargin).toBe('1200px 0px 0px 0px')
+    act(() => { mount.reveal(idOf(5)) })
+    const bottom = FakeObserver.made.find((o) => (o.targets[0] as HTMLElement).dataset.edge === 'bottom')
+    expect(bottom?.opts?.root).toBe(scroller())
+    expect(bottom?.opts?.rootMargin).toBe('0px 0px 1200px 0px')
+  })
+
   it('mounts earlier turns as the reader nears the edge, until there are none', () => {
     act(() => { mount.history(turns(50)) })
     expect(FakeObserver.made.at(-1)?.opts?.root).toBe(scroller())
