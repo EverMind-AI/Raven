@@ -123,6 +123,37 @@ def notice_ceiling(current: list[str], session_messages: list[dict[str, Any]]) -
     return [*unkeyed, MCP_NOTICE_HEADER, *lines] if lines else unkeyed
 
 
+def retell_notices(before: list[dict[str, Any]], after: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """``after``, a trimmed copy of ``before``, telling the plugin notes the trimming took away.
+
+    A reclaim trims the history after the question was built, and the question's
+    block may have left a note out because a reclaimed message had told it. The
+    lines that bring ``after`` back to the state ``before`` reads are added to the
+    newest envelope that recorded its block (``RUNTIME_CONTEXT_KEY``); ``after``
+    itself comes back when nothing was lost.
+    """
+    repair = notice_changes(list(told_notices(before).values()), told_notices(after))
+    if not repair:
+        return after
+    for index in range(len(after) - 1, -1, -1):
+        message = after[index]
+        lines = message.get(RUNTIME_CONTEXT_KEY)
+        if message.get("role") != "user" or not isinstance(lines, str) or not lines:
+            continue
+        if MCP_NOTICE_HEADER in lines.splitlines():
+            repair = repair[1:]
+        told = "\n".join([lines, *repair])
+        content = message.get("content")
+        if isinstance(content, list) and content and isinstance(content[0], dict):
+            content = [{**content[0], "text": str(content[0].get("text", "")).replace(lines, told, 1)}, *content[1:]]
+        elif isinstance(content, str):
+            content = content.replace(lines, told, 1)
+        retold = list(after)
+        retold[index] = {**message, "content": content, RUNTIME_CONTEXT_KEY: told}
+        return retold
+    return after
+
+
 def _split(lines: list[str]) -> tuple[list[str], dict[str, str]]:
     unkeyed: list[str] = []
     keyed: dict[str, str] = {}

@@ -82,6 +82,7 @@ from raven.context_engine.history.compacting.writer import (
 )
 from raven.context_engine.history.markers import HISTORY_CHECKPOINT_KEY, HISTORY_PINNED_KEY, HISTORY_PRIVATE_KEYS
 from raven.context_engine.history_trimmer import HistoryTrimmer, TrimOutcome
+from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.context import AssemblyContext, OverflowOutcome, Segment
 from raven.providers import prompt_cache
 from raven.providers.binding import ModelBinding, active_window, resolve
@@ -508,6 +509,9 @@ class CompactingHistoryBuilder:
         # markers its window passes read) and strips them on the way out, so a
         # reclaim that dropped them would blind every later pass in the turn.
         kept_history = [dict(history[index]) for index in ids if history[index].get("role")]
+        # The question was built against the full history, so a plugin note it
+        # left out because an older block told it goes with that block.
+        kept_history = retell_notices(history, kept_history)
         if not kept_history:
             # The closure found no user message to anchor on and discarded
             # everything. That reads as a total reclaim and is really a lost

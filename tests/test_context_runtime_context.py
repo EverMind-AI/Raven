@@ -544,3 +544,90 @@ class TestToolNoticesAreSentWhenTheyChange:
         assert _mcp_lines(second[-1]) == []
         assert "the user likes tea" in second[-1][TURN_SCRATCH_KEY]
         assert second[-1]["content"].endswith(second[-1][TURN_SCRATCH_KEY])
+
+
+class TestNotesAReclaimTookAwayAreToldAgain:
+    """An overflow reclaim trims the history after the question was built, so the
+    question's block may have left out a note only a reclaimed message carried."""
+
+    @staticmethod
+    def _envelope(lines: str, words: Any = "and now?") -> dict[str, Any]:
+        return {"role": "user", "content": with_runtime_context(lines, words), RUNTIME_CONTEXT_KEY: lines}
+
+    def test_a_note_only_a_reclaimed_message_carried_is_put_back(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+
+        [kept] = retell_notices([older, question], [question])
+
+        block = kept["content"].split("\n\n", 1)[0]
+        assert block.splitlines()[-2:] == [_HEADER, _AUTH]
+        assert kept[RUNTIME_CONTEXT_KEY] == block
+        assert kept["content"].endswith("\n\nand now?")
+
+    def test_a_clearing_only_a_reclaimed_message_carried_is_put_back(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        noted = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        cleared = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_GITHUB_CLEARED}", "q1")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+
+        [*_, kept] = retell_notices([noted, cleared, question], [noted, question])
+
+        assert _GITHUB_CLEARED in kept[RUNTIME_CONTEXT_KEY]
+
+    def test_a_block_list_question_gets_the_note_in_its_first_block(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x", [{"type": "text", "text": "look"}])
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept["content"][0]["text"].endswith(_AUTH)
+        assert kept["content"][1:] == [{"type": "text", "text": "look"}]
+
+    def test_a_question_that_already_has_the_header_is_not_given_a_second(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x\n{_HEADER}\n{_FOLDED}")
+
+        [kept] = retell_notices([older, question], [question])
+
+        assert kept[RUNTIME_CONTEXT_KEY].splitlines().count(_HEADER) == 1
+        assert _AUTH in kept[RUNTIME_CONTEXT_KEY]
+
+    def test_the_question_is_found_behind_the_turns_own_tool_calls(self) -> None:
+        """A reclaim's history ends with this turn's calls and results, after the question."""
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+        call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
+        result = {"role": "tool", "tool_call_id": "c1", "content": "done"}
+
+        kept = retell_notices([older, question, call, result], [question, call, result])
+
+        assert _AUTH in kept[0][RUNTIME_CONTEXT_KEY]
+        assert kept[1:] == [call, result]
+
+    def test_no_envelope_with_its_lines_recorded_leaves_the_messages_alone(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        bare = {"role": "user", "content": "q1"}
+        after = [bare]
+
+        assert retell_notices([older, bare], after) is after
+
+    def test_nothing_lost_leaves_the_messages_alone(self) -> None:
+        from raven.context_engine.runtime_context import retell_notices
+
+        older = {"role": "user", "content": with_runtime_context(f"{_TAG}\n{_HEADER}\n{_AUTH}", "q0")}
+        question = self._envelope(f"{_TAG}\nChat ID: x")
+        after = [older, question]
+
+        assert retell_notices([older, question], after) is after

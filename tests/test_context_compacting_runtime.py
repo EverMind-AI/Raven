@@ -724,6 +724,40 @@ class TestOverflow:
         assert len(outcome.messages) < len(messages)
         assert estimate_prompt_tokens(outcome.messages) < estimate_prompt_tokens(messages)
 
+    async def test_a_plugin_note_only_a_reclaimed_message_carried_is_told_again(self, tmp_path: Path) -> None:
+        """The question's block left a plugin note out because an older block had
+        told it; once the reclaim takes that block away, the retry must say it."""
+        from raven.context_engine.runtime_context import (
+            MCP_NOTICE_HEADER,
+            RUNTIME_CONTEXT_KEY,
+            mcp_notice,
+            with_runtime_context,
+        )
+        from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+
+        note = mcp_notice("github", "installed, awaiting authorization.")
+        session = _session(60)
+        # The head is kept (no checkpoint stands for it), so the note rides an
+        # exchange from the middle, which the reclaim takes.
+        session[20] = {
+            "role": "user",
+            "content": with_runtime_context(
+                f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{note}", session[20]["content"]
+            ),
+        }
+        builder = _builder(tmp_path)
+        lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: x"
+        question = {"role": "user", "content": with_runtime_context(lines, "and now?"), RUNTIME_CONTEXT_KEY: lines}
+        messages = [*await self._refused(builder, session), question]
+
+        outcome = await builder.on_context_overflow("s1", messages, attempt=1, window=WINDOW)
+
+        assert outcome is not None
+        assert not any(note in str(m.get("content")) for m in outcome.messages[:-1]), "fixture must reclaim the note"
+        retry_question = outcome.messages[-1]
+        assert note in retry_question["content"].split("\n\n", 1)[0]
+        assert note in retry_question[RUNTIME_CONTEXT_KEY]
+
     async def test_the_reclaimed_prompt_is_still_a_valid_one(self, tmp_path: Path) -> None:
         builder = _builder(tmp_path)
         messages = await self._refused(builder, _session(60, pinned=True))
