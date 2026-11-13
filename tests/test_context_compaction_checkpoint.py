@@ -649,6 +649,15 @@ class TestTheTemplate:
             assert f"## {name}" in COMPACTION_INSTRUCTION
         assert "Do not call any tool" in COMPACTION_INSTRUCTION
 
+    def test_the_instruction_says_the_runtime_context_block_is_not_conversation(self) -> None:
+        """A replayed user message opens with the runtime-context block it was sent
+        with; a summary that folded it in would carry a past turn's clock and
+        notices forward as something said in the conversation.
+        """
+        from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
+
+        assert RUNTIME_CONTEXT_TAG in COMPACTION_INSTRUCTION
+
     def test_every_heading_carries_the_line_that_says_what_belongs_under_it(self) -> None:
         """The one shape claim worth asserting about the request.
 

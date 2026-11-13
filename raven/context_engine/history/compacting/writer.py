@@ -80,6 +80,7 @@ from raven.context_engine.history.compacting.checkpoint import (
     timestamp,
 )
 from raven.context_engine.history.compacting.ledger import MessageLedger
+from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.utils.refs import SourceRef
 from raven.utils.tokens import estimate_message_tokens, estimate_prompt_tokens
 
@@ -142,7 +143,10 @@ Rules:
    identifiers, numbers, and signatures.
 6. Do not mention this request, and do not mention that the conversation was
    compacted.
-7. Do not call any tool. Reply with the eight sections only."""
+7. A user message above may open with a block headed
+   {RUNTIME_CONTEXT_TAG}. It records when and where that
+   message was sent, and nobody said it: keep it out of every section.
+8. Do not call any tool. Reply with the eight sections only."""
 """The instruction, and the only new bytes in the request.
 
 Two things in it are load-bearing rather than boilerplate.
@@ -155,7 +159,7 @@ back holding commentary about the request. Saying what belongs under a heading
 at the point where it is answered is what the harness with the strictest
 structure guarantee does, and it costs one line each.
 
-**Rule 7.** Prefix reuse requires the request to carry the conversation's own
+**Rule 8.** Prefix reuse requires the request to carry the conversation's own
 tool definitions, so the model has tools in hand while being asked for prose --
 a documented failure mode whose symptom is a compaction block with null
 content. Carrying the definitions is the price of the cache, so saying "do not
@@ -629,7 +633,7 @@ class CheckpointWriter:
 
         cost = CallCost.of(response)
         if getattr(response, "has_tool_calls", False):
-            # Rule 7 asks for prose while the conversation's tools are in the
+            # Rule 8 asks for prose while the conversation's tools are in the
             # request anyway, so a model that reaches for one answers with no
             # content at all. That is a choice about the tools, not about the
             # size, and it survives a shorter replay.

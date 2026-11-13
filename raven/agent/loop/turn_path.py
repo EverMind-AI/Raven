@@ -4178,6 +4178,11 @@ class TurnPathMixin:
         selection of turns can find each turn's messages in the record.
         """
         # Deferred: ``raven.context_engine`` imports back out of this tier.
+        from raven.context_engine.runtime_context import (
+            RUNTIME_CONTEXT_FIELD,
+            RUNTIME_CONTEXT_KEY,
+            carries_runtime_context,
+        )
         from raven.context_engine.scratch import TURN_SCRATCH_KEY, cut_turn_scratch
 
         # Both exits that persist a turn come through here, so a question noted
@@ -4203,6 +4208,7 @@ class TurnPathMixin:
                     entry["trace_id"] = trace_id
                 first_user_pending = False
             entry.pop(TURN_LOG_KEY, None)
+            runtime_lines = entry.pop(RUNTIME_CONTEXT_KEY, None)
             if (scratch := entry.pop(TURN_SCRATCH_KEY, None)) and role == "user":
                 # The turn scratch (recalled memory, routed skills) is rebuilt
                 # from the query every turn. Recording it would turn the log
@@ -4337,6 +4343,12 @@ class TurnPathMixin:
                     if not filtered:
                         continue
                     entry["content"] = filtered
+            if role == "user" and runtime_lines and not carries_runtime_context(entry.get("content"), runtime_lines):
+                # Filed beside the user's words, which ``content`` keeps alone, so
+                # the history projection replays the block this turn sent. Lines
+                # the strip above left in place are not filed, or they would be
+                # sent twice.
+                entry[RUNTIME_CONTEXT_FIELD] = runtime_lines
             entry.setdefault("timestamp", self._now_fn().isoformat())
             session.record(entry)
         session.updated_at = self._now_fn()

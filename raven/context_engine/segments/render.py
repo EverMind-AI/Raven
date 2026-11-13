@@ -942,22 +942,47 @@ _SURFACE_GLOSS: dict[str, str] = {
 }
 
 
+CONVERSATION_HEADING = "# This Conversation"
+
+# What the conversation block may write into the system prompt: a name, never
+# prose. Every path that sets a channel or a surface reaches the block, not only
+# the RPC that refuses such a value, so the block checks again.
+_CONVERSATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+
+
+def build_conversation_context(channel: str | None, surface: str | None) -> str:
+    """Where this conversation is held, for the end of the system prompt; ``""`` when nothing is known.
+
+    Both hold for the whole conversation, so they ride the system prompt rather
+    than every user message. That prompt is shared by every conversation on the
+    same channel and surface, which is why the chat id stays in the runtime block.
+
+    ``surface`` names the front end the connection declared at handshake. It is
+    reported alongside the channel rather than instead of it: the channel is
+    where a reply is delivered, the surface is what the reader is looking at,
+    and the served page shares the ``tui`` channel with the terminal, so the
+    channel alone has the agent telling a browser reader to press Ctrl+C.
+    """
+    lines = []
+    if channel and _CONVERSATION_TOKEN.fullmatch(channel):
+        lines.append(f"Channel: {channel}")
+    if surface and _CONVERSATION_TOKEN.fullmatch(surface):
+        gloss = _SURFACE_GLOSS.get(surface)
+        lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
+    return "\n".join([CONVERSATION_HEADING, *lines]) if lines else ""
+
+
 def build_runtime_context(
     now_fn: Callable[[], datetime],
     channel: str | None,
     chat_id: str | None,
-    surface: str | None = None,
     tool_notices: list[str] | None = None,
     session_notices: list[str] | None = None,
 ) -> str:
     """Untrusted runtime metadata block injected before the user message.
 
-    ``surface`` names the front end this turn came from when the connection
-    declared one at handshake. It is reported alongside the channel rather than
-    instead of it: the channel is where a reply is delivered, the surface is what
-    the reader is looking at, and the served page shares the ``tui`` channel with
-    the terminal, so the channel alone has the agent telling a browser reader to
-    press Ctrl+C.
+    The chat id is named with its channel, which itself is in the system prompt
+    (:func:`build_conversation_context`).
 
     ``tool_notices`` are host-side facts about the tool surface the definitions
     themselves cannot carry -- e.g. an installed MCP plugin whose tools are
@@ -974,10 +999,7 @@ def build_runtime_context(
     tz = _time.strftime("%Z") or "UTC"
     lines = [f"Current Time: {now} ({tz})"]
     if channel and chat_id:
-        lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
-    if surface:
-        gloss = _SURFACE_GLOSS.get(surface)
-        lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
+        lines.append(f"Chat ID: {chat_id}")
     if tool_notices:
         lines += tool_notices
     if session_notices:

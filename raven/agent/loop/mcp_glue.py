@@ -201,8 +201,14 @@ class McpGlueMixin:
           the array and the line tells the model nothing it cannot see.
 
         Rendered into the runtime-context block, not the system prompt -- the
-        set changes turn to turn and must never be cached with the prefix.
+        set changes turn to turn and must never be cached with the prefix. This
+        is the current state; the engine sends a line only when it differs from
+        what the replayed history already says (``runtime_context.notice_changes``),
+        which is why each line is built by ``mcp_notice``.
         """
+        # Deferred: ``raven.context_engine`` imports back out of this tier.
+        from raven.context_engine.runtime_context import mcp_notice
+
         # getattr: the engine factory takes this callable during __init__,
         # before the manager attribute is assigned further down.
         mgr = getattr(self, "_mcp_manager", None)
@@ -224,20 +230,26 @@ class McpGlueMixin:
                 continue
             if snap["state"] == "auth_required":
                 notices.append(
-                    f"MCP plugin '{snap['name']}': installed, awaiting authorization. Its tools are "
-                    f"absent from this turn's definitions until it is authorized -- by the `plugin` "
-                    f"tool's authorize action, or by the user in the plugin panel."
+                    mcp_notice(
+                        snap["name"],
+                        "installed, awaiting authorization. Its tools are absent from this turn's "
+                        "definitions until it is authorized -- by the `plugin` tool's authorize "
+                        "action, or by the user in the plugin panel.",
+                    )
                 )
             elif snap["state"] == "connecting":
                 notices.append(
-                    f"MCP plugin '{snap['name']}': installed, still connecting. Its tools are absent "
-                    f"from this turn's definitions and register themselves when the handshake "
-                    f"finishes, so they are available from a later turn without anyone acting."
+                    mcp_notice(
+                        snap["name"],
+                        "installed, still connecting. Its tools are absent from this turn's "
+                        "definitions and register themselves when the handshake finishes, so "
+                        "they are available from a later turn without anyone acting.",
+                    )
                 )
             elif folded and snap["connected"]:
                 mine = [n for n in self.tools.names_from(snap["name"]) if n in offered]
                 if mine:
-                    notices.append(f"MCP plugin '{snap['name']}': connected, offering {len(mine)} tool(s).")
+                    notices.append(mcp_notice(snap["name"], f"connected, offering {len(mine)} tool(s)."))
         return notices
 
     def prewarm_mcp(self) -> None:

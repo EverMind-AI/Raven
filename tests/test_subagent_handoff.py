@@ -322,7 +322,7 @@ def _loop_with_handoff(tmp_path, monkeypatch):
     # unrelated, pre-existing feature of the context engine that always
     # precedes the user message; bypass it so the assertions below observe
     # only what this task changed -- the handoff prepended to req.text.
-    loop.context_engine._build_user = lambda ctx: {"role": "user", "content": ctx.current_message}
+    loop.context_engine._envelope = lambda ctx, parts, tool_notices: {"role": "user", "content": ctx.current_message}
     return loop
 
 
