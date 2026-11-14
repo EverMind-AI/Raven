@@ -292,9 +292,9 @@ function PluginsWait(): JSX.Element {
   )
 }
 
-/* Eleven roles in one card -- providers/Roles.tsx's ROLES, whose length is the
+/* Ten roles in one card -- providers/Roles.tsx's ROLES, whose length is the
    number here. */
-const ROLE_ROWS = 11
+const ROLE_ROWS = 10
 
 const SHAPE: Partial<Record<SectionId, () => JSX.Element>> = {
   about: () => <Wait><WCard ctl={160} n={4} /></Wait>,

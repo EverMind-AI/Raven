@@ -26,7 +26,7 @@ class TraceCtx:
     surface: str | None = None
     parent_span_id: str | None = None
     # Name of the nearest enclosing non-model span — the purpose a model call is
-    # made on behalf of (turn / memory.extract / skill.gate / ...). Model-kind
+    # made on behalf of (turn / memory.extract / context.curate / ...). Model-kind
     # spans inherit it rather than becoming a source themselves, so a nested
     # ``llm.call`` can self-label without walking the tree. Generic: no adopter
     # names are hard-coded here.

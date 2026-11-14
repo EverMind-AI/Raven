@@ -503,14 +503,6 @@ def test_the_degraded_catalog_block_says_so():
     assert "## Alternative Skills" in block
 
 
-def test_the_shipped_config_stays_on_the_pull_lane():
-    """D1 clause 3: the seat assumes pull discovery. The shipped product
-    config must not spell any skillForge discovery choice -- trunk's factory
-    default (pull) is the lane this hook was adjudicated on."""
-    config = json.loads((REPO / "agents" / "raven-design" / "config.json").read_text())
-    assert "skillForge" not in config
-
-
 # --- the task-state seats -------------------------------------------------------
 
 

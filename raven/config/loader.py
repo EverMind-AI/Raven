@@ -22,7 +22,7 @@ from raven.utils.atomic_io import atomic_replace, atomic_update
 # than on every load -- the watermark is what lets a user re-set by hand
 # whatever a migration cleared. Kept out of the schema on purpose: see
 # ``_stamp_path``.
-CURRENT_CONFIG_VERSION = 15
+CURRENT_CONFIG_VERSION = 16
 
 # The generation that introduced each run-once migration. Each is gated on its
 # own floor rather than on "is this config current", because those are not the
@@ -52,6 +52,7 @@ _DISPLAY_ONLY_ADDRESS_MIGRATION = 12
 _PLANTED_CRON_TIMEZONE_MIGRATION = 13
 _RETIRED_VERDICT_SWITCH_MIGRATION = 14
 _SHIM_PIN_REFRESH_MIGRATION = 15
+_RETIRED_PUSH_DISCOVERY_MIGRATION = 16
 
 # The context window every pre-0.1.11 bootstrap wrote to disk verbatim: back
 # then ``AgentDefaults.context_window_tokens`` defaulted to this number and
@@ -421,6 +422,8 @@ def _persist_migrations(path: Path, from_version: int = 0, *, refresh_interprete
                 retired = _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION]
                 changed = _migrate_retired_shim_pins(raw, retired) or changed
                 pins_waiting = _shim_pins_waiting(raw, retired)
+            if from_version < _RETIRED_PUSH_DISCOVERY_MIGRATION:
+                changed = _migrate_retired_push_discovery(raw) or changed
             if refresh_interpreters:
                 changed = _refresh_bundled_shim_interpreters(raw) or changed
         if not changed:
@@ -666,6 +669,91 @@ def _migrate_retired_verdict_switch(data: dict[str, Any], *, notify: bool = Fals
             if notify and notice not in _migration_notices:
                 _migration_notices.append(notice)
     return changed
+
+
+# The skillForge settings of the retired push pipeline (rewriter, gate, bodies in
+# the system prefix), in both spellings. Skills reach the model through the scent
+# menu and the skill tools only, so nothing reads these, and ``SkillForgeConfig``
+# forbids unknown keys.
+_RETIRED_PUSH_SKILL_FORGE_KEYS = (
+    "discovery",
+    "rewriteEnabled",
+    "rewrite_enabled",
+    "rewriteMaxTokens",
+    "rewrite_max_tokens",
+    "injectionMode",
+    "injection_mode",
+    "injectMax",
+    "inject_max",
+    "llmGateEnabled",
+    "llm_gate_enabled",
+    "llmGateMaxSelect",
+    "llm_gate_max_select",
+    "llmGatePoolSize",
+    "llm_gate_pool_size",
+    "llmGateModel",
+    "llm_gate_model",
+    "llmGateProvider",
+    "llm_gate_provider",
+    "llmGateTemperature",
+    "llm_gate_temperature",
+    "llmGateMaxTokens",
+    "llm_gate_max_tokens",
+)
+
+
+def _migrate_retired_push_discovery(data: dict[str, Any], *, notify: bool = False) -> bool:
+    """Drop the settings of the retired skill push pipeline.
+
+    Covers both spellings of the ``skillForge`` block, and ``topK`` both in its
+    ``router`` and in a legacy top-level ``skillRouter`` block: that block is
+    nested into ``skillForge.router`` in memory only, after this runs, so the
+    file and the load would otherwise disagree about the key. A config that
+    chose ``discovery: "push"`` is told that skills now arrive as a menu; any
+    other leftover is reported as unread.
+    """
+    changed = False
+    dropped: list[str] = []
+    chose_push = False
+    for block_key in ("skillForge", "skill_forge"):
+        block = data.get(block_key)
+        if not isinstance(block, dict):
+            continue
+        for spelling in _RETIRED_PUSH_SKILL_FORGE_KEYS:
+            if spelling not in block:
+                continue
+            was = block.pop(spelling)
+            changed = True
+            dropped.append(f"{block_key}.{spelling}")
+            if spelling == "discovery" and was == "push":
+                chose_push = True
+    for router_path in (("skillForge", "router"), ("skill_forge", "router"), ("skillRouter",), ("skill_router",)):
+        router: Any = data
+        for part in router_path:
+            router = router.get(part) if isinstance(router, dict) else None
+        if not isinstance(router, dict):
+            continue
+        for spelling in ("topK", "top_k"):
+            if spelling in router:
+                router.pop(spelling)
+                changed = True
+                dropped.append(f"{'.'.join(router_path)}.{spelling}")
+    if not changed:
+        return False
+    named = ", ".join(f"`{key}`" for key in dropped)
+    if chose_push:
+        notice = (
+            f"Removed {named} from your config. Skills now always reach the model as a short menu, "
+            "and it reads the ones it needs with read_skill, so choosing them costs a turn no model calls."
+        )
+    else:
+        notice = (
+            f"Removed {named} from your config. They tuned the old way of choosing skills, "
+            "which this version no longer has."
+        )
+    if notify and notice not in _migration_notices:
+        _migration_notices.append(notice)
+    return True
 
 
 # A path token that reaches into the retired vendored tree, on either separator.
@@ -1546,6 +1634,13 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         _log.info("Migrated: dropped the retired subagentDag.verdictEnabled switch again")
     if from_version < _SHIM_PIN_REFRESH_MIGRATION:
         _migrate_retired_shim_pins(data, _RETIRED_SHIM_COMMANDS[_SHIM_PIN_REFRESH_MIGRATION], notify=True)
+    if from_version < _RETIRED_PUSH_DISCOVERY_MIGRATION:
+        _migrate_retired_push_discovery(data, notify=True)
+    elif _migrate_retired_push_discovery(data):
+        # Same return path as the verdict switch above: a build from before this
+        # floor reads the stamp as current and accepts the keys, so a rollback or
+        # a second install sharing the home can write them back.
+        _log.info("Migrated: dropped the retired skill push settings again")
 
     # Same for the session-title gate, which changed both name and unit:
     # ``min_input_chars`` counted code points, ``min_input_width`` counts
@@ -1628,9 +1723,8 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
         if isinstance(sf, dict) and isinstance(sf.get("router"), dict):
             if sf["router"].pop("mass", None) is not None:
                 _log.info("Migrated: dropped skillForge.router.mass (retired; use skillForge.router.hub)")
-            # ``hub.prefetch_bodies`` retired — body hydration moved into
-            # SkillsSegmentBuilder (always-on for Hub hits the segment is
-            # about to render), so the knob no longer has a reader.
+            # ``hub.prefetch_bodies`` retired: a Hub body is fetched when the
+            # model reads the skill, so the knob has no reader.
             hub = sf["router"].get("hub")
             if isinstance(hub, dict):
                 # An explicit falsy endpoint was how a config written before
@@ -1644,8 +1738,7 @@ def _migrate_config(  # noqa: C901 (cc 45: pre-existing, above the ceiling)
                     if hub.pop(legacy_key, None) is not None:
                         _log.info(
                             "Migrated: dropped skillForge.router.hub.%s "
-                            "(retired; SkillsSegmentBuilder always "
-                            "hydrates Hub bodies)",
+                            "(retired; a Hub body is fetched when the skill is read)",
                             legacy_key,
                         )
 

@@ -65,10 +65,6 @@ class LocalSkillSource:
                 # snapshot and meta lookup. Skip rather than emit a
                 # half-populated hit.
                 continue
-            # ``skill_dir`` lets the post-gate hydrate step in
-            # SkillsSegmentBuilder resolve {baseDir} / markdown-link refs
-            # without a second registry lookup.
-            skill_dir: str | None = str(meta.path.parent)
             out.append(
                 RouterHit(
                     qualified_id=f"local/{h.name}",
@@ -83,7 +79,6 @@ class LocalSkillSource:
                         # telemetry — keep it in meta.
                         "physical_source": h.source,
                         "always": meta.always,
-                        "skill_dir": skill_dir,
                         "description": meta.description,
                     },
                 ),

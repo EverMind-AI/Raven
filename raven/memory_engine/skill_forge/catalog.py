@@ -181,8 +181,8 @@ class LocalSkillCatalog:
         # Local-pool BM25 retrieval over file-based skills (workspace +
         # builtin). Always available — no model, no GPU. Blocklisted
         # skills are hidden from the index via a filtered registry view
-        # so they never surface through retrieval; the router pool drop
-        # in SkillsSegmentBuilder stays the backstop for other sources.
+        # so they never surface through retrieval; the scent menu and the
+        # skill tools apply the same list to the other sources.
         self._local_pool = LocalPool(_BlocklistRegistryView(self._registry, self._blocklist_reader))
 
         # Background SKILL.md watcher. Auto-started by default so the
@@ -369,14 +369,11 @@ class LocalSkillCatalog:
         server already free of frontmatter).
 
         ``max_inject`` caps the number of skills inlined (each body is
-        typically 1-5K tokens). When None, falls back to
-        ``config.inject_max``. 0 / None disables the cap.
+        typically 1-5K tokens). 0 / None disables the cap.
 
         Each body is rendered by :func:`render_skill_body`, which resolves
         its bundled-file references against the skill's directory.
         """
-        if max_inject is None:
-            max_inject = getattr(self._config, "inject_max", 0) or 0
         # Backward-compat: accept list[str] of names, resolve via registry.
         if skills and isinstance(skills[0], str):
             resolved: list[SkillMeta] = []
@@ -459,8 +456,7 @@ class LocalSkillCatalog:
             only: When provided, only these skills are included. Accepts
                 either ``list[SkillMeta]`` (canonical) or ``list[str]`` of
                 skill names (backward-compat for older callers). ``None``
-                preserves legacy behavior (full local directory), used as
-                a fallback when no selector picked.
+                renders the full local directory.
 
         Local skills render via their on-disk ``meta.path``; LLM reads the
         full body via ``read_file``. ``available`` reflects ``requires``

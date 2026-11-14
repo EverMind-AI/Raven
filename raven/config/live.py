@@ -67,7 +67,6 @@ __all__ = [
     "media_tool_config",
     "permissions_config",
     "routing_profile",
-    "skill_gate_pin",
     "subagent_runtime",
     "web_provider_keys",
     "web_search_key",
@@ -667,21 +666,12 @@ def curator_pin(live: LiveConfig) -> tuple[str | None, str | None]:
     Read per curation rather than resolved once when the context engine is
     built, so that repointing the curator on a settings surface reaches the
     next turn instead of the next restart. ``permissions.judgeModel`` and
-    ``sessionTitle.model`` are already read this way; this pair and the skill
-    gate's were the subsystem pins that still owed a reload.
+    ``sessionTitle.model`` are read this way too.
 
     Turning the pair into a binding stays with the caller: that goes through
     the provider pool, which is where the cost of building one is visible.
     """
     return _block_pin(live, ("context",), "curator_model", "curator_provider")
-
-
-def skill_gate_pin(live: LiveConfig) -> tuple[str | None, str | None]:
-    """``skillForge.llmGateModel`` and the provider serving it, read live.
-
-    Same reasoning as :func:`curator_pin`.
-    """
-    return _block_pin(live, ("skillForge", "skill_forge"), "llm_gate_model", "llm_gate_provider")
 
 
 def disabled_tool_names(live: LiveConfig) -> frozenset[str]:

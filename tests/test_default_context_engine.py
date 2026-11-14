@@ -1,11 +1,11 @@
 """UnifiedContextEngine — EverOS lane (recall + SkillForgeRouter) behavior.
 
-Formerly the ``DefaultContextEngine`` two-track tests. The two-track
-gather (``backend.recall`` for ``# Memory`` + ``SkillForgeRouter`` for
-``# Skills``) is now the EverOS lane of the single
-:class:`UnifiedContextEngine`. These tests exercise that lane through
-the fast path (empty history → no Curator LLM call), which is where the
-recall / router outputs land in the prompt.
+Formerly the ``DefaultContextEngine`` two-track tests. The two tracks
+(``backend.recall`` for ``# Memory`` + ``SkillForgeRouter`` for the scent
+menu) are now the EverOS lane of the single :class:`UnifiedContextEngine`.
+These tests exercise that lane through the fast path (empty history → no
+Curator LLM call), which is where the recall / router outputs land in the
+prompt.
 """
 
 from __future__ import annotations
@@ -19,12 +19,12 @@ import pytest
 from raven.agent.context import ContextBuilder
 from raven.config.raven import ContextConfig
 from raven.context_engine import ContextAssembler, TurnContext
+from raven.context_engine.scent import ScentMenu
 from raven.context_engine.segments import (
     ActiveSkillsSegmentBuilder,
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
 from raven.context_engine.segments.curator import CuratorSegmentBuilder
 from raven.contracts.assembled import TokenBudget
@@ -35,9 +35,9 @@ from raven.memory_engine.skill_forge import RouterHit, SkillForgeRouter
 def _full_prompt(ac) -> str:
     """System slot plus the turn's user content.
 
-    ``# Memory`` and ``# Skills`` ride in the user message's turn-scratch tail
-    rather than the system prompt, so an assertion about "the prompt" has to
-    read both slots to keep meaning what it used to.
+    ``# Memory`` rides in the user message's turn-scratch tail and the scent
+    menu in its envelope, rather than the system prompt, so an assertion about
+    "the prompt" has to read both slots to keep meaning what it used to.
     """
     parts = [ac.messages[0]["content"]]
     content = ac.messages[-1]["content"]
@@ -137,6 +137,10 @@ def _budget() -> TokenBudget:
     )
 
 
+# Long enough, and carrying a task verb, for the scent menu to look skills up.
+_FAT = "please review the git resolver flow"
+
+
 def _turn(msg: str = "hi", **kw) -> TurnContext:
     return TurnContext(
         current_message=msg,
@@ -171,7 +175,6 @@ def _engine(
             memory_top_k=memory_top_k,
         ),
         ActiveSkillsSegmentBuilder(builder.skills),
-        SkillsSegmentBuilder(router, skill_top_k=skill_top_k),
         CuratorSegmentBuilder(
             workspace=builder.workspace,
             config=ContextConfig(),
@@ -181,7 +184,7 @@ def _engine(
             get_tool_definitions=lambda: [],
         ),
     ]
-    return ContextAssembler(builders, lambda: [])
+    return ContextAssembler(builders, lambda: [], scent=ScentMenu(router, top_k=skill_top_k))
 
 
 # ---------------------------------------------------------------------------
@@ -203,43 +206,11 @@ class TestEngineIdentity:
 
 
 # ---------------------------------------------------------------------------
-# Two-track concurrency (recall + router.select)
+# The two tracks (recall + router.select)
 # ---------------------------------------------------------------------------
 
 
-class TestTwoTrackConcurrency:
-    async def test_skill_and_memory_run_concurrently(
-        self,
-        builder: ContextBuilder,
-    ) -> None:
-        """Neither track is let through until both have arrived, so this passes
-        only if they overlap. The wall-clock total this used to assert on raced
-        whatever else the machine was doing, and failed under load."""
-        rendezvous = asyncio.Barrier(2)
-
-        class _RendezvousSource(_StubSource):
-            async def search(self, query, history, k):
-                await rendezvous.wait()
-                return await super().search(query, history, k)
-
-        class _RendezvousBackend(_StubBackend):
-            async def recall(self, query, *, user_id=None, agent_id=None, top_k):
-                await rendezvous.wait()
-                return await super().recall(query, user_id=user_id, agent_id=agent_id, top_k=top_k)
-
-        eng = _engine(
-            builder,
-            router=SkillForgeRouter([_RendezvousSource("local", hits=[])]),
-            backend=_RendezvousBackend(recall_response=[]),
-        )
-        async with asyncio.timeout(5):
-            await eng.assemble(
-                session_key="s1",
-                session_messages=[],
-                budget=_budget(),
-                turn=_turn(),
-            )
-
+class TestTwoTracks:
     async def test_track_ids_passed_to_recall(
         self,
         builder: ContextBuilder,
@@ -274,7 +245,7 @@ class TestTwoTrackConcurrency:
             skill_top_k=3,
             memory_top_k=7,
         )
-        await eng.assemble("s", [], _budget(), turn=_turn("q"))
+        await eng.assemble("s", [], _budget(), turn=_turn(_FAT))
         # SkillForgeRouter applies an over-fetch factor; the source sees k*2
         # by default.
         assert source.calls[0][1] == 6  # 3 × default over_fetch_factor 2
@@ -289,12 +260,12 @@ class TestTwoTrackConcurrency:
 class TestAssembledMetadata:
     async def test_injected_skill_ids(self, builder: ContextBuilder) -> None:
         hits = [
-            RouterHit(qualified_id="local/a", name="a", content="", score=0.5),
-            RouterHit(qualified_id="everos/b", name="b", content="", score=0.5),
+            RouterHit(qualified_id="local/a", name="a", content="a body", score=0.5),
+            RouterHit(qualified_id="everos/b", name="b", content="b body", score=0.5),
         ]
         source = _StubSource("local", hits=hits)
         eng = _engine(builder, router=SkillForgeRouter([source]), backend=_StubBackend())
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn(_FAT))
         assert set(ac.metadata["injected_skill_ids"]) == {"local/a", "everos/b"}
 
     async def test_memory_hits_count(self, builder: ContextBuilder) -> None:
@@ -330,7 +301,7 @@ class TestAssembledMetadata:
 
 
 # ---------------------------------------------------------------------------
-# Block rendering — recall → # Memory, router → # Skills
+# Block rendering — recall → # Memory, router → the scent menu
 # ---------------------------------------------------------------------------
 
 
@@ -350,7 +321,7 @@ class TestRendering:
         assert "# Recalled memory" not in prompt
         assert "user likes espresso" in prompt
 
-    async def test_router_skills_in_skills_segment(
+    async def test_router_skills_reach_the_scent_menu(
         self,
         builder: ContextBuilder,
     ) -> None:
@@ -364,16 +335,15 @@ class TestRendering:
         ]
         source = _StubSource("local", hits=hits)
         eng = _engine(builder, router=SkillForgeRouter([source]), backend=_StubBackend())
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn(_FAT))
         prompt = _full_prompt(ac)
-        # No addendum channel and no "# Retrieved skills" heading — the
-        # router body lands in segment 5 (# Skills).
+        # No addendum channel and no skill section: the hit is offered by id
+        # and description in the menu, and its body stays out of the prompt.
         assert ac.system_prompt_addition is None
         assert "# Retrieved skills" not in prompt
-        assert "# Skills" in prompt
-        assert "git-resolver" in prompt
-        assert "[local/git-resolver]" in prompt
-        assert "resolves git refs" in prompt
+        assert "# Skills" not in prompt
+        assert "- local/git-resolver: resolves git refs." in prompt
+        assert "local/git-resolver" not in ac.messages[0]["content"]
 
     async def test_no_skills_addition_when_empty(
         self,
@@ -407,7 +377,7 @@ class TestNoBackendDegrade:
         builder: ContextBuilder,
     ) -> None:
         """With ``backend=None`` the recall lane yields [] and the local
-        router still feeds # Skills."""
+        router still feeds the scent menu."""
         hits = [
             RouterHit(
                 qualified_id="local/x",
@@ -418,10 +388,10 @@ class TestNoBackendDegrade:
         ]
         source = _StubSource("local", hits=hits)
         eng = _engine(builder, router=SkillForgeRouter([source]), backend=None)
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn(_FAT))
         assert ac.metadata["memory_hits"] == 0
         assert "local/x" in ac.metadata["injected_skill_ids"]
-        assert "# Skills" in _full_prompt(ac)
+        assert "- local/x: body" in _full_prompt(ac)
 
 
 # ---------------------------------------------------------------------------
@@ -501,7 +471,7 @@ class TestFailureSemantics:
             RouterHit(
                 qualified_id="local/x",
                 name="x",
-                content="",
+                content="x body",
                 score=0.5,
             )
         ]
@@ -510,7 +480,7 @@ class TestFailureSemantics:
             router=SkillForgeRouter([_Failing(), _StubSource("local", hits=good_hits)]),
             backend=_StubBackend(),
         )
-        ac = await eng.assemble("s", [], _budget(), turn=_turn())
+        ac = await eng.assemble("s", [], _budget(), turn=_turn(_FAT))
         assert "local/x" in ac.metadata["injected_skill_ids"]
 
 

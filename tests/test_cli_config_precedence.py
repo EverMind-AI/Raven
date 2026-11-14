@@ -83,27 +83,26 @@ def test_load_raven_config_reads_from_set_config_path(
     ``Path.home() / ".raven" / "config.json"`` directly), the CLI's
     ``--config`` flag becomes a no-op for extension blocks again.
     """
-    # Default global → summary
+    # Default global → always_max 3
     global_cfg = isolated_config_state / ".raven" / "config.json"
     _write_json(
         global_cfg,
         _minimal_base_config(
             {
                 "enabled": True,
-                "injection_mode": "summary",
+                "always_max": 3,
             }
         ),
     )
 
-    # Custom override → full_body
+    # Custom override → always_max 7
     custom_cfg = tmp_path / "custom-config.json"
     _write_json(
         custom_cfg,
         _minimal_base_config(
             {
                 "enabled": True,
-                "injection_mode": "full_body",
-                "inject_max": 2,
+                "always_max": 7,
             }
         ),
     )
@@ -111,20 +110,19 @@ def test_load_raven_config_reads_from_set_config_path(
     from raven.config import loader
     from raven.config.raven import load_raven_config
 
-    # Pre-condition: no override → reads global (summary)
+    # Pre-condition: no override → reads global (3)
     cfg_before = load_raven_config()
-    assert cfg_before.skill_forge.injection_mode == "summary", (
-        "Without set_config_path, load_raven_config must read the "
-        "default ~/.raven/config.json (which we stubbed to summary)."
+    assert cfg_before.skill_forge.always_max == 3, (
+        "Without set_config_path, load_raven_config must read the default ~/.raven/config.json (which we stubbed to 3)."
     )
 
-    # Action: set_config_path → reads custom (full_body)
+    # Action: set_config_path → reads custom (7)
     loader.set_config_path(custom_cfg)
     cfg_after = load_raven_config()
-    assert cfg_after.skill_forge.injection_mode == "full_body", (
+    assert cfg_after.skill_forge.always_max == 7, (
         f"After set_config_path({custom_cfg}), load_raven_config "
-        f"should read injection_mode from custom (full_body), got "
-        f"{cfg_after.skill_forge.injection_mode!r}. "
+        f"should read always_max from custom (7), got "
+        f"{cfg_after.skill_forge.always_max!r}. "
         f"This means either set_config_path is not honored, or "
         f"load_raven_config reads from a hardcoded path."
     )
@@ -153,37 +151,36 @@ def test_cli_subcommand_loads_extension_blocks_from_custom_config(
     before ``_load_runtime_config(--config)``, so the global config
     won. This test:
 
-      1. Stubs ~/.raven/config.json with skill_forge.injection_mode=summary
-      2. Writes a custom config with injection_mode=full_body
+      1. Stubs ~/.raven/config.json with skill_forge.always_max=3
+      2. Writes a custom config with always_max=7
       3. Patches ``load_raven_config`` to capture the loaded value
          then raise (so the rest of the subcommand prologue is skipped).
       4. Invokes ``raven {subcommand} --config <custom>``.
-      5. Asserts the captured value has injection_mode=full_body.
+      5. Asserts the captured value has always_max=7.
 
-    If the order regresses, the captured value will be 'summary' and
+    If the order regresses, the captured value will be 3 and
     the assertion fails with a pointer to the bug.
     """
-    # 1. Global config → summary (should be IGNORED when --config is passed)
+    # 1. Global config → 3 (should be IGNORED when --config is passed)
     global_cfg = isolated_config_state / ".raven" / "config.json"
     _write_json(
         global_cfg,
         _minimal_base_config(
             {
                 "enabled": True,
-                "injection_mode": "summary",
+                "always_max": 3,
             }
         ),
     )
 
-    # 2. Custom --config → full_body (should WIN)
+    # 2. Custom --config → 7 (should WIN)
     custom_cfg = tmp_path / "custom-config.json"
     _write_json(
         custom_cfg,
         _minimal_base_config(
             {
                 "enabled": True,
-                "injection_mode": "full_body",
-                "inject_max": 2,
+                "always_max": 7,
             }
         ),
     )
@@ -227,10 +224,10 @@ def test_cli_subcommand_loads_extension_blocks_from_custom_config(
         f"exit_code={result.exit_code}, stdout={result.stdout!r}"
     )
     sf = captured["ec_config"].skill_forge
-    assert sf.injection_mode == "full_body", (
+    assert sf.always_max == 7, (
         f"`raven {subcommand} --config <X>` IGNORED skill_forge from X. "
-        f"Got injection_mode={sf.injection_mode!r} (from global config), "
-        f"expected 'full_body' (from --config).\n\n"
+        f"Got always_max={sf.always_max!r} (from global config), "
+        f"expected 7 (from --config).\n\n"
         f"Root cause: load_raven_config() was called BEFORE "
         f"_load_runtime_config() in raven/cli/commands.py:{subcommand}(). "
         f"_load_runtime_config calls set_config_path(--config); "

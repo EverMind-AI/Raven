@@ -219,16 +219,15 @@ class ContextAssembler(ContextEngine):
             scent = await self._scent.build(ctx.current_message, ctx.session_messages)
             if scent:
                 ctx = replace(ctx, scent_text=scent.text)
-                # Under pull no SkillsSegmentBuilder runs, so the menu is the
-                # only writer of this key: the after-turn backend feedback
-                # keeps receiving the skills the model was offered.
+                # The menu is the only writer of this key: the after-turn
+                # backend feedback receives the skills the model was offered.
                 meta |= {"injected_skill_ids": list(scent.skill_ids)}
                 window_parts["scent"] = _scent_in_envelope(scent.text)
         # What fills the window, by name, so a reader can tell the parts apart:
-        # the memory and the skills this turn added on top of the talk, the
-        # always-on skill digest that rides the system prompt, and the pull
-        # menu. Each is recorded wherever it rode, so the breakdown can cut it
-        # out of its default bucket.
+        # the memory this turn added on top of the talk, the always-on skill
+        # digest that rides the system prompt, and the scent menu. Each is
+        # recorded wherever it rode, so the breakdown can cut it out of its
+        # default bucket.
         if window_parts:
             meta["window_parts"] = window_parts
         scratch = render_turn_scratch([text for _, text in scratch_parts])
@@ -387,7 +386,7 @@ class ContextAssembler(ContextEngine):
     def _build_user(self, ctx: AssemblyContext) -> dict[str, Any]:
         """The single structural user message: runtime context + content.
 
-        The scent menu (pull-mode skill discovery) rides the same envelope
+        The scent menu (skill discovery) rides the same envelope
         as the clock: per-turn material belongs at the sequence tail, where
         appending never invalidates the cached prefix.
 

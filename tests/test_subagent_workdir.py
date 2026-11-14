@@ -348,6 +348,120 @@ async def test_subagent_fences_on_both_the_session_dir_and_agent_home(tmp_path: 
     assert set(captured["exec"].extra_allowed_dirs) == {session, home}
 
 
+class _ToolCapturingRegistry:
+    """Stands in for ``ToolRegistry`` so a test can call the tools a run built."""
+
+    captured: dict = {}
+
+    def __init__(self, **kwargs) -> None:
+        pass
+
+    @property
+    def tool_names(self) -> tuple[str, ...]:
+        return tuple(self.captured)
+
+    def register(self, tool, **kwargs) -> None:
+        self.captured.setdefault(tool.name, tool)
+
+    def set_withheld_source(self, source) -> None:
+        pass
+
+    def get_definitions(self):
+        return []
+
+
+def _confined_run_tools(tmp_path: Path, monkeypatch, **backend_kw) -> tuple[dict, str]:
+    home = _agent_home_with_a_skill(tmp_path)
+    session = tmp_path / "my-repo"
+    session.mkdir()
+    provider = _PromptCapturingProvider()
+    backend = RavenLoopBackend(
+        provider=provider, model="stub-model", agent_home=home, restrict_to_workspace=True, **backend_kw
+    )
+    captured: dict = {}
+    monkeypatch.setattr(_ToolCapturingRegistry, "captured", captured)
+    monkeypatch.setattr(raven_loop_mod, "ToolRegistry", _ToolCapturingRegistry)
+    asyncio.run(backend.run("do the thing", task_id="t1", workspace=session, executor=_DummyExecutor()))
+    return captured, provider.system_prompt
+
+
+def _point_live_config(tmp_path: Path, monkeypatch, payload: dict) -> None:
+    from raven.config.live import LiveConfig
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(raven_loop_mod, "_LIVE_CONFIG", LiveConfig(path))
+
+
+def test_a_confined_subagent_reads_a_builtin_skill_through_read_skill(tmp_path: Path, monkeypatch) -> None:
+    """A builtin skill's SKILL.md sits inside the installed package, outside
+    both roots a confined run may read, so pointing the sub-agent at that path
+    hands it a skill it cannot open. ``read_skill`` reads the body out of the
+    registry instead, which no fence stands in front of -- the route the main
+    agent already takes under ``restrictToWorkspace``."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch)
+
+    builtin = Path(raven_loop_mod.__file__).parents[3] / "memory_engine" / "skills" / "weather" / "SKILL.md"
+    assert builtin.is_file()
+    refused = asyncio.run(tools["read_file"].execute(path=str(builtin)))
+    assert refused.startswith("Error"), "the fence itself stays: only the skill route goes around it"
+
+    body = asyncio.run(tools["read_skill"].execute(skill_id="local/weather"))
+    assert not body.startswith("Error"), body
+    assert "### Skill: weather" in body
+    assert 'read_skill("local/<name>")' in prompt
+    assert "Read SKILL.md with read_file" not in prompt
+
+
+def test_a_subagent_without_read_skill_keeps_the_file_route(tmp_path: Path, monkeypatch) -> None:
+    """A row whose tool whitelist leaves ``read_skill`` out is told the route it
+    does have, rather than a tool it cannot call."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch, tools_allow={"read_file"})
+
+    assert "read_skill" not in tools
+    assert "invoice-audit" in prompt
+    assert "Read SKILL.md with read_file" in prompt
+    assert "read_skill(" not in prompt
+
+
+def test_a_subagent_neither_offers_nor_reads_a_blocklisted_skill(tmp_path: Path, monkeypatch) -> None:
+    """The operator's blocklist reaches the sub-agent the way it reaches the
+    main agent: the menu leaves the skill out and ``read_skill`` refuses it."""
+    _point_live_config(tmp_path, monkeypatch, {"skillForge": {"blocklist": ["invoice-audit"]}})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch)
+
+    assert "invoice-audit" not in prompt
+    refused = asyncio.run(tools["read_skill"].execute(skill_id="local/invoice-audit"))
+    assert refused.startswith("Error") and "blocklist" in refused
+
+
+def test_an_empty_skill_allow_list_leaves_read_skill_nothing_to_read(tmp_path: Path, monkeypatch) -> None:
+    """``skills_allow=[]`` is a charter: this agent gets no skills. The menu
+    already says so; ``read_skill`` has to agree rather than read any skill
+    whose id the agent happens to know."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch, skills_allow=[])
+
+    assert "## Skills" not in prompt
+    refused = asyncio.run(tools["read_skill"].execute(skill_id="local/invoice-audit"))
+    assert refused.startswith("Error") and "allow-list" in refused
+
+
+def test_a_named_skill_allow_list_reads_its_own_skills_only(tmp_path: Path, monkeypatch) -> None:
+    """A row or a node that names its skills narrows the tool as it narrows the
+    menu: the named one reads, a builtin outside the list does not."""
+    _point_live_config(tmp_path, monkeypatch, {})
+    tools, prompt = _confined_run_tools(tmp_path, monkeypatch, skills_allow=["invoice-audit"])
+
+    assert "invoice-audit" in prompt
+    allowed = asyncio.run(tools["read_skill"].execute(skill_id="local/invoice-audit"))
+    assert "### Skill: invoice-audit" in allowed
+    refused = asyncio.run(tools["read_skill"].execute(skill_id="local/weather"))
+    assert refused.startswith("Error") and "allow-list" in refused
+
+
 def test_subagent_sandbox_mounts_agent_home_when_the_session_dir_does_not_cover_it(tmp_path: Path) -> None:
     """The common shape: a project directory somewhere else on disk."""
     home = tmp_path / "home"

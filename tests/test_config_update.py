@@ -842,7 +842,7 @@ def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: P
         json.dumps(
             {
                 "skillRouter": {"hub": {"endpoint": "https://legacy.test"}},
-                "skillForge": {"router": {"topK": 4}},
+                "skillForge": {"router": {"rrfK": 4}},
             }
         ),
         encoding="utf-8",
@@ -853,7 +853,7 @@ def test_skill_hub_switch_ignores_a_legacy_router_the_loader_ignores(cfg_path: P
     assert change is True
     data = _read(cfg_path)
     assert data["skillRouter"] == {"hub": {"endpoint": "https://legacy.test"}}
-    assert data["skillForge"]["router"] == {"topK": 4, "hub": {"enabled": True}}
+    assert data["skillForge"]["router"] == {"rrfK": 4, "hub": {"enabled": True}}
 
 
 def test_skill_hub_switch_previous_counts_a_retired_hub_key_like_the_loader(cfg_path: Path) -> None:

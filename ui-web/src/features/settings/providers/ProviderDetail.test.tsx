@@ -253,7 +253,7 @@ describe('provider detail', () => {
     await act(async () => { fireEvent.click(screen.getByText('gui.settings.providers.disconnect_key')) })
     expect(calls).toEqual([])
     expect(screen.getByRole('alert').textContent)
-      .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title, gui.settings.roles.gate"}')
+      .toBe('gui.settings.providers.in_use {"roles":"gui.settings.roles.chat, gui.settings.roles.title"}')
   })
 
   /* And it says so where the button is. The panel's own foot sits under a grid

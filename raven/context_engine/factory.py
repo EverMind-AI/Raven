@@ -6,17 +6,18 @@ system prompt:
 
 - **Identity / Bootstrap / ActiveSkills** — the host's own sections.
 - **Memory** — ``backend.recall(user_id=...)`` (segment 4, ``# Memory``).
-- **Skills** — a :class:`SkillForgeRouter` over 1-3 sources (segment 5,
-  ``# Skills``), built only under pull discovery.
 - **History** — the strategy ``context.history.strategy`` names (see
   :mod:`raven.context_engine.history`): ``compacting`` or the Curator.
   Owns ``*history``.
 
-With ``context.cache.turn_scratch`` on (the default), the two sections that
-move with the query -- ``# Memory`` and ``# Skills`` -- are appended to the
-turn's user message instead of the system prompt.
+With ``context.cache.turn_scratch`` on (the default), ``# Memory``, the section
+that moves with the query, is appended to the turn's user message instead of
+the system prompt.
 
-The SkillForgeRouter is assembled from up to three sources:
+Retrieved skills never enter a segment. A :class:`SkillForgeRouter` over 1-3
+sources feeds the :class:`ScentMenu`, a few name and description lines in the
+turn's user envelope, and the ``find_skill`` tool; the model reads a body with
+``read_skill``. The router is assembled from up to three sources:
 
 - :class:`LocalSkillSource` — always; wraps the builder's existing
   ``LocalPool`` + ``SkillRegistry`` (no second disk scan).
@@ -40,7 +41,7 @@ from typing import TYPE_CHECKING, Callable
 from loguru import logger
 
 from raven.agent.context import ContextBuilder
-from raven.config.live import LiveConfig, curator_pin, skill_gate_pin, skill_hub_enabled
+from raven.config.live import LiveConfig, curator_pin, skill_hub_enabled
 from raven.context_engine import history as history_strategies
 from raven.context_engine.assembler import ContextAssembler
 from raven.context_engine.scent import ScentMenu
@@ -49,7 +50,6 @@ from raven.context_engine.segments import (
     BootstrapSegmentBuilder,
     IdentitySegmentBuilder,
     MemorySegmentBuilder,
-    SkillsSegmentBuilder,
 )
 from raven.contracts.context import ContextEngine
 from raven.contracts.llm_provider import LLMProvider
@@ -64,12 +64,7 @@ if TYPE_CHECKING:
         SkillForgeRouterConfig,
     )
     from raven.contracts.memory import MemoryBackend
-    from raven.memory_engine import (
-        LLMGateFilter,
-        QueryRewriter,
-        SkillForgeRouter,
-    )
-    from raven.providers.binding import ModelBinding
+    from raven.memory_engine import SkillForgeRouter
     from raven.providers.pool import ProviderPool
     from raven.skill_hub import SkillHubClient
 
@@ -119,9 +114,9 @@ def build_context_engine(
     if skill_forge_router_config is None:
         skill_forge_router_config = _SkillForgeRouterConfig()
 
-    # One reader for the pins and the Hub switch: the file is re-parsed only
-    # when its bytes change, so the subsystems asking per call cost one read
-    # between them.
+    # One reader for the curator pin and the Hub switch: the file is re-parsed
+    # only when its bytes change, so the subsystems asking per call cost one
+    # read between them.
     live = LiveConfig()
 
     router = _build_router(
@@ -132,23 +127,6 @@ def build_context_engine(
         skill_hub_client=skill_hub_client,
         hub_enabled_reader=lambda: skill_hub_enabled(live),
     )
-
-    discovery = str(getattr(skill_forge_config, "discovery", "pull") or "pull")
-    if discovery == "push":
-        rewriter, gate = _build_rewriter_and_gate(
-            provider=provider,
-            provider_pool=provider_pool,
-            skill_forge_config=skill_forge_config,
-            skill_forge_router_config=skill_forge_router_config,
-            pin_resolver=live_pin_resolver(
-                provider_pool,
-                lambda: skill_gate_pin(live),
-                key="skill_forge.llm_gate_model",
-                follower="the gate",
-            ),
-        )
-    else:
-        rewriter, gate = None, None
 
     builders = [
         IdentitySegmentBuilder(
@@ -167,28 +145,6 @@ def build_context_engine(
         ),
         ActiveSkillsSegmentBuilder(builder.skills, get_tool_definitions=get_tool_definitions),
     ]
-    if discovery == "push":
-        builders.append(
-            SkillsSegmentBuilder(
-                router,
-                skill_top_k=skill_forge_router_config.top_k,
-                rewriter=rewriter,
-                gate=gate,
-                gate_pool_size=(
-                    int(getattr(skill_forge_config, "llm_gate_pool_size", 10)) if skill_forge_config is not None else 10
-                ),
-                hub_client=skill_hub_client,
-                get_tool_definitions=get_tool_definitions,
-                list_subagents=list_subagents,
-                min_safety=skill_forge_router_config.hub.min_safety,
-                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-                blocklist_reader=blocklist_reader,
-                auto_install=str(getattr(skill_forge_config, "auto_install", "auto") or "auto"),
-                install_audit_path=(
-                    workspace / "skills" / "hub" / "installs.jsonl" if skill_hub_client is not None else None
-                ),
-            )
-        )
     strategy = history_strategies.resolve(config.history.strategy)
     builders.append(
         strategy.build(
@@ -207,21 +163,19 @@ def build_context_engine(
             now_fn=now_fn,
         )
     )
-    scent = None
-    if discovery != "push":
-        from raven.skill_hub.policy import SkillPolicy
+    from raven.skill_hub.policy import SkillPolicy
 
-        # Pull mode has no SkillsSegmentBuilder, whose pool drop was the
-        # blocklist / min_safety backstop for the everos + hub sources —
-        # the menu enforces the same policy at advertising time.
-        scent = ScentMenu(
-            router,
-            policy=SkillPolicy.create(
-                min_safety=skill_forge_router_config.hub.min_safety,
-                blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
-                blocklist_reader=blocklist_reader,
-            ),
-        )
+    # The menu is where the everos and hub sources first meet the policy: it
+    # enforces the blocklist and the safety bar at advertising time, and
+    # read_skill / use_skill enforce them again on the detail metadata.
+    scent = ScentMenu(
+        router,
+        policy=SkillPolicy.create(
+            min_safety=skill_forge_router_config.hub.min_safety,
+            blocklist=(getattr(skill_forge_config, "blocklist", None) if skill_forge_config is not None else None),
+            blocklist_reader=blocklist_reader,
+        ),
+    )
     dropped = frozenset(getattr(config, "drop_segments", None) or ())
     # The history slot's builder is named for its strategy now; ``curator`` is
     # what a config written before the registry calls it, so either name drops
@@ -252,8 +206,7 @@ def build_context_engine(
         mints_source_refs=strategy.mints_source_refs and not history_dropped,
         turn_scratch=getattr(getattr(config, "cache", None), "turn_scratch", True),
     )
-    # The find_skill tool searches through the same router the engine
-    # retrieves with, whichever discovery mode is active.
+    # The find_skill tool searches through the same router the scent menu reads.
     engine.skills_router = router
     return engine
 
@@ -267,7 +220,7 @@ def _build_router(
     skill_hub_client: "SkillHubClient | None" = None,
     hub_enabled_reader: "Callable[[], bool] | None" = None,
 ) -> "SkillForgeRouter":
-    """Assemble the 1-to-3 source SkillForgeRouter for segment 5."""
+    """Assemble the 1-to-3 source SkillForgeRouter the scent menu and find_skill share."""
     from raven.memory_engine import (
         BackendSkillSource,
         HubSkillSource,
@@ -337,48 +290,3 @@ def _build_router(
         dedup_by=skill_forge_router_config.dedup_by,
         rrf_k=skill_forge_router_config.rrf_k,
     )
-
-
-def _build_rewriter_and_gate(
-    *,
-    provider: LLMProvider,
-    skill_forge_config: "SkillForgeConfig | None",
-    skill_forge_router_config: "SkillForgeRouterConfig",
-    provider_pool: "ProviderPool | None" = None,
-    pin_resolver: "Callable[[], ModelBinding | None] | None" = None,
-) -> "tuple[QueryRewriter | None, LLMGateFilter | None]":
-    """Construct the optional rewriter + gate from the parent SkillForge
-    config. Both fall to ``None`` when their respective flag is off or
-    no provider is wired — :class:`SkillsSegmentBuilder` then skips that
-    stage.
-
-    Per-stage isolation matters: gate-off + rewriter-on is a valid
-    deployment (cheap retrieval, no LLM selector); rewriter-off + gate-on
-    is also valid (always retrieve, then filter)."""
-    if skill_forge_config is None or provider is None:
-        return None, None
-
-    from raven.memory_engine import LLMGateFilter, QueryRewriter
-
-    rewriter: "QueryRewriter | None" = None
-    if bool(getattr(skill_forge_config, "rewrite_enabled", False)):
-        rewriter = QueryRewriter(
-            provider,
-            max_tokens=int(getattr(skill_forge_config, "rewrite_max_tokens", 8192) or 8192),
-        )
-
-    gate: "LLMGateFilter | None" = None
-    if bool(getattr(skill_forge_config, "llm_gate_enabled", False)):
-        # ``legacy_top_k`` is the gate's failure-fallback size — must match
-        # what the no-gate path renders (i.e. ``skill_top_k``) so a gate
-        # outage doesn't change injection volume vs. having gate disabled.
-        gate = LLMGateFilter(
-            provider,
-            max_select=int(getattr(skill_forge_config, "llm_gate_max_select", 2) or 2),
-            legacy_top_k=int(skill_forge_router_config.top_k or 5),
-            pin_resolver=pin_resolver,
-            temperature=float(getattr(skill_forge_config, "llm_gate_temperature", 0.0)),
-            max_tokens=int(getattr(skill_forge_config, "llm_gate_max_tokens", 8192) or 8192),
-        )
-
-    return rewriter, gate

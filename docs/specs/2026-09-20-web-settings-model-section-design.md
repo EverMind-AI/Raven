@@ -33,9 +33,10 @@ they are cited as "prior C14", "prior A12" and not restated.
 - **offer**: what one opening of the picker lists -- a kind, optionally a
   subset of providers, optionally what a pick does. The composer opens with the
   default offer; a role slot opens with its own.
-- **slot** / **role**: one of the eleven model roles of the roles card (chat,
-  curator, session naming, skill gate, EverOS llm / embedding / rerank /
-  multimodal, image, speech, video).
+- **slot** / **role**: one of the ten model roles of the roles card (chat,
+  curator, session naming, EverOS llm / embedding / rerank / multimodal, image,
+  speech, video; the skill gate role was removed 2026-11-13 with push skill
+  discovery).
 - **provider catalogue** (shortened to **catalogue** below): every provider
   `model.options` returns, connected or not. Not the Session Mode catalogue of
   the Runtime's `CONTEXT.md`.
@@ -210,7 +211,7 @@ number.
 - A23. The embedding slot lists embedding models only and the rerank slot reranker models only: a chat model configured on the same provider does not appear in either. (*)
 - A24. The speech slot offers OpenRouter only, the image slot the connected providers marked `image_api` and the video slot those marked `video_api` (prior A22, amended 2026-10-06 and 2026-10-19); within them, `image`, `audio` and `video` models respectively.
 - A25. Chat, curator, session naming, EverOS llm, gate and multimodal list `text` models only; an embedding model configured on a connected provider does not appear.
-- A26. Picking writes exactly what prior A19-A22 describe, through the roles card's own write path: chat updates `agents.defaults` and the composer chip repaints; curator, skill gate and session naming write model then provider; EverOS roles call `settings.everosSet`; media roles write `tools.media.<kind>` then the tool switch.
+- A26. Picking writes exactly what prior A19-A22 describe, through the roles card's own write path: chat updates `agents.defaults` and the composer chip repaints; curator, skill gate and session naming write model then provider (the skill gate role was removed 2026-11-13); EverOS roles call `settings.everosSet`; media roles write `tools.media.<kind>` then the tool switch.
 - A27. A typed id in a slot's picker shows "use `<id>` · add to `<provider>`" with a kind chip that starts on the slot's kind, not on the name guess; choosing it adds the model to the provider first, with that kind's stated tags as A17 describes, then assigns it.
 - A28. The composer's chip opens the same picker with the default offer: every connected provider, `text` models only (a provider with no text model shows the empty-kind text), the conversation's current model listed and marked in its provider's column even when that provider's list does not carry it, and the same typed-id row, which adds the model then switches this conversation to it and makes it the default new conversations start on. (*)
 - A29. Opened from a settings row the picker hangs below the row; it flips above only when its bottom edge would pass the viewport's bottom minus 12px and it fits above; it stays inside the viewport and over the dialog; scrolling the settings panel closes it; a window resize re-places it. Opened from the composer chip it keeps hanging above the composer card.

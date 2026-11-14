@@ -1,8 +1,9 @@
 """Append-only JSONL audit of Hub skill installs.
 
-Every install that passes policy is recorded — both the silent
-auto-inject path and explicit ``use_skill`` calls — so an operator can
-answer "what third-party code landed on this machine, when, and why".
+Every install that passes policy is recorded, so an operator can answer
+"what third-party code landed on this machine, when, and why". Installs
+come from ``use_skill``; records written with the ``auto_inject`` trigger
+come from builds that injected Hub skills into context on their own.
 Best-effort by design: an audit write failure must never take down the
 install itself.
 

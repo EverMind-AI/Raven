@@ -114,18 +114,15 @@ def test_the_settings_whitelist_is_exactly_this_set() -> None:
         # chip and /perm) since the gate landed; this lets the settings panel
         # write the default a new conversation starts on.
         "permissions.mode",
-        # The settings page's model page. Two more pins of the sessionTitle
-        # shape (curator, skill gate) with their pair keys, the speech and video
+        # The settings page's model page. One more pin of the sessionTitle
+        # shape (curator) with its pair keys, the speech and video
         # selections in the image selection's shape, and three integers: the
         # tool-iteration cap, the context window override and the auto-archive
         # age. None names an address or carries a key; the pins reach only
         # providers the deployment has already credentialed.
         "context.curatorModel",
         "context.curatorProvider",
-        "skillForge.llmGateModel",
-        "skillForge.llmGateProvider",
         "context",
-        "skillForge",
         "tools.media.speech",
         "tools.media.video",
         "agents.defaults.maxToolIterations",
