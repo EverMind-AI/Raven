@@ -46,6 +46,7 @@ from raven.agent.harness.participants import Intake, compose_addendum, compose_i
 from raven.agent.window import compaction, shrink
 from raven.agent.window.images import ATTACHED_IMAGE_KEY
 from raven.context_engine import headroom
+from raven.context_engine.runtime_context import retell_notices
 from raven.contracts.assembled import TokenBudget
 from raven.contracts.harness import MemoryModule, ShrinkResult, WindowPressure, WindowState
 from raven.contracts.participant import AgentParticipant, StepView
@@ -188,7 +189,7 @@ class DefaultMemory:
         self, messages: list[dict[str, Any]], model: str | None, cfg: Any
     ) -> tuple[list[dict[str, Any]], str]:
         chosen = model or self._model()
-        return await shrink.summarize_head(
+        summarized, verdict = await shrink.summarize_head(
             messages,
             provider=self._provider(),
             model=chosen,
@@ -196,6 +197,12 @@ class DefaultMemory:
             ceiling=self._output_ceiling(chosen),
             cfg=cfg,
         )
+        if verdict == "changed":
+            # The replaced head may be the only place a still-standing plugin
+            # note was told, and the brief that replaces it is prose, not a
+            # notice block, so what it took away is said again on the question.
+            summarized = retell_notices(messages, summarized)
+        return summarized, verdict
 
     async def _compact_ahead(
         self, messages: list[dict[str, Any]], state: WindowState, model: str | None

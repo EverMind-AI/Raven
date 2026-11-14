@@ -3,6 +3,7 @@
 Pure frozen data, zero behaviour. Shared by spine and the channel rewrite.
 """
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -14,6 +15,14 @@ class ChatType(StrEnum):
 
     DM = "dm"
     GROUP = "group"
+
+
+SOURCE_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
+"""What a channel or surface name may be once it leaves its transport: a short token.
+
+The conversation block writes both names into the system prompt and leaves any
+other value out, and ``turn.send`` refuses any other channel.
+"""
 
 
 @dataclass(frozen=True)
