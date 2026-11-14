@@ -297,6 +297,45 @@ def test_enabling_an_unwired_catalog_item_fails_loudly(tmp_path, monkeypatch) ->
         persona_tool(["worker"], ["read_file"])
 
 
+def test_a_misshapen_catalogue_section_names_the_file_rather_than_raising_on_its_own(tmp_path, monkeypatch) -> None:
+    """Every read of this loader is promised one error that names the file. A
+    section that is not an object would otherwise raise an ``AttributeError``
+    from inside the walk, which says nothing about which file is broken."""
+    checked_in = json.loads(harness_capabilities._PATH.read_text(encoding="utf-8"))
+
+    def point_at(name: str, mutate) -> None:
+        document = json.loads(json.dumps(checked_in))
+        mutate(document["harnessGeneration"])
+        path = tmp_path / name
+        path.write_text(json.dumps(document), encoding="utf-8")
+        monkeypatch.setattr(harness_capabilities, "_PATH", path)
+
+    def at(module: str, *keys: str):
+        def mutate(root: dict) -> None:
+            section = root[module]
+            for key in keys[:-1]:
+                section = section[key]
+            section[keys[-1]] = []
+
+        return mutate
+
+    for name, mutate, expected in (
+        ("parameters", at("memory", "parameters"), "memory.parameters must be an object"),
+        ("parameters-items", at("memory", "parameters", "items"), "memory.parameters.items must be an object"),
+        ("functions", at("memory", "functions"), "memory.functions must be an object"),
+        ("functions-kind", at("memory", "functions", "participant"), "memory.functions.participant must be an object"),
+        (
+            "functions-kind-items",
+            at("memory", "functions", "participant", "items"),
+            "memory.functions.participant.items must be an object",
+        ),
+        ("self-kind", at("action", "functions", "self"), "action.functions.self must be an object"),
+    ):
+        point_at(f"{name}.json", mutate)
+        with pytest.raises(RuntimeError, match=f"invalid harness generation capability file: {expected}"):
+            harness_capabilities.parameter_enabled("memory", "systemPrompt")
+
+
 @pytest.mark.parametrize(
     ("functions", "message"),
     [
