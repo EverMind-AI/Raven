@@ -6084,7 +6084,11 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .chrome-find-title { display: block; font-size: 13.5px; color: var(--text); }
 .chrome-find-excerpt { display: block; margin-top: 2px; font-size: 12px; color: var(--muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chrome-find-hit mark { background: var(--amber-dp); color: inherit; border-radius: 3px; padding: 0 1px; }
+/* A wash rather than a filled chip: the mark has to stay legible on a title's
+   ink and on an excerpt's grey in both themes, and inheriting either colour
+   onto --amber-dp puts one of them under 2:1 in the dark set. */
+.chrome-find-hit mark { background: color-mix(in srgb, var(--warm) 30%, transparent);
+  color: var(--text); border-radius: 3px; padding: 0 1px; }
 .chrome-find-empty { padding: 24px 16px; text-align: center; font-size: 12.5px; color: var(--muted); }
 /* Bounded, and the fields scroll inside it. A channel's form is as long as that
    channel has fields -- slack specs nine, three of them nested -- and an
