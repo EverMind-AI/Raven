@@ -5050,9 +5050,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.instance_handoff_hint':
       '你在这里说的不会自动加入主智能体的上下文。你下次给主智能体发消息时，它会得知本会话里发生过哪些直接对话，需要时它可以自己去读。',
     'gui.ws.instance_handoff_count_one':
-      '你下次给主智能体发消息时，它会得知本会话有 1 条直接对话记录；对话正文不会自动进入它的上下文，只有它去读才会进入。',
+      '你下次给主智能体发消息时，它会得知本会话有 1 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。',
     'gui.ws.instance_handoff_count_n':
-      '你下次给主智能体发消息时，它会得知本会话有 {n} 条直接对话记录；对话正文不会自动进入它的上下文，只有它去读才会进入。',
+      '你下次给主智能体发消息时，它会得知本会话有 {n} 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。',
     'gui.ws.instance_resumable': '可继续',
     'gui.ws.instance_of_graph': '来自编排',
     'gui.ws.instance_live': '进行中',
