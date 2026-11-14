@@ -1597,20 +1597,24 @@ written mid-turn for the working transcript and is never filed.
 
 **Runtime Context** (`context_engine/runtime_context.py`, `segments/render.py:build_runtime_context`):
 The block each turn's user message opens with: the current time, the chat id, and
-any tool or session notices. The channel tag and the surface hold for the whole
+any tool or session notices. The channel tag and the surface usually hold for the whole
 conversation, so they close the system prompt instead, under `# This Conversation`
 (`segments/render.py:build_conversation_context`), which writes them only when they are
-names, never prose, and `turn.send` refuses any other channel; that prompt is shared by every
-conversation on the same channel and surface, which is why the chat id stays in the
-block. The assembler records the
-lines on the message, the session write keeps the user's words in `content` and
-files the lines beside them as `runtime_context`, and `HistoryTrimmer.history_from_ids`
-joins them back the way they were sent, so a later turn replays the block byte
-for byte and the provider's cached prefix still matches through it. The scent menu
-rides in the same paragraph when the message is sent but is not filed. Tool notices
-are sent as changes: a plugin's line goes out when it differs from what the replayed
-blocks already say, a plugin no longer noted gets a cleared line, and a compaction
-that takes the blocks out has them told again.
+names (`spine.message.SOURCE_NAME_RE`), and `turn.send` refuses any other channel; that
+prompt is shared by every conversation on the same channel and surface, which is why the
+chat id stays in the block. A conversation that moves (the heartbeat session picks its
+channel per run, a linked chat runs as its own channel inside a page session, two surfaces
+can share a session) gets a new prompt at the move. The assembler records the lines on the
+message, the session write keeps the user's words in `content` and files the lines beside
+them as `runtime_context`, and both history projections, `HistoryTrimmer.history_from_ids`
+and the curator's fast path, join them back through `replayed_content` the way they were
+sent, so a later turn replays the block byte for byte and the provider's cached prefix
+still matches through it. The scent menu rides in the same paragraph when the message is
+sent but is not filed. Tool notices are sent as changes: a plugin's line goes out when it
+differs from what the replayed blocks already say, a plugin no longer noted gets a cleared
+line, and a compaction that takes the blocks out has them told again; an overflow reclaim,
+which trims the history after the question was built, puts what it took back into the
+question's block.
 
 **Source Ref** (`utils/refs.py`, `session/refs.py`):
 A `[[ref store/scope#lo-hi]]` token naming verbatim entries of an append-only

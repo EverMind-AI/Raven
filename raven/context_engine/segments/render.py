@@ -27,6 +27,7 @@ from raven.agent import workdir
 from raven.config.agent_names import GENERIC_AGENT
 from raven.i18n import zh_lexicon
 from raven.security.trust import wrap_untrusted
+from raven.spine.message import SOURCE_NAME_RE
 from raven.utils.images import ImagePart, detect_image_mime, image_block
 
 # Ceilings on what one message may carry. ``prepare_image`` caps each image on
@@ -944,29 +945,31 @@ _SURFACE_GLOSS: dict[str, str] = {
 
 CONVERSATION_HEADING = "# This Conversation"
 
-# What the conversation block may write into the system prompt: a name, never
-# prose. Every path that sets a channel or a surface reaches the block, not only
-# the RPC that refuses such a value, so the block checks again.
-_CONVERSATION_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}")
-
 
 def build_conversation_context(channel: str | None, surface: str | None) -> str:
     """Where this conversation is held, for the end of the system prompt; ``""`` when nothing is known.
 
-    Both hold for the whole conversation, so they ride the system prompt rather
-    than every user message. That prompt is shared by every conversation on the
-    same channel and surface, which is why the chat id stays in the runtime block.
+    Both usually hold for the whole conversation, so they ride the system prompt
+    rather than every user message. Some conversations move: the heartbeat session
+    picks its channel per run, a linked chat runs as its own channel inside a page
+    session, and two surfaces can share one session; the prompt changes with them,
+    and an earlier chat id in the history no longer says which channel it was on.
+    That prompt is shared by every conversation on the same channel and surface,
+    which is why the chat id stays in the runtime block.
 
     ``surface`` names the front end the connection declared at handshake. It is
     reported alongside the channel rather than instead of it: the channel is
     where a reply is delivered, the surface is what the reader is looking at,
     and the served page shares the ``tui`` channel with the terminal, so the
     channel alone has the agent telling a browser reader to press Ctrl+C.
+
+    Only a name is written (``SOURCE_NAME_RE``): every path that sets a channel or
+    a surface reaches this block, not only the RPC that refuses another value.
     """
     lines = []
-    if channel and _CONVERSATION_TOKEN.fullmatch(channel):
+    if channel and SOURCE_NAME_RE.fullmatch(channel):
         lines.append(f"Channel: {channel}")
-    if surface and _CONVERSATION_TOKEN.fullmatch(surface):
+    if surface and SOURCE_NAME_RE.fullmatch(surface):
         gloss = _SURFACE_GLOSS.get(surface)
         lines.append(f"Surface: {surface}" + (f" -- {gloss}" if gloss else ""))
     return "\n".join([CONVERSATION_HEADING, *lines]) if lines else ""
