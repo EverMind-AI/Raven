@@ -9340,12 +9340,12 @@
       "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
     },
     "gui.settings.plugins.none": {
-      "en": "No plugin package found",
-      "zh": "还没有插件包"
+      "en": "No Agent Plugin package found",
+      "zh": "还没有 Agent 插件包"
     },
     "gui.settings.plugins.none_sub": {
-      "en": "A plugin package follows the Agent Plugins format and can bring skills and MCP servers. List its folder in agentPlugins.packages to see it here.",
-      "zh": "插件包遵循 Agent Plugins 协议，可以带来技能和 MCP 服务。把它所在的目录写进 agentPlugins.packages，就能在这里看到。"
+      "en": "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
+      "zh": "这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。"
     },
     "gui.settings.plugins.problem": {
       "en": "Has problems",

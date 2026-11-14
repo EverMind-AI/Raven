@@ -2753,9 +2753,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.mcp.tools_n': '{n}',
     'gui.settings.plugins.counter': '{n} packages',
     'gui.settings.plugins.add_hint': 'Packages are read from agentPlugins.packages in {path}.',
-    'gui.settings.plugins.none': 'No plugin package found',
+    'gui.settings.plugins.none': 'No Agent Plugin package found',
     'gui.settings.plugins.none_sub':
-      'A plugin package follows the Agent Plugins format and can bring skills and MCP servers. List its folder in agentPlugins.packages to see it here.',
+      "Packages that follow the Agent Plugins format bring skills and MCP servers. List a package's folder in agentPlugins.packages to see it here.",
     'gui.settings.plugins.problem': 'Has problems',
     'gui.settings.plugins.unimported': 'Skills not imported',
     'gui.settings.plugins.mcp_switch': 'Start its MCP servers',
@@ -6278,9 +6278,9 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.settings.mcp.tools_n': '{n} 个',
     'gui.settings.plugins.counter': '共 {n} 个插件包',
     'gui.settings.plugins.add_hint': '插件包从配置文件 {path} 的 agentPlugins.packages 读取。',
-    'gui.settings.plugins.none': '还没有插件包',
+    'gui.settings.plugins.none': '还没有 Agent 插件包',
     'gui.settings.plugins.none_sub':
-      '插件包遵循 Agent Plugins 协议，可以带来技能和 MCP 服务。把它所在的目录写进 agentPlugins.packages，就能在这里看到。',
+      '这里列出遵循 Agent Plugins 协议的插件包，它们可以带来技能和 MCP 服务。把包所在的目录写进 agentPlugins.packages，就能在这里看到。',
     'gui.settings.plugins.problem': '有问题',
     'gui.settings.plugins.unimported': '技能未导入',
     'gui.settings.plugins.mcp_switch': '启动它的 MCP 服务',
