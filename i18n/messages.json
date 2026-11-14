@@ -4425,6 +4425,14 @@
       "en": "Search sessions",
       "zh": "搜索会话"
     },
+    "gui.find.count": {
+      "en": "{n} matching conversations",
+      "zh": "匹配的会话 · {n}"
+    },
+    "gui.find.empty": {
+      "en": "No conversation matches that.",
+      "zh": "没有匹配的会话。"
+    },
     "gui.send": {
       "en": "Send",
       "zh": "发送"
