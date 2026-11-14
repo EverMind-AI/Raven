@@ -1564,7 +1564,8 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
    (#atPop), the workspace (#wdPop) and the permission modes (#permPop) -- hang
    off their own
    chips: each is a child of the `.chrome-anch` wrapper around its chip, and sits 6px
-   above the chip's top edge, left edges lined up.
+   above the chip's top edge, left edges lined up. The permission list is the
+   exception: it hangs off the session segment, right edges lined up.
 
    The three menus stay names-only: the chip already says what is being chosen,
    and the sentence behind a name is on the row's title. The permission list is
@@ -1647,18 +1648,16 @@ button, [role="button"] { -webkit-user-select: none; user-select: none; }
 #permPop .chrome-perm-note {
   margin: 9px 4px 1px; font-size: 11px; line-height: 1.4; color: var(--muted);
 }
-/* On a phone the chip sits too far right to hang the list off its left edge.
-   Taking the anchor out of the positioned chain hangs the list off the
-   composer card instead, whose width it can share. */
+/* The list hangs off the session segment (see `.chrome-seg`), right edges
+   lined up; on a phone it also narrows to what the window leaves. */
 @media (max-width: 480px) {
-  .chrome-anch:has(> #permPop) { position: static; }
   #permPop { width: min(296px, calc(100vw - 72px)); }
 }
 #plusPop .chrome-plus-row .pico, #atPop .chrome-plus-row .pico { width: 15px; height: 15px; flex: none; color: var(--muted); }
 /* The "@" (src/chrome/AtMenu.tsx): what the conversation is pointed at. The
    button carries the count, because the scope of a question is worth seeing
    while it is being typed and not only while it is being set. */
-#atBtn { font-size: 15px; font-weight: 600; }
+#atBtn { font-size: 17px; font-weight: 400; }
 #atBtn.chrome-at-set { color: var(--amber); }
 .chrome-at-n { position: absolute; top: -1px; right: -2px; min-width: 13px; height: 13px; padding: 0 3px;
   border-radius: 999px; background: var(--amber); color: var(--ink-on-amber); font-size: 9.5px; font-weight: 600;
@@ -3013,7 +3012,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   background: var(--composer-bg);
   -webkit-backdrop-filter: blur(50px);
   backdrop-filter: blur(50px);
-  border: .5px solid var(--composer-line); border-radius: 16px;
+  border: .5px solid var(--composer-line); border-radius: 20px;
   padding: 0;
   transition: box-shadow .15s;
   box-shadow: 0 0 20px var(--composer-sh);
@@ -3108,7 +3107,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
 }
 
 .queued { margin-bottom: 9px; display: grid; gap: 3px; }
-.dock-in .queued { margin: 0; padding: 0 16px; }
+.dock-in .queued { margin: 0; padding: 0 18px; }
 .dock-in .queued:not(:empty) { padding-top: 12px; }
 /* A grid item is as wide as its text until told it may be less: without the
    min-width a long message runs the row past the card, and its buttons with it. */
@@ -3128,7 +3127,7 @@ body:has(> .lightbox) .sbar:not([data-over="lightbox"]) { display: none; }
   border: 0; border-radius: 0; background: none; box-shadow: none;
   padding: 4px 8px 0;
 }
-.dock-in .field { padding: 16px 16px 0; }
+.dock-in .field { padding: 16px 18px 0; }
 .dock-in .atts:not([hidden]) + .field { padding-top: 8px; }
 .field .c { font-family: var(--mono); color: var(--amber); padding-bottom: 3px; }
 /* The ceiling is viewport-relative on purpose: a fixed 168px eats a third of a
@@ -3162,7 +3161,7 @@ textarea:focus, textarea:focus-visible,
 
 /* attachments staged above the composer */
 .atts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.dock-in .atts { gap: 10px; margin: 0; padding: 16px 16px 0; }
+.dock-in .atts { gap: 10px; margin: 0; padding: 16px 18px 0; }
 /* A file is a small tag, not a card: its type badge, its name, and a remove
    button that takes the badge's place while the pointer is on the tag. */
 .dock-in .att:not(.img) {
@@ -3224,6 +3223,12 @@ textarea:focus, textarea:focus-visible,
   transition: background .15s, color .15s;
 }
 .go:disabled { background: var(--send-off); color: var(--send-off-ink); cursor: default; }
+/* In the composer's bar the send disc matches the segment beside it: the
+   same height, and at rest the segment's own ground and hairline, so an empty
+   field shows one quiet row rather than a grey disc. */
+.under .go { width: 32px; height: 32px; }
+.under .go:disabled { background: var(--composer-hover); color: var(--composer-ph);
+  box-shadow: inset 0 0 0 .5px var(--composer-line); }
 .go[data-state="sending"] svg { animation: go-spin 1s linear infinite; }
 @keyframes go-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .go[data-state="sending"] svg { animation-duration: 2.4s; } }
@@ -3234,26 +3239,69 @@ textarea:focus, textarea:focus-visible,
    One row at every width the document allows, never wrapped: a row that may
    wrap picks its breaks from its items' whole widths before any of them
    shrinks, so the send button, last in the row, is what a narrow column would
-   drop onto a line of its own. The items whose width is their text -- the
-   folder, the mode, the meter and the model -- give instead, each taking an
-   equal share of what the fixed controls leave and never more than its own
-   width, so a short name stays whole while a long one ends in an ellipsis. */
-.under { display: flex; align-items: center; gap: 4px; margin: 0; padding: 16px 16px 16px 8px; }
-.under > .chrome-anch:has(> .chip), .under > .chip.model, .under > .meter {
+   drop onto a line of its own. The two items whose width is their text --
+   the meter and the segment -- give instead, each taking an equal share of
+   what the fixed controls leave and never more than its own width; inside the
+   segment only the model's name gives, so a short name stays whole while a
+   long one ends in an ellipsis. */
+.under { display: flex; align-items: center; gap: 2px; margin: 0; padding: 10px 12px 12px 10px; }
+.under > .chrome-seg, .under > .meter {
   flex: 1 1 0; min-width: 0; max-width: max-content;
 }
-/* The chip gives with the anchor it hangs in, and only its name clips: the
-   anchor must not, because its popover stands outside the anchor's box. */
-.under > .chrome-anch > .chip { flex-shrink: 1; min-width: 0; }
-/* The context ring is not a word: it is a fixed-size mark, and the anchor it
-   hangs in keeps that size too, so the bar's flexible chips are the ones that
-   give when the column narrows. */
-.under > .chrome-anch:has(> .chip.ctx) { flex: none; }
-.under > .chrome-anch:has(> .chip.ctx) > .chip.ctx { flex-shrink: 0; }
+/* What runs the session, as one segment (src/chrome/Dock.tsx): the
+   permission as its glyph, the model, the context ring and its number. One
+   ground and one outline for the three, hairlines between them, so the bar
+   reads as two groups -- the message's "+" and "@" on the left, the session's
+   instrument beside send -- rather than six controls in six styles.
+
+   The segment is what its two popovers hang off: their anchors drop out of
+   the positioned chain, and each lines its right edge up with the segment's.
+   Hung off the permission chip's left edge, a 296px list would run out of the
+   card now that the chip sits near its right end. */
+.chrome-seg {
+  position: relative; display: inline-flex; align-items: stretch; box-sizing: border-box; height: 32px;
+  margin-right: 8px; padding: 0; border: .5px solid var(--composer-line); border-radius: 999px;
+  background: var(--composer-hover);
+}
+.chrome-seg > .chrome-anch { position: static; flex: none; align-items: stretch; }
+.chrome-seg > .chrome-anch > .chip { flex-shrink: 0; }
+.chrome-seg > .chip.model { flex: 0 1 auto; min-width: 0; }
+.chrome-seg > .chrome-anch:has(> #permChip)::after,
+.chrome-seg > .chrome-anch:has(> .chip.ctx:not([hidden]))::before {
+  content: ''; flex: none; align-self: center; width: 1px; height: 14px; background: var(--composer-line);
+}
+.chrome-seg #permPop { left: auto; right: 0; }
+/* A chip's ground under the pointer, or while its popover is up, is its
+   section of the segment: full height, flat against a divider, rounded only
+   at the segment's own two ends. The segment has no inset and draws its
+   hairline as a border, so a section's ground meets the edge without
+   covering it. */
+.under .chrome-seg .chip { height: auto; border-radius: 0; padding: 0 10px; gap: 6px; color: var(--rail-ink); }
+.under .chrome-seg .chip:hover, .under .chrome-seg .chip[aria-expanded="true"] {
+  border-radius: 0; background: color-mix(in oklab, var(--text) 5%, transparent);
+}
+.under .chrome-seg > .chrome-anch:first-child > .chip { border-radius: 999px 0 0 999px; }
+.under .chrome-seg > .chrome-anch:last-child > .chip,
+.under .chrome-seg:not(:has(.chip.ctx:not([hidden]))) > .chip.model { border-radius: 0 999px 999px 0; }
+/* The permission is its glyph here; the name is the chip's hover pill and its
+   accessible name (src/chrome/PermChip.tsx). `.risk` still paints the glyph. */
+.under .chrome-seg #permChip { padding: 0 9px 0 11px; }
+.chrome-seg #permName { display: none; }
+.under .chrome-seg #permChip .pico { width: 14px; height: 14px; }
+.under .chrome-seg .chip.risk { color: var(--clay); }
+.under .chrome-seg .chip.model { padding: 0 8px 0 10px; color: var(--composer-ink); }
+/* The ring says its fill as a number too: a ring alone reads as a loading
+   spinner. The number takes the ring's colour, so warm and hot reach it. */
+.under .chrome-seg .chip.ctx { padding: 0 12px 0 9px; color: var(--muted); }
+.under .chrome-seg .chip.ctx.warm { color: var(--gold); }
+.under .chrome-seg .chip.ctx.hot { color: var(--clay); }
+.chrome-seg .chip.ctx .ring { width: 14px; height: 14px; }
+.chrome-seg .chip.ctx .ring .bg { stroke: var(--composer-line); }
+.chrome-ctx-num { font-family: var(--mono); font-size: 11.5px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 #wdName, #permName, #modelName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The "+" (src/chrome/PlusMenu.tsx): a 30px round target; open, its cross turns
+/* The "+" (src/chrome/PlusMenu.tsx): a 32px round target; open, its cross turns
    into a close mark. */
-.plus { flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: var(--rail-ink); }
+.plus { flex: none; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
 .plus:hover, .plus[aria-expanded="true"] { color: var(--composer-ink); background: var(--composer-hover); }
 .plus svg { width: 18px; height: 18px; transition: transform .15s ease; }
 .plus[aria-expanded="true"] svg { transform: rotate(45deg); }
@@ -3291,19 +3339,23 @@ textarea:focus, textarea:focus-visible,
   min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Past sharing, the bar gives things up whole, in the order they matter
    least, rather than ellipsizing every label to a stub: the usage line and
-   the words of the folder and permission chips first (their icons stay, the
-   name is the chip's label and a click away), then the folder chip, the
-   context ring and the permission chip, in that order. The "+", the model
+   the ring's number first (the ring stays), then the context ring and the
+   permission chip, in that order. The "+", the model
    and send never go -- the model's name keeps its ellipsis instead. Measured
    on the dock rather than the window, because the desk pane narrows the chat
    and the window stays put. */
 @container dock (max-width: 480px) {
   .under .meter { visibility: hidden; width: 0; }
-  .under #permName, .under #wdName { display: none; }
-  .under #permChip { padding: 0 9px; }
+  .under #permName, .under #wdName, .under .chrome-ctx-num { display: none; }
 }
-@container dock (max-width: 320px) { .under #ctxChip { display: none; } }
-@container dock (max-width: 280px) { .under .chrome-anch:has(#permChip) { display: none; } }
+@container dock (max-width: 320px) {
+  .under #ctxChip, .under .chrome-seg > .chrome-anch:has(> .chip.ctx)::before { display: none; }
+  .under .chrome-seg > .chip.model { border-radius: 0 999px 999px 0; }
+}
+@container dock (max-width: 280px) {
+  .under .chrome-anch:has(#permChip) { display: none; }
+  .under .chrome-seg > .chip.model { border-radius: 999px; }
+}
 
 /* capability popover above the composer */
 /* model picker: provider column + model column, fixed height so a provider

@@ -10,7 +10,11 @@
  * plain shield and the served word -- because that is what the region golden
  * records and what a reader sees for the frame before the boot's list runs.
  * The accessible name is the one value with no served form: the page carries no
- * aria-label here, so this renders none until there is a tier to name.
+ * aria-label here, so this renders none until there is a tier to name. The
+ * hover pill (data-tip) follows it: the bar shows the chip as its glyph alone,
+ * so the pill is where a sighted reader finds the mode's name. It is dropped
+ * while the popover is up, which would otherwise wear the pill on its last
+ * line; the tooltip watches the attribute and goes down with it.
  *
  * The glyph is the popover's own component (`./PermGlyph.tsx`), so the shape on
  * the chip is the shape of the row it names. The served shield above is the one
@@ -38,6 +42,7 @@ export function PermChip(): JSX.Element {
       aria-expanded={s.open ? 'true' : 'false'}
       aria-haspopup="true"
       aria-label={p ? p.aria : undefined}
+      data-tip={p && !s.open ? p.label : undefined}
       onClick={() => perm.toggle()}
     >
       {p
