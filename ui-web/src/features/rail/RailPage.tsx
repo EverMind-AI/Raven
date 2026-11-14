@@ -7,7 +7,6 @@ import { current, setCurrent } from '../../lib/session'
 import { term as findTerm } from '../../state/find'
 import * as lang from '../../state/lang'
 import { show as showMenu } from '../../state/menu'
-import * as page from '../../state/page'
 import { askingIn, askingVersion, watchAsking } from '../../state/sheetRack'
 import { show as toast } from '../../state/toast'
 import { open as openCron } from '../cron/store'
@@ -111,12 +110,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     : undefined
   const go = (): void => {
     if (editing) return
-    page.show(null)
-    const now = current()
-    if (s.id !== now) {
-      setCurrent(s.id)
-      store.open(s)
-    }
+    store.openSession(s)
   }
   const imported = s.from === 'imported'
   const startEdit = (): void => {
