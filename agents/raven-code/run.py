@@ -474,7 +474,12 @@ def render_config(source: Path, partition: Path, mode: str | None = None, *, una
     host_exec = host_tools.get("exec") or {}
     exec_slice["timeout"] = host_exec.get("timeout", 60)
     exec_slice["pathAppend"] = host_exec.get("pathAppend", "")
-    exec_slice["sandboxBackend"] = (host_tools.get("sandbox") or {}).get("backend", "none")
+    # The sandbox the rendered config runs in: write_rendered gives a product the
+    # host's OpenShell sandbox after this slice is built, so the slice asks the
+    # same question rather than reading the product's own backend. A raven that
+    # predates the question keeps the product's own.
+    inherited = getattr(render, "inherited_sandbox", lambda _host: None)(host)
+    exec_slice["sandboxBackend"] = (inherited or host_tools.get("sandbox") or {}).get("backend", "none")
     if tools_slice.get("enabled"):
         # One capability, one name. Where this face serves a host capability
         # under a different name, the host's name is withheld -- read from the

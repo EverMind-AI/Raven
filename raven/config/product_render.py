@@ -396,17 +396,34 @@ def inherit_host_permissions(config: dict, host: dict, *, keep_own_mode: bool = 
             if keep_own_mode and "mode" in own:
                 config["permissions"]["mode"] = own["mode"]
             inherit_host_denials(config, {"permissions": own})
-    host_tools = host.get("tools")
-    inherit_host_denials(config, {"tools": host_tools})
-    host_sandbox = host_tools.get("sandbox") if isinstance(host_tools, dict) else None
-    if isinstance(host_sandbox, dict) and host_sandbox.get("backend") == "openshell" and sys.platform != "win32":
+    inherit_host_denials(config, {"tools": host.get("tools")})
+    inherited = inherited_sandbox(host)
+    if inherited:
         tools = config.setdefault("tools", {})
         sandbox = tools.setdefault("sandbox", {})
         if not isinstance(sandbox, dict):
             sandbox = tools["sandbox"] = {}
-        for key in ("backend", "gateway", "image"):
-            if key in host_sandbox:
-                sandbox[key] = host_sandbox[key]
+        sandbox.update(inherited)
+
+
+def inherited_sandbox(host: dict) -> dict | None:
+    """The sandbox settings a product takes from the host: its OpenShell backend, gateway and image.
+
+    None when the host runs no OpenShell sandbox or this platform cannot run
+    one. The host's file is read the way its loader reads it, so a retired
+    backend it still names counts as the OpenShell one. A launcher that renders
+    something from the sandbox before :func:`write_rendered` asks here, so it
+    names the sandbox the rendered config will run in.
+    """
+    from raven.config.loader import _migrate_retired_sandbox_backend
+
+    host = copy.deepcopy(host)
+    _migrate_retired_sandbox_backend(host)
+    tools = host.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict) or sandbox.get("backend") != "openshell" or sys.platform == "win32":
+        return None
+    return {key: sandbox[key] for key in ("backend", "gateway", "image") if key in sandbox}
 
 
 def inherit_host_denials(config: dict, host: dict) -> list[str]:
