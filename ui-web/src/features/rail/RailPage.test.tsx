@@ -235,6 +235,18 @@ describe('rail island', () => {
     expect(document.getElementById('newBtn')!.getAttribute('aria-current')).toBe('true')
   })
 
+  it('opens the clicked conversation, leaving any module page first', () => {
+    const h = install({ rows: [row({ id: 'a' }), row({ id: 'b', title: 'second task' })], cur: 'a' })
+    rowByTitle(mount(), 'second task').click()
+    expect(h.calls).toEqual([['showPage', null], ['openSession', 'b']])
+  })
+
+  it('does not re-open the conversation already current', () => {
+    const h = install({ rows: [row({ id: 'a' })], cur: 'a' })
+    rowByTitle(mount(), 'GTM research').click()
+    expect(h.calls).toEqual([['showPage', null]])
+  })
+
   /* A conversation that is asking something says so from the same slot, and says
      it even while its turn is busy. Its sheet only mounts on its own screen, so
      this row is the whole of the notice, and the turn behind it waits for the
