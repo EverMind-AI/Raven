@@ -23,6 +23,7 @@ import * as store from './store'
 import * as tail from './tail';
 
 import type { ProseTarget } from '../../lib/prose'
+import type { SubagentRow } from '../../rpc/generated'
 import type { WorkspaceSource } from '../workspace/types'
 import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
@@ -2516,9 +2517,9 @@ describe('a delegated result, drawn as the message it is', () => {
      the conversation nor its task list can say who sent it: the mark names the
      agent, and the row wears that agent's mark on a reload and live alike. */
   it('names and marks the agent an unprompted report came from', async () => {
-    const roster = {
-      subagents: { roster: async () => [{ name: 'Coder', builtin: false, vendored: false, preset: 'claude_code' }] } as never,
-    }
+    const rows = [{ name: 'Coder', builtin: false, vendored: false, preset: 'claude_code' }] satisfies
+      Pick<SubagentRow, 'name' | 'builtin' | 'vendored' | 'preset'>[]
+    const roster = { subagents: { roster: async () => rows } as never }
     const report = { kind: 'unprompted', label: 'Coder/h1', status: 'report', agent: 'Coder' } as const
     const drawn = (): [string | null | undefined, string | null | undefined] => [
       $('.sdlv .transcript-dlv-from')?.textContent,
