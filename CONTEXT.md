@@ -1694,10 +1694,15 @@ the Working State injection.
 
 **Context parts**:
 The window divided: one request's prompt by part — the system prompt, the tool
-schemas, the conversation, the memory and the skills
+schemas, the conversation, the files, the memory and the skills
 (`raven/agent/window/parts.py`). An estimate of the request the loop sent, not
 a provider's count: the provider reports a prompt as one number and does not
-split it. The memory is the recalled segment, wherever it rides: the turn's
+split it. The files are what the request carries besides talk: the attachment
+notes the assembler appended, recorded under `_attachment_notes` on the message
+that carries them, plus the pictures sent as `image_url` blocks. The record's
+scope is that one message, not the request: a reply that quotes a note, or a
+second message with the same `[Attachment: ...]` text and no record, stays
+conversation. The memory is the recalled segment, wherever it rides: the turn's
 scratch, or the system prompt when `context.cache.turn_scratch` is off. The
 skills are every byte the skill subsystem put in the prompt: the always-on
 digest in the system prompt, the routed segment beside the memory, the
