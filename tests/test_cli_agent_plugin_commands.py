@@ -12,8 +12,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -785,6 +787,95 @@ def test_a_failed_removal_reports_a_marker_that_could_not_be_restored(
     assert "the directory is busy" in payload["failed"][0]["reason"]
     assert "could not be restored" in payload["failed"][0]["reason"]
     assert _ledger_record(env) is not None
+    assert not (env.installed / INSTALL_MARKER_FILENAME).exists()
+
+
+def test_a_failed_removal_does_not_restore_a_marker_into_a_missing_directory(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A directory that vanished while it was being deleted gets no marker back."""
+    assert _run(env, "import", str(env.package)).exit_code == 0
+
+    def _vanish(path):
+        target = Path(path)
+        if target == env.installed:
+            shutil.rmtree(target)
+            raise OSError("the directory is gone")
+        return shutil.rmtree(path)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _vanish)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert payload["failed"] == [{"skill": SKILL_NAME, "reason": "the directory is gone"}]
+    assert not env.installed.exists()
+
+
+def test_a_failed_removal_does_not_write_a_marker_through_a_link(
+    env: _Env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A link left at the skill's name is not written through to its target."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    probe = tmp_path / "probe-link"
+    try:
+        os.symlink(victim, probe, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform cannot create a directory link")
+    probe.unlink()
+
+    assert _run(env, "import", str(env.package)).exit_code == 0
+
+    def _swap_for_a_link(path):
+        target = Path(path)
+        if target == env.installed:
+            shutil.rmtree(target)
+            os.symlink(victim, target, target_is_directory=True)
+            raise OSError("the directory is busy")
+        return shutil.rmtree(path)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _swap_for_a_link)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert payload["failed"] == [{"skill": SKILL_NAME, "reason": "the directory is busy"}]
+    assert not (victim / INSTALL_MARKER_FILENAME).exists()
+    assert env.installed.is_symlink()
+
+
+def test_a_failed_removal_does_not_write_a_marker_through_a_junction(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Windows a junction's lstat is a directory; its reparse tag still refuses the write."""
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    state = {"failed": False}
+    real_lstat = Path.lstat
+
+    def _consume_the_marker_then_fail(path):
+        target = Path(path)
+        if target == env.installed:
+            (target / INSTALL_MARKER_FILENAME).unlink()
+            state["failed"] = True
+            raise OSError("the directory is busy")
+        return shutil.rmtree(path)
+
+    def _junction_lstat(self: Path):
+        if state["failed"] and Path(self) == env.installed:
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_reparse_tag=0xA0000003)
+        return real_lstat(self)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _consume_the_marker_then_fail)
+    monkeypatch.setattr(Path, "lstat", _junction_lstat)
+
+    result = _run(env, "remove", PACKAGE_NAME, "--json")
+
+    assert result.exit_code == 1, result.stdout
+    payload = _json_payload(result)
+    assert payload["failed"] == [{"skill": SKILL_NAME, "reason": "the directory is busy"}]
     assert not (env.installed / INSTALL_MARKER_FILENAME).exists()
 
 

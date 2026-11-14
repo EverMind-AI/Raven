@@ -293,6 +293,43 @@ def test_a_verified_record_supersedes_the_legacy_record_of_the_same_name(tmp_pat
     assert reloaded.entry(PACKAGE_NAME, workspace=workspace) is not None
 
 
+def test_a_record_in_another_workspace_supersedes_the_legacy_record(tmp_path: Path) -> None:
+    """A version 1 record carries no workspace, so a fresh import anywhere replaces it."""
+    path = tmp_path / "ledger.json"
+    _write_v1_ledger(path)
+    ledger = PackageLedger.load(path)
+    workspace_a = tmp_path / "workspace-a"
+    _record_install(ledger, workspace_a)
+    ledger.save()
+
+    # Put the v1 record back beside workspace A's verified one: a version 2
+    # file can carry both sections, and only then does "another workspace"
+    # mean something distinct from "the workspace that already has a record".
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["legacy"] = {
+        PACKAGE_NAME: {
+            "version": "1.0.0",
+            "source": "/tmp/demo-pack",
+            "imported_at": "2026-10-25T00:00:00Z",
+            "skills": ["alpha"],
+            "fingerprint": "sha256:0123456789",
+        }
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    ledger = PackageLedger.load(path)
+    assert ledger.legacy_entry(PACKAGE_NAME) is not None
+
+    workspace_b = tmp_path / "workspace-b"
+    _record_install(ledger, workspace_b)
+    ledger.save()
+
+    reloaded = PackageLedger.load(path)
+    assert reloaded.legacy_entry(PACKAGE_NAME) is None
+    assert reloaded.entry(PACKAGE_NAME, workspace=workspace_a) is not None
+    assert reloaded.entry(PACKAGE_NAME, workspace=workspace_b) is not None
+
+
 def test_forgetting_a_workspace_record_leaves_the_legacy_record_alone(tmp_path: Path) -> None:
     path = tmp_path / "ledger.json"
     _write_v1_ledger(path)
