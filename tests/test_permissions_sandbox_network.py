@@ -86,6 +86,13 @@ async def test_a_long_program_path_is_shortened_and_a_long_address_never_is():
     assert address in text and program in text
 
 
+async def test_a_dns_refusal_of_a_long_host_keeps_the_host_whole():
+    turn = start_permission_turn(None, conversation_id="c", turn_id="t")
+    long_host = "a" * 60 + "." + "b" * 60 + "." + "c" * 60 + ".example.com"
+    await handle_denials(None, [NetworkDenial("", long_host, None, "policy_dns_ineligible")], command="curl")
+    assert [refusal.action for refusal in turn.refusals] == [long_host]
+
+
 class FakeSandbox:
     def __init__(self):
         self.granted: list[list[NetworkGrant]] = []
