@@ -67,15 +67,16 @@ EXPECTED_PROVIDER_NAMES = {
     "aionly",
     "radeon_cloud",
     "opper",
+    "runcrate",
     "gpustack",
     "ovms",
     "bigmodel",
 }
 
 
-def test_registry_has_exactly_56_providers() -> None:
-    assert len(PROVIDERS) == 56
-    assert len(EXPECTED_PROVIDER_NAMES) == 56
+def test_registry_has_exactly_57_providers() -> None:
+    assert len(PROVIDERS) == 57
+    assert len(EXPECTED_PROVIDER_NAMES) == 57
 
 
 def test_registry_provider_name_set_is_pinned() -> None:
