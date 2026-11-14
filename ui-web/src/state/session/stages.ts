@@ -35,7 +35,7 @@ import { show as toast } from '../toast'
 import { ask, noteRow, tagTurn, unask } from './conversation'
 import { applyUsage } from './ctxReport'
 import { namingEnded, settleNaming } from './naming'
-import { isActiveRuntime, rereadChips, viewRuntime } from './registry'
+import { rereadChips, viewRuntime } from './registry'
 import {
   drain, dropStaleSteps, duration, ensureStep, finishTurn, flushSay, reset, resend,
   softStop,
@@ -149,7 +149,7 @@ export const STAGES: readonly Stage[] = [
        the turn's age already. Not `busy()`: a window that has just sent is busy
        too, and has drawn nothing of this turn. A hold runs the machine waiting
        for exactly this frame. */
-    const replayed = (isActiveRuntime(rt) ? turn.phase() : rt.phase.phase) === 'streaming' && !rt.holding
+    const replayed = turn.phase() === 'streaming' && !rt.holding
     advanceTurn()
     if (p.delegated && !replayed) {
       const d = p.delegated
