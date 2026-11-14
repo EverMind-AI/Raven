@@ -332,6 +332,10 @@
   --z-desk-full: 32;
   --z-desk: 34;
   --z-veil: 40;
+  /* Above the other veils, because the search is the one dialog raised from
+     anywhere: when it stands over a confirm sheet the reader is looking at it,
+     and the Escape table reaches it first for the same reason. */
+  --z-find: 41;
   --z-menu: 42;
   --z-palette: 45;
   --z-picker: 46;
@@ -6062,6 +6066,7 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
    same tokens as the rest of the page, so both themes fall out of the ramps
    above rather than out of anything written here. */
 #findVeil[data-open="true"] { align-items: start; padding-top: 20vh; }
+#findVeil { z-index: var(--z-find); }
 .chrome-find-card { width: min(640px, calc(100vw - 32px)); background: var(--ink);
   border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
   overflow: hidden; }
