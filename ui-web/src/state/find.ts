@@ -32,12 +32,15 @@ export function set(next: Partial<FindState>): void {
 
 /* Search is a chore, so it hides until asked for, and a dialog that comes back
    with the last term still in it is a dialog the reader has to clear first.
-   `opener` is whatever had the focus when it was raised, and gets it back. */
+   `opener` is whatever had the focus when it was raised, and gets it back -- so
+   it is taken on the closed-to-open transition only: the shortcut toggles, and
+   pressing it again from inside the dialog would otherwise name the search
+   field itself as the place to return to. */
 let opener: HTMLElement | null = null
 
 export function toggle(force?: boolean, from?: HTMLElement | null): void {
   if (force ?? !get().open) {
-    if (from) opener = from
+    if (!get().open && from) opener = from
     set({ open: true })
     return
   }
