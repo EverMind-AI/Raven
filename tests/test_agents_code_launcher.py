@@ -1494,6 +1494,23 @@ def test_rerendered_exec_settings_follow_the_host_and_preserve_its_sandbox(groun
     assert section["tools"]["exec"]["maxTimeout"] == 1200
 
 
+@pytest.mark.parametrize(("platform", "expected"), [("linux", "openshell"), ("win32", "none")])
+def test_the_shell_slice_names_the_sandbox_the_rendered_config_runs_in(
+    grounded, tmp_path, monkeypatch, platform, expected
+):
+    """The rendered config takes the host's OpenShell sandbox where the platform runs
+    one; the shell slice must say the same, or code-flow serves a host shell beside it."""
+    import sys
+
+    monkeypatch.setattr(sys, "platform", platform)
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.json").write_text(json.dumps({"tools": {"sandbox": {"backend": "auto"}}}))
+    rendered = json.loads(grounded.render_config(RUN_PY.parent / "config.json", tmp_path / "part").read_text())
+    assert rendered["tools"]["sandbox"].get("backend", "none") == expected
+    assert rendered["plugins"]["config"]["code-flow"]["tools"]["exec"]["sandboxBackend"] == expected
+
+
 def test_a_pristine_legacy_tool_guide_is_migrated_in_existing_partitions(grounded, tmp_path):
     from raven.agent.context import ContextBuilder
 
