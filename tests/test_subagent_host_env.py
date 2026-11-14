@@ -756,3 +756,27 @@ def test_on_windows_only_a_bare_startable_name_is_looked_up(monkeypatch: pytest.
         assert backend_env.resolve_program(argv, child_env, batch_files=True) == argv
     assert backend_env.resolve_program(["npx", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.exe", "-y"]
     assert backend_env.resolve_program(["npx.cmd", "-y"], child_env, batch_files=True) == ["/elsewhere/npx.cmd", "-y"]
+
+
+def test_on_windows_a_directory_named_program_resolves_in_the_childs_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CreateProcess resolves a directory-named program in the caller's directory, never the child's."""
+    monkeypatch.setattr(backend_env, "_on_windows", lambda: True)
+    row = tmp_path / "row"
+
+    assert backend_env.resolve_program(["./agent-acp", "acp"], {"PATH": "/x"}, cwd=str(row)) == [
+        str(row / "agent-acp.exe"),
+        "acp",
+    ]
+    assert backend_env.resolve_program(["bin/agent"], {"PATH": "/x"}, cwd=str(row)) == [str(row / "bin" / "agent.exe")]
+    # A name that already carries its extension is not given another.
+    assert backend_env.resolve_program(["./agent-acp.exe"], {"PATH": "/x"}, cwd=str(row)) == [
+        str(row / "agent-acp.exe")
+    ]
+    # No cwd: the child starts here, which is where CreateProcess looks anyway.
+    assert backend_env.resolve_program(["./agent-acp", "acp"], {"PATH": "/x"}) == ["./agent-acp", "acp"]
+    # A missing launcher resolves too, so the spawn fails naming the path searched.
+    assert backend_env.resolve_program(["./absent-agent"], {"PATH": "/x"}, cwd=str(row)) == [
+        str(row / "absent-agent.exe")
+    ]
