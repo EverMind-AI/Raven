@@ -1219,6 +1219,13 @@ export interface SubagentRow {
      */
     name?: string;
   }[];
+  /**
+   * The routes this row offers to other agents, with the picture-search readiness the router applies. image_search_ready is null on a route that does not declare image_search.
+   */
+  routes?: {
+    to: string;
+    image_search_ready?: boolean | null;
+  }[];
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
@@ -5976,6 +5983,24 @@ export interface SettingsGetResult {
    * Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: enabled=false turns it off, and the default is on.
    */
   skill_hub_on: boolean;
+  /**
+   * The deck engine's picture search as the runtime would resolve it now: the vendor it would use and whether a key resolves, environment and product-folder credentials included.
+   */
+  picture_search: {
+    /**
+     * The picture vendor the deck engine would use now, or an empty string when none resolves. Answered from effective credentials -- the config file, the vendor's environment variable, and the deck lane's own .env -- so it agrees with what ppt_image_search would do.
+     */
+    vendor: string;
+    ready: boolean;
+    /**
+     * True when the deck could not use the selected search vendor and a keyed fallback vendor answers instead, so the page can say deck generation will fall back to it. A deck pinned to its own vendor is not a fallback.
+     */
+    fallback: boolean;
+    /**
+     * Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` when the selected vendor has a picture surface but no key, `no_surface` when the selected vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on gateways older than this field, hence the default.
+     */
+    reason?: 'ok' | 'fallback_no_key' | 'no_surface' | 'not_ready';
+  };
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

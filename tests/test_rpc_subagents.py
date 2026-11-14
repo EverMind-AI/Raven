@@ -255,6 +255,169 @@ async def test_list_leaves_out_a_hidden_row(tmp_path: Path, monkeypatch) -> None
     assert "Deck" not in names
 
 
+async def test_a_route_reports_whether_the_picture_search_it_needs_is_ready(tmp_path: Path, monkeypatch) -> None:
+    """The Design card reads this. A route declaring ``image_search`` is closed
+    while the deck lane has no picture vendor, and open once the host's Serper
+    key answers the fallback."""
+    root = tmp_path / "agents"
+    folder = root / "raven-deck"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Deck", "kind": "acp", "description": "builds decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}}}),
+        encoding="utf-8",
+    )
+    path = tmp_path / "config.json"
+
+    def write_host(providers: dict) -> None:
+        path.write_text(
+            json.dumps(
+                {
+                    "subagents": {
+                        "agents": [
+                            {
+                                "name": "Raven-Design",
+                                "kind": "acp",
+                                "command": "x",
+                                "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                            }
+                        ]
+                    },
+                    "tools": {"web": {"search": {"provider": "tavily"}, "providers": providers}},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: root)
+    for name in ("SERPER_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+    write_host({"tavily": {"apiKey": "tv"}})
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": False}]
+
+    write_host({"tavily": {"apiKey": "tv"}, "serper": {"apiKey": "sp"}})
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": True}]
+
+
+def _unknown_vendor_route(tmp_path: Path, monkeypatch) -> None:
+    """A deck folder pinning a vendor this build does not ship, routed to."""
+    root = tmp_path / "agents"
+    folder = root / "raven-deck"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-Deck", "kind": "acp", "description": "builds decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "google"}}}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "google"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Raven-Design",
+                            "kind": "acp",
+                            "command": "x",
+                            "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                        }
+                    ]
+                },
+                "tools": {"web": {"search": {"provider": "serper"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.agents_root", lambda: root)
+    for name in ("SERPER_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
+async def test_a_route_to_a_lane_naming_an_unknown_vendor_still_lists(tmp_path: Path, monkeypatch) -> None:
+    """A folder written by a newer raven, or by hand, may name a vendor this
+    build does not ship. An unknown name answers "not ready"; it must not take
+    the roster -- the page routes are read from -- down with it."""
+    _unknown_vendor_route(tmp_path, monkeypatch)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": False}]
+
+
+async def test_a_probe_that_cannot_answer_leaves_the_route_unknown(tmp_path: Path, monkeypatch) -> None:
+    """An answer this build cannot produce is reported as unknown, not as a
+    refusal: the roster still renders, and nothing claims the route is closed."""
+    _unknown_vendor_route(tmp_path, monkeypatch)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.picture_search_ready", explode)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
+def test_routes_payload_reads_a_dict_route_and_no_host() -> None:
+    """The manifest's routes reach this helper as models in production, but a
+    hand-built row may hand it dicts; with no readable host the readiness is
+    unknown rather than asserted."""
+    from types import SimpleNamespace
+
+    from raven.rpc.methods.subagents import _routes_payload
+
+    cfg = SimpleNamespace(routes=[{"to": "Raven-Deck", "needs": ["image_search"]}])
+
+    assert _routes_payload(cfg, None) == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
+async def test_the_roster_renders_when_the_host_config_cannot_load(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "subagents": {
+                    "agents": [
+                        {
+                            "name": "Raven-Design",
+                            "kind": "acp",
+                            "command": "x",
+                            "routes": [{"to": "Raven-Deck", "needs": ["image_search"]}],
+                        }
+                    ]
+                },
+                "tools": "not-an-object",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("raven.config.loader.get_config_path", lambda: path)
+    monkeypatch.setattr("raven.rpc.methods.subagents.get_config_path", lambda: path)
+
+    rows = {r["name"]: r for r in (await subagents_list({"probe": False}))["rows"]}
+
+    assert rows["Raven-Design"]["routes"] == [{"to": "Raven-Deck", "image_search_ready": None}]
+
+
 async def test_list_never_returns_an_api_key(config_path: Path) -> None:
     result = await subagents_list({})
     blob = json.dumps(result)

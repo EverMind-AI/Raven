@@ -116,6 +116,17 @@ PROXY_ENV = ("PPT_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_prox
 # The vendor for which this product holds a key of its own, by the env name
 # that sets it; that key wins, so the host's vendor slot is not inherited over it.
 OWN_WEB_KEYS = {"serper": "PPT_SERPER_API_KEY", "jina": "PPT_JINA_API_KEY"}
+# A lane's own key for a deck picture vendor, by the env name that sets it.
+# Serper is not here: PPT_SERPER_API_KEY already reaches both readers through
+# the pre-vendor leaf and the slice copy below. For the rest the vendor slot is
+# the one place trunk's web_search and the engine's image_search both read, so
+# a key written here is the same key at both ends.
+DECK_VENDOR_KEYS = {
+    "serpapi": "PPT_SERPAPI_API_KEY",
+    "brave": "PPT_BRAVE_API_KEY",
+    "firecrawl": "PPT_FIRECRAWL_API_KEY",
+    "serply": "PPT_SERPLY_API_KEY",
+}
 
 # The one secret whose absence is fatal: no pictures makes a poorer deck, no
 # model makes no deck at all.
@@ -186,19 +197,31 @@ def inherit_web_vendors(config: dict, host: dict) -> list[str]:
     The shared launcher library owns the policy -- which key wins, when a
     borrowed LLM key is materialized, and when the host's vendor choice may
     move this product's own -- so a deck cannot drift from code and oncall
-    about whose key pays for a search. ``OWN_WEB_KEYS`` and this product's
-    settings lookup are handed in because those are its vocabulary, not the
-    library's.
+    about whose key pays for a search. ``OWN_WEB_KEYS``, ``DECK_VENDOR_KEYS``
+    and this product's settings lookup are handed in because those are its
+    vocabulary, not the library's.
+
+    ``DECK_VENDOR_KEYS`` reaches the library rather than being written here:
+    a deck picture vendor's own key belongs in the vendor slot before the
+    policy reads whose key wins, so it is fed in as the slots it fills.
 
     This file can outlive its raven: a stamped launcher loads under a raven
     that predates the library helper, and that raven runs the frozen snapshot
-    below rather than launching keyless. A raven that has the helper never
+    below rather than launching keyless. A raven that has the helper but not
+    its ``deck_keys`` parameter (the release before this one) runs the same
+    snapshot, which writes the keys itself. A raven that has the helper never
     reaches it.
     """
     inherit = getattr(render, "inherit_web_vendors", None)
-    if inherit is None:
-        return _inherit_web_vendors_frozen(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)
-    return inherit(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value)
+    if inherit is not None:
+        try:
+            return inherit(config, host, own_keys=OWN_WEB_KEYS, lookup=env_value, deck_keys=DECK_VENDOR_KEYS)
+        except TypeError as exc:
+            if "deck_keys" not in str(exc):
+                raise
+    return _inherit_web_vendors_frozen(
+        config, host, own_keys=OWN_WEB_KEYS, lookup=env_value, deck_keys=DECK_VENDOR_KEYS
+    )
 
 
 def _inherit_web_vendors_frozen(
@@ -206,27 +229,29 @@ def _inherit_web_vendors_frozen(
     host: dict,
     *,
     own_keys: dict[str, str] | None = None,
+    deck_keys: dict[str, str] | None = None,
     lookup: Callable[[str], str | None],
 ) -> list[str]:
     """The shared vendor policy frozen for a raven that predates it.
 
     Only ``inherit_web_vendors`` above runs this, and only when
-    ``product_render`` has no helper: without it a stamped deck on an older
-    raven would carry nothing and launch keyless. It is a snapshot of the
-    shared rule as of the release that added the helper, not a second home for
-    it: it is not expected to evolve beside the library, and a policy change
-    there is not back-ported here by default. Revisit it only when a deck on
-    an old raven actually misinherits; the snapshot test in
-    ``tests/test_agents_ppt_launcher.py`` runs both over the same inputs, so a
-    one-sided edit fails there.
+    ``product_render`` has no helper, or has one that predates ``deck_keys``:
+    without it a stamped deck on an older raven would carry nothing and launch
+    keyless. It is a snapshot of the shared rule as of the release that added
+    it, not a second home for it: it is not expected to evolve beside the
+    library, and a policy change there is not back-ported here by default.
+    Revisit it only when a deck on an old raven actually misinherits; the
+    snapshot test in ``tests/test_agents_ppt_launcher.py`` runs both over the
+    same inputs, so a one-sided edit fails there.
 
-    The rules mirrored from ``product_render.inherit_web_vendors``: a vendor
-    whose slot or own leaf key the product holds is its own and is never
-    overwritten; a vendor the host holds a slot for is carried as it stands; a
-    borrowed LLM key is written only for a vendor that ends up selected; and
-    the host's search/fetch choice moves only when the product names none,
-    when the move strands no key the product pays for, and when the host's
-    vendor resolves a key here.
+    The rules mirrored from ``product_render.inherit_web_vendors``: a deck
+    picture vendor's own key fills its slot first; a vendor whose slot or own
+    leaf key the product holds is its own and is never overwritten; a vendor
+    the host holds a slot for is carried as it stands; a borrowed LLM key is
+    written only for a vendor that ends up selected; and the host's
+    search/fetch choice moves only when the product names none, when the move
+    strands no key the product pays for, and when the host's vendor resolves a
+    key here.
     """
     from raven.config.schema import (
         WEB_VENDOR_ENV_VARS,
@@ -234,6 +259,11 @@ def _inherit_web_vendors_frozen(
         WebSearchProvider,
         borrowed_web_key,
     )
+
+    for vendor, name in (deck_keys or {}).items():
+        slot = ("tools", "web", "providers", vendor, "apiKey")
+        if not render.dig(config, slot) and (own := lookup(name)):
+            render.put(config, slot, own)
 
     own_keys = own_keys or {}
     own = {

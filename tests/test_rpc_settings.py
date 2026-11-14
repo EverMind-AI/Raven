@@ -1443,6 +1443,244 @@ async def test_settings_get_reports_the_hub_switch_as_the_runtime_reads_it(cfg, 
     assert skill_hub_enabled(LiveConfig(cfg)) is on
 
 
+def _deck_lane(tmp_path, monkeypatch, provider: str = "host"):
+    """The shipped deck folder, and the agents root the secret reader walks."""
+    from raven.agent.subagent import vendored_agents as va
+
+    folder = tmp_path / "agents" / "raven-ppt"
+    folder.mkdir(parents=True)
+    (folder / "subagent.json").write_text(
+        json.dumps({"name": "Raven-PPT", "kind": "acp", "description": "decks", "command": "x"}),
+        encoding="utf-8",
+    )
+    (folder / "run.py").write_text("", encoding="utf-8")
+    (folder / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(va, "agents_root", lambda: tmp_path / "agents")
+    return folder
+
+
+async def test_settings_get_reports_picture_search_from_effective_credentials(cfg, tmp_path, monkeypatch):
+    """The Settings picture status must agree with the runtime: a vendor's bare
+    environment variable counts even when the config file holds no key."""
+    _deck_lane(tmp_path, monkeypatch)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    monkeypatch.delenv("PPT_SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv"}}}}}),
+        encoding="utf-8",
+    )
+
+    missing = await rpc_console.settings_get({})
+    assert missing["picture_search"] == {"vendor": "", "ready": False, "fallback": False, "reason": "not_ready"}
+
+    monkeypatch.setenv("SERPER_API_KEY", "sk-serper")
+    borrowed = await rpc_console.settings_get({})
+    assert borrowed["picture_search"] == {
+        "vendor": "serper",
+        "ready": True,
+        "fallback": True,
+        "reason": "no_surface",
+    }
+
+
+async def test_settings_get_reads_the_deck_lanes_own_serper_key(cfg, tmp_path, monkeypatch):
+    """Route readiness accepts the product folder's own `<PRODUCT>_<VENDOR>_API_KEY`;
+    the Settings note has to read the same source or it contradicts the route.
+
+    The lane's own Serper key is a vendor it pays for, so the launcher does not
+    inherit the host's Tavily choice: the rendered selection is the schema
+    default Serper, and the note must report the vendor it configured rather
+    than a fallback the launch never takes.
+    """
+    _deck_lane(tmp_path, monkeypatch)
+    (tmp_path / "agents" / "raven-ppt" / ".env").write_text("PPT_SERPER_API_KEY=sk-lane\n", encoding="utf-8")
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {
+        "vendor": "serper",
+        "ready": True,
+        "fallback": False,
+        "reason": "ok",
+    }
+
+
+async def test_settings_get_reads_the_deck_slices_own_serper_key(cfg, tmp_path, monkeypatch):
+    """The slice's documented ``imageSearch.apiKey`` is the engine's Serper
+    override. The Settings note has to read it too, or a deck that searches
+    pictures fine is told it cannot."""
+    folder = _deck_lane(tmp_path, monkeypatch)
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"apiKey": "SLICE-SERPER"}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "tavily"}, "providers": {"tavily": {"apiKey": "tv"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {
+        "vendor": "serper",
+        "ready": True,
+        "fallback": True,
+        "reason": "no_surface",
+    }
+
+
+async def test_settings_get_names_a_key_missing_on_a_vendor_that_can_search_pictures(cfg, tmp_path, monkeypatch):
+    """The two fallback causes are different answers: SerpApi has a picture
+    surface and is missing its key, while Tavily has none for a deck. The page
+    cannot tell them apart from ``fallback`` alone.
+
+    The lane names SerpApi itself, so the launcher keeps that selection while
+    its key is missing -- the rendered lane falls back to the host's Serper.
+    """
+    folder = _deck_lane(tmp_path, monkeypatch)
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "serpapi"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY", "SERPAPI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "search": {"provider": "serper"},
+                        "providers": {"serper": {"apiKey": "sk-fallback"}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {
+        "vendor": "serper",
+        "ready": True,
+        "fallback": True,
+        "reason": "fallback_no_key",
+    }
+
+
+async def test_settings_get_survives_a_product_naming_an_unknown_vendor(cfg, tmp_path, monkeypatch):
+    """A folder written by a newer raven, or by hand, may pin a vendor this
+    build does not ship. The Settings page is where such a file gets repaired,
+    so an unknown name answers "not ready" instead of failing the whole page."""
+    folder = _deck_lane(tmp_path, monkeypatch)
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "google"}}}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "google"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(json.dumps({"tools": {"web": {"search": {"provider": "serper"}}}}), encoding="utf-8")
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "", "ready": False, "fallback": False, "reason": "not_ready"}
+
+
+async def test_settings_get_still_renders_with_a_schema_invalid_host_config(cfg, tmp_path, monkeypatch):
+    """A config the loader refuses is exactly the state the Settings page is
+    opened to repair; failing the whole answer over it leaves no way in."""
+    _deck_lane(tmp_path, monkeypatch)
+    cfg.write_text(json.dumps({"tools": {"web": {"search": {"provider": "bogus"}}}}), encoding="utf-8")
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "", "ready": False, "fallback": False, "reason": "not_ready"}
+
+
+async def test_settings_get_renders_when_the_probe_cannot_answer(cfg, tmp_path, monkeypatch):
+    _deck_lane(tmp_path, monkeypatch)
+    cfg.write_text(json.dumps({"tools": {"web": {"search": {"provider": "serper"}}}}), encoding="utf-8")
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr("raven.agent.subagent.vendored_agents.picture_search_report", explode)
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "", "ready": False, "fallback": False, "reason": "not_ready"}
+
+
+async def test_settings_get_does_not_call_a_pinned_deck_a_fallback(cfg, tmp_path, monkeypatch):
+    """A deck pinned to its own vendor searches it whatever the host selected;
+    the page must not warn about a fallback that never happened."""
+    folder = _deck_lane(tmp_path, monkeypatch)
+    (folder / "config.json").write_text(
+        json.dumps(
+            {
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "serpapi"}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name in ("SERPER_API_KEY", "PPT_SERPER_API_KEY", "SERPAPI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    cfg.write_text(
+        json.dumps(
+            {
+                "tools": {
+                    "web": {
+                        "search": {"provider": "serper"},
+                        "providers": {"serpapi": {"apiKey": "sp"}},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "serpapi", "ready": True, "fallback": False, "reason": "ok"}
+
+
+async def test_settings_get_uses_a_keyed_ppt_vendor_without_a_fallback(cfg, tmp_path, monkeypatch):
+    _deck_lane(tmp_path, monkeypatch)
+    monkeypatch.delenv("SERPER_API_KEY", raising=False)
+    cfg.write_text(
+        json.dumps({"tools": {"web": {"search": {"provider": "serpapi"}, "providers": {"serpapi": {"apiKey": "sp"}}}}}),
+        encoding="utf-8",
+    )
+
+    result = await rpc_console.settings_get({})
+
+    assert result["picture_search"] == {"vendor": "serpapi", "ready": True, "fallback": False, "reason": "ok"}
+
+
 async def test_settings_set_hub_switch_on_writes_only_the_switch(cfg):
     """The URL has a default, so there is nothing to seed and nothing to wait
     for: the loop serving now already holds the client."""

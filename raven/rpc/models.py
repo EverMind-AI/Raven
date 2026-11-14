@@ -95,6 +95,19 @@ class SkillInfo(_Strict):
     tags: list[str]
 
 
+class SubagentRoutePayload(_Strict):
+    """One route a row offers to another agent, and whether it can open now."""
+
+    to: str
+    image_search_ready: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the route's target can search pictures right now. Null on a route that does not "
+            "declare image_search."
+        ),
+    )
+
+
 class SubagentRow(_Strict):
     """One row of the /subagents overlay.
 
@@ -242,6 +255,13 @@ class SubagentRow(_Strict):
             "The reasoning efforts this row's agent offers on the row's own model: its thought_level option, "
             "or its mode menu when every mode is a reasoning level. Empty when it offers neither. An agent that "
             "packs effort into model ids instead has no such menu."
+        ),
+    )
+    routes: list[SubagentRoutePayload] = Field(
+        default_factory=list,
+        description=(
+            "The routes this row offers to other agents, with the picture-search readiness the router "
+            "applies. Empty on a row that offers none."
         ),
     )
 
@@ -4755,6 +4775,38 @@ class SettingsGetParams(_Strict):
     pass
 
 
+class PictureSearchStatus(_Strict):
+    """What the Settings page shows about the deck engine's picture search."""
+
+    vendor: str = Field(
+        ...,
+        description=(
+            "The picture vendor the deck engine would use now, or an empty string when none resolves. "
+            "Answered from effective credentials -- the config file, the vendor's environment variable, "
+            "and the deck lane's own .env -- so it agrees with what ppt_image_search would do."
+        ),
+    )
+    ready: bool
+    fallback: bool = Field(
+        ...,
+        description=(
+            "True when the deck could not use the selected search vendor and a keyed fallback vendor "
+            "answers instead, so the page can say deck generation will fall back to it. A deck pinned "
+            "to its own vendor is not a fallback."
+        ),
+    )
+    reason: Literal["ok", "fallback_no_key", "no_surface", "not_ready"] = Field(
+        default="not_ready",
+        description=(
+            "Why `vendor` is the picture vendor: `ok` when the deck searches on the vendor it is "
+            "configured to use (the selected search vendor, or the deck's own pin), `fallback_no_key` "
+            "when the selected vendor has a picture surface but no key, `no_surface` when the selected "
+            "vendor has no picture surface for decks, `not_ready` when no vendor resolves. Absent on "
+            "gateways older than this field, hence the default."
+        ),
+    )
+
+
 class SettingsGetResult(_Strict):
     settings: dict[str, JsonValue] = Field(..., description="Raw config.json with secret-looking values masked.")
     config_path: str
@@ -4764,6 +4816,13 @@ class SettingsGetResult(_Strict):
         description=(
             "Whether conversational Skill Hub retrieval is on, read the way the runtime reads the config: "
             "enabled=false turns it off, and the default is on."
+        ),
+    )
+    picture_search: PictureSearchStatus = Field(
+        ...,
+        description=(
+            "The deck engine's picture search as the runtime would resolve it now: the vendor it would "
+            "use and whether a key resolves, environment and product-folder credentials included."
         ),
     )
 

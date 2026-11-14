@@ -16,6 +16,7 @@ measures once a route has asked for it.
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -23,7 +24,7 @@ import pytest
 
 from raven.agent.loop import AgentLoop
 from raven.agent.subagent import vendored_agents as va
-from raven.config.schema import MediaGenConfig
+from raven.config.schema import WEB_VENDOR_ENV_VARS, MediaGenConfig
 from raven.providers.base import LLMProvider, LLMResponse
 from tests._wiring import wire
 
@@ -84,13 +85,26 @@ def lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _host(**kw) -> AgentLoop:
-    """A loop holding only what a case names, and a live config file that has
-    nothing in it -- the host's own credentials are the variable under test."""
+    """A loop holding only what a case names, and the host config file behind it.
+
+    The web section is written into the file the readiness probe runs the
+    launcher's inheritance over, built from the same fields the loop booted
+    with: a real host raven keeps its selection and vendor slots there, and the
+    probe reads that file rather than the boot values.
+    """
     workspace = Path(tempfile.mkdtemp())
+    web: dict = {
+        "search": {"provider": kw.get("web_search_provider", "serper")},
+        "providers": {vendor: {"apiKey": key} for vendor, key in (kw.get("web_provider_keys") or {}).items()},
+    }
+    if key := kw.get("search_api_key"):
+        web["search"]["apiKey"] = key
+    host_file = workspace / "host.json"
+    host_file.write_text(json.dumps({"tools": {"web": web}}), encoding="utf-8")
     loop = AgentLoop(provider=_StubProvider(), workspace=workspace, model="stub", **wire(**kw))
     from raven.config.live import LiveConfig
 
-    loop._live_config = LiveConfig(workspace / "absent-config.json")
+    loop._live_config = LiveConfig(host_file)
     return loop
 
 
@@ -173,6 +187,386 @@ def test_a_lane_that_searches_through_its_own_plugin_is_read_on_that_plugins_ven
         media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
     )
     assert with_serper._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def _follows_the_host(folder: Path) -> None:
+    """Declare the product's own picture tool as riding the host's selection."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": "host"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_host_following_lane_reads_the_hosts_selected_vendor(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="serpapi",
+        web_provider_keys={"serpapi": "serp-key"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_host_following_lane_falls_back_to_serper(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        search_api_key="sk-host-serper",
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_host_following_lane_closes_with_neither_vendor(lane, tmp_path: Path) -> None:
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+
+def _pinned_to(folder: Path, provider: str) -> None:
+    """Declare the product's own picture tool pinned to one vendor."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_lane_pinned_to_a_picture_vendor_is_read_on_that_pin(lane, tmp_path: Path) -> None:
+    """``imageSearch.provider`` naming a vendor is the deck engine's pin: the
+    deck searches that vendor whatever the host selected. With the host on
+    Serper and no Serper key anywhere, the SerpApi key is what opens the route."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _pinned_to(tmp_path / "agents" / FOLDER, "serpapi")
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serpapi": "sp-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def _declares_picture_provider(folder: Path, provider) -> None:
+    """Declare the product's own picture tool, with the provider value given."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {"provider": provider}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("provider", ["", None, "bogus"], ids=["empty-string", "null", "unknown-vendor"])
+def test_a_picture_provider_the_engine_refuses_closes_the_route(lane, tmp_path: Path, provider) -> None:
+    """``EngineConfig.from_slice`` raises on an empty, null or unknown provider,
+    so the plugin builds no deck tool at all. The probe reads the same parser,
+    and a Serper key on both sides is not enough to open the route."""
+    lane(SERPER_API_KEY="sk-lane-serper", IMAGE_API_KEY="sk-lane-image")
+    _declares_picture_provider(tmp_path / "agents" / FOLDER, provider)
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serper": "sk-host-serper"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+    assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+        "",
+        False,
+        "not_ready",
+    )
+
+
+def test_an_absent_picture_provider_follows_the_host(lane, tmp_path: Path) -> None:
+    """An absent key is the engine's ``"host"`` default, not a provider it
+    refuses; the lane follows the host's selection and stays ready."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "plugins": {"config": {"ppt-engine": {"imageSearch": {}}}},
+                "tools": {"disabledTools": ["image_search"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    host = _host(
+        web_search_provider="serper",
+        web_provider_keys={"serper": "sk-host-serper"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+    assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+        "serper",
+        True,
+        "ok",
+    )
+
+
+def test_a_lane_with_no_picture_declaration_reads_its_own_page_search_vendor(lane, tmp_path: Path) -> None:
+    """A folder copied before ``imageSearch`` existed carries no declaration,
+    and the engine defaults it to ``host``: the deck follows the lane's own
+    rendered ``tools.web.search.provider``. A vendor without a deck picture
+    surface still falls back to Serper, and no Serper key leaves the deck
+    without a picture tool."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "tavily"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+    # The lane's own page-search vendor is the deck's selection: SerpApi has a
+    # deck picture surface, and the host's keyed slot is what the launcher
+    # copies into the lane's config -- so the engine registers its picture
+    # tool on SerpApi, and the probe has to open the route.
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": "serpapi"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with_serpapi = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host", "serpapi": "sp-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+    assert with_serpapi._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def _legacy_folder(folder: Path, provider: str) -> None:
+    """A folder copied before ``imageSearch`` existed, naming a page-search
+    vendor of its own."""
+    folder.joinpath("config.json").write_text(
+        json.dumps(
+            {
+                "providers": {"deck": {"apiBase": "https://openrouter.ai/api/v1"}},
+                "tools": {"disabledTools": ["image_search"], "web": {"search": {"provider": provider}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_a_legacy_folder_with_its_own_picture_vendor_key_is_ready_on_that_vendor(lane, tmp_path: Path) -> None:
+    """The lane names SerpApi, the outer host runs Tavily, and the lane holds
+    the SerpApi key; no Serper key exists anywhere. The engine reads the
+    lane's rendered selection and registers its picture tool on SerpApi, while
+    a probe reading the outer host refused the route."""
+    lane(SERPAPI_API_KEY="sk-lane-serpapi", IMAGE_API_KEY="sk-lane-image")
+    _legacy_folder(tmp_path / "agents" / FOLDER, "serpapi")
+    host = _host(
+        web_search_provider="tavily",
+        web_provider_keys={"tavily": "tv-host"},
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    def key_for(vendor: str) -> str:
+        return va.product_secret(LANE, f"{vendor.upper()}_API_KEY")
+
+    assert va.picture_search_report(LANE, "tavily", key_for) == ("serpapi", True, "ok")
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_the_probe_and_the_engine_pick_one_vendor_for_a_legacy_folder(lane, tmp_path: Path) -> None:
+    """The same folder and host through the launcher's own inheritance: the
+    engine's ``image_search_vendor`` and the readiness probe must name one
+    vendor. The host's keyed SerpApi slot is what the launcher copies into the
+    lane's config, so neither side reads the outer Tavily selection."""
+    from raven.config.product_render import inherit_web_vendors
+    from raven.config.schema import WebToolsConfig
+
+    plugin_module = pytest.importorskip("raven_ppt.plugin")
+    from raven.plugins.context import PluginContext, ServiceLocator
+
+    lane(IMAGE_API_KEY="sk-lane-image")
+    folder = tmp_path / "agents" / FOLDER
+    _legacy_folder(folder, "serpapi")
+    host = {
+        "tools": {
+            "web": {
+                "search": {"provider": "tavily"},
+                "providers": {"tavily": {"apiKey": "tv-host"}, "serpapi": {"apiKey": "sp-host"}},
+            }
+        }
+    }
+    rendered = json.loads(folder.joinpath("config.json").read_text(encoding="utf-8"))
+    inherit_web_vendors(rendered, host, own_keys={}, lookup=lambda name: None)
+
+    web = WebToolsConfig.model_validate(rendered["tools"]["web"])
+    slice_ = ((rendered.get("plugins") or {}).get("config") or {}).get("ppt-engine") or {}
+    shared = plugin_module._Shared(
+        PluginContext(
+            config=dict(slice_),
+            services=ServiceLocator(workspace=tmp_path, user_id="u", agent_id="a", web_config=lambda: web),
+        )
+    )
+
+    engine_vendor = shared.image_search_vendor()
+    assert engine_vendor == "serpapi"
+    assert va.picture_search_report(LANE, host["tools"]["web"]["search"]["provider"], web.vendor_key) == (
+        engine_vendor,
+        True,
+        "ok",
+    )
+
+
+def _lane_key(host: AgentLoop, row: str = LANE):
+    """The key lookup the router uses, over a loop's live host config."""
+
+    def key_for(vendor: str) -> str:
+        return (
+            va.product_secret(row, f"{vendor.upper()}_API_KEY")
+            or host._live_vendor_key(vendor)
+            or os.environ.get(WEB_VENDOR_ENV_VARS.get(vendor, ""), "")
+        )
+
+    return key_for
+
+
+class TestTheRouteOpensOnlyWhereTheRenderedLaneHasAPictureTool:
+    """The launcher's inheritance is the answer, not the host's picker.
+
+    Four configurations measured on two trees. The first two are the fail-open:
+    the probe assumed the lane inherited the host's Brave choice while the
+    launch declined it -- an env-only host key is not payable, and a deck key
+    for another vendor blocks the move -- so the lane rendered on the schema
+    default Serper with no Serper key, and the engine built no picture tool
+    while the route was open.
+    """
+
+    def test_a_host_key_that_lives_only_in_the_environment_is_not_payable(
+        self, lane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        monkeypatch.setenv("BRAVE_API_KEY", "sk-host-brave-env")
+        host = _host(web_search_provider="brave")
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is False
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            False,
+            "not_ready",
+        )
+
+    def test_a_deck_key_for_another_vendor_blocks_the_host_choice(self, lane, tmp_path: Path) -> None:
+        lane(SERPAPI_API_KEY="sk-lane-serpapi", IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="brave", web_provider_keys={"brave": "sk-host-brave"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is False
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            False,
+            "not_ready",
+        )
+
+    def test_a_payable_host_slot_opens_the_lane_on_that_vendor(self, lane, tmp_path: Path) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="brave", web_provider_keys={"brave": "sk-host-brave"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is True
+        assert va.picture_search_report(LANE, "brave", _lane_key(host), host=host._live_config.raw()) == (
+            "brave",
+            True,
+            "ok",
+        )
+
+    def test_a_serper_host_still_opens_the_lane_on_serper(self, lane, tmp_path: Path) -> None:
+        lane(IMAGE_API_KEY="sk-lane-image")
+        _follows_the_host(tmp_path / "agents" / FOLDER)
+        host = _host(web_search_provider="serper", web_provider_keys={"serper": "sk-host-serper"})
+
+        assert host._routed_target_ready(LANE, ("image_search",)) is True
+        assert va.picture_search_report(LANE, "serper", _lane_key(host), host=host._live_config.raw()) == (
+            "serper",
+            True,
+            "ok",
+        )
+
+
+def test_a_lane_own_key_for_its_pinned_vendor_opens_the_route(lane, tmp_path: Path) -> None:
+    """``<PREFIX>_<VENDOR>_API_KEY`` is the lane's own credential for the vendor
+    its slice pins; the launcher bridges the same name into the rendered config,
+    so readiness and the engine resolve one source."""
+    lane(SERPAPI_API_KEY="sk-lane-serpapi", IMAGE_API_KEY="sk-lane-image")
+    _pinned_to(tmp_path / "agents" / FOLDER, "serpapi")
+    host = _host(
+        web_search_provider="serper",
+        media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}),
+    )
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is True
+
+
+def test_a_probe_that_cannot_answer_closes_the_route_instead_of_raising(lane, tmp_path: Path, monkeypatch) -> None:
+    """The gate re-reads credentials on every dispatch; a reader that breaks
+    must refuse the route, not take the turn down with it."""
+    lane(IMAGE_API_KEY="sk-lane-image")
+    _follows_the_host(tmp_path / "agents" / FOLDER)
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(va, "picture_search_ready", explode)
+    host = _host(media_config=MediaGenConfig.model_validate({"image": {"apiKey": "sk-host-image"}}))
+
+    assert host._routed_target_ready(LANE, ("image_search",)) is False
+
+
+def test_a_malformed_plugin_slice_is_skipped_when_reading_the_picture_vendor(lane, tmp_path: Path) -> None:
+    lane()
+    (tmp_path / "agents" / FOLDER / "config.json").write_text(
+        json.dumps({"plugins": {"config": {"bad": "not-a-section"}}}), encoding="utf-8"
+    )
+
+    assert va.product_picture_vendor(LANE) == ""
 
 
 def test_a_serper_key_the_host_did_not_select_is_still_the_lanes_to_spend(lane) -> None:

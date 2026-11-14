@@ -929,6 +929,57 @@ credential (`cli/_log_file.py`), since httpx logs each request at INFO on the su
 _Avoid_: a per-vendor tool name — the model is always offered `web_search` and
 `web_fetch`, whichever vendor answers.
 
+**Picture Search** (`rpc/models.py`, `PictureSearchStatus`; `settings.get`):
+The deck engine's picture-search state as the runtime would resolve it now, not
+a reading of the Search service picker: `vendor` is the vendor that would answer
+(`""` when none resolves), `ready` says a key resolves for it, and `reason`
+names why that vendor answers: `ok` when it is the vendor the deck is
+configured to use (the lane's rendered search selection -- its folder's own
+`tools.web.search.provider` where it names one, the inherited host choice
+otherwise -- or the deck's own pin),
+`fallback_no_key` when that selection has a picture surface but no key,
+`no_surface` when that selection has none, and `not_ready` when no vendor
+resolves. `fallback` is derived from it -- true for `fallback_no_key` and
+`no_surface` -- so the page can say deck generation will fall back; a deck
+pinned to its own vendor stays `ok` and is not a fallback. `reason` is optional
+on the wire and defaults to `not_ready`, so an answer from a gateway older than
+the field still reads. `settings.get` computes the state through
+`picture_search_report` over the same rule the router applies, from the config,
+the product folder's own credentials and the vendors' environment variables --
+credentials the raw config cannot show. The lane's rendered selection is the
+launcher's own inheritance over those inputs, not the raw config's declaration
+alone. The offline settings fixture (`ui-web/src/rpc/fixtures/settings.ts`,
+`PPT_VENDORS` / `pictureSearchOf`) is its explicit mirror; the vendor list is
+pinned to `PPT_IMAGE_SEARCH_VENDORS` by
+`tests/test_agent_tools_web_providers.py`.
+_Avoid_: reading `ready` as "the selected vendor has image search" -- Tavily
+answers the host's `image_search` but is not a deck vendor, so this state speaks
+of deck pictures, not search availability.
+
+**Deck Picture Vendor** (`plugins-dist/ppt-engine/raven_ppt/plugin/config.py`, `imageSearch.provider`; `agent/subagent/vendored_agents.py`, `product_picture_vendor`):
+Which vendor the deck engine's pictures come from. `imageSearch.provider:
+"host"` (the shipped value in `agents/raven-ppt/config.json`) is a sentinel, not
+a vendor: the deck follows its rendered `tools.web.search.provider` through
+`ppt_image_vendor` -- the lane's own selection where its folder names one, the
+host's inherited where it does not -- so one of the five vendors with a usable
+picture surface answers on its own key, and a selection on any other vendor, or
+on one of the five with no key, falls back to Serper. Any other accepted value
+pins that vendor, honoured only while its key resolves; without one the host
+rule answers instead, so a pin cannot leave the deck advertising a tool whose
+every call fails. `product_picture_vendor` reads the same declaration for
+routing and returns `"host"` -- the declaration, not the resolved vendor -- so
+`picture_search_status` applies the deck's five-vendor set rather than the
+host's six-vendor one, and the Agent Hub card and the dispatch cannot disagree.
+`product_page_search_vendor` derives that rendered selection for the readiness
+probe by running the launcher's own `inherit_web_vendors` over the folder's
+config, the host's config and the lane's keys -- the folder's declaration
+where it names one, the host's choice where the launch would carry it, and the
+schema default otherwise -- so a route cannot open on a vendor the rendered
+lane does not search with (an env-only host key is not payable there, and a
+deck key for another vendor blocks the host's choice).
+_Avoid_: treating `"host"` as a vendor name -- it names the host's selection,
+and `ppt_image_vendor` is what turns it into a vendor.
+
 **Tool Registry** (`agent/tools/registry.py`):
 The name→`Tool` table the Agent Loop dispatches into: resolves a tool by name and runs
 its `execute` under a timeout, returning the string result or a structured error.

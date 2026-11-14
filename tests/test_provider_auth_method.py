@@ -444,6 +444,13 @@ def test_only_the_auth_module_decides_configuredness_from_a_key() -> None:
         "raven/agent/subagent/backends/raven_loop.py",
         "raven/agent/tools/media_gen.py",
         "raven/agent/tools/web.py",
+        # The deck product folder's own picture-search override:
+        # `plugins.config.<slice>.imageSearch.apiKey`, the key the engine reads
+        # first and the one the route's readiness reports. A tool's own key in a
+        # product folder, not a Raven provider section -- auth has no verdict to
+        # give about a plugin slice, and `credential_status` reads a provider's
+        # `api_key` rather than this camelCase engine field.
+        "raven/agent/subagent/vendored_agents.py",
         # The assembly door carries the tool-key reads the three entrances used
         # to make (web search, jina): still a tool's own key, no provider
         # verdict -- the entrances themselves no longer read any key.

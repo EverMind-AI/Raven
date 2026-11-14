@@ -70,6 +70,10 @@ export function extAgentRowOf(r: ExtAgentRowWire): ExtAgentRow {
       .filter((c) => c && c.value)
       .map((c) => ({ value: c.value, name: c.name || '' })),
     machine: r.machine || null,
+    routes: (r.routes || []).map((route) => ({
+      to: route.to,
+      image_search_ready: route.image_search_ready ?? null,
+    })),
   }
 }
 
