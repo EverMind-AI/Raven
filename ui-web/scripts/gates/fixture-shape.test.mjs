@@ -354,7 +354,10 @@ describe('the offline fixture library', () => {
        one installed. The shape of the answer is what this gate is about, so the
        seam gets the two verbs that door touches and nothing else. */
     const { sources } = await import('../../src/state/sources.ts')
-    sources.subagents = { instances: async () => [], roster: async () => [] }
+    sources.subagents = {
+      instances: async () => ({ rows: [], pendingHandoff: 0 }),
+      roster: async () => [],
+    }
     const failures = []
     for (const [label, overrides] of Object.entries(groups)) {
       const transport = new OverrideTransport(base, overrides)

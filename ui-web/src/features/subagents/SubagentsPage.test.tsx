@@ -1297,8 +1297,9 @@ describe('subagents island, an instance detail', () => {
   it('says what a direct chat is, where the reader types it', async () => {
     /* The main agent's silence after a direct turn is the design, not a miss:
        the exchange is kept out of its context on purpose, and the next message
-       to it only names where the records are. Nothing on screen said so, so the
-       silence read as the message having gone nowhere. */
+       to it names the instance and, when a turn has landed, the record path.
+       Nothing on screen said so, so the silence read as the message having
+       gone nowhere. */
     await openInstance(
       inst({ handle: 'chatty', status: 'completed', resumable: true }),
       { instanceSend: async () => {} },
