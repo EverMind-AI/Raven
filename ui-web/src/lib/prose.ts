@@ -161,7 +161,18 @@ function listHtml(items: Item[], inl: Inline): string {
   return `${out}</${tag}>`
 }
 
+/** An answer as markup: every block `mdBlocks` reads, in order. */
 export function md(src: string): string {
+  return mdBlocks(src).join('')
+}
+
+/**
+ * An answer as markup, one string per top-level block (a paragraph, a list,
+ * a listing, a table), each holding exactly one element. A streamed reply
+ * only ever grows at its end, so a caller that keeps the blocks it already
+ * drew only has to redraw from the first one that changed.
+ */
+export function mdBlocks(src: string): string[] {
   /* Only http(s) is turned into a link, and the scheme is matched literally --
      an answer that mentions a URL should be openable, but nothing in the text
      gets to choose the scheme. The match is limited to the ASCII characters a
@@ -467,5 +478,5 @@ export function md(src: string): string {
       && !LI_RE.test(L[i]!)) p.push(L[i++]!)
     o.push(`<p>${flow(p, inl)}</p>`)
   }
-  return o.join('')
+  return o
 }

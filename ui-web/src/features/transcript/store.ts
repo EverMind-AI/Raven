@@ -4,7 +4,7 @@ import { readMessage } from '../../lib/attachments'
 import { formatDuration } from '../../lib/duration'
 import * as hunks from '../../lib/hunks'
 import { readingImported } from '../../lib/imported'
-import { md } from '../../lib/prose'
+import { md, mdBlocks as blocksOf } from '../../lib/prose'
 import { ds, sources } from '../../state/sources'
 import { show as toast } from '../../state/toast'
 import { pane } from '../../state/wsPane'
@@ -53,6 +53,7 @@ export const deliveriesOf = (lane: Lane, turn: number): DeliveryRow[] =>
    the shell bridge and back into it while hiding the
    transcript from anyone auditing md()'s callers. */
 export const mdHtml = (src: string): string => md(src)
+export const mdBlocks = (src: string): string[] => blocksOf(src)
 
 /* The fence lines a dispatch carries around an upstream node's output, set
    apart so the reader sees where the injected text starts and stops. Only the
