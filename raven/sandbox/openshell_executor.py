@@ -64,6 +64,10 @@ _DENIAL_WAIT_SECONDS = 3.0
 _PROCESS_DENIAL_WAIT_SECONDS = 1.0
 _DENIAL_POLL_SECONDS = 0.15
 _RELAY_CLOSED = "ssh relay closed"
+_NOT_NARROWED = (
+    "The command was not run: the sandbox has not loaded a network change that allows less than before. "
+    "It is retried before the next command; if this repeats, tell the user."
+)
 # How much earlier than the caller sees a command end the sandbox may log its close.
 _RELAY_CLOSE_SLACK = 0.25
 # How long a changed network policy may take to load in a running sandbox:
@@ -476,7 +480,10 @@ class OpenShellExecutor(SandboxExecutor):
         env: dict[str, str] | None = None,
     ) -> ExecResult:
         plane, name = await self._running()
-        await self._sync_network(plane, name)
+        if await self._sync(plane, name) == "narrower":
+            # A change that takes something away has not loaded: running under the
+            # old, wider policy would let through what the user has just refused.
+            return ExecResult(stdout="", stderr=_NOT_NARROWED, exit_code=1)
         since = time.time()
         result = await self._run(plane, name, command, cwd, timeout, env)
         # The log is the sandbox's, not the command's: a refusal logged after the
@@ -549,37 +556,48 @@ class OpenShellExecutor(SandboxExecutor):
         return left
 
     async def _sync_network(self, plane: OpenShellControlPlane, name: str) -> bool:
+        return await self._sync(plane, name) == "loaded"
+
+    async def _sync(self, plane: OpenShellControlPlane, name: str) -> str:
+        """Bring the policy up to its source: "loaded", or why not.
+
+        "behind" when what did not load only adds rules, so the policy in force
+        is narrower than the source; "narrower" when it removes or changes one,
+        or the source cannot be read, so the policy in force may allow what the
+        source no longer does. Either is retried before the next command.
+        """
         try:
             source = self._network_source()
-        except Exception as exc:  # noqa: BLE001 - keep running under the policy already loaded
+        except Exception as exc:  # noqa: BLE001 - nothing is known of what the user allows now
             logger.warning("Could not read the network policy for OpenShell sandbox %s: %s", name, exc)
-            return False
+            return "narrower"
         if source is self._last_source:
-            return True
+            return "loaded"
         desired = {**source, **self._local_rules}
         # Compared as dicts, not by a digest: the open rule's port list is one
         # shared object, so an unchanged policy compares without walking its
         # 65,535 ports, which serializing it on every command would.
         if desired == self._applied_policies:
             self._last_source = source
-            return True
+            return "loaded"
         add = {rule: body for rule, body in desired.items() if self._applied_policies.get(rule) != body}
         # A rule whose body changed is removed and added again: OpenShell merges
         # an added rule into one of the same name, so a narrowed rule sent as an
         # add alone would keep what it dropped.
         remove = [rule for rule in self._applied_policies if rule not in desired or rule in add]
+        failed = "narrower" if remove else "behind"
         try:
             version = await asyncio.to_thread(plane.merge_rules, name, add, remove)
             loaded = await asyncio.to_thread(plane.wait_policy, name, version, _POLICY_WAIT_SECONDS)
         except Exception as exc:  # noqa: BLE001 - retried before the next command
             logger.warning("Could not update the network policy of OpenShell sandbox %s: %s", name, exc)
-            return False
+            return failed
         if not loaded:
             logger.warning("OpenShell sandbox %s did not load network policy version %s in time", name, version)
-            return False
+            return failed
         self._applied_policies = desired
         self._last_source = source
-        return True
+        return "loaded"
 
     async def denials_since(
         self, since: float, *, until: float | None = None, wait: bool = False

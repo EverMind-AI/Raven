@@ -718,6 +718,48 @@ class TestLiveNetwork:
         await ex.exec("true")
         assert cp.merges == [({"raven_rule_a": {"name": "raven_rule_a"}}, [])]
 
+    @pytest.mark.parametrize("failure", ["merge_error", "not_loaded"])
+    @pytest.mark.parametrize(
+        "after",
+        [{}, {"raven_rule_a": {"name": "raven_rule_a", "endpoints": []}}],
+        ids=["rule-removed", "rule-narrowed"],
+    )
+    async def test_a_narrowing_change_that_does_not_load_keeps_the_command_from_running(self, tmp_path, failure, after):
+        cp, ex, state = await self._started(tmp_path, {"raven_rule_a": {"name": "raven_rule_a"}})
+        state["policies"] = after
+        if failure == "merge_error":
+            cp.merge_error = RuntimeError("gateway gone")
+        else:
+            cp.policy_loads = False
+        ran = len(cp.execs)
+        result = await ex.exec("curl https://example.com")
+        assert len(cp.execs) == ran
+        assert result.exit_code != 0 and "was not run" in result.stderr
+
+    async def test_an_unreadable_network_source_keeps_the_command_from_running(self, tmp_path):
+        cp = FakeControlPlane()
+        state = {"broken": False}
+
+        def source():
+            if state["broken"]:
+                raise RuntimeError("cannot read the permission set")
+            return {}
+
+        ex = OpenShellExecutor(image="i", workspace=tmp_path, control_plane=cp, network_source=source)
+        await ex.start()
+        state["broken"] = True
+        ran = len(cp.execs)
+        result = await ex.exec("true")
+        assert len(cp.execs) == ran and result.exit_code != 0
+
+    async def test_an_opening_change_that_does_not_load_still_runs_the_command(self, tmp_path):
+        cp, ex, state = await self._started(tmp_path, {})
+        state["policies"] = {"raven_rule_a": {"name": "raven_rule_a"}}
+        cp.merge_error = RuntimeError("gateway gone")
+        ran = len(cp.execs)
+        result = await ex.exec("true")
+        assert len(cp.execs) == ran + 1 and result.exit_code == 0
+
     async def test_a_once_grant_applies_to_this_sandbox_and_survives_the_next_sync(self, tmp_path):
         from raven.sandbox.network_policy import NetworkGrant
 
