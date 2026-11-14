@@ -461,6 +461,28 @@ def test_schema_match_the_boundary_a_suspended_dag_node_emits(schema: dict[str, 
         TypeAdapter(TurnEvent).validate_python(shape)
 
 
+def test_schema_match_the_mark_an_unprompted_report_emits(schema: dict[str, Any]) -> None:
+    """An instance's own report (`SubagentManager._inject_unprompted`) re-enters
+    the session under a kind and a status of its own, and names the agent that
+    sent it: no call or task row is there to name it. All three published shapes
+    of the mark, and their Pydantic mirrors, take it."""
+    import jsonschema
+    from pydantic import TypeAdapter
+
+    from raven.rpc.models import TranscriptDelegated, TurnEvent
+
+    mark = {"kind": "unprompted", "label": "watcher/w1", "status": "report", "agent": "watcher"}
+    components = schema["components"]
+    for shape in (
+        {"type": "turn.started", "payload": {"turn_id": "t1", "delegated": {**mark, "content": "..."}}},
+        {"type": "subagent.delivered", "payload": {**mark, "content": "..."}},
+    ):
+        jsonschema.validate(shape, {**components["schemas"]["TurnEvent"], "components": components})
+        TypeAdapter(TurnEvent).validate_python(shape)
+    jsonschema.validate(mark, {**components["schemas"]["TranscriptDelegated"], "components": components})
+    assert TranscriptDelegated(**mark).agent == "watcher"
+
+
 @pytest.mark.parametrize("truncated", [True, False, None])
 def test_the_output_cut_flag_survives_each_published_delivery_shape(schema: dict[str, Any], truncated) -> None:
     import jsonschema

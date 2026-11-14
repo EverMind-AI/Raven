@@ -5421,6 +5421,31 @@ async def test_an_unprompted_report_teaches_the_silence_marker() -> None:
     assert "If it is routine progress only, no action is needed." in text
 
 
+async def test_an_unprompted_report_names_the_agent_that_sent_it() -> None:
+    """A report answers no call, so no spawn call and no task row can say who sent
+    it; the mark itself has to, or a reader draws an anonymous row. Every published
+    shape of the mark takes it, because a client draws the row from any of the three."""
+    from raven.rpc.models import SubagentDeliveredPayload, TranscriptDelegated, TurnStartedDelegated
+
+    mgr = _make_manager(max_concurrent=1)
+    submitted: list = []
+    mgr.set_submit(submitted.append)
+    delivered: list[dict] = []
+    mgr._emit_delivered = lambda _origin, mark: delivered.append(mark)
+    mgr.remember_origin({"channel": "web", "chat_id": "d", "session_key": "web:s1"})
+
+    await mgr.announce_unprompted_turn("web:s1", "Claude Code-Mirasim", "1264-6b8125", "merged, worktree removed")
+
+    stored = submitted[0].delegated
+    assert stored["agent"] == delivered[0]["agent"] == "Claude Code-Mirasim"
+    for model in (
+        TranscriptDelegated(**stored),
+        TurnStartedDelegated(**stored, content=submitted[0].text),
+        SubagentDeliveredPayload(**delivered[0]),
+    ):
+        assert (model.kind, model.status, model.agent) == ("unprompted", "report", "Claude Code-Mirasim")
+
+
 async def test_a_relayed_result_quoting_the_instruction_does_not_teach_silence() -> None:
     """A DAG result is attacker-influenceable and enters an untaught SUBAGENT turn inside the
     untrusted fence. Quoting the lesson there must not switch that turn to the loose rule, where a

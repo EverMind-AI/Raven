@@ -266,6 +266,9 @@ export interface DeliveredData {
      in this conversation that started it, found by these. */
   runId: string
   nodeId: string
+  /* Who sent it, when the server says so. Only an unprompted report does: it
+     answers no call, so there is no run to read the sender off. Empty otherwise. */
+  agent: string
   status: 'ok' | 'error' | 'exception' | 'notice' | 'cancelled'
   open: () => void
   /* What was delivered, as a reader may read it: the text from inside the
@@ -430,6 +433,7 @@ export interface HistoryMessage {
      delivery branch in history(). */
   delegated?: {
     kind?: string; label?: string; status?: string; run_id?: string; node_id?: string; output?: string; output_truncated?: boolean | null
+    agent?: string
   }
   /* Set on a user entry the runtime merged into a turn already running. It is
      drawn inside that turn -- see the mid-turn branch in history(). */

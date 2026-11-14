@@ -2641,7 +2641,9 @@ This instance acted on its own schedule -- an armed wake, a watch round -- and s
 Read it against the plan this instance serves. If it reports finished work, results ready to collect, or a decision point, continue that plan now -- dispatch the next round or collect what is ready; do not leave finished work waiting for the owner to notice. If it is routine progress only, no action is needed.
 
 {SILENCE_INSTRUCTION}"""
-        mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report"}
+        # `agent` rides the mark because nothing else names the sender: a report
+        # answers no call, so no spawn call or task row exists to read it off.
+        mark = {"kind": "unprompted", "label": f"{agent}/{handle}", "status": "report", "agent": agent}
         # No link: the span current here is whatever the ACP connection's read
         # loop was created under, which has nothing to do with this report.
         if not self._inject(content, origin, mark, dispatch_link=None):

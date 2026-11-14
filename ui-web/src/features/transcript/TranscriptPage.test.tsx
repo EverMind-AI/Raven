@@ -23,6 +23,7 @@ import * as store from './store'
 import * as tail from './tail';
 
 import type { ProseTarget } from '../../lib/prose'
+import type { SubagentRow } from '../../rpc/generated'
 import type { WorkspaceSource } from '../workspace/types'
 import type { HistoryMessage, SpawnListRow, TranscriptSource } from './types'
 
@@ -2510,6 +2511,41 @@ describe('a delegated result, drawn as the message it is', () => {
     await act(async () => { await Promise.resolve() })
     const marks = $$('.sdlv .transcript-dlv-from .agent-mark img').map((i) => i.getAttribute('src'))
     expect(marks).toEqual(['assets/agents/raven-code.svg', 'assets/agents/claudecode-color.svg'])
+  })
+
+  /* A report an instance made on its own schedule answers no call, so neither
+     the conversation nor its task list can say who sent it: the mark names the
+     agent, and the row wears that agent's mark on a reload and live alike. */
+  it('names and marks the agent an unprompted report came from', async () => {
+    const rows = [{ name: 'Coder', builtin: false, vendored: false, preset: 'claude_code' }] satisfies
+      Pick<SubagentRow, 'name' | 'builtin' | 'vendored' | 'preset'>[]
+    const roster = { subagents: { roster: async () => rows } as never }
+    const report = { kind: 'unprompted', label: 'Coder/h1', status: 'report', agent: 'Coder' } as const
+    const drawn = (): [string | null | undefined, string | null | undefined] => [
+      $('.sdlv .transcript-dlv-from')?.textContent,
+      $('.sdlv .transcript-dlv-from .agent-mark img')?.getAttribute('src'),
+    ]
+
+    wireDelivery()
+    setSources(roster)
+    act(() => {
+      mount.history([{ role: 'user', text: fenced('merged'), timestamp: iso(Date.now() - 9000), delegated: report }])
+    })
+    await act(async () => { await Promise.resolve() })
+    const replay = drawn()
+
+    store._resetForTests()
+    wireDelivery()
+    setSources(roster)
+    act(() => {
+      mount.delivered({
+        label: report.label, isDag: false, status: report.status, agent: report.agent, body: fenced('merged'), open: () => {},
+      })
+    })
+    await act(async () => { await Promise.resolve() })
+
+    expect(replay).toEqual(['en:gui.deleg.from {"who":"Coder"}', 'assets/agents/claudecode-color.svg'])
+    expect(drawn()).toEqual(replay)
   })
 
   /* The receipt's node lines are a table someone scans for the one that did not
