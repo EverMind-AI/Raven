@@ -682,6 +682,17 @@ class TestNotesAReclaimTookAwayAreToldAgain:
 
         assert retell_notices([older, question], after) is after
 
+    def test_a_summary_brief_quoting_a_note_does_not_count_as_told(self) -> None:
+        """The brief that replaces a summarized head is prose, not a notice
+        block: it may quote a note line verbatim, and that must not read as the
+        turn having told it, or the repair would skip what it owes."""
+        from raven.agent.window.compaction import SUMMARY_MARKER
+        from raven.context_engine.runtime_context import told_notices
+
+        brief = {"role": "user", "content": f"{SUMMARY_MARKER}\n\n[{_HEADER}\n{_AUTH}]\n{_AUTH}"}
+
+        assert told_notices([brief]) == {}
+
 
 class TestAPluginNameKeysItsOwnLine:
     """A line is keyed by the plugin name it carries, so the name has to read back

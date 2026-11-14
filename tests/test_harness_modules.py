@@ -9,8 +9,10 @@ is what makes the seam safe to widen later.
 from __future__ import annotations
 
 import asyncio
+import copy
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -22,6 +24,15 @@ from raven.agent.harness.memory import DefaultMemory
 from raven.agent.harness.memory import bind as bind_memory
 from raven.agent.harness.planning import DefaultPlanning
 from raven.agent.window import shrink as shrink_module
+from raven.config.schema import CompactionConfig
+from raven.context_engine.runtime_context import (
+    MCP_NOTICE_HEADER,
+    RUNTIME_CONTEXT_KEY,
+    mcp_notice,
+    told_notices,
+    with_runtime_context,
+)
+from raven.context_engine.segments.render import RUNTIME_CONTEXT_TAG
 from raven.contracts.harness import (
     ActionModule,
     ActionRequest,
@@ -496,3 +507,319 @@ def test_the_engine_is_handed_a_turn_memory_briefed_from_the_charter():
     assert seen == {"brief": "Only look at A.", "done_when": "both tables land"}, (
         "the engine was handed a turn Memory never briefed"
     )
+
+
+class _BriefProvider:
+    """A provider whose every chat call answers one fixed handoff brief, the way
+    a paid-for head summary comes back."""
+
+    def __init__(self, brief: str = "the head, as a brief.") -> None:
+        self.brief = brief
+        self.calls = 0
+
+    async def chat(self, *, messages, tools, model, max_tokens, reasoning_effort):
+        self.calls += 1
+        return SimpleNamespace(content=self.brief, finish_reason="stop")
+
+
+def _compacting_memory(provider: Any) -> DefaultMemory:
+    """A Memory over the real shrink moves, sized so a stub summary is worth
+    paying for: the window sits well above the head, and the tail budget holds
+    the question alone, so the split lands inside the older exchange."""
+    return DefaultMemory(
+        _Engine(),
+        provider=lambda: provider,
+        model=lambda: "m",
+        context_window_tokens=lambda: 20_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: CompactionConfig(enabled=True, prune=False, preserve_recent_tokens=2_500),
+        output_ceiling=lambda model=None: 4_000,
+    )
+
+
+def _question(lines: str | None = None, words: Any = "and now?") -> dict[str, Any]:
+    """The turn's own question envelope: a runtime-context block that left the
+    plugin notes out because an older block in the history had told them."""
+    lines = lines or f"{RUNTIME_CONTEXT_TAG}\nChat ID: c1"
+    return {"role": "user", "content": with_runtime_context(lines, words), RUNTIME_CONTEXT_KEY: lines}
+
+
+def _pressured_turn(question: dict[str, Any], *older_blocks: str) -> list[dict[str, Any]]:
+    """The turn's list as the model sees it: the task statement (protected from
+    summaries), one older user exchange per given block, bulk that makes the
+    head worth a summary call, and the question."""
+    messages: list[dict[str, Any]] = [{"role": "user", "content": "list the repos"}]
+    for index, block in enumerate(older_blocks):
+        messages.append({"role": "user", "content": with_runtime_context(block, f"older work {index}")})
+        messages.append({"role": "assistant", "content": f"filler {index} " * 2_200})
+    messages.append(question)
+    return messages
+
+
+_AUTH = mcp_notice("github", "installed, awaiting authorization.")
+_SLIDES_CONNECTED = mcp_notice("slides", "connected, offering 2 tool(s).")
+_QUOTED_NAME = "back\\slash'"
+_QUOTED = mcp_notice(_QUOTED_NAME, "connected, offering 1 tool(s).")
+
+
+def test_a_proactive_summary_tells_again_the_note_it_took_away():
+    """The head summary can replace the only block that still carried a plugin
+    note. The question left the note out because that block had told it, so the
+    summarized turn has to say it again or the model spends the rest of the
+    turn without it. Driven through the public shrink dispatch, with the real
+    split and a paid-for stub brief."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    messages = _pressured_turn(_question(), block)
+    before = copy.deepcopy(messages)
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert provider.calls == 1, "the fixture owes exactly one summary call"
+    assert result.changed and state.compress_retries == 1 and state.last_context_used == 0
+    assert not any("older work 0" in str(m.get("content")) for m in result.messages), (
+        "fixture must have the summary replace the note's carrier, not tail or protect it"
+    )
+    assert messages == before, "the list handed in is the turn's own record, not the summary's to edit"
+    assert told_notices(result.messages) == {"github": _AUTH}
+    [repaired] = [m for m in result.messages if m.get(RUNTIME_CONTEXT_KEY)]
+    assert repaired["content"].split("\n\n", 1)[0] == repaired[RUNTIME_CONTEXT_KEY]
+    assert repaired[RUNTIME_CONTEXT_KEY].splitlines().count(MCP_NOTICE_HEADER) == 1
+    assert repaired[RUNTIME_CONTEXT_KEY].endswith(_AUTH)
+
+
+def test_an_overflow_head_summary_tells_again_the_note_it_took_away():
+    """The overflow path's last resort is the same head summary, reached once
+    nothing is left to elide, so it passes the same common wrap and loses no
+    notes either -- and its own budget bookkeeping moves exactly one step."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    messages = _pressured_turn(_question(), block)
+    state = WindowState(image_window=1, session_key="s1")
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.OVERFLOW, state=state, model="m"))
+
+    assert provider.calls == 1, "nothing is elidable in this fixture, so the summary is the answer"
+    assert result.changed and state.compress_retries == 1 and state.reactive_summary_tried
+    assert told_notices(result.messages) == {"github": _AUTH}
+
+
+_CLEARED = "the earlier note about it no longer applies; this turn's tool definitions show what it offers."
+
+
+def test_the_newest_note_state_is_what_comes_back():
+    """What the repair puts back is the state the last block left standing, not
+    every line the head ever carried: a note a later block cleared stays gone,
+    a note a later block replaced comes back replaced, and a name with quotes
+    and a backslash keeps its own line."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    slides_connecting = mcp_notice("slides", "still connecting.")
+    older = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}\n{slides_connecting}"
+    newer = (
+        f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{mcp_notice('github', _CLEARED)}\n{_SLIDES_CONNECTED}\n{_QUOTED}"
+    )
+    messages = _pressured_turn(_question(), older, newer)
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert provider.calls == 1 and result.changed
+    assert told_notices(result.messages) == {_QUOTED_NAME: _QUOTED, "slides": _SLIDES_CONNECTED}
+    assert not any(_AUTH in str(m.get("content")) for m in result.messages), "a cleared note must not come back"
+
+
+def test_a_note_the_question_already_carries_is_not_told_twice():
+    """When the newest state rides in the question's own block -- the shape a
+    turn whose plugins just changed sends -- the summary takes only stale
+    copies, and the question comes back exactly as it went in."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    question = _question(block)
+    messages = _pressured_turn(question, block)
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert provider.calls == 1 and result.changed
+    assert result.messages[-1] is question, "nothing was lost, so nothing was rewritten"
+    assert told_notices(result.messages) == {"github": _AUTH}
+    assert question["content"].split("\n\n", 1)[0].splitlines().count(MCP_NOTICE_HEADER) == 1
+
+
+def test_consecutive_summaries_do_not_stack_the_notes():
+    """A turn can cross the trigger twice: the second summary runs over a list
+    whose question already carries the retold note, and must not add it (or the
+    header) a second time."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    first = asyncio.run(
+        memory.shrink(_pressured_turn(_question(), block), pressure=WindowPressure.PROACTIVE, state=state, model="m")
+    )
+    assert first.changed and told_notices(first.messages) == {"github": _AUTH}
+
+    call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
+    result_msg = {"role": "tool", "tool_call_id": "c1", "content": "done"}
+    question = first.messages.pop()
+    state.last_context_used = 17_000
+    second = asyncio.run(
+        memory.shrink(
+            [*first.messages, {"role": "assistant", "content": "filler x " * 2_200}, question, call, result_msg],
+            pressure=WindowPressure.PROACTIVE,
+            state=state,
+            model="m",
+        )
+    )
+
+    assert provider.calls == 2 and second.changed and state.compress_retries == 2
+    [repaired] = [m for m in second.messages if m.get(RUNTIME_CONTEXT_KEY)]
+    block_lines = repaired["content"].split("\n\n", 1)[0].splitlines()
+    assert block_lines.count(MCP_NOTICE_HEADER) == 1 and block_lines.count(_AUTH) == 1
+    assert told_notices(second.messages) == {"github": _AUTH}
+
+
+def test_a_multimodal_question_gets_the_note_in_its_first_block():
+    """The question may carry its words as a block list; the note goes into the
+    block the runtime lines already live in, and the words, the calls and the
+    results behind it keep their shape and order."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    lines = f"{RUNTIME_CONTEXT_TAG}\nChat ID: c1"
+    question = {
+        "role": "user",
+        "content": [{"type": "text", "text": lines}, {"type": "text", "text": "look at this"}],
+        RUNTIME_CONTEXT_KEY: lines,
+    }
+    call = {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function"}]}
+    result_msg = {"role": "tool", "tool_call_id": "c1", "content": "done"}
+    messages = [
+        {"role": "user", "content": "list the repos"},
+        {"role": "user", "content": with_runtime_context(block, "older work")},
+        {"role": "assistant", "content": "filler x " * 2_200},
+        question,
+        call,
+        result_msg,
+    ]
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert provider.calls == 1 and result.changed
+    [repaired] = [m for m in result.messages if m.get(RUNTIME_CONTEXT_KEY)]
+    assert repaired["content"][0]["text"] == repaired[RUNTIME_CONTEXT_KEY]
+    assert repaired["content"][0]["text"].endswith(_AUTH)
+    assert repaired["content"][1:] == [{"type": "text", "text": "look at this"}]
+    assert result.messages[-2:] == [call, result_msg]
+    assert told_notices(result.messages) == {"github": _AUTH}
+
+
+async def _raising_chat(**_kwargs):
+    raise RuntimeError("the endpoint is down")
+
+
+def test_a_failed_summary_leaves_the_transcript_alone():
+    """A summary that freed nothing hands back the list it was given, and the
+    notes in it keep reading exactly as they did: the repair belongs to the
+    head a summary took away, not to the attempt at one."""
+    provider = _BriefProvider()
+    provider.chat = _raising_chat
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    messages = _pressured_turn(_question(), block)
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert result.messages is messages and not result.changed
+    assert state.compress_retries == 1 and state.head_summary_failures == 1
+    assert told_notices(messages) == {"github": _AUTH}, "nothing was taken away, so nothing needed retelling"
+
+
+def test_a_skipped_summary_leaves_the_transcript_alone():
+    """A head too small to be worth a call is skipped without payment and
+    without touching the notes: no summary, no repair, no retry spent."""
+    provider = _BriefProvider()
+    memory = _compacting_memory(provider)
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    messages = [
+        {"role": "user", "content": "list the repos"},
+        {"role": "user", "content": with_runtime_context(block, "older work")},
+        _question(),
+    ]
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert result.messages is messages and not result.changed and provider.calls == 0
+    assert state.compress_retries == 0
+    assert told_notices(messages) == {"github": _AUTH}
+
+
+def test_compaction_disabled_leaves_the_transcript_alone():
+    """With compaction off, no pressure the trigger could fire on reaches a
+    summary at all, and the notes ride untouched."""
+    provider = _BriefProvider()
+    memory = DefaultMemory(
+        _Engine(),
+        provider=lambda: provider,
+        model=lambda: "m",
+        context_window_tokens=lambda: 20_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: CompactionConfig(enabled=False),
+        output_ceiling=lambda model=None: 4_000,
+    )
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    messages = _pressured_turn(_question(), block)
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert result.messages is messages and not result.changed and provider.calls == 0
+    assert told_notices(messages) == {"github": _AUTH}
+
+
+def test_pruning_tool_results_alone_touches_no_notice_blocks():
+    """The deterministic tier works on tool bodies, not on user messages, so a
+    turn it settles never reaches a summary and its note carriers come back
+    byte for byte."""
+    provider = _BriefProvider()
+    memory = DefaultMemory(
+        _Engine(),
+        provider=lambda: provider,
+        model=lambda: "m",
+        context_window_tokens=lambda: 20_000,
+        tool_definitions=lambda: [],
+        system_prompt=lambda skills: "S",
+        compaction=lambda: CompactionConfig(enabled=True, prune=True, preserve_recent_tokens=2_500),
+        output_ceiling=lambda model=None: 4_000,
+    )
+    block = f"{RUNTIME_CONTEXT_TAG}\n{MCP_NOTICE_HEADER}\n{_AUTH}"
+    question = _question()
+    payload = "payload " * 900
+    messages = [
+        {"role": "user", "content": "list the repos"},
+        {"role": "user", "content": with_runtime_context(block, "older work")},
+        *[{"role": "tool", "tool_call_id": f"c{i}", "content": payload} for i in range(5)],
+        question,
+    ]
+    state = WindowState(image_window=1, session_key="s1", last_context_used=17_000)
+
+    result = asyncio.run(memory.shrink(messages, pressure=WindowPressure.PROACTIVE, state=state, model="m"))
+
+    assert result.changed and provider.calls == 0, "pruning settled the turn; no summary was owed"
+    elided = [m for m in result.messages if m.get("role") == "tool" and m.get("content") != payload]
+    assert len(elided) == 2, "fixture must have pruned the two oldest tool bodies"
+    carrier = next(m for m in result.messages if "older work" in str(m.get("content")))
+    assert carrier is messages[1], "a user message is never the pruner's to edit"
+    assert result.messages[-1] is question and MCP_NOTICE_HEADER not in str(question["content"])
+    assert told_notices(result.messages) == {"github": _AUTH}
