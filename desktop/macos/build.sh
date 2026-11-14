@@ -5,6 +5,19 @@ set -eu
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 APP="${RAVEN_DESKTOP_APP:-$HOME/Applications/Raven.app}"
+# The bundle is replaced wholesale below, so refuse an override that is not
+# clearly an app bundle before anything is deleted.
+case "$APP" in
+    ""|"/"|"$HOME"|"$HOME/")
+        echo "refusing to replace '$APP'; set RAVEN_DESKTOP_APP to a .app path" >&2
+        exit 1
+        ;;
+    *.app) ;;
+    *)
+        echo "RAVEN_DESKTOP_APP must end in .app, got '$APP'" >&2
+        exit 1
+        ;;
+esac
 CACHE="$HERE/.modulecache"
 mkdir -p "$CACHE" "$(dirname "$APP")" "$HERE/build"
 
@@ -73,5 +86,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 echo "[4/4] codesign (ad-hoc)"
-/usr/bin/codesign --force --deep --sign - "$APP" 2>/dev/null || true
+if ! /usr/bin/codesign --force --deep --sign - "$APP"; then
+    echo "codesign failed; the bundle at $APP is not signed" >&2
+    exit 1
+fi
 echo "done: $APP"
