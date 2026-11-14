@@ -321,13 +321,16 @@ describe('the one listener that reads the order', () => {
     expect(spies.stop).not.toHaveBeenCalled()
   })
 
-  /* The row's `hidden` is <FindRow/>'s to render off this flag (C5), so the
-     flag is what the shortcut is read by; the rail's is written by hand. */
-  it('shows the rail and the search row on Cmd+F', () => {
-    const e = key('f', { metaKey: true })
-    expect(e.defaultPrevented).toBe(true)
-    expect(document.documentElement.dataset.rail).toBe('on')
-    expect(find.get().open).toBe(true)
+  /* The dialog's `data-open` is <SearchDialog/>'s to render off this flag, so
+     the flag is what the shortcut is read by. Cmd+F stays as an alias for
+     readers who used it while the search was a row in the rail. */
+  it('opens the search dialog on Cmd+K and on Cmd+F', () => {
+    for (const k of ['k', 'f']) {
+      const e = key(k, { metaKey: true })
+      expect(e.defaultPrevented).toBe(true)
+      expect(find.get().open).toBe(true)
+      find.toggle(false)
+    }
   })
 
   it('folds and unfolds the rail on Cmd+backslash', () => {
