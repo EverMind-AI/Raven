@@ -122,6 +122,21 @@ describe('the search dialog', () => {
     expect(spy.mock.instances.at(-1)).toBe(document.getElementById('findhit-2'))
   })
 
+  it('keeps Tab inside the card', () => {
+    mount([{ id: 'a', title: 'alpha' }, { id: 'b', title: 'beta' }], 'a')
+    const last = document.getElementById('findhit-1')!
+    last.focus()
+    fireEvent.keyDown(last, { key: 'Tab' })
+    expect(document.activeElement).toBe(field())
+  })
+
+  it('keeps Shift+Tab inside the card', () => {
+    mount([{ id: 'a', title: 'alpha' }, { id: 'b', title: 'beta' }], 'a')
+    field().focus()
+    fireEvent.keyDown(field(), { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(document.getElementById('findhit-1'))
+  })
+
   it('closes on Escape without letting the page see it', () => {
     mount([{ id: 'a', title: 'alpha' }], 'a')
     let seen = 0

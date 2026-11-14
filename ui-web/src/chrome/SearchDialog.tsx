@@ -55,6 +55,7 @@ export function SearchDialog(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   const [active, setActive] = useState(0)
   const field = useRef<HTMLInputElement>(null)
+  const clear = useRef<HTMLButtonElement>(null)
   const veil = useRef<HTMLDivElement>(null)
   const list = useRef<HTMLDivElement>(null)
 
@@ -102,6 +103,23 @@ export function SearchDialog(): JSX.Element {
     find.toggle(false)
   }
 
+  /* The card claims aria-modal, so Tab stays in it: the page behind the scrim
+     is dimmed and out of reach, and a Tab that walked into it would land the
+     reader on a control they cannot see. The stops are the refs this component
+     already holds, in the order they are laid out. */
+  const onTab = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'Tab') return
+    const stops: HTMLElement[] = []
+    if (field.current) stops.push(field.current)
+    if (clear.current && !clear.current.hidden) stops.push(clear.current)
+    if (list.current) stops.push(...(Array.from(list.current.children) as HTMLElement[]))
+    const i = stops.indexOf(e.target as HTMLElement)
+    if (i === -1) return
+    e.preventDefault()
+    const next = e.shiftKey ? (i - 1 + stops.length) % stops.length : (i + 1) % stops.length
+    stops[next]?.focus()
+  }
+
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     /* Composition belongs to the input method: the Enter that picks a candidate
        must not also pick a conversation. */
@@ -126,7 +144,7 @@ export function SearchDialog(): JSX.Element {
 
   return (
     <div className="veil" id="findVeil" ref={veil} data-open={s.open ? 'true' : 'false'}>
-      <div className="chrome-find-card" role="dialog" aria-modal="true" aria-label={lang.attr('gui.search_sessions')}>
+      <div className="chrome-find-card" role="dialog" aria-modal="true" aria-label={lang.attr('gui.search_sessions')} onKeyDown={onTab}>
         <div className="chrome-find-field">
           <span className="chrome-find-ic"><Icon icon={Search01Icon} size={16} /></span>
           <input
@@ -146,6 +164,7 @@ export function SearchDialog(): JSX.Element {
           <button
             className="chrome-find-clr"
             id="sclr"
+            ref={clear}
             hidden={!s.query}
             aria-label={lang.attr('gui.clear_search')}
             onClick={() => {

@@ -84,7 +84,7 @@ function RailTop(): JSX.Element {
         aria-expanded={s.open}
         data-tip={lang.attr('gui.search_sessions')}
         aria-label={lang.attr('gui.search_sessions')}
-        onClick={() => find.toggle()}
+        onClick={(e) => find.toggle(undefined, e.currentTarget)}
       >
         <Icon icon={Search01Icon} stroke={1.8} />
       </button>
