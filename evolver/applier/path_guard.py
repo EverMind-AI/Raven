@@ -238,6 +238,12 @@ def _match(path: str, pattern: str) -> bool:
       and any descendant).
     - Otherwise → exact-string match.
     """
+    # Subject repos may be checked out on a case-insensitive filesystem, and
+    # the immutable patterns are lowercase. Compare case-insensitively so a
+    # case-varied spelling cannot reach the same file. This is conservative on
+    # POSIX, which the guard's docstring already states.
+    path = path.casefold()
+    pattern = pattern.casefold()
     if pattern.endswith("/"):
         prefix = pattern.rstrip("/")
         return path == prefix or path.startswith(pattern)
