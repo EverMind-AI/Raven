@@ -29,6 +29,7 @@ import gzip
 import hashlib
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -156,7 +157,7 @@ def _write_page(dist: Path, out: str) -> int:
     """
     page = dist / "index.html"
     copy = dist / "index.html.gz"
-    copy.unlink(missing_ok=True)
+    _remove(copy)
     # newline="" so the bytes are the same on every platform: the default
     # translates "\n" to "\r\n" on Windows, which would hand a checkout there a
     # differently-hashed page than the one CI and the wheel carry. mtime=0 for
@@ -165,6 +166,24 @@ def _write_page(dist: Path, out: str) -> int:
     data = gzip.compress(page.read_bytes(), compresslevel=9, mtime=0)
     copy.write_bytes(data)
     return len(data)
+
+
+def _remove(path: Path, tries: int = 40) -> None:
+    """Remove ``path``, waiting out a reader that holds it open.
+
+    Windows refuses to remove a file another handle has open, and the gateway
+    holds the gzip copy for as long as it is sending it. A copy still held
+    after a couple of seconds fails the build here, before the page is written,
+    so the two never disagree.
+    """
+    for attempt in range(tries):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(0.05)
 
 
 def _check_boot_snapshot(index: Path, url: str, golden: str) -> None:
