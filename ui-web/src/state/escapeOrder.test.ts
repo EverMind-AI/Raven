@@ -366,19 +366,11 @@ describe('the one listener that reads the order', () => {
       .toEqual([', chipKey', ', onEscapeOrder', ', onSettingsKey'])
   })
 
-  /* And bubbling is what lets a field keep the key: the search row stops
-     Escape on its own input so that dismissing the row does not also take a
-     page down behind it (state/find.ts). A capture-phase listener would have
-     read the key before the field ever saw it. */
-  it('does not see a key an element stopped', () => {
-    find.install()
-    find.toggle(true)
-    LAYERS['#extAgentsPage']!.up()
-    document.getElementById('sfind')!
-      .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
-    expect(find.get().open).toBe(false)
-    expect(spies.extAgentsClose).not.toHaveBeenCalled()
-  })
+  /* And bubbling is what lets a field keep the key: the search dialog stops
+     Escape on its own field so that dismissing it does not also take a page
+     down behind it (src/chrome/SearchDialog.tsx, pinned by
+     src/chrome/SearchDialog.test.tsx). A capture-phase listener would have read
+     the key before the field ever saw it. */
 
   it.each(['shell.exec', 'file.write', 'mcp.call', 'config.change', 'unknown'])(
     'Escape denies %s approval and leaves stopping to the next Escape', (kind) => {
