@@ -481,7 +481,9 @@ class TestOnTheTable:
 
         assert [row.name for row in registry.rows()] == [GENERIC_AGENT, "RAVEN-A", "RAVEN-B", "RAVEN-C"]
 
-    def test_an_acp_row_with_no_command_reaches_the_roster_with_the_host_default(self, tree: Path) -> None:
+    def test_an_acp_row_with_no_command_reaches_the_roster_with_the_host_default(
+        self, tree: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The documented default for an acp redeclaration is reachable.
 
         ``_acp_host_override`` fills an empty command with this install's own
@@ -491,9 +493,14 @@ class TestOnTheTable:
         reached the roster: an operator relying on the documented default got an
         agent that silently was not there, with no warning, because the override
         only warns when the host command cannot be resolved at all.
+
+        The resolver is stubbed, so the assertion is about the value the override
+        writes rather than about whether this machine has a ``raven`` console
+        script; the real one answers "" from a source tree that installed none.
         """
         from raven.config.schema import ThirdPartyAcpSubagentConfig
 
+        monkeypatch.setattr("raven.agent.subagent.builtin_agents.host_raven_acp_command", lambda: "/stub/raven acp")
         redeclared = ThirdPartyAcpSubagentConfig.model_validate({"name": GENERIC_AGENT, "kind": "acp", "command": ""})
         registry = AgentRegistry()
 
@@ -502,7 +509,7 @@ class TestOnTheTable:
         assert GENERIC_AGENT in registry.names()
         row = registry.get(GENERIC_AGENT)
         assert row.kind == "acp"
-        assert "acp" in row.config.command
+        assert row.config.command == "/stub/raven acp"
 
     def test_an_acp_row_the_operator_switched_off_stays_off(self, tree: Path) -> None:
         """The other direction: this merge leaves the flag alone rather than
