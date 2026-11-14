@@ -6287,7 +6287,10 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
   border-radius: 1px; background: var(--text); opacity: .5;
   animation: spsweep 1.4s cubic-bezier(.45, .1, .45, .9) infinite; }
 @keyframes spfloat { 50% { transform: translateY(-5px); } }
-@keyframes spsweep { to { left: 100%; } }
+/* The sweep runs while the bundle's long task holds the main thread, so it
+   moves by transform, which the compositor runs on its own: 350% of the
+   sweep's own width is 140% of the bar's, from -40% to 100%. */
+@keyframes spsweep { to { transform: translateX(350%); } }
 @media (prefers-reduced-motion: reduce) {
   .sp-rv { animation: none; }
   .sp-bar i { animation-duration: 2.4s; }

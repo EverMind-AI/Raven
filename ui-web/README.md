@@ -125,7 +125,7 @@ runs the same three and then `npm test`.
 
 ## Gates
 
-`npm test` is one run over both trees, so the 39 gate suites under `scripts/gates/`
+`npm test` is one run over both trees, so the gate suites under `scripts/gates/`
 go with the unit suites. Each one's header says what it pins and why; the
 conventions they are written to are `CONTRIBUTING.md` section 8.
 
@@ -166,3 +166,4 @@ conventions they are written to are `CONTRIBUTING.md` section 8.
 | `instance-composer-css` | a sub-agent's composer is the page's composer, one size down |
 | `agents-roster-live` | what the desk's agent list is a list of, on the shipped wiring |
 | `direct-chat-media-live` | the instance composer's send carries its attachments |
+| `splash-motion-css` | the boot splash animates only `transform` and `opacity`, so it keeps moving while the bundle's long task holds the main thread |
