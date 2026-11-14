@@ -571,7 +571,7 @@ describe('the bar under the field', () => {
     styled()
     perm.setFromConfig('full')
     ctx.set(68_000, 100_000)
-    const corners = (id: string): string[] => {
+    const corners = (id: string): [string, string, string, string] => {
       const c = style(el(id))
       return [c.borderTopLeftRadius, c.borderTopRightRadius, c.borderBottomRightRadius, c.borderBottomLeftRadius]
     }
