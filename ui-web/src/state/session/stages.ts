@@ -142,8 +142,16 @@ export const STAGES: readonly Stage[] = [
        the lane. `delegated` carries the identity AND the injected text, the
        same identity a stored entry carries on replay, so the two views draw
        the same row at the same place. */
+    /* Read before the phase is set below. A machine already running a turn when
+       that turn's opening arrives belongs to a page that subscribed mid-turn --
+       a reload, a reconnect -- and the subscription is replaying the turn from
+       this frame: the conversation read off disk has drawn the row and measured
+       the turn's age already. Not `busy()`: a window that has just sent is busy
+       too, and has drawn nothing of this turn. A hold runs the machine waiting
+       for exactly this frame. */
+    const replayed = turn.phase() === 'streaming' && !rt.holding
     advanceTurn()
-    if (p.delegated) {
+    if (p.delegated && !replayed) {
       const d = p.delegated
       const isDag = d.kind === 'dag'
       transcript.delivered({
@@ -167,8 +175,10 @@ export const STAGES: readonly Stage[] = [
        sub-agent's whole run sitting in between. The server's `duration_ms`
        covers the number that gets drawn; this covers the paths that fall back
        to timing it here, a stop being the one that always does. */
-    rt.startedAt = Date.now()
-    rt.answerAt = 0
+    if (!replayed) {
+      rt.startedAt = Date.now()
+      rt.answerAt = 0
+    }
     /* Cancellable by its id: nothing bound a handle to this turn, so the stop
        button names it and turn.cancel reaches it as the lane's running turn. */
     rt.openedTurn = p.turn_id

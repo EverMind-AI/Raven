@@ -379,6 +379,59 @@ describe('turn.started', () => {
     expect(h.live.openedTurn).toBeNull()
   })
 
+  /* A page that loads while this turn runs reads the conversation off disk --
+     its delivery row included -- and arms the machine for the running turn
+     before it subscribes. The subscription then replays the turn from its
+     opening, and that opening is this frame: drawing from it again put the
+     result on the page twice, and re-anchoring the clock threw away the age
+     the reload had just measured. Everything else it does still applies, since
+     nothing else gave the page this turn's id. */
+  it('draws nothing a reload already drew when the subscription replays the boundary', async () => {
+    const h = await harness({ rows: [{ id: 's1' }], busy: true, phase: 'streaming' })
+    h.live.startedAt = 1234
+    h.live.answerAt = 99
+
+    h.dispatch({
+      type: 'turn.started',
+      payload: {
+        turn_id: 't-reentry',
+        delegated: { kind: 'spawn', label: 'fix F2', status: 'ok', node_id: 'n1', content: 'done' },
+      },
+    })
+
+    expect(h.did('delivered')).toHaveLength(0)
+    expect([h.live.startedAt, h.live.answerAt]).toEqual([1234, 99])
+    expect(h.did('advanceTurn')).toHaveLength(1)
+    expect(h.live.openedTurn).toBe('t-reentry')
+  })
+
+  /* Busy is not the test: a window that has just sent is busy too, and the
+     result that takes the lane before its message does opens a turn it has not
+     drawn. Only a machine already running a turn has seen this one. */
+  it('still draws the row when this window has just sent a message', async () => {
+    const h = await harness({ rows: [{ id: 's1' }], busy: true, phase: 'sending' })
+
+    h.dispatch({
+      type: 'turn.started',
+      payload: { turn_id: 't-reentry', delegated: { kind: 'spawn', label: 'fix F2', status: 'ok', content: 'done' } },
+    })
+
+    expect(h.did('delivered')).toHaveLength(1)
+  })
+
+  /* A hold runs the machine with no turn in it, waiting for exactly this frame. */
+  it('draws the row of the turn a hold was waiting for', async () => {
+    const h = await harness({ rows: [{ id: 's1' }], busy: true, phase: 'streaming' })
+    h.live.holding = true
+
+    h.dispatch({
+      type: 'turn.started',
+      payload: { turn_id: 't-reentry', delegated: { kind: 'spawn', label: 'fix F2', status: 'ok', content: 'done' } },
+    })
+
+    expect(h.did('delivered')).toHaveLength(1)
+  })
+
   it('hands the row what a node returned, beside the report the model was given', async () => {
     const h = await harness({ rows: [{ id: 's1' }] })
 
@@ -634,7 +687,7 @@ describe('notice', () => {
 
 /* The same frames through the real transcript island, read off what it draws:
    the stand-in step above can say a take-back ran, not what it took back. */
-async function islandHarness() {
+async function islandHarness({ phase = 'streaming' } = {}) {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   const frames: FrameRequestCallback[] = []
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length })
@@ -653,7 +706,7 @@ async function islandHarness() {
         drawMeter: () => {},
         goPaint: () => {},
         queueShift: () => undefined,
-        turn: { busy: () => false, phase: () => 'streaming', dispatch: () => {} },
+        turn: { busy: () => false, phase: () => phase, dispatch: () => {} },
       },
       'src/lib/duration': { formatDuration: (ms: number) => `${ms}ms` },
       'src/lib/session': { current: () => 's1' },
@@ -704,6 +757,34 @@ async function islandHarness() {
     },
   }
 }
+
+describe('a delegated turn the page joined mid-way, drawn by the real transcript island', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  const mark = { kind: 'spawn', label: 'fix F2', status: 'ok', node_id: 'n1' } as const
+  const stored: HistoryMessage = {
+    role: 'user', timestamp: '2026-11-14T16:15:08.897501', delegated: mark,
+    text: "[Subagent 'fix F2' returned]\n\nResult:\n[BEGIN UNTRUSTED subagent #ab12cd34 x]\ndone\n[END UNTRUSTED subagent #ab12cd34]",
+  }
+  const opening = { type: 'turn.started', payload: { turn_id: 't-delegated', delegated: { ...mark, content: 'done' } } }
+  const drawn = (): number => document.querySelectorAll('.sdlv').length
+
+  /* A reload while the turn ran: the row read off disk, then the subscription's
+     replay of the turn from its opening, which drew the same row a second time. */
+  it('draws the result once when the replayed opening follows a reload', async () => {
+    const h = await islandHarness({ phase: 'streaming' })
+    h.reload([stored])
+    h.dispatch(opening)
+    expect(drawn()).toBe(1)
+  })
+
+  /* A page that was idle when the turn opened draws the result from that frame. */
+  it('draws the result from the opening a page receives while idle', async () => {
+    const h = await islandHarness({ phase: 'idle' })
+    h.dispatch(opening)
+    expect(drawn()).toBe(1)
+  })
+})
 
 describe('a turn that ends silent, drawn by the real transcript island', () => {
   afterEach(() => { vi.unstubAllGlobals() })
