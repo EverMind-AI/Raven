@@ -101,6 +101,27 @@ describe('the search dialog', () => {
     expect(find.get().open).toBe(false)
   })
 
+  it('does nothing on Enter or the arrows until a term is typed', () => {
+    const h = mount([{ id: 'a', title: 'alpha' }, { id: 'b', title: 'beta' }])
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    expect(h.calls).toEqual([])
+    expect(find.get().open).toBe(true)
+  })
+
+  it('keeps the active row scrolled into view', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, title: `session ${i}` }))
+    mount(rows, 'session')
+    const spy = vi.fn()
+    HTMLElement.prototype.scrollIntoView = spy
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    fireEvent.keyDown(field(), { key: 'ArrowDown' })
+    expect(spy).toHaveBeenLastCalledWith({ block: 'nearest' })
+    expect(spy.mock.instances.at(-1)).toBe(document.getElementById('findhit-2'))
+  })
+
   it('closes on Escape without letting the page see it', () => {
     mount([{ id: 'a', title: 'alpha' }], 'a')
     let seen = 0

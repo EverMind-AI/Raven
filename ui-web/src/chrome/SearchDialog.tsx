@@ -56,13 +56,18 @@ export function SearchDialog(): JSX.Element {
   const [active, setActive] = useState(0)
   const field = useRef<HTMLInputElement>(null)
   const veil = useRef<HTMLDivElement>(null)
+  const list = useRef<HTMLDivElement>(null)
 
   const rows = (rail.snap?.rows ?? []).filter(
     (r) => !s.query || r.title.toLowerCase().includes(s.query) || (r.last ?? '').toLowerCase().includes(s.query),
   )
   const at = Math.min(active, Math.max(0, rows.length - 1))
+  /* Whether results are on screen, which is not the same as whether the filter
+     matched: with no term typed nothing is rendered, so a key must not act on
+     the rows that are merely waiting behind it. */
+  const showing = Boolean(s.query && rows.length)
 
-  useEffect(() => setActive(0), [s.query])
+  useEffect(() => setActive(0), [s.query, s.open])
 
   useEffect(() => {
     if (s.open) {
@@ -72,6 +77,14 @@ export function SearchDialog(): JSX.Element {
     if (field.current) field.current.value = ''
     find.set({ query: '' })
   }, [s.open])
+
+  /* The active row is reached by moving aria-activedescendant while focus stays
+     in the field, so the browser never scrolls it in: a list taller than the
+     card would otherwise let the selection walk out of sight. */
+  useEffect(() => {
+    const el = list.current?.children[at] as HTMLElement | undefined
+    el?.scrollIntoView?.({ block: 'nearest' })
+  }, [at, s.query])
 
   useEffect(() => {
     const el = veil.current
@@ -98,7 +111,7 @@ export function SearchDialog(): JSX.Element {
       find.toggle(false)
       return
     }
-    if (!rows.length) return
+    if (!showing) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setActive((at + 1) % rows.length)
@@ -123,9 +136,9 @@ export function SearchDialog(): JSX.Element {
             aria-label={lang.attr('gui.search_sessions')}
             role="combobox"
             aria-autocomplete="list"
-            aria-expanded={rows.length > 0}
-            aria-controls="findList"
-            aria-activedescendant={rows.length ? `findhit-${at}` : undefined}
+            aria-expanded={showing}
+            aria-controls={showing ? 'findList' : undefined}
+            aria-activedescendant={showing ? `findhit-${at}` : undefined}
             autoComplete="off"
             onInput={(e) => find.set({ query: e.currentTarget.value.trim().toLowerCase() })}
             onKeyDown={onKey}
@@ -148,7 +161,7 @@ export function SearchDialog(): JSX.Element {
           <>
             <div className="chrome-find-count" id="findCount">{t('gui.find.count', { n: rows.length })}</div>
             {rows.length ? (
-              <div className="chrome-find-list" id="findList" role="listbox" aria-labelledby="findCount">
+              <div className="chrome-find-list" id="findList" ref={list} role="listbox" aria-labelledby="findCount">
                 {rows.map((r, i) => (
                   <button
                     key={r.id}
