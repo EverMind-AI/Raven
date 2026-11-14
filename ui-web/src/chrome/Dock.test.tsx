@@ -645,7 +645,8 @@ describe('a queued message', () => {
  * the band cannot see: where each stands.
  *
  * Each is rendered beside its chip, inside an anchor the two share, and hangs
- * off the chip's top edge with the stylesheet. Nothing measures, nothing moves:
+ * off the bar with the stylesheet: off the chip's top edge, or for the
+ * permission modes off the session segment's. Nothing measures, nothing moves:
  * the fixed-coordinate popovers before them left the card for the body because
  * the card's entrance animation re-based their coordinates, and that whole
  * dance is gone with the coordinates.

@@ -14,8 +14,9 @@
  * the popover says so rather than inventing a breakdown.
  *
  * WHERE this renders is not decided here. It is a child of the ring's anchor
- * (.chrome-anch, src/chrome/Dock.tsx), hung off the chip's top edge by the
- * stylesheet, the way the permission modes' popover is.
+ * (.chrome-anch, src/chrome/Dock.tsx), hung by the stylesheet off the top
+ * edge of the session segment the ring sits in, right edges lined up, the way
+ * the permission modes' popover is.
  */
 
 import { useEffect, useSyncExternalStore } from 'react'

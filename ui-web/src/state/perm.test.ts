@@ -25,7 +25,7 @@ function wire(): void {
 
 /* The chip and the popover are the page root's now (src/chrome/PermChip.tsx,
    src/chrome/PermPopover.tsx), so the fixture is the one band they render into --
-   the composer card comes with them, and the popover hangs off the chip inside it. */
+   the composer card comes with them, and the popover hangs off the bar inside it. */
 function markup(): void {
   document.body.innerHTML = '<div class="dock"></div>'
 }
@@ -176,10 +176,10 @@ describe('the permission popover', () => {
     expect(document.getElementById('perm-pop-title')!.textContent).toBe(t('gui.perm.title'))
   })
 
-  it('hangs off the chip inside the card, and measures nothing', async () => {
+  it('stands beside the chip inside the card, and measures nothing', async () => {
     const perm = await load()
     /* The popover shares an anchor with the chip: the stylesheet hangs it off the
-       chip's top edge, so nothing here places it and nothing moves it out of
+       session segment's top edge, so nothing here places it and nothing moves it out of
        the card the way the fixed-coordinate popovers before it were moved. */
     expect(pop().parentElement!.className).toBe('chrome-anch')
     expect(pop().previousElementSibling).toBe(chip())
