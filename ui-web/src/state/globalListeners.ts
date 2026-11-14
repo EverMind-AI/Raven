@@ -100,7 +100,7 @@ function onEscapeOrder(e: KeyboardEvent): void {
   const inField = /INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')
   if (e.key === 'Escape' && escapeOrder.dispatch()) return
   if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f')) {
-    e.preventDefault(); toggleFind(true)
+    e.preventDefault(); toggleFind(true, e.target instanceof HTMLElement ? e.target : null)
   }
   if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
     e.preventDefault(); setRail(!railOpen())

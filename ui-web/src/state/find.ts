@@ -31,11 +31,18 @@ export function set(next: Partial<FindState>): void {
 }
 
 /* Search is a chore, so it hides until asked for, and a dialog that comes back
-   with the last term still in it is a dialog the reader has to clear first. */
-export function toggle(force?: boolean): void {
+   with the last term still in it is a dialog the reader has to clear first.
+   `opener` is whatever had the focus when it was raised, and gets it back. */
+let opener: HTMLElement | null = null
+
+export function toggle(force?: boolean, from?: HTMLElement | null): void {
   if (force ?? !get().open) {
+    if (from) opener = from
     set({ open: true })
     return
   }
   set({ open: false, query: '' })
+  const back = opener
+  opener = null
+  back?.focus()
 }

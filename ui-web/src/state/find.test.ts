@@ -56,4 +56,15 @@ describe('the search dialog state', () => {
     set({ query: 'a' })
     expect(draws).toBe(2)
   })
+
+  it('gives the focus back to what opened it', () => {
+    const opener = document.createElement('button')
+    const elsewhere = document.createElement('button')
+    document.body.append(opener, elsewhere)
+    opener.focus()
+    toggle(true, opener)
+    elsewhere.focus()
+    toggle(false)
+    expect(document.activeElement).toBe(opener)
+  })
 })
