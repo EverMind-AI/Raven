@@ -69,9 +69,21 @@ def _live_exec_extra_deny() -> list[str] | None:
     return exec_extra_deny_patterns(_LIVE_CONFIG)
 
 
-def _append_participant_note(messages: list[dict[str, Any]], note: str) -> None:
-    """Append generated advice without importing the main loop back into this backend."""
-    if not messages or not note:
+def _append_participant_note(messages: list[dict[str, Any]], note: str, delivered: set[str]) -> None:
+    """One round's generated advice, written where a tool result is not.
+
+    Two rules, both about what the transcript ends up saying. A tool result is
+    fenced as untrusted input, so guidance appended into one reaches the model
+    as something a tool told it: a note that lands after a tool round is a
+    message of its own. And the advice is asked for every round while a
+    generated function is stateless, so the same words are delivered once
+    rather than once per round.
+    """
+    if not messages or not note or note in delivered:
+        return
+    delivered.add(note)
+    if messages[-1].get("role") == "tool":
+        messages.append({"role": "user", "content": note})
         return
     body = messages[-1].get("content")
     if isinstance(body, str):
@@ -513,6 +525,7 @@ class RavenLoopBackend:
         iteration = 0
         participants = charter_mod.charter_participants()
         original_task = task
+        notes: set[str] = set()
 
         async def participant_answer(verb: str, *args: Any) -> Any:
             if not participants:
@@ -580,7 +593,7 @@ class RavenLoopBackend:
             if participants:
                 advice = await participant_answer("advise", participant_step("iteration"))
                 if isinstance(advice, str) and advice:
-                    _append_participant_note(messages, advice)
+                    _append_participant_note(messages, advice, notes)
             reply_streamed = False
             if on_delta is None:
                 response = await provider.chat_with_retry(
@@ -819,7 +832,7 @@ class RavenLoopBackend:
                 if participants:
                     advice = await participant_answer("advise", participant_step("after_iteration", response=response))
                     if isinstance(advice, str) and advice:
-                        _append_participant_note(messages, advice)
+                        _append_participant_note(messages, advice, notes)
             else:
                 # A reply with nothing visible in it is no answer, whatever its
                 # finish reason says: handed on as "", a spawn records it
