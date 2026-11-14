@@ -796,6 +796,25 @@ class TestSkillServiceLegacyAPI:
         items = svc.list_skills(filter_unavailable=False)
         assert any(i["name"] == "needs_fake_bin" for i in items)
 
+    def test_list_skills_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills()
+        assert not any(i["name"] == "simple" for i in items)
+        assert any(i["name"] == "user_custom" for i in items)
+
+    def test_list_skills_unfiltered_still_omits_blocklisted_skills(self, tmp_workspace, tmp_builtin):
+        svc = LocalSkillCatalog(
+            tmp_workspace,
+            builtin_skills_dir=tmp_builtin,
+            blocklist_reader=lambda: frozenset({"simple"}),
+        )
+        items = svc.list_skills(filter_unavailable=False)
+        assert not any(i["name"] == "simple" for i in items)
+
     def test_load_skill_returns_body(self, tmp_workspace, tmp_builtin):
         svc = LocalSkillCatalog(tmp_workspace, builtin_skills_dir=tmp_builtin)
         body = svc.load_skill("simple")

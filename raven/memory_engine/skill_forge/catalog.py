@@ -302,10 +302,16 @@ class LocalSkillCatalog:
     # ------------------------------------------------------------------
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
-        """All skills as ``{name, path, source}`` dicts."""
+        """All skills as ``{name, path, source}`` dicts.
+
+        Blocklisted skills are left out, like every other runtime listing
+        in this catalog; :meth:`gather_all_skills` is the deliberate
+        exception that keeps them so the CLI can mark them.
+        """
         metas = self._registry.list_all()
         if filter_unavailable:
             metas = [m for m in metas if self._registry.check_available(m.name, source=m.source)]
+        metas = [m for m in metas if not self._is_blocked(m.name)]
         return [{"name": m.name, "path": str(m.path), "source": m.source} for m in metas]
 
     def load_skill(self, name: str) -> str | None:
