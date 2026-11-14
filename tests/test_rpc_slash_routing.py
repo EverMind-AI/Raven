@@ -148,7 +148,6 @@ import pytest as _pytest
         # keep the terminal-only toast; normal channels now dispatch.
         "channels login weixin",
         "channels login whatsapp",
-        "sandbox shell",
         # harness-command-catalog-dynamic — newly blacklisted (smoke caught
         # that the prior hardcoded _is_blacklist_argv missed these two and
         # the user got an "unknown command" toast instead of the correct
@@ -218,7 +217,7 @@ async def test_slash_exec_non_zero_exit_keeps_warning(fake_app_patch):
 async def test_slash_exec_never_raises_for_dispatch_failures(fake_app_patch):
     """Regression guard: slash.exec must NOT raise -32xxx; all failures must
     arrive as dict so hermes UI's .then() handles them."""
-    for cmd in ("", "asd", "provider login", "sandbox shell", "gateway"):
+    for cmd in ("", "asd", "provider login", "channels login weixin", "gateway"):
         result = await slash_exec({"command": cmd, "session_id": "sid-abc"})
         assert isinstance(result, dict)
         # output always present so createSlashHandler.ts:88 doesn't fall back

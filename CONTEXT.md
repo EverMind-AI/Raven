@@ -2473,6 +2473,40 @@ lands on one, and is recorded on the call's tool.call span as
 wait on a human, and answers with a full ToolResult.
 _Avoid_: "tool gate" for this -- that name is the plugin paper's.
 
+**Runtime approval** (`permissions/runtime.py`):
+Asking about an action a tool finds while its body runs, not before dispatch:
+`PermissionGate.authorize_runtime`, reached through `current_gate()`, which the
+registry binds for the length of the tool body. It follows the gate's own order
+(this turn's earlier answers, the conversation's grants, the mode, the smart-mode
+reviewer, the person) and answers with a `RuntimeAnswer`: once, session, always,
+deny, deny and stop, lapsed (asked, nobody answered) or unattended. A person
+deciding stops the tool's deadline, which the registry runs under
+`asyncio.timeout` for this reason. The first such action is a Network denial.
+_Avoid_: "re-check" or "second gate" -- it is the one gate, asked later.
+
+**Network denial** (`sandbox/denials.py`):
+One connection an OpenShell sandbox's network policy refused, read from the
+gateway's OCSF log over the time a command (or, for a long-lived MCP server, a
+call) ran: the program, the host, the port and the reason (`NetworkDenial`). The
+log names the sandbox, not the command, so a denial in that window may be
+another process's in the same sandbox. A DNS refusal names only the host.
+Carried on `ExecResult.denials` and settled by `permissions/sandbox_network.py`.
+_Avoid_: "network error" -- a denial is the policy's decision, and the command
+sees only a failed connect.
+
+**Network grant** (`sandbox/network_policy.py`, `permissions/network_grants.py`):
+A person's yes to one program reaching one host and port, compiled into a named
+rule (`raven_grant_<hash>`) of the sandboxes it reaches: "once" in the refused
+sandbox until it stops, "this session" in every sandbox of the conversation
+until Raven restarts (the `GrantRegistry`, keyed by the conversation's
+`session_key`; the main agent's shared sandbox runs under every conversation's),
+"always" as a `permissions.network` rule. A deny rule naming the same target
+leaves a session grant out of the policy the conversation's sandboxes compile;
+what the refused sandbox was granted directly, once or for the session, stays
+there until it stops. Distinct from a session grant in
+`permissions/session.py`, which remembers the action's keys so the gate does not
+ask again; a network grant is what makes the sandbox let the connection through.
+
 **Credential scope**:
 Which credential store an MCP server's secrets are read from and written to.
 `None` is the host's own -- `<credentials>/mcp/<server>.json` for OAuth tokens,
@@ -2578,7 +2612,8 @@ second owner, and that distinction is what keeps it off its parent's tab.
 ### Execution & Evaluation
 
 **SandBox** (`sandbox/`):
-Isolated command execution (microVM / boxlite); owns the debug server and VM lifecycle.
+Isolated command execution: one OpenShell sandbox per executor on a local gateway, or direct host
+execution when disabled; owns sandbox lifecycle, mounts, and the egress policy.
 
 **EvalEngine** (`eval_engine/`):
 The L3 evaluation engine: task judging and cognitive coordination, implemented as three
@@ -3476,9 +3511,10 @@ The same trust boundary the cli transport already ran under (`codex -a never`,
 The one request it refuses is one naming a shell command (`toolCall.rawInput.command`,
 codex's `commandActions`) that the host's own deny rules refuse - the builtin list with
 `tools.exec.extraDenyPatterns`, or a `deny` entry in `permissions.tools`: refusing needs no
-operator, so it is answered with the agent's reject option. Raven's own products carry the
-same refusals in their rendered config (`product_render.inherit_host_denials`), because a call
-their own gate allows never reaches this handler.
+operator, so it is answered with the agent's reject option. Raven's own products run under
+the host's whole permission set, these refusals included, in their rendered config
+(`product_render.inherit_host_permissions`), because a call their own gate allows never
+reaches this handler.
 Distinct from what raven still refuses: `fs/read_text_file` and its siblings are declared
 unsupported in `CLIENT_CAPABILITIES`, and a handler returning `UNHANDLED` is how they stay
 that way.

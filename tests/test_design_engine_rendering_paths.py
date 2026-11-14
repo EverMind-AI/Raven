@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from raven_design.rendering.backend import (
-    BoxLiteRenderBackend,
+    SandboxRenderBackend,
     _copy_asset_tree,
     _outcome_from_wire,
     _posix_locale,
@@ -186,7 +186,7 @@ def test_worker_request_schema_rejects_unknown_config_fields(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
+async def test_cancelling_a_sandboxed_job_stops_the_sandbox_and_removes_staging(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -208,7 +208,7 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
         async def stop(self):
             stopped.set()
 
-    backend = BoxLiteRenderBackend(
+    backend = SandboxRenderBackend(
         RenderConfig(chrome_path=None, libreoffice_path=None),
         policy,
         image="renderer:test",
@@ -228,7 +228,7 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
             preview_limit=1,
         )
     )
-    await started.wait()
+    await asyncio.wait_for(started.wait(), 5)
     task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
@@ -237,14 +237,57 @@ async def test_cancelling_boxlite_job_stops_vm_and_removes_staging(
     assert list(policy.runtime_root.iterdir()) == []
 
 
-def test_the_boxlite_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
-    """The constructor call crosses the raven/design-engine seam, so a new
-    required argument on raven's side fails here synchronously, before any VM.
-    The cancellation test above replaces ``_executor``, so it cannot see that."""
-    from raven.config.paths import get_sandbox_dir
-    from raven.sandbox.boxlite_executor import BoxliteExecutor
+@pytest.mark.asyncio
+async def test_a_sandbox_that_cannot_start_says_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The SDK's absence has to arrive as an answer, not as a wait that never ends."""
+    from raven.sandbox.interfaces import SandboxInitError
 
-    backend = BoxLiteRenderBackend(
+    policy = _policy(tmp_path)
+    source = policy.workspace / "page.html"
+    source.write_text("<html/>", encoding="utf-8")
+
+    class Executor:
+        async def start(self):
+            raise SandboxInitError("The OpenShell SDK is not installed in this raven's environment.")
+
+        async def exec(self, *args, **kwargs):
+            raise AssertionError("the command must not run without a sandbox")
+
+        async def stop(self):
+            return None
+
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        policy,
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    monkeypatch.setattr(backend, "_executor", lambda job_root: Executor())
+
+    with pytest.raises(RenderError) as raised:
+        await backend.run(
+            RenderRequest(
+                path=source,
+                output_dir=policy.workspace / "output",
+                motion_mode="static",
+                capture_duration_seconds=0.25,
+            ),
+            preview_limit=1,
+        )
+
+    assert raised.value.code == "renderer_unavailable"
+    assert "OpenShell SDK is not installed" in raised.value.message
+
+
+def test_the_sandbox_backend_can_build_the_executor_it_asks_raven_for(tmp_path: Path) -> None:
+    """The constructor call crosses the raven/design-engine seam, so a new
+    required argument on raven's side fails here synchronously, before any sandbox.
+    The cancellation test above replaces ``_executor``, so it cannot see that."""
+    from raven.sandbox.openshell_executor import OpenShellExecutor
+
+    backend = SandboxRenderBackend(
         RenderConfig(chrome_path=None, libreoffice_path=None),
         _policy(tmp_path),
         image="renderer:test",
@@ -255,5 +298,51 @@ def test_the_boxlite_backend_can_build_the_executor_it_asks_raven_for(tmp_path: 
 
     executor = backend._executor(tmp_path / "job")
 
-    assert isinstance(executor, BoxliteExecutor)
-    assert executor._sandbox_home == get_sandbox_dir("boxlite")
+    assert isinstance(executor, OpenShellExecutor)
+    assert (executor._image, executor._cpus, executor._memory_mib) == ("renderer:test", 1, 512)
+    assert executor._network_source() == {}
+
+
+def test_the_renderer_sandbox_can_read_the_worker_images_browsers(tmp_path: Path) -> None:
+    """The worker re-discovers Chromium inside the sandbox, first under the image's
+    /ms-playwright; OpenShell keeps every path it is not given unreadable."""
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        _policy(tmp_path),
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    assert backend._executor(tmp_path / "job")._read_only_paths == ("/ms-playwright",)
+
+
+def test_the_renderer_sandbox_has_no_network(tmp_path: Path) -> None:
+    """Decision D11: a render job runs no agent command, so it stays offline and has no switch of its own."""
+    import dataclasses
+
+    assert "allow_network" not in {field.name for field in dataclasses.fields(RenderConfig)}
+    backend = SandboxRenderBackend(
+        RenderConfig(chrome_path=None, libreoffice_path=None),
+        _policy(tmp_path),
+        image="renderer:test",
+        cpus=1,
+        memory_mib=512,
+        create_timeout_seconds=1,
+    )
+    assert backend._executor(tmp_path / "job")._network_source() == {}
+
+
+@pytest.mark.parametrize("name", ["auto", "sandbox", "boxlite"])
+def test_every_isolated_backend_name_builds_the_sandbox_renderer(tmp_path: Path, name: str) -> None:
+    from raven_design.rendering.service import RenderService
+
+    built = RenderService._build_backend(
+        SimpleNamespace(config=RenderConfig(chrome_path=None, libreoffice_path=None), path_policy=_policy(tmp_path)),
+        name,
+        worker_image="renderer:test",
+        worker_cpus=1,
+        worker_memory_mib=512,
+        worker_create_timeout_seconds=1,
+    )
+    assert isinstance(built, SandboxRenderBackend)

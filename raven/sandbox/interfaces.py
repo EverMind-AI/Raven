@@ -1,21 +1,27 @@
 """Public interfaces for the sandbox package.
 
-Import from here (or from raven.sandbox) — never from boxlite_executor.py
+Import from here (or from raven.sandbox) — never from openshell_executor.py
 or direct_executor.py directly, so callers remain decoupled from concrete backends.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from raven.sandbox.denials import NetworkDenial
+
+if TYPE_CHECKING:
+    from raven.sandbox.network_policy import NetworkGrant
 
 
 class SandboxInitError(RuntimeError):
     """Raised when the sandbox backend cannot be started or probed.
 
-    Defined here rather than in ``boxlite_executor`` so it can be imported
-    without boxlite installed: the agent loop and the MCP client import this
+    Defined here rather than in ``openshell_executor`` so it can be imported
+    without the OpenShell SDK installed: the agent loop and the MCP client import this
     type for error handling and must not fail because a backend is absent.
     """
 
@@ -27,6 +33,9 @@ class ExecResult:
     stdout: str
     stderr: str
     exit_code: int
+    # Connections the sandbox's network policy refused while the command ran;
+    # empty for an executor that enforces no network policy.
+    denials: tuple[NetworkDenial, ...] = ()
 
     def as_text(self, max_chars: int = 10_000) -> str:
         parts = []
@@ -46,7 +55,7 @@ class SandboxExecutor(ABC):
     """
     Abstraction for isolated command execution.
 
-    Implementations: BoxliteExecutor (boxlite microVM), DirectExecutor (host fallback).
+    Implementations: OpenShellExecutor (OpenShell sandbox), DirectExecutor (host fallback).
     ExecTool holds this interface and is unaware of the concrete backend.
     """
 
@@ -73,6 +82,30 @@ class SandboxExecutor(ABC):
         DirectExecutor and the base class default to False.
         """
         return False
+
+    @property
+    def supports_network_grants(self) -> bool:
+        """True if a running executor can open a blocked host (``grant_network``)."""
+        return False
+
+    async def grant_network(self, grants: Sequence[NetworkGrant]) -> bool:
+        """Open ``grants`` in this executor only; False where there is no network policy to change."""
+        return False
+
+    async def sync_network(self) -> bool:
+        """Bring a running executor's network policy up to date; False where there is none."""
+        return False
+
+    async def denials_since(
+        self, since: float, *, until: float | None = None, wait: bool = False
+    ) -> list[NetworkDenial]:
+        """Connections the sandbox refused between ``since`` and ``until`` (epoch seconds), whoever made them.
+
+        For a process that outlives any one command (a stdio MCP server), whose
+        refusals no ``exec`` result carries. ``wait`` gives a refusal a moment
+        to arrive. None for an executor that enforces no network policy.
+        """
+        return []
 
     @abstractmethod
     async def exec(

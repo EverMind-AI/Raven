@@ -192,6 +192,41 @@ def _preflight(**over: Any):
 
 
 @pytest.mark.asyncio
+async def test_the_playbooks_sandbox_runs_under_the_permission_set_and_the_conversations_grants(monkeypatch):
+    import json
+
+    import raven.sandbox
+    from raven.config.loader import get_config_path
+    from raven.permissions import network_grants
+    from raven.permissions.turn import start_permission_turn
+    from raven.sandbox.network_policy import NetworkGrant, grant_rules
+
+    get_config_path().write_text(
+        json.dumps({"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}})
+    )
+    registry = network_grants.GrantRegistry()
+    monkeypatch.setattr(network_grants, "GRANTS", registry)
+    sources: list = []
+
+    def fake_build(cfg, workspace, extra_volumes=(), *, network_source=None):
+        sources.append(network_source)
+        return raven.sandbox.DirectExecutor()
+
+    monkeypatch.setattr(raven.sandbox, "build_executor", fake_build)
+    start_permission_turn(None, conversation_id="conv-playbook", turn_id="t")
+    grant = NetworkGrant("/usr/bin/curl", "example.com", 443)
+    registry.grant("conv-playbook", grant)
+    registry.grant("conv-other", NetworkGrant("/usr/bin/git", "github.com", 22))
+    with patch(_CONNECT, new=_noop_connect):
+        async with _preflight():
+            pass
+    (source,) = sources
+    names = sorted(source())
+    assert [name for name in names if name.startswith("raven_grant_")] == list(grant_rules([grant]))
+    assert any(name.startswith("raven_rule_") for name in names) and "allow_open" not in names
+
+
+@pytest.mark.asyncio
 async def test_the_playbook_definition_wins_over_a_host_server_of_the_same_name():
     """Precedence lives at the config seam: one merged mapping is what the
     manager dials and what the grant resolver reads, so the two cannot drift."""

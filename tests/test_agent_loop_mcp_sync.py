@@ -700,7 +700,7 @@ async def test_prewarm_reports_a_sandbox_that_cannot_start_instead_of_vanishing(
     from raven.sandbox import SandboxInitError
 
     async def no_sandbox(name, cfg, registry, stack, executor=None, http_auth=None):
-        raise SandboxInitError("no boxlite here")
+        raise SandboxInitError("no sandbox here")
 
     loop = _loop(workspace, {"svc": MCPServerConfig(command="npx", args=["x"])})
     with patch(_PATCH, new=no_sandbox):

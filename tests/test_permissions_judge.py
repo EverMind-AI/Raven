@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from raven.permissions.judge import _request_text, review
+from raven.permissions.judge import _INSTRUCTION, _request_text, review, review_network
 
 
 def test_the_bytes_a_write_would_leave_on_disk_do_not_reach_the_reviewer() -> None:
@@ -100,3 +100,86 @@ async def test_a_decision_carried_by_another_tools_call_is_not_a_verdict() -> No
 
     assert outcome.allow is False
     assert outcome.failed is True
+
+
+class _Recording(_Provider):
+    def __init__(self, reply: _Reply) -> None:
+        super().__init__(reply)
+        self.messages: list[dict[str, Any]] = []
+
+    async def chat_with_retry(self, **kwargs: Any) -> _Reply:
+        self.messages = kwargs["messages"]
+        return self._reply
+
+
+class _Slow(_Provider):
+    async def chat_with_retry(self, **_: Any) -> _Reply:
+        import asyncio
+
+        await asyncio.sleep(1)
+        return self._reply
+
+
+_PIP = {"binary": "/usr/bin/pip", "host": "pypi.org", "port": 443, "reason": "transparent_tcp_policy_denied"}
+
+
+async def _network(provider: Any, **kwargs: Any) -> Any:
+    return await review_network(provider, targets=[_PIP], command="pip install requests", **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_a_network_review_reads_the_reporters_verdict() -> None:
+    reply = _Reply([_Call("report_permission_review", {"decision": "allow", "reason": "package index for an install"})])
+    outcome = await _network(_Provider(reply))
+    assert (outcome.allow, outcome.reason, outcome.failed) == (True, "package index for an install", False)
+
+
+@pytest.mark.asyncio
+async def test_a_network_review_without_a_verdict_escalates() -> None:
+    outcome = await _network(_Provider(_Reply([])))
+    assert (outcome.allow, outcome.failed) == (False, True)
+
+
+@pytest.mark.asyncio
+async def test_a_network_review_that_runs_out_of_time_escalates() -> None:
+    reply = _Reply([_Call("report_permission_review", {"decision": "allow"})])
+    outcome = await _network(_Slow(reply), timeout_s=0.05)
+    assert (outcome.allow, outcome.failed) == (False, True)
+
+
+@pytest.mark.asyncio
+async def test_a_network_review_is_shown_the_command_and_every_target_as_untrusted_data() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "escalate"})]))
+    await _network(provider)
+    system, user = provider.messages
+    assert system["content"] != _INSTRUCTION and "package index" in system["content"]
+    assert "pip install requests" in user["content"]
+    assert "/usr/bin/pip -> pypi.org:443" in user["content"]
+    assert user["content"].index("pip install requests") > user["content"].index("BEGIN UNTRUSTED")
+
+
+@pytest.mark.asyncio
+async def test_a_long_command_cannot_push_a_target_out_of_the_reviewers_sight() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "escalate"})]))
+    await review_network(provider, targets=[_PIP], command="echo " + "x" * 20000)
+    user = provider.messages[1]["content"]
+    assert "/usr/bin/pip -> pypi.org:443" in user
+    assert "more characters cut" in user and len(user) < 6000
+
+
+@pytest.mark.asyncio
+async def test_more_targets_than_one_prompt_holds_are_escalated_unread() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "allow"})]))
+    outcome = await review_network(provider, targets=[_PIP] * 11, command="pip install a b c")
+    assert outcome.allow is False and provider.messages == []
+
+
+@pytest.mark.asyncio
+async def test_a_long_program_path_cannot_cut_the_address_out_of_a_target() -> None:
+    provider = _Recording(_Reply([_Call("report_permission_review", {"decision": "escalate"})]))
+    deep = "/" + "/".join(["very-long-directory-name"] * 20) + "/curl"
+    target = {"binary": deep, "host": "exfil.example.net", "port": 8443, "reason": "r" * 500}
+    await review_network(provider, targets=[target], command="curl")
+    user = provider.messages[1]["content"]
+    assert "-> exfil.example.net:8443" in user
+    assert deep[-60:] in user

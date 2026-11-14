@@ -894,7 +894,7 @@ def run(argv=None):
         "No plugin could be installed; long-term memory, Raven-Design and Raven-PPT stay off (raven doctor explains)."
     )
     lost_sandbox = (
-        "The sandbox runtime (boxlite) could not be reinstalled; a configured boxlite backend "
+        "The OpenShell SDK could not be reinstalled; a configured openshell sandbox backend "
         "will fail to start (raven doctor explains)."
     )
     full = write_list(plugin_lines, "raven-plugins-") if plugin_lines else None
@@ -908,11 +908,11 @@ def run(argv=None):
         rungs.append((None, "raven[channels]", [lost_plugins]))
         rungs.append((None, "raven", [lost_plugins, lost_channels]))
     # The rebuild syncs the tool environment to the requirement set it is given,
-    # so a boxlite the sandbox advice installed survives only when the rung
+    # so an OpenShell SDK the sandbox advice installed survives only when the rung
     # that names it comes first. Per rung rather than once at the top, because
     # the extras and the plugins fail on independent axes; the plain rung stays
     # behind each sandbox variant as the fallback, and the platform gate on the
-    # extra makes this a no-op where boxlite never installs at all.
+    # extra makes this a no-op where the SDK never installs at all.
     if keep_sandbox:
         rungs = [
             stepped
@@ -1454,15 +1454,15 @@ def _external_executable(value: object, *, label: str) -> Path:
     return executable
 
 
-def _boxlite_installed() -> bool:
-    """Whether this raven's environment holds a boxlite install the rebuild would drop.
+def _sandbox_sdk_installed() -> bool:
+    """Whether this raven's environment holds an OpenShell SDK install the rebuild would drop.
 
     Read here, in the parent, rather than in the helper: the helper runs under
     ``-I`` with the base interpreter, so importlib.metadata there sees the base
     environment, not the tool environment this answer is about.
     """
     try:
-        metadata.version("boxlite")
+        metadata.version("openshell")
     except metadata.PackageNotFoundError:
         return False
     return True
@@ -1516,7 +1516,7 @@ def _handoff_upgrade(
     env["UV_TOOL_BIN_DIR"] = str(target.bin_dir)
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=release.version))
     trust_copy = _hand_over_system_ca(env)
-    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _sandbox_sdk_installed() else "0"
     argv = [
         str(base_python),
         "-I",
@@ -1614,7 +1614,7 @@ def spawn_detached_upgrade(
     # opens the moment the caller lets go of the port, which is before the
     # helper has run its first instruction.
     env["RAVEN_UPGRADE_MARKER"] = str(_install_guard.write_marker(to_version=plan.release.version, port=status_port))
-    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _boxlite_installed() else "0"
+    env["RAVEN_UPGRADE_KEEP_SANDBOX"] = "1" if _sandbox_sdk_installed() else "0"
     trust_copy = _hand_over_system_ca(env)
     if extra_env:
         env.update(extra_env)

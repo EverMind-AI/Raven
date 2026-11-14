@@ -189,7 +189,7 @@ class BrowserAdapter:
                 "engine_version": command_version(self.config.chrome_path),
                 "playwright_version": _playwright_version(),
                 "isolated": False,
-                "network_policy": ("configured-external" if self.config.allow_network else "loopback-only"),
+                "network_policy": "loopback-only",
                 "timeline_mode": result.timeline_mode,
             },
             rendered={
@@ -469,7 +469,6 @@ class BrowserAdapter:
                 or parsed.scheme in {"http", "ws"}
                 and parsed.hostname == "127.0.0.1"
                 and parsed.port == port
-                or self._external_request_allowed(parsed)
             )
             if allowed:
                 route.continue_()
@@ -479,12 +478,7 @@ class BrowserAdapter:
 
         def route_websocket(websocket: Any) -> None:
             parsed = urllib.parse.urlparse(websocket.url)
-            allowed = (
-                parsed.scheme == "ws"
-                and parsed.hostname == "127.0.0.1"
-                and parsed.port == port
-                or self._external_request_allowed(parsed)
-            )
+            allowed = parsed.scheme == "ws" and parsed.hostname == "127.0.0.1" and parsed.port == port
             if allowed:
                 websocket.connect_to_server()
             else:
@@ -493,25 +487,6 @@ class BrowserAdapter:
         context.route("**/*", route_request)
         context.route_web_socket("**/*", route_websocket)
         return context
-
-    def _external_request_allowed(self, parsed: urllib.parse.ParseResult) -> bool:
-        if not self.config.allow_network or parsed.scheme not in {
-            "http",
-            "https",
-            "ws",
-            "wss",
-        }:
-            return False
-        hostname = (parsed.hostname or "").lower().rstrip(".")
-        if not hostname:
-            return False
-        allowlist = self.config.network_allowlist
-        if not allowlist:
-            return True
-        return any(
-            hostname == allowed.lower().rstrip(".") or hostname.endswith(f".{allowed.lower().rstrip('.')}")
-            for allowed in allowlist
-        )
 
 
 def _append_opening_visual_warning(

@@ -29,8 +29,8 @@ two rulings the host's gate consults before any mode: the builtin deny list
 with ``tools.exec.extraDenyPatterns``, and a ``deny`` rule in
 ``permissions.tools``. A match is answered with the agent's reject option.
 This sees only what an agent asks about -- a call its own gate allows never
-reaches here -- which is why raven's own products also carry the host's
-refusals in their rendered config (``product_render.inherit_host_denials``).
+reaches here -- which is why raven's own products run under the host's whole
+permission set in their rendered config (``product_render.inherit_host_permissions``).
 """
 
 from __future__ import annotations

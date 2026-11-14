@@ -926,3 +926,16 @@ async def test_a_clean_checkout_still_answers_and_a_plain_directory_passes_untou
     with workdir.bind(plain):
         decision = await hook.after_send(SimpleNamespace(outbound_content="all set"))
     assert decision.modified_content is None
+
+
+def test_a_retired_render_network_key_is_ignored_with_one_warning(caplog) -> None:
+    """The renderer runs offline; its own network switch left settings so it is not read as a second permission set."""
+    import logging
+
+    retired = {"enabled": True, "render": {"allowNetwork": True, "networkAllowlist": ["cdn.example.com"]}}
+    with caplog.at_level(logging.WARNING):
+        first = EngineConfig.from_slice(retired)
+        EngineConfig.from_slice(retired)
+    assert not hasattr(first.render, "allow_network")
+    warned = [record for record in caplog.records if "allowNetwork" in record.getMessage()]
+    assert len(warned) == 1

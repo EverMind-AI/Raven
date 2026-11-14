@@ -100,7 +100,7 @@ def _risk_banner(config) -> str | None:
     for name in sorted(open_channels):
         lines.append(f"   - channels.{name}.allow_from contains '*' (anyone can command this agent)")
     lines.append("   Restrict senders:  raven channels set <name> --allow-from <id1,id2>")
-    lines.append("   Enable a sandbox:  set tools.sandbox.backend to 'auto' or 'boxlite' in your config")
+    lines.append("   Enable a sandbox:  set tools.sandbox.backend to 'openshell' in your config")
     return "\n".join(lines)
 
 

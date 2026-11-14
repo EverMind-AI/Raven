@@ -2224,6 +2224,49 @@ def test_the_verdict_switch_goes_under_its_snake_spelling_too() -> None:
     assert len(loader.drain_migration_notices()) == 1
 
 
+@pytest.mark.parametrize("retired", ["auto", "boxlite"])
+def test_a_boxlite_sandbox_block_is_rewritten_for_openshell_on_disk(tmp_path: Path, retired: str) -> None:
+    """The raw config has readers of its own (the raven_config tool, onboarding), so
+    the retired backend and its two keys leave the file, not only the loaded model;
+    the neighbours stay, the user is told once, and a second load changes nothing."""
+    p = tmp_path / "config.json"
+    _write(
+        p,
+        {
+            "tools": {
+                "sandbox": {"backend": retired, "debug": {"enabled": True}, "diskSizeGb": 20, "cpus": 4},
+                "restrictToWorkspace": True,
+            }
+        },
+    )
+    _stamp_path(p).write_text(json.dumps({"version": 15}), encoding="utf-8")
+
+    drain_migration_notices()
+    cfg = load_config(p)
+
+    assert cfg.tools.sandbox.backend == "openshell"
+    on_disk = json.loads(p.read_text(encoding="utf-8"))
+    assert on_disk["tools"] == {"sandbox": {"backend": "openshell", "cpus": 4}, "restrictToWorkspace": True}
+    assert json.loads(_stamp_path(p).read_text(encoding="utf-8")) == {"version": CURRENT_CONFIG_VERSION}
+    notices = drain_migration_notices()
+    assert len([n for n in notices if "tools.sandbox" in n]) == 3, notices
+
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+def test_a_current_sandbox_block_is_left_byte_for_byte() -> None:
+    from raven.config import loader
+
+    for block in ({"tools": {"sandbox": {"backend": "openshell", "gateway": "dev"}}}, {"tools": {}}, {}):
+        before = json.dumps(block)
+        assert loader._migrate_retired_sandbox_backend(block, notify=True) is False
+        assert json.dumps(block) == before
+    assert loader.drain_migration_notices() == []
+
+
 def test_the_verdict_switch_is_dropped_from_the_extension_blocks_in_memory_too(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2267,3 +2310,77 @@ def test_the_verdict_switch_set_again_after_its_floor_still_loads(tmp_path: Path
 
     assert cfg.subagent_dag.verdict_model == "cheap/tier"
     assert [n for n in drain_migration_notices() if "verdictEnabled" in n] == []
+
+
+def _sandbox_network_floor(
+    tmp_path: Path, sandbox: dict, permissions: dict | None = None
+) -> tuple[dict, list[str], object]:
+    p = tmp_path / "config.json"
+    body: dict = {"tools": {"sandbox": {"backend": "openshell", **sandbox}}}
+    if permissions is not None:
+        body["permissions"] = permissions
+    _write(p, body)
+    _stamp_path(p).write_text(json.dumps({"version": 16}), encoding="utf-8")
+    drain_migration_notices()
+    cfg = load_config(p)
+    return json.loads(p.read_text(encoding="utf-8")), drain_migration_notices(), cfg
+
+
+def test_allow_net_true_becomes_the_open_default(tmp_path: Path) -> None:
+    on_disk, notices, cfg = _sandbox_network_floor(tmp_path, {"allowNet": True})
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert on_disk["permissions"]["network"] == {"default": "open", "rules": []}
+    assert cfg.permissions.network.default == "open"
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_an_allowlist_keeps_its_hosts_and_its_two_ports(tmp_path: Path) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": ["pypi.org", "files.pythonhosted.org"]})
+    assert on_disk["permissions"]["network"]["default"] == "closed"
+    assert [(r["host"], r["ports"]) for r in on_disk["permissions"]["network"]["rules"]] == [
+        ("pypi.org", [80, 443]),
+        ("files.pythonhosted.org", [80, 443]),
+    ]
+    assert cfg.permissions.network.default == "closed"
+
+
+def test_a_star_list_keeps_the_open_default_and_adds_the_rest(tmp_path: Path) -> None:
+    on_disk, _, _ = _sandbox_network_floor(tmp_path, {"allow_net": ["*", "example.com"]})
+    assert on_disk["permissions"]["network"]["default"] == "open"
+    assert [r["host"] for r in on_disk["permissions"]["network"]["rules"]] == ["example.com"]
+    assert "allow_net" not in on_disk["tools"]["sandbox"]
+
+
+def test_an_existing_permissions_network_wins_over_the_old_key(tmp_path: Path) -> None:
+    on_disk, notices, _ = _sandbox_network_floor(
+        tmp_path, {"allowNet": True}, permissions={"network": {"default": "closed"}}
+    )
+    assert on_disk["permissions"]["network"] == {"default": "closed"}
+    assert "allowNet" not in on_disk["tools"]["sandbox"]
+    assert len([n for n in notices if "allowNet" in n]) == 1
+
+
+def test_the_sandbox_network_floor_runs_once_and_is_silent_the_second_time(tmp_path: Path) -> None:
+    _sandbox_network_floor(tmp_path, {"allowNet": False})
+    p = tmp_path / "config.json"
+    before = p.read_bytes()
+    load_config(p)
+    assert p.read_bytes() == before
+    assert drain_migration_notices() == []
+
+
+@pytest.mark.parametrize(
+    ("value", "default"),
+    [("false", "closed"), (0, "closed"), ("true", "open"), (5, "closed"), ({"hosts": []}, "closed"), (None, "closed")],
+)
+def test_an_allow_net_value_is_read_the_way_the_old_field_read_it(tmp_path: Path, value, default) -> None:
+    on_disk, _, cfg = _sandbox_network_floor(tmp_path, {"allowNet": value})
+    assert on_disk["permissions"]["network"]["default"] == default
+    assert cfg.permissions.network.default == default
+
+
+def test_a_returning_allow_net_is_still_read_into_permissions_in_memory(tmp_path: Path) -> None:
+    p = tmp_path / "config.json"
+    _write(p, {"tools": {"sandbox": {"backend": "openshell", "allowNet": False}}})
+    _stamp_path(p).write_text(json.dumps({"version": CURRENT_CONFIG_VERSION}), encoding="utf-8")
+    assert load_config(p).permissions.network.default == "closed"

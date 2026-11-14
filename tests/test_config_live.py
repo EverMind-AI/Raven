@@ -826,6 +826,83 @@ def test_permissions_node_invalid_from_the_start_answers_defaults(tmp_path):
     assert fresh.tools == {}
 
 
+def test_network_permissions_read_a_returning_allow_net_the_way_the_loader_does(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+    from raven.config.loader import load_config
+
+    body = '{"tools": {"sandbox": {"allowNet": false}}}'
+    path, loaded = tmp_path / "config.json", tmp_path / "loaded.json"
+    path.write_text(body)
+    loaded.write_text(body)
+    assert network_permissions(LiveConfig(path)).default == "closed"
+    assert load_config(loaded).permissions.network.default == "closed"
+
+
+def test_network_permissions_keep_the_last_valid_set_and_close_when_none_ever_validated(tmp_path):
+    from raven.config.live import LiveConfig, network_permissions
+
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}}')
+    live = LiveConfig(path)
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    path.write_text('{"permissions": {"network": {"default": "ajar"}}}')
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    fresh = network_permissions(LiveConfig(path))
+    assert (fresh.default, fresh.rules) == ("closed", [])
+
+
+@pytest.mark.parametrize("first", ['{"permissions": ', "[]"])
+def test_network_permissions_close_when_the_first_read_is_not_a_config(tmp_path, first):
+    """A file that has never parsed as a config here holds rules nobody can read: the
+    open default is for a file that says nothing, so the network closes until one parses."""
+    from raven.config.live import LiveConfig, network_permissions
+
+    path = tmp_path / "config.json"
+    path.write_text(first)
+    live = LiveConfig(path)
+    assert network_permissions(live).default == "closed"
+    path.write_text('{"permissions": {"network": {"default": "closed", "rules": [{"host": "pypi.org"}]}}}')
+    assert [rule.host for rule in network_permissions(live).rules] == ["pypi.org"]
+    assert network_permissions(LiveConfig(tmp_path / "absent.json")).default == "open"
+
+
+def test_an_explicit_null_network_section_is_invalid_for_every_reader(tmp_path):
+    """The loader refuses `permissions.network: null`; a reader that took it for a missing
+    section would answer the open default."""
+    from raven.config.live import LiveConfig, network_on_disk, network_permissions, network_permissions_of
+    from raven.config.loader import get_config_path
+
+    with pytest.raises(ValueError):
+        network_permissions_of({"permissions": {"network": None}})
+    assert network_permissions_of({"permissions": {}}).default == "open"
+    path = tmp_path / "config.json"
+    path.write_text('{"permissions": {"network": null}}')
+    assert network_permissions(LiveConfig(path)).default == "closed"
+    get_config_path().write_text('{"permissions": {"network": null}}')
+    assert network_on_disk().default == "closed"
+
+
+@pytest.mark.parametrize(
+    ("body", "default"),
+    [
+        ('{"permissions": ', "closed"),
+        ('{"tools": {"sandbox": {"allowNet": false}}}', "closed"),
+        ('{"permissions": {"network": {"default": "ajar"}}}', "closed"),
+        (None, "open"),
+    ],
+)
+def test_the_network_on_disk_closes_when_the_file_cannot_be_read(body, default):
+    from raven.config.live import network_on_disk
+    from raven.config.loader import get_config_path
+
+    path = get_config_path()
+    if body is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(body)
+    assert network_on_disk().default == default
+
+
 def test_a_retired_destructive_toggle_is_accepted_ignored_and_flagged():
     """The key used to lift a recursive-delete refusal that no longer exists.
     An old config still carrying it must load, must not change any ruling, and

@@ -32,6 +32,14 @@ export interface GateWords {
   readonly cut: string
   /* A configuration change's own words, present only for `config.change`. */
   readonly cfg?: ConfigWords
+  /* A blocked connection's own words, present only for `sandbox.network`. */
+  readonly net?: NetWords
+}
+
+export interface NetWords {
+  /* Said when the sandbox is the one every conversation shares: what is
+     allowed in it stays allowed for all of them until Raven restarts. */
+  readonly shared: string
 }
 
 export interface ConfigWords {
@@ -135,6 +143,10 @@ const diffClass = (line: string): string =>
 /* What is being judged, by kind: the command verbatim, a path and the diff the
    write would make, an MCP tool and its input -- or, for a tool the page has no
    layout for, the arguments as they are. */
+/* The connections a `sandbox.network` request is about, as the engine listed them. */
+export const blockedTargets = (evidence: Evidence): Evidence[] =>
+  Array.isArray(evidence.targets) ? (evidence.targets as Evidence[]).filter((t) => t && typeof t === 'object') : []
+
 function EvidenceBlock(
   { kind, evidence, command, words }: { kind: string; evidence: Evidence; command: string; words: GateWords },
 ): JSX.Element {
@@ -191,6 +203,21 @@ function EvidenceBlock(
   if (kind === 'shell.exec') {
     return <>
       <div className="what">{str(evidence.command) || command}</div>
+      {cut}
+    </>
+  }
+  if (kind === 'sandbox.network') {
+    /* Each connection by the program that made it and where it went, then the
+       command they came from. The note sits outside the part that scrolls, as
+       the cut mark does: it changes what an answer means. */
+    return <>
+      <div className="what cp-ev">
+        {blockedTargets(evidence).map((target, i) => (
+          <div key={i} className="cp-ev-path">{`${str(target.binary)} -> ${str(target.host)}:${String(target.port ?? '')}`}</div>
+        ))}
+        <div className="cp-ev-cmd">{str(evidence.command) || command}</div>
+      </div>
+      {evidence.shared === true && words.net ? <div className="cp-ev-note">{words.net.shared}</div> : null}
       {cut}
     </>
   }

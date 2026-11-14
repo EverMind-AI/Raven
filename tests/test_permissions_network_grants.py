@@ -1,0 +1,94 @@
+"""Run-time network grants, the scopes they apply to, and the sandboxes they must reach."""
+
+from __future__ import annotations
+
+from raven.config.schema import NetworkPermissions
+from raven.permissions.network_grants import GrantRegistry, network_source_for
+from raven.sandbox.network_policy import NetworkGrant
+
+CURL = NetworkGrant("/usr/bin/curl", "example.com", 443)
+GIT = NetworkGrant("/usr/bin/git", "gitlab.example.org", 22)
+
+
+class Sandbox:
+    """A stand-in a registry can hold a weak reference to, as it holds a real executor."""
+
+
+def test_a_grant_stays_in_its_conversations_scope():
+    registry = GrantRegistry()
+    registry.grant("conv-a", CURL)
+    assert registry.grants_for("conv-a") == frozenset({CURL})
+    assert registry.grants_for("conv-b") == frozenset()
+
+
+def test_the_shared_sandbox_sees_every_scopes_grants():
+    registry = GrantRegistry()
+    registry.grant("conv-a", CURL)
+    registry.grant("conv-b", GIT)
+    assert registry.grants_for(None) == frozenset({CURL, GIT})
+
+
+def test_a_scope_reaches_its_own_sandboxes_and_the_shared_one():
+    registry = GrantRegistry()
+    shared, own, other = Sandbox(), Sandbox(), Sandbox()
+    registry.register(shared, None)
+    registry.register(own, "conv-a")
+    registry.register(other, "conv-b")
+    assert set(map(id, registry.executors_for("conv-a"))) == {id(shared), id(own)}
+
+
+def test_an_unregistered_sandbox_is_no_longer_reached():
+    registry = GrantRegistry()
+    own = Sandbox()
+    registry.register(own, "conv-a")
+    registry.unregister(own)
+    registry.unregister(own)
+    assert registry.executors_for("conv-a") == []
+
+
+def test_the_network_source_reads_the_live_permissions_and_the_scopes_grants():
+    registry = GrantRegistry()
+    current = {"network": NetworkPermissions(default="closed")}
+    source = network_source_for(lambda: current["network"], "conv-a", registry=registry)
+    assert source() == {}
+    registry.grant("conv-a", CURL)
+    assert [name.startswith("raven_grant_") for name in source()] == [True]
+    current["network"] = NetworkPermissions()
+    assert "allow_open" in source()
+
+
+def test_a_deny_rule_added_after_a_session_grant_closes_it_for_the_next_sync():
+    from raven.config.schema import NetworkRule
+
+    registry = GrantRegistry()
+    current = {"network": NetworkPermissions(default="closed")}
+    source = network_source_for(lambda: current["network"], "conv-a", registry=registry)
+    registry.grant("conv-a", CURL)
+    assert len(source()) == 1
+    current["network"] = NetworkPermissions(default="closed", rules=[NetworkRule(host="example.com", tier="deny")])
+    assert source() == {}
+
+
+def test_a_grant_without_a_scope_is_ignored():
+    registry = GrantRegistry()
+    registry.grant("", CURL)
+    assert registry.grants_for(None) == frozenset()
+
+
+def test_a_sandbox_registered_without_a_scope_is_the_shared_one():
+    registry = GrantRegistry()
+    shared, own, stranger = Sandbox(), Sandbox(), Sandbox()
+    registry.register(shared, None)
+    registry.register(own, "conv-a")
+    assert (registry.is_shared(shared), registry.is_shared(own), registry.is_shared(stranger)) == (True, False, False)
+
+
+def test_a_sandbox_whose_run_is_over_leaves_the_registry():
+    import gc
+
+    registry = GrantRegistry()
+    finished = Sandbox()
+    registry.register(finished, "conv-a")
+    del finished
+    gc.collect()
+    assert registry.executors_for("conv-a") == []

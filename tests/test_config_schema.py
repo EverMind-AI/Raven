@@ -200,3 +200,53 @@ def test_a_stanza_with_an_unknown_marker_still_loads() -> None:
     tools = ToolsConfig.model_validate({"mcpServers": {"files": {"command": "npx", "source": "carried"}}})
 
     assert tools.mcp_servers["files"].source == "host"
+
+
+# --- permissions.network -----------------------------------------------------
+
+
+def test_network_defaults_to_open_with_no_rules():
+    from raven.config.schema import PermissionsConfig
+
+    network = PermissionsConfig().network
+    assert network.default == "open"
+    assert network.rules == []
+
+
+@pytest.mark.parametrize(
+    ("rule", "field"),
+    [
+        ({"host": "*"}, "host"),
+        ({"host": "**"}, "host"),
+        ({"host": "*.com"}, "host"),
+        ({"host": "https://example.com"}, "host"),
+        ({"host": "example.com:443"}, "host"),
+        ({"host": ""}, "host"),
+        ({"host": "example.com", "ports": [0]}, "ports"),
+        ({"host": "example.com", "ports": [70000]}, "ports"),
+        ({"host": "example.com", "binary": "curl"}, "binary"),
+    ],
+)
+def test_unenforceable_hosts_and_ports_are_rejected_with_the_rule_index(rule, field):
+    from pydantic import ValidationError
+
+    from raven.config.schema import PermissionsConfig
+
+    with pytest.raises(ValidationError, match=rf"network\.rules\.1\.{field}"):
+        PermissionsConfig.model_validate({"network": {"rules": [{"host": "pypi.org"}, rule]}})
+
+
+def test_three_label_wildcards_and_exact_hosts_are_accepted():
+    from raven.config.schema import PermissionsConfig
+
+    rules = [
+        {"host": "example.com"},
+        {"host": "*.example.com", "ports": [443]},
+        {"host": "**.*.*"},
+        {"host": "10.0.0.5", "ports": [8080], "binary": "/usr/bin/curl"},
+        {"host": "evil.example.com", "tier": "deny"},
+    ]
+    network = PermissionsConfig.model_validate({"network": {"default": "closed", "rules": rules}}).network
+    assert network.default == "closed"
+    assert [(r.host, r.tier) for r in network.rules][-1] == ("evil.example.com", "deny")
+    assert network.rules[0].ports == [] and network.rules[0].binary == ""

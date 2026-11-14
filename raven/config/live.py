@@ -136,6 +136,9 @@ class LiveConfig:
         self._bytes: bytes | None = None
         self._raw: dict[str, Any] = {}
         self._loaded = False
+        # Whether ``_raw`` is an answer: a file that parsed as an object, or no
+        # file. Before either, ``_raw`` is only the empty start.
+        self._answered = False
         # The last slice each reader successfully admitted, keyed by reader
         # slot. The slice-level form of the torn-read rule above: a candidate
         # the schema rejects keeps the last admitted answer serving, and a
@@ -159,7 +162,7 @@ class LiveConfig:
         except OSError:
             # Absent is a real answer and a stable one: no file, no preferences.
             # Distinguished from a failed parse below, which keeps what it had.
-            self._bytes, self._raw, self._loaded = None, {}, True
+            self._bytes, self._raw, self._loaded, self._answered = None, {}, True, True
             return self._raw
         if self._loaded and data == self._bytes:
             return self._raw
@@ -177,8 +180,19 @@ class LiveConfig:
             return self._raw
         self._bytes = data
         self._raw = parsed if isinstance(parsed, dict) else {}
+        self._answered = isinstance(parsed, dict)
         self._loaded = True
         return self._raw
+
+    def readable(self) -> bool:
+        """Whether :meth:`raw` is an answer: the file parsed as an object, or there is none.
+
+        A file that has not parsed since this reader started, or parsed as
+        something other than an object, leaves ``raw`` empty without saying
+        anything; a reader that must not mistake that for "no preferences" asks.
+        """
+        self.raw()
+        return self._answered
 
     def get(self, dotted: str, default: Any = None) -> Any:
         """One dotted key, the way the settings surface names them."""
@@ -827,3 +841,83 @@ def permissions_config(live: LiveConfig) -> "Any":
         return kept if kept is not None else PermissionsConfig()
     _LAST_VALID_PERMISSIONS[live] = validated
     return validated
+
+
+def network_permissions_of(raw: dict[str, Any]) -> Any:
+    """``permissions.network`` as the loader reads it from ``raw``; raises when it does not validate.
+
+    The loader reads a ``tools.sandbox.allowNet`` that an older build wrote back
+    into ``permissions.network`` on every load without writing the file, so the
+    same move is made here, on a copy.
+    """
+    from raven.config.loader import _migrate_sandbox_network
+    from raven.config.schema import NetworkPermissions
+
+    permissions = raw.get("permissions", {})
+    if not isinstance(permissions, dict):
+        raise ValueError("permissions is not an object")
+    tools = raw.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    data: dict[str, Any] = {"permissions": dict(permissions)}
+    if isinstance(sandbox, dict):
+        data["tools"] = {"sandbox": dict(sandbox)}
+    _migrate_sandbox_network(data)
+    if "network" not in data["permissions"]:
+        return NetworkPermissions()
+    node = data["permissions"]["network"]
+    if node is None:
+        # The loader refuses it; read as a missing section it would open the network.
+        raise ValueError("permissions.network is null")
+    return NetworkPermissions.model_validate(node)
+
+
+def network_on_disk() -> Any:
+    """``permissions.network`` as the config file says it now, for a sandbox built with no live reader.
+
+    The file is read here rather than through ``load_config``, which runs on
+    defaults when the file is not valid JSON: a config that cannot be read or
+    does not validate closes the network, and only a missing one answers the
+    open default.
+    """
+    from raven.config.loader import get_config_path
+    from raven.config.schema import NetworkPermissions
+
+    path = get_config_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(raw, dict):
+            raise ValueError("the config is not a JSON object")
+        return network_permissions_of(raw)
+    except Exception as exc:  # noqa: BLE001 - no readable permission set means no network
+        logger.warning("Could not read permissions.network for a sandbox ({}); it gets no network", exc)
+        return NetworkPermissions(default="closed")
+
+
+_LAST_VALID_NETWORK: "weakref.WeakKeyDictionary[LiveConfig, Any]" = weakref.WeakKeyDictionary()
+
+
+def network_permissions(live: LiveConfig) -> Any:
+    """What sandboxes may reach, read live the way the loader reads it.
+
+    A section that does not validate keeps the last validated one, as
+    :func:`permissions_config` does. One that has never validated in this
+    process closes the network instead of answering the open default: the
+    rules it was meant to hold are not known, and the open default is for a
+    file that says nothing.
+    """
+    from raven.config.schema import NetworkPermissions
+
+    try:
+        if not live.readable():
+            raise ValueError("the config file has not parsed as an object")
+        network = network_permissions_of(live.raw())
+    except Exception as exc:  # noqa: BLE001 - a torn or wrong section keeps the last good one
+        kept = _LAST_VALID_NETWORK.get(live)
+        logger.warning(
+            "live config: permissions.network is not valid right now ({}); keeping the {}",
+            exc,
+            "last validated set" if kept is not None else "network closed",
+        )
+        return kept if kept is not None else NetworkPermissions(default="closed")
+    _LAST_VALID_NETWORK[live] = network
+    return network

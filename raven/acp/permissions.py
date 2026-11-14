@@ -55,6 +55,10 @@ SESSION_KIND = "allow_always"
 REJECT_KIND = "reject_once"
 #: The ``approval_kind`` the shell tool declares (``ExecTool``).
 EXEC_KIND = "shell.exec"
+#: The kind a sandboxed command's refused connection is asked under
+#: (``raven.permissions.sandbox_network``); the spec's tool kind for it is a fetch.
+NETWORK_KIND = "sandbox.network"
+_TOOL_KINDS = {NETWORK_KIND: "fetch"}
 
 
 # The two outcomes that are a person's answer. Every other name in this file is
@@ -147,7 +151,7 @@ class AcpPermissionBroker:
             "toolCall": {
                 "toolCallId": tool_call_id or f"exec-{uuid4().hex}",
                 "title": redact.redact(f"{description}: {command}" if description else command),
-                "kind": "execute",
+                "kind": _TOOL_KINDS.get(kind, "execute"),
                 "status": "pending",
             },
             "options": [
@@ -251,4 +255,4 @@ class AcpPermissionBroker:
         return ApprovalOutcome(choice=choice, answered=outcome in _ANSWERED)
 
 
-__all__ = ["ALLOW_KIND", "EXEC_KIND", "REJECT_KIND", "AcpPermissionBroker"]
+__all__ = ["ALLOW_KIND", "EXEC_KIND", "NETWORK_KIND", "REJECT_KIND", "AcpPermissionBroker"]

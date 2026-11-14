@@ -31,10 +31,12 @@ requirement.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Any, Callable, Iterable, get_args
 
@@ -358,6 +360,70 @@ def _compiles(pattern: str) -> bool:
     except re.error:
         return False
     return True
+
+
+def inherit_host_permissions(config: dict, host: dict, *, keep_own_mode: bool = False) -> None:
+    """Run a product under the host's one permission set, and in the host's sandbox where one can run.
+
+    The user perceives one permission set: the mode, the tool rules and the
+    network rules a product's own gate reads are the host's, so a product
+    asks about what the host asks about and grants what it grants. A product's
+    own mode gives way to the host's unless its launcher asks to keep it
+    (``keep_own_mode``) because it applies the owner's mode another way. A
+    product that brings refusals of its own keeps them on top, since a refusal
+    always wins, and the host's extra deny patterns reach it as before
+    (:func:`inherit_host_denials`). The host's file is read the way its own
+    loader reads it, an unpersisted ``tools.sandbox.allowNet`` included.
+
+    A product runs its commands where the host runs its own: the host's
+    OpenShell backend, gateway and image, on a platform OpenShell runs on.
+    The product's other sandbox settings stay its own.
+    """
+    from raven.config.loader import _migrate_retired_sandbox_backend, _migrate_sandbox_network
+
+    host = copy.deepcopy(host)
+    _migrate_retired_sandbox_backend(host)
+    _migrate_sandbox_network(host)
+    own = config.get("permissions")
+    host_permissions = host.get("permissions")
+    if isinstance(host_permissions, dict):
+        config["permissions"] = copy.deepcopy(host_permissions)
+        if isinstance(own, dict):
+            # Only on the launcher's word: raven-oncall renders its trunk gate
+            # at full and applies the owner's mode, read from the host, in a
+            # gate of its own, and the host's mode there would refuse the wakes
+            # nobody attends. A product config alone cannot widen the mode.
+            if keep_own_mode and "mode" in own:
+                config["permissions"]["mode"] = own["mode"]
+            inherit_host_denials(config, {"permissions": own})
+    inherit_host_denials(config, {"tools": host.get("tools")})
+    inherited = inherited_sandbox(host)
+    if inherited:
+        tools = config.setdefault("tools", {})
+        sandbox = tools.setdefault("sandbox", {})
+        if not isinstance(sandbox, dict):
+            sandbox = tools["sandbox"] = {}
+        sandbox.update(inherited)
+
+
+def inherited_sandbox(host: dict) -> dict | None:
+    """The sandbox settings a product takes from the host: its OpenShell backend, gateway and image.
+
+    None when the host runs no OpenShell sandbox or this platform cannot run
+    one. The host's file is read the way its loader reads it, so a retired
+    backend it still names counts as the OpenShell one. A launcher that renders
+    something from the sandbox before :func:`write_rendered` asks here, so it
+    names the sandbox the rendered config will run in.
+    """
+    from raven.config.loader import _migrate_retired_sandbox_backend
+
+    host = copy.deepcopy(host)
+    _migrate_retired_sandbox_backend(host)
+    tools = host.get("tools")
+    sandbox = tools.get("sandbox") if isinstance(tools, dict) else None
+    if not isinstance(sandbox, dict) or sandbox.get("backend") != "openshell" or sys.platform == "win32":
+        return None
+    return {key: sandbox[key] for key in ("backend", "gateway", "image") if key in sandbox}
 
 
 def inherit_host_denials(config: dict, host: dict) -> list[str]:
@@ -975,7 +1041,7 @@ def sweep_stale_renders(root: Path) -> None:
             stale.unlink(missing_ok=True)
 
 
-def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ()) -> Path:
+def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = (), keep_own_mode: bool = False) -> Path:
     """Write the rendered config under ``root``, owner-only on POSIX, named by pid.
 
     The location is the mechanism: raven derives its data dir from the
@@ -984,16 +1050,17 @@ def write_rendered(config: dict, root: Path, *, own_plugins: Iterable[str] = ())
     secrets landed; Windows uses the containing directory's inherited ACLs.
     The pid in the name is what :func:`sweep_stale_renders` reads back.
 
-    The host's refusals (:func:`inherit_host_denials`), plugin opt-outs
+    The host's permission set and sandbox (:func:`inherit_host_permissions`), plugin opt-outs
     (:func:`inherit_plugin_opt_outs`) and memory address
     (:func:`inherit_memory_backend`) are merged in here rather than by each
     launcher: every product render ends in this call, so a launcher cannot
     write a config that forgot them. ``own_plugins`` is the product's engine,
     which the opt-outs leave alone; a launcher that names none inherits them
-    all.
+    all. ``keep_own_mode`` is for a launcher that applies the owner's mode in a
+    gate of its own (:func:`inherit_host_permissions`).
     """
     host = host_config()
-    inherit_host_denials(config, host)
+    inherit_host_permissions(config, host, keep_own_mode=keep_own_mode)
     inherit_plugin_opt_outs(config, host, own=own_plugins)
     inherit_memory_backend(config, host)
     return _write_owner_only(config, root / f".config.rendered.{os.getpid()}.json")

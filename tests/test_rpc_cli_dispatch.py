@@ -225,7 +225,6 @@ def test_dispatch_compatible_b2_whitelist_extension():
     assert _is_dispatch_compatible(["sentinel", "routines"]) is True
     assert _is_dispatch_compatible(["sentinel", "nudges"]) is True
     assert _is_dispatch_compatible(["sentinel", "decisions"]) is True
-    assert _is_dispatch_compatible(["sandbox", "list"]) is True
 
 
 def test_dispatch_blacklist_p3():
@@ -236,7 +235,6 @@ def test_dispatch_blacklist_p3():
     # channels login is gated per-channel now (weixin/whatsapp only).
     assert _is_dispatch_compatible(["channels", "login", "weixin"]) is False  # QR long-poll
     assert _is_dispatch_compatible(["channels", "login", "whatsapp"]) is False  # npm subprocess
-    assert _is_dispatch_compatible(["sandbox", "shell"]) is False  # stdin hijack
 
 
 def test_channels_login_normal_channels_dispatch():
@@ -258,7 +256,7 @@ def test_channels_login_normal_channels_dispatch():
 
 
 def test_blacklist_full_coverage():
-    """11-entry blacklist (5 original + tui + onboard + upgrade + 3 tracing maintenance).
+    """10-entry blacklist (4 original + tui + onboard + upgrade + 3 tracing maintenance).
 
     `tui` blocks recursive Ink+Node spawn; `onboard` blocks prompt_toolkit
     wizard stdin hijack; `upgrade` blocks replacing the active Raven process;
@@ -273,7 +271,6 @@ def test_blacklist_full_coverage():
         ("provider", "login"),
         ("channels", "login", "weixin"),
         ("channels", "login", "whatsapp"),
-        ("sandbox", "shell"),
         ("tui",),
         ("onboard",),
         ("upgrade",),
@@ -282,7 +279,7 @@ def test_blacklist_full_coverage():
         ("tracing", "pack-messages"),
     }
     assert _DISPATCH_BLACKLIST == expected_entries, (
-        f"blacklist drift; expected 11 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
+        f"blacklist drift; expected 10 prefix tuples (+ agent REPL special-case), got {_DISPATCH_BLACKLIST}"
     )
     # Hard-reject probe (prefix match)
     assert _is_dispatch_compatible(["tui"]) is False
@@ -376,8 +373,6 @@ def test_dispatch_compatible_via_reflection_newly_active():
     assert _is_dispatch_compatible(["cron", "delete"]) is True
     assert _is_dispatch_compatible(["cron", "add"]) is True
     assert _is_dispatch_compatible(["sentinel", "discover-now"]) is True  # hyphen subcmd
-    assert _is_dispatch_compatible(["sandbox", "exec"]) is True
-    assert _is_dispatch_compatible(["sandbox", "ls"]) is True  # alias of list
     # NOTE: trunk dropped 6 skill subcommands
     # (refresh / stats / rebuild-index / import-files / cases / rollback);
     # only ``skill list`` + ``skill get`` remain. The reflection model
@@ -420,6 +415,9 @@ def test_dispatch_rejects_unknown_commands():
 #   ``skill get``. The guard list shrinks from 14 → 12 accordingly — those
 #   commands no longer exist in the CLI surface; reflection cannot find them
 #   and must not be expected to.
+# - The ``sandbox`` group retired with the boxlite backend (OpenShell's own
+#   ``openshell sandbox`` CLI replaced it), so ``sandbox list`` left the
+#   guard list: 12 -> 11.
 _WORKING_ENTRIES = [
     ("status",),
     ("channels", "status"),
@@ -432,14 +430,13 @@ _WORKING_ENTRIES = [
     ("sentinel", "routines"),
     ("sentinel", "nudges"),
     ("sentinel", "decisions"),
-    ("sandbox", "list"),
 ]
-# Sentinel — protects the "currently 12" claim. If someone removes an entry
+# Sentinel — protects the "currently 11" claim. If someone removes an entry
 # while touching this list, the count test fails before the parametrised cases
 # silently weaken the regression guard. The number itself is *not* a forever
 # invariant — it's a snapshot. Update intentionally when trunk-side CLI
 # surface evolves; never silently shrink.
-_EXPECTED_WORKING_COUNT = 12
+_EXPECTED_WORKING_COUNT = 11
 assert len(_WORKING_ENTRIES) == _EXPECTED_WORKING_COUNT, (
     f"working entries snapshot drifted from {_EXPECTED_WORKING_COUNT} to "
     f"{len(_WORKING_ENTRIES)}; bump _EXPECTED_WORKING_COUNT only when CLI "
@@ -450,8 +447,8 @@ assert len(_WORKING_ENTRIES) == _EXPECTED_WORKING_COUNT, (
 @pytest.mark.parametrize("argv", _WORKING_ENTRIES)
 def test_working_entries_remain_compatible(argv):
     """Every still-present working entry must dispatch-OK after
-    _DISPATCH_WHITELIST removal. Currently 12 entries (trunk dropped 6 skill
-    subs; we keep the surviving 12 in scope). Any failure here is a hard
+    _DISPATCH_WHITELIST removal. Currently 11 entries (trunk dropped 6 skill
+    subs and the sandbox group; we keep the surviving 11 in scope). Any failure here is a hard
     regression of a working slash that the user could previously type.
     """
     assert _is_dispatch_compatible(list(argv)) is True, (

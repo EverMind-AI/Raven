@@ -8,6 +8,7 @@ Public API (import everything from here, not from sub-modules):
     SandboxConfig      — Pydantic config model
     DirectExecutor     — host-process fallback (no isolation)
     build_executor()   — factory: SandboxConfig → SandboxExecutor
+    sandbox_install_hint() — how to get the OpenShell SDK into this environment
 """
 
 from __future__ import annotations
@@ -36,58 +37,79 @@ __all__ = [
     "SandboxConfig",
     "DirectExecutor",
     "build_executor",
+    "sandbox_install_hint",
 ]
 
 
-def boxlite_install_hint() -> str:
-    """A copy-pasteable command that installs boxlite into this raven's environment.
+def sandbox_install_hint() -> str:
+    """The advice that tells the user how to get the OpenShell SDK into this raven's environment.
 
     raven is not distributed under this name on package indexes, so naming the
     ``raven[sandbox]`` extra in a command would fetch an unrelated project.
-    The hint therefore installs the pinned boxlite requirement itself, into the
+    The hint therefore installs the pinned SDK requirement itself, into the
     interpreter raven is running under (a uv tool venv or a project venv).
-    """
 
-    spec = "boxlite"
+    The SDK is not published for Windows, so there the answer is that the
+    backend is unavailable rather than a command that cannot work.
+    """
+    if sys.platform == "win32":
+        return "The OpenShell SDK is not published for Windows, so the OpenShell sandbox backend needs Linux or macOS."
+
+    spec = "openshell"
     try:
         for requirement in importlib.metadata.requires("raven") or []:
             candidate = requirement.split(";", 1)[0].strip()
-            if re.match(r"boxlite\b", candidate):
-                spec = candidate
+            if re.match(r"openshell\b", candidate):
+                spec = _install_spec(requirement)
                 break
     except importlib.metadata.PackageNotFoundError:
         pass
-    return f"uv pip install --python {shlex.quote(sys.executable)} {spec}"
+    return (
+        "Install the OpenShell SDK into this raven's environment: "
+        f"uv pip install --python {_quote(sys.executable)} {_quote(spec)}"
+    )
+
+
+def _quote(value: str) -> str:
+    """Quote a path or a requirement for the shell that will read it."""
+    if sys.platform == "win32":
+        return f'"{value}"'
+    return shlex.quote(value)
+
+
+def _install_spec(requirement: str) -> str:
+    """The requirement as a command that installs it names it.
+
+    The marker of a requirement that lives in an extra carries two
+    conditions: the platform the dependency is for, and the extra that pulls
+    it in. The extra is a packaging context the command does not have -- it
+    names the package itself -- so only the platform condition stays, and its
+    quotes are doubled so the shell quoting around it stays readable.
+    """
+    name, _, marker = requirement.partition(";")
+    if not marker:
+        return name.strip()
+    platform = re.sub(r"\s+and\s+extra\s*==\s*['\"][^'\"]*['\"]", "", marker)
+    single, double = "'", '"'
+    return f"{name.strip()}; {platform.strip().replace(single, double)}"
 
 
 def build_executor(
     sandbox_cfg: SandboxConfig | None,
     workspace: Path,
-    owned_ids: set[str] | None = None,
     extra_volumes: tuple[tuple[str, str, str], ...] = (),
     *,
-    sandbox_dir: Callable[[str], Path],
+    network_source: Callable[[], dict[str, dict]] | None = None,
 ) -> SandboxExecutor:
     """Synchronously construct the executor for the given config.
 
-    Object creation is always sync and cheap. Probe / VM initialisation runs
-    later inside executor.start() / __aenter__(). Raises SandboxInitError
-    (propagated from start()) if the backend cannot be started.
-
-    owned_ids: optional shared set that BoxliteExecutor populates with its VM
-    ID on start and removes on stop. Used by SandboxDebugServer to distinguish
-    VMs owned by this process from those of other processes.
+    Object creation is always sync and cheap. Sandbox creation runs later
+    inside executor.start() / __aenter__(), which raises SandboxInitError if
+    the backend cannot be started.
 
     extra_volumes: additional (host_path, guest_path, mode) mounts appended to
     ``sandbox_cfg.extra_volumes``, e.g. keeping agent home reachable inside
-    the VM when the mounted workspace does not already cover it.
-
-    sandbox_dir: backend name -> the directory that backend keeps its state in,
-    normally ``raven.config.paths.get_sandbox_dir``. Passed as the resolver
-    rather than an already-resolved path because resolving one creates it, and
-    the default backend is 'none' -- an eager path would leave every install a
-    boxlite home it never uses. This package is told where its data lives so
-    that it does not have to read raven's configuration to find out.
+    the sandbox when the mounted workspace does not already cover it.
     """
     backend = sandbox_cfg.backend if sandbox_cfg else "none"
 
@@ -98,34 +120,34 @@ def build_executor(
             logger.warning(
                 "Sandbox backend is 'none' — agent commands run directly on the "
                 "host with no isolation. Prompt-injected commands execute with "
-                "full host privileges. Set tools.sandbox.backend to 'auto' or "
-                "'boxlite' to contain them."
+                "full host privileges. Set tools.sandbox.backend to 'openshell' "
+                "to contain them."
             )
         return DirectExecutor()
 
-    if backend in ("auto", "boxlite"):
+    if backend == "openshell":
         try:
-            import boxlite as _  # noqa: F401 — probe availability before constructing executor
-
-            from raven.sandbox.boxlite_executor import BoxliteExecutor
+            import openshell as _  # noqa: F401 — probe availability before constructing executor
         except ImportError as exc:
-            raise SandboxInitError(
-                f"No sandbox backend available: {exc}\n"
-                f"  • Install into this raven's environment: {boxlite_install_hint()}"
-            ) from exc
-        return BoxliteExecutor(
+            raise SandboxInitError(f"No sandbox backend available: {exc}\n  • {sandbox_install_hint()}") from exc
+        from raven.sandbox.openshell_executor import OpenShellExecutor
+
+        return OpenShellExecutor(
             image=sandbox_cfg.image,
             workspace=workspace,
             cpus=sandbox_cfg.cpus,
             memory_mib=sandbox_cfg.memory_mib,
-            disk_size_gb=sandbox_cfg.disk_size_gb,
-            allow_net=sandbox_cfg.allow_net,
             extra_volumes=[*sandbox_cfg.extra_volumes, *[list(v) for v in extra_volumes]],
             default_timeout=sandbox_cfg.default_timeout,
             verify_timeout=sandbox_cfg.verify_timeout,
             create_timeout=sandbox_cfg.create_timeout,
-            owned_ids=owned_ids,
-            sandbox_home=sandbox_dir("boxlite"),
+            gateway=sandbox_cfg.gateway,
+            # A caller that names no source gets no network rather than a guess.
+            network_source=network_source if network_source is not None else _no_network,
         )
 
-    raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'auto', 'boxlite'.")
+    raise SandboxInitError(f"Unknown sandbox backend: {backend!r}. Valid values: 'none', 'openshell'.")
+
+
+def _no_network() -> dict[str, dict]:
+    return {}

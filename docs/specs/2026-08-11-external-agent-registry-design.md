@@ -407,7 +407,7 @@ P1 单独就值得落：它把「人手填的声明」换成「握手测出来�
 
 1. **raven 内置子 agent 要不要也进这张表？** 今天它是表外的默认值：`spawn` 省略 `agent` 时用它，DAG **根本用不了**（`subagent` 必填且只能取表上的名字）。让它进表能让 DAG 图里放 raven 自己的节点，代价是 roster 多一个不可删不可禁的特殊条目，且它的能力标签要单独定义。本期不做，但值得先定方向。
 2. **`spawn` 未知 agent 名静默退回 raven 子 agent**（`_resolve_backend` 的兜底），而 DAG 是拒整张图。要不要统一成拒绝？热更新后消失的 agent 会走到这条路。
-3. **`manager._run_subagent` 无条件 `build_executor`**，而 cli / acp / openai 后端全都忽略这个 executor（docstring 自己写了 "third-party backends ignore it"）。`backend="none"` 时是廉价的 `DirectExecutor`，配了 boxlite 就是白起一个 VM。属于既有问题，本期不在范围内，但连接池落地后这笔浪费会更显眼。
+3. **`manager._run_subagent` 无条件 `build_executor`**，而 cli / acp / openai 后端全都忽略这个 executor（docstring 自己写了 "third-party backends ignore it"）。`backend="none"` 时是廉价的 `DirectExecutor`，配了 OpenShell 沙箱就是白起一个沙箱。属于既有问题，本期不在范围内，但连接池落地后这笔浪费会更显眼。
 
 ## 13. 分支
 

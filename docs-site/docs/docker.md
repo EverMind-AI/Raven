@@ -135,6 +135,7 @@ docker compose run --rm raven status
 - The TUI is not built into the image. `raven tui` needs the bundle from
   `ui-tui/`.
 - The `sandbox` extra is disabled by default; commands run within the container.
-  Include it through `RAVEN_EXTRAS` if you also need Boxlite.
+  The OpenShell sandbox bind mounts the workspace by host path, so it needs a
+  gateway on the host that sees the same paths as Raven; see [Sandbox](sandbox.md).
 - LibreOffice is included for office-file previews. Build with
   `RAVEN_OFFICE=0` if your deployment does not need office-file previews.
