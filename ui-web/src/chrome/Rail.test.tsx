@@ -65,12 +65,11 @@ afterEach(() => {
 })
 
 describe('the rail', () => {
-  it('renders the column with the six children page.html had, in order', () => {
+  it('renders the column with its children in order', () => {
     render()
     expect(Array.from(rail().children).map((child) => child.id || child.className)).toEqual([
       'railtop',
       'rail-nav',
-      'findBox',
       'list',
       'rail-foot',
       'railGrip',
@@ -82,7 +81,7 @@ describe('the rail', () => {
     for (const id of [
       'railBtn', 'findBtn',
       'newBtn', 'agentsBtn', 'importedBtn',
-      'findBox', 'sfind', 'sclr', 'list',
+      'sfind', 'sclr', 'list',
       'upnote', 'importRow', 'meBtn', 'railGrip',
     ]) {
       expect(document.querySelectorAll(`#${id}`), id).toHaveLength(1)
@@ -98,8 +97,7 @@ describe('the rail', () => {
     expect(el('railGrip').getAttribute('role')).toBe('separator')
     expect(el('railGrip').getAttribute('aria-orientation')).toBe('vertical')
     expect((el('sfind') as HTMLInputElement).placeholder).not.toBe('')
-    /* Three things the page is served closed, empty or hidden. */
-    expect(el('findBox').hidden).toBe(true)
+    /* Two things the page is served closed or empty. */
     expect(el('sclr').hidden).toBe(true)
     expect(el('upnote').hidden).toBe(true)
     for (const svg of rail().querySelectorAll('svg')) {
@@ -162,7 +160,7 @@ describe('the rail', () => {
     act(() => {
       el('findBtn').click()
     })
-    expect(el('findBox').hidden).toBe(false)
+    expect(el('findVeil').dataset.open).toBe('true')
     expect(el('findBtn').getAttribute('aria-expanded')).toBe('true')
   })
 
