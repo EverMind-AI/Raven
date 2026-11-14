@@ -1205,6 +1205,7 @@ def test_response_series_use_declared_vendor_addresses(vendor, model, base):
         ("groq", "groq/qwen/qwen3-32b"),
         ("dashscope", "dashscope/qwen-plus"),
         ("nvidia_nim", "nvidia_nim/deepseek-ai/deepseek-v3.1"),
+        ("llmtr", "llmtr/qwen/qwen3.8-27b-free"),
     ],
 )
 def test_an_inferred_native_protocol_steps_aside_where_the_provider_has_no_address_for_it(vendor, model):
