@@ -187,7 +187,7 @@ const hubText = (v: unknown): string =>
 
 /* `plughub.detail` declares its entry as a free JSON object, so the shape read
    out of it is this page's own. Only the MCP contribution's credential fields
-   are read, which is all the plugins page asks for. */
+   are read, which is all the MCP page asks for. */
 interface AuthContribution {
   kind: string
   auth?: { fields?: AuthField[] }
@@ -357,6 +357,9 @@ export const settingsSource: SettingsSource = {
     if (url) openUrl(url)
     return afterExt()
   })),
+  agentPlugins: () => gateway().call('agent_plugins.list', {}),
+  setPackageMcp: (name, on) => run(gateway().call('agent_plugins.set_mcp', { name, enabled: on })
+    .then(() => gateway().call('agent_plugins.list', {}))),
   version: () => chrome.version(),
   checkUpdate: (btn) => chrome.checkUpdate(btn),
   newerVersion: () => chrome.newerVersion(),
@@ -539,7 +542,7 @@ export function webStepDone(): boolean {
   return webKeyOnFile('web_search', RAW) || webKeyOnFile('web_fetch', RAW)
 }
 
-/* The manager's word on a server, pushed as it changes; the plugins page
+/* The manager's word on a server, pushed as it changes; the MCP page
    redraws its chips from it. Returns the unsubscribe. */
 export const watchMcp = (onStatus: () => void): (() => void) => gateway().on('mcp.status', onStatus)
 

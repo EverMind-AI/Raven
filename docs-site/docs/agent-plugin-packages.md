@@ -186,6 +186,25 @@ a different Agent Plugins version than its `plugin.json`, or whose file is
 not a valid MCP configuration, has MCP disabled while its skills keep
 working.
 
+## In the web UI
+
+The settings dialog's **Plugins** page lists the packages Raven can see:
+each package's version, source directory, skills and MCP servers, and
+whether its skills were imported into this workspace. A path under
+`agentPlugins.packages` that holds no usable package is listed with the
+reason.
+
+A package that ships MCP servers has one switch, **Start its MCP
+servers**, which adds the package to `agentPlugins.mcpPackages` or takes
+it out. The running engine keeps the servers it started with, so the
+change applies after Raven restarts, and the row says so until then.
+Importing and removing skills stay with `raven agent-plugins`: both take a
+path on the Raven host, and the browser showing the page may be on another
+machine.
+
+The **MCP** page beside it is a different list: the servers configured in
+`tools.mcpServers`. A package's servers are not listed there.
+
 ## Current limits
 
 - Raven does not download packages. A package is a directory you already

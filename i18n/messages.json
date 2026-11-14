@@ -8183,6 +8183,10 @@
       "en": "Tools",
       "zh": "工具"
     },
+    "gui.settings.nav.mcp": {
+      "en": "MCP",
+      "zh": "MCP"
+    },
     "gui.settings.nav.plugins": {
       "en": "Plugins",
       "zh": "插件"
@@ -9239,93 +9243,161 @@
       "en": "You can read pages without a key - adding one gets you higher rate limits.",
       "zh": "不填密钥也能抓取网页，填上之后不容易被限流"
     },
-    "gui.settings.plugins.counter": {
+    "gui.settings.mcp.counter": {
       "en": "Connected {on} / {total}",
       "zh": "已连接 {on} / 共 {total}"
     },
-    "gui.settings.plugins.none": {
+    "gui.settings.mcp.none": {
       "en": "No MCP server configured",
       "zh": "还没有配置 MCP 服务"
     },
-    "gui.settings.plugins.none_sub": {
+    "gui.settings.mcp.none_sub": {
       "en": "An MCP server hands Raven tools and data from outside.",
       "zh": "MCP 服务能给 Raven 接上外部的工具和数据。"
     },
-    "gui.settings.plugins.add": {
+    "gui.settings.mcp.add": {
       "en": "Add",
       "zh": "新增"
     },
-    "gui.settings.plugins.add_prompt": {
+    "gui.settings.mcp.add_prompt": {
       "en": "Help me connect an MCP server. My requirements are as follows:",
       "zh": "帮我接入一个 MCP 服务，我的要求如下："
     },
-    "gui.settings.plugins.add_hint": {
+    "gui.settings.mcp.add_hint": {
       "en": "A server the catalogue does not list goes into tools.mcpServers in {path} by hand.",
       "zh": "目录里没有的服务，要手改配置文件 {path} 的 tools.mcpServers。"
     },
-    "gui.settings.plugins.connected": {
+    "gui.settings.mcp.connected": {
       "en": "Connected",
       "zh": "已连接"
     },
-    "gui.settings.plugins.connecting": {
+    "gui.settings.mcp.connecting": {
       "en": "Connecting",
       "zh": "连接中"
     },
-    "gui.settings.plugins.setup": {
+    "gui.settings.mcp.setup": {
       "en": "Needs setup",
       "zh": "待配置"
     },
-    "gui.settings.plugins.failed": {
+    "gui.settings.mcp.failed": {
       "en": "Connection failed",
       "zh": "连接失败"
     },
-    "gui.settings.plugins.retry": {
+    "gui.settings.mcp.retry": {
       "en": "Reconnect",
       "zh": "重新连接"
     },
-    "gui.settings.plugins.auth_browser": {
+    "gui.settings.mcp.auth_browser": {
       "en": "Authorize in browser",
       "zh": "在浏览器中授权"
     },
-    "gui.settings.plugins.authorized": {
+    "gui.settings.mcp.authorized": {
       "en": "Authorized",
       "zh": "已授权"
     },
-    "gui.settings.plugins.reauth": {
+    "gui.settings.mcp.reauth": {
       "en": "Re-authorize",
       "zh": "重新授权"
     },
-    "gui.settings.plugins.revoke": {
+    "gui.settings.mcp.revoke": {
       "en": "Revoke",
       "zh": "撤销"
     },
-    "gui.settings.plugins.api_key": {
+    "gui.settings.mcp.api_key": {
       "en": "API key",
       "zh": "API key"
     },
-    "gui.settings.plugins.key_first": {
+    "gui.settings.mcp.key_first": {
       "en": "Enter the key first",
       "zh": "先填入 Key"
     },
-    "gui.settings.plugins.no_credential": {
+    "gui.settings.mcp.no_credential": {
       "en": "This server takes no credential",
       "zh": "这个服务不需要凭据"
     },
-    "gui.settings.plugins.no_fields": {
+    "gui.settings.mcp.no_fields": {
       "en": "The catalogue names no credential field for this server",
       "zh": "目录里没有登记这个服务要填什么凭据"
     },
-    "gui.settings.plugins.address": {
+    "gui.settings.mcp.address": {
       "en": "Address",
       "zh": "连接"
     },
-    "gui.settings.plugins.tools": {
+    "gui.settings.mcp.tools": {
       "en": "Tools",
       "zh": "工具"
     },
-    "gui.settings.plugins.tools_n": {
+    "gui.settings.mcp.tools_n": {
       "en": "{n}",
       "zh": "{n} 个"
+    },
+    "gui.settings.plugins.counter": {
+      "en": "{n} packages",
+      "zh": "共 {n} 个插件包"
+    },
+    "gui.settings.plugins.add_hint": {
+      "en": "Packages are read from agentPlugins.packages in {path}.",
+      "zh": "插件包从配置文件 {path} 的 agentPlugins.packages 读取。"
+    },
+    "gui.settings.plugins.none": {
+      "en": "No plugin package found",
+      "zh": "还没有插件包"
+    },
+    "gui.settings.plugins.none_sub": {
+      "en": "A plugin package follows the Agent Plugins format and can bring skills and MCP servers. List its folder in agentPlugins.packages to see it here.",
+      "zh": "插件包遵循 Agent Plugins 协议，可以带来技能和 MCP 服务。把它所在的目录写进 agentPlugins.packages，就能在这里看到。"
+    },
+    "gui.settings.plugins.problem": {
+      "en": "Has problems",
+      "zh": "有问题"
+    },
+    "gui.settings.plugins.unimported": {
+      "en": "Skills not imported",
+      "zh": "技能未导入"
+    },
+    "gui.settings.plugins.mcp_switch": {
+      "en": "Start its MCP servers",
+      "zh": "启动它的 MCP 服务"
+    },
+    "gui.settings.plugins.mcp_switch_sub": {
+      "en": "Applies after Raven restarts.",
+      "zh": "重启 Raven 后生效。"
+    },
+    "gui.settings.plugins.source": {
+      "en": "Source",
+      "zh": "来源"
+    },
+    "gui.settings.plugins.skills": {
+      "en": "Skills",
+      "zh": "技能"
+    },
+    "gui.settings.plugins.skills_in": {
+      "en": "{n}, imported",
+      "zh": "{n} 个，已导入"
+    },
+    "gui.settings.plugins.skills_out": {
+      "en": "{n}, not imported",
+      "zh": "{n} 个，未导入"
+    },
+    "gui.settings.plugins.server": {
+      "en": "MCP server",
+      "zh": "MCP 服务"
+    },
+    "gui.settings.plugins.server_off": {
+      "en": "not started",
+      "zh": "未启动"
+    },
+    "gui.settings.plugins.server_idle": {
+      "en": "not connected yet",
+      "zh": "尚未连接"
+    },
+    "gui.settings.plugins.import_hint": {
+      "en": "To use its skills, run this on the Raven host:",
+      "zh": "想用它的技能，在 Raven 所在的机器上运行："
+    },
+    "gui.settings.plugins.path_problems": {
+      "en": "Paths that hold no usable package",
+      "zh": "这些路径里没有可用的插件包"
     },
     "gui.model.pick_search": {
       "en": "Search or type a model ID",

@@ -367,7 +367,7 @@ _Avoid_: "agent hub" for the whole -- that is the agents module, one of its two.
 
 **Settings section**:
 One row of `features/settings/store.ts`'s `SECTIONS`: a pane of the settings
-dialog. Nine of the eleven are that domain's own components. The other two --
+dialog. Ten of the twelve are that domain's own components. The other two --
 schedules and memory -- are another domain's island, rooted in a box
 `src/App.tsx` renders beside `#spanels` and named by that store's `HOSTED`,
 because a React root inside the settings island's own tree would be unmounted
@@ -378,6 +378,24 @@ registers what arriving at it costs on `state/settings.ts`'s `onEnter`, and
 what leaving it costs on `onLeave`.
 _Avoid_: "page" for one -- a page is a row of `state/pages.ts` and has a rail
 button.
+
+**MCP section** (`features/settings/pages/Mcp.tsx`):
+The settings section that lists the MCP servers configured in
+`tools.mcpServers`, each with its switch (`plug.toggle`), its credential and
+the connection manager's state. The servers an **Agent Plugin Package** (Runtime
+`CONTEXT.md`) contributes are not among its rows.
+_Avoid_: "plugins" for it -- the section carried that label until the Plugins
+section below took it.
+
+**Plugins section** (`features/settings/pages/Plugins.tsx`):
+The settings section that lists the **Agent Plugin Packages** this host can see
+(`agent_plugins.list`). Its one write is `agent_plugins.set_mcp`, which adds a
+package to `agentPlugins.mcpPackages` or takes it out; the running generation
+keeps the package servers it was assembled with, so a row whose `allowed` and
+`live` disagree reads "needs restart". Importing and removing a package's
+skills stay with `raven agent-plugins`, which take a path on the host's disk.
+_Avoid_: reading it as PlugHub's plugins or as kernel **Plugins** -- neither is
+listed here.
 
 **Manifest**:
 `features/<domain>/manifest.ts` -- what one domain declares about itself: its

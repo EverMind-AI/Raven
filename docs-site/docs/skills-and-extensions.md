@@ -193,10 +193,13 @@ the server, verify its tool list and authentication, and then test a read-only
 operation before permitting mutations. `raven plugin auth <server>` handles
 configured MCP OAuth; it is not an installer for arbitrary plugins.
 
-In the web UI, the settings dialog's Plugins page switches, retries and
+In the web UI, the settings dialog's MCP page switches, retries and
 authorizes configured servers; its **Add** button leads into the chat, where
 Raven connects a server from the PlugHub catalogue, and a server the catalogue
 does not list is written into `tools.mcpServers` in `config.json` by hand.
+The Plugins page beside it lists [Agent Plugin
+packages](agent-plugin-packages.md), which bring skills and MCP servers of
+their own.
 
 Use a Raven plugin for in-process tools, hooks, services, or memory backends.
 Its declarative `raven-plugin.toml` names contributions; code runs in the host

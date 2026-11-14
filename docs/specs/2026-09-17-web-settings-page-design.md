@@ -203,7 +203,9 @@ Numbering is stable once referenced. A withdrawn item keeps its number.
 - A32. Media tools: the model control in the row is the same control as the roles page; a change in one shows in the other.
 - A33. Tool search group: `tool_search` and `tool_call` are shown greyed with no working switch and a note that they are built-in; they are excluded from the counter.
 
-### Plugins
+### MCP (labelled Plugins until 2026-11-14)
+
+Amended 2026-11-14: this section is labelled MCP (`pages/Mcp.tsx`, section id `mcp`). The Plugins label now names a separate section that lists Agent Plugin packages (`agent_plugins.list`, `agent_plugins.set_mcp`); `ui-web/CONTEXT.md` defines both.
 
 - A34. List: every configured MCP server appears with its switch and, when the switch is on, a status chip: connected, connecting, needs setup (OAuth not authorised or key empty), or failed with a retry action; a server switched off shows no chip. Counter "connected N / total M" matches.
 - A35. Toggle: off disconnects the server on the running gateway (its tools vanish from the next turn); on reconnects it; a server turned on that still needs a credential is written as enabled, opens its panel and makes no connection attempt until the credential is saved.

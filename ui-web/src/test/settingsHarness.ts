@@ -14,7 +14,7 @@ import { setTranslator } from '../i18n/t'
 import * as settingsDialog from '../state/settings'
 
 import type { ModelSource, Provider } from '../features/model/types'
-import type { ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
+import type { AgentPluginList, ProviderRow, SettingsSnapshot, SettingsSource } from '../features/settings/types'
 
 /* Every label carries the `kind` the wire carries, because the surfaces read
    it: `model.options` runs `registry_data.kind_of` over each row, so a fixture
@@ -73,6 +73,27 @@ export const modelSource: ModelSource = new Proxy({} as ModelSource, {
     return (liveModel as unknown as Record<string, unknown>)[prop]
   },
 })
+
+/* Two packages: one whose skills are imported and whose MCP server runs, one
+   just found, holding a skill and a server it may not start yet. */
+export function pkgList(over: Partial<AgentPluginList> = {}): AgentPluginList {
+  return {
+    packages: [
+      {
+        name: 'docs-kit', version: '1.0.0', description: 'Docs helpers.', source: '/pkgs/docs-kit', notes: [],
+        skills: ['write-docs'], skills_imported: true, problems: [],
+        mcp: { servers: [{ name: 'docs-kit__search', state: 'connected', error: null }], allowed: true, live: true, problems: [] },
+      },
+      {
+        name: 'fresh-pkg', version: '0.3.0', description: '', source: '/pkgs/fresh-pkg', notes: [],
+        skills: ['draft'], skills_imported: false, problems: [],
+        mcp: { servers: [{ name: 'fresh-pkg__local', state: 'off', error: null }], allowed: false, live: false, problems: [] },
+      },
+    ],
+    problems: [],
+    ...over,
+  }
+}
 
 export function snap(over: Partial<SettingsSnapshot> = {}): SettingsSnapshot {
   return {
@@ -200,6 +221,8 @@ export function install(data: SettingsSnapshot = snap(), over: Partial<SettingsS
     revokeServer: async (name) => rec('revokeServer', name),
     configureServer: async (name, form) => rec('configureServer', { name, form }),
     authServer: async (name) => rec('authServer', name),
+    agentPlugins: async () => pkgList(),
+    setPackageMcp: async (name, on) => { calls.push(['setPackageMcp', { name, on }]); return pkgList() },
     version: () => '0.2.1',
     checkUpdate: async (btn) => { calls.push(['checkUpdate', btn.textContent]) },
     newerVersion: () => null,

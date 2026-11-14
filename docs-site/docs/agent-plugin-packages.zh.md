@@ -151,6 +151,21 @@ server 以 `<包名>__<server 名>` 命名，因此不会和你自己的 `tools.
 `mcp.json` 声明的 Agent Plugins 版本和它的 `plugin.json` 不一致，或文件本身
 不是合法的 MCP 配置，则只关闭该包的 MCP，技能仍然可用。
 
+## 网页端 { #in-the-web-ui }
+
+网页端设置弹窗的「插件」页列出 Raven 能看到的包：每个包的版本、来源目录、技能和
+MCP server，以及它的技能是否已导入当前工作区。`agentPlugins.packages` 里没有可用
+包的路径也会列出来，并附上原因。
+
+带 MCP server 的包有一个开关「启动它的 MCP 服务」，用来把包名加进或移出
+`agentPlugins.mcpPackages`。运行中的引擎沿用启动时的 server 集合，所以改动在
+Raven 重启后生效，在此之前该行会显示「需重启」。导入和移除技能仍然用
+`raven agent-plugins`：两者都要填 Raven 主机上的路径，而打开页面的浏览器不一定在
+那台机器上。
+
+旁边的「MCP」页是另一份列表，列的是 `tools.mcpServers` 里配置的 server，包里的
+server 不在那里。
+
 ## 当前限制 { #current-limits }
 
 - Raven 不下载包。包是你已经拥有的目录；没有目录客户端，也没有更新通道。
