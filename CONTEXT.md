@@ -2123,8 +2123,15 @@ separate process. It is not a **Plugin** (the kernel kind, which ships Python fa
 imports `config`, `security`, `skill_hub` and `utils`, and no surface. The loader imports
 a package's skills into the workspace skill tree under `<workspace>/skills/<package name>/`,
 one directory per package, so the pool mints one source label per package rather than one
-per skill; the copy is recorded in the package ledger (`<home>/agent-plugins.json`), which is
-what makes removal safe. An imported skill carries no unconditional-injection flag: `always`
+per skill; the copy is recorded in the **package ledger** (`<home>/agent-plugins.json`,
+version 2), one record per workspace, and that record is what makes removal safe: the
+package root and every skill root carry an **install marker** (`.raven-install.json`, a
+random token minted by the host at install time), and a directory is deletable only while
+its marker still matches the recorded token
+-- so a same-named user directory, whether in another workspace sharing the home or
+standing where an install was moved away from, is never claimed. Records written by ledger
+version 1 load as unverified legacy records that grant nothing; a fresh verified import of
+the same name supersedes one. An imported skill carries no unconditional-injection flag: `always`
 is dropped from the copy, so a third-party package cannot put text into every turn. A package
 may also carry `mcp.json`, and those servers are composed under the package's own names
 (`<package>__<server>`) with the package root as their working directory and `PLUGIN_ROOT` /

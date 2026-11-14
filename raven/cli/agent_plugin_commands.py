@@ -7,8 +7,9 @@ the Agent Plugins manifest schema, with optional ``skills/`` and
 plugin (those ship Python factories in ``raven-plugin.toml``).
 
 The commands here read and write the workspace skill tree through the
-package ledger, so nothing outside a ledger-owned directory is ever
-touched.
+package ledger, and the ledger proves ownership per workspace against the
+install markers it recorded -- so nothing outside a directory Raven verifiably
+installed is ever touched, in this workspace or any other sharing the home.
 
 - ``agent-plugins list``      -- the packages this build can see
 - ``agent-plugins inspect``   -- validate a package, touching nothing
@@ -20,7 +21,7 @@ touched.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -92,9 +93,29 @@ def list_packages(
         config.agent_plugins.packages,
         disabled=config.agent_plugins.disabled,
     )
+    workspace = _workspace_path()
     ledger = _load_ledger()
-    entries = ledger.entries
     running = set(config.agent_plugins.mcp_packages)
+
+    def install_state(name: str) -> tuple[bool, str]:
+        """Whether a verified install stands here, and what the record says.
+
+        ``imported`` answers only for a verified install: a record whose
+        directory is gone or replaced, or a legacy record, describes the
+        ledger, not an install standing in this workspace.
+        """
+        root = workspace / "skills" / name
+        if ledger.entry(name, workspace=workspace) is None:
+            if ledger.legacy_entry(name) is not None:
+                return False, "legacy"
+            return False, "none"
+        if not root.exists():
+            return False, "missing"
+        if ledger.claim(root, workspace=workspace).owned:
+            return True, "verified"
+        return False, "unverified"
+
+    states = {package.name: install_state(package.name) for package in packages}
 
     if as_json:
         console.print_json(
@@ -106,7 +127,8 @@ def list_packages(
                             "version": package.version,
                             "source": str(package.root),
                             "notes": list(package.notes),
-                            "imported": package.name in entries,
+                            "imported": states[package.name][0],
+                            "install": states[package.name][1],
                             "mcp": {
                                 "servers": list(_mcp_report(package).servers),
                                 "running": package.name in running,
@@ -128,6 +150,13 @@ def list_packages(
         )
         return
 
+    status_labels = {
+        "verified": "[green]imported[/green]",
+        "unverified": "[yellow]imported (unverified copy)[/yellow]",
+        "missing": "[yellow]imported (copy missing)[/yellow]",
+        "legacy": "[yellow]imported (legacy record)[/yellow]",
+        "none": "[yellow]available[/yellow]",
+    }
     table = Table(title="Agent Plugin packages", show_header=True, header_style="bold cyan")
     table.add_column("Name")
     table.add_column("Version")
@@ -135,7 +164,7 @@ def list_packages(
     table.add_column("Status")
     table.add_column("MCP")
     for package in packages:
-        status = "[green]imported[/green]" if package.name in entries else "[yellow]available[/yellow]"
+        status = status_labels[states[package.name][1]]
         mcp_servers = len(_mcp_report(package).servers)
         if not mcp_servers:
             mcp = "[dim]none[/dim]"
@@ -232,10 +261,11 @@ def import_package(
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
     """Validate a package and import its skills into the workspace."""
-    from raven.agent_plugins import LedgerEntry, discover_packages
+    from raven.agent_plugins import discover_packages
     from raven.agent_plugins import (
         import_package as run_import,
     )
+    from raven.agent_plugins.ledger import LedgerError
 
     config = _load_config(config_path)
     entry = Path(path).expanduser()
@@ -243,6 +273,13 @@ def import_package(
 
     workspace = _workspace_path()
     ledger = _load_ledger()
+    if ledger.unrecognized:
+        console.print(
+            f"[red]the package ledger at {escape(str(ledger.path))} cannot be read: "
+            f"{escape(ledger.unrecognized)}; no package was imported[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(1)
     blocklist = config.skill_forge.blocklist
     reports: list[dict] = []
     problems: list[dict] = [{"path": item.path, "reason": item.reason} for item in discovery_problems]
@@ -268,6 +305,7 @@ def import_package(
                     "installed": [],
                     "removed": [],
                     "retained": [],
+                    "released": [],
                     "skipped": [],
                     "failed": [],
                     "problems": [],
@@ -275,20 +313,6 @@ def import_package(
                 }
             )
             continue
-        ledger.record(
-            LedgerEntry(
-                name=report.package,
-                version=report.version,
-                # Resolved: `check` may run from any directory, and "." must
-                # not mean the directory it happens to be run in.
-                source=str(package.root.resolve()),
-                imported_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                # A skill whose copy could not be removed still belongs to this
-                # package; dropping the claim would make it unremovable later.
-                skills=report.installed + report.retained,
-                fingerprint=package.fingerprint(),
-            )
-        )
         reports.append(
             {
                 "package": report.package,
@@ -297,6 +321,7 @@ def import_package(
                 "installed": list(report.installed),
                 "removed": list(report.removed),
                 "retained": list(report.retained),
+                "released": list(report.released),
                 "skipped": [{"skill": name, "reason": reason} for name, reason in report.skipped],
                 "failed": [{"skill": name, "reason": reason} for name, reason in report.failed],
                 "problems": [{"name": item.name, "reason": item.reason} for item in report.problems],
@@ -305,7 +330,16 @@ def import_package(
         )
         failed = failed or bool(report.failed)
 
-    ledger.save()
+    try:
+        ledger.save()
+    except (LedgerError, OSError) as exc:
+        console.print(
+            f"[red]the package ledger could not be saved: {escape(str(exc))}; "
+            "the imported skill directories stay on disk but are not recorded, "
+            "and a re-import will refuse to touch them until they are moved away[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(1)
 
     if as_json:
         console.print_json(json.dumps({"packages": reports, "problems": problems}))
@@ -330,6 +364,12 @@ def import_package(
                 f"  [red]kept[/red] {escape(name)}: the old copy could not be removed",
                 highlight=False,
             )
+        for name in report["released"]:
+            console.print(
+                f"  [yellow]released[/yellow] {escape(name)}: no longer shipped and no longer "
+                "verifiably the imported copy; left alone",
+                highlight=False,
+            )
         for name, reason in [(item["skill"], item["reason"]) for item in report["skipped"]]:
             console.print(f"  [yellow]skipped[/yellow] {escape(name)}: {escape(reason)}", highlight=False)
         for item in report["failed"]:
@@ -349,47 +389,134 @@ def remove_package(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
-    """Delete a package's imported skills and forget it."""
+    """Delete a package's imported skills and, when none remain, forget it.
+
+    Exit code 0 does not mean the package is gone: a kept entry leaves the
+    package directory and its ledger record in place. Read the kept list
+    (kept_details with --json), not the exit code.
+    """
+    from raven.agent_plugins.ledger import (
+        INSTALL_MARKER_FILENAME,
+        LedgerError,
+        read_install_marker,
+        restore_install_marker,
+    )
     from raven.agent_plugins.skills import remove_tree
 
     _load_config(config_path)
     workspace = _workspace_path()
     ledger = _load_ledger()
-    entry = ledger.entry(name)
+    if ledger.unrecognized:
+        console.print(
+            f"[red]the package ledger at {escape(str(ledger.path))} cannot be read: "
+            f"{escape(ledger.unrecognized)}; no package was removed[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(1)
+    entry = ledger.entry(name, workspace=workspace)
     if entry is None:
-        console.print(f"[red]no package named '{escape(name)}' in the ledger[/red]", highlight=False)
+        if ledger.legacy_entry(name) is not None:
+            console.print(
+                f"[red]the import record for '{escape(name)}' predates ownership verification and "
+                f"cannot be matched to the directories on disk; nothing was deleted. Move "
+                f"{escape(str(workspace / 'skills' / name))} away yourself if you no longer want it[/red]",
+                highlight=False,
+            )
+            raise typer.Exit(1)
+        others = ledger.other_workspaces_with(name, workspace=workspace)
+        if others:
+            console.print(
+                f"[red]no package named '{escape(name)}' is imported into this workspace; "
+                "the ledger records it in another workspace[/red]",
+                highlight=False,
+            )
+        else:
+            console.print(
+                f"[red]no package named '{escape(name)}' in the ledger of this workspace[/red]",
+                highlight=False,
+            )
         raise typer.Exit(1)
 
     target = workspace / "skills" / name
     removed: list[str] = []
-    kept: list[str] = []
+    kept: list[dict] = []
     failed: list[tuple[str, str]] = []
     if target.is_dir():
-        if not ledger.owns_directory(target, workspace=workspace):
+        root_claim = ledger.claim(target, workspace=workspace)
+        if not root_claim.owned:
             console.print(
-                f"[red]{escape(str(target))}[/red] is not owned by the ledger; left alone",
+                f"[red]{escape(str(target))} {escape(root_claim.reason)}; left alone. "
+                "Move it away yourself if you no longer want it, then import again[/red]",
                 highlight=False,
             )
             raise typer.Exit(1)
         for child in sorted(target.iterdir()):
-            if ledger.owns_directory(child, workspace=workspace):
+            if child.name == INSTALL_MARKER_FILENAME:
+                continue
+            child_claim = ledger.claim(child, workspace=workspace)
+            if child_claim.owned:
                 try:
                     remove_tree(child)
                 except OSError as exc:
-                    failed.append((child.name, str(exc)))
+                    failure = str(exc)
+                    # The marker lives inside the tree being deleted, so a
+                    # partial removal can consume it before failing. The
+                    # ledger still records its token; put the marker back
+                    # while the directory survives, or the retry this
+                    # failure asks for cannot prove the directory is ours.
+                    try:
+                        info = child.lstat()
+                    except OSError:
+                        info = None
+                    if info is not None and stat.S_ISDIR(info.st_mode) and not getattr(info, "st_reparse_tag", 0):
+                        token = entry.skill_tokens.get(child.name, "")
+                        if token and read_install_marker(child) != token:
+                            try:
+                                restore_install_marker(child, token)
+                            except OSError as marker_exc:
+                                failure += f"; the install marker could not be restored: {marker_exc}"
+                    failed.append((child.name, failure))
                 else:
                     removed.append(child.name)
             else:
-                kept.append(child.name)
-        if not any(target.iterdir()):
-            try:
-                target.rmdir()
-            except OSError as exc:
-                failed.append((name, str(exc)))
+                kept.append({"skill": child.name, "reason": child_claim.reason})
+        if not failed and not kept:
+            leftovers = [child for child in target.iterdir() if child.name != INSTALL_MARKER_FILENAME]
+            if leftovers:
+                # A directory appeared after the sweep: it was never claimed,
+                # so keep the record and the marker that prove the rest.
+                kept.extend(
+                    {"skill": child.name, "reason": "appeared while the package was being removed"}
+                    for child in leftovers
+                )
+            else:
+                try:
+                    (target / INSTALL_MARKER_FILENAME).unlink()
+                except OSError:
+                    pass
+                try:
+                    target.rmdir()
+                except OSError as exc:
+                    failed.append((name, str(exc)))
+                    # The record below stays claimed, so the marker proving it
+                    # must stand again: without it the retry this failure asks
+                    # for would be refused by the very check that kept it.
+                    if entry.install_token and not (target / INSTALL_MARKER_FILENAME).exists():
+                        try:
+                            restore_install_marker(target, entry.install_token)
+                        except OSError as marker_exc:
+                            failed.append((name, f"the install marker could not be restored: {marker_exc}"))
 
-    if not failed:
-        ledger.forget(name)
-    ledger.save()
+    if not failed and not kept:
+        ledger.forget(name, workspace=workspace)
+    try:
+        ledger.save()
+    except (LedgerError, OSError) as exc:
+        console.print(
+            f"[red]the package ledger could not be saved: {escape(str(exc))}[/red]",
+            highlight=False,
+        )
+        raise typer.Exit(1)
 
     if as_json:
         console.print_json(
@@ -397,7 +524,8 @@ def remove_package(
                 {
                     "package": name,
                     "removed": removed,
-                    "kept": kept,
+                    "kept": [item["skill"] for item in kept],
+                    "kept_details": kept,
                     "failed": [{"skill": skill, "reason": reason} for skill, reason in failed],
                 }
             )
@@ -407,14 +535,23 @@ def remove_package(
         return
     for skill, reason in failed:
         console.print(f"  [red]failed[/red] {escape(skill)}: {escape(reason)}", highlight=False)
-    if failed:
-        raise typer.Exit(1)
-    console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
-    for child in kept:
+    if kept:
         console.print(
-            f"  [yellow]kept[/yellow] {escape(child)}: the ledger does not claim it",
+            f"removed {len(removed)} imported skill(s) from '{escape(name)}'; "
+            f"{len(kept)} unverified entr{'y remains' if len(kept) == 1 else 'ies remain'} in "
+            f"{escape(str(target))}, so the package directory and its ledger record were kept. "
+            "Move them away, then run remove again",
             highlight=False,
         )
+    elif not failed:
+        console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
+    for item in kept:
+        console.print(
+            f"  [yellow]kept[/yellow] {escape(item['skill'])}: {escape(item['reason'])}",
+            highlight=False,
+        )
+    if failed:
+        raise typer.Exit(1)
 
 
 @agent_plugin_app.command("check")
@@ -426,20 +563,50 @@ def check_packages(
     from raven.agent_plugins import package_fingerprint
 
     _load_config(config_path)
+    workspace = _workspace_path()
     ledger = _load_ledger()
     rows: list[dict] = []
-    for name, entry in sorted(ledger.entries.items()):
+    for name, entry in sorted(ledger.entries_for(workspace).items()):
         # Old records may carry a path as typed; normalize what can be
         # normalized before asking whether the package is there.
         source = Path(entry.source).expanduser().resolve()
-        if not source.is_dir():
-            rows.append({"name": name, "status": "missing", "detail": f"{source} is gone"})
-            continue
-        current = package_fingerprint(source)
-        if current == entry.fingerprint:
-            rows.append({"name": name, "status": "current", "detail": entry.version})
+        install_dir = workspace / "skills" / name
+        if not install_dir.exists():
+            install = "missing"
+        elif ledger.claim(install_dir, workspace=workspace).owned:
+            install = "verified"
         else:
-            rows.append({"name": name, "status": "stale", "detail": f"imported from {entry.version}"})
+            install = "unverified"
+        if not source.is_dir():
+            row = {"name": name, "status": "missing", "detail": f"{source} is gone", "install": install}
+        else:
+            current = package_fingerprint(source)
+            if current == entry.fingerprint:
+                row = {"name": name, "status": "current", "detail": entry.version, "install": install}
+            else:
+                row = {
+                    "name": name,
+                    "status": "stale",
+                    "detail": f"imported from {entry.version}",
+                    "install": install,
+                }
+        if install == "unverified":
+            row["detail"] += "; the installed directory is not the recorded copy"
+        elif install == "missing":
+            row["detail"] += "; the installed directory is gone"
+        rows.append(row)
+    for name, _entry in sorted(ledger.legacy_entries.items()):
+        rows.append(
+            {
+                "name": name,
+                "status": "unverified",
+                "detail": (
+                    "imported before the ledger recorded install identities; "
+                    "move its skill directories away and import again to reinstall"
+                ),
+                "install": "unknown",
+            }
+        )
 
     if as_json:
         console.print_json(json.dumps({"packages": rows}))
@@ -454,7 +621,7 @@ def check_packages(
     table.add_column("Status")
     table.add_column("Detail")
     for row in rows:
-        colour = {"current": "green", "stale": "yellow", "missing": "red"}[row["status"]]
+        colour = {"current": "green", "stale": "yellow", "missing": "red", "unverified": "yellow"}[row["status"]]
         table.add_row(row["name"], f"[{colour}]{row['status']}[/{colour}]", row["detail"])
     console.print(table)
 
