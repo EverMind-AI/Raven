@@ -67,4 +67,19 @@ describe('the search dialog state', () => {
     toggle(false)
     expect(document.activeElement).toBe(opener)
   })
+
+  /* The shortcut is a toggle, so it can be pressed again while the dialog is
+     up. The second press comes from inside the dialog, and that must not
+     become the control Escape returns the reader to. */
+  it('keeps the first opener when the shortcut is pressed again', () => {
+    const opener = document.createElement('button')
+    const field = document.createElement('input')
+    document.body.append(opener, field)
+    opener.focus()
+    toggle(true, opener)
+    field.focus()
+    toggle(true, field)
+    toggle(false)
+    expect(document.activeElement).toBe(opener)
+  })
 })
