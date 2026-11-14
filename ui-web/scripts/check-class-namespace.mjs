@@ -380,7 +380,9 @@ const LEGACY_CHROME = {
      with the schedules island's new-job sheet, which is gone -- so the frame's
      own use of the name is counted here rather than borrowed from the shared
      tally. */
-  chrome: 92,
+  /* Down three with the search row: `.find`, `.ic` and `.clr` left with it,
+     and the dialog that replaced it writes `chrome-find-*`. */
+  chrome: 89,
   components: 36,
 }
 

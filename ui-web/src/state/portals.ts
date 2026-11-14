@@ -62,6 +62,7 @@ export const BOOT_BODY_ORDER = [
   'aside#detail',
   'div#setVeil',
   'div#exportVeil',
+  'div#findVeil',
   'div#veil',
   'div#menu',
   'div#toasts',
