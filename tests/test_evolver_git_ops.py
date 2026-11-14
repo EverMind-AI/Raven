@@ -407,3 +407,51 @@ class TestCommitFilesAsChildPathEscape:
         sha = _commit_symlink(repo_dir, "loop", "loop")
         with pytest.raises(ValueError, match="symlink loop"):
             git_ops.commit_files_as_child(repo_dir, sha, {}, "loop", deletions=("loop/x",))
+
+
+class TestApplyPatchAsCommitGuard:
+    def test_guards_a_hidden_immutable_path_in_the_diff(self, repo):
+        repo_dir, sha = repo
+        diff = """diff --git a/src/x.py b/src/x.py
+index 0000000..1111111 100644
+--- a/src/x.py
++++ b/src/x.py
+@@ -1 +1 @@
+-x = 1
++x = 2
+diff --git a/evolver/kernel.py b/evolver/kernel.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/evolver/kernel.py
+@@ -0,0 +1 @@
++KERNEL = 0
+"""
+        with pytest.raises(ImmutablePathError, match="evolver"):
+            git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
+
+    def test_guards_a_non_ascii_immutable_path(self, repo):
+        repo_dir, sha = repo
+        diff = """diff --git a/evolver/\u4e2d\u6587.py b/evolver/\u4e2d\u6587.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/evolver/\u4e2d\u6587.py
+@@ -0,0 +1 @@
++KERNEL = 0
+""".encode().decode("unicode_escape")
+        with pytest.raises(ImmutablePathError, match="evolver"):
+            git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
+
+    def test_applies_a_mutable_diff(self, repo):
+        repo_dir, sha = repo
+        diff = """diff --git a/src/x.py b/src/x.py
+index 0000000..1111111 100644
+--- a/src/x.py
++++ b/src/x.py
+@@ -1 +1 @@
+-x = 1
++x = 2
+"""
+        child = git_ops.apply_patch_as_commit(repo_dir, sha, diff, "candidate")
+        assert _git(repo_dir, "show", f"{child}:src/x.py") == "x = 2\n"
