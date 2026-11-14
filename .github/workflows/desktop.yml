@@ -1,0 +1,31 @@
+name: Desktop
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/desktop.yml'
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    name: swift typecheck
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # The app is a single top-level source file, so typechecking it is also
+      # checking that the window, the shell bridge and the WebKit delegates
+      # still compile together. It needs no simulator, signing identity or GUI.
+      - name: Typecheck the window
+        run: /usr/bin/swiftc -typecheck -framework Cocoa -framework WebKit desktop/macos/RavenDesktop.swift
+
+      - name: Typecheck the icon renderer
+        run: /usr/bin/swiftc -typecheck -framework Cocoa -framework WebKit desktop/macos/render_svg.swift
