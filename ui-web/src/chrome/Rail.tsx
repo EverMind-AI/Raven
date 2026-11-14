@@ -57,7 +57,8 @@ import type { JSX } from 'react'
 
 /* The mark and the name, then the two icon chores. Neither button carries a
    literal -- their words are a tooltip and a label the language pass writes
-   onto attributes -- so this subscribes to the search row alone. */
+   onto attributes -- so this subscribes to the dialog's own state alone: the
+   magnifier's aria-expanded is the one thing here that the store decides. */
 function RailTop(): JSX.Element {
   const s = useSyncExternalStore(find.subscribe, find.get)
   return (
