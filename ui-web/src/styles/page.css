@@ -6054,6 +6054,38 @@ button.mtog[disabled] { cursor: not-allowed; opacity: .4; }
 .veil .sheet footer { padding: 20px 20px 18px; gap: 8px; }
 .veil .btn { padding: 6px 14px; border-radius: 8px; color: var(--text); background: var(--surface); }
 .veil .btn:not(.key, .bad):hover { background: var(--raised); }
+
+/* ---- the search dialog ------------------------------------------------
+   The page's second use of the veil: a card at the top of the window rather
+   than in the middle, because the field is what the reader's eyes are on and
+   a centred card moves it between openings. Everything inside reads off the
+   same tokens as the rest of the page, so both themes fall out of the ramps
+   above rather than out of anything written here. */
+#findVeil[data-open="true"] { align-items: start; padding-top: 20vh; }
+.chrome-find-card { width: min(640px, calc(100vw - 32px)); background: var(--ink);
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
+  overflow: hidden; }
+.chrome-find-field { display: flex; align-items: center; gap: 8px; height: 44px;
+  padding: 0 12px; border-bottom: 1px solid var(--line-soft); }
+.chrome-find-ic { display: grid; color: var(--faint); }
+.chrome-find-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0;
+  background: none; font-size: 14px; color: var(--text); }
+.chrome-find-field input::placeholder { color: var(--faint); }
+.chrome-find-clr { color: var(--faint); padding: 2px 4px; border-radius: 4px; }
+.chrome-find-clr:hover { color: var(--text); }
+.chrome-find-count { padding: 8px 16px; font-size: 11px; color: var(--faint);
+  background: var(--surface); border-bottom: 1px solid var(--line-soft); }
+.chrome-find-list { max-height: min(26rem, 60vh); overflow: auto; }
+.chrome-find-hit { display: block; width: 100%; padding: 12px 16px; text-align: left;
+  border-bottom: 1px solid var(--line-soft); }
+.chrome-find-hit:last-child { border-bottom: 0; }
+.chrome-find-hit:hover,
+.chrome-find-hit[aria-selected="true"] { background: color-mix(in srgb, var(--warm) 12%, transparent); }
+.chrome-find-title { display: block; font-size: 13.5px; color: var(--text); }
+.chrome-find-excerpt { display: block; margin-top: 2px; font-size: 12px; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chrome-find-hit mark { background: var(--amber-dp); color: inherit; border-radius: 3px; padding: 0 1px; }
+.chrome-find-empty { padding: 24px 16px; text-align: center; font-size: 12.5px; color: var(--muted); }
 /* Bounded, and the fields scroll inside it. A channel's form is as long as that
    channel has fields -- slack specs nine, three of them nested -- and an
    unbounded sheet grew taller than the window with its own save button below
