@@ -17,13 +17,15 @@ Sources under ``src/``:
 Three substitutions and a copy, and no assembly of its own: every line of
 JavaScript the page runs comes from that one bundle, which Vite builds from
 ``src/main.tsx``. The message catalogue is in it too (``src/i18n/t.ts``
-imports ``i18n/messages.json``).
+imports ``i18n/messages.json``). The page is written once more beside itself,
+gzipped, for ``raven serve`` to send (``_write_page``).
 
 Run:
 
     python ui-web/build.py
 """
 
+import gzip
 import hashlib
 import shutil
 import subprocess
@@ -123,11 +125,8 @@ def main() -> None:
     out = page.replace(ASSETV_MARK, _assets_stamp(), 1)
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
-    # newline="" so the bytes are the same on every platform: the default
-    # translates "\n" to "\r\n" on Windows, which would hand a checkout there a
-    # differently-hashed page than the one CI and the wheel carry.
-    (dist / "index.html").write_text(out, encoding="utf-8", newline="")
-    print(f"built dist/index.html ({len(out):,} bytes)", flush=True)
+    packed = _write_page(dist, out)
+    print(f"built dist/index.html ({len(out):,} bytes, {packed:,} gzipped)", flush=True)
 
     # Static assets stay files rather than data: URIs -- inlining 320 KB of
     # artwork would grow the page by a third again in base64 and re-download it
@@ -143,6 +142,29 @@ def main() -> None:
         print(f"copied dist/assets ({total:,} bytes)", flush=True)
     for url, golden in _BOOT_SNAPSHOTS:
         _check_boot_snapshot(dist / "index.html", url, golden)
+
+
+def _write_page(dist: Path, out: str) -> int:
+    """Write the page, and beside it the gzip copy ``raven serve`` sends.
+
+    aiohttp's FileResponse answers a client that accepts gzip with
+    ``index.html.gz`` when one lies beside the page, so the page, a few
+    megabytes of inlined script, goes over the wire at about a quarter of that.
+    The old copy is removed first: a build that dies after writing the page must
+    not leave the previous page's copy to be sent in its place. Returns the
+    copy's size.
+    """
+    page = dist / "index.html"
+    copy = dist / "index.html.gz"
+    copy.unlink(missing_ok=True)
+    # newline="" so the bytes are the same on every platform: the default
+    # translates "\n" to "\r\n" on Windows, which would hand a checkout there a
+    # differently-hashed page than the one CI and the wheel carry. mtime=0 for
+    # the same reason: the same page always packs to the same bytes.
+    page.write_text(out, encoding="utf-8", newline="")
+    data = gzip.compress(page.read_bytes(), compresslevel=9, mtime=0)
+    copy.write_bytes(data)
+    return len(data)
 
 
 def _check_boot_snapshot(index: Path, url: str, golden: str) -> None:

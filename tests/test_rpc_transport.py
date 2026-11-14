@@ -10,6 +10,7 @@ that makes it safe to serve unauthenticated.
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 
@@ -860,6 +861,37 @@ async def test_a_rebuilt_page_is_not_served_from_a_stale_browser_cache(tmp_path:
         again = await client.get("/", headers={"If-None-Match": etag})
         assert again.status == 304, "an unchanged page must still cost no bytes"
         assert again.headers["Cache-Control"] == "no-cache", "a 304 must carry the directive too"
+    finally:
+        await client.close()
+
+
+async def test_the_page_goes_out_gzipped_where_the_build_left_a_copy(tmp_path: Path) -> None:
+    """ui-web/build.py writes ``index.html.gz`` beside the page, and aiohttp's
+    FileResponse sends it to a client that accepts gzip: the page is a few
+    megabytes of inlined script and stylesheet, about a quarter of that packed.
+    Nothing in the route names the copy, so this is what holds the route to a
+    FileResponse; a response built from the page's bytes would quietly send
+    the whole page again. A client that does not accept gzip still gets the page.
+    """
+    static = tmp_path / "dist"
+    static.mkdir()
+    html = b"<html>" + b"x" * 4096 + b"</html>"
+    (static / "index.html").write_bytes(html)
+    (static / "index.html.gz").write_bytes(gzip.compress(html, mtime=0))
+
+    client = TestClient(TestServer(build_app(WsGateway(), static)), auto_decompress=False)
+    await client.start_server()
+    try:
+        packed = await client.get("/", headers={"Accept-Encoding": "gzip, deflate, br"})
+        assert packed.status == 200
+        assert packed.headers.get("Content-Encoding") == "gzip"
+        assert "Accept-Encoding" in packed.headers.get("Vary", "")
+        assert packed.headers["Cache-Control"] == "no-cache"
+        assert gzip.decompress(await packed.read()) == html
+
+        plain = await client.get("/", headers={"Accept-Encoding": "identity"})
+        assert "Content-Encoding" not in plain.headers
+        assert await plain.read() == html
     finally:
         await client.close()
 
