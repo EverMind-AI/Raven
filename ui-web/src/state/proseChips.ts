@@ -14,9 +14,8 @@
  * than per-chip handlers because a chip's node is replaced whenever the prose
  * around it is redrawn -- the whole box in most views, the changed block in a
  * streamed reply -- so there is nothing stable to bind to. Both are registered
- * on the document with
- * the page's other document listeners (state/globalListeners.ts), which is
- * where the order they run in is declared.
+ * on the document with the page's other document listeners
+ * (state/globalListeners.ts), which is where the order they run in is declared.
  *
  * What opening MEANS is still the page's, through DS.prose.open: the live
  * layer shows the file in the workspace island, the offline demo just brings
