@@ -55,6 +55,8 @@ def dry_query(task_text: str, *, library_root: Path | None = None) -> list[str]:
     config = SkillForgeConfig(
         enabled=True,
         local_dirs=local_dirs,
+        llm_gate_enabled=False,
+        rewrite_enabled=False,
         reranker_enabled=False,
         disable_always=False,
     )

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from pydantic.alias_generators import to_camel
 
 from raven.config.loader import EXTENSION_KEYS
 from raven.config.raven import (
@@ -67,11 +68,9 @@ class TestDefaults:
         "field",
         [
             "discovery",
-            "rewrite_enabled",
             "rewrite_max_tokens",
             "injection_mode",
             "inject_max",
-            "llm_gate_enabled",
             "llm_gate_max_select",
             "llm_gate_pool_size",
             "llm_gate_model",
@@ -84,6 +83,17 @@ class TestDefaults:
         """Skills reach the model one way, so the knobs of the other are not on
         the model: a field nothing reads would read as a setting that works."""
         assert field not in SkillForgeConfig.model_fields
+
+    def test_the_two_push_settings_evolver_passes_are_declared_and_never_written(self) -> None:
+        """Evolver is maintained on its own, and its activation probe builds the
+        model with ``llm_gate_enabled`` and ``rewrite_enabled``. Both stay
+        declared so that call builds and type-checks; nothing reads them, and
+        neither is ever written back."""
+        config = SkillForgeConfig(enabled=True, llm_gate_enabled=False, rewrite_enabled=False)
+        for field in ("llm_gate_enabled", "rewrite_enabled"):
+            assert field in SkillForgeConfig.model_fields
+            assert field not in config.model_dump()
+            assert to_camel(field) not in config.model_dump(by_alias=True)
 
     def test_the_router_carries_no_per_turn_size_of_its_own(self) -> None:
         """Each caller of the router asks for its own count, so a router-wide
