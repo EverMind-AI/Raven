@@ -21,13 +21,7 @@ import type { MenuItem } from '../../state/menu'
 import type { ToastAction } from '../../state/toast'
 import type { RailSnapshot, RailSource, SessRow } from './types'
 
-/* The search term is the find row's, not the snapshot's, so the island reads it
-   straight out of state/find. Stubbed here rather than mounting that row's
-   markup: this file asks what the LIST does with a term, and find.test.ts asks
-   how the row produces one. */
-const found = vi.hoisted(() => ({ term: '' }))
 const toastWriter = vi.hoisted(() => ({ items: [] as Array<{ text: string; action?: ToastAction }> }))
-vi.mock('../../state/find', () => ({ term: () => found.term }))
 vi.mock('../../state/toast', () => ({
   show: (text: string, action?: ToastAction) => { toastWriter.items.push({ text, action }) },
 }))
@@ -116,7 +110,6 @@ const rowItems = (host: HTMLElement, title: string): Array<MenuItem | '-'> =>
 afterEach(() => {
   cleanup()
   sessionReset()
-  found.term = ''
   localStorage.clear()
   resetSources()
 })
@@ -233,6 +226,18 @@ describe('rail island', () => {
     install({ rows: [row()], cur: null })
     mount()
     expect(document.getElementById('newBtn')!.getAttribute('aria-current')).toBe('true')
+  })
+
+  it('opens the clicked conversation, leaving any module page first', () => {
+    const h = install({ rows: [row({ id: 'a' }), row({ id: 'b', title: 'second task' })], cur: 'a' })
+    rowByTitle(mount(), 'second task').click()
+    expect(h.calls).toEqual([['showPage', null], ['openSession', 'b']])
+  })
+
+  it('does not re-open the conversation already current', () => {
+    const h = install({ rows: [row({ id: 'a' })], cur: 'a' })
+    rowByTitle(mount(), 'GTM research').click()
+    expect(h.calls).toEqual([['showPage', null]])
   })
 
   /* A conversation that is asking something says so from the same slot, and says
@@ -476,12 +481,10 @@ describe('rail island', () => {
     expect(gone).toEqual(['imported:1'])
   })
 
-  it('keeps an imported row to its two actions in a search', () => {
+  it('keeps an imported row to its two actions', () => {
     install({ rows: [row(), row({ id: 'imported:1', title: 'a bug report', from: 'imported', sourceName: 'br-1.tar.gz' })] })
-    found.term = 'bug'
     const host = mount()
-    expect(host.querySelectorAll('.sess').length).toBe(1)
-    const buttons = [...host.querySelectorAll<HTMLButtonElement>('.sess .quick button')].map((b) => b.getAttribute('aria-label'))
+    const buttons = [...rowByTitle(host, 'a bug report').querySelectorAll<HTMLButtonElement>('.quick button')].map((b) => b.getAttribute('aria-label'))
     expect(buttons).toEqual(['gui.sess.rename', 'gui.sess.delete'])
   })
 
@@ -491,29 +494,6 @@ describe('rail island', () => {
     store.rename()
     expect(document.getElementById('title')!.tagName).toBe('H1')
     expect(document.querySelector('input.titin')).toBeNull()
-  })
-
-  it('answers a search with hits and with the empty note', () => {
-    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
-    found.term = 'gtm'
-    const host = mount()
-    expect(screen.getByText('gui.rail.search_hits {"n":1}')).toBeTruthy()
-    expect(host.querySelectorAll('.sess').length).toBe(1)
-    found.term = 'zzz'
-    act(() => store.draw())
-    expect(screen.getByText('gui.rail.no_hits {"q":"zzz"}')).toBeTruthy()
-    expect(host.querySelector('.sess')).toBeNull()
-  })
-
-  /* The term is read at paint time, never captured: a redraw the find row did
-     not trigger (a new session, a finished turn) must still filter. */
-  it('reads the term on every draw, not once at mount', () => {
-    install({ rows: [row(), row({ id: 'b', title: 'second task' })] })
-    const host = mount()
-    expect(host.querySelectorAll('.sess').length).toBe(2)
-    found.term = 'second'
-    act(() => store.draw())
-    expect(host.querySelectorAll('.sess').length).toBe(1)
   })
 
   it('opens another session through the source and repaints the mark', () => {

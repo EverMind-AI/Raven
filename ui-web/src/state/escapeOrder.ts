@@ -29,6 +29,7 @@
 import { busy as turnBusy } from '../features/composer/turn'
 import * as extAgents from '../features/extAgents/store'
 import * as detail from './detail'
+import * as find from './find'
 import { close as closeImage, isOpen as imageOpen } from './lightbox'
 import * as mentions from './mentions'
 import * as navfly from './navfly'
@@ -83,6 +84,9 @@ const CLOSERS: Record<PageId, () => void> = {
    back what a section raised and a second takes back the dialog. */
 const ABOVE: readonly EscapeLayer[] = [
   { id: '.lightbox', isOpen: imageOpen, close: closeImage },
+  /* Over every other dialog: the reader raised it to find something, and the
+     first Escape should give back what they raised. */
+  { id: '#findVeil', isOpen: flagged('findVeil'), close: () => find.toggle(false) },
   { id: '#veil', isOpen: flagged('veil'), close: cancels('cfNo') },
   /* Under the confirm sheet, which it raises before stopping an export, and
      over the details pane it covers. Its own close button is the cancel. */
@@ -165,7 +169,7 @@ const BELOW: readonly EscapeLayer[] = [
   { id: 'turn.busy()', isOpen: turnBusy, close: () => ds('composer').stop() },
 ]
 
-/** The seventeen, in the order Escape reaches them. */
+/** The eighteen, in the order Escape reaches them. */
 export const ESCAPE_ORDER: readonly EscapeLayer[] = [
   ...ABOVE,
   ...byEscape().map((page) => ({

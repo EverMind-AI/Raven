@@ -57,7 +57,8 @@ import type { JSX } from 'react'
 
 /* The mark and the name, then the two icon chores. Neither button carries a
    literal -- their words are a tooltip and a label the language pass writes
-   onto attributes -- so this subscribes to the search row alone. */
+   onto attributes -- so this subscribes to the dialog's own state alone: the
+   magnifier's aria-expanded is the one thing here that the store decides. */
 function RailTop(): JSX.Element {
   const s = useSyncExternalStore(find.subscribe, find.get)
   return (
@@ -84,7 +85,7 @@ function RailTop(): JSX.Element {
         aria-expanded={s.open}
         data-tip={lang.attr('gui.search_sessions')}
         aria-label={lang.attr('gui.search_sessions')}
-        onClick={() => find.toggle()}
+        onClick={(e) => find.toggle(undefined, e.currentTarget)}
       >
         <Icon icon={Search01Icon} stroke={1.8} />
       </button>
@@ -164,35 +165,6 @@ function RailNav(): JSX.Element {
       ))}
       <MoreFly />
     </nav>
-  )
-}
-
-/* The search row. The field is deliberately uncontrolled and its listeners are
-   native (src/state/find.ts); what is state here is the row's own showing and
-   the clear button's, which are the same term read two ways.
-
-   The whitespace page.html had between these three is reproduced: .find is
-   neither a flex nor a grid parent and its middle child is an inline-block
-   (src/styles/page.css), so the rule that makes the gaps harmless is the line
-   edge rather than the parent -- a leading or trailing space on a line is not
-   painted, and the two absolutely positioned siblings leave nothing else on it. */
-function FindRow(): JSX.Element {
-  const s = useSyncExternalStore(find.subscribe, find.get)
-  useSyncExternalStore(lang.subscribe, lang.get)
-  return (
-    <div className="find" id="findBox" hidden={!s.open}>
-      {' '}
-      <span className="ic"><Icon icon={Search01Icon} size={14} /></span>
-      {' '}
-      <input
-        id="sfind"
-        placeholder={t('gui.search_sessions')}
-        aria-label={lang.attr('gui.search_sessions')}
-      />
-      {' '}
-      <button className="clr" id="sclr" hidden={!s.query} aria-label={lang.attr('gui.clear_search')} onClick={() => find.clear()}>&#10005;</button>
-      {' '}
-    </div>
   )
 }
 
@@ -278,7 +250,6 @@ export function Rail(): JSX.Element {
     <aside className="rail" ref={foldOnPick}>
       <RailTop />
       <RailNav />
-      <FindRow />
       <div className="list" id="list" />
       <RailFoot />
       <div

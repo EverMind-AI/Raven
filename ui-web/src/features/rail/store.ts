@@ -1,7 +1,7 @@
 import { t } from '../../i18n/t'
 import { isImportedKey } from '../../lib/imported'
-import { setCurrent } from '../../lib/session'
-import { navState } from '../../state/page'
+import { current, setCurrent } from '../../lib/session'
+import { navState, show as showPage } from '../../state/page'
 import { NAV_BUTTONS } from '../../state/pages'
 import { ds } from '../../state/sources'
 import { makeStore } from '../../state/store'
@@ -149,6 +149,16 @@ export function release(): void {
 
 export function open(s: SessRow): void {
   void source().open(s)
+}
+
+/* A row and a search result both mean "go to this conversation", and both have
+   to leave a module page behind first. One function so they cannot drift. */
+export function openSession(s: SessRow): void {
+  showPage(null)
+  if (s.id !== current()) {
+    setCurrent(s.id)
+    open(s)
+  }
 }
 
 export function count(): number {

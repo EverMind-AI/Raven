@@ -68,13 +68,6 @@ div.app
               path
               path
             span
-    div#findBox.find
-      span.ic
-        svg
-          path
-          path
-      input#sfind
-      button#sclr.clr
     div#list.list
     div.rail-foot
       button#upnote.upnote

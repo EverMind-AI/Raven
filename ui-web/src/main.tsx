@@ -23,7 +23,6 @@ import { WorkspaceApp } from './features/workspace/WorkspacePage'
 import * as session from './lib/session'
 import { chooseTransport } from './rpc/chooseTransport'
 import { setGateway } from './rpc/gateway'
-import * as find from './state/find'
 import { installGlobalListeners } from './state/globalListeners'
 import * as langEffects from './state/lang/effects'
 import { pageOf } from './state/pages'
@@ -93,7 +92,6 @@ session.onChange(() => {
   desk.sync()
   rail.draw()
 })
-find.onChange(rail.draw)
 
 /* Not a listener: the subscription to the frames the agent pushes, for a page
    it opens before this view is ever shown. */
@@ -109,11 +107,10 @@ composer.install()
    by the time this bundle runs: the page script below is the LAST thing in the
    body. Installing here rather than from the shell keeps each module's wiring
    next to the behaviour it belongs to. What each of these installs is
-   element-level -- the grips, the search row -- except the scrollbars, which
-   raise the layer their thumbs are parked in. */
+   element-level -- the grips -- except the scrollbars, which raise the layer
+   their thumbs are parked in. */
 scrollbars.install()
 panes.install()
-find.install()
 
 /* The model picker renders nothing until asked. One root at the body rather
    than a host inside a page: the popover is anchored to whatever button opened

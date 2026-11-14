@@ -89,7 +89,7 @@ function copyCodeBlock(event: MouseEvent): void {
   }, 1500)
 }
 
-/* The Escape order (state/escapeOrder.ts) and the three shortcuts that have
+/* The Escape order (state/escapeOrder.ts) and the four shortcuts that have
    always shared its handler. They share it because splitting them would add a
    registration, and the sequence above is what this file is for. */
 function onEscapeOrder(e: KeyboardEvent): void {
@@ -99,8 +99,8 @@ function onEscapeOrder(e: KeyboardEvent): void {
   if (composing(e)) return
   const inField = /INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')
   if (e.key === 'Escape' && escapeOrder.dispatch()) return
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault(); setRail(true); toggleFind(true)
+  if ((e.metaKey || e.ctrlKey) && (e.key.toLowerCase() === 'k' || e.key.toLowerCase() === 'f')) {
+    e.preventDefault(); toggleFind(true, e.target instanceof HTMLElement ? e.target : null)
   }
   if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
     e.preventDefault(); setRail(!railOpen())

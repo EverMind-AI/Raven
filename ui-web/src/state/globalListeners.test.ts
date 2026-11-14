@@ -76,7 +76,7 @@ const ORDER: ReadonlyArray<readonly [string, string, string, unknown, string]> =
   ['document', 'dblclick', 'bubble', shellWindow.onDblClick, "the shell window's zoom"],
   ['document', 'selectionchange', 'bubble', selection.clamp, 'the selection clamp (state/selection)'],
   ['document', 'click', 'bubble', null, "a code block's copy button"],
-  ['document', 'keydown', 'bubble', null, 'the Escape order and its three shortcuts'],
+  ['document', 'keydown', 'bubble', null, 'the Escape order and its four shortcuts'],
   ['document', 'keydown', 'bubble', null, 'the settings shortcut'],
   ['window', 'load', 'bubble', boot.onLoad, 'the boot\'s load handler (app/boot)'],
   ['document', 'visibilitychange', 'bubble', updates.onVisible, 'the build watch (app/updates)'],

@@ -4,10 +4,8 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { ArchiveGlyph, Icon } from '../../components/Icon'
 import { t } from '../../i18n/t'
 import { current, setCurrent } from '../../lib/session'
-import { term as findTerm } from '../../state/find'
 import * as lang from '../../state/lang'
 import { show as showMenu } from '../../state/menu'
-import * as page from '../../state/page'
 import { askingIn, askingVersion, watchAsking } from '../../state/sheetRack'
 import { show as toast } from '../../state/toast'
 import { open as openCron } from '../cron/store'
@@ -111,12 +109,7 @@ function Row({ s, cur, busy }: { s: SessRow; cur: string | null; busy: boolean }
     : undefined
   const go = (): void => {
     if (editing) return
-    page.show(null)
-    const now = current()
-    if (s.id !== now) {
-      setCurrent(s.id)
-      store.open(s)
-    }
+    store.openSession(s)
   }
   const imported = s.from === 'imported'
   const startEdit = (): void => {
@@ -391,25 +384,7 @@ export function RailApp(): JSX.Element | null {
   }
   const snap = s.snap
   if (!snap) return null
-  /* Not a snapshot field: the search row owns the term (state/find.ts), and
-     neither the demo nor the live source can produce it. */
-  const query = findTerm()
-  const hit = (x: SessRow): boolean =>
-    !query || x.title.toLowerCase().includes(query) || (x.last || '').toLowerCase().includes(query)
-  const rows = snap.rows.filter(hit)
-
-  if (query && !rows.length) return <div className="empty-note">{t('gui.rail.no_hits', { q: query })}</div>
-
-  if (query) {
-    return (
-      <>
-        <span className="lab">{t('gui.rail.search_hits', { n: rows.length })}</span>
-        {rows.map(x => (
-          <Row key={x.id} s={x} cur={snap.cur} busy={snap.busy} />
-        ))}
-      </>
-    )
-  }
+  const rows = snap.rows
 
   // Straight through, in the order the source already holds: newest last activity
   // first, which is the same value each row's clock shows. Not split on
