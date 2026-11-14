@@ -10,6 +10,7 @@ import { ds } from '../../state/sources'
 import { composing, fmtSize } from '../composer/store'
 import { instanceMark, instanceState } from './history'
 import * as store from './store'
+import './styles.css'
 
 import type { Attachment, ComposerSource } from '../composer/types'
 import type { AgentsState } from './store'
@@ -527,9 +528,26 @@ function InstanceComposer(
       }
     })
   }
+  /* What a direct chat is, said once where the reader types it: these turns
+     stay out of the main agent's context on purpose, and the count is the
+     runtime's own -- the entries it will prepend to the next message to the
+     main agent, not a tally this page could do from the rows. One line, with
+     the whole sentence in `title` when the pane clips it: the dock's resting
+     height is what the transcript's reserves are cut to, so this row has to
+     measure the same at every pane width. */
+  const handoff = store.pendingHandoff()
+  const note = handoff === 0
+    ? t('gui.ws.instance_handoff_hint')
+    : handoff === 1
+      ? t('gui.ws.instance_handoff_count_one')
+      : t('gui.ws.instance_handoff_count_n', { n: handoff })
   return (
     <div className="dock instance-dock sasend">
       <div className="dock-in">
+        {/* First, so the `atts + field` adjacency below is untouched and the
+            hint sits where the card opens rather than between the staged
+            files and the box they will be sent with. */}
+        <div className="subagents-handoff" title={note}>{note}</div>
         {chat.queue.length ? (
           <div className="instance-queue" aria-label={t('gui.queue.title', undefined, 'Queued messages')}>
             {chat.queue.map((item, index) => (

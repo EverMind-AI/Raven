@@ -77,7 +77,7 @@ function inst(over: Partial<InstanceRow> & { handle: string }): InstanceRow {
 /* The panel drawing instances rather than runs: `list` still answers, because a
    run detail opened from the conversation reads its header off that list. */
 function instances(items: InstanceRow[], over: Partial<SubagentsSource> = {}): SubagentsSource {
-  const source: SubagentsSource = { list: async () => [], instances: async () => items, ...over }
+  const source: SubagentsSource = { list: async () => [], instances: async () => ({ rows: items, pendingHandoff: 0 }), ...over }
   wire(source)
   return source
 }
@@ -258,7 +258,7 @@ describe('subagents island, the list', () => {
     const source = instances([inst({ handle: 'old', status: 'completed' })])
     await mount()
     expect(await screen.findByText('old')).toBeTruthy()
-    source.instances = async () => []
+    source.instances = async () => ({ rows: [], pendingHandoff: 0 })
     await act(async () => {
       store.refreshInstances(true)
       await Promise.resolve()
@@ -330,7 +330,7 @@ describe('subagents island, the list', () => {
     const forgotten: Array<[string, string]> = []
     let listed: InstanceRow[] = [inst({ handle: 'one' }), inst({ handle: 'two' })]
     startable({
-      instances: async () => listed,
+      instances: async () => ({ rows: listed, pendingHandoff: 0 }),
       instanceForget: async (agent, handle) => {
         forgotten.push([agent, handle])
         listed = listed.filter((r) => r.handle !== handle)
@@ -361,7 +361,7 @@ describe('subagents island, the list', () => {
        cancels the inner button's own native activation, and then opens the
        pane. Without the boundary a keyboard user cannot retire at all -- they
        get the one thing they were trying not to do, while the mouse works. */
-    startable({ instances: async () => [inst({ handle: 'one' })] })
+    startable({ instances: async () => ({ rows: [inst({ handle: 'one' })], pendingHandoff: 0 }) })
     await mountGrouped()
     await screen.findByText('hermes')
     const button = retireIn('hermes')!
@@ -413,7 +413,7 @@ describe('subagents island, the list', () => {
     const fresh = inst({ handle: 'fresh', status: 'idle' })
     let listed: InstanceRow[] = []
     startable({
-      instances: async () => listed,
+      instances: async () => ({ rows: listed, pendingHandoff: 0 }),
       instanceCreate: async (agent, sessionKey) => {
         asked.push([agent, sessionKey])
         listed = [...listed, fresh]
@@ -444,7 +444,7 @@ describe('subagents island, the list', () => {
     const asked: Array<[string, string]> = []
     const fresh = inst({ handle: 'fresh', status: 'idle' })
     startable({
-      instances: async () => [],
+      instances: async () => ({ rows: [], pendingHandoff: 0 }),
       instanceCreate: async (agent, sessionKey) => {
         asked.push([agent, sessionKey])
         return fresh
@@ -469,7 +469,7 @@ describe('subagents island, the list', () => {
        the instance exists. */
     const asked: string[] = []
     startable({
-      instances: async () => [],
+      instances: async () => ({ rows: [], pendingHandoff: 0 }),
       /* Present and expected never to be called: the create is what the
          promotion was for, and a promotion that failed must not reach it. */
       instanceCreate: async (agent) => {
@@ -528,7 +528,7 @@ describe('subagents island, the list', () => {
     let listed: InstanceRow[] = [inst({ handle: 'one' })]
     const fresh = inst({ handle: 'fresh', status: 'idle' })
     startable({
-      instances: async () => listed,
+      instances: async () => ({ rows: listed, pendingHandoff: 0 }),
       instanceCreate: async (agent, sessionKey) => {
         asked.push([agent, sessionKey])
         listed = [...listed, fresh]
@@ -671,7 +671,7 @@ describe('subagents island, the list', () => {
        could not be created with its row sitting in the list underneath. */
     const fresh = inst({ handle: 'fresh', status: 'idle' })
     startable({
-      instances: async () => [inst({ handle: 'one' }), fresh],
+      instances: async () => ({ rows: [inst({ handle: 'one' }), fresh], pendingHandoff: 0 }),
       instanceCreate: async () => fresh,
     })
     await mountGrouped(() => { throw new Error('the desk pane blew up') })
@@ -823,7 +823,7 @@ describe('subagents island, the detail', () => {
     const ctx: AgentCtx = { status: 'ok', agent: 'openclaw', messages: [] }
     const run: AgentRow = { id: 'a1', label: '🧭 survey', status: 'ok', agent: null, started_at: iso(Date.now() - 9000), ended_at: iso(Date.now() - 2000), tokens: 40 }
     /* An instance as well, because "back" now returns to the instance list. */
-    rows([run], { context: async () => ctx, instances: async () => [inst({ handle: 'h1', status: 'completed' })] })
+    rows([run], { context: async () => ctx, instances: async () => ({ rows: [inst({ handle: 'h1', status: 'completed' })], pendingHandoff: 0 }) })
     await mount()
     await openRun(run)
     expect(document.querySelector('.sahd .back')).toBeTruthy()
@@ -1294,6 +1294,53 @@ describe('subagents island, an instance detail', () => {
     expect(box.getAttribute('placeholder')).toBe('gui.ws.instance_say_hint {"name":"用一句话解释光合作用"}')
   })
 
+  it('says what a direct chat is, where the reader types it', async () => {
+    /* The main agent's silence after a direct turn is the design, not a miss:
+       the exchange is kept out of its context on purpose, and the next message
+       to it names the instance and, when a turn has landed, the record path.
+       Nothing on screen said so, so the silence read as the message having
+       gone nowhere. */
+    await openInstance(
+      inst({ handle: 'chatty', status: 'completed', resumable: true }),
+      { instanceSend: async () => {} },
+    )
+    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_hint')
+  })
+
+  it('says how many entries are still owed to the main agent', async () => {
+    /* The count rides the same `subagents.instances` answer as the rows, and
+       the line switches to it the moment the runtime is holding any -- the
+       handoff docstring's own "a client reads only the count, to draw a
+       hint". */
+    await openInstance(
+      inst({ handle: 'chatty', status: 'completed', resumable: true }),
+      {
+        instanceSend: async () => {},
+        instances: async () => ({
+          rows: [inst({ handle: 'chatty', status: 'completed', resumable: true })],
+          pendingHandoff: 3,
+        }),
+      },
+    )
+    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_count_n {"n":3}')
+  })
+
+  it('uses the singular line for one pending entry', async () => {
+    /* One direct turn is the common case, and the plural line would say
+       "1 direct-chat entries". */
+    await openInstance(
+      inst({ handle: 'chatty', status: 'completed', resumable: true }),
+      {
+        instanceSend: async () => {},
+        instances: async () => ({
+          rows: [inst({ handle: 'chatty', status: 'completed', resumable: true })],
+          pendingHandoff: 1,
+        }),
+      },
+    )
+    expect(document.querySelector('.subagents-handoff')?.textContent).toBe('gui.ws.instance_handoff_count_one')
+  })
+
   /* A direct turn's events arrive on the session's one subscription, tagged with
      their target; the conversation drops them and hands them here. Only the fact
      is used -- the transcript is re-read, never re-rendered from the delta. */
@@ -1738,7 +1785,7 @@ describe('subagents island, an instance detail', () => {
     const row = inst({ handle: 'h-1', status: 'completed', resumable: true, runId: 'r1', nodeId: 'shape' })
     let rows: InstanceRow[] = []
     instances([], {
-      instances: async () => rows,
+      instances: async () => ({ rows: rows, pendingHandoff: 0 }),
       instanceHistory: async () => ({ turns: [] }),
       instanceSend: async () => {},
       node: async () => ({ messages: [] }),
@@ -1773,7 +1820,7 @@ describe('subagents island, an instance detail', () => {
        reads `row.node` before `row.label`, so the id would have won even once
        the summary arrived. */
     const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
-    instances([], { instances: async () => [], node: async () => ({ messages: [] }) })
+    instances([], { instances: async () => ({ rows: [], pendingHandoff: 0 }), node: async () => ({ messages: [] }) })
     await act(async () => {
       store.openDagNode('r1', {
         id: 'create_august_ppt',
@@ -1804,7 +1851,7 @@ describe('subagents island, an instance detail', () => {
     const openAgent = vi.spyOn(deskPane, 'openAgent').mockImplementation(() => {})
     const openAgentRecord = vi.spyOn(deskPane, 'openAgentRecord').mockImplementation(() => {})
     instances([], {
-      instances: async () => [row],
+      instances: async () => ({ rows: [row], pendingHandoff: 0 }),
       instanceHistory: async () => ({ turns: [] }),
       node: async () => ({ messages: [] }),
     })
@@ -2079,7 +2126,7 @@ describe('subagents island, what a spawned run opens as', () => {
     /* The ordinary case from the transcript's card: that path holds the run
        list and has never asked for instances. */
     let rows: InstanceRow[] = []
-    instances([], { instances: async () => rows, instanceHistory: async () => ({ turns: [] }) })
+    instances([], { instances: async () => ({ rows: rows, pendingHandoff: 0 }), instanceHistory: async () => ({ turns: [] }) })
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
     await act(async () => { await Promise.resolve() })
@@ -2108,7 +2155,7 @@ describe('subagents island, what a spawned run opens as', () => {
        opens a record first and the list answers after. It used to be checked
        by a second copy of the predicate that no test reached. */
     let rows: InstanceRow[] = []
-    instances([], { instances: async () => rows, instanceHistory: async () => ({ turns: [] }) })
+    instances([], { instances: async () => ({ rows: rows, pendingHandoff: 0 }), instanceHistory: async () => ({ turns: [] }) })
 
     store.openRow(run({ instance: 'survey-9ab2c6' }))
     await act(async () => { await Promise.resolve() })
@@ -2152,7 +2199,7 @@ describe('the list reads', () => {
       instances: async () => {
         asks += 1
         await Promise.resolve()
-        return [inst({ handle: 'h7', resumable: true })]
+        return { rows: [inst({ handle: 'h7', resumable: true })], pendingHandoff: 0 }
       },
     })
 
@@ -2193,7 +2240,7 @@ describe('the list reads', () => {
       instances: async () => {
         asked.push('instances')
         await Promise.resolve()
-        return []
+        return { rows: [], pendingHandoff: 0 }
       },
       list: async () => {
         asked.push('list')
@@ -2220,7 +2267,7 @@ describe('the list reads', () => {
       instances: async (sessionId: string) => {
         asked.push(sessionId)
         await Promise.resolve()
-        return [inst({ sessionKey: sessionId, handle: `for-${sessionId}`, resumable: true })]
+        return { rows: [inst({ sessionKey: sessionId, handle: `for-${sessionId}`, resumable: true })], pendingHandoff: 0 }
       },
     })
 
@@ -2250,6 +2297,24 @@ describe('the list reads', () => {
 
     expect(asked).toEqual(['s1', 's2'])
     expect(store.get().rows.map((row) => row.id)).toEqual(['call-s2'])
+  })
+
+  it('carry the handoff count beside the rows, and repaint when only it moves', async () => {
+    /* The count is in the refresh's fingerprint: rows that never change while
+       the runtime clears or grows the handoff still have to reach the state,
+       or the composer's line says "nothing pending" over a list that is. */
+    let pending = 0
+    instances([], {
+      instances: async () => ({ rows: [inst({ handle: 'quiet', resumable: true })], pendingHandoff: pending }),
+    })
+
+    await store.refreshInstances(true)
+    expect(store.get().pendingHandoff).toBe(0)
+
+    pending = 2
+    await store.refreshInstances(true)
+    expect(store.get().pendingHandoff).toBe(2)
+    expect(store.get().instances.map((row) => row.handle)).toEqual(['quiet'])
   })
 })
 

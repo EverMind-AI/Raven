@@ -51,7 +51,7 @@ function wire(): void {
   tasksStore.reset()
   setSources({
     workspace: { shortPath: (p: string) => p, hostPlatform: () => 'mac', canBrowse: true, openPath: () => {} },
-    subagents: { list: async () => [], instances: async () => agentRows },
+    subagents: { list: async () => [], instances: async () => ({ rows: agentRows, pendingHandoff: 0 }) },
     tasks: {
       list: async () => taskRows, one: async () => null, stop: async () => false,
       node: async () => ({ dispatch: null, steps: [], answer: null, outputTruncated: false, messages: [] }),

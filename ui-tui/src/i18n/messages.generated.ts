@@ -1453,6 +1453,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.instance_new_fail': 'Could not start: {why}',
     'gui.ws.instance_say': 'Send',
     'gui.ws.instance_say_hint': 'Carry on with {name}',
+    'gui.ws.instance_handoff_hint':
+      "What you say here is not added to the main agent's context automatically. With your next message, the main agent is told which direct chats have happened in this session, so it can read them if it needs to.",
+    'gui.ws.instance_handoff_count_one':
+      'With your next message, the main agent is told about 1 direct-chat entry from this session; the text is not added to its context automatically and enters only if the agent reads it.',
+    'gui.ws.instance_handoff_count_n':
+      'With your next message, the main agent is told about {n} direct-chat entries from this session; the text is not added to its context automatically and enters only if the agent reads it.',
     'gui.ws.instance_resumable': 'Can continue',
     'gui.ws.instance_of_graph': 'From a graph',
     'gui.ws.instance_live': 'Working',
@@ -5041,6 +5047,12 @@ export const UI_TEXT: Record<Locale, Record<string, string>> = {
     'gui.ws.instance_new_fail': '无法新建：{why}',
     'gui.ws.instance_say': '发送',
     'gui.ws.instance_say_hint': '继续和 {name} 对话',
+    'gui.ws.instance_handoff_hint':
+      '你在这里说的不会自动加入主智能体的上下文。你下次给主智能体发消息时，它会得知本会话里发生过哪些直接对话，需要时它可以自己去读。',
+    'gui.ws.instance_handoff_count_one':
+      '你下次给主智能体发消息时，它会得知本会话有 1 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。',
+    'gui.ws.instance_handoff_count_n':
+      '你下次给主智能体发消息时，它会得知本会话有 {n} 个直接对话条目；对话正文不会自动进入它的上下文，只有它去读才会进入。',
     'gui.ws.instance_resumable': '可继续',
     'gui.ws.instance_of_graph': '来自编排',
     'gui.ws.instance_live': '进行中',
