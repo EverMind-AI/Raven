@@ -50,6 +50,17 @@ def _safe_loop(factory) -> Any:
         return None
 
 
+def _mcp_live_states(loop: Any) -> dict[str, dict]:
+    """The connection manager's snapshot of every server it knows, by name.
+
+    The console's one read-only peek at the manager, shared by every status
+    read here. Empty until the manager has started: it starts on the first
+    turn, and a status read must not start it.
+    """
+    mgr = getattr(loop, "mcp_manager_if_started", None)
+    return {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
+
+
 def _hub_marker_name() -> str | None:
     """Filename marking a hub-installed skill, or ``None`` without the market.
 
@@ -222,8 +233,7 @@ async def ext_list(params: dict, *, agent_loop_factory: "AgentLoopFactory | None
             from raven.mcp.client import resolve_transport
             from raven.mcp.oauth import pending_url
 
-            mgr = getattr(loop, "mcp_manager_if_started", None)
-            live = {snap["name"]: snap for snap in mgr.status()} if mgr is not None else {}
+            live = _mcp_live_states(loop)
             for name, sc in servers.items():
                 count = owned.get(name, 0)
                 snap = live.get(name)

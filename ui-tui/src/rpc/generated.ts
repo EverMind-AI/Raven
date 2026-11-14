@@ -3647,6 +3647,76 @@ export interface TaskBoardCard {
   sub_agents: number;
 }
 /**
+ * One MCP server an Agent Plugin package declares.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginServerRow".
+ */
+export interface AgentPluginServerRow {
+  /**
+   * Composed server name, '<package>__<server>'.
+   */
+  name: string;
+  /**
+   * The connection manager's state, or 'off' when the running process does not run this server.
+   */
+  state: string;
+  error?: string | null;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginMcpRow".
+ */
+export interface AgentPluginMcpRow {
+  servers: AgentPluginServerRow[];
+  /**
+   * Named in agentPlugins.mcpPackages.
+   */
+  allowed: boolean;
+  /**
+   * The running process started this package's servers. Differs from allowed until the next start.
+   */
+  live: boolean;
+  problems: string[];
+}
+/**
+ * One Agent Plugins 1.0 package: a directory whose root holds a plugin.json.
+ *
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginRow".
+ */
+export interface AgentPluginRow {
+  name: string;
+  version: string;
+  description: string;
+  /**
+   * The package root on the host's disk.
+   */
+  source: string;
+  notes: string[];
+  /**
+   * The usable skills the package holds.
+   */
+  skills: string[];
+  /**
+   * A verified import of this package stands in the workspace.
+   */
+  skills_imported: boolean;
+  /**
+   * Skills the package holds that cannot be used, with the reason.
+   */
+  problems: string[];
+  mcp: AgentPluginMcpRow;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginProblem".
+ */
+export interface AgentPluginProblem {
+  path: string;
+  reason: string;
+}
+/**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
  * via the `definition` "SessionListParams".
  */
@@ -5634,6 +5704,42 @@ export interface PlugConfigureParams {
 export interface PlugConfigureResult {
   name: string;
   mcp?: McpSnapshot;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsListParams".
+ */
+export interface AgentPluginsListParams {}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsListResult".
+ */
+export interface AgentPluginsListResult {
+  packages: AgentPluginRow[];
+  /**
+   * Configured paths that hold no usable package.
+   */
+  problems: AgentPluginProblem[];
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsSetMcpParams".
+ */
+export interface AgentPluginsSetMcpParams {
+  name: string;
+  enabled: boolean;
+}
+/**
+ * This interface was referenced by `RavenRpcRoot`'s JSON-Schema
+ * via the `definition` "AgentPluginsSetMcpResult".
+ */
+export interface AgentPluginsSetMcpResult {
+  name: string;
+  enabled: boolean;
+  /**
+   * False when the package was already in the asked state.
+   */
+  changed: boolean;
 }
 /**
  * This interface was referenced by `RavenRpcRoot`'s JSON-Schema

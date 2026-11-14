@@ -19,6 +19,7 @@ from raven.config.update import (
     remove_exec_pattern,
     reset_cron_config,
     set_a2a_server_enabled,
+    set_agent_plugin_mcp,
     set_default_model,
     set_memory_backend,
     set_playbook_disabled,
@@ -337,6 +338,41 @@ def test_playbook_disabled_preserves_sibling_fields(cfg_path: Path) -> None:
     data = _read(cfg_path)["playbooks"]
     assert data["enabled"] is True and data["dir"] == "/x"
     assert data["disabled"] == ["a"]
+
+
+# ---------------------------------------------------------------------------
+# set_agent_plugin_mcp
+# ---------------------------------------------------------------------------
+
+
+def test_agent_plugin_mcp_allow_adds_the_package(cfg_path: Path) -> None:
+    assert set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path) is True
+    assert _read(cfg_path)["agentPlugins"]["mcpPackages"] == ["demo-pkg"]
+
+
+def test_agent_plugin_mcp_is_idempotent(cfg_path: Path) -> None:
+    set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path)
+    before = cfg_path.read_text(encoding="utf-8")
+    assert set_agent_plugin_mcp("demo-pkg", True, config_path=cfg_path) is False
+    assert set_agent_plugin_mcp("ghost", False, config_path=cfg_path) is False
+    assert cfg_path.read_text(encoding="utf-8") == before
+
+
+def test_agent_plugin_mcp_withhold_removes_only_that_package(cfg_path: Path) -> None:
+    cfg_path.write_text(
+        json.dumps({"agentPlugins": {"packages": ["/pkgs"], "mcpPackages": ["a", "b"]}}),
+        encoding="utf-8",
+    )
+    assert set_agent_plugin_mcp("a", False, config_path=cfg_path) is True
+    block = _read(cfg_path)["agentPlugins"]
+    assert block == {"packages": ["/pkgs"], "mcpPackages": ["b"]}
+
+
+def test_agent_plugin_mcp_writes_the_spelling_the_file_already_uses(cfg_path: Path) -> None:
+    """A second spelling beside the first leaves the config unloadable."""
+    cfg_path.write_text(json.dumps({"agent_plugins": {"mcp_packages": ["a"]}}), encoding="utf-8")
+    assert set_agent_plugin_mcp("b", True, config_path=cfg_path) is True
+    assert _read(cfg_path) == {"agent_plugins": {"mcp_packages": ["a", "b"]}}
 
 
 def test_allow_exec_pattern_writes_and_is_idempotent(cfg_path: Path) -> None:

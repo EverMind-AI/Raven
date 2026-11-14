@@ -3,7 +3,7 @@
 // Source of truth: rpc-schema/openrpc.json (OpenRPC 1.2.6).
 // Drift check: `npm run gen:check` (CI runs this; a stale file fails the build).
 //
-// 261 methods, 147 component schemas.
+// 263 methods, 151 component schemas.
 
 /* eslint-disable */
 /**
@@ -3051,6 +3051,62 @@ export interface TaskBoardCard {
   events: number;
   sub_agents: number;
 }
+/**
+ * One MCP server an Agent Plugin package declares.
+ */
+export interface AgentPluginServerRow {
+  /**
+   * Composed server name, '<package>__<server>'.
+   */
+  name: string;
+  /**
+   * The connection manager's state, or 'off' when the running process does not run this server.
+   */
+  state: string;
+  error?: string | null;
+}
+export interface AgentPluginMcpRow {
+  servers: AgentPluginServerRow[];
+  /**
+   * Named in agentPlugins.mcpPackages.
+   */
+  allowed: boolean;
+  /**
+   * The running process started this package's servers. Differs from allowed until the next start.
+   */
+  live: boolean;
+  problems: string[];
+}
+/**
+ * One Agent Plugins 1.0 package: a directory whose root holds a plugin.json.
+ */
+export interface AgentPluginRow {
+  name: string;
+  version: string;
+  description: string;
+  /**
+   * The package root on the host's disk.
+   */
+  source: string;
+  notes: string[];
+  /**
+   * The usable skills the package holds.
+   */
+  skills: string[];
+  /**
+   * A verified import of this package stands in the workspace.
+   */
+  skills_imported: boolean;
+  /**
+   * Skills the package holds that cannot be used, with the reason.
+   */
+  problems: string[];
+  mcp: AgentPluginMcpRow;
+}
+export interface AgentPluginProblem {
+  path: string;
+  reason: string;
+}
 export interface SessionListParams {
   /**
    * Max sessions to return.
@@ -4436,6 +4492,26 @@ export interface PlugConfigureParams {
 export interface PlugConfigureResult {
   name: string;
   mcp?: McpSnapshot;
+}
+export interface AgentPluginsListParams {}
+export interface AgentPluginsListResult {
+  packages: AgentPluginRow[];
+  /**
+   * Configured paths that hold no usable package.
+   */
+  problems: AgentPluginProblem[];
+}
+export interface AgentPluginsSetMcpParams {
+  name: string;
+  enabled: boolean;
+}
+export interface AgentPluginsSetMcpResult {
+  name: string;
+  enabled: boolean;
+  /**
+   * False when the package was already in the asked state.
+   */
+  changed: boolean;
 }
 export interface SkillhubSearchParams {
   /**
@@ -7068,6 +7144,8 @@ export interface RpcMethods {
   'plug.retry': { params: PlugRetryParams; result: PlugRetryResult };
   'plug.revoke': { params: PlugRevokeParams; result: PlugRevokeResult };
   'plug.configure': { params: PlugConfigureParams; result: PlugConfigureResult };
+  'agent_plugins.list': { params: AgentPluginsListParams; result: AgentPluginsListResult };
+  'agent_plugins.set_mcp': { params: AgentPluginsSetMcpParams; result: AgentPluginsSetMcpResult };
   'skillhub.search': { params: SkillhubSearchParams; result: SkillhubSearchResult };
   'skillhub.detail': { params: SkillhubDetailParams; result: SkillhubDetailResult };
   'skillhub.install': { params: SkillhubInstallParams; result: SkillhubInstallResult };
@@ -7239,6 +7317,8 @@ export type ResultOf<M extends RpcMethod> = RpcMethods[M]['result'];
 
 /** Method names present in the contract, for a runtime guard at the edges. */
 export const RPC_METHODS = [
+  "agent_plugins.list",
+  "agent_plugins.set_mcp",
   "approval.pending",
   "approval.respond",
   "approval.revoke",

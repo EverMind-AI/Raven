@@ -4180,6 +4180,67 @@ class PlugConfigureResult(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# agent_plugins.* -- Agent Plugin packages (Agent Plugins 1.0)
+# ---------------------------------------------------------------------------
+
+
+class AgentPluginServerRow(_Strict):
+    name: str = Field(..., description="Composed server name, '<package>__<server>'.")
+    state: str = Field(
+        ...,
+        description="The connection manager's state, or 'off' when the running process does not run this server.",
+    )
+    error: str | None = None
+
+
+class AgentPluginMcpRow(_Strict):
+    servers: list[AgentPluginServerRow]
+    allowed: bool = Field(..., description="Named in agentPlugins.mcpPackages.")
+    live: bool = Field(
+        ...,
+        description="The running process started this package's servers. Differs from allowed until the next start.",
+    )
+    problems: list[str]
+
+
+class AgentPluginRow(_Strict):
+    name: str
+    version: str
+    description: str
+    source: str = Field(..., description="The package root on the host's disk.")
+    notes: list[str]
+    skills: list[str] = Field(..., description="The usable skills the package holds.")
+    skills_imported: bool = Field(..., description="A verified import of this package stands in the workspace.")
+    problems: list[str] = Field(..., description="Skills the package holds that cannot be used, with the reason.")
+    mcp: AgentPluginMcpRow
+
+
+class AgentPluginProblem(_Strict):
+    path: str
+    reason: str
+
+
+class AgentPluginsListParams(_Strict):
+    pass
+
+
+class AgentPluginsListResult(_Strict):
+    packages: list[AgentPluginRow]
+    problems: list[AgentPluginProblem] = Field(..., description="Configured paths that hold no usable package.")
+
+
+class AgentPluginsSetMcpParams(_Strict):
+    name: str
+    enabled: bool
+
+
+class AgentPluginsSetMcpResult(_Strict):
+    name: str
+    enabled: bool
+    changed: bool = Field(..., description="False when the package was already in the asked state.")
+
+
+# ---------------------------------------------------------------------------
 # skillhub.* results (the params models are above)
 # ---------------------------------------------------------------------------
 
@@ -7584,6 +7645,8 @@ METHOD_MODELS: dict[str, tuple[type[BaseModel], type[BaseModel]]] = {
     "plug.retry": (PlugRetryParams, PlugRetryResult),
     "plug.revoke": (PlugRevokeParams, PlugRevokeResult),
     "plug.configure": (PlugConfigureParams, PlugConfigureResult),
+    "agent_plugins.list": (AgentPluginsListParams, AgentPluginsListResult),
+    "agent_plugins.set_mcp": (AgentPluginsSetMcpParams, AgentPluginsSetMcpResult),
     "skillhub.search": (SkillhubSearchParams, SkillhubSearchResult),
     "skillhub.detail": (SkillhubDetailParams, SkillhubDetailResult),
     "skillhub.install": (SkillhubInstallParams, SkillhubInstallResult),
@@ -7891,6 +7954,14 @@ __all__ = [
     "PlugRemoveResult",
     "PlugToggleParams",
     "PlugToggleResult",
+    "AgentPluginServerRow",
+    "AgentPluginMcpRow",
+    "AgentPluginRow",
+    "AgentPluginProblem",
+    "AgentPluginsListParams",
+    "AgentPluginsListResult",
+    "AgentPluginsSetMcpParams",
+    "AgentPluginsSetMcpResult",
     "PlughubCatalogItem",
     "PlughubDetailParams",
     "PlughubDetailResult",
