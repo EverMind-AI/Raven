@@ -1028,7 +1028,7 @@ def supervise_from_argv(argv: list[str]) -> bool:
     if not (argv[3].isascii() and argv[3].isdecimal()):
         return False
     try:
-        _web(int(argv[3]), foreground=False, stop=False, supervise=True)
+        _web(int(argv[3]), foreground=False, stop=False, supervise=True, print_url=False)
     except typer.Exit as exc:
         raise SystemExit(exc.exit_code) from None
     return True
@@ -1520,6 +1520,7 @@ def _await_attach(
     timeout_s: float = _ATTACH_PATIENCE_S,
     *,
     gone: Optional[Callable[[], bool]] = None,
+    err: bool = False,
 ) -> Optional[str]:
     """Poll until the freshly started gateway answers, then mint an auth URL.
 
@@ -1539,6 +1540,9 @@ def _await_attach(
       to watch there, so without this the wait sat out its full ceiling on a
       child that had already died -- two minutes and a half of a terminal that
       had printed the error and then said nothing.
+
+    ``err`` sends the slow notice to stderr, where it belongs when stdout is a
+    machine-read URL (``--print-url``).
     """
     import time
 
@@ -1564,14 +1568,40 @@ def _await_attach(
         elif seen_supervisor:
             return None
         if not said_slow and time.monotonic() - started > _ATTACH_SLOW_NOTICE_S:
-            typer.echo("still starting (a first run compiles its dependencies; this can take a minute)...")
+            typer.echo(
+                "still starting (a first run compiles its dependencies; this can take a minute)...",
+                err=err,
+            )
             said_slow = True
         time.sleep(0.3)
     return None
 
 
-def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: bool = False) -> None:
-    """``raven web`` -- open the page against a gateway that stays up."""
+def _web(
+    port: int,
+    *,
+    foreground: bool = False,
+    stop: bool = False,
+    supervise: bool = False,
+    print_url: bool = False,
+) -> None:
+    """``raven web`` -- open the page against a gateway that stays up.
+
+    ``print_url`` is the desktop shell's mode: make sure the gateway is up, print
+    the one-time sign-in URL on stdout, and open nothing. Everything else the
+    command has to say goes to stderr, so stdout is the URL and only the URL.
+    """
+
+    def say(message: str) -> None:
+        typer.echo(message, err=print_url)
+
+    if print_url and (stop or foreground or supervise):
+        typer.echo(
+            "error: --print-url cannot be combined with --stop, --foreground or --supervise",
+            err=True,
+        )
+        raise typer.Exit(2)
+
     if stop:
         if _stop_resident():
             typer.echo("raven web stopped")
@@ -1580,7 +1610,7 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         return
 
     if resolve_ui_dist() is None:
-        typer.echo("No page is built. Run `make build-ui`, or install raven from a release wheel.")
+        say("No page is built. Run `make build-ui`, or install raven from a release wheel.")
         raise typer.Exit(1)
 
     if supervise:
@@ -1590,11 +1620,14 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
     try:
         url = _attached_url()
     except PermissionError as exc:
-        typer.echo(f"error: {exc}; stop it and run `raven web` again")
+        say(f"error: {exc}; stop it and run `raven web` again")
         raise typer.Exit(1) from None
 
     if url is not None:
-        typer.echo(f"attaching to the gateway already running: {url.split('/auth#')[0]}")
+        if print_url:
+            typer.echo(url)
+            return
+        say(f"attaching to the gateway already running: {url.split('/auth#')[0]}")
         _open(url)
         return
 
@@ -1622,27 +1655,30 @@ def _web(port: int, *, foreground: bool = False, stop: bool = False, supervise: 
         lingering = _read_serve_pid()
         if lingering is not None:
             if _recorded_is_ours(lingering) is None:
-                typer.echo(
+                say(
                     f"error: the recorded gateway (pid {lingering}) is alive but its identity cannot be read; "
                     f"restore process access, or after confirming the record is stale, remove {_state_path()} "
                     "and retry. Do not signal an unverified PID."
                 )
                 raise typer.Exit(1)
-            typer.echo(
+            say(
                 f"error: a gateway (pid {lingering}) is still running but not answering; "
                 "run `raven web --stop`, then `raven web`"
             )
             raise typer.Exit(1)
         _spawn_supervisor(port)
     try:
-        url = _await_attach()
+        url = _await_attach(err=True) if print_url else _await_attach()
     except PermissionError as exc:
-        typer.echo(f"error: {exc}; run `raven web --stop`, then `raven web`")
+        say(f"error: {exc}; run `raven web --stop`, then `raven web`")
         raise typer.Exit(1) from None
     if url is None:
-        typer.echo(f"the gateway did not come up; see {_web_log_path()}")
+        say(f"the gateway did not come up; see {_web_log_path()}")
         raise typer.Exit(1)
-    typer.echo(f"raven is running at {url.split('/auth#')[0]} (stop it with `raven web --stop`)")
+    if print_url:
+        typer.echo(url)
+        return
+    say(f"raven is running at {url.split('/auth#')[0]} (stop it with `raven web --stop`)")
     _open(url)
 
 
@@ -1743,6 +1779,11 @@ def register(app: typer.Typer) -> None:
             "--foreground",
             help="Hold the terminal instead of leaving a resident gateway (no restart on failure).",
         ),
+        print_url: bool = typer.Option(
+            False,
+            "--print-url",
+            help="Print the one-time sign-in URL on stdout and open nothing (for native windows).",
+        ),
         supervise: bool = typer.Option(
             False,
             "--supervise",
@@ -1751,7 +1792,7 @@ def register(app: typer.Typer) -> None:
         ),
     ) -> None:
         """Open Raven in a browser, on a gateway that stays up after you close the terminal."""
-        _web(port, foreground=foreground, stop=stop, supervise=supervise)
+        _web(port, foreground=foreground, stop=stop, supervise=supervise, print_url=print_url)
 
 
 __all__ = ["SERVE", "register", "resolve_ui_dist"]
