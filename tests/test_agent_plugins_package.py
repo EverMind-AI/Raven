@@ -219,6 +219,15 @@ def test_a_child_path_is_contained(tmp_path: Path) -> None:
     assert is_contained(root, root)
 
 
+def test_a_path_that_does_not_exist_yet_is_contained(tmp_path: Path) -> None:
+    """A root-internal location stays contained before anything creates it."""
+    root = tmp_path / "pkg"
+    root.mkdir()
+
+    assert is_contained(root, root / "gone") is True
+    assert is_contained(root, root / "skills" / "deeper" / "x") is True
+
+
 def test_a_path_that_escapes_with_a_parent_reference_is_not_contained(
     tmp_path: Path,
 ) -> None:
@@ -316,7 +325,7 @@ def test_a_loop_that_resolution_cannot_resolve_is_not_contained(
     realpath = os.path.realpath
 
     def raising_realpath(path: str | os.PathLike[str], *, strict: bool = False) -> str:
-        if str(path) == str(candidate):
+        if strict and str(path) == str(candidate):
             raise OSError(errno.ELOOP, "Symlink loop")
         return realpath(path, strict=strict)
 
@@ -329,6 +338,10 @@ def test_a_loop_that_resolution_cannot_resolve_is_not_contained(
 def test_a_real_symlink_loop_is_not_contained(tmp_path: Path) -> None:
     root = tmp_path / "pkg"
     root.mkdir()
-    (root / "loop").symlink_to("loop")
+    loop = root / "loop"
+    try:
+        _link_to(loop, loop)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"this host cannot create a symlink loop: {exc}")
 
-    assert is_contained(root, root / "loop") is False
+    assert is_contained(root, loop) is False
