@@ -842,6 +842,96 @@ class TestTheCommand:
         assert started == [] and supervised == [] and opened == []
 
 
+class TestThePrintUrlMode:
+    """`raven web --print-url` is how a native window gets its sign-in link.
+
+    The URL is the whole of stdout -- the caller reads stdout as the answer --
+    and the command opens nothing and signals nothing on its own. Killing a
+    gateway it did not start is exactly what the desktop launcher used to do
+    when an empty probe meant "still booting".
+    """
+
+    def test_it_prints_the_attached_url_and_opens_nothing(
+        self, home: Path, a_built_page, opened: list[str], monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: "http://127.0.0.1:31337/auth#abc")
+
+        serve_commands._web(port=18999, print_url=True)
+
+        assert capsys.readouterr().out == "http://127.0.0.1:31337/auth#abc\n"
+        assert opened == []
+
+    def test_it_waits_for_the_gateway_it_started(
+        self,
+        home: Path,
+        a_built_page,
+        opened: list[str],
+        supervised: list[int],
+        monkeypatch,
+        capsys,
+    ) -> None:
+        seen: dict[str, object] = {}
+
+        def attach(*_args, **kwargs):
+            seen.update(kwargs)
+            return "http://127.0.0.1:18999/auth#z"
+
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", attach)
+
+        serve_commands._web(port=18999, print_url=True)
+
+        assert supervised == [18999]
+        assert seen == {"err": True}, "the slow notice could land in the URL slot"
+        assert capsys.readouterr().out == "http://127.0.0.1:18999/auth#z\n"
+        assert opened == []
+
+    def test_a_failure_leaves_stdout_empty(
+        self, home: Path, a_built_page, supervised: list[int], monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setattr(serve_commands, "_attached_url", lambda: None)
+        monkeypatch.setattr(serve_commands, "_await_attach", lambda *_a, **_k: None)
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999, print_url=True)
+
+        assert exit_info.value.exit_code == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "did not come up" in captured.err
+
+    @pytest.mark.parametrize("other", [{"stop": True}, {"foreground": True}, {"supervise": True}])
+    def test_it_refuses_to_be_another_mode(self, home: Path, a_built_page, monkeypatch, other: dict[str, bool]) -> None:
+        touched: list[str] = []
+        monkeypatch.setattr(serve_commands, "_stop_resident", lambda: touched.append("stop"))
+        monkeypatch.setattr(serve_commands, "_run_foreground", lambda _port: touched.append("foreground"))
+
+        with pytest.raises(typer.Exit) as exit_info:
+            serve_commands._web(port=18999, print_url=True, **other)
+
+        assert exit_info.value.exit_code == 2
+        assert touched == [], "a refused combination still ran one of its modes"
+
+    def test_the_option_reaches_the_orchestrator(self, monkeypatch) -> None:
+        from typer.testing import CliRunner
+
+        seen: dict[str, object] = {}
+        monkeypatch.setattr(serve_commands, "_web", lambda port, **kwargs: seen.update(port=port, **kwargs))
+        app = typer.Typer()
+        serve_commands.register(app)
+
+        result = CliRunner().invoke(app, ["web", "--print-url"])
+
+        assert result.exit_code == 0
+        assert seen == {
+            "port": 18792,
+            "foreground": False,
+            "stop": False,
+            "supervise": False,
+            "print_url": True,
+        }
+
+
 class TestTheSignInLink:
     """The one URL that signs a browser in has to reach the person, whatever the
     browser launch did with it."""
@@ -3305,7 +3395,7 @@ def test_the_web_command_hands_its_options_on(monkeypatch) -> None:
     seen: list[tuple[tuple, dict]] = []
     monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: seen.append((a, kw)))
     assert CliRunner().invoke(app, ["web"]).exit_code == 0
-    assert seen == [((18792,), {"foreground": False, "stop": False, "supervise": False})]
+    assert seen == [((18792,), {"foreground": False, "stop": False, "supervise": False, "print_url": False})]
 
 
 def test_the_serve_command_hands_its_options_on(monkeypatch) -> None:
@@ -3327,7 +3417,7 @@ class TestTheSupervisorStartsWithoutTheCommandTable:
     imported for it; any other argv is still parsed by the table."""
 
     ARGV = ["web", "--supervise", "--port", "18999"]
-    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True})
+    CALL = ((18999,), {"foreground": False, "stop": False, "supervise": True, "print_url": False})
 
     @pytest.fixture
     def web_calls(self, monkeypatch) -> list[tuple[tuple, dict]]:
