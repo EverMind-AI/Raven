@@ -104,6 +104,7 @@ EMPTY_RETRY_MAX_DELAY_S = 60.0
 # answer: the tool results may be all the task needed.
 POST_TOOL_NUDGE = "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task, or give your final answer now."
 OUTPUT_LIMIT_CONTINUATION = "[System: Your previous response was cut off by the output length limit before it produced any text or tool call, so nothing from it was kept. Keep this response short: answer briefly, or make the tool call the task needs. If a payload you were writing is too large for one response, send it across several smaller calls.]"
+CONTEXT_WINDOW_CONTINUATION = "[System: Your previous response was cut off at the model's context window before it produced any text or tool call, so nothing from it was kept. Continue concisely now that earlier context has been trimmed.]"
 NETWORK_CUT_CONTINUATION = "[System: The previous response was cut off by a network error mid-stream. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]"
 EMPTY_REPLY_FAILURE = "No reply: the model returned empty content after retries and any fallback models. Try `continue`, switch the model, or check the tool output above."
 THINKING_ONLY_FAILURE = "The model produced only internal reasoning and no final answer, despite retries. Its last reasoning, which may contain the answer:"
@@ -116,6 +117,10 @@ TRUNCATED_FAILURE = "Processing stopped: the response remained truncated after {
 TRUNCATED_UNCONTINUED_FAILURE = (
     "Processing stopped: the response was cut off at the output length limit, "
     "and this turn has no continuation attempts left. Try again."
+)
+CONTEXT_WINDOW_FAILURE = (
+    "Processing stopped: the request hit the model's context window and could not fit even after trimming context. "
+    "Start a new session or compact the conversation before continuing."
 )
 REFUSAL_FAILURE = "The model declined to respond to this request (a safety refusal, not a Raven failure)."
 REFUSAL_EXPLANATION = " The model's explanation: {text}"
