@@ -70,13 +70,6 @@ div.app[data-rail=on]
               path
               path
             span
-    div#findBox.find
-      span.ic
-        svg
-          path
-          path
-      input#sfind
-      button#sclr.clr
     div#list.list
     div.rail-foot
       button#upnote.upnote
@@ -452,6 +445,15 @@ div#setVeil.veil.setveil[data-open=false][data-section=usage]
 div#exportVeil.veil[data-open=false]
   div#exportModal.chrome-export-modal
     div#exportBody.chrome-export-body
+div#findVeil.veil[data-open=false]
+  div.chrome-find-card
+    div.chrome-find-field
+      span.chrome-find-ic
+        svg
+          path
+          path
+      input#sfind
+      button#sclr.chrome-find-clr
 div#veil.veil[data-open=false]
   div.sheet
     header#cfTitle

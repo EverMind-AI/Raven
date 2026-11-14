@@ -98,7 +98,6 @@ const PINNED = {
   'state/detail.ts': 3,
   'state/envChip.ts': 3,
   'state/escapeOrder.ts': 2,
-  'state/find.ts': 1,
   'state/globalListeners.ts': 3,
   'state/lightbox.ts': 3,
   'state/menu.ts': 1,

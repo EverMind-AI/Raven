@@ -55,6 +55,7 @@ export function SearchDialog(): JSX.Element {
   useSyncExternalStore(lang.subscribe, lang.get)
   const [active, setActive] = useState(0)
   const field = useRef<HTMLInputElement>(null)
+  const veil = useRef<HTMLDivElement>(null)
 
   const rows = (rail.snap?.rows ?? []).filter(
     (r) => !s.query || r.title.toLowerCase().includes(s.query) || (r.last ?? '').toLowerCase().includes(s.query),
@@ -73,7 +74,7 @@ export function SearchDialog(): JSX.Element {
   }, [s.open])
 
   useEffect(() => {
-    const el = document.getElementById('findVeil')
+    const el = veil.current
     if (!el) return
     const away = (e: Event): void => {
       if (e.target === el) find.toggle(false)
@@ -111,7 +112,7 @@ export function SearchDialog(): JSX.Element {
   }
 
   return (
-    <div className="veil" id="findVeil" data-open={s.open ? 'true' : 'false'}>
+    <div className="veil" id="findVeil" ref={veil} data-open={s.open ? 'true' : 'false'}>
       <div className="chrome-find-card" role="dialog" aria-modal="true" aria-label={lang.attr('gui.search_sessions')}>
         <div className="chrome-find-field">
           <span className="chrome-find-ic"><Icon icon={Search01Icon} size={16} /></span>

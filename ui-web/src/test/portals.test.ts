@@ -118,7 +118,7 @@ describe('the portal table', () => {
        page installs and .upshade only when an upgrade starts. The table copies
        what is measured, not what the comment intends. */
     expect(BOOT_BODY_ORDER.indexOf('div.tipp')).toBeGreaterThan(-1)
-    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(17)
+    expect(PORTALS.find((p) => p.id === '.tipp')!.at).toBe(18)
     expect(PORTALS.find((p) => p.id === '.upshade')!.at).toBe('last')
   })
 
@@ -164,7 +164,7 @@ describe('the portal table', () => {
 
   it('gives the model picker its place among the standing layers, and reparents nothing', () => {
     const picker = PORTALS.find((p) => p.id === 'pickHost')!
-    expect(picker.at).toBe(15)
+    expect(picker.at).toBe(16)
     /* The composer's popovers hang off their chips with the stylesheet now, so
        no portal leaves the card it was born in. */
     expect(PORTALS.filter((p) => p.kind === 'reparent')).toEqual([])
@@ -173,7 +173,7 @@ describe('the portal table', () => {
   /* The page's own root appends its regions to the body, after the three
      things page.html still carries: it is a portal, and a root AT the body
      would clear that markup instead of joining it (see src/main.tsx). Two of
-     the three are taken down at boot, which leaves #onb and the sixteen
+     the three are taken down at boot, which leaves #onb and the seventeen
      regions -- the golden's whole static half. */
   it('renders the page regions at the body, in the boot golden order', () => {
     const { doc, unmount } = bootedPage()
