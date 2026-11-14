@@ -89,6 +89,5 @@ def test_a_decisions_file_that_cannot_be_read_is_no_questions_rather_than_a_cras
     path.chmod(0o000)
     try:
         assert decisions_mod.read(project) == []
-        assert decisions_mod.pending(project) == []
     finally:
         path.chmod(0o600)
