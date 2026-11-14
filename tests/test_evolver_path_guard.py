@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from evolver.applier.path_guard import (
+    ImmutablePathError,
     UnsafePathError,
     assert_patch_allowed,
     assert_safe_relative_paths,
+    is_immutable,
 )
 
 
@@ -62,3 +64,39 @@ def test_unsafe_paths_are_rejected(path: str):
 )
 def test_relative_repo_paths_are_allowed(path: str):
     assert_safe_relative_paths([path])
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "EVOLVER/orchestrator/gates/pipeline.py",
+        "Evolver/x.py",
+        "Raven/agent/loop/main.py",
+        "raven/agent/loop/MAIN.PY",
+        "raven/eval_engine/ENGINE.py",
+        "Benchmarks/AppWorld/Evolve/grade.py",
+    ],
+)
+def test_a_case_varied_immutable_path_is_still_immutable(path: str):
+    """Windows resolves these to the immutable file, so the guard must refuse them.
+
+    `_match` used to compare exact strings, so the same patch was judged
+    differently by the filesystem underneath it.
+    """
+    assert is_immutable(path)
+    # The predicate is not the contract the evolver calls: a patch naming the
+    # path in another case must be refused at the door, not only flagged.
+    with pytest.raises(ImmutablePathError):
+        assert_patch_allowed([path])
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "skills/foo/SKILL.md",
+        "raven/agent/loop/other.py",
+        "docs/CONTRIBUTING.md",
+    ],
+)
+def test_case_folding_does_not_make_a_mutable_path_immutable(path: str):
+    assert not is_immutable(path)
