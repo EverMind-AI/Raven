@@ -446,24 +446,22 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
     A launcher that names a path is read the way the launch reads it, and the
     two platforms read it differently. POSIX starts the child in the row's cwd
     and execs it there, so a relative launcher (``./agent-acp``, ``bin/agent``)
-    is that directory's file. Windows' ``CreateProcess`` resolves a relative
-    program in the *parent's* context -- it looks in this process's own
-    directory, not in the child's -- so a row that sets a cwd and names a
-    relative launcher does not name the file the spawn runs, and this digest
-    reads nothing there: that row keeps the digest it had. A row that sets no
-    cwd names this process's own directory on either platform, which is where
-    the spawn looks either way. An absolute path is its own file, and a bare
-    name is looked up on the PATH -- where, on Windows, this process's own
-    directory comes first, as it does for the launch's own lookup
-    (``resolve_program`` reads a PATH the same way).
+    is that directory's file. Windows' spawn resolves such a program the same
+    way, through ``windows._program``: against the row's directory, with
+    ``.exe`` added for a name that has no extension of its own, so this digest
+    reads the file the spawn will run. A row that sets no cwd names this
+    process's own directory on either platform, which is where the spawn looks
+    either way. An absolute path is its own file, and a bare name is looked up
+    on the PATH -- where, on Windows, this process's own directory comes first,
+    as it does for the launch's own lookup (``resolve_program`` reads a PATH
+    the same way).
 
     ``None`` for an ``npx`` launcher, for a row on another machine (that install
     is not this one's to read), for a command this process cannot resolve, for
-    a relative launcher missing from the launch directory, for a relative
-    launcher in a row that sets a cwd on Windows, and for a bare command while
-    no launch PATH has been captured yet: each leaves the digest exactly as it
-    was, which keeps every snapshot measured before this function existed
-    valid.
+    a launcher missing from the directory the spawn resolves it in, and for a
+    bare command while no launch PATH has been captured yet: each leaves the
+    digest exactly as it was, which keeps every snapshot measured before this
+    function existed valid.
 
     A Windows ``.cmd``/``.bat`` shim is read as the file PATH resolves, not as
     the package entry it points at. npm can rewrite a package without
@@ -508,13 +506,6 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
                 base = os.getcwd()
             except OSError:  # a service can outlive the directory it started in
                 return None
-        elif os.name == "nt":
-            # Windows resolves a relative program in the parent's own context:
-            # CreateProcess looks for it in this process's directory, not in the
-            # child's, so the row's cwd does not name the file the spawn runs.
-            # This digest does not read this process's directory for a row that
-            # names one, so the launcher is a row this digest cannot read.
-            return None
         resolved = os.path.normpath(os.path.join(base, program))
     else:
         # A bare name cannot be resolved at all until a capture has recorded
@@ -523,6 +514,17 @@ def _executable_identity(cfg: Any) -> list[Any] | None:
             return None
         resolved = shutil.which(program, path=path)
         if resolved is None:
+            return None
+    if os.name == "nt" and os.path.dirname(program):
+        # The spawn resolves a directory-named program through
+        # windows._program -- the row's directory, then ``.exe`` for a name
+        # that has no extension -- so the digest reads the file that will
+        # run, not the one as written.
+        from raven.acp_client.windows import _program
+
+        try:
+            resolved = _program([program], getattr(cfg, "cwd", None))[0]
+        except OSError:  # includes FileNotFoundError: a missing launcher
             return None
     try:
         stat = os.stat(resolved)

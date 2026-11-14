@@ -9964,7 +9964,10 @@ def _installed(path: Path, body: str = "#!/bin/sh\n") -> Path:
 def test_the_launch_digest_follows_an_in_place_upgrade(tmp_path: Path) -> None:
     """An agent upgraded where it stands keeps its command line, so the command
     alone cannot tell that what it offers may have moved with the build."""
-    exe = _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # carries the extension there and the command names that same file.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    exe = _installed(tmp_path / launcher)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command=str(exe))
     before = snapshot_fingerprint(cfg)
 
@@ -10112,7 +10115,7 @@ def test_a_launcher_that_vanishes_before_it_is_read_keeps_the_old_digest(
     assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path) -> None:
     """The launch starts the agent in the row's cwd, so a relative launcher is
     that directory's file; reading raven's own directory would fingerprint a
@@ -10128,27 +10131,41 @@ def test_a_relative_launcher_resolves_against_the_configured_cwd(tmp_path: Path)
     assert identity[0] == str(tmp_path / "agent-acp")
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows resolves a relative program in the parent's directory")
-def test_a_relative_launcher_in_a_row_with_a_cwd_is_unreadable_on_windows(tmp_path: Path) -> None:
-    """Windows' CreateProcess resolves a relative program in the parent's own
-    context -- it looks in this process's directory, not in the child's -- so
-    the row's cwd does not name the file the spawn runs. The digest reads
-    nothing there and leaves the row's digest as it was."""
+def test_a_relative_launcher_in_a_row_with_a_cwd_is_read_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Windows spawn resolves the row's relative launcher through
+    ``windows._program`` -- the row's directory, then ``.exe`` for a name
+    without an extension -- so the digest reads that same file, and an
+    in-place upgrade moves the row's fingerprint with it."""
     from raven.acp_client.capabilities import _executable_identity
 
-    exe = _installed(tmp_path / "agent-acp")
-    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path))
+    # The rule is Windows'; faking the name runs it on any host, and on a
+    # real Windows host it is already the name.
+    monkeypatch.setattr(os, "name", "nt")
+    exe = _installed(tmp_path / "agent-acp.exe")
+    cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp", cwd=str(tmp_path), env={"PATH": str(tmp_path)})
 
-    assert _executable_identity(cfg) is None
-    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+    identity = _executable_identity(cfg)
+
+    assert identity is not None
+    assert identity[0] == str(tmp_path / "agent-acp.exe")
+    before = snapshot_fingerprint(cfg)
+    assert before != _legacy_launch_digest(cfg)
 
     stat = exe.stat()
     os.utime(exe, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
-    assert snapshot_fingerprint(cfg) == _legacy_launch_digest(cfg)
+    assert snapshot_fingerprint(cfg) != before
+
+    # A launcher the spawn cannot find is a digest it cannot read, the same
+    # as on POSIX: nothing to measure, so the old digest stays.
+    absent = ThirdPartyAcpSubagentConfig(name="b", command="./absent", cwd=str(tmp_path), env={"PATH": str(tmp_path)})
+    assert _executable_identity(absent) is None
+    assert snapshot_fingerprint(absent) == _legacy_launch_digest(absent)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(tmp_path: Path) -> None:
     """The same rule for a launcher that names a directory of its own: the
     directory part is relative to where the subprocess starts, not to raven."""
@@ -10165,7 +10182,7 @@ def test_a_relative_launcher_in_a_subdirectory_is_read_from_the_configured_cwd(t
     assert identity[0] == str(launch_dir / "bin" / "agent-acp")
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows resolves a relative program in the parent's directory")
+@pytest.mark.skipif(os.name == "nt", reason="the fixture names an extensionless launcher; Windows runs its .exe")
 def test_a_relative_launchers_in_place_upgrade_moves_the_digest(tmp_path: Path) -> None:
     """The blocking case: an agent installed beside its configured cwd is
     upgraded where it stands, exactly as for an absolute command."""
@@ -10187,14 +10204,17 @@ def test_a_relative_launcher_without_a_configured_cwd_resolves_from_the_process_
     fallback has to be that same directory."""
     from raven.acp_client.capabilities import _executable_identity
 
-    _installed(tmp_path / "agent-acp")
+    # Windows runs the ``.exe`` beside an extensionless name, so the fixture
+    # names the file the spawn would start here.
+    launcher = "agent-acp.exe" if os.name == "nt" else "agent-acp"
+    _installed(tmp_path / launcher)
     monkeypatch.chdir(tmp_path)
     cfg = ThirdPartyAcpSubagentConfig(name="a", command="./agent-acp")
 
     identity = _executable_identity(cfg)
 
     assert identity is not None
-    assert identity[0] == os.path.join(os.getcwd(), "agent-acp")
+    assert identity[0] == os.path.join(os.getcwd(), launcher)
 
 
 def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -10218,10 +10238,11 @@ def test_a_removed_process_directory_keeps_the_old_digest(tmp_path: Path, monkey
 def test_windows_does_not_look_in_the_row_cwd_for_a_relative_launcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The rule the digest follows on Windows, measured: CreateProcess resolves
-    a relative program in the parent's own context, so a file that exists only
-    in the row's cwd is a file the spawn cannot start at all, and a file in
-    this process's own directory is the one it starts."""
+    """The rule ``windows._program`` compensates for, measured on the raw
+    spawn: CreateProcess resolves a relative program in the parent's own
+    context, so without that wrapper a file that exists only in the row's cwd
+    is a file the spawn cannot start at all, and a file in this process's own
+    directory is the one it starts."""
     import shutil
 
     async def spawn() -> tuple[int | None, BaseException | None]:
