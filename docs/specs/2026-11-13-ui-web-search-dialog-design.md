@@ -2,11 +2,12 @@
 
 ## Intent
 
-The rail's search is an inline row: `#findBtn` reveals `#findBox` under the rail
-navigation, and the term filters the conversation list in place
-(`state/find.ts`, `features/rail/RailPage.tsx`). The reader wants the web
-frontend to open a centered search dialog instead, the way the documentation
-site's search does: a card over a dimmed page, one field, results below it.
+The rail's search used to be an inline row: `#findBtn` revealed `#findBox`
+under the rail navigation, and the term filtered the conversation list in
+place (`state/find.ts`, `features/rail/RailPage.tsx`). The reader wanted the
+web frontend to open a centered search dialog instead, the way the
+documentation site's search does: a card over a dimmed page, one field,
+results below it.
 
 The docs site is the reference, not the target: it already renders that dialog
 (`docs-site/docs/stylesheets/evermind.css`, `[data-md-toggle="search"]:checked`).
