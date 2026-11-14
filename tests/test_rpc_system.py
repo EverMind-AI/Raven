@@ -399,7 +399,7 @@ class TestUpgradingFromAGatewayHostedPage:
         taken: list[tuple] = []
         monkeypatch.setattr(serve_commands, "_web", lambda *a, **kw: taken.append((a, kw)))
         assert serve_commands.supervise_from_argv(spawned["relaunch"][1:]) is True
-        assert taken == [((18792,), {"foreground": False, "stop": False, "supervise": True})]
+        assert taken == [((18792,), {"foreground": False, "stop": False, "supervise": True, "print_url": False})]
         assert spawned["extra_env"] == {
             "RAVEN_SERVE_PORT_STRICT": "1",
             "RAVEN_SERVE_TOKEN": "tok",
