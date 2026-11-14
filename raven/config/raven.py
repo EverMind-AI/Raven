@@ -1310,6 +1310,15 @@ class SkillForgeConfig(_Base):
     """When reranker is enabled, mass pool fetches this many candidates
     for rescoring, then truncates to ``mass_pool_top_k`` before RRF."""
 
+    # --- Retired with push discovery, still passed by Evolver ---
+    llm_gate_enabled: bool | None = Field(default=None, exclude=True)
+    """Read by nothing. Declared only because Evolver's activation probe,
+    maintained on its own, still builds this model with it; never written
+    back, and the file migration drops it from ``config.json``."""
+
+    rewrite_enabled: bool | None = Field(default=None, exclude=True)
+    """Read by nothing; kept for the same caller as ``llm_gate_enabled``."""
+
     disable_always: bool = False
     """When True, ``get_always_skills()`` returns [] and select() filters
     out always:true skills. Default False (always skills inject)."""
