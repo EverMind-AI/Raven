@@ -51,6 +51,10 @@ raven agent-plugins remove my-package     # 删除导入的技能
 
 每条命令都支持 `--json` 以便脚本调用。
 
+`remove` 在没有删除失败时返回 0，即使它保留了一个无法验证的条目——此时包目录
+和账本记录仍然存在。判断包是否真的卸载干净，要看 `kept`（`--json` 里的
+`kept_details`），而不是退出码。
+
 ## 导入做了什么 { #what-an-import-does }
 
 包的技能会被复制到工作区技能树下的 `<workspace>/skills/<包名>/`。一个包一个

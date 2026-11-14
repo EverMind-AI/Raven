@@ -389,7 +389,12 @@ def remove_package(
     config_path: Optional[str] = typer.Option(None, "--config", "-c", help="Path to config file"),
     as_json: bool = typer.Option(False, "--json", help="Print JSON instead of a table"),
 ) -> None:
-    """Delete a package's imported skills and, when none remain, forget it."""
+    """Delete a package's imported skills and, when none remain, forget it.
+
+    Exit code 0 does not mean the package is gone: a kept entry leaves the
+    package directory and its ledger record in place. Read the kept list
+    (kept_details with --json), not the exit code.
+    """
     from raven.agent_plugins.ledger import (
         INSTALL_MARKER_FILENAME,
         LedgerError,
@@ -530,8 +535,6 @@ def remove_package(
         return
     for skill, reason in failed:
         console.print(f"  [red]failed[/red] {escape(skill)}: {escape(reason)}", highlight=False)
-    if failed:
-        raise typer.Exit(1)
     if kept:
         console.print(
             f"removed {len(removed)} imported skill(s) from '{escape(name)}'; "
@@ -540,13 +543,15 @@ def remove_package(
             "Move them away, then run remove again",
             highlight=False,
         )
-    else:
+    elif not failed:
         console.print(f"removed '{escape(name)}'" + (f" and {len(removed)} imported skill(s)" if removed else ""))
     for item in kept:
         console.print(
             f"  [yellow]kept[/yellow] {escape(item['skill'])}: {escape(item['reason'])}",
             highlight=False,
         )
+    if failed:
+        raise typer.Exit(1)
 
 
 @agent_plugin_app.command("check")

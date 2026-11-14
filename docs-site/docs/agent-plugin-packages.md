@@ -55,6 +55,11 @@ raven agent-plugins remove my-package     # delete the imported skills
 
 Every command takes `--json` for scripting.
 
+`remove` exits 0 when it finishes without a deletion failure, even if it
+kept an unverified entry: the package directory and its ledger record are
+still there. Read the `kept` list (`kept_details` with `--json`), not the
+exit code, to know whether the package is gone.
+
 ## What an import does
 
 The package's skills are copied into the workspace skill tree, under

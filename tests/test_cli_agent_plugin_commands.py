@@ -879,6 +879,48 @@ def test_a_failed_removal_does_not_write_a_marker_through_a_junction(
     assert not (env.installed / INSTALL_MARKER_FILENAME).exists()
 
 
+def test_a_mixed_removal_reports_the_kept_entry_beside_the_failure(env: _Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed skill must not hide the entry the same run kept."""
+    other = "other-skill"
+    skill = env.package / "skills" / other
+    skill.mkdir()
+    (skill / "SKILL.md").write_text(
+        f"---\nname: {other}\ndescription: A second demo skill.\n---\n\n# Other Skill\n",
+        encoding="utf-8",
+    )
+    assert _run(env, "import", str(env.package)).exit_code == 0
+    kept_dir = env.workspace / "skills" / PACKAGE_NAME / other
+    shutil.rmtree(kept_dir)
+    kept_dir.mkdir()
+    (kept_dir / "SKILL.md").write_text("USER CONTENT.\n", encoding="utf-8")
+
+    def _refuse(path):
+        if Path(path) == env.installed:
+            raise OSError("the directory is busy")
+        return shutil.rmtree(path)
+
+    monkeypatch.setattr("raven.agent_plugins.skills.remove_tree", _refuse)
+
+    result = _run(env, "remove", PACKAGE_NAME)
+
+    assert result.exit_code == 1, result.stdout
+    flowed = _flowed(result)
+    assert f"failed {SKILL_NAME}: the directory is busy" in flowed
+    assert f"kept {other}" in flowed
+    assert "1 unverified entry remains" in flowed
+    assert "ledger record were kept" in flowed
+
+
+def test_remove_help_says_a_zero_exit_does_not_mean_the_package_is_gone() -> None:
+    """The exit-code contract is only safe if the help states it."""
+    result = runner.invoke(app, ["agent-plugins", "remove", "--help"])
+
+    assert result.exit_code == 0, result.stdout
+    flowed = " ".join(result.stdout.lower().split())
+    assert "exit code 0" in flowed
+    assert "kept" in flowed
+
+
 def test_a_remove_that_cannot_unlink_the_root_marker_keeps_the_record(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
