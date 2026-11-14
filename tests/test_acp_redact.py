@@ -33,10 +33,12 @@ class TestWhatItCatches:
             ('curl -H "Authorization: Bearer sk-ant-api03-AAAABBBBCCCCDDDD" https://x', "sk-ant-api03"),
             ("export OPENAI_API_KEY=sk-proj-abcdefghijklmnop", "sk-proj-abcdefghijklmnop"),
             ("gh auth login --with-token ghp_ABCDEFGHIJKLMNOPQRSTUV", "ghp_ABCDEFGHIJKLMNOPQRSTUV"),
+            ("git clone https://github_pat_11AAAAAAAAAAAAAAAAAAAAAA_BBBB@github.com/a/b", "github_pat_11AAAA"),
             ("glab auth login --token glpat-abcdefghijklmnopqrst", "glpat-abcdefghijklmnopqrst"),
             ('api_key: "AIzaSyDdI0hCZtE6vySjMm-WEfRq3CPzqKqqsHI"', "AIzaSy"),
             ("aws sts get-caller-identity  # AKIAIOSFODNN7EXAMPLE", "AKIAIOSFODNN7EXAMPLE"),
             ("psql postgres://admin:hunter2secret@db:5432/app", "hunter2secret"),
+            ("redis-cli -u redis://:hunter2secret@cache:6379/0 ping", "hunter2secret"),
             ("SLACK_BOT=xoxb-1234567890-abcdefghij", "xoxb-1234567890"),
             ("Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NX0.dBjftJeZ4CVPmB92K27uhbUJU1p1r", "eyJhbGciOi"),
             ('{"password": "correct-horse-battery"}', "correct-horse-battery"),
@@ -128,6 +130,7 @@ class TestWhatItLeavesAlone:
         [
             "set -e && npm test",
             "git clone https://github.com/user/repo",
+            "redis-cli -u redis://cache:6379/0 ping",
             "token: 12345",
             "the password is wrong",
             "authorization: read",
@@ -156,7 +159,15 @@ class TestWhatItLeavesAlone:
 class TestTheLimits:
     @pytest.mark.parametrize(
         "text",
-        ['"Authorization": "Bearer opaqu', "password=abcde", "--token abcde", "ghp_ABCD", "eyJabcdefghijk"],
+        [
+            '"Authorization": "Bearer opaqu',
+            "password=abcde",
+            "--token abcde",
+            "ghp_ABCD",
+            "github_pat_11AB",
+            "redis://:abc",
+            "eyJabcdefghijk",
+        ],
     )
     def test_a_known_cut_removes_short_credential_tails(self, text):
         assert REPLACEMENT in redact(text, truncated=True)
@@ -238,6 +249,7 @@ class TestTheLimits:
         # One long value per pattern: a run longer than the label room, which a
         # value class narrower than the pattern's own would stop short of.
         tails = ["eyJ", "x.sk-", "pwd=", '"password": "', "Authorization: Bearer ", "--token ", "https://user:"]
+        tails += ["github_pat_", "redis://:"]
         for tail in tails:
             for lead in ("", "x " * 300, "pwd=" * 100 + ","):
                 text = lead + tail + "aZ9" * 140
@@ -247,6 +259,7 @@ class TestTheLimits:
         rng = random.Random(978)
         heads = ["password", "PWD", "api_key", "auth", "token", "Authorization", "Proxy-Authorization"]
         heads += ["--token", "--with-token", "https://user", "sk-", "ghp_", "eyJ", "AKIA", "xoxb-"]
+        heads += ["github_pat_", "redis://"]
         noise = ["sk-", ".sk-", "pwd=", "--token=", "://", ":", "@", "/", "!", ",", "'", '"', " ", "\n", "x", "Z9"]
         for _ in range(3000):
             text = "".join(rng.choice(noise) for _ in range(rng.randint(0, 12)))
