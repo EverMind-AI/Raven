@@ -82,6 +82,35 @@ def test_an_over_long_prompt_is_cut_not_honoured() -> None:
     assert len(charter.prompt) <= 4000
 
 
+def test_an_addendum_a_brief_less_payload_mirrors_is_not_injected_twice() -> None:
+    """A payload with no brief carries the addendum in the legacy prompt as
+    well, so a host that knows only the prompt still receives it. Read as the
+    brief too, the same instructions would reach the turn twice."""
+    charter = parse({"prompt": "hold the line", "instructionAddendum": "hold the line"})
+    assert charter is not None
+    assert charter.prompt == ""
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "hold the line"
+
+
+def test_an_addendum_beside_a_prompt_of_its_own_stays_two_instructions() -> None:
+    """The mirror is only the mirror when the two are the same text: a prompt
+    that says something else is the brief the sender meant it to be."""
+    charter = parse({"prompt": "only look at A", "instructionAddendum": "hold the line"})
+    assert charter is not None
+    assert charter.prompt == "only look at A"
+    assert charter.instruction_addendum == "hold the line"
+    assert charter.task_brief == "only look at A\n\nhold the line"
+
+
+def test_a_named_brief_outranks_the_legacy_prompt() -> None:
+    """A payload that names its brief has said which of the two it means, so
+    the prompt beside it is only the mirror a brief-less host would read."""
+    charter = parse({"brief": "only look at A", "prompt": "an older brief"})
+    assert charter is not None
+    assert charter.prompt == "only look at A"
+
+
 def test_an_empty_tool_list_survives_the_read() -> None:
     """Three-valued: absent is "whatever this worker offers", `[]` is a real
     answer, and folding one into the other reverses its meaning."""
